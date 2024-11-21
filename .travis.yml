@@ -1,0 +1,51 @@
+# File: .travis.yml
+# Author: Ryoichi Ando (ryoichi.ando@zozo.com)
+# License: Apache v2.0
+
+dist: focal
+services:
+  - docker
+
+os: linux
+language: shell
+
+vm:
+  size: gpu-medium
+
+env:
+  global:
+    - DOCKER_IMAGE=nvidia/cuda:11.8.0-devel-ubuntu22.04
+    - MY_WEB_PORT=8080
+    - MY_TIME_ZONE=Asia/Tokyo
+    - MY_CONTAINER_NAME=ppf-dev
+
+before_install:
+  # fix EXPKEYSIG
+  # https://travis-ci.community/t/travis-focal-ubuntu-image-uses-now-expired-mongodb-4-4-package/14293
+  - wget -qO - https://www.mongodb.org/static/pgp/server-4.4.asc | sudo apt-key add -
+  - echo "deb [ arch=amd64,arm64 ] https://repo.mongodb.org/apt/ubuntu focal/mongodb-org/4.4 multiverse" | sudo tee /etc/apt/sources.list.d/mongodb-org-4.4.list
+  # start here
+  - curl -fSsL -O https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2004/x86_64/cuda-keyring_1.1-1_all.deb
+  - sudo dpkg -i cuda-keyring_1.1-1_all.deb
+  - sudo apt-get update
+  - sudo apt-get -y install cuda-toolkit-12-6
+  - curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg && curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
+  - sudo apt update
+  - sudo apt install -y nvidia-container-toolkit nvidia-container-runtime
+  - sudo service docker restart
+
+install:
+  - docker pull $DOCKER_IMAGE
+  - docker run -d -t --gpus all -p $MY_WEB_PORT:8080 -e TERM -e TZ=$MY_TIME_ZONE -e LANG=en_US.UTF-8 --hostname ppf-dev --name $MY_CONTAINER_NAME -e NVIDIA_DRIVER_CAPABILITIES=graphics,compute,utility $DOCKER_IMAGE
+  - EXEC="docker exec $MY_CONTAINER_NAME"
+  - EXEC_W="docker exec -w /root/ppf-contact-solver $MY_CONTAINER_NAME"
+  - $EXEC nvidia-smi
+  - $EXEC apt update
+  - $EXEC apt install -y curl git python3 python3-pip
+  - $EXEC pip3 install psutil click
+  - docker cp . $MY_CONTAINER_NAME:/root/ppf-contact-solver
+  - $EXEC_W python3 warmup.py
+  - $EXEC_W /root/.cargo/bin/cargo build --release
+
+script:
+  
