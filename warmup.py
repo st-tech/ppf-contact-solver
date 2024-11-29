@@ -129,15 +129,10 @@ def install_oh_my_zsh():
 
 
 def run(command, cwd="/tmp"):
-    pardir = os.path.dirname(os.getcwd())
-    if pardir == "/" or pardir == "/root":
-        if not os.path.exists("warmup.py"):
-            print("Please run this script in the same directory as warmup.py")
-            sys.exit(1)
-        subprocess.run(command, shell=True, cwd=cwd)
-    else:
-        print("Please run this script in the parent directory of root")
+    if not os.path.exists("warmup.py"):
+        print("Please run this script in the same directory as warmup.py")
         sys.exit(1)
+    subprocess.run(command, shell=True, cwd=cwd)
 
 
 def setup():
