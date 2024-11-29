@@ -289,7 +289,7 @@ docker rm $MY_CONTAINER_NAME
 
 ## ☁ Running on [vast.ai](https://vast.ai)
 
-The exact same steps above should work, except that you'll need to create a Docker template. Here's one:
+The exact same steps above should work (see `.github/workflows/getting-started-vast.yml`), except that you'll need to create a Docker template. Here's one:
 
 - **Image Path/Tag**: ```nvidia/cuda:11.8.0-devel-ubuntu22.04```
 - **Docker Options**: ```-e TZ=Asia/Tokyo -p 8080:8080``` (Your time zone, of course)

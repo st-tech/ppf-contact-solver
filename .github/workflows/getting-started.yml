@@ -1,4 +1,4 @@
-name: Getting Started Build & Run
+name: Getting Started
 
 on:
   workflow_dispatch:
