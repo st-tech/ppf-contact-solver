@@ -44,10 +44,14 @@ Symbolic math software 💥 explodes.
 We know that there is excellent literature out there 📚 but it has ⛔ limitations.
 The most popular one [[1]](#1) heavily depends on invariants, but not all isotropic energies can be clearly expressed with them, or at least not without considerable human effort.
 For example, how can we write a flavor of [Ogden](https://en.wikipedia.org/wiki/Ogden_hyperelastic_model) energy $\sum_k \left( \lambda_1^{0.5^k} + \lambda_2^{0.5^k} + \lambda_3^{0.5^k} - 3 \right)$ using invariants?
+
+> [!NOTE]
+> A practical example where our singular-value eigenanalysis is essential is the isotropic strain-limiting energies, which are discussed in the supplementary.
+
 Other method [[2]](#2) can handle such cases but have singularities when two stretches are the same along principal axes.
 This means that even a rest pose 🛟 is considered a singular case.
 Technically, our method is mathematically a variant of Zhu [[3]](#3); though, we eliminate (not all) the singularities they have and offer a more explicit solution.
-A notable differnce is that ours has the ability to re-derive the eigen system revealed by Smith et al. [[1]](#1).
+A notable difference is that ours has the ability to re-derive the eigen system revealed by Smith et al. [[1]](#1).
 This is only possible with our formulation, not with Zhu [[3]](#3).
 
 <a id="1">[1]</a> Breannan Smith, Fernando De Goes, and Theodore Kim. 2019. Analytic Eigensystems for Isotropic Distortion Energies. ACM Trans. Graph. https://doi.org/10.1145/3241041

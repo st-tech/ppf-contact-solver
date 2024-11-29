@@ -1,0 +1,69 @@
+name: Getting Started Build & Run
+
+on:
+  workflow_dispatch:
+
+env:
+  DOCKER_IMAGE: nvidia/cuda:11.8.0-devel-ubuntu22.04
+  TMP_CONTAINER_NAME: tmp-ppf-dev
+  TMP_ROOT: /root/ppf-contact-solver
+
+jobs:
+  headless:
+    runs-on: ocean
+
+    steps:
+      - name: prepare env
+        run: |
+          echo "EXEC=docker exec ${{env.TMP_CONTAINER_NAME}}" >> $GITHUB_ENV
+          echo "EXEC_W=docker exec -w ${{env.TMP_ROOT}} ${{env.TMP_CONTAINER_NAME}}" >> $GITHUB_ENV
+
+      - name: check env
+        run: |
+          echo "DOCKER_IMAGE: $DOCKER_IMAGE"
+          echo "TMP_CONTAINER_NAME: $TMP_CONTAINER_NAME"
+          echo "TMP_ROOT: $TMP_ROOT"
+          echo "EXEC: $EXEC"
+          echo "EXEC_W: $EXEC_W"
+
+      - name: check out repo
+        uses: actions/checkout@v3
+
+      # optional
+      #
+      # - name: install NVIDIA container toolkit
+      #   run: |
+      #       curl -fSsL -O https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2004/x86_64/cuda-keyring_1.1-1_all.deb
+      #       sudo dpkg -i cuda-keyring_1.1-1_all.deb
+      #       sudo apt-get update
+      #       sudo apt-get -y install cuda-toolkit-12-6
+      #       curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg && curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
+      #       sudo chmod 644 /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+      #       sudo apt update
+      #       sudo apt install -y nvidia-container-toolkit nvidia-container-runtime
+      #       sudo service docker restart
+
+      - name: setup container
+        run: |
+          docker pull $DOCKER_IMAGE
+          docker run -d -t --gpus all -e TERM -e LANG=en_US.UTF-8 --hostname ppf-dev --name $TMP_CONTAINER_NAME -e NVIDIA_DRIVER_CAPABILITIES=graphics,compute,utility $DOCKER_IMAGE
+          $EXEC nvidia-smi
+          $EXEC apt update
+          $EXEC apt install -y curl git python3 python3-pip
+          $EXEC pip3 install psutil click
+          docker cp . $TMP_CONTAINER_NAME:$TMP_ROOT
+
+      - name: warmup
+        run: $EXEC_W python3 warmup.py
+
+      - name: build
+        run: $EXEC_W /root/.cargo/bin/cargo build --release
+
+      - name: run headless
+        run: $EXEC_W python3 examples/headless.py
+
+      - name: remove container
+        run: |
+          docker stop $TMP_CONTAINER_NAME
+          docker rm $TMP_CONTAINER_NAME
+

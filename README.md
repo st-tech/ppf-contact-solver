@@ -1,4 +1,4 @@
-# ZOZO's Contact Solver 🫶
+# ZOZO's Contact Solver 🫶 
 
 A contact solver for physics-based simulations involving 👚 shells, 🪵 solids and 🪢 rods. All made by ZOZO.
 Published in [ACM Transactions on Graphics (TOG)](https://dl.acm.org/doi/abs/10.1145/3687908).
@@ -24,18 +24,18 @@ Published in [ACM Transactions on Graphics (TOG)](https://dl.acm.org/doi/abs/10.
 - 📃 Main paper [[PDF]](https://drive.google.com/file/d/1OrOKJH_im1L4j1cJB18sfvNHEbZVSqjL/view?usp=drive_link)[[Hindsight]](./articles/hindsight.md)
 - 📊 Supplementary PDF [[PDF]](https://drive.google.com/file/d/1ptjFNVufPBV4-vb5UDh1yTgz8-esjaSF/view?usp=drive_link)
 - 🤖 Supplementary scripts [[Directory]](https://drive.google.com/drive/folders/13CO068xLkd6ZSxsqtJQdNadgMrbbfSug?usp=drive_link)
-- 🔍 Singular-value eigen analysis [[Markdown]](./articles/eigensys.md)
+- 🔍 Singular-value eigenanalysis [[Markdown]](./articles/eigensys.md)
 
 ## ⚡️ Requirements
 
-- 🔥 A modern NVIDIA GPU (CUDA 11.X compatible).
-- 🐳 A Docker environment.
+- 🔥 A modern NVIDIA GPU (Turing or newer).
+- 🐳 A Docker environment (see [below](#-getting-started)).
 
 ## 🐍 How To Use
 Our frontend is accessible through a browser using our built-in JupyterLab interface.
 All is set up when you open it for the first time.
 Results can be interactively viewed through the browser and exported as needed.
-This allows you to interact with the simulator on your laptop while the actual simulation runs on a remote server.
+This allows you to interact with the simulator on your laptop while the actual simulation runs on a remote headless server.
 Here's an example of draping five sheets over a sphere with two corners pinned.
 Please look into the [examples](./examples/) directory for more examples.
 
@@ -126,17 +126,25 @@ The author is actively woriking on it.
 
 ## 💨 Getting Started
 
-It can be stressful 😰 to build something that heavily depends on the GPU, but we’ve made things easy 👍.
+It can be stressful 😰 to build something that heavily depends on the GPU, but we've made things easy for you with clear instructions 👍.
 First, we assume a Linux/bash/zsh environment, but this could also work for Windows with minor 🔧 tweaks (we don't own Windows).
 To get the ball ⚽ rolling, we'll configure a Docker environment 🐳 to minimize any trouble 🤯 that 🥊 hits you.
+Rest assured 😌, all the steps below are verified to run without errors via automated GitHub Actions (see `.github/workflows/getting-started.yml`).
 
-Please get a latest Docker environent 🐋 installed on your system [[Link]](https://docs.docker.com/engine/install/) and also install NVIDIA Container Toolkit [[Link]](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html).
+> [!NOTE]
+> If you wish to install our solver on a headless remote machine, SSH into the server with port forwarding using the following command:
+> ```
+> ssh -L 8080:localhost:8080 user@remote_server_address
+> ```
+> This port will be used to access the frontend afterward.
+> The two port numbers of `8080` must match the value we set for `$MY_WEB_PORT` below.
+
+First, please get a latest Docker environent 🐋 installed on your system [[Link]](https://docs.docker.com/engine/install/) and also install NVIDIA Container Toolkit [[Link]](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html).
 Of course, a CUDA toolkit, along with a driver, must also be installed on your host.
-How exactly they are done can be seen in the `.travis.yml` config file.
 Next, create a container 📦 by the following Docker command:
 
 ```
-MY_WEB_PORT=8080  # Port number for web-based file browsing
+MY_WEB_PORT=8080  # Port number for JupyterLab web browsing
 MY_TIME_ZONE=Asia/Tokyo  # Your time zone
 MY_CONTAINER_NAME=ppf-contact-solver  # Container name
 
@@ -188,20 +196,30 @@ If successful, this will get back to you with something like this
 
 ```
 
-Next, run this
+> [!NOTE]
+> If an error occurs 🥵, make sure that `nvidia-smi` works on your host. If it does, verify that the NVIDIA Container Toolkit is properly installed. If it still doesn't work, running `sudo service docker restart` on your host may resolve the issue.
+
+Please confirm that your GPU is properly detected and listed here.
+Next, we'll make sure that your GPU has sufficient compute capabilities.
+This can be confirmed by running
+
+```
+nvidia-smi --query-gpu=compute_cap --format=csv,noheader,nounits
+```
+
+and if this returns a number `7.5` or higher, your GPU satisfies the requirements to run our solver.
+Next, we'll check if `nvcc` is properly installed and verify that its version is `11.8`.
+This can be checked by running
 
 ```
 nvcc --version | grep cuda_11.8
 ```
 
-and this gets back to you with
+and it should get back to you with
 
 ```
 Build cuda_11.8.r11.8/compiler.31833905_0
 ```
-
-> [!NOTE]
-> If an error occurs 🥵, you may need to do a fresh 🌟 install of the NVIDIA driver.
 
 Now let's get the installation started.
 No worries 🤙; all the commands below only disturb things in the container, so your host environment stays clean ✨.
@@ -249,9 +267,8 @@ python3 warmup.py jupyter
 ```
 
 and now you can access our JupyterLab frontend from http://localhost:8080 on your 🌐 browser.
-The port number `8080` is the one we set as `$MY_WEB_PORT`.
-If you install it on a remote machine, replace `localhost` with the remote machine's address.
-If you are connected to the machine via SSH with the port forwarding option `-L 8080:localhost:8080`, you can still access it through `localhost:8080`.
+The port number `8080` is the one we set for `$MY_WEB_PORT`.
+Enjoy! 😄
 
 ## 🧹 Cleaning Up
 

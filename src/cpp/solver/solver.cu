@@ -101,21 +101,22 @@ class ThrustOperators : public Operators {
 };
 
 __device__ static Mat3x3f invert(const Mat3x3f &m) {
-    float det = m(0, 0) * (m(1, 1) * m(2, 2) - m(2, 1) * m(1, 2)) -
-                m(0, 1) * (m(1, 0) * m(2, 2) - m(1, 2) * m(2, 0)) +
-                m(0, 2) * (m(1, 0) * m(2, 1) - m(1, 1) * m(2, 0));
+    float det = m(0, 0) * m(1, 1) * m(2, 2) - m(0, 0) * m(1, 2) * m(1, 2) -
+                m(0, 1) * m(0, 1) * m(2, 2) +
+                2.0f * m(0, 1) * m(0, 2) * m(1, 2) -
+                m(0, 2) * m(0, 2) * m(1, 1);
     Mat3x3f minv;
     if (det) {
         float invdet = 1.0f / det;
-        minv(0, 0) = (m(1, 1) * m(2, 2) - m(2, 1) * m(1, 2)) * invdet;
-        minv(0, 1) = (m(0, 2) * m(2, 1) - m(0, 1) * m(2, 2)) * invdet;
+        minv(0, 0) = (m(1, 1) * m(2, 2) - m(1, 2) * m(1, 2)) * invdet;
+        minv(0, 1) = (m(0, 2) * m(1, 2) - m(0, 1) * m(2, 2)) * invdet;
         minv(0, 2) = (m(0, 1) * m(1, 2) - m(0, 2) * m(1, 1)) * invdet;
-        minv(1, 0) = (m(1, 2) * m(2, 0) - m(1, 0) * m(2, 2)) * invdet;
-        minv(1, 1) = (m(0, 0) * m(2, 2) - m(0, 2) * m(2, 0)) * invdet;
-        minv(1, 2) = (m(1, 0) * m(0, 2) - m(0, 0) * m(1, 2)) * invdet;
-        minv(2, 0) = (m(1, 0) * m(2, 1) - m(2, 0) * m(1, 1)) * invdet;
-        minv(2, 1) = (m(2, 0) * m(0, 1) - m(0, 0) * m(2, 1)) * invdet;
-        minv(2, 2) = (m(0, 0) * m(1, 1) - m(1, 0) * m(0, 1)) * invdet;
+        minv(1, 1) = (m(0, 0) * m(2, 2) - m(0, 2) * m(0, 2)) * invdet;
+        minv(1, 2) = (m(0, 1) * m(0, 2) - m(0, 0) * m(1, 2)) * invdet;
+        minv(2, 2) = (m(0, 0) * m(1, 1) - m(0, 1) * m(0, 1)) * invdet;
+        minv(1, 0) = minv(0, 1);
+        minv(2, 0) = minv(0, 2);
+        minv(2, 1) = minv(1, 2);
     } else {
         minv = Mat3x3f::Zero();
         for (unsigned j = 0; j < 3; j++) {
