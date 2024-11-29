@@ -9,7 +9,8 @@ on:
 
 jobs:
   headless:
-    runs-on: vast-ci
+    runs-on: vast-ci # replace with your runner name
+    timeout-minutes: 15
 
     steps:
 

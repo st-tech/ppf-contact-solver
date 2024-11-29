@@ -10,7 +10,8 @@ env:
 
 jobs:
   headless:
-    runs-on: ocean
+    runs-on: ppf-contact-solver-NVIDIA # replace with your runner name
+    timeout-minutes: 15
 
     steps:
       - name: prepare env
