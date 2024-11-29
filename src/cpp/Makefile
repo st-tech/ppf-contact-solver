@@ -8,9 +8,9 @@ NVCC=nvcc
 
 OUT_DIR=build
 SUPPRESS_WARNINGS=1222 2527 2529 2651 2653 2668 2669 2670 2671 2735 2737 2739 20012 20011 20014
-CUDA_FLAGS=-O3 -arch=sm_75 -MMD --device-c -Xcompiler -fPIC -D__NVCC__ -DEIGEN_WARNINGS_DISABLED --expt-relaxed-constexpr --extended-lambda
+CUDA_FLAGS=-O3 -MMD --device-c -Xcompiler -fPIC -D__NVCC__ -DEIGEN_WARNINGS_DISABLED --expt-relaxed-constexpr --extended-lambda
 CUDA_FLAGS += $(foreach warn,$(SUPPRESS_WARNINGS),--diag-suppress=$(warn))
-CPP_FLAGS=-O3 -std=c++1z -Wall -Wno-unused-parameter -Wno-unused-function -Wno-unused-function -Wno-strict-aliasing -Wno-uninitialized -Wno-deprecated-declarations -Wno-unused-lambda-capture -fPIC -MMD -MP
+CPP_FLAGS=-O3 -std=c++1z -Wall -Wno-unused-function -Wno-unused-function -Wno-strict-aliasing -Wno-uninitialized -Wno-deprecated-declarations -Wno-unused-lambda-capture -fPIC -MMD -MP
 EIGEN_PATH=/usr/include/eigen3
 EIGSYS_PATH=../../eigsys
 

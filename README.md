@@ -199,15 +199,7 @@ If successful, this will get back to you with something like this
 > [!NOTE]
 > If an error occurs 🥵, make sure that `nvidia-smi` works on your host. If it does, verify that the NVIDIA Container Toolkit is properly installed. If it still doesn't work, running `sudo service docker restart` on your host may resolve the issue.
 
-Please confirm that your GPU is properly detected and listed here.
-Next, we'll make sure that your GPU has sufficient compute capabilities.
-This can be confirmed by running
-
-```
-nvidia-smi --query-gpu=compute_cap --format=csv,noheader,nounits
-```
-
-and if this returns a number `7.5` or higher, your GPU satisfies the requirements to run our solver.
+Please confirm that your GPU is listed here.
 Next, we'll check if `nvcc` is properly installed and verify that its version is `11.8`.
 This can be checked by running
 
