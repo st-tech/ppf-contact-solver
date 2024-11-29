@@ -236,16 +236,14 @@ class Session:
         self._save_func()
         return self
 
-    def start(self, param: Param, force: bool = True) -> "Session":
-        self._check_ready()
+    def output_path(self) -> str:
+        return os.path.join(self._path, "output")
+
+    def export_shell_command(
+        self,
+        param: Param,
+    ) -> str:
         param.export(self._path)
-        if is_running():
-            if force:
-                terminate()
-            else:
-                display("Solver is already running. Teriminate first.")
-                display(self._terminate_button("Terminate Now"))
-                return self
         program_path = os.path.join(
             self._proj_root, "target", "release", "ppf-contact-solver"
         )
@@ -254,19 +252,40 @@ class Session:
                 [
                     program_path,
                     f"--path {self._path}",
-                    f"--output {self._path}/output",
+                    f"--output {self.output_path()}",
                 ]
             )
-            with open(os.path.join(self._path, "command.sh"), "w") as f:
+            path = os.path.join(self._path, "command.sh")
+            with open(path, "w") as f:
                 f.write(command)
-            os.chmod(os.path.join(self._path, "command.sh"), 0o755)
-            err_path = os.path.join(self._path, "error.log")
-            log_path = os.path.join(self._path, "stdout.log")
+            os.chmod(path, 0o755)
+            return path
+        else:
+            raise ValueError("Solver does not exist")
+
+    def start(self, param: Param, force: bool = True, blocking=False) -> "Session":
+        self._check_ready()
+        if is_running():
+            if force:
+                terminate()
+            else:
+                display("Solver is already running. Teriminate first.")
+                display(self._terminate_button("Terminate Now"))
+                return self
+        cmd_path = self.export_shell_command(param)
+        err_path = os.path.join(self._path, "error.log")
+        log_path = os.path.join(self._path, "stdout.log")
+        if blocking:
+            subprocess.run(cmd_path.split(), shell=True)
+            return self
+        else:
+            command = open(cmd_path, "r").read()
             process = subprocess.Popen(
                 command.split(),
                 stdout=open(log_path, "w"),
                 stderr=open(err_path, "w"),
                 start_new_session=True,
+                cwd=self._proj_root,
             )
             if process.poll() is not None:
                 raise ValueError("Solver failed to start")
@@ -279,8 +298,6 @@ class Session:
                 err_content = open(err_path, "r").readlines()
                 display_log(err_content)
                 raise ValueError("Solver failed to start")
-        else:
-            raise ValueError("Solver executable not found")
 
     def get_number(self, name: str):
         path = os.path.join(self._path, "output", "data", f"{name}.out")
@@ -638,7 +655,7 @@ def get_default_params(path: str) -> dict[str, Any]:
                         clap_match = re.match(r"clap\((.*?)\)", attr)
                         if clap_match:
                             args = clap_match.group(1)
-                            arg_list = re.findall(r'(?:[^,"]|"(?:\\.|[^"])*")+', args)
+                            arg_list = re.findall(r'(?:[^,"]|"(?:\\.|[^"\\])*")+', args)
                             for arg in arg_list:
                                 arg = arg.strip()
                                 if "=" in arg:
