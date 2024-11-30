@@ -143,7 +143,9 @@ Next, follow the instructions below specific to the operating system running on 
 
 ### 🪟 Windows
 
-Install the latest version of Docker Desktop [[Link]](https://docs.docker.com/desktop/setup/install/windows-install/) on your computer. You may need to log out or reboot after the installation. After logging back in, launch Docker Desktop to ensure that Docker is running. Then, create a container 📦 by running the following Docker command in PowerShell:
+Install the latest version of Docker Desktop [[Link]](https://docs.docker.com/desktop/setup/install/windows-install/) on the host computer.
+You may need to log out or reboot after the installation. After logging back in, launch Docker Desktop to ensure that Docker is running.
+Then, create a container 📦 by running the following Docker command in PowerShell:
 
 ```
 $MY_WEB_PORT = 8080  # Port number for JupyterLab web browsing
