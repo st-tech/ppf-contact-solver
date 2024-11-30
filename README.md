@@ -238,7 +238,7 @@ First, install following packages
 
 ```
 apt update
-apt install -y curl git python3 python3-pip
+apt install -y git python3
 ```
 
 Next, clone our respository

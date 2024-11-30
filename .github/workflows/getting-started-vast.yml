@@ -1,3 +1,7 @@
+# File: getting-started-vast.toml
+# Author: Ryoichi Ando (ryoichi.ando@zozo.com)
+# License: Apache v2.0
+
 name: vast.ai
 
 # To setup a vast instance as a self-runner
@@ -21,7 +25,7 @@ jobs:
         run: |
           nvidia-smi
           apt update
-          apt install -y curl git python3 python3-pip
+          apt install -y git python3
 
       - name: warmup
         run: python3 warmup.py

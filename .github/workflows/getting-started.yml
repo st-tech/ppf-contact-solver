@@ -1,3 +1,7 @@
+# File: getting-started.toml
+# Author: Ryoichi Ando (ryoichi.ando@zozo.com)
+# License: Apache v2.0
+
 name: Getting Started
 
 on:
@@ -50,7 +54,7 @@ jobs:
           docker run -d -t --gpus all -e TERM -e LANG=en_US.UTF-8 --hostname ppf-dev --name $TMP_CONTAINER_NAME -e NVIDIA_DRIVER_CAPABILITIES=graphics,compute,utility $DOCKER_IMAGE
           $EXEC nvidia-smi
           $EXEC apt update
-          $EXEC apt install -y curl git python3 python3-pip
+          $EXEC apt install -y git python3
           docker cp . $TMP_CONTAINER_NAME:$TMP_ROOT
 
       - name: warmup
