@@ -126,8 +126,7 @@ The author is actively woriking on it.
 
 ## 💨 Getting Started
 
-It can be stressful 😰 to build something that heavily depends on the GPU, but we've made things easy for you with clear instructions 👍.
-First, we assume a Linux/bash/zsh environment, but this could also work for Windows with minor 🔧 tweaks (we don't own Windows).
+It can be stressful 😰 to build something that heavily depends on the GPU, but we've made things easy for you 👍.
 To get the ball ⚽ rolling, we'll configure a Docker environment 🐳 to minimize any trouble 🤯 that 🥊 hits you.
 Rest assured 😌, all the steps below are verified to run without errors via automated GitHub Actions (see `.github/workflows/getting-started.yml`).
 
@@ -139,9 +138,40 @@ Rest assured 😌, all the steps below are verified to run without errors via au
 > This port will be used to access the frontend afterward.
 > The two port numbers of `8080` must match the value we set for `$MY_WEB_PORT` below.
 
-First, please get a latest Docker environent 🐋 installed on your system [[Link]](https://docs.docker.com/engine/install/) and also install NVIDIA Container Toolkit [[Link]](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html).
-Of course, a CUDA toolkit, along with a driver, must also be installed on your host.
-Next, create a container 📦 by the following Docker command:
+First, install the CUDA toolkit along with the driver on your host system.
+Next, follow the instructions specific to the operating system running on the host.
+
+### 🪟 Windows
+
+Next, install the latest version of Docker Desktop [[Link]](https://docs.docker.com/desktop/setup/install/windows-install/) on your computer.
+Then, create a container 📦 by running the following Docker command in PowerShell:
+
+```
+$MY_WEB_PORT = 8080  # Port number for JupyterLab web browsing
+$MY_TIME_ZONE = "Asia/Tokyo"  # Your time zone
+$MY_CONTAINER_NAME = "ppf-contact-solver"  # Container name
+
+docker run -it `
+    --gpus all `
+    -p ${MY_WEB_PORT}:8080 `
+    -e TERM `
+    -e TZ=$MY_TIME_ZONE `
+    -e LANG=en_US.UTF-8 `
+    --hostname ppf-dev `
+    --hostname ppf-dev `
+    --name $MY_CONTAINER_NAME `
+    -e NVIDIA_DRIVER_CAPABILITIES="graphics,compute,utility" `
+    nvidia/cuda:11.8.0-devel-ubuntu22.04
+```
+
+Windows users do not need to install the NVIDIA Container Toolkit.
+
+### 🐧 Linux
+
+Linux users will also need to install Docker 🐋 on their system.
+Please refer to the installation guide [[Link]](https://docs.docker.com/engine/install/).
+Also, install the NVIDIA Container Toolkit by following the guide [[Link]](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html).
+Then, create a container 📦 by running the following Docker command:
 
 ```
 MY_WEB_PORT=8080  # Port number for JupyterLab web browsing
@@ -159,7 +189,9 @@ docker run -it \
     nvidia/cuda:11.8.0-devel-ubuntu22.04
 ```
 
-At the end of the line you see:
+### 🪟🐧 Both Systems
+
+At the end of the line, you should see:
 
 ```
 root@ppf-dev:/#
@@ -197,22 +229,9 @@ If successful, this will get back to you with something like this
 ```
 
 > [!NOTE]
-> If an error occurs 🥵, make sure that `nvidia-smi` works on your host. If it does, verify that the NVIDIA Container Toolkit is properly installed. If it still doesn't work, running `sudo service docker restart` on your host may resolve the issue.
+> If an error occurs 🥵, ensure that `nvidia-smi` is working on your host. For Linux users, make sure the NVIDIA Container Toolkit is properly installed. If the issue persists, try running `sudo service docker restart` on your host to resolve it.
 
 Please confirm that your GPU is listed here.
-Next, we'll check if `nvcc` is properly installed and verify that its version is `11.8`.
-This can be checked by running
-
-```
-nvcc --version | grep cuda_11.8
-```
-
-and it should get back to you with
-
-```
-Build cuda_11.8.r11.8/compiler.31833905_0
-```
-
 Now let's get the installation started.
 No worries 🤙; all the commands below only disturb things in the container, so your host environment stays clean ✨.
 First, install following packages
