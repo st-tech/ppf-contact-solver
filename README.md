@@ -158,7 +158,6 @@ docker run -it `
     -e TZ=$MY_TIME_ZONE `
     -e LANG=en_US.UTF-8 `
     --hostname ppf-dev `
-    --hostname ppf-dev `
     --name $MY_CONTAINER_NAME `
     -e NVIDIA_DRIVER_CAPABILITIES="graphics,compute,utility" `
     nvidia/cuda:11.8.0-devel-ubuntu22.04
@@ -283,7 +282,7 @@ Enjoy! 😄
 
 ## 🧹 Cleaning Up
 
-To remove all the files simply stop 🛑 the container and ❌ delete it.
+To remove all traces, simply stop 🛑 the container and ❌ delete it.
 Be aware that all simulation data will be also lost. Back up any important data if needed.
 
 ```
