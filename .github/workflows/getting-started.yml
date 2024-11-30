@@ -51,7 +51,6 @@ jobs:
           $EXEC nvidia-smi
           $EXEC apt update
           $EXEC apt install -y curl git python3 python3-pip
-          $EXEC pip3 install psutil click
           docker cp . $TMP_CONTAINER_NAME:$TMP_ROOT
 
       - name: warmup
