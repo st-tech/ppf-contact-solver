@@ -138,13 +138,12 @@ Rest assured 😌, all the steps below are verified to run without errors via au
 > This port will be used to access the frontend afterward.
 > The two port numbers of `8080` must match the value we set for `$MY_WEB_PORT` below.
 
-First, install the CUDA toolkit along with the driver on your host system.
-Next, follow the instructions specific to the operating system running on the host.
+First, install the CUDA Toolkit [[Link]](https://developer.nvidia.com/cuda-downloads) along with the driver on your host system.
+Next, follow the instructions below specific to the operating system running on the host.
 
 ### 🪟 Windows
 
-Next, install the latest version of Docker Desktop [[Link]](https://docs.docker.com/desktop/setup/install/windows-install/) on your computer.
-Then, create a container 📦 by running the following Docker command in PowerShell:
+Install the latest version of Docker Desktop [[Link]](https://docs.docker.com/desktop/setup/install/windows-install/) on your computer. You may need to log out or reboot after the installation. After logging back in, launch Docker Desktop to ensure that Docker is running. Then, create a container 📦 by running the following Docker command in PowerShell:
 
 ```
 $MY_WEB_PORT = 8080  # Port number for JupyterLab web browsing
