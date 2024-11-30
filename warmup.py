@@ -3,8 +3,6 @@
 # License: Apache v2.0
 
 import subprocess
-import click
-import psutil
 import sys
 import os
 
@@ -59,6 +57,8 @@ def list_packages():
 
 def python_packages():
     python_packages = [
+        "click",
+        "psutil",
         "numpy",
         "libigl",
         "plyfile",
@@ -170,6 +170,8 @@ def set_time():
 
 
 def start_jupyter():
+    import click
+    import psutil
     for process in psutil.process_iter():
         if "jupyter" in process.name():
             print("Jupyter is already running")

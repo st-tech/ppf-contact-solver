@@ -238,7 +238,6 @@ First, install following packages
 ```
 apt update
 apt install -y curl git python3 python3-pip
-pip3 install psutil click
 ```
 
 Next, clone our respository
