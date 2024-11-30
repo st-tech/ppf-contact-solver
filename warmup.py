@@ -39,6 +39,8 @@ def create_clang_config():
 
 def list_packages():
     packages = [
+        "curl",
+        "python3-pip",
         "build-essential",
         "clang",
         "clangd",
