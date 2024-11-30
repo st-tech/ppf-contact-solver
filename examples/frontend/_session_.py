@@ -276,7 +276,7 @@ class Session:
         err_path = os.path.join(self._path, "error.log")
         log_path = os.path.join(self._path, "stdout.log")
         if blocking:
-            subprocess.run(cmd_path.split(), shell=True)
+            subprocess.run(cmd_path, cwd=self._proj_root, shell=True)
             return self
         else:
             command = open(cmd_path, "r").read()
@@ -291,6 +291,7 @@ class Session:
                 raise ValueError("Solver failed to start")
             else:
                 init_path = os.path.join(self._path, "output", "data", "initialize.out")
+                time.sleep(1)
                 while is_running():
                     if os.path.exists(init_path):
                         return self
