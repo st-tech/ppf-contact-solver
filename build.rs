@@ -4,15 +4,17 @@
 
 use std::env;
 use std::process::Command;
+use num_cpus;
 
 fn main() {
     let out_dir = env::var("OUT_DIR").unwrap();
+    let num_threads = num_cpus::get();
     println!("cargo:rerun-if-changed=src/cpp");
     println!("cargo:rerun-if-changed=eigsys/eig-hpp");
     let output = Command::new("make")
         .current_dir("src/cpp")
         .arg(format!("OUT_DIR={}", out_dir))
-        .arg("-j12")
+        .arg(format!("-j{}", num_threads))
         .output()
         .expect("Failed to execute make command");
 

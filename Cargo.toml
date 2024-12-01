@@ -21,3 +21,6 @@ rand = "0.8.5"
 git_info = "^0.1.2"
 rayon = "1.5.3"
 toml = "0.8.19"
+
+[build-dependencies]
+num_cpus = "1.16.0"
