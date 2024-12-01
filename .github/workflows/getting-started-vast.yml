@@ -4,7 +4,7 @@
 
 name: vast.ai
 
-# To setup a vast instance as a self-runner
+# To setup a vast instance as a self-hosted runner
 # set this before running config.py
 # export RUNNER_ALLOW_RUNASROOT="1"
 
