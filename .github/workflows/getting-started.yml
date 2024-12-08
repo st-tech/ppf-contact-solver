@@ -67,6 +67,7 @@ jobs:
         run: $EXEC_W python3 examples/headless.py
 
       - name: remove container
+        if: always()
         run: |
           docker stop $TMP_CONTAINER_NAME
           docker rm $TMP_CONTAINER_NAME
