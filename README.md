@@ -34,7 +34,7 @@ Published in [ACM Transactions on Graphics (TOG)](https://dl.acm.org/doi/abs/10.
 - 🐳 A Docker environment (see [below](#-getting-started)).
 
 ## 🐍 How To Use
-Our frontend is accessible through a browser using our built-in JupyterLab interface (see this video [[Video]](https://drive.google.com/file/d/1dtfbYf39SBkXS6H76RJmoW-1f362ZMW2/view?usp=sharing)).
+Our frontend is accessible through a browser using our built-in JupyterLab interface (see this video [[Video]](https://drive.google.com/file/d/1MtOEOvm5KEPwvgO-oeMY736he7H2DoNp/view?usp=sharing)).
 All is set up when you open it for the first time.
 Results can be interactively viewed through the browser and exported as needed.
 This allows you to interact with the simulator on your laptop while the actual simulation runs on a remote headless server.
