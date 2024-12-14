@@ -128,7 +128,13 @@ The author is actively woriking on it.
 
 ## 💨 Getting Started
 
-It can be stressful 😰 to build something that heavily depends on the GPU, but we've made things easy for you 👍.
+### 🎥 Installation Videos
+
+We provide uninterrupted recorded installation videos (🪟 Windows [[Video]](https://drive.google.com/file/d/1Np3MwUtSlppQPMrawtobzoGtZZWrmFgG/view?usp=sharing), 🐧 Linux [[Video]](https://drive.google.com/file/d/1ZDnzsn46E1I6xNzyg0S8Q6xvgXw_Lw7M/view?usp=sharing) and ☁ [vast.ai](https://vast.ai) [[Video]](https://drive.google.com/file/d/1k0LnkPKXuEwZZvElaKohWZeDd6M3ONe1/view?usp=sharing))
+to reduce stress 😣 during the installation process. We encourage you to 👀 check them out to get a sense of how things go ⏳ and how long ⏱️ each step takes.
+
+### 🐳 Installing Docker
+
 To get the ball ⚽ rolling, we'll configure a Docker environment 🐳 to minimize any trouble 🤯 that 🥊 hits you.
 Rest assured 😌, all the steps below are verified to run without errors via automated GitHub Actions (see `.github/workflows/getting-started.yml`).
 
@@ -167,6 +173,11 @@ docker run -it `
 ```
 
 Windows users do not need to install the NVIDIA Container Toolkit.
+
+> [!WARNING]
+> We have confirmed that some NVIDIA drivers result in runtime errors 🚫.
+For example, driver version `560.94` leads to a simulation failure at startup.
+If you encounter such an issue ⚠️, try upgrading to the latest driver 🔄 or, if necessary, downgrading to a previous version ⬇️. I would appreciate it if you could open an issue 📝 to report the driver version that causes runtime errors 🚫, so that others can know which driver should be avoided.
 
 ### 🐧 Linux
 
