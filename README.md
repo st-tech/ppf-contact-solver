@@ -136,7 +136,9 @@ to reduce stress 😣 during the installation process. We encourage you to 👀 
 ### 🐳 Installing Docker
 
 To get the ball ⚽ rolling, we'll configure a Docker environment 🐳 to minimize any trouble 🤯 that 🥊 hits you.
-Rest assured 😌, all the steps below are verified to run without errors via automated GitHub Actions (see `.github/workflows/getting-started.yml`).
+Rest assured 😌, all the steps below are verified to run without errors via automated GitHub Actions (see `.github/workflows/getting-started.yml`
+).
+The tested runner is the Ubuntu NVIDIA GPU-Optimized Image for AI and HPC with an NVIDIA Tesla T4 (16 GB VRAM).
 
 > [!NOTE]
 > If you wish to install our solver on a headless remote machine, SSH into the server with port forwarding using the following command:
