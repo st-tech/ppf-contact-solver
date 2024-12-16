@@ -64,9 +64,11 @@ __device__ Mat3x3f compute_deformation_grad(const Mat3x4f &x,
 __device__ float compute_face_area(const Mat3x3f &vertex);
 
 template <class T> T sum_array(Vec<T> array, unsigned size);
-template <class T> T sum_array_sorted(Vec<T> array, unsigned size);
-template <class T> T min_array(Vec<T> array, unsigned size, T init_val);
-template <class T> T max_array(Vec<T> array, unsigned size, T init_val);
+template <class T> unsigned sum_integer_array(Vec<T> array, unsigned size);
+
+template <class T> T min_array(const T *array, unsigned size, T init_val);
+template <class T> T max_array(const T *array, unsigned size, T init_val);
+
 void compute_svd(DataSet data, Vec<Vec3f> curr, Vec<Svd3x2> svd,
                  ParamSet param);
 __device__ float get_wind_weight(float time);

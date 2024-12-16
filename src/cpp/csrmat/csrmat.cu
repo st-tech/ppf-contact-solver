@@ -7,13 +7,8 @@
 
 #include "../main/cuda_utils.hpp"
 #include "../utility/dispatcher.hpp"
+#include "../utility/utility.hpp"
 #include "csrmat.hpp"
-#include <thrust/device_ptr.h>
-#include <thrust/execution_policy.h>
-#include <thrust/functional.h>
-#include <thrust/logical.h>
-#include <thrust/reduce.h>
-#include <thrust/scan.h>
 
 __device__ void Row::alloc() {
     head = 0;
@@ -142,6 +137,83 @@ void DynCSRMat::start_rebuild_buffer() {
     } DISPATCH_END;
 }
 
+__global__ void block_scan_kernel(unsigned *d_data, unsigned *d_block_sums,
+                                  unsigned n) {
+    extern __shared__ unsigned temp[];
+    unsigned tid = threadIdx.x;
+    unsigned idx = blockIdx.x * blockDim.x + threadIdx.x;
+    temp[tid] = (idx < n) ? d_data[idx] : 0;
+    __syncthreads();
+    unsigned last_element = temp[blockDim.x - 1];
+    __syncthreads();
+    for (int offset = 1; offset < blockDim.x; offset *= 2) {
+        int index = (tid + 1) * offset * 2 - 1;
+        if (index < blockDim.x) {
+            temp[index] += temp[index - offset];
+        }
+        __syncthreads();
+    }
+    if (tid == 0) {
+        temp[blockDim.x - 1] = 0;
+    }
+    __syncthreads();
+    for (int offset = blockDim.x / 2; offset > 0; offset /= 2) {
+        int index = (tid + 1) * offset * 2 - 1;
+        if (index < blockDim.x) {
+            unsigned temp_val = temp[index - offset];
+            temp[index - offset] = temp[index];
+            temp[index] += temp_val;
+        }
+        __syncthreads();
+    }
+    if (idx < n) {
+        d_data[idx] = temp[tid];
+    }
+    if (tid == 0 && d_block_sums != nullptr) {
+        d_block_sums[blockIdx.x] = temp[blockDim.x - 1] + last_element;
+    }
+}
+
+__global__ void add_block_offsets_kernel(unsigned *d_data,
+                                         unsigned *d_block_sums, unsigned n) {
+    unsigned idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (blockIdx.x > 0 && idx < n) {
+        d_data[idx] += d_block_sums[blockIdx.x - 1];
+    }
+}
+
+void exclusive_scan(unsigned *d_data, unsigned n) {
+    const unsigned block_size = 1024;
+    const unsigned num_blocks = (n + block_size - 1) / block_size;
+    static unsigned *d_block_sums = nullptr;
+    static unsigned *h_block_sums = nullptr;
+    static unsigned max_num_blocks = 0;
+    if (d_block_sums == nullptr) {
+        cudaMalloc((void **)&d_block_sums, num_blocks * sizeof(unsigned));
+        h_block_sums = new unsigned[num_blocks];
+        max_num_blocks = num_blocks;
+    } else if (max_num_blocks < num_blocks) {
+        cudaFree(d_block_sums);
+        cudaMalloc((void **)&d_block_sums, num_blocks * sizeof(unsigned));
+        delete[] h_block_sums;
+        h_block_sums = new unsigned[num_blocks];
+        max_num_blocks = num_blocks;
+    }
+    block_scan_kernel<<<num_blocks, block_size,
+                        block_size * sizeof(unsigned)>>>(d_data, d_block_sums,
+                                                         n);
+    cudaDeviceSynchronize();
+    cudaMemcpy(h_block_sums, d_block_sums, num_blocks * sizeof(unsigned),
+               cudaMemcpyDeviceToHost);
+    for (unsigned i = 1; i < num_blocks; i++) {
+        h_block_sums[i] += h_block_sums[i - 1];
+    }
+    cudaMemcpy(d_block_sums, h_block_sums, num_blocks * sizeof(unsigned),
+               cudaMemcpyHostToDevice);
+    add_block_offsets_kernel<<<num_blocks, block_size>>>(d_data, d_block_sums,
+                                                         n);
+}
+
 void DynCSRMat::finish_rebuild_buffer(unsigned &max_nnz_row,
                                       float &consumed_rat) {
     Vec<unsigned> fixed_row_offsets = this->fixed_row_offsets;
@@ -156,18 +228,13 @@ void DynCSRMat::finish_rebuild_buffer(unsigned &max_nnz_row,
         tmp_array[i] = rows[i].max_dyn_rows + rows[i].fixed_nnz;
     } DISPATCH_END;
 
-    max_nnz_row =
-        thrust::reduce(thrust::device, tmp_array.data, tmp_array.data + nrow, 0,
-                       thrust::maximum<unsigned>());
+    max_nnz_row = utility::max_array(tmp_array.data, nrow, 0u);
 
     unsigned tmp0, tmp1;
     CUDA_HANDLE_ERROR(cudaMemcpy(&tmp0, dyn_row_offsets.data + nrow - 1,
                                  sizeof(unsigned), cudaMemcpyDeviceToHost));
 
-    thrust::exclusive_scan(thrust::device, dyn_row_offsets.data,
-                           dyn_row_offsets.data + nrow, dyn_row_offsets.data,
-                           0);
-
+    exclusive_scan(dyn_row_offsets.data, nrow);
     CUDA_HANDLE_ERROR(cudaMemcpy(&tmp1, dyn_row_offsets.data + nrow - 1,
                                  sizeof(unsigned), cudaMemcpyDeviceToHost));
 
@@ -242,8 +309,6 @@ void DynCSRMat::finalize() {
     unsigned num_fixed_nnz = 0;
 
     Vec<unsigned> fixed_row_offsets = this->fixed_row_offsets;
-    Vec<unsigned> fixed_index_buff = this->fixed_index_buff;
-
     DISPATCH_START(nrow)
     [fixed_row_offsets, rows] __device__(unsigned i) mutable {
         fixed_row_offsets[i] = rows[i].head;
@@ -253,10 +318,7 @@ void DynCSRMat::finalize() {
     CUDA_HANDLE_ERROR(cudaMemcpy(&tmp0, fixed_row_offsets.data + nrow - 1,
                                  sizeof(unsigned), cudaMemcpyDeviceToHost));
 
-    thrust::exclusive_scan(thrust::device, fixed_row_offsets.data,
-                           fixed_row_offsets.data + nrow,
-                           fixed_row_offsets.data, 0);
-
+    exclusive_scan(fixed_row_offsets.data, nrow);
     CUDA_HANDLE_ERROR(cudaMemcpy(&tmp1, fixed_row_offsets.data + nrow - 1,
                                  sizeof(unsigned), cudaMemcpyDeviceToHost));
 
@@ -287,10 +349,7 @@ void DynCSRMat::finalize() {
     CUDA_HANDLE_ERROR(cudaMemcpy(&tmp0, ref_index_offsets.data + nrow - 1,
                                  sizeof(unsigned), cudaMemcpyDeviceToHost));
 
-    thrust::exclusive_scan(thrust::device, ref_index_offsets.data,
-                           ref_index_offsets.data + nrow,
-                           ref_index_offsets.data, 0);
-
+    exclusive_scan(ref_index_offsets.data, nrow);
     CUDA_HANDLE_ERROR(cudaMemcpy(&tmp1, ref_index_offsets.data + nrow - 1,
                                  sizeof(unsigned), cudaMemcpyDeviceToHost));
 
@@ -325,10 +384,12 @@ void DynCSRMat::finalize() {
 }
 
 bool DynCSRMat::check() {
-    thrust::device_ptr<Row> ptr(rows.data);
-    return thrust::all_of(ptr, ptr + rows.size, [] __device__(const Row &row) {
-        return row.state == Row::SUCCESS;
-    });
+    Vec<Row> rows = this->rows;
+    DISPATCH_START(rows.size)[rows] __device__(unsigned i) {
+        assert(rows[i].state == Row::SUCCESS);
+    }
+    DISPATCH_END;
+    return true;
 }
 
 __device__ unsigned DynCSRMat::nnz(unsigned row) const {

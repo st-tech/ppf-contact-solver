@@ -18,7 +18,6 @@
 #include "../utility/utility.hpp"
 #include "accd.hpp"
 #include "contact.hpp"
-#include <thrust/logical.h>
 
 namespace contact {
 
@@ -251,10 +250,9 @@ __device__ bool intersect_free(unsigned a, unsigned b, unsigned c, unsigned d) {
 }
 
 bool check_success(Vec<char> array) {
-    thrust::device_ptr<char> ptr(array.data);
-    return thrust::all_of(
-        ptr, ptr + array.size,
-        [] __device__(const char &flag) { return flag == 0; });
+    DISPATCH_START(array.size) [array] __device__(unsigned i) {
+        assert(array[i] == 0);
+    } DISPATCH_END;
 }
 
 template <typename F> struct AABB_AABB_Tester {
@@ -1174,8 +1172,8 @@ unsigned embed_contact_force_hessian(
         force[i] += contact_force[i];
     } DISPATCH_END;
 
-    return utility::sum_array(num_contact_vtf, num_contact_vtf.size) +
-           utility::sum_array(num_contact_ee, num_contact_ee.size);
+    return utility::sum_integer_array(num_contact_vtf, num_contact_vtf.size) +
+           utility::sum_integer_array(num_contact_ee, num_contact_ee.size);
 }
 
 unsigned embed_constraint_force_hessian(
@@ -1269,8 +1267,8 @@ unsigned embed_constraint_force_hessian(
         } DISPATCH_END;
     }
 
-    return utility::sum_array(num_contact_vtf, num_contact_vtf.size) +
-           utility::sum_array(num_contact_ee, num_contact_ee.size);
+    return utility::sum_integer_array(num_contact_vtf, num_contact_vtf.size) +
+           utility::sum_integer_array(num_contact_ee, num_contact_ee.size);
 }
 
 struct CollisionMeshPointFaceCCD_M2C {
@@ -1665,8 +1663,8 @@ float line_search(const DataSet &data, const Kinematic &kinematic,
     }
 
     float toi = fminf(
-        utility::min_array(toi_vtf, toi_vtf.size, param.line_search_max_t),
-        utility::min_array(toi_ee, toi_ee.size, param.line_search_max_t));
+        utility::min_array(toi_vtf.data, toi_vtf.size, param.line_search_max_t),
+        utility::min_array(toi_ee.data, toi_ee.size, param.line_search_max_t));
     return toi / param.line_search_max_t;
 }
 
@@ -1803,7 +1801,7 @@ bool check_intersection(const DataSet &data, const Kinematic &kinematic,
         }
     } DISPATCH_END;
 
-    return utility::sum_array(intersection_flag, edge_count) == 0;
+    return utility::sum_integer_array(intersection_flag, edge_count) == 0;
 }
 
 } // namespace contact

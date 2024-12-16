@@ -7,7 +7,7 @@
 
 #include "../common.hpp"
 #include "../data.hpp"
-#include "../math/vec.hpp"
+#include "../vec/vec.hpp"
 
 struct Row {
     enum State { SUCCESS, OVERFLOW, COUNTING };

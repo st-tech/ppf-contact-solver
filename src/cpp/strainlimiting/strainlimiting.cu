@@ -135,7 +135,7 @@ float line_search(const DataSet &data, const Kinematic &kinematic,
     } DISPATCH_END;
 
     float result =
-        utility::min_array(toi, shell_face_count, param.line_search_max_t);
+        utility::min_array(toi.data, shell_face_count, param.line_search_max_t);
     return result / param.line_search_max_t;
 }
 

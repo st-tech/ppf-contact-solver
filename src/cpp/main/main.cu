@@ -83,7 +83,8 @@ void build_kinematic(const DataSet &host_dataset, const DataSet &dev_dataset,
     [data, fake_tmp_face, kinematic_face] __device__(unsigned i) mutable {
         fake_tmp_face[i] = kinematic_face[i] ? 0 : 1;
     } DISPATCH_END;
-    tmp::active_shell_count = utility::sum_array(fake_tmp_face, face_count);
+    tmp::active_shell_count =
+        utility::sum_integer_array(fake_tmp_face, face_count);
 
     Vec<bool> kinematic_tet = tmp::kinematic.tet;
     DISPATCH_START(tet_count)
@@ -168,6 +169,7 @@ void initialize(DataSet _host_dataset, DataSet _dev_dataset, ParamSet *_param) {
                                             dev_dataset.transpose_table);
     tmp::tmp_fixed = FixedCSRMat::alloc(dev_dataset.fixed_index_table,
                                         dev_dataset.transpose_table);
+
     contact::initialize(host_dataset, *param);
 
     logging.push("build_kinematic");
@@ -234,7 +236,8 @@ StepResult advance() {
         velocity[i] = u;
         tmp_scalar[i] = kinematic.vertex[i].active ? 0.0f : u.squaredNorm();
     } DISPATCH_END;
-    float max_u = sqrtf(utility::max_array(tmp_scalar, vertex_count, 0.0f));
+    float max_u =
+        sqrtf(utility::max_array(tmp_scalar.data, vertex_count, 0.0f));
     logging.mark("max_u", max_u);
 
     if (shell_face_count) {
@@ -277,7 +280,7 @@ StepResult advance() {
             }
         } DISPATCH_END;
         float max_sigma =
-            utility::max_array(tmp_scalar, shell_face_count, 0.0f);
+            utility::max_array(tmp_scalar.data, shell_face_count, 0.0f);
         float avg_sigma = utility::sum_array(tmp_scalar, shell_face_count) /
                           tmp::active_shell_count;
         logging.mark("max_sigma", max_sigma);
@@ -390,14 +393,13 @@ StepResult advance() {
         logging.mark("iter", iter);
         logging.mark("reresid", reresid);
 
-        // report max displacement
         tmp_scalar.clear();
         DISPATCH_START(vertex_count)
         [dx, tmp_scalar] __device__(unsigned i) mutable {
             tmp_scalar[i] = Map<Vec3f>(dx.data + 3 * i).norm();
         } DISPATCH_END;
 
-        float max_dx = utility::max_array(tmp_scalar, vertex_count, 0.0f);
+        float max_dx = utility::max_array(tmp_scalar.data, vertex_count, 0.0f);
         logging.mark("max_dx", max_dx);
 
         tmp_eval_x.copy(eval_x);
@@ -630,7 +632,10 @@ extern "C" void initialize(DataSet *dataset, ParamSet *param) {
     int num_device;
     CUDA_HANDLE_ERROR(cudaGetDeviceCount(&num_device));
     logging::info("cuda: detected %d devices...", num_device);
-    assert(num_device > 0);
+    if (num_device == 0) {
+        logging::info("cuda: no device found...");
+        exit(1);
+    }
 
     logging::info("cuda: allocating memory...");
     DataSet dev_dataset = malloc_dataset(*dataset, *param);

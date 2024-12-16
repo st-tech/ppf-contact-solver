@@ -8,13 +8,7 @@
 #include "../csrmat/csrmat.hpp"
 #include "../utility/dispatcher.hpp"
 #include "../utility/utility.hpp"
-#include "cg.hpp"
 #include "solver.hpp"
-#include <thrust/device_ptr.h>
-#include <thrust/device_vector.h>
-#include <thrust/execution_policy.h>
-#include <thrust/inner_product.h>
-#include <thrust/transform.h>
 
 namespace solver {
 
@@ -74,25 +68,32 @@ void apply(const DynCSRMat &A, const FixedCSRMat &B, const Vec<Mat3x3f> &C,
     } DISPATCH_END;
 }
 
-class ThrustOperators : public Operators {
+class DeviceOperators {
   public:
-    ThrustOperators(const DynCSRMat &A, const FixedCSRMat &B,
+    DeviceOperators(const DynCSRMat &A, const FixedCSRMat &B,
                     const Vec<Mat3x3f> &C, const Vec<Mat3x3f> &P)
         : A(A), B(B), C(C), P(P) {}
-    virtual void apply(const Vec<float> &x, Vec<float> &result) const override {
+    void apply(const Vec<float> &x, Vec<float> &result) const {
         const DynCSRMat &A = this->A;
         const FixedCSRMat &B = this->B;
         const Vec<Mat3x3f> &C = this->C;
         solver::apply(A, B, C, 0.0f, x, result);
     }
-    virtual void precond(const Vec<float> &x,
-                         Vec<float> &result) const override {
+    void precond(const Vec<float> &x,
+                         Vec<float> &result) const {
         const Vec<Mat3x3f> &inv_diag = this->P;
         DISPATCH_START(A.nrow)
         [x, result, inv_diag] __device__(unsigned i) mutable {
             Map<Vec3f>(result.data + 3 * i) =
                 inv_diag[i] * Map<Vec3f>(x.data + 3 * i);
         } DISPATCH_END;
+    }
+    float norm(const Vec<float> &r, Vec<float> &tmp) const {
+        DISPATCH_START(r.size)
+        [r, tmp] __device__(unsigned i) mutable {
+            tmp[i] = fabs(r[i]);
+        } DISPATCH_END;
+        return utility::sum_array(tmp, r.size);
     }
     const DynCSRMat &A;
     const FixedCSRMat &B;
@@ -126,6 +127,49 @@ __device__ static Mat3x3f invert(const Mat3x3f &m) {
     return minv;
 }
 
+std::tuple<bool, unsigned, float> cg(const DeviceOperators &op, Vec<float> &r,
+                                        Vec<float> &x, unsigned max_iter,
+                                        float tol) {
+    static Vec<float> tmp = Vec<float>::alloc(x.size);
+    static Vec<float> z = Vec<float>::alloc(x.size);
+    static Vec<float> p = Vec<float>::alloc(x.size);
+    static Vec<float> r0 = Vec<float>::alloc(x.size);
+
+    op.apply(x, tmp);
+    r.add_scaled(tmp, -1.0f);
+    r0.copy(r);
+    op.precond(r, z);
+    p.copy(z);
+
+    unsigned iter = 1;
+    double rz0 = r.inner_product(z);
+
+    double err0 = op.norm(r, tmp);
+    if (!err0) {
+        return {true, iter, 0.0f};
+    } else {
+        while (true) {
+            op.apply(p, tmp);
+            double alpha = rz0 / (double)p.inner_product(tmp);
+            x.add_scaled(p, alpha);
+            r.add_scaled(tmp, -alpha);
+            double err = op.norm(r, tmp);
+            double reresid = err / err0;
+            if (reresid < tol) {
+                return {true, iter, reresid};
+            } else if (iter >= max_iter) {
+                return {false, iter, reresid};
+            }
+            op.precond(r, z);
+            double rz1 = r.inner_product(z);
+            double beta = rz1 / rz0;
+            p.combine(z, p, 1.0f, beta);
+            rz0 = rz1;
+            iter++;
+        }
+    }
+}
+
 bool solve(const DynCSRMat &A, const FixedCSRMat &B, const Vec<Mat3x3f> &C,
            Vec<float> b, float tol, unsigned max_iter, Vec<float> x,
            unsigned &iter, float &resid) {
@@ -136,9 +180,10 @@ bool solve(const DynCSRMat &A, const FixedCSRMat &B, const Vec<Mat3x3f> &C,
     [A, B, C, inv_diag] __device__(unsigned i) mutable {
         inv_diag[i] = invert(A(i, i) + B(i, i) + C[i]);
     } DISPATCH_END;
-    ThrustOperators ops(A, B, C, inv_diag);
+
+    DeviceOperators ops(A, B, C, inv_diag);
     bool success;
-    std::tie(success, iter, resid) = cg::solve(ops, b, x, max_iter, tol);
+    std::tie(success, iter, resid) = cg(ops, b, x, max_iter, tol);
     return success;
 }
 
