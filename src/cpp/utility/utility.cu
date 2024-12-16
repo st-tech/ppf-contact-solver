@@ -7,10 +7,7 @@
 
 #include "dispatcher.hpp"
 #include "utility.hpp"
-
-#include <thrust/device_ptr.h>
-#include <thrust/reduce.h>
-#include <thrust/sort.h>
+#include <limits>
 
 #define _real_ float
 #define USE_EIGEN_SYMM_EIGSOLVE
@@ -40,20 +37,22 @@ __device__ Vec3f compute_vertex_normal(const DataSet &data,
 
 __device__ void solve_symm_eigen2x2(const Mat2x2f &matrix, Vec2f &eigenvalues,
                                     Mat2x2f &eigenvectors) {
-    auto [lambda, U] = sym_eigsolve_2x2(matrix);
-    eigenvalues = lambda;
-    eigenvectors = U;
+    eig_tuple_2x2 result = sym_eigsolve_2x2(matrix);
+    eigenvalues = result.lambda;
+    eigenvectors = result.eigvecs;
 }
 
 __device__ void solve_symm_eigen3x3(const Mat3x3f &matrix, Vec3f &eigenvalues,
                                     Mat3x3f &eigenvectors) {
-    auto [lambda, U] = sym_eigsolve_3x3(matrix);
-    eigenvalues = lambda;
-    eigenvectors = U;
+    eig_tuple_3x3 result = sym_eigsolve_3x3(matrix);
+    eigenvalues = result.lambda;
+    eigenvectors = result.eigvecs;
 }
 
 __device__ Svd3x2 svd3x2(const Mat3x2f &F) {
-    auto [sigma, V] = sym_eigsolve_2x2(F.transpose() * F);
+    eig_tuple_2x2 result = sym_eigsolve_2x2(F.transpose() * F);
+    Vec2f sigma = result.lambda;
+    Mat2x2f V = result.eigvecs;
     for (int i = 0; i < 2; ++i) {
         sigma[i] = sqrtf(fmax(0.0f, sigma[i]));
     }
@@ -65,7 +64,9 @@ __device__ Svd3x2 svd3x2(const Mat3x2f &F) {
 }
 
 __device__ Svd3x3 svd3x3(const Mat3x3f &F) {
-    auto [sigma, V] = sym_eigsolve_3x3(F.transpose() * F);
+    eig_tuple_3x3 result = sym_eigsolve_3x3(F.transpose() * F);
+    Vec3f sigma = result.lambda;
+    Mat3x3f V = result.eigvecs;
     for (int i = 0; i < 3; ++i) {
         sigma[i] = sqrtf(fmax(0.0f, sigma[i]));
     }
@@ -193,25 +194,79 @@ __device__ float compute_face_area(const Mat3x3f &vertex) {
     return 0.5f * (v1 - v0).cross(v2 - v0).norm();
 }
 
+template <class T, class Y, typename Op>
+__global__ void reduce_op_kernel(const T *input, Y *output, Op func, Y init_val,
+                                 unsigned n) {
+    extern __shared__ unsigned char _shared_data[];
+    Y *shared_data = reinterpret_cast<Y *>(_shared_data);
+    unsigned tid = threadIdx.x;
+    unsigned global_idx = blockIdx.x * blockDim.x + tid;
+    shared_data[tid] = (global_idx < n) ? input[global_idx] : init_val;
+    __syncthreads();
+    for (unsigned stride = blockDim.x / 2; stride > 0; stride /= 2) {
+        if (tid < stride) {
+            shared_data[tid] =
+                func(shared_data[tid], shared_data[tid + stride]);
+        }
+        __syncthreads();
+    }
+    if (tid == 0) {
+        output[blockIdx.x] = shared_data[0];
+    }
+}
+
+template <class T, class Y, typename Op>
+Y reduce(const T *d_input, Op func, Y init_val, unsigned n) {
+    unsigned block_size = 256;
+    unsigned grid_size = (n + block_size - 1) / block_size;
+    static Y *d_output = nullptr;
+    static Y *h_results = nullptr;
+    static unsigned max_grid_size = 0;
+    if (d_output == nullptr) {
+        cudaMalloc(&d_output, grid_size * sizeof(Y));
+        h_results = new Y[grid_size];
+        max_grid_size = grid_size;
+    } else if (grid_size > max_grid_size) {
+        max_grid_size = grid_size;
+        cudaFree(d_output);
+        delete[] h_results;
+        cudaMalloc(&d_output, grid_size * sizeof(Y));
+        h_results = new Y[grid_size];
+    }
+    size_t shared_mem_size = block_size * sizeof(Y);
+    reduce_op_kernel<T, Y><<<grid_size, block_size, shared_mem_size>>>(
+        d_input, d_output, func, init_val, n);
+    cudaMemcpy(h_results, d_output, grid_size * sizeof(Y),
+               cudaMemcpyDeviceToHost);
+    Y result = init_val;
+    for (unsigned i = 0; i < grid_size; i++) {
+        result = func(result, h_results[i]);
+    }
+    return result;
+}
+
 template <class T> T sum_array(Vec<T> array, unsigned size) {
-    thrust::device_ptr<T> ptr(array.data);
-    return thrust::reduce(ptr, ptr + size);
+    return reduce<T, T>(
+        array.data, [] __host__ __device__(T a, T b) { return a + b; }, T(),
+        size);
 }
 
-template <class T> T sum_array_sorted(Vec<T> array, unsigned size) {
-    thrust::device_ptr<T> ptr(array.data);
-    thrust::sort(ptr, ptr + size);
-    return thrust::reduce(ptr, ptr + size);
+template <class T> unsigned sum_integer_array(Vec<T> array, unsigned size) {
+    return reduce<T, unsigned>(
+        array.data, [] __host__ __device__(T a, T b) { return a + b; }, 0u,
+        size);
 }
 
-template <class T> T min_array(Vec<T> array, unsigned size, T init_val) {
-    thrust::device_ptr<T> ptr(array.data);
-    return thrust::reduce(ptr, ptr + size, init_val, thrust::minimum<T>());
+template <class T> T min_array(const T *array, unsigned size, T init_val) {
+    return reduce<T, T>(
+        array, [] __host__ __device__(T a, T b) { return a < b ? a : b; },
+        init_val, size);
 }
 
-template <class T> T max_array(Vec<T> array, unsigned size, T init_val) {
-    thrust::device_ptr<T> ptr(array.data);
-    return thrust::reduce(ptr, ptr + size, init_val, thrust::maximum<T>());
+template <class T> T max_array(const T *array, unsigned size, T init_val) {
+    return reduce<T, T>(
+        array, [] __host__ __device__(T a, T b) { return a > b ? a : b; },
+        init_val, size);
 }
 
 void compute_svd(DataSet data, Vec<Vec3f> curr, Vec<Svd3x2> svd,
@@ -237,20 +292,20 @@ __device__ float get_wind_weight(float time) {
 } // namespace utility
 
 template float utility::sum_array(Vec<float> array, unsigned size);
-template float utility::sum_array_sorted(Vec<float> array, unsigned size);
-template char utility::sum_array(Vec<char> array, unsigned size);
-template char utility::sum_array_sorted(Vec<char> array, unsigned size);
-template unsigned utility::sum_array(Vec<unsigned> array, unsigned size);
-template unsigned utility::sum_array_sorted(Vec<unsigned> array, unsigned size);
-template float utility::min_array(Vec<float> array, unsigned size,
+template unsigned utility::sum_integer_array(Vec<unsigned> array,
+                                             unsigned size);
+template unsigned utility::sum_integer_array(Vec<char> array, unsigned size);
+template float utility::min_array(const float *array, unsigned size,
                                   float init_val);
-template float utility::max_array(Vec<float> array, unsigned size,
+template float utility::max_array(const float *array, unsigned size,
                                   float init_val);
-template char utility::min_array(Vec<char> array, unsigned size, char init_val);
-template char utility::max_array(Vec<char> array, unsigned size, char init_val);
-template unsigned utility::min_array(Vec<unsigned> array, unsigned size,
+template char utility::min_array(const char *array, unsigned size,
+                                 char init_val);
+template char utility::max_array(const char *array, unsigned size,
+                                 char init_val);
+template unsigned utility::min_array(const unsigned *array, unsigned size,
                                      unsigned init_val);
-template unsigned utility::max_array(Vec<unsigned> array, unsigned size,
+template unsigned utility::max_array(const unsigned *array, unsigned size,
                                      unsigned init_val);
 
 #endif

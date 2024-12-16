@@ -34,7 +34,7 @@ Published in [ACM Transactions on Graphics (TOG)](https://dl.acm.org/doi/abs/10.
 - 🐳 A Docker environment (see [below](#-getting-started)).
 
 ## 🐍 How To Use
-Our frontend is accessible through a browser using our built-in JupyterLab interface (see this video [[Video]](https://drive.google.com/file/d/1MtOEOvm5KEPwvgO-oeMY736he7H2DoNp/view?usp=sharing)).
+Our frontend is accessible through a browser using our built-in JupyterLab interface (see this video [[Video]](https://drive.google.com/file/d/1n068Ai_hlfgapf2xkAutOHo3PkLpJXA4/view?usp=sharing)).
 All is set up when you open it for the first time.
 Results can be interactively viewed through the browser and exported as needed.
 This allows you to interact with the simulator on your laptop while the actual simulation runs on a remote headless server.
@@ -46,7 +46,7 @@ Please look into the [examples](./examples/) directory for more examples.
 from frontend import App
 
 # make an app with the label "drape"
-app = App("drape").clear()
+app = App("drape", renew=True)
 
 # create a square mesh resolution 128
 V, F = app.mesh.square(res=128)
@@ -105,8 +105,8 @@ session.stream()
 # or interactively view the animation sequences
 session.animate()
 
-# save the results (run this separately in a new cell)
-session.export("five-sheets.ply") 
+# export all simulated frames (downloadable from the file browser)
+session.export_animation(f"export/{session.info.name}")
 ```
 <img src="./asset/image/drape.jpg" alt="drape">
   
@@ -173,11 +173,6 @@ docker run -it `
 ```
 
 Windows users do not need to install the NVIDIA Container Toolkit.
-
-> [!WARNING]
-> We have confirmed that some NVIDIA drivers result in runtime errors 🚫.
-For example, driver version `560.94` leads to a simulation failure at startup.
-If you encounter such an issue ⚠️, try upgrading to the latest driver 🔄 or, if necessary, downgrading to a previous version ⬇️. I would appreciate it if you could open an issue 📝 to report the driver version that causes runtime errors 🚫, so that others can know which driver should be avoided.
 
 ### 🐧 Linux
 
@@ -268,7 +263,7 @@ python3 warmup.py
 ```
 
 > [!NOTE]
-> If you’re suspicious, you can look around ```warmup.py``` before you proceed.
+> If you’re suspicious, you can look around ```warmup.py``` before you proceed. Run `less warmup.py`, scroll all the way to the bottom, and type `q` to quit.
 
 Now we're set. Let's kick in the compilation!🏃
 

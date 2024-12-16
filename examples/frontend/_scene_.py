@@ -225,6 +225,8 @@ class FixedScene:
             o3d_static.vertex_colors = o3d.utility.Vector3dVector(self._static_color)
             o3d_mesh += o3d_static
 
+        if not os.path.exists(os.path.dirname(path)):
+            os.makedirs(os.path.dirname(path))
         o3d.io.write_triangle_mesh(path, o3d_mesh)
         return self
 

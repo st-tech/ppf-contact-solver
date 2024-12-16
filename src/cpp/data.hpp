@@ -5,7 +5,7 @@
 #ifndef DATA_HPP
 #define DATA_HPP
 
-#include "math/vec.hpp"
+#include "vec/vec.hpp"
 #include <Eigen/Dense>
 
 using Eigen::Map;

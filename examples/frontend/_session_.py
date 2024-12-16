@@ -195,12 +195,19 @@ class SessionManager:
         return Param(self._proj_root)
 
 
+class SessionInfo:
+    def __init__(self, name: str, path: str):
+        self.name = name
+        self.path = path
+
+
 class Session:
     def __init__(self, app_root: str, proj_root: str, name: str, save_func):
         self._app_root = app_root
         self._proj_root = proj_root
         self._fixed = None
-        self._path = os.path.expanduser(os.path.join(app_root, "session", name))
+        path = os.path.expanduser(os.path.join(app_root, "session", name))
+        self.info = SessionInfo(name, path)
         self._save_func = save_func
         self._update_preview_interval = 1.0 / 60.0
         self._update_terminal_interval = 1.0 / 30.0
@@ -208,8 +215,8 @@ class Session:
         self.delete()
 
     def delete(self):
-        if os.path.exists(self._path):
-            shutil.rmtree(self._path)
+        if os.path.exists(self.info.path):
+            shutil.rmtree(self.info.path)
 
     def _check_ready(self):
         if self._fixed is None:
@@ -223,13 +230,13 @@ class Session:
 
         self._fixed = scene
 
-        if os.path.exists(self._path):
-            shutil.rmtree(self._path)
+        if os.path.exists(self.info.path):
+            shutil.rmtree(self.info.path)
         else:
-            os.makedirs(self._path)
+            os.makedirs(self.info.path)
 
         if self._fixed is not None:
-            self._fixed.export_fixed(self._path, True)
+            self._fixed.export_fixed(self.info.path, True)
         else:
             raise ValueError("Scene and param must be initialized")
 
@@ -237,13 +244,13 @@ class Session:
         return self
 
     def output_path(self) -> str:
-        return os.path.join(self._path, "output")
+        return os.path.join(self.info.path, "output")
 
     def export_shell_command(
         self,
         param: Param,
     ) -> str:
-        param.export(self._path)
+        param.export(self.info.path)
         program_path = os.path.join(
             self._proj_root, "target", "release", "ppf-contact-solver"
         )
@@ -251,11 +258,11 @@ class Session:
             command = " ".join(
                 [
                     program_path,
-                    f"--path {self._path}",
+                    f"--path {self.info.path}",
                     f"--output {self.output_path()}",
                 ]
             )
-            path = os.path.join(self._path, "command.sh")
+            path = os.path.join(self.info.path, "command.sh")
             with open(path, "w") as f:
                 f.write(command)
             os.chmod(path, 0o755)
@@ -273,8 +280,8 @@ class Session:
                 display(self._terminate_button("Terminate Now"))
                 return self
         cmd_path = self.export_shell_command(param)
-        err_path = os.path.join(self._path, "error.log")
-        log_path = os.path.join(self._path, "stdout.log")
+        err_path = os.path.join(self.info.path, "error.log")
+        log_path = os.path.join(self.info.path, "stdout.log")
         if blocking:
             subprocess.run(cmd_path, cwd=self._proj_root, shell=True)
             return self
@@ -290,7 +297,9 @@ class Session:
             if process.poll() is not None:
                 raise ValueError("Solver failed to start")
             else:
-                init_path = os.path.join(self._path, "output", "data", "initialize.out")
+                init_path = os.path.join(
+                    self.info.path, "output", "data", "initialize.out"
+                )
                 time.sleep(1)
                 while is_running():
                     if os.path.exists(init_path):
@@ -301,7 +310,7 @@ class Session:
                 raise ValueError("Solver failed to start")
 
     def get_number(self, name: str):
-        path = os.path.join(self._path, "output", "data", f"{name}.out")
+        path = os.path.join(self.info.path, "output", "data", f"{name}.out")
         if os.path.exists(path):
             with open(path, "r") as f:
                 lines = f.readlines()
@@ -313,7 +322,7 @@ class Session:
         return None
 
     def _get_vertex_frame_count(self) -> int:
-        path = os.path.join(self._path, "output")
+        path = os.path.join(self.info.path, "output")
         max_frame = 0
         if os.path.exists(path):
             files = os.listdir(path)
@@ -324,7 +333,7 @@ class Session:
         return max_frame
 
     def _get_latest_frame(self) -> int:
-        path = os.path.join(self._path, "output")
+        path = os.path.join(self.info.path, "output")
         if os.path.exists(path):
             files = os.listdir(path)
             frames = []
@@ -340,7 +349,7 @@ class Session:
         if self._fixed is None:
             raise ValueError("Scene must be initialized")
         else:
-            path = os.path.join(self._path, "output")
+            path = os.path.join(self.info.path, "output")
             if os.path.exists(path):
                 if n is None:
                     files = os.listdir(path)
@@ -541,6 +550,14 @@ class Session:
             self._fixed.export(vert, path, include_static)
         return self
 
+    def export_animation(self, path: str, ext="ply", include_static: bool = True):
+        if os.path.exists(path):
+            shutil.rmtree(path)
+        else:
+            os.makedirs(path)
+        for i in tqdm(range(self._get_latest_frame()), desc="export", ncols=70):
+            self.export(os.path.join(path, f"frame_{i}.{ext}"), i, include_static)
+
     def stream(self, n_lines=40) -> "Session":
         log_widget = widgets.HTML()
         display(log_widget)
@@ -548,7 +565,7 @@ class Session:
         display(widgets.HBox((button, self._terminate_button())))
 
         stop = False
-        log_path = os.path.join(self._path, "output", "cudasim_log.txt")
+        log_path = os.path.join(self.info.path, "output", "cudasim_log.txt")
         if os.path.exists(log_path):
 
             def live_stream(self):
