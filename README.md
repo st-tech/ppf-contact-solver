@@ -128,6 +128,12 @@ The author is actively woriking on it.
 
 ## 💨 Getting Started
 
+🛠️ All the steps below are verified to run without errors via automated GitHub Actions ⚙️ (see `.github/workflows/getting-started.yml`
+).
+
+The tested 🚀 runner is the Ubuntu NVIDIA GPU-Optimized Image for AI and HPC with an NVIDIA Tesla T4 (16 GB VRAM) with Driver version 550.127.05.
+This is not a self-hosted runner, meaning that each time the runner launches, all environments are 🌱 fresh.
+
 ### 🎥 Installation Videos
 
 We provide uninterrupted recorded installation videos (🪟 Windows [[Video]](https://drive.google.com/file/d/1Np3MwUtSlppQPMrawtobzoGtZZWrmFgG/view?usp=sharing), 🐧 Linux [[Video]](https://drive.google.com/file/d/1ZDnzsn46E1I6xNzyg0S8Q6xvgXw_Lw7M/view?usp=sharing) and ☁ [vast.ai](https://vast.ai) [[Video]](https://drive.google.com/file/d/1k0LnkPKXuEwZZvElaKohWZeDd6M3ONe1/view?usp=sharing))
@@ -136,11 +142,6 @@ to reduce stress 😣 during the installation process. We encourage you to 👀 
 ### 🐳 Installing Docker
 
 To get the ball ⚽ rolling, we'll configure a Docker environment 🐳 to minimize any trouble 🤯 that 🥊 hits you.
-Rest assured 😌, all the steps below are verified to run without errors via automated GitHub Actions (see `.github/workflows/getting-started.yml`
-).
-
-The tested runner is the Ubuntu NVIDIA GPU-Optimized Image for AI and HPC with an NVIDIA Tesla T4 (16 GB VRAM).
-This is not a self-hosted runner, meaning that each time the runner 🚀 launches, all environments are 🌱 fresh.
 
 > [!NOTE]
 > If you wish to install our solver on a headless remote machine, SSH into the server with port forwarding using the following command:
