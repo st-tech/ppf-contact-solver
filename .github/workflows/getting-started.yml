@@ -18,6 +18,12 @@ jobs:
     timeout-minutes: 15
 
     steps:
+      - name: check out repo
+        uses: actions/checkout@v3
+      
+      - name: print info
+        run: bash .github/workflows/print-info.sh
+
       - name: prepare env
         run: |
           echo "EXEC=docker exec ${{env.TMP_CONTAINER_NAME}}" >> $GITHUB_ENV
@@ -30,9 +36,6 @@ jobs:
           echo "TMP_ROOT: $TMP_ROOT"
           echo "EXEC: $EXEC"
           echo "EXEC_W: $EXEC_W"
-
-      - name: check out repo
-        uses: actions/checkout@v3
 
       # optional
       #
@@ -71,4 +74,3 @@ jobs:
         run: |
           docker stop $TMP_CONTAINER_NAME
           docker rm $TMP_CONTAINER_NAME
-

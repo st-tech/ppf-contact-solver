@@ -21,6 +21,9 @@ jobs:
       - name: check out repo
         uses: actions/checkout@v3
 
+      - name: print info
+        run: bash .github/workflows/print-info.sh
+
       - name: setup 
         run: |
           nvidia-smi
