@@ -141,7 +141,6 @@ Rest assured 😌, all the steps below are verified to run without errors via au
 
 The tested runner is the Ubuntu NVIDIA GPU-Optimized Image for AI and HPC with an NVIDIA Tesla T4 (16 GB VRAM).
 This is not a self-hosted runner, meaning that each time the runner 🚀 launches, all environments are 🌱 fresh.
-The tested NVIDIA driver version and the running Linux kernel can both be seen in the GitHub Actions tab summary.
 
 > [!NOTE]
 > If you wish to install our solver on a headless remote machine, SSH into the server with port forwarding using the following command:
