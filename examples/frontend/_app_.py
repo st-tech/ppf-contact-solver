@@ -17,7 +17,9 @@ class App:
     def __init__(self, name: str, renew: bool = False, cache_dir: str = ""):
         self.extra = Extra()
         self._name = name
-        self._root = os.path.expanduser(os.path.join("~", ".local", "ppf-cts", name))
+        self._root = os.path.expanduser(
+            os.path.join("~", ".local", "share", "ppf-cts", name)
+        )
         self._path = os.path.join(self._root, "app.pickle")
         proj_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
         if cache_dir:
