@@ -43,6 +43,7 @@ Published in [ACM Transactions on Graphics (TOG)](https://dl.acm.org/doi/abs/10.
 Our frontend is accessible through 🌐 a browser using our built-in JupyterLab 🐍 interface.
 All is set up when you open it for the first time.
 Results can be interactively viewed through the browser and exported as needed.
+
 This allows you to interact with the simulator on your 💻 laptop while the actual simulation runs on a remote headless server over 🌍 the internet.
 This means that you don't have to buy ⚙️ hardware, but can rent it at [vast.ai](https://vast.ai) or [RunPod](https://www.runpod.io/) for less than 💵 $1 per hour.
 For example, this [[Video]](https://drive.google.com/file/d/1n068Ai_hlfgapf2xkAutOHo3PkLpJXA4/view?usp=sharing) was recorded on a [vast.ai](https://vast.ai) instance.
@@ -278,7 +279,7 @@ python3 warmup.py
 ```
 
 > [!NOTE]
-> If you’re suspicious, you can look around ```warmup.py``` before you proceed. Run `less warmup.py`, scroll all the way to the bottom, and type `q` to quit.
+> If you’re suspicious, you can look around ```warmup.py``` before you proceed. Run `less warmup.py`, scroll all the way to the bottom, and hit `q` to quit.
 
 Now we're set. Let's kick in the compilation!🏃
 
