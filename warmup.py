@@ -141,9 +141,9 @@ def setup():
     run("apt update")
     run("apt install -y locales-all")
     run("DEBIAN_FRONTEND=noninteractive apt install -y " + " ".join(list_packages()))
-    run("pip3 install " + " ".join(python_packages()))
+    run("pip3 install --ignore-installed " + " ".join(python_packages()))
     run("git clone https://github.com/skoch9/meshplot /tmp/meshplot")
-    run("pip3 install /tmp/meshplot")
+    run("pip3 install --ignore-installed /tmp/meshplot")
     run("curl https://sh.rustup.rs -sSf | sh -s -- -y")
 
 
@@ -174,6 +174,7 @@ def set_time():
 def start_jupyter():
     import click
     import psutil
+
     for process in psutil.process_iter():
         if "jupyter" in process.name():
             print("Jupyter is already running")

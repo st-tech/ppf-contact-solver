@@ -69,7 +69,7 @@ The actual tilt was set up such that gravity is split into two orthogonal compon
 
 <div align="center"> <img src="../asset/image/hindsight/tilt-friction.png" alt="tilt divide" width="250">
 
-Figure C: Actual tilt configuration used in the paper example.
+**Figure C:** Actual tilt configuration used in the paper example.
 </div>
 
 That is, the actual tilt angle is approximately $26.57^\circ$.
