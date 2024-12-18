@@ -26,7 +26,12 @@ class MeshManager:
         )
 
     def rectangle(
-        self, res_x: int = 32, width: float = 2, height: float = 1
+        self,
+        res_x: int = 32,
+        width: float = 2,
+        height: float = 1,
+        ex: list[float] = [1, 0, 0],
+        ey: list[float] = [0, 1, 0],
     ) -> "TriMesh":
         ratio = height / width
         res_y = int(res_x * ratio)
@@ -38,6 +43,10 @@ class MeshManager:
         X_flat, Y_flat = X.flatten(), Y.flatten()
         Z_flat = np.full_like(X_flat, 0)
         vert = np.vstack((X_flat, Y_flat, Z_flat)).T
+        _ex, _ey = np.array(ex), np.array(ey)
+        for i, v in enumerate(vert):
+            x, y, _ = v
+            vert[i] = _ex * x + _ey * y
         n_faces = 2 * (res_x - 1) * (res_y - 1)
         tri = np.zeros((n_faces, 3), dtype=np.int32)
         tri_idx = 0
@@ -56,8 +65,14 @@ class MeshManager:
                 tri_idx += 2
         return TriMesh.create(vert, tri, self._cache_dir)
 
-    def square(self, res: int = 32, size: float = 2) -> "TriMesh":
-        return self.rectangle(res, size, size)
+    def square(
+        self,
+        res: int = 32,
+        size: float = 2,
+        ex: list[float] = [1, 0, 0],
+        ey: list[float] = [0, 1, 0],
+    ) -> "TriMesh":
+        return self.rectangle(res, size, size, ex, ey)
 
     def circle(self, n: int = 32, r: float = 1, ntri: int = 1024) -> "TriMesh":
         pts = []

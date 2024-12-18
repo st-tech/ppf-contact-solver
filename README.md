@@ -54,8 +54,8 @@ from frontend import App
 # make an app with the label "drape"
 app = App("drape", renew=True)
 
-# create a square mesh resolution 128
-V, F = app.mesh.square(res=128)
+# create a square mesh resolution 128 spanning the xz plane
+V, F = app.mesh.square(res=128, ex=[1,0,0], ey=[0,0,1])
 
 # add to the asset and name it "sheet"
 app.asset.add.tri("sheet", V, F)
@@ -77,11 +77,11 @@ for i in range(5):
     # add a sheet to the scene
     obj = scene.add("sheet")
 
-    # pick two vertices max towards directions [1,-1,0] and [-1,-1,0]
-    corner = obj.grab([1, -1, 0]) + obj.grab([-1, -1, 0])
+    # pick two vertices max towards directions [1,0,-1] and [-1,0,-1]
+    corner = obj.grab([1, 0, -1]) + obj.grab([-1, 0, -1])
 
-    # place it with a vertical offset, rotate it and pin the corners
-    obj.at(0, gap * i, 0).rotate(90, "x").pin(corner)
+    # place it with a vertical offset and pin the corners
+    obj.at(0, gap * i, 0).pin(corner)
 
     # set fiber directions required for the Baraff-Witkin model
     obj.direction([1, 0, 0], [0, 0, 1])
