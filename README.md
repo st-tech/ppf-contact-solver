@@ -324,15 +324,32 @@ docker rm $MY_CONTAINER_NAME
 
 The exact same steps above should work (see `.github/workflows/getting-started-vast.yml`), except that you'll need to create a Docker template. Here's one:
 
-- **Image Path/Tag**: ```nvidia/cuda:11.8.0-devel-ubuntu22.04```
-- **Docker Options**: ```-e TZ=Asia/Tokyo -p 8080:8080``` (Your time zone, of course)
+- **Image Path/Tag**: `nvidia/cuda:11.8.0-devel-ubuntu22.04`
+- **Docker Options**: `-e TZ=Asia/Tokyo -p 8080:8080` (Your time zone, of course)
 - Make sure to select ✅ ***Run interactive shell server, SSH.***
-
-<img src="./asset/image/vast-template.png" alt="vast template">
-
+- When connecting via SSH, make sure to include `-L 8080:localhost:8080` in the command.
+- For a better experience, choose a geographically nearby server with a high connection speed.
 - Also, make sure to allocate a large disk space, such as 64GB.
 
+<img src="./asset/image/vast-template.png" alt="vast template">
 <img src="./asset/image/vast-diskspace.png" alt="vast diskspace">
+
+## 📦 Running on [RunPod](https://runpod.io)
+
+You can deploy our solver on a RunPod instance. To do this, we need to select an official RunPod Docker image instead.
+Here's how
+
+- **Container Image**: `runpod/pytorch:2.0.1-py3.10-cuda11.8.0-devel-ubuntu22.04`
+- **Expose HTTP Ports**: Empty
+- **Expose TCP Ports**: `22`
+- When connecting via SSH, make sure to include `-L 8080:localhost:8080` in the command.
+- For a better experience, choose a geographically nearby server with a high connection speed.
+- Also, make sure to allocate a large disk space, such as 64GB.
+- ✅ Make sure to select `SSH Terminal Access`
+- ❌ Deselect `Start Jupyter Notebook`
+
+<img src="./asset/image/runpod-template.png" alt="runpod template">
+<img src="./asset/image/runpod-deploy.png" alt="runpod deploy">
 
 ## 📃 License
 
