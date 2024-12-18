@@ -6,6 +6,7 @@ If you happen to be working with the Finite Element Method (FEM) solving for bou
 > 
 > The content of this section is described in the supplementary PDF.
 > Please cite our paper if you wish to mention this article; not the link to this repository.
+> Just to avoid confusion; the existence of this analysis is not even implied in the main paper, but its full contents do exist in the supplementary PDF.
 
 ## 🏁 The Final Results
 
