@@ -15,7 +15,7 @@ Since the materials below are lengthy, we provide a summary of the final results
 
 - If the energy is expressed in terms of invariants, eigen-filtered force jacobian can be obtained in closed form by using only $\frac{\partial \Psi}{\partial I_k}$ and $\frac{\partial^2 \Psi}{\partial I_k^2}$, where $I_k$ are the Cauchy-Green invariants or those from Smith et al. [[1]](#1).
 
-- Our eigen system is idential to the one by Smith et al. [[1]](#1).
+- Our analysis can be used to re-derive exactly the same system from Smith et al. [[1]](#1).
 
 ## 📖 What's the Story?
 
@@ -473,9 +473,9 @@ Similar to our 3D case, two vectors $[a_1, a_2]$, $[b_1, b_2]$ and their corresp
 Everything else is exactly the same as the 3D case presented above.
 We provide another Python code [[Code]](../eigsys/eigsys_2.py) to numerically verify this analysis.
 
-## 🎓 Equivalence with Smith et al. [[1]](#1)
+## 🎓 Re-Deriving Smith et al. [[1]](#1)
 
-Our technique yields the same eigen system revealed by Smith et al. [[1]](#1).
+Our technique can be used to arrive at the same eigen system revealed by Smith et al. [[1]](#1).
 We can confirm this by simply swapping the Cauchy-Green invariants with those of Smith et al. [[1]](#1) and substitute them into our eigenvalue expressions.
 This is simple enough to do manually, but I’ve written a SymPy code to help facilitate the task:
 
@@ -497,6 +497,7 @@ display(ratsimp((E.diff(b) - E.diff(c)) / (b - c)))
 
 Now look at Equations (7.16 to 7.21) from [[B]](#B).
 The output is identical.
+This can't be a coincidence.
 
 <a id="B">[B]</a> Theodore Kim and David Eberle. 2022. Dynamic deformables: implementation and production practicalities (now with code!). In ACM SIGGRAPH 2022 Courses (SIGGRAPH '22). https://doi.org/10.1145/3532720.3535628
 
@@ -563,7 +564,7 @@ display(simplify(H3x3-A))
 
 This prints zero! 😲 But if you tweak the way $A$ is computed a little bit, it gives non-zero expressions 🔢, so this must be correct ✅.
 This also confirms that their encoded matrix $A$ corresponds to $\frac{\partial^2 \Psi}{\partial \sigma^2}$.
-Now we have proven that our eigen system is exactly the same as Smith et al. [[1]](#1).
+Now we have proven that our eigen analysis can re-derive the same system as Smith et al. [[1]](#1).
 
 ## 🍱 Takeaway C/C++ ⚙️ and Rust 🦀 Codes
 

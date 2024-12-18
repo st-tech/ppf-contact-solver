@@ -284,6 +284,8 @@ impl Scene {
                 let nx = read_f32(count, "nx");
                 let ny = read_f32(count, "ny");
                 let nz = read_f32(count, "nz");
+                let mut normal = Vector3::new(nx, ny, nz);
+                normal.normalize_mut();
                 let position =
                     read_mat_from_file::<f32, 3>(&format!("{}/bin/wall-pos-{}.bin", args.path, i))
                         .expect("Failed to read pos_path");
@@ -292,7 +294,7 @@ impl Scene {
                 assert_eq!(position.ncols(), n_keyframe as usize);
                 assert_eq!(wall_timing.len(), n_keyframe);
                 wall.push(InvisibleWall {
-                    normal: Vector3::new(nx, ny, nz),
+                    normal,
                     position,
                     timing: wall_timing,
                 });

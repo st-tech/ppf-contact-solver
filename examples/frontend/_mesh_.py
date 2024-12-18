@@ -25,22 +25,27 @@ class MeshManager:
             o3d.geometry.TriangleMesh.create_box(width, height, depth)
         )
 
-    def square(self, res: int = 32, size: float = 2) -> "TriMesh":
-        dx = size / (res - 1)
-        x = -size / 2 + dx * np.arange(res)
-        y = x
+    def rectangle(
+        self, res_x: int = 32, width: float = 2, height: float = 1
+    ) -> "TriMesh":
+        ratio = height / width
+        res_y = int(res_x * ratio)
+        size_x, size_y = width, width * (res_y / res_x)
+        dx = min(size_x / (res_x - 1), size_y / (res_y - 1))
+        x = -size_x / 2 + dx * np.arange(res_x)
+        y = -size_y / 2 + dx * np.arange(res_y)
         X, Y = np.meshgrid(x, y, indexing="ij")
         X_flat, Y_flat = X.flatten(), Y.flatten()
         Z_flat = np.full_like(X_flat, 0)
         vert = np.vstack((X_flat, Y_flat, Z_flat)).T
-        n_faces = 2 * (res - 1) ** 2
+        n_faces = 2 * (res_x - 1) * (res_y - 1)
         tri = np.zeros((n_faces, 3), dtype=np.int32)
         tri_idx = 0
-        for j in range(res - 1):
-            for i in range(res - 1):
-                v0 = j * res + i
+        for j in range(res_y - 1):
+            for i in range(res_x - 1):
+                v0 = i * res_y + j
                 v1 = v0 + 1
-                v2 = v0 + res
+                v2 = v0 + res_y
                 v3 = v2 + 1
                 if (i % 2) == (j % 2):
                     tri[tri_idx] = [v0, v1, v3]
@@ -50,6 +55,9 @@ class MeshManager:
                     tri[tri_idx + 1] = [v1, v3, v2]
                 tri_idx += 2
         return TriMesh.create(vert, tri, self._cache_dir)
+
+    def square(self, res: int = 32, size: float = 2) -> "TriMesh":
+        return self.rectangle(res, size, size)
 
     def circle(self, n: int = 32, r: float = 1, ntri: int = 1024) -> "TriMesh":
         pts = []

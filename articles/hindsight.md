@@ -10,7 +10,7 @@ In the paper we presented the following barrier as a quadratic energy counterpar
 \end{equation}
 ```
 <div align="center">
-<img src="../asset/image/hindsight/error.jpg" alt="equation" width="300">
+<img src="../asset/image/hindsight/error.jpg" alt="equation" width="450">
 </div>
 
 However, soon after the publication, we realized that this was not the best counterpart since its curvature is a constant $\kappa / \hat{g}$.
@@ -31,9 +31,11 @@ We show an example and discuss why.
 
 When the above new quadratic barrier is used, visual artifacts may emerge **when contacts are lightly touched** as shown in Figure A.
 
+<div align="center">
 <img src="../asset/image/hindsight/domino-artifacts.gif" alt="snag artifacts">
 
 **Figure A:** Domino scene. Noticeable snags occur when one domino pushes the next ones.
+</div>
 
 ### 🔄 The Sources of Artifacts
 
@@ -50,6 +52,25 @@ This can be seen in Figure B.
 
 As a result, when $g \approx \hat{g}$ (that is, contacts are lightly touched), the conditioning of the system unnecessarily stiffens, leading to possible artifacts.
 
+<div align="center">
 <img src="../asset/image/hindsight/search_dir.svg" alt="graph">
 
 **Figure B:** Visualizing the transition of the magnitude of both our cubic barrier and a quadratic counterpart.
+</div>
+
+### Tilted Slope (Section 5.8)
+
+In Section 5.8, we stated that the slope was tilted at an angle of $30^\circ$.
+
+<div align="center"> <img src="../asset/image/hindsight/tilt-eratta-text.png" alt="equation" width="450"></div>
+
+However, this was incorrect.
+The actual tilt was set up such that gravity is split into two orthogonal components, with their ratio being 2:1, as shown in Figure C.
+
+<div align="center"> <img src="../asset/image/hindsight/tilt-friction.png" alt="tilt divide" width="250">
+
+Figure C: Actual tilt configuration used in the paper example.
+</div>
+
+That is, the actual tilt angle is approximately $26.57^\circ$.
+We chose this setup because, in this way, the sliding object eventually stops its motion when $\mu > 0.5$ and keeps sliding if $\mu < 0.5$.

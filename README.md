@@ -33,6 +33,12 @@ Published in [ACM Transactions on Graphics (TOG)](https://dl.acm.org/doi/abs/10.
 - 🔥 A modern NVIDIA GPU (Turing or newer).
 - 🐳 A Docker environment (see [below](#-getting-started)).
 
+## 📝 Change History
+
+- (2024.12.18) Added a [frictional contact example](./examples/friction.ipynb): armadillo sliding on the slope [[Video]](https://drive.google.com/file/d/12WGdfDTFIwCT0UFGEZzfmQreM6WSSHet/view?usp=sharing).
+- (2024.12.18) Added a [hindsight](./articles/hindsight.md) noting that the tilt angle was not $30^\circ$, but rather $26.57^\circ$.
+- (2024.12.16) Removed thrust dependencies to fix runtime errors for the driver version `560.94` [[Issue Link]](https://github.com/st-tech/ppf-contact-solver/issues/1).
+
 ## 🐍 How To Use
 Our frontend is accessible through a browser using our built-in JupyterLab interface (see this video [[Video]](https://drive.google.com/file/d/1n068Ai_hlfgapf2xkAutOHo3PkLpJXA4/view?usp=sharing)).
 All is set up when you open it for the first time.
