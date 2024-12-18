@@ -14,7 +14,7 @@ Published in [ACM Transactions on Graphics (TOG)](https://dl.acm.org/doi/abs/10.
 - **📐 Physically Accurate**: Our deformable solver is driven by the Finite Element Method.
 - **🚀 Massively Parallel**: Both contact and elasticity solvers are run on the GPU.
 - **🐳 Docker Sealed**: Everything is designed to work out of the box.
-- **🌐 JupyterLab Included**: Open your browser and run examples right away.
+- **🌐 JupyterLab Included**: Open your browser and run examples right away [[Video]](https://drive.google.com/file/d/1n068Ai_hlfgapf2xkAutOHo3PkLpJXA4/view?usp=sharing).
 - **✨ Stay Clean**: You can remove all traces after use.
 - **👌 Open**: We have opted the Apache v2.0 license.
 
@@ -40,10 +40,14 @@ Published in [ACM Transactions on Graphics (TOG)](https://dl.acm.org/doi/abs/10.
 - (2024.12.16) Removed thrust dependencies to fix runtime errors for the driver version `560.94` [[Issue Link]](https://github.com/st-tech/ppf-contact-solver/issues/1).
 
 ## 🐍 How To Use
-Our frontend is accessible through a browser using our built-in JupyterLab interface (see this video [[Video]](https://drive.google.com/file/d/1n068Ai_hlfgapf2xkAutOHo3PkLpJXA4/view?usp=sharing)).
+Our frontend is accessible through 🌐 a browser using our built-in JupyterLab 🐍 interface.
 All is set up when you open it for the first time.
 Results can be interactively viewed through the browser and exported as needed.
-This allows you to interact with the simulator on your laptop while the actual simulation runs on a remote headless server.
+This allows you to interact with the simulator on your 💻 laptop while the actual simulation runs on a remote headless server over 🌍 the internet.
+This means that you don't have to buy ⚙️ hardware, but can rent it at [vast.ai](https://vast.ai) or [RunPod](https://www.runpod.io/) for less than 💵 $1 per hour.
+For example, this [[Video]](https://drive.google.com/file/d/1n068Ai_hlfgapf2xkAutOHo3PkLpJXA4/view?usp=sharing) was recorded on a [vast.ai](https://vast.ai) instance.
+The experience is 👍 good!
+
 Here's an example of draping five sheets over a sphere with two corners pinned.
 Please look into the [examples](./examples/) directory for more examples.
 
