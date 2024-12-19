@@ -382,7 +382,8 @@ Here's how
 
 ### 📦 Deploying on [Google Compute Engine](https://cloud.google.com/products/compute)
 
-First, set up your `gcloud` CLI by following 📚 [this guide](https://cloud.google.com/sdk/docs/install?hl=en) Next, run the command below to provision an ⚡ NVIDIA L4 GPU instance.
+First, set up your `gcloud` CLI by following 📚 [this guide](https://cloud.google.com/sdk/docs/install?hl=en).
+Next, run the command below to provision an ⚡ NVIDIA L4 GPU instance.
 As of late 2024, this setup costs approximately 💵 $1 per hour.
 
 ```bash
