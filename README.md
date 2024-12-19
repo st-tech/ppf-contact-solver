@@ -351,7 +351,7 @@ docker rm $MY_CONTAINER_NAME
 The exact same steps above should work (see `.github/workflows/getting-started-vast.yml`), except that you'll need to create a Docker template. Here's one:
 
 - **Image Path/Tag**: `nvidia/cuda:11.8.0-devel-ubuntu22.04`
-- **Docker Options**: `-e TZ=Asia/Tokyo -p 8080:8080` (Your time zone, of course)
+- **Docker Options**: `-e TZ=Asia/Tokyo` (Your time zone, of course)
 - Make sure to select ✅ ***Run interactive shell server, SSH.***
 - When connecting via SSH, make sure to include `-L 8080:localhost:8080` in the command.
 - For a better experience, choose a geographically nearby server with a high connection speed.
@@ -359,13 +359,125 @@ The exact same steps above should work (see `.github/workflows/getting-started-v
 
 **Important**: Don't forget to ❌ delete the instance after use, or you’ll be 💸 charged for nothing.
 
-<img src="./asset/image/vast-template.png" alt="vast template">
-<img src="./asset/image/vast-diskspace.png" alt="vast diskspace">
+[vast.ai](https://vast.ai) provides a CLI interface for deploying instances.
+Here’s an example bash script to automate the task.
+First, install [vast.ai CLI](https://cloud.vast.ai/cli/) and set variables:
+
+```bash
+# api key
+VAST_API_KEY="get an API key at https://cloud.vast.ai/cli/"
+
+# your local public ssh key
+SSH_PUB_KEY=$HOME/.ssh/id_ed25519.pub
+
+# disk space 64GB
+DISK_SPACE=64
+
+# GPU
+GPU_NAME=RTX_4090
+
+# jq must be installed (sudo apt install jq)
+jq --version
+
+# install vast-ai CLI (https://cloud.vast.ai/cli/)
+wget https://raw.githubusercontent.com/vast-ai/vast-python/master/vast.py -O vast
+chmod +x vast
+
+./vast set api-key $VAST_API_KEY
+```
+
+Next, search an instance
+
+```bash
+# https://vast.ai/docs/cli/commands
+query=""
+query+="reliability > 0.98 " # high reliability
+query+="num_gpus=1 " # single gpu
+query+="gpu_name=$GPU_NAME " # GPU
+query+="cuda_vers >= 11.8 " # cuda version
+query+="compute_cap >= 750 " # compute capability
+query+="geolocation=TW " # location country code
+query+="rentable=True " # rentable only
+query+="verified=True " # verified by vast.ai
+query+="disk_space >= $DISK_SPACE " # available disk space
+query+="dph <= 1.0 " # less than $1 per hour
+query+="duration >= 3 " # at least 3 days online
+query+="inet_up >= 300 " # at least 300MB/s upload
+query+="inet_down >= 300 " # at least 300MB/s download
+query+="cpu_ram >= 32 " # at least 32GB ram
+query+="inet_up_cost <= 0.05 " # upload cheaper than $0.5/GB
+query+="inet_down_cost <= 0.05 " # download cheaper than $0.5/GB
+
+# find offer cheapest
+INSTANCE_ID=$(./vast search offers $query -o 'dph' | awk 'NR==2 {print $1}')
+
+# verify that the instance ID is valid
+echo "instance_id: $INSTANCE_ID"
+```
+
+and deploy
+
+```bash
+# create an instance
+./vast create instance $INSTANCE_ID \
+   --label "ppf-contact-solver" \
+   --image "nvidia/cuda:11.8.0-devel-ubuntu22.04" \
+   --disk $DISK_SPACE --ssh --direct \
+   --env TZ=Asia/Tokyo
+
+# connect via ssh
+VAST_INSTANCE_JSON=/tmp/vast-instance.json
+while true; do
+  ./vast show instances --raw > $VAST_INSTANCE_JSON
+  SSH_IP=$(jq -r '.[0].public_ipaddr' "$VAST_INSTANCE_JSON" 2>/dev/null)
+  SSH_PORT=$(jq -r '.[0].ports["22/tcp"][] | select(.HostIp == "0.0.0.0") | .HostPort' "$VAST_INSTANCE_JSON" 2>/dev/null)
+  if [[ -n "$SSH_IP" && -n "$SSH_PORT" ]]; then
+    sleep 1
+    break  # exit the loop if both are valid
+  else
+    echo "failed to fetch SSH details. Retrying in 5 seconds..."
+    sleep 5  # wait for 5 seconds before retrying
+  fi
+done
+
+# register ssh key
+echo "register ssh key"
+./vast attach ssh $(./vast show instances -q) "$(cat $SSH_PUB_KEY)"
+```
+
+Now connect via SSH.
+If the first connection attempt fails, try again after a few seconds.
+
+```bash
+# ssh into the server port forwarding 8080 <--> 8080
+ssh -p $SSH_PORT root@${SSH_IP} -L 8080:localhost:8080
+```
+
+After logging in, follow the instructions from [Both Systems](#-both-systems) to install our solver.
+Once the JupyterLab frontend is up, you can access it at http://localhost:8080.
+After use, follow the instructions below to destroy the instance.
+
+```bash
+# destroy instance
+./vast destroy instance $(./vast show instances -q)
+
+# list all instances
+./vast show instances
+
+echo "visit web interface https://cloud.vast.ai/instances/ to make sure that all instances are deleted"
+```
+
+If you wish to wipe the entire [vast.ai CLI](https://vast.ai/docs/cli/commands) installation, run the commands below:
+
+```bash
+# (optional) delete vast CLI and config
+rm -f vast
+rm -rf $HOME/.config/vastai
+```
 
 ### 📦 Deploying on [RunPod](https://runpod.io)
 
 You can deploy our solver on a RunPod instance. To do this, we need to select an official RunPod Docker image instead.
-Here's how
 
 - **Container Image**: `runpod/pytorch:2.0.1-py3.10-cuda11.8.0-devel-ubuntu22.04`
 - **Expose HTTP Ports**: Empty
@@ -378,8 +490,89 @@ Here's how
 
 **Important**: Don't forget to ❌ delete the instance after use, or you’ll be 💸 charged for nothing.
 
-<img src="./asset/image/runpod-template.png" alt="runpod template">
-<img src="./asset/image/runpod-deploy.png" alt="runpod deploy">
+[RunPod](https://runpod.io) also provides a CLI interface for deploying instances.
+Here’s an example bash script to automate the task.
+First, set the necessary variables.
+
+```bash
+# set API key (generate at https://www.runpod.io/console/user/settings)
+RUNPOD_API_KEY="..."
+
+# disk space 64GB
+DISK_SPACE=64
+
+# GPU
+GPU_NAME="RTX 4090"
+
+# go must be installed at this point (https://go.dev/doc/install)
+go version
+```
+
+Next, install [runpodctl](https://github.com/runpod/runpodctl).
+Note that, as of late 2024, the official binary release does not offer SSH connection support. For this use, a direct GitHub clone is required.
+
+```bash
+# clone runpodctl latest copy
+git clone https://github.com/runpod/runpodctl.git $HOME/runpodctl
+
+# compile runpodctl
+cd $HOME/runpodctl; make; cd -
+
+# set ephemeral path only valid in the current shell
+PATH=$PATH:$HOME/runpodctl/bin/
+
+# this must return greater than 1.0.0-test
+# as of late 2024 the official release does not offer ssh connect
+runpodctl --version
+
+runpodctl config; runpodctl config --apiKey $RUNPOD_API_KEY
+```
+
+Now deploy an instance
+
+```bash
+# create a pod. rent cost must be less than $1 per hour
+runpodctl create pod \
+  --name ppf-contact-solver --startSSH \
+  --ports '22/tcp' --cost 1.0 --gpuCount 1 \
+  --gpuType "NVIDIA GeForce $GPU_NAME" \
+  --containerDiskSize $DISK_SPACE \
+  --imageName 'runpod/pytorch:2.0.1-py3.10-cuda11.8.0-devel-ubuntu22.04'
+
+# get pod_id
+POD_ID=$(runpodctl get pod | grep -v '^ID' | cut -f1)
+echo "pod_id: $POD_ID"
+```
+
+Now connect via SSH.
+If the first connection attempt fails, try again after a few seconds.
+
+```bash
+# connect ssh portforward 8080 <-> 8080
+eval $(runpodctl ssh connect $POD_ID) -L 8080:localhost:8080
+```
+
+After logging in, follow the instructions from [Both Systems](#-both-systems) to install our solver.
+Once the JupyterLab frontend is up, you can access it at http://localhost:8080.
+After use, follow the instructions below to destroy the instance.
+
+```bash
+# remove pod
+runpodctl remove pod $POD_ID
+
+# list pods
+runpodctl get pod
+
+echo "also check the web interface to confirm the pod is removed"
+```
+
+If you wish to wipe the entire [runpodctl](https://github.com/runpod/runpodctl) installation, run the commands below:
+
+```bash
+# remove runpod if desired
+rm -rf $HOME/runpodctl
+rm -rf .runpod
+```
 
 ### 📦 Deploying on [Google Compute Engine](https://cloud.google.com/products/compute)
 
