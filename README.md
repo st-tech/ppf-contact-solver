@@ -347,7 +347,7 @@ docker rm $MY_CONTAINER_NAME
 ## 📡 Deploying on Cloud Services
 
 Our contact solver is designed for heavy use in cloud services ☁️, which supports on-demand flexible scalability 🔄 and reduces hardware investigation costs 💰.
-This has been challenging because the computational performance of CPUs designed for data centers 🖥️ is far behind that of consumer-targeted CPUs 🏠.
+This has been challenging because the computational performance of CPUs/GPUs designed for data centers 🖥️ is far behind that of those targeted for consumer use 🏠.
 
 With our scalable contact solver framework 🧩 and purely web-based frontends 🌐, this limitation is reduced. Our solver also runs on an NVIDIA L4 🖱️, a data-center designed GPU that offers reasonable pricing 💲, delivering both satisfactory performance 💪 and practical scalability 📈.
 
