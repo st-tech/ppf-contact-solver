@@ -15,6 +15,7 @@ Published in [ACM Transactions on Graphics (TOG)](https://dl.acm.org/doi/abs/10.
 - **🚀 Massively Parallel**: Both contact and elasticity solvers are run on the GPU.
 - **🐳 Docker Sealed**: Everything is designed to work out of the box.
 - **🌐 JupyterLab Included**: Open your browser and run examples right away [[Video]](https://drive.google.com/file/d/1n068Ai_hlfgapf2xkAutOHo3PkLpJXA4/view?usp=sharing).
+- **☁️ Cloud-Ready**: Our solver can be seamlessly deployed on major cloud platforms.
 - **✨ Stay Clean**: You can remove all traces after use.
 - **👌 Open**: We have opted the Apache v2.0 license.
 
