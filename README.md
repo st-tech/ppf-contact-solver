@@ -410,8 +410,8 @@ query+="duration >= 3 " # at least 3 days online
 query+="inet_up >= 300 " # at least 300MB/s upload
 query+="inet_down >= 300 " # at least 300MB/s download
 query+="cpu_ram >= 32 " # at least 32GB ram
-query+="inet_up_cost <= 0.05 " # upload cheaper than $0.5/GB
-query+="inet_down_cost <= 0.05 " # download cheaper than $0.5/GB
+query+="inet_up_cost <= 0.05 " # upload cheaper than $0.05/GB
+query+="inet_down_cost <= 0.05 " # download cheaper than $0.05/GB
 
 # find offer cheapest
 INSTANCE_ID=$(./vast search offers $query -o 'dph' | awk 'NR==2 {print $1}')
