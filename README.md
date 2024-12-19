@@ -435,7 +435,7 @@ while true; do
     sleep 1
     break  # exit the loop if both are valid
   else
-    echo "failed to fetch SSH details. Retrying in 5 seconds..."
+    echo "failed to fetch SSH details. retrying in 5 seconds..."
     sleep 5  # wait for 5 seconds before retrying
   fi
 done
