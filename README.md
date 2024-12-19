@@ -425,7 +425,7 @@ and deploy
    --disk $DISK_SPACE --ssh --direct \
    --env TZ=Asia/Tokyo
 
-# connect via ssh
+# ssh info fetch
 VAST_INSTANCE_JSON=/tmp/vast-instance.json
 while true; do
   ./vast show instances --raw > $VAST_INSTANCE_JSON
