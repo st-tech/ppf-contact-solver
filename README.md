@@ -18,6 +18,27 @@ Published in [ACM Transactions on Graphics (TOG)](https://dl.acm.org/doi/abs/10.
 - **✨ Stay Clean**: You can remove all traces after use.
 - **👌 Open**: We have opted the Apache v2.0 license.
 
+## 🔖 Table of Contents
+
+- [🎓 Technical Materials](#-technical-materials)
+- [⚡️ Requirements](#️-requirements)
+- [📝 Change History](#-change-history)
+- [🐍 How To Use](#-how-to-use)
+- [🖼️ Catalogue](#️-catalogue)
+- [💨 Getting Started](#-getting-started)
+    - [🎥 Installation Videos](#-installation-videos)
+    - [🐳 Installing Docker](#-installing-docker)
+    - [🪟 Windows](#-windows)
+    - [🐧 Linux](#-linux)
+    - [🧹 Cleaning Up](#-cleaning-up)
+- [📡 Deploying on Cloud Services](#-deploying-on-cloud-services)
+    - [📦 Deploying on vast.ai](#-deploying-on-vastai)
+    - [📦 Deploying on RunPod](#-deploying-on-runpod)
+    - [📦 Deploying on Google Compute Engine](#-deploying-on-google-compute-engine)
+- [📃 License](#-license)
+- [🙏 Acknowledgements](#-acknowledgements)
+- [🖋 Citation](#-citation)
+
 ## 🎓 Technical Materials
 
 - 🎥 Main video [[Video]](https://drive.google.com/file/d/1OzPbUoqddUYDvXMvRnUHH7kz0nZhmt7K/view?usp=drive_link)
@@ -40,6 +61,7 @@ Published in [ACM Transactions on Graphics (TOG)](https://dl.acm.org/doi/abs/10.
 - (2024.12.16) Removed thrust dependencies to fix runtime errors for the driver version `560.94` [[Issue Link]](https://github.com/st-tech/ppf-contact-solver/issues/1).
 
 ## 🐍 How To Use
+
 Our frontend is accessible through 🌐 a browser using our built-in JupyterLab 🐍 interface.
 All is set up when you open it for the first time.
 Results can be interactively viewed through the browser and exported as needed.
@@ -147,7 +169,7 @@ This is not a self-hosted runner, meaning that each time the runner launches, al
 
 ### 🎥 Installation Videos
 
-We provide uninterrupted recorded installation videos (🪟 Windows [[Video]](https://drive.google.com/file/d/1Np3MwUtSlppQPMrawtobzoGtZZWrmFgG/view?usp=sharing), 🐧 Linux [[Video]](https://drive.google.com/file/d/1ZDnzsn46E1I6xNzyg0S8Q6xvgXw_Lw7M/view?usp=sharing) and ☁ [vast.ai](https://vast.ai) [[Video]](https://drive.google.com/file/d/1k0LnkPKXuEwZZvElaKohWZeDd6M3ONe1/view?usp=sharing))
+We provide uninterrupted recorded installation videos (🪟 Windows [[Video]](https://drive.google.com/file/d/1Np3MwUtSlppQPMrawtobzoGtZZWrmFgG/view?usp=sharing), 🐧 Linux [[Video]](https://drive.google.com/file/d/1ZDnzsn46E1I6xNzyg0S8Q6xvgXw_Lw7M/view?usp=sharing), ☁ [vast.ai](https://vast.ai) [[Video]](https://drive.google.com/file/d/1k0LnkPKXuEwZZvElaKohWZeDd6M3ONe1/view?usp=sharing), and ☁️ [Google Cloud](https://cloud.google.com/products/compute) [[Video]](https://drive.google.com/file/d/1dj6TvR2IVLKLFXtO8QRrRl-8xQ7G547A/view?usp=sharing))
 to reduce stress 😣 during the installation process. We encourage you to 👀 check them out to get a sense of how things go ⏳ and how long ⏱️ each step takes.
 
 ### 🐳 Installing Docker
@@ -304,7 +326,7 @@ and now you can access our JupyterLab frontend from http://localhost:8080 on you
 The port number `8080` is the one we set for `$MY_WEB_PORT`.
 Enjoy! 😄
 
-## 🧹 Cleaning Up
+### 🧹 Cleaning Up
 
 To remove all traces, simply stop 🛑 the container and ❌ delete it.
 Be aware that all simulation data will be also lost. Back up any important data if needed.
@@ -321,7 +343,9 @@ docker rm $MY_CONTAINER_NAME
 > ```
 > but don't do this if you still need it.
 
-## ☁ Running on [vast.ai](https://vast.ai)
+## 📡 Deploying on Cloud Services
+
+### 📦 Deploying on [vast.ai](https://vast.ai)
 
 The exact same steps above should work (see `.github/workflows/getting-started-vast.yml`), except that you'll need to create a Docker template. Here's one:
 
@@ -332,10 +356,12 @@ The exact same steps above should work (see `.github/workflows/getting-started-v
 - For a better experience, choose a geographically nearby server with a high connection speed.
 - Also, make sure to allocate a large disk space, such as 64GB.
 
+**Important**: Don't forget to ❌ delete the instance after use, or you’ll be 💸 charged for nothing.
+
 <img src="./asset/image/vast-template.png" alt="vast template">
 <img src="./asset/image/vast-diskspace.png" alt="vast diskspace">
 
-## 📦 Running on [RunPod](https://runpod.io)
+### 📦 Deploying on [RunPod](https://runpod.io)
 
 You can deploy our solver on a RunPod instance. To do this, we need to select an official RunPod Docker image instead.
 Here's how
@@ -349,8 +375,63 @@ Here's how
 - ✅ Make sure to select `SSH Terminal Access`
 - ❌ Deselect `Start Jupyter Notebook`
 
+**Important**: Don't forget to ❌ delete the instance after use, or you’ll be 💸 charged for nothing.
+
 <img src="./asset/image/runpod-template.png" alt="runpod template">
 <img src="./asset/image/runpod-deploy.png" alt="runpod deploy">
+
+### 📦 Deploying on [Google Compute Engine](https://cloud.google.com/products/compute)
+
+First, set up your `gcloud` CLI by following 📚 [this guide](https://cloud.google.com/sdk/docs/install?hl=en) Next, run the command below to provision an ⚡ NVIDIA L4 GPU instance.
+As of late 2024, this setup costs approximately 💵 $1 per hour.
+
+```bash
+export IMAGE="projects/ml-images/global/images/c0-deeplearning-common-gpu-v20241118-debian-11-py310"
+export ZONE="asia-east1-c"
+export INSTANCE_NAME="ppf-contact-solver"
+export INSTANCE_TYPE="g2-standard-8"
+
+gcloud compute instances create $INSTANCE_NAME \
+	--zone=$ZONE \
+	--machine-type=$INSTANCE_TYPE \
+	--network-interface=network-tier=PREMIUM,stack-type=IPV4_ONLY,subnet=default \
+	--maintenance-policy=TERMINATE \
+	--provisioning-model=STANDARD \
+	--accelerator=count=1,type=nvidia-l4 \
+	--create-disk=auto-delete=yes,boot=yes,image=$IMAGE,mode=rw,size=50,type=pd-balanced \
+	--no-shielded-secure-boot \
+	--shielded-vtpm
+```
+
+After creating the instance, try connecting to it via `ssh` using the 🌐 `gcloud` interface. Since port `8080` is taken by the deployed image, make sure to select a different port on the host side.
+Here, we set the host-side port to `8888`.
+Note that the local port remains `8080` so that the JupyterLab interface can be accessed at `http://localhost:8080`.
+I know this might be confusing, so just copy and paste if you're okay with it.
+
+```bash
+# Port number 8080 is taken, so let's use 8888
+gcloud compute ssh --zone=$ZONE $INSTANCE_NAME -- -L 8080:localhost:8888
+```
+
+As shown in this [[Video]](https://drive.google.com/file/d/1dj6TvR2IVLKLFXtO8QRrRl-8xQ7G547A/view?usp=sharing), the instance may take a few minutes to load, so early SSH access fails.
+Keep trying at intervals; it should connect once the host is ready.
+
+Next, run the same Docker 🐧 [Linux](#-linux) command in the instance to set up a 🐳 Docker environment. Be sure to change `$MY_WEB_PORT` to `8888` in this case.
+
+```
+MY_WEB_PORT=8888  # Make sure to set the port to 8888
+MY_TIME_ZONE=Asia/Tokyo  # Your time zone
+MY_CONTAINER_NAME=ppf-contact-solver  # Container name
+```
+
+The rest of the installation process is identical. After use, don't forget to ❌ delete the instance, or you will continue to be 💸 charged.  
+
+```bash
+gcloud compute instances stop --zone=$ZONE $INSTANCE_NAME
+gcloud compute instances delete --zone=$ZONE $INSTANCE_NAME
+```
+
+Just to be sure, double-check from the 🖥️ web console to confirm that the instance has been successfully ✅ deleted.
 
 ## 📃 License
 
