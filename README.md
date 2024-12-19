@@ -581,10 +581,10 @@ Next, run the command below to provision an ⚡ NVIDIA L4 GPU instance.
 As of late 2024, this setup costs approximately 💵 $1 per hour.
 
 ```bash
-export IMAGE="projects/ml-images/global/images/c0-deeplearning-common-gpu-v20241118-debian-11-py310"
-export ZONE="asia-east1-c"
-export INSTANCE_NAME="ppf-contact-solver"
-export INSTANCE_TYPE="g2-standard-8"
+IMAGE="projects/ml-images/global/images/c0-deeplearning-common-gpu-v20241118-debian-11-py310"
+ZONE="asia-east1-c"
+INSTANCE_NAME="ppf-contact-solver"
+INSTANCE_TYPE="g2-standard-8"
 
 gcloud compute instances create $INSTANCE_NAME \
 	--zone=$ZONE \
