@@ -346,6 +346,11 @@ docker rm $MY_CONTAINER_NAME
 
 ## 📡 Deploying on Cloud Services
 
+Our contact solver is designed for heavy use in cloud services ☁️, which supports on-demand flexible scalability 🔄 and reduces hardware investigation costs 💰.
+This has been challenging because the computational performance of CPUs designed for data centers 🖥️ is far behind that of consumer-targeted CPUs 🏠.
+
+With our scalable contact solver framework 🧩 and purely web-based frontends 🌐, this limitation is reduced. Our solver also runs on an NVIDIA T4 🖱️, a data-center designed GPU that offers reasonable pricing 💲, delivering both satisfactory performance 💪 and practical scalability 📈.
+
 ### 📦 Deploying on [vast.ai](https://vast.ai)
 
 The exact same steps above should work (see `.github/workflows/getting-started-vast.yml`), except that you'll need to create a Docker template. Here's one:
