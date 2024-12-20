@@ -7,7 +7,15 @@ import sys
 import os
 
 
+def run(command, cwd="/tmp"):
+    if not os.path.exists("warmup.py"):
+        print("Please run this script in the same directory as warmup.py")
+        sys.exit(1)
+    subprocess.run(command, shell=True, cwd=cwd)
+
+
 def create_clang_config():
+    print("setting up clang config")
     script_dir = os.path.dirname(os.path.realpath(__file__))
     eigsys_dir = os.path.join(script_dir, "eigsys")
     clang_format = [
@@ -35,6 +43,21 @@ def create_clang_config():
         with open(name_2, "w") as f:
             f.write("\n".join(clangd))
             f.write("\n")
+
+
+def create_vscode_ext_recommend():
+    print("setting up vscode extension recommendation")
+    text = """{
+    "recommendations": [
+        "llvm-vs-code-extensions.vscode-clangd"
+    ]
+}"""
+    script_dir = os.path.dirname(os.path.realpath(__file__))
+    path = os.path.join(script_dir, ".vscode", "extensions.json")
+    if not os.path.exists(path):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f:
+            f.write(text)
 
 
 def list_packages():
@@ -83,6 +106,7 @@ def python_packages():
 
 def install_lazygit():
     if not os.path.exists("/usr/local/bin/lazygit"):
+        print("installing lazygit")
         cmd = 'curl -s "https://api.github.com/repos/jesseduffield/lazygit/releases/latest" | grep -Po \'"tag_name": "v\\K[^"]*\''
         result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
         latest_version = result.stdout.strip().replace("v", "")
@@ -94,6 +118,7 @@ def install_lazygit():
 
 
 def install_nvim():
+    print("installing nvim")
     run(
         "curl -LO https://github.com/neovim/neovim/releases/latest/download/nvim-linux64.tar.gz"
     )
@@ -103,15 +128,19 @@ def install_nvim():
     run("apt install -y nodejs")
     run("curl https://www.npmjs.com/install.sh | sh")
     run("apt install -y fzf fd-find bat")
-    run(
-        "curl -sL https://raw.githubusercontent.com/jorgebucaran/fisher/main/functions/fisher.fish | source && fisher install jorgebucaran/fisher"
-    )
+    run("/root/.cargo/bin/rustup component add rust-analyzer")
     run("ln -s $(which fdfind) /usr/bin/fd")
     run("ln -s $(which batcat) /usr/bin/bat")
-    run("fisher install PatrickF1/fzf.fish@v7.0")
+
+
+def install_lazyvim():
+    print("installing lazyvim")
+    run("git clone https://github.com/LazyVim/starter ~/.config/nvim")
+    run("rm -rf ~/.config/nvim/.git")
 
 
 def install_fish():
+    print("installing fish")
     run("apt-add-repository ppa:fish-shell/release-3")
     run("apt update")
     run("apt install -y fish")
@@ -122,19 +151,13 @@ def install_fish():
 
 
 def install_oh_my_zsh():
+    script_dir = os.path.dirname(os.path.realpath(__file__))
+    print("installing oh-my-zsh")
     run("apt install -y zsh")
-    run(
-        'sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)"'
-    )
+    run('sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)"', cwd=script_dir)
     run("zsh -c exit")
     run("echo 'export PATH=$HOME/.cargo/bin:$PATH' >> ~/.zshrc")
-
-
-def run(command, cwd="/tmp"):
-    if not os.path.exists("warmup.py"):
-        print("Please run this script in the same directory as warmup.py")
-        sys.exit(1)
-    subprocess.run(command, shell=True, cwd=cwd)
+    run("echo 'export PATH=/usr/local/cuda/bin:$PATH' >> ~/.zshrc")
 
 
 def setup():
@@ -148,6 +171,7 @@ def setup():
 
 
 def set_tmux():
+    print("installing tmux")
     run("apt install -y tmux")
     tmux_config_commands = [
         "set-option -g prefix C-t",
@@ -202,11 +226,15 @@ def start_jupyter():
 
 
 if __name__ == "__main__":
+    if not os.path.exists(os.path.expanduser("~/.config")):
+        os.makedirs(os.path.expanduser("~/.config"))
     if len(sys.argv) > 1:
         mode = sys.argv[1]
         if mode == "nvim":
-            create_clang_config()
             install_nvim()
+        elif mode == "lazyvim":
+            install_lazyvim()
+        elif mode == "lazygit":
             install_lazygit()
         elif mode == "fish":
             install_fish()
@@ -216,6 +244,8 @@ if __name__ == "__main__":
             set_tmux()
         elif mode == "clangd":
             create_clang_config()
+        elif mode == "vscode":
+            create_vscode_ext_recommend()
         elif mode == "time":
             set_time()
         elif mode == "jupyter":

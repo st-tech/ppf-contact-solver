@@ -249,10 +249,11 @@ __device__ bool intersect_free(unsigned a, unsigned b, unsigned c, unsigned d) {
     return a != b && a != c && a != d && b != c && b != d && c != d;
 }
 
-bool check_success(Vec<char> array) {
-    DISPATCH_START(array.size) [array] __device__(unsigned i) {
+void check_success(Vec<char> array) {
+    DISPATCH_START(array.size)[array] __device__(unsigned i) {
         assert(array[i] == 0);
-    } DISPATCH_END;
+    }
+    DISPATCH_END;
 }
 
 template <typename F> struct AABB_AABB_Tester {

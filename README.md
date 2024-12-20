@@ -36,6 +36,7 @@ Published in [ACM Transactions on Graphics (TOG)](https://dl.acm.org/doi/abs/10.
     - [📦 Deploying on vast.ai](#-deploying-on-vastai)
     - [📦 Deploying on RunPod](#-deploying-on-runpod)
     - [📦 Deploying on Google Compute Engine](#-deploying-on-google-compute-engine)
+- [🧑‍💻 Setting Up Your Development Environment](#-setting-up-your-development-environment)
 - [📃 License](#-license)
 - [🙏 Acknowledgements](#-acknowledgements)
 - [🖋 Citation](#-citation)
@@ -182,8 +183,8 @@ To get the ball ⚽ rolling, we'll configure a Docker environment 🐳 to minimi
 > ```
 > ssh -L 8080:localhost:8080 user@remote_server_address
 > ```
-> This port will be used to access the frontend afterward.
-> The two port numbers of `8080` must match the value we set for `$MY_WEB_PORT` below.
+> This port forwarding will be used to access the frontend afterward.
+> The second port number must match `$MY_WEB_PORT` below.
 
 First, install the CUDA Toolkit [[Link]](https://developer.nvidia.com/cuda-downloads) along with the driver on your host system.
 Next, follow the instructions below specific to the operating system running on the host.
@@ -346,7 +347,7 @@ docker rm $MY_CONTAINER_NAME
 
 ## 📡 Deploying on Cloud Services
 
-Our contact solver is designed for heavy use in cloud services ☁️, which supports on-demand flexible scalability 🔄 and reduces hardware investigation costs 💰.
+Our contact solver is designed for heavy use in cloud services ☁️, which supports on-demand flexible scalability 🔄 and reduces hardware investment costs 💰.
 This has been challenging because the computational performance of CPUs/GPUs designed for data centers 🖥️ is far behind that of those targeted for consumer use 🏠.
 
 With our scalable contact solver framework 🧩 and purely web-based frontends 🌐, this limitation is reduced. Our solver also runs on an NVIDIA L4 🖱️, a data-center designed GPU that offers reasonable pricing 💲, delivering both satisfactory performance 💪 and practical scalability 📈.
@@ -364,7 +365,7 @@ The exact same steps above should work (see `.github/workflows/getting-started-v
 
 **Important**: Don't forget to ❌ delete the instance after use, or you’ll be 💸 charged for nothing.
 
-[vast.ai](https://vast.ai) provides a CLI interface for deploying instances.
+[vast.ai](https://vast.ai) provides a CLI for deploying instances.
 Here’s an example bash script to automate the task.
 First, install [vast.ai CLI](https://cloud.vast.ai/cli/) and set variables:
 
@@ -380,6 +381,9 @@ DISK_SPACE=64
 
 # GPU
 GPU_NAME=RTX_4090
+
+# Image
+VAST_IMAGE="nvidia/cuda:11.8.0-devel-ubuntu22.04"
 
 # jq must be installed (sudo apt install jq)
 jq --version
@@ -426,7 +430,7 @@ and deploy
 # create an instance
 ./vast create instance $INSTANCE_ID \
    --label "ppf-contact-solver" \
-   --image "nvidia/cuda:11.8.0-devel-ubuntu22.04" \
+   --image "$VAST_IMAGE" \
    --disk $DISK_SPACE --ssh --direct \
    --env TZ=Asia/Tokyo
 
@@ -469,7 +473,8 @@ After use, follow the instructions below to destroy the instance.
 # list all instances
 ./vast show instances
 
-echo "visit web interface https://cloud.vast.ai/instances/ to make sure that all instances are deleted"
+echo "visit web interface https://cloud.vast.ai/instances/"
+echo "to make sure that all instances are deleted"
 ```
 
 If you wish to wipe the entire [vast.ai CLI](https://vast.ai/docs/cli/commands) installation, run the commands below:
@@ -495,19 +500,22 @@ You can deploy our solver on a RunPod instance. To do this, we need to select an
 
 **Important**: Don't forget to ❌ delete the instance after use, or you’ll be 💸 charged for nothing.
 
-[RunPod](https://runpod.io) also provides a CLI interface for deploying instances.
+[RunPod](https://runpod.io) also provides a CLI for deploying instances.
 Here’s an example bash script to automate the task.
 First, set the necessary variables.
 
 ```bash
 # set API key (generate at https://www.runpod.io/console/user/settings)
-RUNPOD_API_KEY="..."
+RUNPOD_API_KEY="...your_api_key..."
 
 # disk space 64GB
 DISK_SPACE=64
 
 # GPU
 GPU_NAME="RTX 4090"
+
+# Image
+RUNPOD_IMAGE="runpod/pytorch:2.0.1-py3.10-cuda11.8.0-devel-ubuntu22.04"
 
 # go must be installed at this point (https://go.dev/doc/install)
 go version
@@ -542,7 +550,7 @@ runpodctl create pod \
   --ports '22/tcp' --cost 1.0 --gpuCount 1 \
   --gpuType "NVIDIA GeForce $GPU_NAME" \
   --containerDiskSize $DISK_SPACE \
-  --imageName 'runpod/pytorch:2.0.1-py3.10-cuda11.8.0-devel-ubuntu22.04'
+  --imageName "$RUNPOD_IMAGE"
 
 # get pod_id
 POD_ID=$(runpodctl get pod | grep -v '^ID' | cut -f1)
@@ -605,7 +613,7 @@ gcloud compute instances create $INSTANCE_NAME \
 
 After creating the instance, try connecting to it via `ssh` using the 🌐 `gcloud` interface. Since port `8080` is taken by the deployed image, make sure to select a different port on the host side.
 Here, we set the host-side port to `8888`.
-Note that the local port remains `8080` so that the JupyterLab interface can be accessed at `http://localhost:8080`.
+Note that the local port remains `8080` so that the JupyterLab interface can be accessed at http://localhost:8080.
 I know this might be confusing, so just copy and paste if you're okay with it.
 
 ```bash
@@ -632,6 +640,184 @@ gcloud compute instances delete --zone=$ZONE $INSTANCE_NAME
 ```
 
 Just to be sure, double-check from the 🖥️ web console to confirm that the instance has been successfully ✅ deleted.
+
+## 🧑‍💻 Setting Up Your Development Environment
+
+Advanced users may be interested in inspecting our 📜 core code to examine how each component ⚙️ contributes to our solver pipeline 🔄. To facilitate this task, we provide a guide below for setting up a comfortable development environment using either 🖥️ [VSCode](https://azure.microsoft.com/en-us/products/visual-studio-code) or ⌨️ [NeoVim](https://neovim.io/).
+In fact, this is how we 🚀 develop.
+
+### 🚢 Docker Context Setup (For Remote Hosts)
+
+If you install our solver on a remote machine and plan to set up a remote development environment, this process is necessary.
+
+First, set up your SSH config to enable passwordless login to the remote host.
+You can find plenty of 📚 articles online that guide you on how to set it up. [[DuckDuck Go]](https://duckduckgo.com/?q=ssh+login+without+password).
+Make sure that you can connect to the host server simply by running `ssh host_address`, where `host_address` is the label for the host.
+
+> [!NOTE]  
+> If your remote server is ephemeral (e.g., a short-term contracted [vast.ai](https://vast.ai) instance), you can include the following line in your `$HOME/.ssh/config`:
+> ```  
+> Include my_ephemeral_remote_hosts
+> ```  
+> Then, create a file `$HOME/.ssh/my_ephemeral_remote_hosts` with contents like:
+> ```
+> Host my_ephemeral_server
+>   HostName xxx.xxx.xxx.xxx
+>   User root
+>   Port xxxx
+>   IdentityFile /home/user/.ssh/ephemeral_id_rsa
+>   UserKnownHostsFile=/home/user/.ssh/ephemeral_known_hosts
+> ```
+> Along with this, you need to generate key files `ephemeral_id_rsa` and `ephemeral_id_rsa.pub`.
+> You can create them by `ssh-keygen`.
+>
+> Whenever a new server is deployed, simply update the file `my_ephemeral_remote_hosts`.
+> For example, we have a custom script to automate this task.
+>
+> Note that community-driven cloud hosts are not as reliable as data-center hosted servers, so please make sure to back up or push commits often before the host becomes unreachable.
+>
+> For example, we run `rsync` at some intervals to sync with our local machines to ensure any data loss is minimized.
+
+Next, run the following command **on your 💻 local computer**, not on the host server!
+This will create a new context that bridges the Docker connection to the host, making the containers appear as if they exist on the local computer.
+```
+DOCKER_CONTEXT_LABEL="your short concise server label here"
+
+docker context create $DOCKER_CONTEXT_LABEL --docker "host=ssh://host_address"
+```
+
+Don't worry, you can easily switch the bridge on and off, preserving full access to the local containers if they exist.
+Note that at this point, the context is created but 🚧 not yet activated.
+If you're unsure, you can quickly check which context is active by running this command on your 💻 local machine:
+
+```bash
+docker context list
+```
+
+Now let's switch to the newly created context.
+This can be easily done by running:
+
+```bash
+docker context use $DOCKER_CONTEXT_LABEL
+```
+
+Keep this context active while working on the remote development.
+Once done, you can always switch back to the default local context by running:
+
+```bash
+docker context use default
+```
+
+But don't do this for now, as we will continue to explain how to configure your development 🛠️ environment.
+
+> [!NOTE]
+> When you attach to a Docker container and explore the shell, you will quickly notice that the Emacs binding `ctrl-p` does not work as intended.
+> This is because Docker assigns `ctrl-p ctrl-q` as a special key sequence to detach from the container.
+>
+> To change this behavior, find the Docker config file **on the local machine** at `$HOME/.docker/config.json` and modify it to:
+> ```
+> {
+>   "auths": {},
+>   "detachKeys": "ctrl-q",
+>   "currentContext": "..."
+> }
+> ```
+> If not found (this happens if you haven't changed the context), create one with the content:
+> ```
+> {
+>   "detachKeys": "ctrl-q"
+> }
+> ```
+> The line `"detachKeys": "ctrl-q",` specifies the new detach key combination.  
+> Change this to your preferred combination.
+
+Note that all the `docker context` commands above should be executed on your local machine, as running them on the remote can ⚠️ complicate things.
+
+Once the context is set to the remote host, you can run `docker` commands from the local machine to do things on the remote host.
+For example, run
+
+```
+docker start $MY_CONTAINER_NAME
+```
+
+**from the local machine** to start the container on the remote host, and
+
+```
+docker attach $MY_CONTAINER_NAME
+```
+
+to attach the terminal to the container, and
+
+```
+docker stop $MY_CONTAINER_NAME
+```
+
+to stop the container.
+
+> [!NOTE]
+> You may wonder why not just SSH into the host and run `docker` commands there?
+> It turns out that if you wish to use [VSCode](https://azure.microsoft.com/en-us/products/visual-studio-code) and connect it to Docker containers, creating a Docker context is the only option.
+> Also, we can easily transfer data using `docker cp` commands between the local machine and the host.
+> This is why.
+
+### 🖥️ Confirm Your Terminal is Attached to the Container
+
+We recommend creating a new terminal window from here on.
+First, complete the entire [installation process](#-getting-started) in the new terminal window and keep the Docker container 🚢 running.
+Make sure that your terminal is attached to the container, with the current directory pointing to `ppf-contact-solver` directory.
+
+### 🛠️ [clangd](https://clangd.llvm.org/) Setup
+
+Just to avoid confusion, all the `python3 warmup.py ...` commands below must be executed in the Docker container on the remote, not on your local machine!
+
+Our code is not compatible with [C/C++ IntelliSense](https://marketplace.visualstudio.com/items?itemName=ms-vscode.cpptools) provided by Microsoft.
+We instead employ [clangd](https://clangd.llvm.org/) for linting, so make sure not to install IntelliSense into the container.
+Otherwise, you will be overwhelmed by 🐞 errors and ⚠️ warnings.
+First, run the following command:
+
+```bash
+python3 warmup.py clangd
+```
+
+This generates the `.clangd` and `.clang-format` config files, which we adhere to when writing code 💻.
+They will be automatically detected by [clangd](https://clangd.llvm.org/).
+
+### 🖥️ [VSCode](https://azure.microsoft.com/en-us/products/visual-studio-code) Users
+
+If you intend to use [VSCode](https://azure.microsoft.com/en-us/products/visual-studio-code), run the following command to generate `.vscode/extensions.json` file.
+
+```bash
+python3 warmup.py vscode
+```
+
+The generated file contains a list of recommended extensions. You will be prompted to install these extensions when your VSCode connects to the container via the [Dev Containers extension](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-containers).
+Finally, connect to the container by following [this guide](https://code.visualstudio.com/docs/devcontainers/containers).
+Now you're good to go! 🚀
+
+### ⌨️ [NeoVim](https://neovim.io/) Users
+
+We provide one-liners to install [NeoVim](https://neovim.io/) and other handy tools into the container:
+
+- [🖥️ NeoVim](https://neovim.io/): `python3 warmup.py nvim`
+- [💤 LazyVim](http://www.lazyvim.org/): `python3 warmup.py lazyvim`
+- [🛠️ Lazygit](https://github.com/jesseduffield/lazygit): `python3 warmup.py lazygit`
+- [🐟 fish shell](https://fishshell.com/): `python3 warmup.py fish`
+- [⌨️ ohmyzsh](https://ohmyz.sh/): `python3 warmup.py ohmyzsh`
+
+Of course, if you need a specific version to be installed, simply do so within the container.
+If you are a careful person (and even though you are not), we strongly encourage that you 👀 scout `warmup.py` before you do this for security reasons.
+It's not lengthy code.
+
+Once you have a [NeoVim](https://neovim.io/) environment installed in the container, you can transfer a copy of your local [NeoVim](https://neovim.io/) config file by running the command below from your local machine:
+
+```bash
+docker cp $HOME/.config/nvim $MY_CONTAINER_NAME:/root/.config/
+```
+
+where `$MY_CONTAINER_NAME` is the container name.
+If you use [💤 LazyVim](http://www.lazyvim.org/), turn on the `clangd` and `rust` plugins.
+
+Now you're good to go! 🚀
 
 ## 📃 License
 
