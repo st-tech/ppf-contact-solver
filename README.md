@@ -681,7 +681,7 @@ Make sure that you can connect to the host server simply by running `ssh host_ad
 Next, run the following command **on your 💻 local computer**, not on the host server!
 This will create a new context that bridges the Docker connection to the host, making the containers appear as if they exist on the local computer.
 ```
-DOCKER_CONTEXT_LABEL="your short concise server label here"
+DOCKER_CONTEXT_LABEL=your_short_concise_server_label_here
 
 docker context create $DOCKER_CONTEXT_LABEL --docker "host=ssh://host_address"
 ```
@@ -757,7 +757,7 @@ to stop the container.
 > [!NOTE]
 > You may wonder why not just SSH into the host and run `docker` commands there?
 > It turns out that if you wish to use [VSCode](https://azure.microsoft.com/en-us/products/visual-studio-code) and connect it to Docker containers, creating a Docker context is the only option.
-> Also, we can easily transfer data using `docker cp` commands between the local machine and the host.
+> Also, we can easily transfer data using `docker cp` commands between the local machine and containers on the host.
 > This is why.
 
 ### 🖥️ Confirm Your Terminal is Attached to the Container
@@ -802,7 +802,7 @@ We provide one-liners to install [NeoVim](https://neovim.io/) and other handy to
 - [💤 LazyVim](http://www.lazyvim.org/): `python3 warmup.py lazyvim`
 - [🛠️ Lazygit](https://github.com/jesseduffield/lazygit): `python3 warmup.py lazygit`
 - [🐟 fish shell](https://fishshell.com/): `python3 warmup.py fish`
-- [⌨️ ohmyzsh](https://ohmyz.sh/): `python3 warmup.py ohmyzsh`
+- [⌨️ oh-my-zsh](https://ohmyz.sh/): `python3 warmup.py ohmyzsh`
 
 Of course, if you need a specific version to be installed, simply do so within the container.
 If you are a careful person (and even though you are not), we strongly encourage that you 👀 scout `warmup.py` before you do this for security reasons.
