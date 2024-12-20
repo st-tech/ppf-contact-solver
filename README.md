@@ -646,124 +646,9 @@ Just to be sure, double-check from the 🖥️ web console to confirm that the i
 Advanced users may be interested in inspecting our 📜 core code to examine how each component ⚙️ contributes to our solver pipeline 🔄. To facilitate this task, we provide a guide below for setting up a comfortable development environment using either 🖥️ [VSCode](https://azure.microsoft.com/en-us/products/visual-studio-code) or ⌨️ [NeoVim](https://neovim.io/).
 In fact, this is how we 🚀 develop.
 
-### 🚢 Docker Context Setup (For Remote Hosts)
+### 🖥️ Complete Installation
 
-If you install our solver on a remote machine and plan to set up a remote development environment, this process is necessary.
-
-First, set up your SSH config to enable passwordless login to the remote host.
-You can find plenty of 📚 articles online that guide you on how to set it up. [[DuckDuck Go]](https://duckduckgo.com/?q=ssh+login+without+password).
-Make sure that you can connect to the host server simply by running `ssh host_address`, where `host_address` is the label for the host.
-
-> [!NOTE]  
-> If your remote server is ephemeral (e.g., a short-term contracted [vast.ai](https://vast.ai) instance), you can include the following line in your `$HOME/.ssh/config`:
-> ```  
-> Include my_ephemeral_remote_hosts
-> ```  
-> Then, create a file `$HOME/.ssh/my_ephemeral_remote_hosts` with contents like:
-> ```
-> Host my_ephemeral_server
->   HostName xxx.xxx.xxx.xxx
->   User root
->   Port xxxx
->   IdentityFile /home/user/.ssh/ephemeral_id_rsa
->   UserKnownHostsFile=/home/user/.ssh/ephemeral_known_hosts
-> ```
-> Along with this, you need to generate key files `ephemeral_id_rsa` and `ephemeral_id_rsa.pub`.
-> You can create them by `ssh-keygen`.
->
-> Whenever a new server is deployed, simply update the file `my_ephemeral_remote_hosts`.
-> For example, we have a custom script to automate this task.
->
-> Note that community-driven cloud hosts are not as reliable as data-center hosted servers, so please make sure to back up or push commits often before the host becomes unreachable.
->
-> For example, we run `rsync` at some intervals to sync with our local machines to ensure any data loss is minimized.
-
-Next, run the following command **on your 💻 local computer**, not on the host server!
-This will create a new context that bridges the Docker connection to the host, making the containers appear as if they exist on the local computer.
-```
-DOCKER_CONTEXT_LABEL=your_short_concise_server_label_here
-
-docker context create $DOCKER_CONTEXT_LABEL --docker "host=ssh://host_address"
-```
-
-Don't worry, you can easily switch the bridge on and off, preserving full access to the local containers if they exist.
-Note that at this point, the context is created but 🚧 not yet activated.
-If you're unsure, you can quickly check which context is active by running this command on your 💻 local machine:
-
-```bash
-docker context list
-```
-
-Now let's switch to the newly created context.
-This can be easily done by running:
-
-```bash
-docker context use $DOCKER_CONTEXT_LABEL
-```
-
-Keep this context active while working on the remote development.
-Once done, you can always switch back to the default local context by running:
-
-```bash
-docker context use default
-```
-
-But don't do this for now, as we will continue to explain how to configure your development 🛠️ environment.
-
-> [!NOTE]
-> When you attach to a Docker container and explore the shell, you will quickly notice that the Emacs binding `ctrl-p` does not work as intended.
-> This is because Docker assigns `ctrl-p ctrl-q` as a special key sequence to detach from the container.
->
-> To change this behavior, find the Docker config file **on the local machine** at `$HOME/.docker/config.json` and modify it to:
-> ```
-> {
->   "auths": {},
->   "detachKeys": "ctrl-q",
->   "currentContext": "..."
-> }
-> ```
-> If not found (this happens if you haven't changed the context), create one with the content:
-> ```
-> {
->   "detachKeys": "ctrl-q"
-> }
-> ```
-> The line `"detachKeys": "ctrl-q",` specifies the new detach key combination.  
-> Change this to your preferred combination.
-
-Note that all the `docker context` commands above should be executed on your local machine, as running them on the remote can ⚠️ complicate things.
-
-Once the context is set to the remote host, you can run `docker` commands from the local machine to do things on the remote host.
-For example, run
-
-```
-docker start $MY_CONTAINER_NAME
-```
-
-**from the local machine** to start the container on the remote host, and
-
-```
-docker attach $MY_CONTAINER_NAME
-```
-
-to attach the terminal to the container, and
-
-```
-docker stop $MY_CONTAINER_NAME
-```
-
-to stop the container.
-
-> [!NOTE]
-> You may wonder why not just SSH into the host and run `docker` commands there?
-> It turns out that if you wish to use [VSCode](https://azure.microsoft.com/en-us/products/visual-studio-code) and connect it to Docker containers, creating a Docker context is the only option.
-> Also, we can easily transfer data using `docker cp` commands between the local machine and containers on the host.
-> This is why.
-
-### 🖥️ Confirm Your Terminal is Attached to the Container
-
-We recommend creating a new terminal window from here on.
-First, complete the entire [installation process](#-getting-started) in the new terminal window and keep the Docker container 🚢 running.
+First, complete the entire [installation process](#-getting-started) and keep the Docker container 🚢 running.
 Make sure that your terminal is attached to the container, with the current directory pointing to `ppf-contact-solver` directory.
 
 ### 🛠️ [clangd](https://clangd.llvm.org/) Setup
@@ -792,6 +677,7 @@ python3 warmup.py vscode
 
 The generated file contains a list of recommended extensions. You will be prompted to install these extensions when your VSCode connects to the container via the [Dev Containers extension](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-containers).
 Finally, connect to the container by following [this guide](https://code.visualstudio.com/docs/devcontainers/containers).
+
 Now you're good to go! 🚀
 
 ### ⌨️ [NeoVim](https://neovim.io/) Users
@@ -808,14 +694,22 @@ Of course, if you need a specific version to be installed, simply do so within t
 If you are a careful person (and even though you are not), we strongly encourage that you 👀 scout `warmup.py` before you do this for security reasons.
 It's not lengthy code.
 
-Once you have a [NeoVim](https://neovim.io/) environment installed in the container, you can transfer a copy of your local [NeoVim](https://neovim.io/) config file by running the command below from your local machine:
+Once you have a [💤 LazyVim](http://www.lazyvim.org/) environment installed in the container, turn on the `clangd` and `rust` plugins.
 
-```bash
-docker cp $HOME/.config/nvim $MY_CONTAINER_NAME:/root/.config/
-```
-
-where `$MY_CONTAINER_NAME` is the container name.
-If you use [💤 LazyVim](http://www.lazyvim.org/), turn on the `clangd` and `rust` plugins.
+> [!NOTE]
+> When you attach to a Docker container and explore the shell, you will quickly notice that the Emacs binding `ctrl-p` does not work as intended.
+> This is because Docker assigns `ctrl-p ctrl-q` as a special key sequence to detach from the container.
+> 
+> To change this behavior, create a Docker config file `$HOME/.docker/config.json` on the remote machine, **not in the container on the remote!**
+> Set its contents to
+> ```
+> {
+>   "detachKeys": "ctrl-q"
+> }
+> ```
+> The value `ctrl-q` defines the new key combination for detaching.
+Replace this with your preferred combination.
+You can now detach from the container by pressing `ctrl-q`.
 
 Now you're good to go! 🚀
 
