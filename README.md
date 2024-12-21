@@ -675,8 +675,9 @@ If you intend to use [VSCode](https://azure.microsoft.com/en-us/products/visual-
 python3 warmup.py vscode
 ```
 
-The generated file contains a list of recommended extensions. You will be prompted to install these extensions when your VSCode connects to the container via the [Dev Containers extension](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-containers).
-Finally, connect to the container by following [this guide](https://code.visualstudio.com/docs/devcontainers/containers).
+The generated file contains a list of recommended extensions.
+You will be prompted to install these extensions when your VSCode connects to the container.
+Finally, connect to the container using the [Dev Containers extension](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-containers).
 
 Now you're good to go! 🚀
 
