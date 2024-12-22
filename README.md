@@ -369,7 +369,7 @@ You can deploy our solver on a RunPod instance. To do this, we need to select an
 
 ### 📦 Deploying on [Google Compute Engine](https://cloud.google.com/products/compute)
 
-- Select `GPUs`. We recommend the GPU type `NVIDIA L4` because it's more affordable and accessible, as it does not require a high quota. You may select `T4` instead for testing purposes.
+- Select `GPUs`. We recommend the GPU type `NVIDIA L4` because it's affordable and accessible, as it does not require a high quota. You may select `T4` instead for testing purposes.
 - Do **not** check `Enable Virtual Workstation (NVIDIA GRID)`.
 - We recommend the machine type `g2-standard-8`.
 - Choose the OS type `Deep Learning VM with CUDA 11.8 M126` and set the disk size to `50GB`.
