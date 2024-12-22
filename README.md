@@ -158,13 +158,13 @@ session.export_animation(f"export/{session.info.name}")
 
 |||||
 |---|---|---|---|
-|woven|stack|trampoline|needle|
+|woven|[stack](./examples/stack.ipynb) [[Video]](https://drive.google.com/file/d/1BAGtVaVJhAYWFFZStmKEBTA1u0bRnKro/view?usp=sharing)|[trampoline](./examples/trampoline.ipynb) [[Video]](https://drive.google.com/file/d/1MZBwTiWdTsaHbn7rhIrJVdMeMnKmnut-/view?usp=sharing)|[needle](./examples/needle.ipynb) [[Video]](https://drive.google.com/file/d/1DyyM3ER0liq63x24I2TJ7JVK3_2EJDc6/view?usp=sharing)|
 |![](./asset/image/catalogue/woven.mp4.gif)|![](./asset/image/catalogue/stack.mp4.gif)|![](./asset/image/catalogue/trampoline.mp4.gif)|![](./asset/image/catalogue/needle.mp4.gif)|
-|cards|codim|hang|trapped|
+|[cards](./examples/cards.ipynb) [[Video]](https://drive.google.com/file/d/1PMdDnlyCsjinbvICKph_0UcXUfUvvUmZ/view?usp=sharing)|codim|[hang](./examples/hang.ipynb) [[Video]](https://drive.google.com/file/d/1gIjwaRrEifH0FQnZ8HO8Q9-f9FF5ZivG/view?usp=sharing)|[trapped](./examples/trapped.ipynb)|
 |![](./asset/image/catalogue/cards.mp4.gif)|![](./asset/image/catalogue/codim.mp4.gif)|![](./asset/image/catalogue/hang.mp4.gif)|![](./asset/image/catalogue/trapped.mp4.gif)|
-|domino|noodle|drape|quintuple|
+|domino|noodle|[drape](./examples/drape.ipynb) [[Video]](https://drive.google.com/file/d/1PGL3tbA451VhHOViSJJNNdQvmUpg7bQd/view?usp=sharing)|quintuple|
 |![](./asset/image/catalogue/domino.mp4.gif)|![](./asset/image/catalogue/noodle.mp4.gif)|![](./asset/image/catalogue/drape.mp4.gif)|![](./asset/image/catalogue/quintupletwist.mp4.gif)|
-|ribbon|curtain|fishingknot|friction|
+|ribbon|[curtain](./examples/curtain.ipynb) [[Video]](https://drive.google.com/file/d/1c9W3YAFAS5r9m9i7sZHsFu8h98C8yy1T/view?usp=sharing)|fishingknot|[friction](./examples/friction.ipynb) [[Video]](https://drive.google.com/file/d/12WGdfDTFIwCT0UFGEZzfmQreM6WSSHet/view?usp=sharing)|
 |![](./asset/image/catalogue/ribbon.mp4.gif)|![](./asset/image/catalogue/curtain.mp4.gif)|![](./asset/image/catalogue/fishingknot.mp4.gif)|![](./asset/image/catalogue/friction-armadillo.mp4.gif)|
 
 At the moment, not all examples are ready yet, but they will be added/updated one by one.
@@ -332,10 +332,15 @@ docker rm $MY_CONTAINER_NAME
 
 ## 📡 Deploying on Cloud Services
 
-Our contact solver is designed for heavy use in cloud services ☁️, which supports on-demand flexible scalability 🔄 and reduces hardware investment costs 💰.
-This has been challenging because the computational performance of CPUs/GPUs designed for data centers 🖥️ is far behind that of those targeted for consumer use 🏠.
+Our contact solver is designed for heavy use in cloud services ☁️, enabling us to:
 
-With our scalable contact solver framework 🧩 and purely web-based frontends 🌐, this limitation is reduced. Our solver also runs on an NVIDIA L4 🖱️, a data-center designed GPU that offers reasonable pricing 💲, delivering both satisfactory performance 💪 and practical scalability 📈.
+- Quickly deploy testing environments 🚀 and delete them when not in use, saving costs 💰.
+- Scale as needed based on demand 📈. For example, you can create multiple instances to perform numerous tasks before a specific deadline ⏰.
+- Design a fully automated pipeline 🔄 for trial-and-error iterations without human involvement 🤖.
+- Allow anyone with an internet connection 🌍 to try our solver, even on a smartphone 📱 or tablet 🖥️.
+
+This is all made possible with our purely web-based frontends 🌐 and scalable capability 🧩.
+Our solver also runs on the NVIDIA L4 🖱️, a data-center-targeted GPU 🖥️ that offers reasonable pricing 💲, delivering both practical performance 💪 and scalability 📊 without investing in expensive hardware 💻.
 
 ### 📦 Deploying on [vast.ai](https://vast.ai)
 
@@ -428,9 +433,10 @@ We provide one-liners to install [NeoVim](https://neovim.io/) and other handy to
 - [🐟 fish shell](https://fishshell.com/): `python3 warmup.py fish`
 - [⌨️ oh-my-zsh](https://ohmyz.sh/): `python3 warmup.py ohmyzsh`
 
-Of course, if you need a specific version to be installed, simply do so within the container.
-If you are a careful person (and even though you are not), we strongly encourage that you 👀 scout `warmup.py` before you do this for security reasons.
-It's not lengthy code.
+Nevertheless, for security reasons, we strongly encourage you 👀 review `warmup.py` before running these commands.
+The code is not lengthy.
+If possible, we also strongly suggest following the official instructions to install them.
+These commands exist because this is exactly how we initiate our development environment for all new containers.
 
 Once you have a [💤 LazyVim](http://www.lazyvim.org/) environment installed in the container, turn on the `clangd` and `rust` plugins.
 

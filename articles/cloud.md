@@ -1,12 +1,7 @@
 ## 📡 CLI Instructions on Cloud Services
 
-This article summarizes how to deploy our solver on major cloud platforms using the provided CLI. With this CLI, we can:
-
-- Quickly deploy a testing environment and delete it when not in use, saving costs.
-
-- Scale as needed based on demand. For example, you can create multiple instances to perform numerous tasks before a specific deadline.
-
-- Design a fully automated pipeline to enable trial-and-error iterations without human involvement.
+This article summarizes how to deploy our solver on major cloud platforms using the provided CLI.
+The CLI enables faster and more consistent creation and deletion of instances. It can also be extended to create a cleaner UI that facilitates instance management.
 
 ### 📦 [vast.ai](https://vast.ai)
 
