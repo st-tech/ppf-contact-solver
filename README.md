@@ -76,7 +76,7 @@ The experience is 👍 good!
 
 Our Python interface is designed with the following principles in mind:
 
-- **🛠️ Non-Destructive Mesh Creation**: Relying on third-party tools for mesh creation and loading can make it difficult to change resolutions and result in excessive data storage. We have built-in mesh creation tools to avoid these issues.
+- **🛠️ Non-Destructive Tri/Tet Creation**: Relying on third-party tools for triangulation, tetrahedralization, and loading can make it difficult to adjust resolutions and lead to excessive data storage. Our built-in mesh creation tools eliminate these issues.
 
 - **🔗 Method Chaining**: We adopt the method chaining style from JavaScript, making the API intuitive and easy to use.
 
