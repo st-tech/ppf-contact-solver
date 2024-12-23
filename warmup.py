@@ -82,8 +82,6 @@ def list_packages():
 
 def python_packages():
     python_packages = [
-        "click",
-        "psutil",
         "numpy",
         "libigl",
         "plyfile",
