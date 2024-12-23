@@ -6,7 +6,6 @@ REMOTE_WORKDIR=/root/ppf-contact-solver
 ARG=$1
 if [ "$ARG" = "warmup" ]; then
     $SSH "apt update"
-    $SSH "git clone https://github.com/st-tech/ppf-contact-solver.git"
     $SSH "cd ppf-contact-solver; python3 warmup.py"
 elif [ "$ARG" = "build" ]; then
     $SSH "cd ppf-contact-solver; /root/.cargo/bin/cargo build --release"
