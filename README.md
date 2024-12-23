@@ -1,4 +1,4 @@
-# ZOZO's Contact Solver 🫶 [![Getting Started](https://github.com/st-tech/ppf-contact-solver/actions/workflows/getting-started.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/getting-started.yml)
+# ZOZO's Contact Solver 🫶 [![Getting Started](https://github.com/st-tech/ppf-contact-solver/actions/workflows/getting-started.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/getting-started.yml) [![All Examples](https://github.com/st-tech/ppf-contact-solver/actions/workflows/vast-all.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/vast-all.yml)
 
 A contact solver for physics-based simulations involving 👚 shells, 🪵 solids and 🪢 rods. All made by ZOZO.
 Published in [ACM Transactions on Graphics (TOG)](https://dl.acm.org/doi/abs/10.1145/3687908).
@@ -26,6 +26,7 @@ Published in [ACM Transactions on Graphics (TOG)](https://dl.acm.org/doi/abs/10.
 - [📝 Change History](#-change-history)
 - [🐍 How To Use](#-how-to-use)
 - [🖼️ Catalogue](#️-catalogue)
+- [🚀 GitHub Actions](#-github-actions)
 - [💨 Getting Started](#-getting-started)
     - [🎥 Installation Videos](#-installation-videos)
     - [🐳 Installing Docker](#-installing-docker)
@@ -173,13 +174,20 @@ session.export_animation(f"export/{session.info.name}")
 At the moment, not all examples are ready yet, but they will be added/updated one by one.
 The author is actively woriking on it.
 
-## 💨 Getting Started
+## 🚀 GitHub Actions
 
-🛠️ All the steps below are verified to run without errors via automated GitHub Actions ⚙️ (see `.github/workflows/getting-started.yml`
-).
+🛠️ Installation steps are provided below, and both the steps and examples have been verified to run without errors via automated GitHub Actions. The runner types are as follows.
 
-The tested 🚀 runner is the Ubuntu NVIDIA GPU-Optimized Image for AI and HPC with an NVIDIA Tesla T4 (16 GB VRAM) with Driver version 550.127.05.
+### [![Getting Started](https://github.com/st-tech/ppf-contact-solver/actions/workflows/getting-started.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/getting-started.yml)
+
+The tested 🚀 runner of this action is the Ubuntu NVIDIA GPU-Optimized Image for AI and HPC with an NVIDIA Tesla T4 (16 GB VRAM) with Driver version 550.127.05.
 This is not a self-hosted runner, meaning that each time the runner launches, all environments are 🌱 fresh.
+
+### [![All Examples](https://github.com/st-tech/ppf-contact-solver/actions/workflows/vast-all.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/vast-all.yml)
+
+We use the GitHub-hosted runner 🖥️, but the actual simulation runs on a provisioned [vast.ai](https://vast.ai) instance 🌐. We do this for performance ⚡ and budget 💰 reasons: each example doesn't take long, but simulating all of them takes hours ⏳. We choose an RTX 4090 🎮, which typically costs around $0.50 per hour 💵. Since we start with a fresh 🌱 instance, the environment is clean 🧹 every time.
+
+## 💨 Getting Started
 
 ### 🎥 Installation Videos
 
