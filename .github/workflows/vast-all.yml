@@ -13,8 +13,6 @@ env:
 jobs:
   headless:
     runs-on: ubuntu-latest
-    timeout-minutes: 180
-
     steps:
 
       - name: check out repo
