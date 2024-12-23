@@ -7,12 +7,26 @@ The CLI enables faster and more consistent creation and deletion of instances. I
 
 [vast.ai](https://vast.ai) provides a CLI for deploying instances.
 Here’s an example bash script to automate the task.
-First, install [vast.ai CLI](https://cloud.vast.ai/cli/) and set variables:
+First, we setup [vast.ai](https://vast.ai) CLI:
 
 ```bash
+# install vast-ai CLI (https://cloud.vast.ai/cli/)
+wget https://raw.githubusercontent.com/vast-ai/vast-python/master/vast.py -O vast
+chmod +x vast
+
 # api key
 VAST_API_KEY="get an API key at https://cloud.vast.ai/cli/"
 
+# set API key
+./vast set api-key $VAST_API_KEY
+
+# jq must be installed (sudo apt install jq)
+jq --version
+```
+
+Set variables
+
+```bash
 # your local public ssh key
 SSH_PUB_KEY=$HOME/.ssh/id_ed25519.pub
 
@@ -24,18 +38,9 @@ GPU_NAME=RTX_4090
 
 # Image
 VAST_IMAGE="nvidia/cuda:11.8.0-devel-ubuntu22.04"
-
-# jq must be installed (sudo apt install jq)
-jq --version
-
-# install vast-ai CLI (https://cloud.vast.ai/cli/)
-wget https://raw.githubusercontent.com/vast-ai/vast-python/master/vast.py -O vast
-chmod +x vast
-
-./vast set api-key $VAST_API_KEY
 ```
 
-Next, search an instance
+Search an instance
 
 ```bash
 # https://vast.ai/docs/cli/commands
@@ -64,7 +69,7 @@ INSTANCE_ID=$(./vast search offers $query -o 'dph' | awk 'NR==2 {print $1}')
 echo "instance_id: $INSTANCE_ID"
 ```
 
-and deploy
+Deploy
 
 ```bash
 # create an instance
@@ -129,26 +134,8 @@ rm -rf $HOME/.config/vastai
 
 [RunPod](https://runpod.io) also provides a CLI for deploying instances.
 Here’s an example bash script to automate the task.
-First, set the necessary variables.
 
-```bash
-# set API key (generate at https://www.runpod.io/console/user/settings)
-RUNPOD_API_KEY="...your_api_key..."
-
-# disk space 64GB
-DISK_SPACE=64
-
-# GPU
-GPU_NAME="RTX 4090"
-
-# Image
-RUNPOD_IMAGE="runpod/pytorch:2.0.1-py3.10-cuda11.8.0-devel-ubuntu22.04"
-
-# go must be installed at this point (https://go.dev/doc/install)
-go version
-```
-
-Next, install [runpodctl](https://github.com/runpod/runpodctl).
+First, install [runpodctl](https://github.com/runpod/runpodctl).
 Note that, as of late 2024, the official binary release does not offer SSH connection support. For this use, a direct GitHub clone is required.
 
 ```bash
@@ -165,7 +152,25 @@ PATH=$PATH:$HOME/runpodctl/bin/
 # as of late 2024 the official release does not offer ssh connect
 runpodctl --version
 
+# set API key (generate at https://www.runpod.io/console/user/settings)
+RUNPOD_API_KEY="...your_api_key..."
 runpodctl config; runpodctl config --apiKey $RUNPOD_API_KEY
+```
+
+Next, set the necessary variables.
+
+```bash
+# disk space 64GB
+DISK_SPACE=64
+
+# GPU
+GPU_NAME="RTX 4090"
+
+# Image
+RUNPOD_IMAGE="runpod/pytorch:2.0.1-py3.10-cuda11.8.0-devel-ubuntu22.04"
+
+# go must be installed at this point (https://go.dev/doc/install)
+go version
 ```
 
 Now deploy an instance

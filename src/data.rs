@@ -300,6 +300,7 @@ pub struct ParamSet {
     pub stitch_stiffness: f32,
     pub cg_max_iter: u32,
     pub cg_tol: f32,
+    pub enable_retry: bool,
     pub line_search_max_t: f32,
     pub ccd_tol: f32,
     pub ccd_reduction: f32,
@@ -323,13 +324,14 @@ pub struct ParamSet {
 pub struct StepResult {
     pub time: f64,
     pub ccd_success: bool,
-    pub cg_success: bool,
+    pub pcg_success: bool,
+    pub retry_count: u32,
     pub intersection_free: bool,
 }
 
 impl StepResult {
     pub fn success(&self) -> bool {
-        self.ccd_success && self.cg_success && self.intersection_free
+        self.ccd_success && self.pcg_success && self.intersection_free
     }
 }
 

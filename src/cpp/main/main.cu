@@ -193,7 +193,8 @@ StepResult advance() {
     SimpleLog logging("advance");
 
     StepResult result;
-    result.cg_success = true;
+    result.retry_count = 0;
+    result.pcg_success = true;
     result.ccd_success = true;
     result.intersection_free = true;
 
@@ -305,177 +306,197 @@ StepResult advance() {
             }
         } DISPATCH_END;
     };
-    compute_target(dt);
 
-    eval_x.copy(data.vertex.curr);
-
-    float toi_advanced = 0.0f;
-    unsigned step(1);
-    bool final_step(false);
-
+    unsigned retry_count(0);
     while (true) {
-        if (final_step) {
-            logging.message("------ error reduction step ------");
-        } else {
-            logging.message("------ newton step %u ------", step);
-        }
+        compute_target(dt);
 
-        dyn_hess.clear();
-        diag_hess.clear(Mat3x3f::Zero());
-        fixed_hess.clear();
-        force.clear();
-        dx.clear();
+        eval_x.copy(data.vertex.curr);
 
-        if (final_step) {
-            dt *= toi_advanced;
-            compute_target(dt);
-        }
+        float toi_advanced = 0.0f;
+        unsigned step(1);
+        bool final_step(false);
+        bool retry(false);
 
-        logging.push("matrix assembly");
-
-        DISPATCH_START(vertex_count)
-        [data, eval_x, kinematic, dx, target, prm,
-         dt] __device__(unsigned i) mutable {
-            if (kinematic.vertex[i].active) {
-                Map<Vec3f>(dx.data + 3 * i) = eval_x[i] - target[i];
+        while (true) {
+            if (final_step) {
+                logging.message("------ error reduction step ------");
+            } else {
+                logging.message("------ newton step %u ------", step);
             }
-        } DISPATCH_END;
 
-        energy::embed_momentum_force_hessian(data, eval_x, kinematic, velocity,
-                                             dt, target, force, diag_hess, prm);
+            dyn_hess.clear();
+            diag_hess.clear(Mat3x3f::Zero());
+            fixed_hess.clear();
+            force.clear();
+            dx.clear();
 
-        energy::embed_elastic_force_hessian(data, eval_x, kinematic, force,
-                                            fixed_hess, dt, prm);
+            if (final_step) {
+                dt *= toi_advanced;
+                compute_target(dt);
+            }
 
-        if (host_data.constraint.stitch.size) {
-            energy::embed_stitch_force_hessian(data, eval_x, force, fixed_hess,
-                                               prm);
-        }
+            logging.push("matrix assembly");
 
-        tmp_fixed.copy(fixed_hess);
-
-        if (strain_limit_sum && data.shell_face_count > 0) {
-            strainlimiting::embed_strainlimiting_force_hessian(
-                data, eval_x, kinematic, force, tmp_fixed, fixed_hess, prm);
-        }
-
-        unsigned num_contact = 0;
-        float dyn_consumed;
-        unsigned max_nnz_row;
-        contact::update_aabb(host_data, data, eval_x, eval_x,
-                             tmp::kinematic.vertex, prm);
-        num_contact += contact::embed_contact_force_hessian(
-            data, eval_x, kinematic, force, tmp_fixed, fixed_hess, dyn_hess,
-            max_nnz_row, dyn_consumed, dt, prm);
-        logging.mark("dyn_consumed", dyn_consumed);
-        logging.mark("max_nnz_row", max_nnz_row);
-
-        num_contact += contact::embed_constraint_force_hessian(
-            data, eval_x, kinematic, force, tmp_fixed, fixed_hess, dt, prm);
-
-        logging.mark("num_contact", num_contact);
-        logging.pop();
-
-        unsigned iter;
-        float reresid;
-        logging.push("linsolve");
-
-        bool success =
-            solver::solve(dyn_hess, fixed_hess, diag_hess, force, prm.cg_tol,
-                          prm.cg_max_iter, dx, iter, reresid);
-        logging.pop();
-
-        if (!success) {
-            logging.message("### cg failed");
-            result.cg_success = false;
-            break;
-        }
-        logging.mark("iter", iter);
-        logging.mark("reresid", reresid);
-
-        tmp_scalar.clear();
-        DISPATCH_START(vertex_count)
-        [dx, tmp_scalar] __device__(unsigned i) mutable {
-            tmp_scalar[i] = Map<Vec3f>(dx.data + 3 * i).norm();
-        } DISPATCH_END;
-
-        float max_dx = utility::max_array(tmp_scalar.data, vertex_count, 0.0f);
-        logging.mark("max_dx", max_dx);
-
-        tmp_eval_x.copy(eval_x);
-        DISPATCH_START(vertex_count)
-        [eval_x, data, dx] __device__(unsigned i) mutable {
-            eval_x[i] -= Map<Vec3f>(dx.data + 3 * i);
-        } DISPATCH_END;
-
-        if (param->fix_xz) {
             DISPATCH_START(vertex_count)
-            [eval_x, data, prm] __device__(unsigned i) mutable {
-                if (eval_x[i][1] > prm.fix_xz) {
-                    float y = fmin(1.0f, eval_x[i][1] - prm.fix_xz);
-                    Vec3f z = data.vertex.prev[i];
-                    eval_x[i][0] = (1.0f - y) * eval_x[i][0] + y * z[0];
-                    eval_x[i][2] = (1.0f - y) * eval_x[i][2] + y * z[2];
+            [data, eval_x, kinematic, dx, target, prm,
+             dt] __device__(unsigned i) mutable {
+                if (kinematic.vertex[i].active) {
+                    Map<Vec3f>(dx.data + 3 * i) = eval_x[i] - target[i];
                 }
             } DISPATCH_END;
+
+            energy::embed_momentum_force_hessian(data, eval_x, kinematic,
+                                                 velocity, dt, target, force,
+                                                 diag_hess, prm);
+
+            energy::embed_elastic_force_hessian(data, eval_x, kinematic, force,
+                                                fixed_hess, dt, prm);
+
+            if (host_data.constraint.stitch.size) {
+                energy::embed_stitch_force_hessian(data, eval_x, force,
+                                                   fixed_hess, prm);
+            }
+
+            tmp_fixed.copy(fixed_hess);
+
+            if (strain_limit_sum && data.shell_face_count > 0) {
+                strainlimiting::embed_strainlimiting_force_hessian(
+                    data, eval_x, kinematic, force, tmp_fixed, fixed_hess, prm);
+            }
+
+            unsigned num_contact = 0;
+            float dyn_consumed;
+            unsigned max_nnz_row;
+            contact::update_aabb(host_data, data, eval_x, eval_x,
+                                 tmp::kinematic.vertex, prm);
+            num_contact += contact::embed_contact_force_hessian(
+                data, eval_x, kinematic, force, tmp_fixed, fixed_hess, dyn_hess,
+                max_nnz_row, dyn_consumed, dt, prm);
+            logging.mark("dyn_consumed", dyn_consumed);
+            logging.mark("max_nnz_row", max_nnz_row);
+
+            num_contact += contact::embed_constraint_force_hessian(
+                data, eval_x, kinematic, force, tmp_fixed, fixed_hess, dt, prm);
+
+            logging.mark("num_contact", num_contact);
+            logging.pop();
+
+            unsigned iter;
+            float reresid;
+            logging.push("linsolve");
+
+            bool success =
+                solver::solve(dyn_hess, fixed_hess, diag_hess, force,
+                              prm.cg_tol, prm.cg_max_iter, dx, iter, reresid);
+            logging.pop();
+
+            if (!success) {
+                logging.message("### cg failed");
+                if (param->enable_retry && dt > DT_MIN) {
+                    retry = true;
+                } else {
+                    result.pcg_success = false;
+                }
+                break;
+            }
+            logging.mark("iter", iter);
+            logging.mark("reresid", reresid);
+
+            tmp_scalar.clear();
+            DISPATCH_START(vertex_count)
+            [dx, tmp_scalar] __device__(unsigned i) mutable {
+                tmp_scalar[i] = Map<Vec3f>(dx.data + 3 * i).norm();
+            } DISPATCH_END;
+
+            float max_dx =
+                utility::max_array(tmp_scalar.data, vertex_count, 0.0f);
+            logging.mark("max_dx", max_dx);
+
+            tmp_eval_x.copy(eval_x);
+            DISPATCH_START(vertex_count)
+            [eval_x, data, dx] __device__(unsigned i) mutable {
+                eval_x[i] -= Map<Vec3f>(dx.data + 3 * i);
+            } DISPATCH_END;
+
+            if (param->fix_xz) {
+                DISPATCH_START(vertex_count)
+                [eval_x, data, prm] __device__(unsigned i) mutable {
+                    if (eval_x[i][1] > prm.fix_xz) {
+                        float y = fmin(1.0f, eval_x[i][1] - prm.fix_xz);
+                        Vec3f z = data.vertex.prev[i];
+                        eval_x[i][0] = (1.0f - y) * eval_x[i][0] + y * z[0];
+                        eval_x[i][2] = (1.0f - y) * eval_x[i][2] + y * z[2];
+                    }
+                } DISPATCH_END;
+            }
+
+            logging.push("line search");
+            contact::update_aabb(host_data, data, tmp_eval_x, eval_x,
+                                 tmp::kinematic.vertex, prm);
+            float toi =
+                contact::line_search(data, kinematic, tmp_eval_x, eval_x, prm);
+            if (strain_limit_sum && shell_face_count > 0) {
+                toi = fminf(toi, strainlimiting::line_search(data, kinematic,
+                                                             eval_x, tmp_eval_x,
+                                                             tmp_scalar, prm));
+            }
+            logging.pop();
+
+            if (toi <= 0.0f) {
+                logging.message("### ccd failed (toi: %.2e)", toi);
+                result.ccd_success = false;
+                break;
+            }
+
+            if (!final_step) {
+                toi_advanced += fmaxf(0.0f, 1.0f - toi_advanced) * toi;
+            }
+            logging.mark("toi", toi);
+
+            DISPATCH_START(vertex_count)
+            [eval_x, tmp_eval_x, data, toi] __device__(unsigned i) mutable {
+                eval_x[i] = (1.0f - toi) * tmp_eval_x[i] + toi * eval_x[i];
+            } DISPATCH_END;
+
+            if (final_step) {
+                break;
+            } else if (toi_advanced >= param->target_toi &&
+                       step >= param->min_newton_steps) {
+                final_step = true;
+            } else {
+                logging.message("* toi_advanced: %.2e", toi_advanced);
+                ++step;
+            }
         }
-
-        logging.push("line search");
-        contact::update_aabb(host_data, data, tmp_eval_x, eval_x,
-                             tmp::kinematic.vertex, prm);
-        float toi =
-            contact::line_search(data, kinematic, tmp_eval_x, eval_x, prm);
-        if (strain_limit_sum && shell_face_count > 0) {
-            toi = fminf(toi, strainlimiting::line_search(data, kinematic,
-                                                         eval_x, tmp_eval_x,
-                                                         tmp_scalar, prm));
-        }
-        logging.pop();
-
-        if (toi <= 0.0f) {
-            logging.message("### ccd failed (toi: %.2e)", toi);
-            result.ccd_success = false;
-            break;
-        }
-
-        if (!final_step) {
-            toi_advanced += fmaxf(0.0f, 1.0f - toi_advanced) * toi;
-        }
-        logging.mark("toi", toi);
-
-        DISPATCH_START(vertex_count)
-        [eval_x, tmp_eval_x, data, toi] __device__(unsigned i) mutable {
-            eval_x[i] = (1.0f - toi) * tmp_eval_x[i] + toi * eval_x[i];
-        } DISPATCH_END;
-
-        if (final_step) {
-            break;
-        } else if (toi_advanced >= param->target_toi &&
-                   step >= param->min_newton_steps) {
-            final_step = true;
+        if (retry) {
+            dt *= param->dt_decrease_factor;
+            logging.message("**** retry requested. dt: %.2e", dt);
+            retry_count++;
         } else {
-            logging.message("* toi_advanced: %.2e", toi_advanced);
-            ++step;
+            if (!contact::check_intersection(data, kinematic, eval_x)) {
+                logging.message("### intersection detected");
+                result.intersection_free = false;
+            }
+            if (result.success()) {
+                logging.mark("toi_advanced", toi_advanced);
+                logging.mark("newton_steps", step);
+
+                param->prev_dt = dt;
+                param->time += param->prev_dt;
+
+                dev_dataset.vertex.prev.copy(dev_dataset.vertex.curr);
+                dev_dataset.vertex.curr.copy(eval_x);
+
+                result.time = param->time;
+            }
+            break;
         }
     }
-
-    if (!contact::check_intersection(data, kinematic, eval_x)) {
-        logging.message("### intersection detected");
-        result.intersection_free = false;
+    if (param->enable_retry) {
+        logging.mark("retry_count", retry_count);
     }
-
-    if (result.success()) {
-        logging.mark("toi_advanced", toi_advanced);
-        logging.mark("newton_steps", step);
-
-        param->prev_dt = dt;
-        param->time += param->prev_dt;
-
-        dev_dataset.vertex.prev.copy(dev_dataset.vertex.curr);
-        dev_dataset.vertex.curr.copy(eval_x);
-
-        result.time = param->time;
-    }
+    result.retry_count = retry_count;
     return result;
 }
 

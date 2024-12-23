@@ -67,6 +67,9 @@ pub struct Args {
     #[clap(long, default_value_t = 1e-3)]
     pub cg_tol: f32,
 
+    #[clap(long)]
+    pub enable_retry: bool,
+
     #[clap(long, default_value_t = 1024)]
     pub ccd_max_iters: u32,
 

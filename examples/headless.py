@@ -28,5 +28,4 @@ param.set("min-newton-steps", 8)
 param.set("frames", 60)
 
 session = app.session.create("dt-001-newton-8").init(fixed).start(param, blocking=True)
-assert os.path.exists(os.path.join(session.output_path(), "vert_60.bin"))
-
+assert session.finished()

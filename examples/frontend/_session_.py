@@ -4,6 +4,7 @@
 
 from ._scene_ import FixedScene
 from ._plot_ import Plot
+from ._plot_ import in_jupyter_notebook
 from tqdm import tqdm
 import pandas as pd
 import signal
@@ -16,8 +17,7 @@ import threading
 import time
 import re
 from typing import Any, Optional
-from IPython.display import display
-import ipywidgets as widgets
+
 
 PROCESS_NAME = "ppf-contact"
 CONSOLE_STYLE = """
@@ -203,6 +203,7 @@ class SessionInfo:
 
 class Session:
     def __init__(self, app_root: str, proj_root: str, name: str, save_func):
+        self._in_jupyter_notebook = in_jupyter_notebook()
         self._app_root = app_root
         self._proj_root = proj_root
         self._fixed = None
@@ -214,6 +215,14 @@ class Session:
         self._update_table_interval = 0.25
         self.delete()
 
+    def print(self, message):
+        if self._in_jupyter_notebook:
+            from IPython.display import display
+
+            display(message)
+        else:
+            print(message)
+
     def delete(self):
         if os.path.exists(self.info.path):
             shutil.rmtree(self.info.path)
@@ -224,8 +233,11 @@ class Session:
 
     def init(self, scene: FixedScene) -> "Session":
         if is_running():
-            display("Solver is already running. Teriminate first.")
-            display(self._terminate_button("Terminate Now"))
+            self.print("Solver is already running. Teriminate first.")
+            if self._in_jupyter_notebook:
+                from IPython.display import display
+
+                display(self._terminate_button("Terminate Now"))
             return self
 
         self._fixed = scene
@@ -245,6 +257,10 @@ class Session:
 
     def output_path(self) -> str:
         return os.path.join(self.info.path, "output")
+
+    def finished(self) -> bool:
+        finished_path = os.path.join(self.output_path(), "finished.txt")
+        return os.path.exists(finished_path)
 
     def export_shell_command(
         self,
@@ -276,13 +292,15 @@ class Session:
             if force:
                 terminate()
             else:
-                display("Solver is already running. Teriminate first.")
+                from IPython.display import display
+
+                self.print("Solver is already running. Teriminate first.")
                 display(self._terminate_button("Terminate Now"))
                 return self
         cmd_path = self.export_shell_command(param)
         err_path = os.path.join(self.info.path, "error.log")
         log_path = os.path.join(self.info.path, "stdout.log")
-        if blocking:
+        if blocking or not self._in_jupyter_notebook:
             subprocess.run(cmd_path, cwd=self._proj_root, shell=True)
             return self
         else:
@@ -309,17 +327,38 @@ class Session:
                 display_log(err_content)
                 raise ValueError("Solver failed to start")
 
-    def get_number(self, name: str):
+    def get_log(self) -> list[str]:
+        path = os.path.join(self.info.path, "output", "data")
+        result = []
+        for file in os.listdir(path):
+            if file.endswith(".out"):
+                result.append(file.replace(".out", ""))
+        return result
+
+    def get_numbers(self, name: str):
+        def float_or_int(var):
+            var = float(var)
+            if var.is_integer():
+                return int(var)
+            else:
+                return var
+
         path = os.path.join(self.info.path, "output", "data", f"{name}.out")
+        entries = []
         if os.path.exists(path):
             with open(path, "r") as f:
                 lines = f.readlines()
-                number = float(lines[-1].split(" ")[1])
-                if number.is_integer():
-                    return int(number)
-                else:
-                    return number
-        return None
+                for line in lines:
+                    entry = line.split(" ")
+                    entries.append([float_or_int(entry[0]), float_or_int(entry[1])])
+        return entries
+
+    def get_number(self, name: str):
+        entries = self.get_numbers(name)
+        if entries:
+            return entries[-1][1]
+        else:
+            return None
 
     def _get_vertex_frame_count(self) -> int:
         path = os.path.join(self.info.path, "output")
@@ -389,147 +428,167 @@ class Session:
                     return None
         return None
 
-    def _terminate_button(
-        self, description: str = "Terminate Solver"
-    ) -> widgets.Button:
-        def _terminate(button):
-            button.disabled = True
-            button.description = "Terminating..."
-            terminate()
-            while is_running():
-                time.sleep(0.25)
-            button.description = "Terminated"
+    def _terminate_button(self, description: str = "Terminate Solver"):
+        if self._in_jupyter_notebook:
+            import ipywidgets as widgets
 
-        button = widgets.Button(description=description)
-        button.on_click(_terminate)
-        return button
-
-    def preview(self, live_update: bool = True) -> "Plot":
-        shading = {"wireframe": False}
-        if self._fixed is None:
-            raise ValueError("Scene must be initialized")
-        else:
-            result = self._get_vertex()
-            if result is None:
-                vert, curr_frame = self._fixed._vert, 0
-            else:
-                vert, curr_frame = result
-            plot = self._fixed.preview(
-                vert, shading=shading, show_pin=False, show_stitch=False
-            )
-
-        table = widgets.HTML()
-        button = self._terminate_button()
-
-        def convert_integer(number) -> str:
-            if number is None:
-                return "N/A"
-            elif number < 1000:
-                return str(number)
-            elif number < 1_000_000:
-                return f"{number/1_000:.2f}k"
-            elif number < 1_000_000_000:
-                return f"{number/1_000_000:.2f}M"
-            else:
-                return f"{number/1_000_000_000:.2f}B"
-
-        def convert_time(time) -> str:
-            if time is None:
-                return "N/A"
-            elif time < 1_000:
-                return f"{int(time)}ms"
-            elif time < 60_000:
-                return f"{time/1_000:.2f}s"
-            else:
-                return f"{time/60_000:.2f}m"
-
-        if live_update and is_running():
-
-            def update_dataframe(table, curr_frame):
-                time_per_frame = convert_time(self.get_number("per_video_frame"))
-                time_per_step = convert_time(self.get_number("advance"))
-                n_contact = convert_integer(self.get_number("advance.num_contact"))
-                n_newton = convert_integer(self.get_number("advance.newton_steps"))
-                max_sigma = self.get_number("advance.max_sigma")
-                n_pcg = convert_integer(self.get_number("advance.iter"))
-                data = {
-                    "Frame": [str(curr_frame)],
-                    "Time/Frame": [time_per_frame],
-                    "Time/Step": [time_per_step],
-                    "#Contact": [n_contact],
-                    "#Newton": [n_newton],
-                    "#PCG": [n_pcg],
-                }
-                if max_sigma is not None:
-                    stretch = f"{100.0 * (max_sigma - 1.0):.2f}%"
-                    data["Max Stretch"] = [stretch]
-                df = pd.DataFrame(data)
-                table.value = df.to_html(
-                    classes="table table-striped", border=0, index=False
-                )
-
-            def live_preview(self):
-                nonlocal plot
-                nonlocal button
-                nonlocal table
-                nonlocal curr_frame
-                while True:
-                    last_frame = self._get_latest_frame()
-                    if curr_frame != last_frame:
-                        curr_frame = last_frame
-                        result = self._get_vertex(curr_frame)
-                        if result is not None:
-                            vert, _ = result
-                            update_dataframe(table, curr_frame)
-                            plot.update(vert)
-                    if not is_running():
-                        break
-                    time.sleep(self._update_preview_interval)
+            def _terminate(button):
                 button.disabled = True
+                button.description = "Terminating..."
+                terminate()
+                while is_running():
+                    time.sleep(0.25)
                 button.description = "Terminated"
 
-            def live_table(self):
-                nonlocal table
-                while True:
-                    update_dataframe(table, curr_frame)
-                    if not is_running():
-                        break
-                    time.sleep(self._update_table_interval)
+            button = widgets.Button(description=description)
+            button.on_click(_terminate)
+            return button
+        else:
+            return None
 
-            threading.Thread(target=live_preview, args=(self,)).start()
-            threading.Thread(target=live_table, args=(self,)).start()
-            display(button)
+    def preview(self, live_update: bool = True) -> Optional["Plot"]:
+        if self._in_jupyter_notebook:
+            import ipywidgets as widgets
+            from IPython.display import display
 
-        display(table)
-        return plot
+            shading = {"wireframe": False}
+            if self._fixed is None:
+                raise ValueError("Scene must be initialized")
+            else:
+                result = self._get_vertex()
+                if result is None:
+                    vert, curr_frame = self._fixed._vert, 0
+                else:
+                    vert, curr_frame = result
+                plot = self._fixed.preview(
+                    vert, shading=shading, show_pin=False, show_stitch=False
+                )
+
+            table = widgets.HTML()
+            button = self._terminate_button()
+
+            def convert_integer(number) -> str:
+                if number is None:
+                    return "N/A"
+                elif number < 1000:
+                    return str(number)
+                elif number < 1_000_000:
+                    return f"{number/1_000:.2f}k"
+                elif number < 1_000_000_000:
+                    return f"{number/1_000_000:.2f}M"
+                else:
+                    return f"{number/1_000_000_000:.2f}B"
+
+            def convert_time(time) -> str:
+                if time is None:
+                    return "N/A"
+                elif time < 1_000:
+                    return f"{int(time)}ms"
+                elif time < 60_000:
+                    return f"{time/1_000:.2f}s"
+                else:
+                    return f"{time/60_000:.2f}m"
+
+            if live_update and is_running():
+
+                def update_dataframe(table, curr_frame):
+                    time_per_frame = convert_time(self.get_number("per_video_frame"))
+                    time_per_step = convert_time(self.get_number("advance"))
+                    n_contact = convert_integer(self.get_number("advance.num_contact"))
+                    n_newton = convert_integer(self.get_number("advance.newton_steps"))
+                    max_sigma = self.get_number("advance.max_sigma")
+                    n_pcg = convert_integer(self.get_number("advance.iter"))
+                    data = {
+                        "Frame": [str(curr_frame)],
+                        "Time/Frame": [time_per_frame],
+                        "Time/Step": [time_per_step],
+                        "#Contact": [n_contact],
+                        "#Newton": [n_newton],
+                        "#PCG": [n_pcg],
+                    }
+                    if max_sigma is not None:
+                        stretch = f"{100.0 * (max_sigma - 1.0):.2f}%"
+                        data["Max Stretch"] = [stretch]
+                    df = pd.DataFrame(data)
+                    table.value = df.to_html(
+                        classes="table table-striped", border=0, index=False
+                    )
+
+                def live_preview(self):
+                    nonlocal plot
+                    nonlocal button
+                    nonlocal table
+                    nonlocal curr_frame
+                    assert plot is not None
+                    while True:
+                        last_frame = self._get_latest_frame()
+                        if curr_frame != last_frame:
+                            curr_frame = last_frame
+                            result = self._get_vertex(curr_frame)
+                            if result is not None:
+                                vert, _ = result
+                                update_dataframe(table, curr_frame)
+                                plot.update(vert)
+                        if not is_running():
+                            break
+                        time.sleep(self._update_preview_interval)
+                    assert button is not None
+                    button.disabled = True
+                    button.description = "Terminated"
+
+                def live_table(self):
+                    nonlocal table
+                    while True:
+                        update_dataframe(table, curr_frame)
+                        if not is_running():
+                            break
+                        time.sleep(self._update_table_interval)
+
+                threading.Thread(target=live_preview, args=(self,)).start()
+                threading.Thread(target=live_table, args=(self,)).start()
+                display(button)
+
+            display(table)
+            return plot
+        else:
+            return None
 
     def animate(self) -> "Session":
-        shading = {"wireframe": False}
-        if self._fixed is None:
-            raise ValueError("Scene must be initialized")
-        else:
-            plot = self._fixed.preview(
-                self._fixed._vert, shading=shading, show_pin=False, show_stitch=False
-            )
-            try:
-                if self._fixed is not None:
-                    frame_count = self._get_vertex_frame_count()
-                    vert_list = []
-                    for i in tqdm(range(frame_count), desc="Loading frames", ncols=70):
-                        result = self._get_vertex(i)
-                        if result is not None:
-                            vert, _ = result
-                            vert_list.append(vert)
+        if self._in_jupyter_notebook:
+            import ipywidgets as widgets
 
-                    def update(frame=1):
-                        nonlocal vert_list
-                        nonlocal plot
-                        if self._fixed is not None:
-                            plot.update(vert_list[frame - 1])
+            shading = {"wireframe": False}
+            if self._fixed is None:
+                raise ValueError("Scene must be initialized")
+            else:
+                plot = self._fixed.preview(
+                    self._fixed._vert,
+                    shading=shading,
+                    show_pin=False,
+                    show_stitch=False,
+                )
+                try:
+                    if self._fixed is not None:
+                        frame_count = self._get_vertex_frame_count()
+                        vert_list = []
+                        for i in tqdm(
+                            range(frame_count), desc="Loading frames", ncols=70
+                        ):
+                            result = self._get_vertex(i)
+                            if result is not None:
+                                vert, _ = result
+                                vert_list.append(vert)
 
-                    widgets.interact(update, frame=(1, frame_count))
-            except Exception as _:
-                pass
+                        def update(frame=1):
+                            nonlocal vert_list
+                            nonlocal plot
+                            assert plot is not None
+                            if self._fixed is not None:
+                                plot.update(vert_list[frame - 1])
+
+                        widgets.interact(update, frame=(1, frame_count))
+                except Exception as _:
+                    pass
         return self
 
     def export(
@@ -559,57 +618,61 @@ class Session:
             self.export(os.path.join(path, f"frame_{i}.{ext}"), i, include_static)
 
     def stream(self, n_lines=40) -> "Session":
-        log_widget = widgets.HTML()
-        display(log_widget)
-        button = widgets.Button(description="Stop Live Stream")
-        display(widgets.HBox((button, self._terminate_button())))
+        if self._in_jupyter_notebook:
+            import ipywidgets as widgets
+            from IPython.display import display
 
-        stop = False
-        log_path = os.path.join(self.info.path, "output", "cudasim_log.txt")
-        if os.path.exists(log_path):
+            log_widget = widgets.HTML()
+            display(log_widget)
+            button = widgets.Button(description="Stop Live Stream")
+            display(widgets.HBox((button, self._terminate_button())))
 
-            def live_stream(self):
-                nonlocal stop
-                nonlocal button
-                nonlocal log_widget
-                nonlocal log_path
+            stop = False
+            log_path = os.path.join(self.info.path, "output", "cudasim_log.txt")
+            if os.path.exists(log_path):
 
-                while not stop:
-                    result = subprocess.run(
-                        ["tail", f"-n{n_lines}", log_path],
-                        capture_output=True,
-                        text=True,
-                    )
-                    log_widget.value = (
-                        CONSOLE_STYLE
-                        + f"<pre style='no-scroll'>{result.stdout.strip()}</pre>"
-                    )
-                    if not is_running():
-                        log_widget.value += "<p style='color: red;'>Terminated.</p>"
-                        button.disabled = True
-                        break
-                    time.sleep(self._update_terminal_interval)
+                def live_stream(self):
+                    nonlocal stop
+                    nonlocal button
+                    nonlocal log_widget
+                    nonlocal log_path
 
-            thread = threading.Thread(target=live_stream, args=(self,))
-            thread.start()
+                    while not stop:
+                        result = subprocess.run(
+                            ["tail", f"-n{n_lines}", log_path],
+                            capture_output=True,
+                            text=True,
+                        )
+                        log_widget.value = (
+                            CONSOLE_STYLE
+                            + f"<pre style='no-scroll'>{result.stdout.strip()}</pre>"
+                        )
+                        if not is_running():
+                            log_widget.value += "<p style='color: red;'>Terminated.</p>"
+                            button.disabled = True
+                            break
+                        time.sleep(self._update_terminal_interval)
 
-            def toggle_stream(b):
-                nonlocal stop
-                nonlocal thread
-                if thread.is_alive():
-                    stop = True
-                    thread.join()
-                    b.description = "Start Live Stream"
-                else:
-                    thread = threading.Thread(target=live_stream, args=(self,))
-                    stop = False
-                    thread.start()
-                    b.description = "Stop Live Stream"
+                thread = threading.Thread(target=live_stream, args=(self,))
+                thread.start()
 
-            button.on_click(toggle_stream)
-        else:
-            log_widget.value = "No log file found."
-            button.disabled = True
+                def toggle_stream(b):
+                    nonlocal stop
+                    nonlocal thread
+                    if thread.is_alive():
+                        stop = True
+                        thread.join()
+                        b.description = "Start Live Stream"
+                    else:
+                        thread = threading.Thread(target=live_stream, args=(self,))
+                        stop = False
+                        thread.start()
+                        b.description = "Stop Live Stream"
+
+                button.on_click(toggle_stream)
+            else:
+                log_widget.value = "No log file found."
+                button.disabled = True
 
         return self
 
@@ -635,10 +698,14 @@ def terminate():
 
 
 def display_log(lines: list[str]):
-    log_widget = widgets.HTML()
-    text = "\n".join(lines)
-    log_widget.value = CONSOLE_STYLE + f"<pre style='no-scroll'>{text}</pre>"
-    display(log_widget)
+    if in_jupyter_notebook():
+        import ipywidgets as widgets
+        from IPython.display import display
+
+        log_widget = widgets.HTML()
+        text = "\n".join(lines)
+        log_widget.value = CONSOLE_STYLE + f"<pre style='no-scroll'>{text}</pre>"
+        display(log_widget)
 
 
 def get_default_params(path: str) -> dict[str, Any]:

@@ -154,7 +154,10 @@ def install_oh_my_zsh():
     script_dir = os.path.dirname(os.path.realpath(__file__))
     print("installing oh-my-zsh")
     run("apt install -y zsh")
-    run('sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)"', cwd=script_dir)
+    run(
+        'sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)"',
+        cwd=script_dir,
+    )
     run("zsh -c exit")
     run("echo 'export PATH=$HOME/.cargo/bin:$PATH' >> ~/.zshrc")
     run("echo 'export PATH=/usr/local/cuda/bin:$PATH' >> ~/.zshrc")
@@ -196,16 +199,7 @@ def set_time():
 
 
 def start_jupyter():
-    import click
-    import psutil
-
-    for process in psutil.process_iter():
-        if "jupyter" in process.name():
-            print("Jupyter is already running")
-            if click.confirm("Do you want to restart?", default=True):
-                psutil.Process(process.pid).terminate()
-            else:
-                return
+    run("pkill jupyter-lab")
     script_dir = os.path.dirname(os.path.realpath(__file__))
     examples_dir = os.path.join(script_dir, "examples")
 
@@ -221,8 +215,11 @@ def start_jupyter():
 """
             f.write(lines)
 
-    command = "jupyter-lab --no-browser --port=8080 --ip=0.0.0.0 --allow-root --NotebookApp.token='' --NotebookApp.password=''"
-    run(command, cwd=examples_dir)
+    try:
+        command = "jupyter-lab -y --no-browser --port=8080 --ip=0.0.0.0 --allow-root --NotebookApp.token='' --NotebookApp.password=''"
+        run(command, cwd=examples_dir)
+    except KeyboardInterrupt:
+        print("jupyterlab shutdown")
 
 
 if __name__ == "__main__":

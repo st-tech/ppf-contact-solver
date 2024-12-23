@@ -348,6 +348,7 @@ pub fn make_param(args: &Args) -> data::ParamSet {
         stitch_stiffness: args.stitch_stiffness,
         cg_max_iter: args.cg_max_iter,
         cg_tol: args.cg_tol,
+        enable_retry: args.enable_retry,
         line_search_max_t: args.line_search_max_t,
         ccd_tol: args.contact_ghat,
         ccd_reduction: args.ccd_reduction,

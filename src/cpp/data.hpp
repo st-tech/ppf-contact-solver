@@ -226,6 +226,7 @@ struct ParamSet {
     float stitch_stiffness;
     unsigned cg_max_iter;
     float cg_tol;
+    bool enable_retry;
     float line_search_max_t;
     float ccd_tol;
     float ccd_reduction;
@@ -247,10 +248,11 @@ struct ParamSet {
 struct StepResult {
     double time;
     bool ccd_success;
-    bool cg_success;
+    bool pcg_success;
+    unsigned retry_count;
     bool intersection_free;
     bool success() const {
-        return ccd_success && cg_success && intersection_free;
+        return ccd_success && pcg_success && intersection_free;
     }
 };
 

@@ -5,11 +5,14 @@
 use super::data::Constraint;
 use super::data::StepResult;
 use super::{builder, mesh::Mesh, Args, BvhSet, DataSet, ParamSet, Scene};
+use chrono::Local;
 use serde::{Deserialize, Serialize};
 use std::fs::OpenOptions;
 use std::io::Write;
+use std::path::Path;
 use std::sync::mpsc;
 use std::time::Instant;
+
 extern crate nalgebra as na;
 
 use log::*;
@@ -228,5 +231,20 @@ impl Backend {
                 first_step = false;
             }
         }
+        let _ = result_receiver.try_recv();
+        let finished_path = std::path::Path::new(args.output.as_str()).join("finished.txt");
+        write_current_time_to_file(finished_path.to_str().unwrap()).unwrap();
     }
+}
+
+fn write_current_time_to_file(file_path: &str) -> std::io::Result<()> {
+    let now = Local::now();
+    let time_str = now.to_rfc3339(); // For example, "2024-12-23T12:34:56+00:00"
+    let path = Path::new(file_path);
+    let mut file = OpenOptions::new()
+        .create(true) // Create the file if it doesn't exist
+        .append(true) // Append to the file if it exists
+        .open(path)?;
+    writeln!(file, "{}", time_str)?;
+    Ok(())
 }

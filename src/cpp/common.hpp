@@ -28,7 +28,7 @@
 #define EPSILON 1.0e-8f
 #define FLT_MAX 1.0e8f
 #define FLT_MIN -1.0e8f
-#define DT_EPSILON 1e-10f
+#define DT_MIN 1e-5f
 #define PI 3.14159265358979323846f
 #define DEBUG_MODE 0
 

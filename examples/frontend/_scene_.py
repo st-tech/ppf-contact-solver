@@ -11,8 +11,6 @@ import colorsys
 from typing import Optional
 from ._plot_ import PlotManager, Plot
 from ._asset_ import AssetManager
-from IPython.display import display, HTML
-from ipywidgets import interact
 
 EPS = 1e-3
 
@@ -201,9 +199,14 @@ class FixedScene:
             else:
                 data[key] = [str(value)]
 
-        df = pd.DataFrame(data)
-        html = df.to_html(classes="table", index=False)
-        display(HTML(html))
+        from IPython.display import display, HTML
+
+        if self._plot.is_jupyter_notebook():
+            df = pd.DataFrame(data)
+            html = df.to_html(classes="table", index=False)
+            display(HTML(html))
+        else:
+            print(data)
         return self
 
     def export(
@@ -443,87 +446,94 @@ class FixedScene:
         shading: dict = {},
         show_stitch: bool = True,
         show_pin: bool = True,
-    ) -> "Plot":
-        if vert is None:
-            vert = self._vert
-        color = self._color
-        plot = None
+    ) -> Optional["Plot"]:
+        if self._plot.is_jupyter_notebook():
+            if vert is None:
+                vert = self._vert
+            color = self._color
+            plot = None
 
-        if len(self._tri):
-            if plot is None:
-                plot = self._plot.create().tri(
-                    vert, self._tri, color=color, shading=shading
-                )
-            else:
-                plot.add.tri(vert, self._tri, color)
-
-        if len(self._static_vert):
-            if plot is None:
-                plot = self._plot.create().tri(
-                    self._static_vert,
-                    self._static_tri,
-                    color=self._static_color,
-                )
-            else:
-                plot.add.tri(
-                    self._static_vert,
-                    self._static_tri,
-                    self._static_color,
-                )
-
-        if len(self._rod):
-            if plot is None:
-                plot = self._plot.create().curve(vert, self._rod, shading=shading)
-            else:
-                plot.add.edge(vert, self._rod)
-
-        if plot is not None:
-            if show_stitch and len(self._stitch_ind) and len(self._stitch_w):
-                stitch_vert, stitch_edge = [], []
-                for ind, w in zip(self._stitch_ind, self._stitch_w):
-                    x0, y0, y1 = vert[ind[0]], vert[ind[1]], vert[ind[2]]
-                    w0, w1 = w[0], w[1]
-                    idx0, idx1 = len(stitch_vert), len(stitch_vert) + 1
-                    stitch_vert.append(x0)
-                    stitch_vert.append(w0 * y0 + w1 * y1)
-                    stitch_edge.append([idx0, idx1])
-                stitch_vert = np.array(stitch_vert)
-                stitch_edge = np.array(stitch_edge)
-                if plot._darkmode:
-                    color = np.array([1, 1, 1])
-                else:
-                    color = np.array([0, 0, 0])
-                plot.add.edge(stitch_vert, stitch_edge)
-
-            has_vel = np.linalg.norm(self._vel) > 0
-            if show_pin and (self._pin or has_vel):
-                max_time = 0
-                if self._pin:
-                    avg_area = self._average_tri_area()
-                    avg_length = np.sqrt(avg_area)
-                    shading["point_size"] = 5 * avg_length
-                    pin_verts = np.vstack([vert[pin] for pin, _, _, _, _ in self._pin])
-                    plot.add.point(pin_verts)
-                    max_time = max(
-                        [
-                            timing[-1] if len(timing) else 0
-                            for _, _, timing, _, _ in self._pin
-                        ]
+            if len(self._tri):
+                if plot is None:
+                    plot = self._plot.create().tri(
+                        vert, self._tri, color=color, shading=shading
                     )
-                if has_vel:
-                    max_time = max(max_time, 1.0)
-                if max_time > 0:
+                else:
+                    plot.add.tri(vert, self._tri, color)
 
-                    def update(time=0):
-                        nonlocal plot
-                        vert = self.time(time)
-                        if plot is not None:
-                            plot.update(vert)
+            if len(self._static_vert):
+                if plot is None:
+                    plot = self._plot.create().tri(
+                        self._static_vert,
+                        self._static_tri,
+                        color=self._static_color,
+                    )
+                else:
+                    plot.add.tri(
+                        self._static_vert,
+                        self._static_tri,
+                        self._static_color,
+                    )
 
-                    interact(update, time=(0, max_time, 0.01))
-            return plot
+            if len(self._rod):
+                if plot is None:
+                    plot = self._plot.create().curve(vert, self._rod, shading=shading)
+                else:
+                    plot.add.edge(vert, self._rod)
+
+            if plot is not None:
+                if show_stitch and len(self._stitch_ind) and len(self._stitch_w):
+                    stitch_vert, stitch_edge = [], []
+                    for ind, w in zip(self._stitch_ind, self._stitch_w):
+                        x0, y0, y1 = vert[ind[0]], vert[ind[1]], vert[ind[2]]
+                        w0, w1 = w[0], w[1]
+                        idx0, idx1 = len(stitch_vert), len(stitch_vert) + 1
+                        stitch_vert.append(x0)
+                        stitch_vert.append(w0 * y0 + w1 * y1)
+                        stitch_edge.append([idx0, idx1])
+                    stitch_vert = np.array(stitch_vert)
+                    stitch_edge = np.array(stitch_edge)
+                    if plot._darkmode:
+                        color = np.array([1, 1, 1])
+                    else:
+                        color = np.array([0, 0, 0])
+                    plot.add.edge(stitch_vert, stitch_edge)
+
+                has_vel = np.linalg.norm(self._vel) > 0
+                if show_pin and (self._pin or has_vel):
+                    max_time = 0
+                    if self._pin:
+                        avg_area = self._average_tri_area()
+                        avg_length = np.sqrt(avg_area)
+                        shading["point_size"] = 5 * avg_length
+                        pin_verts = np.vstack(
+                            [vert[pin] for pin, _, _, _, _ in self._pin]
+                        )
+                        plot.add.point(pin_verts)
+                        max_time = max(
+                            [
+                                timing[-1] if len(timing) else 0
+                                for _, _, timing, _, _ in self._pin
+                            ]
+                        )
+                    if has_vel:
+                        max_time = max(max_time, 1.0)
+                    if max_time > 0:
+
+                        def update(time=0):
+                            nonlocal plot
+                            vert = self.time(time)
+                            if plot is not None:
+                                plot.update(vert)
+
+                        from ipywidgets import interact
+
+                        interact(update, time=(0, max_time, 0.01))
+                return plot
+            else:
+                raise Exception("no plot")
         else:
-            raise Exception("no plot")
+            return None
 
 
 class Scene:
