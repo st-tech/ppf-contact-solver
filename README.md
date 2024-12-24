@@ -159,7 +159,8 @@ session.stream()
 session.animate()
 
 # export all simulated frames (downloadable from the file browser)
-session.export_animation(f"export/{session.info.name}")
+path = f"export/{scene.info.name}/{session.info.name}"
+session.export.animation(path)
 ```
 <img src="./asset/image/drape.jpg" alt="drape">
   

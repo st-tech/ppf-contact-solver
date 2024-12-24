@@ -1,5 +1,4 @@
 from frontend import App
-import os
 
 app = App("headless").clear()
 

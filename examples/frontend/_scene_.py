@@ -26,7 +26,7 @@ class SceneManager:
         if name in self._scene.keys():
             raise Exception(f"scene {name} already exists")
         else:
-            scene = Scene(self._plot, self._asset, self._save_func)
+            scene = Scene(name, self._plot, self._asset, self._save_func)
             self._scene[name] = scene
             return scene
 
@@ -536,14 +536,22 @@ class FixedScene:
             return None
 
 
+class SceneInfo:
+    def __init__(self, name: str, scene: "Scene"):
+        self._scene = scene
+        self.name = name
+
+
 class Scene:
-    def __init__(self, plot: PlotManager, asset: AssetManager, save_func):
+    def __init__(self, name: str, plot: PlotManager, asset: AssetManager, save_func):
+        self._name = name
         self._plot = plot
         self._asset = asset
         self._save_func = save_func
         self._object = {}
         self._sphere = []
         self._wall = []
+        self.info = SceneInfo(name, self)
 
     def clear(self) -> "Scene":
         self._object.clear()

@@ -201,6 +201,173 @@ class SessionInfo:
         self.path = path
 
 
+class SessionExport:
+    def __init__(self, session: "Session"):
+        self._session = session
+
+    def shell_command(
+        self,
+        param: Param,
+    ) -> str:
+        param.export(self._session.info.path)
+        program_path = os.path.join(
+            self._session._proj_root, "target", "release", "ppf-contact-solver"
+        )
+        if os.path.exists(program_path):
+            command = " ".join(
+                [
+                    program_path,
+                    f"--path {self._session.info.path}",
+                    f"--output {self._session.output.path}",
+                ]
+            )
+            path = os.path.join(self._session.info.path, "command.sh")
+            with open(path, "w") as f:
+                f.write(command)
+            os.chmod(path, 0o755)
+            return path
+        else:
+            raise ValueError("Solver does not exist")
+
+    def animation(self, path: str, ext="ply", include_static: bool = True):
+        if os.path.exists(path):
+            shutil.rmtree(path)
+        else:
+            os.makedirs(path)
+        for i in tqdm(range(self._session.get.latest_frame()), desc="export", ncols=70):
+            self.frame(os.path.join(path, f"frame_{i}.{ext}"), i, include_static)
+
+    def frame(
+        self, path: str, frame: Optional[int] = None, include_static: bool = True
+    ) -> "Session":
+        if self._session._fixed is None:
+            raise ValueError("Scene must be initialized")
+        else:
+            vert = self._session._fixed._vert
+            if frame is not None:
+                result = self._session.get.vertex(frame)
+                if result is not None:
+                    vert, _ = result
+            else:
+                result = self._session.get.vertex()
+                if result is not None:
+                    vert, _ = result
+            self._session._fixed.export(vert, path, include_static)
+        return self._session
+
+
+class SessionOutput:
+    def __init__(self, session: "Session"):
+        self._session = session
+        self.path = os.path.join(self._session.info.path, "output")
+
+
+class SessionGet:
+    def __init__(self, session: "Session"):
+        self._session = session
+
+    def log(self) -> list[str]:
+        path = os.path.join(self._session.info.path, "output", "data")
+        result = []
+        for file in os.listdir(path):
+            if file.endswith(".out"):
+                result.append(file.replace(".out", ""))
+        return result
+
+    def numbers(self, name: str):
+        def float_or_int(var):
+            var = float(var)
+            if var.is_integer():
+                return int(var)
+            else:
+                return var
+
+        path = os.path.join(self._session.info.path, "output", "data", f"{name}.out")
+        entries = []
+        if os.path.exists(path):
+            with open(path, "r") as f:
+                lines = f.readlines()
+                for line in lines:
+                    entry = line.split(" ")
+                    entries.append([float_or_int(entry[0]), float_or_int(entry[1])])
+        return entries
+
+    def number(self, name: str):
+        entries = self.numbers(name)
+        if entries:
+            return entries[-1][1]
+        else:
+            return None
+
+    def vertex_frame_count(self) -> int:
+        path = os.path.join(self._session.info.path, "output")
+        max_frame = 0
+        if os.path.exists(path):
+            files = os.listdir(path)
+            for file in files:
+                if file.startswith("vert") and file.endswith(".bin"):
+                    frame = int(file.split("_")[1].split(".")[0])
+                    max_frame = max(max_frame, frame)
+        return max_frame
+
+    def latest_frame(self) -> int:
+        path = os.path.join(self._session.info.path, "output")
+        if os.path.exists(path):
+            files = os.listdir(path)
+            frames = []
+            for file in files:
+                if file.startswith("vert") and file.endswith(".bin"):
+                    frame = int(file.split("_")[1].split(".")[0])
+                    frames.append(frame)
+            if len(frames) > 0:
+                return sorted(frames)[-1]
+        return 0
+
+    def vertex(self, n: Optional[int] = None) -> Optional[tuple[np.ndarray, int]]:
+        if self._session._fixed is None:
+            raise ValueError("Scene must be initialized")
+        else:
+            path = os.path.join(self._session.info.path, "output")
+            if os.path.exists(path):
+                if n is None:
+                    files = os.listdir(path)
+                    frames = []
+                    for file in files:
+                        if file.startswith("vert") and file.endswith(".bin"):
+                            frame = int(file.split("_")[1].split(".")[0])
+                            frames.append(frame)
+                    if len(frames) > 0:
+                        frames = sorted(frames)
+                        last_frame = frames[-1]
+                        path = os.path.join(path, f"vert_{last_frame}.bin")
+                        try:
+                            with open(path, "rb") as f:
+                                data = f.read()
+                                vert = np.frombuffer(data, dtype=np.float32).reshape(
+                                    -1, 3
+                                )
+                            if len(vert) == len(self._session._fixed._vert):
+                                return (vert, last_frame)
+                            else:
+                                return None
+                        except ValueError:
+                            return None
+                else:
+                    try:
+                        path = os.path.join(path, f"vert_{n}.bin")
+                        if os.path.exists(path):
+                            with open(path, "rb") as f:
+                                data = f.read()
+                                vert = np.frombuffer(data, dtype=np.float32).reshape(
+                                    -1, 3
+                                )
+                            return (vert, n)
+                    except ValueError:
+                        pass
+                    return None
+        return None
+
+
 class Session:
     def __init__(self, app_root: str, proj_root: str, name: str, save_func):
         self._in_jupyter_notebook = in_jupyter_notebook()
@@ -208,11 +375,14 @@ class Session:
         self._proj_root = proj_root
         self._fixed = None
         path = os.path.expanduser(os.path.join(app_root, "session", name))
-        self.info = SessionInfo(name, path)
         self._save_func = save_func
         self._update_preview_interval = 1.0 / 60.0
         self._update_terminal_interval = 1.0 / 30.0
         self._update_table_interval = 0.25
+        self.info = SessionInfo(name, path)
+        self.export = SessionExport(self)
+        self.get = SessionGet(self)
+        self.output = SessionOutput(self)
         self.delete()
 
     def print(self, message):
@@ -255,36 +425,9 @@ class Session:
         self._save_func()
         return self
 
-    def output_path(self) -> str:
-        return os.path.join(self.info.path, "output")
-
     def finished(self) -> bool:
-        finished_path = os.path.join(self.output_path(), "finished.txt")
+        finished_path = os.path.join(self.output.path, "finished.txt")
         return os.path.exists(finished_path)
-
-    def export_shell_command(
-        self,
-        param: Param,
-    ) -> str:
-        param.export(self.info.path)
-        program_path = os.path.join(
-            self._proj_root, "target", "release", "ppf-contact-solver"
-        )
-        if os.path.exists(program_path):
-            command = " ".join(
-                [
-                    program_path,
-                    f"--path {self.info.path}",
-                    f"--output {self.output_path()}",
-                ]
-            )
-            path = os.path.join(self.info.path, "command.sh")
-            with open(path, "w") as f:
-                f.write(command)
-            os.chmod(path, 0o755)
-            return path
-        else:
-            raise ValueError("Solver does not exist")
 
     def start(self, param: Param, force: bool = True, blocking=False) -> "Session":
         self._check_ready()
@@ -297,7 +440,7 @@ class Session:
                 self.print("Solver is already running. Teriminate first.")
                 display(self._terminate_button("Terminate Now"))
                 return self
-        cmd_path = self.export_shell_command(param)
+        cmd_path = self.export.shell_command(param)
         err_path = os.path.join(self.info.path, "error.log")
         log_path = os.path.join(self.info.path, "stdout.log")
         if blocking or not self._in_jupyter_notebook:
@@ -327,107 +470,6 @@ class Session:
                 display_log(err_content)
                 raise ValueError("Solver failed to start")
 
-    def get_log(self) -> list[str]:
-        path = os.path.join(self.info.path, "output", "data")
-        result = []
-        for file in os.listdir(path):
-            if file.endswith(".out"):
-                result.append(file.replace(".out", ""))
-        return result
-
-    def get_numbers(self, name: str):
-        def float_or_int(var):
-            var = float(var)
-            if var.is_integer():
-                return int(var)
-            else:
-                return var
-
-        path = os.path.join(self.info.path, "output", "data", f"{name}.out")
-        entries = []
-        if os.path.exists(path):
-            with open(path, "r") as f:
-                lines = f.readlines()
-                for line in lines:
-                    entry = line.split(" ")
-                    entries.append([float_or_int(entry[0]), float_or_int(entry[1])])
-        return entries
-
-    def get_number(self, name: str):
-        entries = self.get_numbers(name)
-        if entries:
-            return entries[-1][1]
-        else:
-            return None
-
-    def _get_vertex_frame_count(self) -> int:
-        path = os.path.join(self.info.path, "output")
-        max_frame = 0
-        if os.path.exists(path):
-            files = os.listdir(path)
-            for file in files:
-                if file.startswith("vert") and file.endswith(".bin"):
-                    frame = int(file.split("_")[1].split(".")[0])
-                    max_frame = max(max_frame, frame)
-        return max_frame
-
-    def _get_latest_frame(self) -> int:
-        path = os.path.join(self.info.path, "output")
-        if os.path.exists(path):
-            files = os.listdir(path)
-            frames = []
-            for file in files:
-                if file.startswith("vert") and file.endswith(".bin"):
-                    frame = int(file.split("_")[1].split(".")[0])
-                    frames.append(frame)
-            if len(frames) > 0:
-                return sorted(frames)[-1]
-        return 0
-
-    def _get_vertex(self, n: Optional[int] = None) -> Optional[tuple[np.ndarray, int]]:
-        if self._fixed is None:
-            raise ValueError("Scene must be initialized")
-        else:
-            path = os.path.join(self.info.path, "output")
-            if os.path.exists(path):
-                if n is None:
-                    files = os.listdir(path)
-                    frames = []
-                    for file in files:
-                        if file.startswith("vert") and file.endswith(".bin"):
-                            frame = int(file.split("_")[1].split(".")[0])
-                            frames.append(frame)
-                    if len(frames) > 0:
-                        frames = sorted(frames)
-                        last_frame = frames[-1]
-                        path = os.path.join(path, f"vert_{last_frame}.bin")
-                        try:
-                            with open(path, "rb") as f:
-                                data = f.read()
-                                vert = np.frombuffer(data, dtype=np.float32).reshape(
-                                    -1, 3
-                                )
-                            if len(vert) == len(self._fixed._vert):
-                                return (vert, last_frame)
-                            else:
-                                return None
-                        except ValueError:
-                            return None
-                else:
-                    try:
-                        path = os.path.join(path, f"vert_{n}.bin")
-                        if os.path.exists(path):
-                            with open(path, "rb") as f:
-                                data = f.read()
-                                vert = np.frombuffer(data, dtype=np.float32).reshape(
-                                    -1, 3
-                                )
-                            return (vert, n)
-                    except ValueError:
-                        pass
-                    return None
-        return None
-
     def _terminate_button(self, description: str = "Terminate Solver"):
         if self._in_jupyter_notebook:
             import ipywidgets as widgets
@@ -455,7 +497,7 @@ class Session:
             if self._fixed is None:
                 raise ValueError("Scene must be initialized")
             else:
-                result = self._get_vertex()
+                result = self.get.vertex()
                 if result is None:
                     vert, curr_frame = self._fixed._vert, 0
                 else:
@@ -492,12 +534,12 @@ class Session:
             if live_update and is_running():
 
                 def update_dataframe(table, curr_frame):
-                    time_per_frame = convert_time(self.get_number("per_video_frame"))
-                    time_per_step = convert_time(self.get_number("advance"))
-                    n_contact = convert_integer(self.get_number("advance.num_contact"))
-                    n_newton = convert_integer(self.get_number("advance.newton_steps"))
-                    max_sigma = self.get_number("advance.max_sigma")
-                    n_pcg = convert_integer(self.get_number("advance.iter"))
+                    time_per_frame = convert_time(self.get.number("per_video_frame"))
+                    time_per_step = convert_time(self.get.number("advance"))
+                    n_contact = convert_integer(self.get.number("advance.num_contact"))
+                    n_newton = convert_integer(self.get.number("advance.newton_steps"))
+                    max_sigma = self.get.number("advance.max_sigma")
+                    n_pcg = convert_integer(self.get.number("advance.iter"))
                     data = {
                         "Frame": [str(curr_frame)],
                         "Time/Frame": [time_per_frame],
@@ -521,10 +563,10 @@ class Session:
                     nonlocal curr_frame
                     assert plot is not None
                     while True:
-                        last_frame = self._get_latest_frame()
+                        last_frame = self.get.latest_frame()
                         if curr_frame != last_frame:
                             curr_frame = last_frame
-                            result = self._get_vertex(curr_frame)
+                            result = self.get.vertex(curr_frame)
                             if result is not None:
                                 vert, _ = result
                                 update_dataframe(table, curr_frame)
@@ -569,12 +611,12 @@ class Session:
                 )
                 try:
                     if self._fixed is not None:
-                        frame_count = self._get_vertex_frame_count()
+                        frame_count = self.get.vertex_frame_count()
                         vert_list = []
                         for i in tqdm(
                             range(frame_count), desc="Loading frames", ncols=70
                         ):
-                            result = self._get_vertex(i)
+                            result = self.get.vertex(i)
                             if result is not None:
                                 vert, _ = result
                                 vert_list.append(vert)
@@ -590,32 +632,6 @@ class Session:
                 except Exception as _:
                     pass
         return self
-
-    def export(
-        self, path: str, frame: Optional[int] = None, include_static: bool = True
-    ) -> "Session":
-        if self._fixed is None:
-            raise ValueError("Scene must be initialized")
-        else:
-            vert = self._fixed._vert
-            if frame is not None:
-                result = self._get_vertex(frame)
-                if result is not None:
-                    vert, _ = result
-            else:
-                result = self._get_vertex()
-                if result is not None:
-                    vert, _ = result
-            self._fixed.export(vert, path, include_static)
-        return self
-
-    def export_animation(self, path: str, ext="ply", include_static: bool = True):
-        if os.path.exists(path):
-            shutil.rmtree(path)
-        else:
-            os.makedirs(path)
-        for i in tqdm(range(self._get_latest_frame()), desc="export", ncols=70):
-            self.export(os.path.join(path, f"frame_{i}.{ext}"), i, include_static)
 
     def stream(self, n_lines=40) -> "Session":
         if self._in_jupyter_notebook:

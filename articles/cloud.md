@@ -64,10 +64,21 @@ query+="inet_up_cost <= 0.05 " # upload cheaper than $0.05/GB
 query+="inet_down_cost <= 0.05 " # download cheaper than $0.05/GB
 
 # find offer cheapest
-INSTANCE_ID=$(./vast search offers $query -o 'dph' | awk 'NR==2 {print $1}')
-
-# verify that the instance ID is valid
-echo "instance_id: $INSTANCE_ID"
+RESULT=$(./vast create instance $INSTANCE_ID \
+  --label "github-actions" \
+  --image "$VAST_IMAGE" \
+  --disk $DISK_SPACE --ssh \
+  --env TZ=Asia/Tokyo \
+  --raw)
+RESULT=$(printf "%s\n" "$RESULT" | sed "s/'/\"/g" | sed "s/True/true/g")
+success=$(printf "%s\n" "$RESULT" | jq -r '.success')
+INSTANCE_ID=$(printf "%s\n" "$RESULT" | jq -r '.new_contract')
+if [[ "$success" == "true" ]]; then
+  echo "new INSTANCE_ID: $INSTANCE_ID"
+else
+  echo "success: $success"
+  echo "instance creation failed."
+fi
 ```
 
 Deploy
@@ -77,8 +88,7 @@ Deploy
 ./vast create instance $INSTANCE_ID \
    --label "ppf-contact-solver" \
    --image "$VAST_IMAGE" \
-   --disk $DISK_SPACE --ssh --direct \
-   --env TZ=Asia/Tokyo
+   --disk $DISK_SPACE --ssh \
 
 # ssh info fetch
 VAST_INSTANCE_JSON=/tmp/vast-instance.json
