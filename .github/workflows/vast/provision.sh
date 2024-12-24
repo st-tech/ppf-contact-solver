@@ -92,13 +92,12 @@ while true; do
   else
     condition=""
   fi
-  OFFER_CMD="./vast search offers \"$query $condition\" -o 'dph'"
+  
+  OFFER_CMD="./vast search offers \"$query $condition\" -o 'dph' --raw"
   echo $OFFER_CMD
   OFFER=$(eval $OFFER_CMD)
-  printf "%s\n" "$OFFER"
-
-  INSTANCE_ID=$(printf "%s\n" "$OFFER" | awk 'NR==2 {print $1}')
-  HOST_ID=$(printf "%s\n" "$OFFER" | awk 'NR==2 {print $21}')
+  INSTANCE_ID=$(echo "$OFFER" | jq -r '.[0].id')
+  HOST_ID=$(echo "$OFFER" | jq -r '.[0].host_id')
   TRIED_LIST+=($HOST_ID)
 
   # verify that the instance ID is valid

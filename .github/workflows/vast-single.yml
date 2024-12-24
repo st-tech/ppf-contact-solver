@@ -1,0 +1,63 @@
+# File: vast-all.yml
+# Author: Ryoichi Ando (ryoichi.ando@zozo.com)
+# License: Apache v2.0
+
+name: Single Example
+
+on:
+  workflow_dispatch:
+    inputs:
+      scene:
+        type: string
+        required: true
+        description: 'Scene Python Script'
+
+env:
+  VAST_API_KEY: ${{ secrets.VAST_API_KEY }}
+  
+jobs:
+  single-example:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+
+      - name: print scene
+        run: |
+          echo "Scene: ${{ github.event.inputs.scene }}" >> $GITHUB_STEP_SUMMARY
+
+      - name: check out repo
+        uses: actions/checkout@v3
+
+      - name: provision vast
+        timeout-minutes: 20
+        run: |
+          bash .github/workflows/vast/provision.sh $VAST_API_KEY
+      
+      - name: transfer files
+        timeout-minutes: 5
+        run: bash /tmp/vast-ci/rsync-command.sh
+
+      - name: warm up
+        timeout-minutes: 10
+        run: bash .github/workflows/vast/run.sh warmup
+      
+      - name: build
+        timeout-minutes: 30
+        run: bash .github/workflows/vast/run.sh build
+
+      - name: convert
+        timeout-minutes: 10
+        run: bash .github/workflows/vast/run.sh convert
+          
+      - name: run-1
+        run: bash .github/workflows/vast/run.sh run ${{ github.event.inputs.scene }}
+
+      - name: run-2
+        run: bash .github/workflows/vast/run.sh run ${{ github.event.inputs.scene }}
+
+      - name: run-3
+        run: bash .github/workflows/vast/run.sh run ${{ github.event.inputs.scene }}
+
+      - name: shutdown
+        if: always()
+        run: bash /tmp/vast-ci/delete-instance.sh
