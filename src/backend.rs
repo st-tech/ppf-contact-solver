@@ -115,6 +115,10 @@ impl Backend {
     }
 
     pub fn run(&mut self, args: &Args, dataset: DataSet, mut param: ParamSet, scene: Scene) {
+        let finished_path = std::path::Path::new(args.output.as_str()).join("finished.txt");
+        if finished_path.exists() {
+            std::fs::remove_file(finished_path.clone()).unwrap();
+        }
         unsafe {
             initialize(&dataset, &param);
         }
@@ -232,7 +236,6 @@ impl Backend {
             }
         }
         let _ = result_receiver.try_recv();
-        let finished_path = std::path::Path::new(args.output.as_str()).join("finished.txt");
         write_current_time_to_file(finished_path.to_str().unwrap()).unwrap();
     }
 }

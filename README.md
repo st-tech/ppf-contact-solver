@@ -39,6 +39,7 @@ Published in [ACM Transactions on Graphics (TOG)](https://dl.acm.org/doi/abs/10.
     - [📦 Deploying on vast.ai](#-deploying-on-vastai)
     - [📦 Deploying on RunPod](#-deploying-on-runpod)
     - [📦 Deploying on Scaleway](#-deploying-on-scaleway)
+    - [📦 Deploying on Amazon Web Services](#-deploying-on-amazon-web-services)
     - [📦 Deploying on Google Compute Engine](#-deploying-on-google-compute-engine)
 - [🧑‍💻 Setting Up Your Development Environment](#-setting-up-your-development-environment)
 - [📃 License](#-license)
@@ -85,7 +86,7 @@ Our Python interface is designed with the following principles in mind:
 
 - **🚫 No Mesh Data**: Preparing mesh data using external tools can be cumbersome. Our frontend minimizes this effort by allowing meshes to be created on the fly or downloaded when needed.
 
-- **🔗 Method Chaining**: We adopt the method chaining style from JavaScript, making the API intuitive and easy to use.
+- **🔗 Method Chaining**: We adopt the method chaining style from JavaScript, making the API intuitive and easy to understand.
 
 - **📦 Single Import for Everything**: All frontend features are accessible by simply importing with `from frontend import App`.
 
@@ -399,8 +400,16 @@ You can deploy our solver on a RunPod instance. To do this, we need to select an
 - Select type `L4-1-24G` or `GPU-3070-S`
 - Choose `Ubuntu Jammy GPU OS 12`
 - *Do not skip* the Docker container creation in the installation process; it is required.
+- This setup costs approximately €0.76 per hour.
 
 - CLI instructions are described in [[Markdown]](./articles/cloud.md#-scaleway).
+
+### 📦 Deploying on [Amazon Web Services](https://aws.amazon.com/en/)
+
+- Amazon Machine Image (AMI): `Deep Learning Base OSS Nvidia Driver GPU AMI (Ubuntu 22.04)`
+- Instance Type: `g6.2xlarge` (Recommended)
+- This setup costs around $1 per hour.
+- *Do not skip* the Docker container creation in the installation process; it is required.
 
 ### 📦 Deploying on [Google Compute Engine](https://cloud.google.com/products/compute)
 

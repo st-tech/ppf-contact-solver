@@ -225,7 +225,7 @@ rm -rf .runpod
 Set up your Scaleway CLI by following 📚 [this guide](https://www.scaleway.com/en/cli/).
 Also, register your public SSH key.
 Here’s how to create a GPU instance and SSH into the instance with port forwarding.
-As of late 2024, this setup costs approximately €0.76 per hour.
+This setup costs approximately €0.76 per hour.
 
 ```bash
 # set zone
