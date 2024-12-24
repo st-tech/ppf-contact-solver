@@ -14,6 +14,7 @@ Published in [ACM Transactions on Graphics (TOG)](https://dl.acm.org/doi/abs/10.
 - **🚲 Cache Efficient**: All on the GPU runs in single precision. No double precision.
 - **🥼 Inextensible**: Cloth never extends beyond very strict upper bounds, such as 1%.
 - **📐 Physically Accurate**: Our deformable solver is driven by the Finite Element Method.
+- **🚀 Stress Proof**: We design GitHub Actions to verify success many times in a row.
 - **🚀 Massively Parallel**: Both contact and elasticity solvers are run on the GPU.
 - **🐳 Docker Sealed**: Everything is designed to work out of the box.
 - **🌐 JupyterLab Included**: Open your browser and run examples right away [[Video]](https://drive.google.com/file/d/1n068Ai_hlfgapf2xkAutOHo3PkLpJXA4/view?usp=sharing).
