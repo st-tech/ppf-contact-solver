@@ -43,8 +43,8 @@ ssh-keygen -q -t ed25519 -N '' -f $WORKDIR/id_ed25519
 # your local public ssh key
 SSH_PUB_KEY=$WORKDIR/id_ed25519.pub
 
-# disk space 64GB
-DISK_SPACE=64
+# disk space 32GB
+DISK_SPACE=32
 
 # GPU
 GPU_NAME=RTX_4090
@@ -66,12 +66,12 @@ query+="gpu_name=$GPU_NAME " # GPU
 query+="driver_version >= 535.154.05 " # driver version
 query+="cuda_vers >= 11.8 " # cuda version
 query+="compute_cap >= 750 " # compute capability
-query+="geolocation in [JP,US] " # country US,CA,IS,TW,VN,GB,NO
+query+="geolocation in [US] " # country US,CA,IS,TW,VN,GB,NO
 query+="rentable=True " # rentable only
 query+="verified=True " # verified by vast.ai
 query+="disk_space >= $DISK_SPACE " # available disk space
 query+="dph <= 1.0 " # less than $1 per hour
-query+="duration >= 3 " # at least 3 days online
+query+="duration >= 2 " # at least 2 days online
 query+="inet_up >= 200 " # at least 200MB/s upload
 query+="inet_down >= 200 " # at least 200MB/s download
 query+="cpu_ram >= 32 " # at least 32GB ram
@@ -96,8 +96,8 @@ while true; do
   OFFER_CMD="./vast search offers \"$query $condition\" -o 'dph' --raw"
   echo $OFFER_CMD
   OFFER=$(eval $OFFER_CMD)
-  INSTANCE_ID=$(echo "$OFFER" | jq -r '.[0].id')
-  HOST_ID=$(echo "$OFFER" | jq -r '.[0].host_id')
+  INSTANCE_ID=$(printf "%s\n" "$OFFER" | jq -r '.[0].id')
+  HOST_ID=$(printf "%s\n" "$OFFER" | jq -r '.[0].host_id')
   TRIED_LIST+=($HOST_ID)
 
   # verify that the instance ID is valid
@@ -114,12 +114,11 @@ while true; do
     --label "github-actions" \
     --image "$VAST_IMAGE" \
     --disk $DISK_SPACE --ssh \
-    --env TZ=Asia/Tokyo \
     --raw)
-  RESULT=$(echo "$RESULT" | sed "s/'/\"/g" | sed "s/True/true/g")
-  success=$(echo "$RESULT" | jq -r '.success')
+  RESULT=$(printf "%s\n" "$RESULT" | sed "s/'/\"/g" | sed "s/True/true/g")
+  success=$(printf "%s\n" "$RESULT" | jq -r '.success')
   echo $RESULT
-  INSTANCE_ID=$(echo "$RESULT" | jq -r '.new_contract')
+  INSTANCE_ID=$(printf "%s\n" "$RESULT" | jq -r '.new_contract')
   if [[ "$success" == "true" ]]; then
     echo "new INSTANCE_ID: $INSTANCE_ID"
   else
