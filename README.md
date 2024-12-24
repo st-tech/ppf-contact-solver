@@ -178,7 +178,7 @@ The author is actively woriking on it.
 
 ## 🚀 GitHub Actions
 
-All the examples are verified to run without errors via automated GitHub Actions ⚙️. We perform explicit intersection checks 🔍 at the end of each step, which raises an error ❌ if an intersection is detected. This ensures that all steps are confirmed to be penetration-free ✅.
+All the examples are verified to run without errors via automated GitHub Actions ⚙️, not just once but many times in a row. We perform explicit intersection checks 🔍 at the end of each step, which raises an error ❌ if an intersection is detected. This ensures that all steps are confirmed to be penetration-free ✅.
 The runner types are described as follows:
 
 ### [![Getting Started](https://github.com/st-tech/ppf-contact-solver/actions/workflows/getting-started.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/getting-started.yml)
@@ -356,6 +356,8 @@ Our contact solver is designed for heavy use in cloud services ☁️, enabling 
 
 This is all made possible with our purely web-based frontends 🌐 and scalable capability 🧩.
 Our solver also runs on the NVIDIA L4 🖱️, a data-center-targeted GPU 🖥️ that offers reasonable pricing 💲, delivering both practical performance 💪 and scalability 📊 without investing in expensive hardware 💻.
+
+Below, we describe how to deploy our solver on major cloud services ☁️. These instructions are up to date as of late 2024 📅 and are subject to change 🔄.
 
 ### 📦 Deploying on [vast.ai](https://vast.ai)
 
