@@ -27,7 +27,7 @@ Published in [ACM Transactions on Graphics (TOG)](https://dl.acm.org/doi/abs/10.
 - [🎓 Technical Materials](#-technical-materials)
 - [⚡️ Requirements](#️-requirements)
 - [📝 Change History](#-change-history)
-- [🐍 How To Use](#-how-    to-use)
+- [🐍 How To Use](#-how-to-use)
 - [🖼️ Catalogue](#️-catalogue)
 - [🚀 GitHub Actions](#-github-actions)
 - [💨 Getting Started](#-getting-started)
