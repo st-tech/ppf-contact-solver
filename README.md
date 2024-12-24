@@ -178,7 +178,8 @@ The author is actively woriking on it.
 
 ## 🚀 GitHub Actions
 
-All the examples are verified to run without errors via automated GitHub Actions. The runner types are described as follows.
+All the examples are verified to run without errors via automated GitHub Actions ⚙️. We perform explicit intersection checks 🔍 at the end of each step, which raises an error ❌ if an intersection is detected. This ensures that all steps are confirmed to be penetration-free ✅.
+The runner types are described as follows:
 
 ### [![Getting Started](https://github.com/st-tech/ppf-contact-solver/actions/workflows/getting-started.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/getting-started.yml)
 
