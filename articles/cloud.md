@@ -48,9 +48,10 @@ query=""
 query+="reliability > 0.98 " # high reliability
 query+="num_gpus=1 " # single gpu
 query+="gpu_name=$GPU_NAME " # GPU
+query+="driver_version >= 535.154.05 " # driver version
 query+="cuda_vers >= 11.8 " # cuda version
 query+="compute_cap >= 750 " # compute capability
-query+="geolocation=TW " # location country code
+query+="geolocation in [TW,VN,JP]" # location country code
 query+="rentable=True " # rentable only
 query+="verified=True " # verified by vast.ai
 query+="disk_space >= $DISK_SPACE " # available disk space

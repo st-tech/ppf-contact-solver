@@ -178,7 +178,7 @@ The author is actively woriking on it.
 
 ## 🚀 GitHub Actions
 
-🛠️ Installation steps are provided below, and both the steps and examples have been verified to run without errors via automated GitHub Actions. The runner types are as follows.
+All the examples are verified to run without errors via automated GitHub Actions. The runner types are described as follows.
 
 ### [![Getting Started](https://github.com/st-tech/ppf-contact-solver/actions/workflows/getting-started.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/getting-started.yml)
 
@@ -187,7 +187,8 @@ This is not a self-hosted runner, meaning that each time the runner launches, al
 
 ### [![All Examples](https://github.com/st-tech/ppf-contact-solver/actions/workflows/vast-all.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/vast-all.yml)
 
-We use the GitHub-hosted runner 🖥️, but the actual simulation runs on a provisioned [vast.ai](https://vast.ai) instance 🌐. We do this for performance ⚡ and budget 💰 reasons: each example doesn't take long, but simulating all of them takes hours ⏳. We choose an RTX 4090 🎮, which typically costs around $0.50 per hour 💵. Since we start with a fresh 🌱 instance, the environment is clean 🧹 every time.
+We use the GitHub-hosted runner 🖥️, but the actual simulation runs on a provisioned [vast.ai](https://vast.ai) instance 🌐. We do this for performance ⚡ and budget 💰 reasons. We choose an RTX 4090 🎮, which typically costs less than $0.50 per hour 💵. Since we start with a fresh 🌱 instance, the environment is clean 🧹 every time.
+We take advantage of the ability to deploy on the cloud; this action is performed in parallel, which reduces the total action time.
 
 ## 💨 Getting Started
 
@@ -357,7 +358,7 @@ Our solver also runs on the NVIDIA L4 🖱️, a data-center-targeted GPU 🖥�
 
 ### 📦 Deploying on [vast.ai](https://vast.ai)
 
-The exact same steps above should work (see `.github/workflows/getting-started-vast.yml`), except that you'll need to create a Docker template. Here's one:
+The exact same steps above should work, except that you'll need to create a Docker template. Here's one:
 
 - **Image Path/Tag**: `nvidia/cuda:11.8.0-devel-ubuntu22.04`
 - **Docker Options**: `-e TZ=Asia/Tokyo` (Your time zone, of course)
@@ -365,6 +366,7 @@ The exact same steps above should work (see `.github/workflows/getting-started-v
 - When connecting via SSH, make sure to include `-L 8080:localhost:8080` in the command.
 - For a better experience, choose a geographically nearby server with a high connection speed.
 - Also, make sure to allocate a large disk space, such as 64GB.
+- Skip the Docker container creation in the installation process; it is already made.
 - CLI instructions are described in [[Markdown]](./articles/cloud.md#-vastai).
 
 **Important**: Don't forget to ❌ delete the instance after use, or you’ll be 💸 charged for nothing.
@@ -381,6 +383,7 @@ You can deploy our solver on a RunPod instance. To do this, we need to select an
 - Also, make sure to allocate a large disk space, such as 64GB.
 - ✅ Make sure to select `SSH Terminal Access`
 - ❌ Deselect `Start Jupyter Notebook`
+- Skip the Docker container creation in the installation process; it is already made.
 - CLI instructions are described in [[Markdown]](./articles/cloud.md#-runpod).
 
 **Important**: Don't forget to ❌ delete the instance after use, or you’ll be 💸 charged for nothing.
@@ -393,6 +396,7 @@ You can deploy our solver on a RunPod instance. To do this, we need to select an
 - Choose the OS type `Deep Learning VM with CUDA 11.8 M126` and set the disk size to `50GB`.
 - As of late 2024, this configuration costs approximately $0.86 per hour in `us-central1 (Iowa)` and $1.00 per hour in `asia-east1 (Taiwan)`. 
 - Port number `8080` is reserved by the OS image. Set `$MY_WEB_PORT` to `8888`. When connecting via `gcloud`, use the following format:  `gcloud compute ssh --zone "xxxx" "instance-name" -- -L 8080:localhost:8888`.
+- *Do not skip* the Docker container creation in the installation process; it is required.
 
 - CLI instructions are described in [[Markdown]](./articles/cloud.md#-google-compute-engine).
 
