@@ -11,6 +11,7 @@ elif [ "$ARG" = "build" ]; then
     $SSH "cd ppf-contact-solver; /root/.cargo/bin/cargo build --release"
 elif [ "$ARG" = "convert" ]; then
     $SSH "cd ppf-contact-solver/examples; jupyter nbconvert --to script *.ipynb"
+    $SSH "touch /root/ppf-contact-solver/examples/.CLI"
 elif [ "$ARG" = "run" ]; then
     EXAMPLE=$2
     $SSH "cd ppf-contact-solver/examples; python3 $EXAMPLE"
