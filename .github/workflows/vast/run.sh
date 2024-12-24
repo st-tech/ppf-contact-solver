@@ -1,4 +1,6 @@
-#!/bin/bash
+# File: run.sh
+# Author: Ryoichi Ando (ryoichi.ando@zozo.com)
+# License: Apache v2.0
 
 SSH=/tmp/vast-ci/ssh-command.sh
 REMOTE_WORKDIR=/root/ppf-contact-solver

@@ -1,4 +1,6 @@
-#!/bin/bash
+# File: provision.sh
+# Author: Ryoichi Ando (ryoichi.ando@zozo.com)
+# License: Apache v2.0
 
 # Check if $1 is not set (empty)
 if [ -z "$1" ]; then
