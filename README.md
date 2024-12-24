@@ -38,6 +38,7 @@ Published in [ACM Transactions on Graphics (TOG)](https://dl.acm.org/doi/abs/10.
 - [📡 Deploying on Cloud Services](#-deploying-on-cloud-services)
     - [📦 Deploying on vast.ai](#-deploying-on-vastai)
     - [📦 Deploying on RunPod](#-deploying-on-runpod)
+    - [📦 Deploying on Scaleway](#-deploying-on-scaleway)
     - [📦 Deploying on Google Compute Engine](#-deploying-on-google-compute-engine)
 - [🧑‍💻 Setting Up Your Development Environment](#-setting-up-your-development-environment)
 - [📃 License](#-license)
@@ -178,7 +179,10 @@ The author is actively woriking on it.
 
 ## 🚀 GitHub Actions
 
-All the examples are verified to run without errors via automated GitHub Actions ⚙️, not just once but many times in a row. We perform explicit intersection checks 🔍 at the end of each step, which raises an error ❌ if an intersection is detected. This ensures that all steps are confirmed to be penetration-free ✅.
+Our experience shows that you can't fully trust the reliability of contact resolution by simply watching a success case in a single 🎥 video.
+
+To maximize the reliability, we verified that all the examples run without errors via automated GitHub Actions ⚙️, not just once, but many times in a row 🔁.
+We perform explicit intersection checks 🔍 at the end of each step, which raises an error ❌ if an intersection is detected. This ensures that all steps are confirmed to be penetration-free ✅.
 The runner types are described as follows:
 
 ### [![Getting Started](https://github.com/st-tech/ppf-contact-solver/actions/workflows/getting-started.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/getting-started.yml)
@@ -359,6 +363,8 @@ Our solver also runs on the NVIDIA L4 🖱️, a data-center-targeted GPU 🖥�
 
 Below, we describe how to deploy our solver on major cloud services ☁️. These instructions are up to date as of late 2024 📅 and are subject to change 🔄.
 
+**Important**: For all the services below, don't forget to ❌ delete the instance after use, or you’ll be 💸 charged for nothing.
+
 ### 📦 Deploying on [vast.ai](https://vast.ai)
 
 The exact same steps above should work, except that you'll need to create a Docker template. Here's one:
@@ -371,8 +377,6 @@ The exact same steps above should work, except that you'll need to create a Dock
 - Also, make sure to allocate a large disk space, such as 64GB.
 - Skip the Docker container creation in the installation process; it is already made.
 - CLI instructions are described in [[Markdown]](./articles/cloud.md#-vastai).
-
-**Important**: Don't forget to ❌ delete the instance after use, or you’ll be 💸 charged for nothing.
 
 ### 📦 Deploying on [RunPod](https://runpod.io)
 
@@ -389,7 +393,14 @@ You can deploy our solver on a RunPod instance. To do this, we need to select an
 - Skip the Docker container creation in the installation process; it is already made.
 - CLI instructions are described in [[Markdown]](./articles/cloud.md#-runpod).
 
-**Important**: Don't forget to ❌ delete the instance after use, or you’ll be 💸 charged for nothing.
+### 📦 Deploying on [Scaleway](https://www.scaleway.com/en/)
+
+- Set zone to `fr-par-2`
+- Select type `L4-1-24G` or `GPU-3070-S`
+- Choose `Ubuntu Jammy GPU OS 12`
+- *Do not skip* the Docker container creation in the installation process; it is required.
+
+- CLI instructions are described in [[Markdown]](./articles/cloud.md#-scaleway).
 
 ### 📦 Deploying on [Google Compute Engine](https://cloud.google.com/products/compute)
 

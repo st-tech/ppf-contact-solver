@@ -220,6 +220,55 @@ rm -rf $HOME/runpodctl
 rm -rf .runpod
 ```
 
+### 📦 [Scaleway](https://www.scaleway.com/en/)
+
+Set up your Scaleway CLI by following 📚 [this guide](https://www.scaleway.com/en/cli/).
+Also, register your public SSH key.
+Here’s how to create a GPU instance and SSH into the instance with port forwarding.
+As of late 2024, this setup costs approximately €0.76 per hour.
+
+```bash
+# set zone
+zone=fr-par-2
+
+# set name
+name=ppf-contact-solver
+
+# set type L4-1-24G or GPU-3070-S
+type=L4-1-24G
+
+# create
+result=$(scw instance server create \
+         --output json \
+         name=$name \
+         type=$type \
+         image=ubuntu_jammy_gpu_os_12 \
+         zone=$zone)
+id=$(jq -r '.id' <<< "$result")
+ip=$(jq -r '.public_ip.address' <<< "$result")
+
+# print info
+echo "ID: $id IP: $ip"
+
+# ssh into the server
+ssh root@${ip} -L 8080:localhost:8080
+```
+
+SSH might fail until the instance is fully loaded; try again at intervals.
+Once connected, run the same Docker 🐧 [Linux](#-linux) command on the instance to set up a 🐳 Docker environment.
+After use, run the following command to clean up.
+
+```bash
+# cleanup
+scw instance server terminate $id zone=$zone with-ip=true with-block=true
+
+# check
+scw instance server list zone=$zone
+```
+
+Double-check from the 🖥️ web console to confirm that the instance has been successfully ✅ deleted.
+Also, check that both the flexible IP and its associated storage are deleted.
+
 ### 📦 [Google Compute Engine](https://cloud.google.com/products/compute)
 
 First, set up your `gcloud` CLI by following 📚 [this guide](https://cloud.google.com/sdk/docs/install?hl=en).
