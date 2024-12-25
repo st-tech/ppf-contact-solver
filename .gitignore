@@ -17,10 +17,14 @@ npm*
 *.tmp
 __pycache__
 .clangd.swp
+.vscode
 eigsys/eigen2
 eigsys/eigen3
 eigsys/bench3
 examples/asset
 examples/data
 examples/**/.*
+examples/export
+examples/_*
 _skipped.node
+private/vast
