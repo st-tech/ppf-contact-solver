@@ -182,10 +182,7 @@ The author is actively woriking on it.
 
 ## 🚀 GitHub Actions
 
-We know that you can't fully trust the reliability of contact resolution by simply watching a success case in a single 🎥 video.
-
-To maximize the reliability, we verified that all the examples run without errors via automated GitHub Actions ⚙️, not just once, but 5 times in a row 🔁.
-
+We implemented GitHub Actions to verify that all works without errors.
 We perform explicit intersection checks 🔍 at the end of each step, which raises an error ❌ if an intersection is detected. This ensures that all steps are confirmed to be penetration-free ✅.
 The runner types are described as follows:
 
@@ -201,8 +198,8 @@ We take advantage of the ability to deploy on the cloud; this action is performe
 
 ### ⚔️ Five Consecutive Runs
 
-For each, the same example is run 5 times in a row, and the test is considered a pass if all of them succeed.
-Any single failure is deemed a failure of the whole example.
+We know that you can't fully trust the reliability of contact resolution by simply watching a success case in a single 🎥 video.
+To ensure greater reliability, we verify that all the examples run without errors via automated GitHub Actions ⚙️, not just once, but 5 times in a row 🔁.
 
 [![drape.ipynb](https://github.com/st-tech/ppf-contact-solver/actions/workflows/example_drape.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/example_drape.yml)
 [![cards.ipynb](https://github.com/st-tech/ppf-contact-solver/actions/workflows/example_cards.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/example_cards.yml)
