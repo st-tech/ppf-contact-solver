@@ -641,10 +641,12 @@ class Session:
             log_widget = widgets.HTML()
             display(log_widget)
             button = widgets.Button(description="Stop Live Stream")
-            display(widgets.HBox((button, self._terminate_button())))
+            terminate_button = self._terminate_button()
+            display(widgets.HBox((button, terminate_button)))
 
             stop = False
             log_path = os.path.join(self.info.path, "output", "cudasim_log.txt")
+            err_path = os.path.join(self.info.path, "error.log")
             if os.path.exists(log_path):
 
                 def live_stream(self):
@@ -652,6 +654,9 @@ class Session:
                     nonlocal button
                     nonlocal log_widget
                     nonlocal log_path
+                    nonlocal err_path
+                    nonlocal terminate_button
+                    assert terminate_button is not None
 
                     while not stop:
                         result = subprocess.run(
@@ -665,7 +670,17 @@ class Session:
                         )
                         if not is_running():
                             log_widget.value += "<p style='color: red;'>Terminated.</p>"
+                            if os.path.exists(err_path):
+                                file = open(err_path, "r")
+                                lines = file.readlines()
+                                if len(lines) > 0:
+                                    log_widget.value += "<p style='color: red;'>"
+                                    for line in lines:
+                                        log_widget.value += line + "\n"
+                                    log_widget.value += "</p>"
+
                             button.disabled = True
+                            terminate_button.disabled = True
                             break
                         time.sleep(self._update_terminal_interval)
 

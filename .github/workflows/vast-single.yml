@@ -7,6 +7,11 @@ name: Single Example
 on:
   workflow_dispatch:
     inputs:
+      runner:
+        type: string
+        default: self-hosted
+        required: true
+        description: 'Runner Name'
       scene:
         type: string
         required: true
@@ -17,7 +22,7 @@ env:
   
 jobs:
   single-example:
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event.inputs.runner }}
     timeout-minutes: 300
     steps:
 
@@ -49,13 +54,13 @@ jobs:
         timeout-minutes: 10
         run: bash .github/workflows/vast/run.sh convert
           
-      - name: run-1
+      - name: ${{ github.event.inputs.scene }} (1st)
         run: bash .github/workflows/vast/run.sh run ${{ github.event.inputs.scene }}
 
-      - name: run-2
+      - name: ${{ github.event.inputs.scene }} (2nd)
         run: bash .github/workflows/vast/run.sh run ${{ github.event.inputs.scene }}
 
-      - name: run-3
+      - name: ${{ github.event.inputs.scene }} (3rd)
         run: bash .github/workflows/vast/run.sh run ${{ github.event.inputs.scene }}
 
       - name: shutdown

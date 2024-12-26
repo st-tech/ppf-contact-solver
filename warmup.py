@@ -251,5 +251,6 @@ if __name__ == "__main__":
             install_fish()
             set_tmux()
             install_lazygit()
+            install_lazyvim()
     else:
         setup()

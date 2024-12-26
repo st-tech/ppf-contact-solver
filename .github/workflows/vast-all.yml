@@ -6,13 +6,19 @@ name: All Examples
 
 on:
   workflow_dispatch:
+    inputs:
+      runner:
+        type: string
+        default: self-hosted
+        required: true
+        description: 'Runner Name'
 
 env:
   VAST_API_KEY: ${{ secrets.VAST_API_KEY }}
   
 jobs:
   part_1:
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event.inputs.runner }}
     timeout-minutes: 300
     steps:
 
@@ -63,7 +69,7 @@ jobs:
         run: bash /tmp/vast-ci/delete-instance.sh
 
   part_2:
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event.inputs.runner }}
     timeout-minutes: 300
     steps:
 
@@ -100,7 +106,7 @@ jobs:
         run: bash /tmp/vast-ci/delete-instance.sh
 
   part_3:
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event.inputs.runner }}
     timeout-minutes: 300
     steps:
 
@@ -137,7 +143,7 @@ jobs:
         run: bash /tmp/vast-ci/delete-instance.sh
   
   part_4:
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event.inputs.runner }}
     timeout-minutes: 300
     steps:
 
@@ -168,9 +174,6 @@ jobs:
 
       - name: trampoline
         run: bash .github/workflows/vast/run.sh run trampoline.py
-
-      - name: needle
-        run: bash .github/workflows/vast/run.sh run needle.py
 
       - name: shutdown
         if: always()
