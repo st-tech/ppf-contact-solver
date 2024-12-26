@@ -49,7 +49,7 @@ pub struct Args {
     #[clap(long, default_value_t = 0.025)]
     pub strain_limit_eps: f32,
 
-    #[clap(long, default_value_t = 1024)]
+    #[clap(long, default_value_t = 64)]
     pub binary_search_max_iter: u32,
 
     #[clap(long)]
@@ -75,9 +75,6 @@ pub struct Args {
 
     #[clap(long, default_value_t = 0.01)]
     pub ccd_reduction: f32,
-
-    #[clap(long, default_value_t = 0.0025)]
-    pub ccd_reduction_eps: f32,
 
     #[clap(long, default_value_t = 1e-2)]
     pub eiganalysis_eps: f32,

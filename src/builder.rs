@@ -352,7 +352,6 @@ pub fn make_param(args: &Args) -> data::ParamSet {
         line_search_max_t: args.line_search_max_t,
         ccd_tol: args.contact_ghat,
         ccd_reduction: args.ccd_reduction,
-        ccd_reduction_eps: args.ccd_reduction_eps,
         ccd_max_iters: args.ccd_max_iters,
         eiganalysis_eps: args.eiganalysis_eps,
         friction: args.friction,
