@@ -111,7 +111,6 @@ float line_search(const DataSet &data, const Kinematic &kinematic,
             const Mat3x2f dF = F1 - F0;
             float gap = max_sigma - utility::svd3x2(F0).S.maxCoeff();
             float target = max_sigma - param.ccd_reduction * gap;
-            float diff_eps = param.ccd_reduction_eps * gap;
             if (utility::svd3x2(F0 + t * dF).S.maxCoeff() > target) {
                 float upper_t = t;
                 float lower_t = 0.0f;
@@ -126,9 +125,7 @@ float line_search(const DataSet &data, const Kinematic &kinematic,
                         upper_t = t;
                     }
                     if (lower_t > 0.0f) {
-                        if (upper_t - lower_t < DT_MIN) {
-                            break;
-                        } else if (iter++ > param.binary_search_max_iter) {
+                        if (upper_t - lower_t < param.ccd_reduction * lower_t) {
                             break;
                         }
                     }
