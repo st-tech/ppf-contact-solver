@@ -82,7 +82,7 @@ query+="rentable=True "                # rentable only
 query+="verified=True "                # verified by vast.ai
 query+="disk_space >= $DISK_SPACE "    # available disk space
 query+="dph <= 1.0 "                   # less than $1 per hour
-query+="duration >= 2 "                # at least 2 days online
+query+="duration >= 7 "                # at least 7 days online
 query+="inet_up >= 200 "               # at least 200MB/s upload
 query+="inet_down >= 200 "             # at least 200MB/s download
 query+="cpu_ram >= 32 "                # at least 32GB ram
@@ -182,4 +182,3 @@ while true; do
     break
   fi
 done
-

@@ -14,6 +14,7 @@ on:
 
 env:
   VAST_API_KEY: ${{ secrets.VAST_API_KEY }}
+  HELPER_PATH: .github/workflows/vast/helper.sh
   
 jobs:
   part_1:
@@ -24,48 +25,31 @@ jobs:
       - name: check out repo
         uses: actions/checkout@v3
 
-      - name: provision vast
-        timeout-minutes: 20
-        run: |
-          bash .github/workflows/vast/provision.sh $VAST_API_KEY
-      
-      - name: transfer files
-        timeout-minutes: 5
-        run: bash /tmp/vast-ci/rsync-command.sh
-
-      - name: warm up
-        timeout-minutes: 10
-        run: bash .github/workflows/vast/run.sh warmup
-      
-      - name: build
+      - name: prepare
         timeout-minutes: 30
-        run: bash .github/workflows/vast/run.sh build
-
-      - name: convert
-        timeout-minutes: 10
-        run: bash .github/workflows/vast/run.sh convert
+        run: bash $HELPER_PATH create $VAST_API_KEY
           
       - name: hang
-        run: bash .github/workflows/vast/run.sh run hang.py
+        run: bash $HELPER_PATH run hang.py
 
       - name: needle
-        run: bash .github/workflows/vast/run.sh run needle.py
+        run: bash $HELPER_PATH run needle.py
 
       - name: curtain
-        run: bash .github/workflows/vast/run.sh run curtain.py
+        run: bash $HELPER_PATH run curtain.py
 
       - name: drape
-        run: bash .github/workflows/vast/run.sh run drape.py
+        run: bash $HELPER_PATH run drape.py
       
       - name: trapped
-        run: bash .github/workflows/vast/run.sh run trapped.py
+        run: bash $HELPER_PATH run trapped.py
       
       - name: cards
-        run: bash .github/workflows/vast/run.sh run cards.py
+        run: bash $HELPER_PATH run cards.py
 
       - name: shutdown
         if: always()
-        run: bash /tmp/vast-ci/delete-instance.sh
+        run: bash $HELPER_PATH delete
 
   part_2:
     runs-on: ${{ github.event.inputs.runner }}
@@ -75,34 +59,16 @@ jobs:
       - name: check out repo
         uses: actions/checkout@v3
 
-      - name: provision vast
-        timeout-minutes: 20
-        run: |
-          sleep 10
-          bash .github/workflows/vast/provision.sh $VAST_API_KEY
-      
-      - name: transfer files
-        timeout-minutes: 5
-        run: bash /tmp/vast-ci/rsync-command.sh
-
-      - name: warm up
-        timeout-minutes: 10
-        run: bash .github/workflows/vast/run.sh warmup
-      
-      - name: build
+      - name: prepare
         timeout-minutes: 30
-        run: bash .github/workflows/vast/run.sh build
-
-      - name: convert
-        timeout-minutes: 10
-        run: bash .github/workflows/vast/run.sh convert
+        run: bash $HELPER_PATH create $VAST_API_KEY
 
       - name: stack
-        run: bash .github/workflows/vast/run.sh run stack.py
+        run: bash $HELPER_PATH run stack.py
 
       - name: shutdown
         if: always()
-        run: bash /tmp/vast-ci/delete-instance.sh
+        run: bash $HELPER_PATH delete
 
   part_3:
     runs-on: ${{ github.event.inputs.runner }}
@@ -112,34 +78,16 @@ jobs:
       - name: check out repo
         uses: actions/checkout@v3
 
-      - name: provision vast
-        timeout-minutes: 20
-        run: |
-          sleep 20
-          bash .github/workflows/vast/provision.sh $VAST_API_KEY
-      
-      - name: transfer files
-        timeout-minutes: 5
-        run: bash /tmp/vast-ci/rsync-command.sh
-
-      - name: warm up
-        timeout-minutes: 10
-        run: bash .github/workflows/vast/run.sh warmup
-      
-      - name: build
+      - name: prepare
         timeout-minutes: 30
-        run: bash .github/workflows/vast/run.sh build
-
-      - name: convert
-        timeout-minutes: 10
-        run: bash .github/workflows/vast/run.sh convert
+        run: bash $HELPER_PATH create $VAST_API_KEY
 
       - name: friction
-        run: bash .github/workflows/vast/run.sh run friction.py
+        run: bash $HELPER_PATH run friction.py
 
       - name: shutdown
         if: always()
-        run: bash /tmp/vast-ci/delete-instance.sh
+        run: bash $HELPER_PATH delete
   
   part_4:
     runs-on: ${{ github.event.inputs.runner }}
@@ -149,31 +97,13 @@ jobs:
       - name: check out repo
         uses: actions/checkout@v3
 
-      - name: provision vast
-        timeout-minutes: 20
-        run: |
-          sleep 30
-          bash .github/workflows/vast/provision.sh $VAST_API_KEY
-      
-      - name: transfer files
-        timeout-minutes: 5
-        run: bash /tmp/vast-ci/rsync-command.sh
-
-      - name: warm up
-        timeout-minutes: 10
-        run: bash .github/workflows/vast/run.sh warmup
-      
-      - name: build
+      - name: prepare
         timeout-minutes: 30
-        run: bash .github/workflows/vast/run.sh build
-
-      - name: convert
-        timeout-minutes: 10
-        run: bash .github/workflows/vast/run.sh convert
+        run: bash $HELPER_PATH create $VAST_API_KEY
 
       - name: trampoline
-        run: bash .github/workflows/vast/run.sh run trampoline.py
+        run: bash $HELPER_PATH run trampoline.py
 
       - name: shutdown
         if: always()
-        run: bash /tmp/vast-ci/delete-instance.sh
+        run: bash $HELPER_PATH delete

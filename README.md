@@ -182,9 +182,10 @@ The author is actively woriking on it.
 
 ## 🚀 GitHub Actions
 
-Our experience shows that you can't fully trust the reliability of contact resolution by simply watching a success case in a single 🎥 video.
+We know that you can't fully trust the reliability of contact resolution by simply watching a success case in a single 🎥 video.
 
-To maximize the reliability, we verified that all the examples run without errors via automated GitHub Actions ⚙️, not just once, but many times in a row 🔁.
+To maximize the reliability, we verified that all the examples run without errors via automated GitHub Actions ⚙️, not just once, but at least 5 times in a row 🔁.
+
 We perform explicit intersection checks 🔍 at the end of each step, which raises an error ❌ if an intersection is detected. This ensures that all steps are confirmed to be penetration-free ✅.
 The runner types are described as follows:
 

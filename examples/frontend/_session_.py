@@ -427,6 +427,13 @@ class Session:
 
     def finished(self) -> bool:
         finished_path = os.path.join(self.output.path, "finished.txt")
+        err_path = os.path.join(self.info.path, "error.log")
+        if os.path.exists(err_path):
+            file = open(err_path, "r")
+            lines = file.readlines()
+            if len(lines) > 0:
+                for line in lines:
+                    print(line)
         return os.path.exists(finished_path)
 
     def start(self, param: Param, force: bool = True, blocking=False) -> "Session":

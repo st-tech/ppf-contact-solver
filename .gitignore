@@ -27,4 +27,3 @@ examples/**/.*
 examples/export
 examples/_*
 _skipped.node
-private/vast

@@ -49,7 +49,7 @@ pub struct Args {
     #[clap(long, default_value_t = 0.025)]
     pub strain_limit_eps: f32,
 
-    #[clap(long, default_value_t = 64)]
+    #[clap(long, default_value_t = 1024)]
     pub binary_search_max_iter: u32,
 
     #[clap(long)]

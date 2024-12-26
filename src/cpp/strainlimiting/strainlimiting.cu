@@ -10,6 +10,7 @@
 #include "../utility/dispatcher.hpp"
 #include "../utility/utility.hpp"
 #include "strainlimiting.hpp"
+#include <limits>
 
 namespace strainlimiting {
 
@@ -108,28 +109,36 @@ float line_search(const DataSet &data, const Kinematic &kinematic,
             const Mat3x2f F1 =
                 utility::compute_deformation_grad(x1, inv_rest2x2[i]);
             const Mat3x2f dF = F1 - F0;
-            if (utility::svd3x2(F0 + t * dF).S.maxCoeff() >= max_sigma) {
-                float tol = param.ccd_reduction *
-                            (max_sigma - utility::svd3x2(F0).S.maxCoeff());
-                float target = max_sigma - 2.0f * tol;
+            float gap = max_sigma - utility::svd3x2(F0).S.maxCoeff();
+            float reduced_gap = param.ccd_reduction * gap;
+            float diff_eps = 0.5f * reduced_gap;
+            float target = max_sigma;
+            target -= reduced_gap;
+            if (utility::svd3x2(F0 + t * dF).S.maxCoeff() > target) {
                 float upper_t = t;
                 float lower_t = 0.0f;
-                for (unsigned k = 0; k < param.binary_search_max_iter; ++k) {
+                unsigned iter(0);
+                while (true) {
                     t = 0.5f * (upper_t + lower_t);
                     Svd3x2 svd = utility::svd3x2(F0 + t * dF);
                     float diff = svd.S.maxCoeff() - target;
-                    if (fabs(diff) < tol) {
-                        break;
-                    } else if (diff < 0.0f) {
+                    if (diff < 0.0f) {
                         lower_t = t;
                     } else {
                         upper_t = t;
                     }
+                    if (lower_t > 0.0f) {
+                        if (upper_t - lower_t < DT_MIN) {
+                            break;
+                        } else if (iter++ > param.binary_search_max_iter) {
+                            break;
+                        }
+                    }
+                    assert(t > std::numeric_limits<float>::epsilon());
                 }
-                while (utility::svd3x2(F0 + t * dF).S.maxCoeff() >= target) {
-                    t *= param.dt_decrease_factor;
-                }
+                t = lower_t;
             }
+            assert(utility::svd3x2(F0 + t * dF).S.maxCoeff() <= target);
         }
         toi[i] = t;
     } DISPATCH_END;

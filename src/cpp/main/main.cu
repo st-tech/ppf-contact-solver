@@ -391,6 +391,9 @@ StepResult advance() {
                               prm.cg_tol, prm.cg_max_iter, dx, iter, reresid);
             logging.pop();
 
+            logging.mark("iter", iter);
+            logging.mark("reresid", reresid);
+
             if (!success) {
                 logging.message("### cg failed");
                 if (param->enable_retry && dt > DT_MIN) {
@@ -400,8 +403,6 @@ StepResult advance() {
                 }
                 break;
             }
-            logging.mark("iter", iter);
-            logging.mark("reresid", reresid);
 
             tmp_scalar.clear();
             DISPATCH_START(vertex_count)
