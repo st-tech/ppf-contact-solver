@@ -9,7 +9,6 @@ on:
     inputs:
       runner:
         type: string
-        default: self-hosted
         required: true
         description: 'Runner Name'
 
