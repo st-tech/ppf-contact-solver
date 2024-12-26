@@ -23,8 +23,9 @@ __device__ float ccd_helper(const Mat3x4f &x0, const Mat3x4f &dx, float u_max,
                             const ParamSet &param) {
     float toi = 0.0f;
     float max_t = param.line_search_max_t;
-    float eps = param.ccd_reduction * (sqrtf(square_dist_func(x0)) - offset);
-    float target = 2.0f * eps + offset;
+    float gap = sqrtf(square_dist_func(x0)) - offset;
+    float eps = param.ccd_reduction_eps * gap;
+    float target = param.ccd_reduction * gap + offset;
     float eps_sqr = eps * eps;
     float inv_u_max = 1.0f / u_max;
     for (unsigned k = 0; k < param.ccd_max_iters; ++k) {

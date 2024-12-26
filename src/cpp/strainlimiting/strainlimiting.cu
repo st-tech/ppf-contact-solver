@@ -110,10 +110,8 @@ float line_search(const DataSet &data, const Kinematic &kinematic,
                 utility::compute_deformation_grad(x1, inv_rest2x2[i]);
             const Mat3x2f dF = F1 - F0;
             float gap = max_sigma - utility::svd3x2(F0).S.maxCoeff();
-            float reduced_gap = param.ccd_reduction * gap;
-            float diff_eps = 0.5f * reduced_gap;
-            float target = max_sigma;
-            target -= reduced_gap;
+            float target = max_sigma - param.ccd_reduction * gap;
+            float diff_eps = param.ccd_reduction_eps * gap;
             if (utility::svd3x2(F0 + t * dF).S.maxCoeff() > target) {
                 float upper_t = t;
                 float lower_t = 0.0f;

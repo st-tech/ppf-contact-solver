@@ -230,6 +230,7 @@ struct ParamSet {
     float line_search_max_t;
     float ccd_tol;
     float ccd_reduction;
+    float ccd_reduction_eps;
     unsigned ccd_max_iters;
     float eiganalysis_eps;
     float friction;

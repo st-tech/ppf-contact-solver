@@ -73,8 +73,11 @@ pub struct Args {
     #[clap(long, default_value_t = 1024)]
     pub ccd_max_iters: u32,
 
-    #[clap(long, default_value_t = 0.01)]
+    #[clap(long, default_value_t = 0.1)]
     pub ccd_reduction: f32,
+
+    #[clap(long, default_value_t = 0.01)]
+    pub ccd_reduction_eps: f32,
 
     #[clap(long, default_value_t = 1e-2)]
     pub eiganalysis_eps: f32,

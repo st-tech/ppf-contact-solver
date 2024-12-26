@@ -304,6 +304,7 @@ pub struct ParamSet {
     pub line_search_max_t: f32,
     pub ccd_tol: f32,
     pub ccd_reduction: f32,
+    pub ccd_reduction_eps: f32,
     pub ccd_max_iters: u32,
     pub eiganalysis_eps: f32,
     pub friction: f32,
