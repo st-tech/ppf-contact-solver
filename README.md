@@ -14,6 +14,7 @@ Published in [ACM Transactions on Graphics (TOG)](https://dl.acm.org/doi/abs/10.
 - **🚲 Cache Efficient**: All on the GPU runs in single precision. No double precision.
 - **🥼 Inextensible**: Cloth never extends beyond very strict upper bounds, such as 1%.
 - **📐 Physically Accurate**: Our deformable solver is driven by the Finite Element Method.
+- **⚔️ Stress Proof**: We run GitHub Actions to confirm success 10 times in a row.
 - **🚀 Massively Parallel**: Both contact and elasticity solvers are run on the GPU.
 - **🐳 Docker Sealed**: Everything is designed to work out of the box.
 - **🌐 JupyterLab Included**: Open your browser and run examples right away [[Video]](https://drive.google.com/file/d/1n068Ai_hlfgapf2xkAutOHo3PkLpJXA4/view).
@@ -162,6 +163,47 @@ path = f"export/{scene.info.name}/{session.info.name}"
 session.export.animation(path)
 ```
 <img src="./asset/image/drape.jpg" alt="drape">
+
+### 🔍 Obtaining Logs
+
+Logs for the simulation can also be queried through the Python APIs. Here's an example of how to get the list of recorded logs, fetch them, and compute the average.
+
+```python
+# get list of logs files list[str]
+logs = session.get.log()
+assert 'per_video_frame' in logs
+assert 'advance.newton_steps' in logs
+
+# list[(int,int)]: pairs of (frame, msec)
+msec_per_video = session.get.numbers('per_video_frame')
+
+# compute the average frame per video frame
+print('avg:', sum([n for _,n in msec_per_video])/len(msec_per_video))
+
+# get newton step count list[tuple[float,int]] pair of (time,count)
+newton_steps = session.get.numbers('advance.newton_steps')
+
+# compute the average of consumed newton steps
+print('avg:', sum([n for _,n in newton_steps])/len(newton_steps))
+```
+
+Here are the representative ones.
+`vid_time` refers to the video time in seconds and is recorded as `float`.
+`msec` refers to the consumed simulation time recorded as `int`.
+`vid_frame` is the video frame count recorede as `int`.
+
+| **Log Name** | **Description** | **Format**
+|---------------|----------------|------------
+| **per_video_frame** | Time per video frame | list[(vid_frame,msec)] |
+| **advance.matrix_assembly** | Matrix assembly time | list[(vid_time,msec)] |
+| **advance.linsolve** | Linear system solve time | list[(vid_time,msec)] |
+| **advance.line_search** | Line search time | list[(vid_time,msec)] |
+| **advance** | Time per step | list[(vid_time,msec)] |
+| **advance.newton_steps** | Newton iterations per step | list[(vid_time,count)] |
+| **advance.num_contact** | Contact count | list[(vid_time,count)] |
+| **advance.max_sigma** | Max stretch | list(vid_time,strech) |
+
+Note that some entries have multiple records at the same video time ⏱️. This occurs because the same operation is executed multiple times 🔄 within a single step size during the inner Newton's iteration 🧮. For example, the linear system solve is performed at each Newton's step, so if multiple Newton's steps are 🔁 executed, multiple linear system solve times may appear in the record at the same 📊 video time.
   
 ## 🖼️ Catalogue
 
@@ -194,6 +236,23 @@ This is not a self-hosted runner, meaning that each time the runner launches, al
 
 We use the GitHub-hosted runner 🖥️, but the actual simulation runs on a provisioned [vast.ai](https://vast.ai) instance 🌐. We do this for performance ⚡ and budget 💰 reasons. We choose an RTX 4090 🎮, which typically costs less than $0.50 per hour 💵. Since we start with a fresh 🌱 instance, the environment is clean 🧹 every time.
 We take advantage of the ability to deploy on the cloud; this action is performed in parallel, which reduces the total action time.
+
+### ⚔️ Ten Consecutive Runs
+
+We know that you can't fully trust the reliability of contact resolution by simply watching a success case in a single 🎥 video.
+To ensure greater reliability, we verify that all the examples run without errors via automated GitHub Actions ⚙️, not just once, but 10 times in a row 🔁.
+
+[![drape.ipynb](https://github.com/st-tech/ppf-contact-solver/actions/workflows/example_drape.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/example_drape.yml)
+[![cards.ipynb](https://github.com/st-tech/ppf-contact-solver/actions/workflows/example_cards.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/example_cards.yml)
+[![curtain.ipynb](https://github.com/st-tech/ppf-contact-solver/actions/workflows/example_curtain.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/example_curtain.yml)
+[![friction.ipynb](https://github.com/st-tech/ppf-contact-solver/actions/workflows/example_friction.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/example_friction.yml)
+[![hang.ipynb](https://github.com/st-tech/ppf-contact-solver/actions/workflows/example_hang.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/example_hang.yml)
+[![needle.ipynb](https://github.com/st-tech/ppf-contact-solver/actions/workflows/example_needle.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/example_needle.yml)
+[![stack.ipynb](https://github.com/st-tech/ppf-contact-solver/actions/workflows/example_stack.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/example_stack.yml)
+[![trampoline.ipynb](https://github.com/st-tech/ppf-contact-solver/actions/workflows/example_trampoline.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/example_trampoline.yml)
+[![trapped.ipynb](https://github.com/st-tech/ppf-contact-solver/actions/workflows/example_trapped.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/example_trapped.yml)
+
+Also, we apply small jitters to the position of objects in the scene 🔄, so at each run, the scene is slightly different. This means that success 🎯 is not just due to a lucky spot 🍀.
 
 ## 💨 Getting Started
 
