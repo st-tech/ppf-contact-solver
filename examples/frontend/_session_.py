@@ -266,13 +266,39 @@ class SessionGet:
     def __init__(self, session: "Session"):
         self._session = session
 
-    def log(self) -> list[str]:
+    def logfiles(self) -> list[str]:
         path = os.path.join(self._session.info.path, "output", "data")
         result = []
         for file in os.listdir(path):
             if file.endswith(".out"):
                 result.append(file.replace(".out", ""))
         return result
+
+    def _tail_file(self, path: str, n_lines: Optional[int] = None) -> list[str]:
+        if os.path.exists(path):
+            with open(path, "r") as f:
+                lines = f.readlines()
+                lines = [line.rstrip("\n") for line in lines]
+                if n_lines is not None:
+                    return lines[-n_lines:]
+                else:
+                    return lines
+        return []
+
+    def log(self, n_lines: Optional[int] = None) -> list[str]:
+        return self._tail_file(
+            os.path.join(self._session.info.path, "output", "cudasim_log.txt"), n_lines
+        )
+
+    def stdout(self, n_lines: Optional[int] = None) -> list[str]:
+        return self._tail_file(
+            os.path.join(self._session.info.path, "stdout.log"), n_lines
+        )
+
+    def stderr(self, n_lines: Optional[int] = None) -> list[str]:
+        return self._tail_file(
+            os.path.join(self._session.info.path, "error.log"), n_lines
+        )
 
     def numbers(self, name: str):
         def float_or_int(var):
@@ -427,13 +453,10 @@ class Session:
 
     def finished(self) -> bool:
         finished_path = os.path.join(self.output.path, "finished.txt")
-        err_path = os.path.join(self.info.path, "error.log")
-        if os.path.exists(err_path):
-            file = open(err_path, "r")
-            lines = file.readlines()
-            if len(lines) > 0:
-                for line in lines:
-                    print(line)
+        error = self.get.stderr()
+        if len(error) > 0:
+            for line in error:
+                print(line)
         return os.path.exists(finished_path)
 
     def start(self, param: Param, force: bool = True, blocking=False) -> "Session":

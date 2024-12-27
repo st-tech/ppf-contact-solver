@@ -28,6 +28,7 @@ Published in [ACM Transactions on Graphics (TOG)](https://dl.acm.org/doi/abs/10.
 - [⚡️ Requirements](#️-requirements)
 - [📝 Change History](#-change-history)
 - [🐍 How To Use](#-how-to-use)
+- [🔍 Obtaining Logs](#-obtaining-logs)
 - [🖼️ Catalogue](#️-catalogue)
 - [🚀 GitHub Actions](#-github-actions)
 - [💨 Getting Started](#-getting-started)
@@ -64,6 +65,7 @@ Published in [ACM Transactions on Graphics (TOG)](https://dl.acm.org/doi/abs/10.
 
 ## 📝 Change History
 
+- (2024.12.27) Line search for strain limiting is improved [[Markdown]](./articles/bug.md#new-strain-limiting-line-search).
 - (2024.12.23) Added [[Bug Fixes and Updates]](./articles/bug.md)
 - (2024.12.21) Added a [house of cards example](./examples/cards.ipynb) [[Video]](https://drive.google.com/file/d/1PMdDnlyCsjinbvICKph_0UcXUfUvvUmZ/view)
 - (2024.12.18) Added a [frictional contact example](./examples/friction.ipynb): armadillo sliding on the slope [[Video]](https://drive.google.com/file/d/12WGdfDTFIwCT0UFGEZzfmQreM6WSSHet/view)
@@ -164,13 +166,13 @@ session.export.animation(path)
 ```
 <img src="./asset/image/drape.jpg" alt="drape">
 
-### 🔍 Obtaining Logs
+## 🔍 Obtaining Logs
 
 Logs for the simulation can also be queried through the Python APIs. Here's an example of how to get the list of recorded logs, fetch them, and compute the average.
 
 ```python
-# get list of logs files list[str]
-logs = session.get.log()
+# get the list of log names as list[str]
+logs = session.get.logfiles()
 assert 'per_video_frame' in logs
 assert 'advance.newton_steps' in logs
 
@@ -187,23 +189,48 @@ newton_steps = session.get.numbers('advance.newton_steps')
 print('avg:', sum([n for _,n in newton_steps])/len(newton_steps))
 ```
 
-Here are the representative ones.
+Below are some representatives.
 `vid_time` refers to the video time in seconds and is recorded as `float`.
-`msec` refers to the consumed simulation time recorded as `int`.
+`ms` refers to the consumed simulation time in milliseconds recorded as `int`.
 `vid_frame` is the video frame count recorede as `int`.
 
 | **Log Name** | **Description** | **Format**
 |---------------|----------------|------------
-| **per_video_frame** | Time per video frame | list[(vid_frame,msec)] |
-| **advance.matrix_assembly** | Matrix assembly time | list[(vid_time,msec)] |
-| **advance.linsolve** | Linear system solve time | list[(vid_time,msec)] |
-| **advance.line_search** | Line search time | list[(vid_time,msec)] |
-| **advance** | Time per step | list[(vid_time,msec)] |
+| **per_video_frame** | Time per video frame | list[(vid_frame,ms)] |
+| **advance.matrix_assembly** | Matrix assembly time | list[(vid_time,ms)] |
+| **advance.linsolve** | Linear system solve time | list[(vid_time,ms)] |
+| **advance.line_search** | Line search time | list[(vid_time,ms)] |
+| **advance** | Time per step | list[(vid_time,ms)] |
 | **advance.newton_steps** | Newton iterations per step | list[(vid_time,count)] |
 | **advance.num_contact** | Contact count | list[(vid_time,count)] |
 | **advance.max_sigma** | Max stretch | list(vid_time,strech) |
 
-Note that some entries have multiple records at the same video time ⏱️. This occurs because the same operation is executed multiple times 🔄 within a single step during the inner Newton's iteration 🧮. For example, the linear system solve is performed at each Newton's step, so if multiple Newton's steps are 🔁 executed, multiple linear system solve times may appear in the record at the same 📊 video time.
+Note that some entries have multiple records at the same video time ⏱️. This occurs because the same operation is executed multiple times 🔄 within a single step during the inner Newton's iterations 🧮. For example, the linear system solve is performed at each Newton's step, so if multiple Newton's steps are 🔁 executed, multiple linear system solve times may appear in the record at the same 📊 video time.
+
+If you would like to retrieve the raw log stream, you can do so by
+
+```python
+# Last 8 lines. Omit for everything.
+for line in session.get.log(n_lines=8):
+    print(line)
+```
+
+This will output something like:
+
+```
+* dt: 1.000e-03
+* max_sigma: 1.045e+00
+* avg_sigma: 1.030e+00
+------ newton step 1 ------
+   ====== contact_matrix_assembly ======
+   > dry_pass...0 msec
+   > rebuild...7 msec
+   > fillin_pass...0 msec
+```
+
+If you would like to read `stdout` and `stderr`, you can do so using `session.get.stdout()` and `session.get.stderr()` (if it exists). They return `list[str]`.
+
+All the log files 📂 are available ✅ and can be fetched ⬇️ during the simulation 🧑‍💻.
   
 ## 🖼️ Catalogue
 
@@ -568,22 +595,22 @@ The author also extends thanks to the teams in the IP department for permitting 
 
 ```
 @article{Ando2024CB,
-author = {Ando, Ryoichi},
-title = {A Cubic Barrier with Elasticity-Inclusive Dynamic Stiffness},
-year = {2024},
-issue_date = {December 2024},
-publisher = {Association for Computing Machinery},
-address = {New York, NY, USA},
-volume = {43},
-number = {6},
-issn = {0730-0301},
-url = {https://doi.org/10.1145/3687908},
-doi = {10.1145/3687908},
-journal = {ACM Trans. Graph.},
-month = nov,
-articleno = {224},
-numpages = {13},
-keywords = {collision, contact}
+    author = {Ando, Ryoichi},
+    title = {A Cubic Barrier with Elasticity-Inclusive Dynamic Stiffness},
+    year = {2024},
+    issue_date = {December 2024},
+    publisher = {Association for Computing Machinery},
+    address = {New York, NY, USA},
+    volume = {43},
+    number = {6},
+    issn = {0730-0301},
+    url = {https://doi.org/10.1145/3687908},
+    doi = {10.1145/3687908},
+    journal = {ACM Trans. Graph.},
+    month = nov,
+    articleno = {224},
+    numpages = {13},
+    keywords = {collision, contact}
 }
 ```
 

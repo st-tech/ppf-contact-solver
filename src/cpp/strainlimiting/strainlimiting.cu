@@ -109,26 +109,27 @@ float line_search(const DataSet &data, const Kinematic &kinematic,
                 utility::compute_deformation_grad(x1, inv_rest2x2[i]);
             const Mat3x2f dF = F1 - F0;
             if (utility::svd3x2(F0 + t * dF).S.maxCoeff() >= max_sigma) {
-                float tol = param.ccd_reduction *
-                            (max_sigma - utility::svd3x2(F0).S.maxCoeff());
-                float target = max_sigma - 2.0f * tol;
                 float upper_t = t;
                 float lower_t = 0.0f;
-                for (unsigned k = 0; k < param.binary_search_max_iter; ++k) {
+                float window = upper_t - lower_t;
+                while (true) {
                     t = 0.5f * (upper_t + lower_t);
                     Svd3x2 svd = utility::svd3x2(F0 + t * dF);
-                    float diff = svd.S.maxCoeff() - target;
-                    if (fabs(diff) < tol) {
-                        break;
-                    } else if (diff < 0.0f) {
+                    float diff = svd.S.maxCoeff() - max_sigma;
+                    if (diff < 0.0f) {
                         lower_t = t;
                     } else {
                         upper_t = t;
                     }
+                    float new_window = upper_t - lower_t;
+                    if (new_window == window) {
+                        break;
+                    } else {
+                        window = new_window;
+                    }
                 }
-                while (utility::svd3x2(F0 + t * dF).S.maxCoeff() >= target) {
-                    t *= param.dt_decrease_factor;
-                }
+                t = lower_t;
+                assert(t > std::numeric_limits<float>::epsilon());
             }
         }
         toi[i] = t;

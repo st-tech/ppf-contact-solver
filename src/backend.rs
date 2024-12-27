@@ -133,7 +133,7 @@ impl Backend {
                 let face = builder::build_bvh(&vertex, Some(&face));
                 let edge = builder::build_bvh(&vertex, Some(&edge));
                 let vertex = builder::build_bvh::<1>(&vertex, None);
-                result_sender.send(BvhSet { face, edge, vertex }).unwrap();
+                let _ = result_sender.send(BvhSet { face, edge, vertex });
             }
         });
 
