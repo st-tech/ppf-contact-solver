@@ -203,7 +203,7 @@ Here are the representative ones.
 | **advance.num_contact** | Contact count | list[(vid_time,count)] |
 | **advance.max_sigma** | Max stretch | list(vid_time,strech) |
 
-Note that some entries have multiple records at the same video time ⏱️. This occurs because the same operation is executed multiple times 🔄 within a single step size during the inner Newton's iteration 🧮. For example, the linear system solve is performed at each Newton's step, so if multiple Newton's steps are 🔁 executed, multiple linear system solve times may appear in the record at the same 📊 video time.
+Note that some entries have multiple records at the same video time ⏱️. This occurs because the same operation is executed multiple times 🔄 within a single step during the inner Newton's iteration 🧮. For example, the linear system solve is performed at each Newton's step, so if multiple Newton's steps are 🔁 executed, multiple linear system solve times may appear in the record at the same 📊 video time.
   
 ## 🖼️ Catalogue
 
