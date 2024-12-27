@@ -794,7 +794,7 @@ class Object:
 
     def clear(self):
         self._param = {}
-        self._at = [0, 0, 0]
+        self._at = [0.0, 0.0, 0.0]
         self._scale = 1.0
         self._rotation = np.eye(3)
         self._color = []
@@ -894,6 +894,15 @@ class Object:
 
     def at(self, x: float, y: float, z: float) -> "Object":
         self._at = [x, y, z]
+        return self
+
+    def jitter(self, r: float = 1e-2) -> "Object":
+        dx = np.random.random()
+        dy = np.random.random()
+        dz = np.random.random()
+        self._at[0] += r * dx
+        self._at[1] += r * dy
+        self._at[2] += r * dz
         return self
 
     def atop(self, object: "Object", margin: float = 0.0) -> "Object":

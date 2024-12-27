@@ -48,6 +48,21 @@ jobs:
       - name: 5th run
         run: bash $HELPER_PATH run ${EXAMPLE_NAME}.py
 
+      - name: 6th run
+        run: bash $HELPER_PATH run ${EXAMPLE_NAME}.py
+
+      - name: 7th run
+        run: bash $HELPER_PATH run ${EXAMPLE_NAME}.py
+
+      - name: 8th run
+        run: bash $HELPER_PATH run ${EXAMPLE_NAME}.py
+
+      - name: 9th run
+        run: bash $HELPER_PATH run ${EXAMPLE_NAME}.py
+
+      - name: 10th run
+        run: bash $HELPER_PATH run ${EXAMPLE_NAME}.py
+
       - name: shutdown
         if: always()
         run: bash $HELPER_PATH delete

@@ -17,7 +17,7 @@ for i in range(5):
     obj.direction([0, 1, 0], [0, 0, 1])
     obj.pin(obj.grab([0, 1, 0]))
 
-scene.add("sphere").at(-1, 0, 0).pin().move_by([8, 0, 0], 5)
+scene.add("sphere").at(-1, 0, 0).jitter().pin().move_by([8, 0, 0], 5)
 fixed = scene.build()
 
 param = app.session.param()

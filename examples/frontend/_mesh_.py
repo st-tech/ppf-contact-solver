@@ -103,10 +103,85 @@ class MeshManager:
 
         return self._from_o3d(o3d.geometry.TriangleMesh.create_cylinder(r, height, n))
 
-    def cone(self, r: float = 1, height: float = 2, n: int = 32) -> "TriMesh":
-        import open3d as o3d
+    def cone(
+        self,
+        Nr: int = 16,
+        Ny: int = 16,
+        Nb: int = 4,
+        radius: float = 0.5,
+        height: float = 2,
+    ) -> "TriMesh":
+        V = [[0, 0, height], [0, 0, 0]]
+        T = []
+        ind_btm_center = 0
+        ind_tip = 1
+        offset = []
+        offset_btm = len(V)
 
-        return self._from_o3d(o3d.geometry.TriangleMesh.create_cone(r, height, n))
+        for k in reversed(range(Ny)):
+            if k > 0:
+                r = k / (Ny - 1)
+                r = r * r
+                offset.append(len(V))
+                for i in range(Nr):
+                    t = 2 * np.pi * i / Nr
+                    x, y = radius * r * np.cos(t), radius * r * np.sin(t)
+                    V.append([x, y, height * r])
+
+        for j in offset[0:-1]:
+            for i in range(Nr):
+                ind00, ind10 = i, (i + 1) % Nr
+                ind01, ind11 = ind00 + Nr, ind10 + Nr
+                if i % 2 == 0:
+                    T.append([ind00 + j, ind01 + j, ind10 + j])
+                    T.append([ind10 + j, ind01 + j, ind11 + j])
+                else:
+                    T.append([ind00 + j, ind11 + j, ind10 + j])
+                    T.append([ind00 + j, ind01 + j, ind11 + j])
+
+        j = offset[-1]
+        for i in range(Nr):
+            ind0, ind1 = i, (i + 1) % Nr
+            T.append([ind0 + j, ind_tip, ind1 + j])
+
+        offset = []
+        for k in reversed(range(Nb)):
+            if k > 0:
+                r = k / Nb
+                offset.append(len(V))
+                for i in range(Nr):
+                    t = 2 * np.pi * i / Nr
+                    x, y = radius * r * np.cos(t), radius * r * np.sin(t)
+                    V.append([x, y, height])
+
+        for j in offset[0:-1]:
+            for i in range(Nr):
+                ind00, ind10 = i, (i + 1) % Nr
+                ind01, ind11 = ind00 + Nr, ind10 + Nr
+                if i % 2 == 0:
+                    T.append([ind00 + j, ind10 + j, ind01 + j])
+                    T.append([ind10 + j, ind11 + j, ind01 + j])
+                else:
+                    T.append([ind00 + j, ind10 + j, ind11 + j])
+                    T.append([ind00 + j, ind11 + j, ind01 + j])
+
+        j = offset[-1]
+        for i in range(Nr):
+            ind0, ind1 = i, (i + 1) % Nr
+            T.append([ind0 + j, ind1 + j, ind_btm_center])
+
+        j0, j1 = offset_btm, offset[0]
+        for i in range(Nr):
+            ind00, ind10 = i + j0, (i + 1) % Nr + j0
+            ind01, ind11 = i + j1, (i + 1) % Nr + j1
+            if i % 2 == 0:
+                T.append([ind00, ind10, ind01])
+                T.append([ind10, ind11, ind01])
+            else:
+                T.append([ind00, ind10, ind11])
+                T.append([ind00, ind11, ind01])
+
+        return TriMesh.create(np.array(V), np.array(T), self._cache_dir)
 
     def torus(self, r: float = 1, R: float = 0.25, n: int = 32) -> "TriMesh":
         import open3d as o3d
