@@ -60,12 +60,12 @@ Published in [ACM Transactions on Graphics (TOG)](https://dl.acm.org/doi/abs/10.
 
 ## ⚡️ Requirements
 
-- 🔥 A modern NVIDIA GPU (Turing or newer).
-- 🐳 A Docker environment (see [below](#-getting-started)).
+- 🔥 A modern NVIDIA GPU (Turing or newer)
+- 🐳 A Docker environment (see [below](#-getting-started))
 
 ## 📝 Change History
 
-- (2024.12.27) Line search for strain limiting is improved [[Markdown]](./articles/bug.md#new-strain-limiting-line-search).
+- (2024.12.27) Line search for strain limiting is improved [[Markdown]](./articles/bug.md#new-strain-limiting-line-search)
 - (2024.12.23) Added [[Bug Fixes and Updates]](./articles/bug.md)
 - (2024.12.21) Added a [house of cards example](./examples/cards.ipynb) [[Video]](https://drive.google.com/file/d/1PMdDnlyCsjinbvICKph_0UcXUfUvvUmZ/view)
 - (2024.12.18) Added a [frictional contact example](./examples/friction.ipynb): armadillo sliding on the slope [[Video]](https://drive.google.com/file/d/12WGdfDTFIwCT0UFGEZzfmQreM6WSSHet/view)
