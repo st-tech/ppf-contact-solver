@@ -142,6 +142,32 @@ while true; do
   echo "source $WORKDIR/venv/bin/activate; $WORKDIR/vast destroy instance $INSTANCE_ID" >$WORKDIR/delete-instance.sh
   chmod +x $WORKDIR/delete-instance.sh
 
+  # wait until the instance is loaded
+  VAST_INSTANCE_JSON=$WORKDIR/instance.json
+  retry_count=0
+  host_ready=false
+  while true; do
+    $WORKDIR/vast show instances --raw >$VAST_INSTANCE_JSON
+    STATUS=$(jq -r --argjson id "$INSTANCE_ID" '.[] | select(.id == $id) | .actual_status' "$VAST_INSTANCE_JSON")
+    if [[ "$STATUS" == "running" ]]; then
+      echo "host ready"
+      host_ready=true
+      break
+    else
+      echo "instance status: $STATUS. retrying in $RETRY_INTERVAL seconds..."
+      ((retry_count++))
+      if [ "$retry_count" -ge "$MAX_RETRIES" ]; then
+        echo "Maximum retries reached. Exiting..."
+        $WORKDIR/delete-instance.sh
+        break
+      fi
+      sleep $RETRY_INTERVAL
+    fi
+  done
+  if [ "$host_ready" = false ]; then
+    continue
+  fi
+
   # register ssh key
   echo "register ssh key"
   ./vast attach ssh $INSTANCE_ID "$(cat $SSH_PUB_KEY)"
