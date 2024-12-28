@@ -22,7 +22,7 @@ float line_search_strain_limiting(
         float window = upper_t - lower_t;
         while (true) {
             t = 0.5f * (upper_t + lower_t);
-            float diff = svd3x2(F0 + t * dF).S.maxCoeff() - max_sigma;
+            float diff = svd3x2(F0 + t * dF).S.max() - max_sigma;
             if (diff < 0.0f) {
                 lower_t = t;
             } else {
