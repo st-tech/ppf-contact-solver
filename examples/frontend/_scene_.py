@@ -542,6 +542,44 @@ class SceneInfo:
         self.name = name
 
 
+class InvisibleAdder:
+    def __init__(self, scene: "Scene"):
+        self._scene = scene
+
+    def sphere(self, position: list[float], radius: float) -> Sphere:
+        sphere = Sphere().add(position, radius)
+        self._scene._sphere.append(sphere)
+        return sphere
+
+    def wall(self, position: list[float], normal: list[float]) -> Wall:
+        wall = Wall().add(position, normal)
+        self._scene._wall.append(wall)
+        return wall
+
+
+class SessionAdder:
+    def __init__(self, scene: "Scene"):
+        self._scene = scene
+        self.invisible = InvisibleAdder(scene)
+
+    def __call__(self, mesh_name: str, ref_name: str = "") -> "Object":
+        if ref_name == "":
+            ref_name = mesh_name
+            count = 0
+            while ref_name in self._scene._object.keys():
+                count += 1
+                ref_name = f"{mesh_name}_{count}"
+        mesh_list = self._scene._asset.list()
+        if mesh_name not in mesh_list:
+            raise Exception(f"mesh_name '{mesh_name}' does not exist")
+        elif ref_name in self._scene._object.keys():
+            raise Exception(f"ref_name '{ref_name}' already exists")
+        else:
+            obj = Object(self._scene._asset, mesh_name)
+            self._scene._object[ref_name] = obj
+            return obj
+
+
 class Scene:
     def __init__(self, name: str, plot: PlotManager, asset: AssetManager, save_func):
         self._name = name
@@ -551,44 +589,18 @@ class Scene:
         self._object = {}
         self._sphere = []
         self._wall = []
+        self.add = SessionAdder(self)
         self.info = SceneInfo(name, self)
 
     def clear(self) -> "Scene":
         self._object.clear()
         return self
 
-    def add(self, mesh_name: str, ref_name: str = "") -> "Object":
-        if ref_name == "":
-            ref_name = mesh_name
-            count = 0
-            while ref_name in self._object.keys():
-                count += 1
-                ref_name = f"{mesh_name}_{count}"
-        mesh_list = self._asset.list()
-        if mesh_name not in mesh_list:
-            raise Exception(f"mesh_name '{mesh_name}' does not exist")
-        elif ref_name in self._object.keys():
-            raise Exception(f"ref_name '{ref_name}' already exists")
-        else:
-            obj = Object(self._asset, mesh_name)
-            self._object[ref_name] = obj
-            return obj
-
     def pick(self, name: str) -> "Object":
         if name not in self._object.keys():
             raise Exception(f"object {name} does not exist")
         else:
             return self._object[name]
-
-    def add_invisible_sphere(self, position: list[float], radius: float) -> Sphere:
-        sphere = Sphere().add(position, radius)
-        self._sphere.append(sphere)
-        return sphere
-
-    def add_invisible_wall(self, position: list[float], normal: list[float]) -> Wall:
-        wall = Wall().add(position, normal)
-        self._wall.append(wall)
-        return wall
 
     def build(self) -> FixedScene:
         pbar = tqdm(total=10, desc="build", ncols=70)
