@@ -6,9 +6,21 @@ import numpy as np
 
 
 class Extra:
+    """Extra class. Use this to perform extra operations."""
+
     def load_CIPC_stitch_mesh(
         self, path: str
     ) -> tuple[np.ndarray, np.ndarray, tuple[np.ndarray, np.ndarray]]:
+        """Load a stitch mesh data used in CIPC paper
+
+        Args:
+            path (str): The path to the stitch mesh data.
+
+        Returns:
+            tuple[np.ndarray, np.ndarray, tuple[np.ndarray, np.ndarray]]: A tuple
+            containing the vertices (#x3), faces (#x3), and stitch data (index #x3 and weight #x2).
+            The weight encodes the liner interpolation between the last two vertices.
+        """
         vertices = []
         faces = []
         stitch_ind = []

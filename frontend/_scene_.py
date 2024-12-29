@@ -16,13 +16,26 @@ EPS = 1e-3
 
 
 class SceneManager:
+    """SceneManager class. Use this to manage scenes."""
+
     def __init__(self, plot: PlotManager, asset: AssetManager, save_func):
+        """Initialize the scene manager."""
         self._plot = plot
         self._asset = asset
         self._scene: dict[str, Scene] = {}
         self._save_func = save_func
 
     def create(self, name: str) -> "Scene":
+        """Create a new scene.
+
+        Create a scene only if the name does not exist. Raise an exception if the name already exists.
+
+        Args:
+            name (str): The name of the scene to create.
+
+        Returns:
+            Scene: The created scene.
+        """
         if name in self._scene.keys():
             raise Exception(f"scene {name} already exists")
         else:
@@ -31,31 +44,67 @@ class SceneManager:
             return scene
 
     def select(self, name: str, create: bool = True) -> "Scene":
+        """Select a scene.
+
+        If the scene exists, it will be selected. If it does not exist and create is True, a new scene will be created.
+
+        Args:
+            name (str): The name of the scene to select.
+            create (bool, optional): Whether to create a new scene if it does not exist. Defaults to True.
+        """
         if create and name not in self._scene.keys():
             return self.create(name)
         else:
             return self._scene[name]
 
     def remove(self, name: str):
+        """Remove a scene from the manager.
+
+        Args:
+            name (str): The name of the scene to remove.
+        """
         if name in self._scene.keys():
             del self._scene[name]
 
     def clear(self):
+        """Clear all the scenes in the manager."""
         self._scene = {}
 
-    def list(self):
+    def list(self) -> list[str]:
+        """List all the scenes in the manager.
+
+        Returns:
+            list[str]: A list of scene names.
+        """
         return list(self._scene.keys())
 
 
 class Wall:
+    """An invisible wall class."""
+
     def __init__(self):
+        """Initialize the wall."""
         self._normal = [0, 1, 0]
         self._entry = []
 
     def get_entry(self) -> list[tuple[list[float], float]]:
+        """Get a list of time-dependent wall entries.
+
+        Returns:
+            list[tuple[list[float], float]]: A list of time-dependent entries, each containing a position and time.
+        """
         return self._entry
 
     def add(self, pos: list[float], normal: list[float]) -> "Wall":
+        """Add an invisible wall information.
+
+        Args:
+            pos (list[float]): The position of the wall.
+            normal (list[float]): The outer normal of the wall.
+
+        Returns:
+            Wall: The invisible wall.
+        """
         if len(self._entry):
             raise Exception("wall already exists")
         else:
@@ -64,15 +113,38 @@ class Wall:
             return self
 
     def _check_time(self, time: float):
+        """Check if the time is valid.
+
+        Args:
+            time (float): The time to check.
+        """
         if time <= self._entry[-1][1]:
             raise Exception("time must be greater than the last time")
 
     def move_to(self, pos: list[float], time: float) -> "Wall":
+        """Move the wall to a new position at a specific time.
+
+        Args:
+            pos (list[float]): The target position of the wall.
+            time (float): The absolute time to move the wall.
+
+        Returns:
+            Wall: The invisible wall.
+        """
         self._check_time(time)
         self._entry.append((pos, time))
         return self
 
     def move_by(self, delta: list[float], time: float) -> "Wall":
+        """Move the wall by a positional delta at a specific time.
+
+        Args:
+            delta (list[float]): The positional delta to move the wall.
+            time (float): The absolute time to move the wall.
+
+        Returns
+            Wall: The invisible wall.
+        """
         self._check_time(time)
         pos = self._entry[-1][0] + delta
         self._entry.append((pos, time))
@@ -80,23 +152,38 @@ class Wall:
 
 
 class Sphere:
+    """An invisible sphere class."""
+
     def __init__(self):
+        """Initialize the sphere."""
         self._entry = []
         self._hemisphere = False
         self._invert = False
 
     def hemisphere(self) -> "Sphere":
+        """Turn the sphere into a hemisphere, so the half of the sphere top becomes empty, like a bowl."""
         self._hemisphere = True
         return self
 
     def invert(self) -> "Sphere":
+        """Invert the sphere, so the inside becomes empty and the outside becomes solid."""
         self._invert = True
         return self
 
     def get_entry(self) -> list[tuple[list[float], float, float]]:
+        """Get the time-dependent sphere entries."""
         return self._entry
 
     def add(self, pos: list[float], radius: float) -> "Sphere":
+        """Add an invisible sphere information.
+
+        Args:
+            pos (list[float]): The position of the sphere.
+            radius (float): The radius of the sphere.
+
+        Returns:
+            Sphere: The sphere.
+        """
         if len(self._entry):
             raise Exception("sphere already exists")
         else:
@@ -104,6 +191,11 @@ class Sphere:
             return self
 
     def _check_time(self, time: float):
+        """Check if the time is valid.
+
+        Args:
+            time (float): The time to check.
+        """
         if time <= self._entry[-1][2]:
             raise Exception(
                 "time must be greater than the last time. last time is %f"
@@ -111,17 +203,45 @@ class Sphere:
             )
 
     def transform_to(self, pos: list[float], radius: float, time: float) -> "Sphere":
+        """Change the sphere to a new position and radius at a specific time.
+
+        Args:
+            pos (list[float]): The target position of the sphere.
+            radius (float): The target radius of the sphere.
+            time (float): The absolute time to transform the sphere.
+
+        Returns:
+            Spere: The sphere.
+        """
         self._check_time(time)
         self._entry.append((pos, radius, time))
         return self
 
     def move_to(self, pos: list[float], time: float) -> "Sphere":
+        """Move the sphere to a new position at a specific time.
+
+        Args:
+            pos list[float]: The target position of the sphere.
+            time (float): The absolute time to move the sphere.
+
+        Returns:
+            Sphere: The sphere.
+        """
         self._check_time(time)
         radius = self._entry[-1][1]
         self._entry.append((pos, radius, time))
         return self
 
     def move_by(self, delta: list[float], time: float) -> "Sphere":
+        """Move the sphere by a positional delta at a specific time.
+
+        Args:
+            delta (list[float]): The positional delta to move the sphere.
+            time (float): The absolute time to move the sphere.
+
+        Returns:
+            Sphere: The sphere.
+        """
         self._check_time(time)
         pos = self._entry[-1][0] + delta
         radius = self._entry[-1][1]
@@ -129,6 +249,15 @@ class Sphere:
         return self
 
     def radius(self, radius: float, time: float) -> "Sphere":
+        """Change the radius of the sphere at a specific time.
+
+        Args:
+            radius (float): The target radius of the sphere.
+            time (float): The absolute time to change the radius.
+
+        Returns:
+            Sphere: The sphere.
+        """
         self._check_time(time)
         pos = self._entry[-1][0]
         self._entry.append((pos, radius, time))
@@ -136,6 +265,8 @@ class Sphere:
 
 
 class FixedScene:
+    """A fixed scene class."""
+
     def __init__(
         self,
         plot: PlotManager,
@@ -153,6 +284,25 @@ class FixedScene:
         rod_count: int,
         shell_count: int,
     ):
+        """Initialize the fixed scene.
+
+        Args:
+            plot (PlotManager): The plot manager.
+            vert (np.ndarray): The vertices of the scene.
+            color (np.ndarray): The colors of the vertices.
+            vel (np.ndarray): The velocities of the vertices.
+            uv (np.ndarray): The UV coordinates of the vertices.
+            rod (np.ndarray): The rod elements.
+            tri (np.ndarray): The triangle elements.
+            tet (np.ndarray): The tetrahedral elements.
+            wall (list[Wall]): The invisible walls.
+            sphere (list[Sphere]): The invisible spheres.
+            rod_vert_range (tuple[int, int]): The index range of the rod vertices.
+            shell_vert_range (tuple[int, int]): The index range of the shell vertices.
+            rod_count (int): The number of rod elements.
+            shell_count (int): The number of shell elements.
+        """
+
         self._plot = plot
         self._vert = vert
         self._color = color
@@ -175,6 +325,7 @@ class FixedScene:
         self._shell_count = shell_count
 
     def report(self) -> "FixedScene":
+        """Print a summary of the scene."""
         data = {}
         data["#vert"] = len(self._vert)
         if len(self._rod):
@@ -212,6 +363,19 @@ class FixedScene:
     def export(
         self, vert: np.ndarray, path: str, include_static: bool = True
     ) -> "FixedScene":
+        """Export the scene to a mesh file.
+
+        Export the scene to a mesh file. The vertices must be explicitly provided.
+
+        Args:
+            vert (np.ndarray): The vertices of the scene.
+            path (str): The path to the mesh file. Supported formats are `.ply`, `.obj`
+            include_static (bool, optional): Whether to include the static mesh. Defaults to True.
+
+        Returns:
+            FixedScene: The fixed scene.
+        """
+
         import open3d as o3d
 
         o3d_mesh = o3d.geometry.TriangleMesh(
@@ -234,6 +398,15 @@ class FixedScene:
         return self
 
     def export_fixed(self, path: str, delete_exist: bool) -> "FixedScene":
+        """Export the fixed scene as a simulatio-readible format.
+
+        Args:
+            path (str): The path to the output directory.
+            delete_exist (bool): Whether to delete the existing directory.
+
+        Returns:
+            FixedScene: The fixed scene.
+        """
         if os.path.exists(path):
             if delete_exist:
                 for item in os.listdir(path):
@@ -362,10 +535,20 @@ class FixedScene:
         return self
 
     def bbox(self) -> tuple[np.ndarray, np.ndarray]:
+        """Compute the bounding box of the scene.
+
+        Returns:
+            tuple[np.ndarray, np.ndarray]: The maximum and minimum coordinates of the bounding box.
+        """
         vert = self._vert
         return (np.max(vert, axis=0), np.min(vert, axis=0))
 
     def center(self) -> np.ndarray:
+        """Compute the area-weighted center of the scene.
+
+        Returns:
+            np.ndarray: The area-weighted center of the scene.
+        """
         vert = self._vert
         tri = self._tri
         center = np.zeros(3)
@@ -380,30 +563,64 @@ class FixedScene:
         else:
             return center / area_sum
 
-    def _average_tri_area(self):
+    def _average_tri_area(self) -> float:
+        """Compute the average triangle area of the scene.
+
+        Returns:
+            float: The average triangle area of the scene.
+        """
         vert = self._vert
         tri = self._tri
-        area = 0
-        for f in tri:
-            a, b, c = vert[f[0]], vert[f[1]], vert[f[2]]
-            area += 0.5 * np.linalg.norm(np.cross(b - a, c - a))
-        return area / len(tri)
+        area = 0.0
+        if len(tri):
+            for f in tri:
+                a, b, c = vert[f[0]], vert[f[1]], vert[f[2]]
+                area += 0.5 * float(np.linalg.norm(np.cross(b - a, c - a)))
+            return area / len(tri)
+        else:
+            return 0.0
 
     def set_pin(
         self, pin: list[tuple[list[int], list[np.ndarray], list[float], bool, float]]
     ):
+        """Set the pinning data of all the objects.
+
+        Args:
+            pin (list[tuple[list[int], list[np.ndarray], list[float], bool, float]]): A list of pinning data.
+        """
         self._pin = pin
 
     def set_static(self, vert: np.ndarray, tri: np.ndarray, color: np.ndarray):
+        """Set the static mesh data.
+
+        Args:
+            vert (np.ndarray): The vertices of the static mesh.
+            tri (np.ndarray): The triangle elements of the static mesh.
+            color (np.ndarray): The colors of the static mesh.
+        """
         self._static_vert = vert
         self._static_tri = tri
         self._static_color = color
 
     def set_stitch(self, ind: np.ndarray, w: np.ndarray):
+        """Set the stitch data.
+
+        Args:
+            ind (np.ndarray): The stitch indices.
+            w (np.ndarray): The stitch weights.
+        """
         self._stitch_ind = ind
         self._stitch_w = w
 
     def time(self, time: float) -> np.ndarray:
+        """Compute the vertex positions at a specific time.
+
+        Args:
+            time (float): The time to compute the vertex positions.
+
+        Returns:
+            np.ndarray: The vertex positions at the specified time.
+        """
         vert = self._vert.copy()
         if len(self._pin):
             for pin, _target, _timing, _, _ in self._pin:
@@ -420,6 +637,11 @@ class FixedScene:
         return vert
 
     def check_intersection(self) -> "FixedScene":
+        """Check for self-intersections and intersections with the static mesh.
+
+        Returns:
+            FixedScene: The fixed scene.
+        """
         import open3d as o3d
 
         if len(self._vert) and len(self._tri):
@@ -447,6 +669,17 @@ class FixedScene:
         show_stitch: bool = True,
         show_pin: bool = True,
     ) -> Optional["Plot"]:
+        """Preview the scene.
+
+        Args:
+            vert (Optional[np.ndarray], optional): The vertices to preview. Defaults to None.
+            shading (dict, optional): The shading options. Defaults to {}.
+            show_stitch (bool, optional): Whether to show the stitch. Defaults to True.
+            show_pin (bool, optional): Whether to show the pin. Defaults to True.
+
+        Returns:
+            Optional[Plot]: The plot object if in a Jupyter notebook, otherwise None.
+        """
         if self._plot.is_jupyter_notebook():
             if vert is None:
                 vert = self._vert
@@ -547,22 +780,47 @@ class InvisibleAdder:
         self._scene = scene
 
     def sphere(self, position: list[float], radius: float) -> Sphere:
+        """Add an invisible sphere to the scene.
+
+        Args:
+            position (list[float]): The position of the sphere.
+            radius (float): The radius of the sphere.
+        Returns:
+            Sphere: The invisible sphere.
+        """
         sphere = Sphere().add(position, radius)
         self._scene._sphere.append(sphere)
         return sphere
 
     def wall(self, position: list[float], normal: list[float]) -> Wall:
+        """Add an invisible wall to the scene.
+
+        Args:
+            position (list[float]): The position of the wall.
+            normal (list[float]): The outer normal of the wall.
+        Returns:
+            Wall: The invisible wall.
+        """
         wall = Wall().add(position, normal)
         self._scene._wall.append(wall)
         return wall
 
 
-class SessionAdder:
+class ObjectAdder:
     def __init__(self, scene: "Scene"):
         self._scene = scene
-        self.invisible = InvisibleAdder(scene)
+        self.invisible = InvisibleAdder(scene) #: InvisibleAdder: The invisible object adder.
 
     def __call__(self, mesh_name: str, ref_name: str = "") -> "Object":
+        """Add a mesh to the scene.
+
+        Args:
+            mesh_name (str): The name of the mesh to add.
+            ref_name (str, optional): The reference name of the object.
+
+        Returns:
+            Object: The added object.
+        """
         if ref_name == "":
             ref_name = mesh_name
             count = 0
@@ -581,6 +839,8 @@ class SessionAdder:
 
 
 class Scene:
+    """A scene class."""
+
     def __init__(self, name: str, plot: PlotManager, asset: AssetManager, save_func):
         self._name = name
         self._plot = plot
@@ -589,10 +849,15 @@ class Scene:
         self._object = {}
         self._sphere = []
         self._wall = []
-        self.add = SessionAdder(self)
-        self.info = SceneInfo(name, self)
+        self.add = ObjectAdder(self) #: ObjectAdder: The object adder.
+        self.info = SceneInfo(name, self) #: SceneInfo: The scene information.
 
     def clear(self) -> "Scene":
+        """Clear all objects from the scene.
+
+        Returns:
+            Scene: The cle  ared scene.
+        """
         self._object.clear()
         return self
 
@@ -603,6 +868,11 @@ class Scene:
             return self._object[name]
 
     def build(self) -> FixedScene:
+        """Build the fixed scene from the current scene.
+
+        Returns:
+            FixedScene: The built fixed scene.
+        """
         pbar = tqdm(total=10, desc="build", ncols=70)
         concat_count = 0
         dyn_objects = [
@@ -799,12 +1069,15 @@ class Scene:
 
 
 class Object:
+    """The object class."""
+
     def __init__(self, asset: AssetManager, name: str):
         self._asset = asset
         self._name = name
         self.clear()
 
     def clear(self):
+        """Clear the object data."""
         self._param = {}
         self._at = [0.0, 0.0, 0.0]
         self._scale = 1.0
@@ -823,6 +1096,7 @@ class Object:
         self._uv = None
 
     def report(self):
+        """Report the object data."""
         print("at:", self._at)
         print("scale:", self._scale)
         print("rotation:")
@@ -833,6 +1107,11 @@ class Object:
         print("pin:", len(self._pin))
 
     def bbox(self) -> tuple[np.ndarray, np.ndarray]:
+        """Compute the bounding box of the object.
+
+        Returns:
+            tuple[np.ndarray, np.ndarray]: The dimensions and center of the bounding box.
+        """
         vert = self.get("V")
         if vert is None:
             raise Exception("vertex does not exist")
@@ -854,6 +1133,11 @@ class Object:
             )
 
     def normalize(self) -> "Object":
+        """Normalize the object  so that it fits within a unit cube.
+
+        Returns:
+            Object: The normalized object.
+        """
         if self._normalize:
             raise Exception("already normalized")
         else:
@@ -862,6 +1146,13 @@ class Object:
             return self
 
     def get(self, key: str) -> Optional[np.ndarray]:
+        """Get an associated value of the object with respect to the key.
+
+        Args:
+            key (str): The key of the value.
+        Returns:
+            Optional[np.ndarray]: The value associated with the key.
+        """
         if key == "color":
             if self._color:
                 return np.array(self._color)
@@ -888,6 +1179,11 @@ class Object:
                 return None
 
     def vertex(self) -> np.ndarray:
+        """Get the transformed vertices of the object.
+
+        Returns:
+            np.ndarray: The transformed vertices.
+        """
         vert = self.get("V")
         if vert is None:
             raise Exception("vertex does not exist")
@@ -896,19 +1192,55 @@ class Object:
             return transformed
 
     def grab(self, uv: list[float], eps: float = 1e-3) -> list[int]:
+        """Grab vertices max towards a specified direction.
+
+        Args:
+            uv (list[float]): The direction vector.
+            eps (float, optional): The distance threshold.
+
+        Returns:
+            list[int]: The indices of the grabbed vertices.
+        """
         vert = self.vertex()
         val = np.max(np.dot(vert, np.array(uv)))
         return np.where(np.dot(vert, uv) > val - eps)[0].tolist()
 
     def set(self, key: str, value) -> "Object":
+        """Set a parameter of the object.
+
+        Args:
+            key (str): The parameter key.
+            value: The parameter value.
+
+        Returns:
+            Object: The object with the updated parameter.
+        """
         self._param[key] = value
         return self
 
     def at(self, x: float, y: float, z: float) -> "Object":
+        """Set the position of the object.
+
+        Args:
+            x (float): The x-coordinate.
+            y (float): The y-coordinate.
+            z (float): The z-coordinate.
+
+        Returns:
+            Object: The object with the updated position.
+        """
         self._at = [x, y, z]
         return self
 
     def jitter(self, r: float = 1e-2) -> "Object":
+        """Add random jitter to the position of the object.
+
+        Args:
+            r (float, optional): The jitter magnitude.
+
+        Returns:
+            Object: The object with the jittered position.
+        """
         dx = np.random.random()
         dy = np.random.random()
         dz = np.random.random()
@@ -918,6 +1250,15 @@ class Object:
         return self
 
     def atop(self, object: "Object", margin: float = 0.0) -> "Object":
+        """Place the object on top of another object.
+
+        Args:
+            object (Object): The reference object.
+            margin (float, optional): The margin between the objects. Defaults to 0.0.
+
+        Returns:
+            Object: The object placed on top of the reference object.
+        """
         a_bbox, a_center = self.bbox()
         b_bbox, b_center = object.bbox()
         center = b_center - a_center
@@ -925,10 +1266,27 @@ class Object:
         return self.at(*center)
 
     def scale(self, _scale: float) -> "Object":
+        """Set the scale of the object.
+
+        Args:
+            _scale (float): The scale factor.
+
+        Returns:
+            Object: The object with the updated scale.
+        """
         self._scale = _scale
         return self
 
     def rotate(self, angle: float, axis: str) -> "Object":
+        """Rotate the object around a specified axis.
+
+        Args:
+            angle (float): The rotation angle in degrees.
+            axis (str): The rotation axis ('x', 'y', or 'z').
+
+        Returns:
+            Object: The object with the updated rotation.
+        """
         theta = angle / 180.0 * np.pi
         if axis.lower() == "x":
             self._rotation = np.array(
@@ -962,14 +1320,38 @@ class Object:
         return self
 
     def max(self, dim: int):
+        """Get the maximum coordinate value along a specified dimension.
+
+        Args:
+            dim (int): The dimension index (0 for x, 1 for y, 2 for z).
+
+        Returns:
+            float: The maximum coordinate value.
+        """
         vert = self.vertex()
         return np.max([x[dim] for x in vert])
 
     def min(self, dim: int):
+        """Get the minimum coordinate value along a specified dimension.
+
+        Args:
+            dim (int): The dimension index (0 for x, 1 for y, 2 for z).
+
+        Returns:
+            float: The minimum coordinate value.
+        """
         vert = self.vertex()
         return np.min([x[dim] for x in vert])
 
     def apply_transform(self, x: np.ndarray) -> np.ndarray:
+        """Apply the object's transformation to a set of vertices.
+
+        Args:
+            x (np.ndarray): The vertices to transform.
+
+        Returns:
+            np.ndarray: The transformed vertices.
+        """
         if len(x.shape) == 1:
             raise Exception("vertex should be 2D array")
         else:
@@ -981,18 +1363,59 @@ class Object:
         return x.transpose()
 
     def static_color(self, red: float, green: float, blue: float) -> "Object":
+        """Set the static color of the object.
+
+        Args:
+            red (float): The red component.
+            green (float): The green component.
+            blue (float): The blue component.
+
+        Returns:
+            Object: The object with the updated static color.
+        """
         self._static_color = [red, green, blue]
         return self
 
     def default_color(self, red: float, green: float, blue: float) -> "Object":
+        """Set the default color of the object.
+
+        Args:
+            red (float): The red component.
+            green (float): The green component.
+            blue (float): The blue component.
+
+        Returns:
+            Object: The object with the updated default color.
+        """
         self._default_color = [red, green, blue]
         return self
 
     def color(self, red: float, green: float, blue: float) -> "Object":
+        """Set the color of the object.
+
+        Args:
+            red (float): The red component.
+            green (float): The green component.
+            blue (float): The blue component.
+
+        Returns:
+            Object: The object with the updated color.
+        """
         self._color = [red, green, blue]
         return self
 
     def velocity(self, u: float, v: float, w: float) -> "Object":
+        """Set the velocity of the object.
+        If the object is static, an exception is raised.
+
+        Args:
+            u (float): The velocity in the x-direction.
+            v (float): The velocity in the y-direction.
+            w (float): The velocity in the z-direction.
+
+        Returns:
+            Object: The object with the updated velocity.
+        """
         if self.is_static():
             raise Exception("object is static")
         else:
@@ -1000,6 +1423,13 @@ class Object:
             return self
 
     def is_static(self) -> bool:
+        """Check if the object is static.
+        When all the vertices are pinned and the object is not moving,
+        it is considered static.
+
+        Returns:
+            bool: True if the object is static, False otherwise.
+        """
         if len(self._pin) == 0:
             return False
         else:
@@ -1011,6 +1441,15 @@ class Object:
                 return len(self._move) == 0 and self._pin == list(range(n_vert))
 
     def pin(self, ind: Optional[list[int]] = None) -> "Object":
+        """Set specified vertices as pinned.
+
+        Args:
+            ind (Optional[list[int]], optional): The indices of the vertices to pin.
+            If None, all vertices are pinned. Defaults to None.
+
+        Returns:
+            Object: The object with the pinned vertices.
+        """
         if ind is None:
             vert: np.ndarray = self.vertex()
             ind = list(range(len(vert)))
@@ -1018,17 +1457,40 @@ class Object:
         return self
 
     def pull_pin(self, value: float = 1.0, ind: Optional[list[int]] = None) -> "Object":
+        """Pin and pull the object at specified vertices.
+
+        Args:
+            value (float, optional): The pull value. Defaults to 1.0.
+            ind (Optional[list[int]], optional): The indices of the vertices to pin. Defaults to None.
+
+        Returns:
+            Object: The object with the pinned and pulled vertices.
+        """
         self.pin(ind)
         self._pull = value
         return self
 
     def unpin(self) -> "Object":
+        """Unpin the object.
+
+        Returns:
+            Object: The object with the unpinned vertices.
+        """
         if len(self._pin) == 0:
             raise Exception("pin must be set before unpinning")
         self._unpin = True
         return self
 
     def move_by(self, delta_pos, time: float) -> "Object":
+        """Move the object by a positional delta over a specified time.
+
+        Args:
+            delta_pos (list[float]): The positional delta.
+            time (float): The time over which to move the object.
+
+        Returns:
+            Object: The object with the updated position.
+        """
         delta_pos = np.array(delta_pos).reshape((-1, 3))
         if len(self._move) == 0:
             target = self.vertex()[self._pin] + delta_pos
@@ -1037,6 +1499,14 @@ class Object:
         return self.move_to(target, time)
 
     def hold(self, time: float) -> "Object":
+        """Hold the object in its current position for a specified time.
+
+        Args:
+            time (float): The time to hold the object.
+
+        Returns:
+            Object: The object with the held position.
+        """
         return self.move_by([0, 0, 0], time)
 
     def move_to(
@@ -1044,6 +1514,15 @@ class Object:
         target: np.ndarray,
         time: float,
     ) -> "Object":
+        """Move the object to a target position at a specified time.
+
+        Args:
+            target (np.ndarray): The target position.
+            time (float): The absolute time over which to move the object.
+
+        Returns:
+            Object: The object with the updated position.
+        """
         if len(self._pin) == 0:
             raise Exception("pin must be set before moving")
         elif len(target) != len(self._pin):
@@ -1063,6 +1542,14 @@ class Object:
             return self
 
     def stitch(self, name: str) -> "Object":
+        """Apply stitch to the object.
+
+        Args:
+            name (str): The name of stitch registered in the asset manager.
+
+        Returns:
+            Object: The stitched object.
+        """
         if self.is_static():
             raise Exception("object is static")
         else:
@@ -1076,6 +1563,15 @@ class Object:
                 return self
 
     def direction(self, _ex: list[float], _ey: list[float]) -> "Object":
+        """Set two orthogonal directions of a shell required for Baraff-Witkin model.
+
+        Args:
+            _ex (list[float]): The 3D x-direction vector.
+            _ey (list[float]): The 3D y-direction vector.
+
+        Returns:
+            Object: The object with the updated direction.
+        """
         vert, tri = self.vertex(), self.get("F")
         ex = np.array(_ex)
         ex = ex / np.linalg.norm(ex)

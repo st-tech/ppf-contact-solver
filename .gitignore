@@ -26,4 +26,6 @@ examples/data
 examples/**/.*
 examples/export
 examples/_*
+frontend/**/.*
 _skipped.node
+docs/_*

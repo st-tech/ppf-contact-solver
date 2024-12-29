@@ -1,6 +1,6 @@
 from frontend import App
 
-app = App("headless").clear()
+app = App.create("headless")
 
 V, F = app.mesh.square(res=64,ex=[0,0,1],ey=[0,1,0])
 app.asset.add.tri("sheet", V, F)

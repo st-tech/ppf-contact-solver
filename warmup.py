@@ -94,10 +94,17 @@ def python_packages():
         "ipywidgets",
         "open3d",
         "gpytoolbox",
-        "jupyterlab",
         "tabulate",
         "tetgen",
         "triangle",
+        "ruff",
+        "black",
+        "isort",
+        "jupyterlab",
+        "jupyterlab-lsp",
+        "python-lsp-server",
+        "python-lsp-ruff",
+        "jupyterlab-code-formatter",
     ]
     return python_packages
 
@@ -122,9 +129,6 @@ def install_nvim():
     )
     run("tar -C /opt -xzf nvim-linux64.tar.gz")
     run("ln -s /opt/nvim-linux64/bin/nvim /usr/bin/nvim")
-    run("curl -fsSL https://deb.nodesource.com/setup_21.x | bash -")
-    run("apt install -y nodejs")
-    run("curl https://www.npmjs.com/install.sh | sh")
     run("apt install -y fzf fd-find bat")
     run("/root/.cargo/bin/rustup component add rust-analyzer")
     run("ln -s $(which fdfind) /usr/bin/fd")
@@ -138,6 +142,7 @@ def install_lazyvim():
 
 
 def install_fish():
+    script_dir = os.path.dirname(os.path.realpath(__file__))
     print("installing fish")
     run("apt-add-repository ppa:fish-shell/release-3")
     run("apt update")
@@ -146,6 +151,9 @@ def install_fish():
     run("fish -c exit")
     run("echo 'fish_add_path $HOME/.cargo/bin' >> ~/.config/fish/config.fish")
     run("echo 'fish_add_path /usr/local/cuda/bin' >> ~/.config/fish/config.fish")
+    run(
+        f"echo 'set -x PYTHONPATH $PYTHONPATH {script_dir}' >> ~/.config/fish/config.fish"
+    )
 
 
 def install_oh_my_zsh():
@@ -159,16 +167,26 @@ def install_oh_my_zsh():
     run("zsh -c exit")
     run("echo 'export PATH=$HOME/.cargo/bin:$PATH' >> ~/.zshrc")
     run("echo 'export PATH=/usr/local/cuda/bin:$PATH' >> ~/.zshrc")
+    run(f"echo 'export PYTHONPATH={script_dir}:$PYTHONPATH' >> ~/.zshrc")
+
+
+def install_meshplot():
+    run("git clone https://github.com/skoch9/meshplot /tmp/meshplot")
+    run("pip3 install --ignore-installed /tmp/meshplot")
 
 
 def setup():
+    script_dir = os.path.dirname(os.path.realpath(__file__))
     run("apt update")
     run("apt install -y locales-all")
     run("DEBIAN_FRONTEND=noninteractive apt install -y " + " ".join(list_packages()))
     run("pip3 install --ignore-installed " + " ".join(python_packages()))
-    run("git clone https://github.com/skoch9/meshplot /tmp/meshplot")
-    run("pip3 install --ignore-installed /tmp/meshplot")
+    install_meshplot()
+    run("curl -fsSL https://deb.nodesource.com/setup_21.x | bash -")
+    run("apt install -y nodejs")
+    run("curl https://www.npmjs.com/install.sh | sh")
     run("curl https://sh.rustup.rs -sSf | sh -s -- -y")
+    run(f"echo 'export PYTHONPATH={script_dir}:$PYTHONPATH' >> ~/.bashrc")
 
 
 def set_tmux():
@@ -201,6 +219,17 @@ def start_jupyter():
     script_dir = os.path.dirname(os.path.realpath(__file__))
     examples_dir = os.path.join(script_dir, "examples")
 
+    lsp_symlink = os.path.join(examples_dir, ".lsp_symlink")
+    if not os.path.exists(lsp_symlink):
+        run(f"ln -s / {lsp_symlink}")
+
+    config_path = os.path.expanduser("~/.ipython/profile_default/ipython_config.py")
+    if not os.path.exists(config_path):
+        os.makedirs(os.path.dirname(config_path), exist_ok=True)
+        with open(config_path, "w") as f:
+            f.write("c = get_config()\n")
+            f.write("c.Completer.use_jedi = False")
+
     override_file = "/usr/local/share/jupyter/lab/settings/overrides.json"
     if not os.path.exists(override_file):
         os.makedirs(os.path.dirname(override_file), exist_ok=True)
@@ -215,9 +244,24 @@ def start_jupyter():
 
     try:
         command = "jupyter-lab -y --no-browser --port=8080 --ip=0.0.0.0 --allow-root --NotebookApp.token='' --NotebookApp.password=''"
-        run(command, cwd=examples_dir)
+        env = os.environ.copy()
+        key = "PYTHONPATH"
+        if key in env:
+            if script_dir not in env[key]:
+                env[key] += f":{script_dir}"
+        else:
+            env[key] = script_dir
+        subprocess.run(command, shell=True, cwd=examples_dir, env=env)
     except KeyboardInterrupt:
         print("jupyterlab shutdown")
+
+
+def build_docs():
+    script_dir = os.path.dirname(os.path.realpath(__file__))
+    run("pip3 install --ignore-installed " + " ".join(python_packages()))
+    run("pip3 install sphinx furo sphinx_autobuild")
+    install_meshplot()
+    run("sphinx-build -b html ./ ./_build", cwd=os.path.join(script_dir, "docs"))
 
 
 if __name__ == "__main__":
@@ -245,6 +289,8 @@ if __name__ == "__main__":
             set_time()
         elif mode == "jupyter":
             start_jupyter()
+        elif mode == "docs":
+            build_docs()
         elif mode == "all":
             create_clang_config()
             install_nvim()

@@ -8,17 +8,40 @@ import os
 
 
 class MeshManager:
+    """Mesh Manager for accessing mesh creation functions"""
+
     def __init__(self, cache_dir: str):
+        """Initialize the mesh manager"""
         self._cache_dir = cache_dir
-        self.create = CreateManager(cache_dir)
+        self.create = CreateManager(cache_dir) #: CreateManager: a manager to create meshes
 
     def line(self, _p0: list[float], _p1: list[float], n: int) -> "Rod":
+        """Create a line mesh with a given start and end points and resolution.
+
+        Args:
+            _p0 (list[float]): a start point of the line
+            _p1 (list[float]): an end point of the line
+            n (int): a resolution of the line
+
+        Returns:
+            Rod: a line mesh, a pair of vertices and edges
+        """
         p0, p1 = np.array(_p0), np.array(_p1)
         vert = np.vstack([p0 + (p1 - p0) * i / n for i in range(n + 1)])
         edge = np.array([[i, i + 1] for i in range(n)])
         return self.create.rod(vert, edge)
 
     def box(self, width: float = 1, height: float = 1, depth: float = 1) -> "TriMesh":
+        """Create a box mesh
+
+        Args:
+            width (float): a width of the box
+            hight (float): a height of the box
+            depth (float): a depth of the box
+
+        Returns:
+            TriMesh: a box mesh, a pair of vertices and triangles
+        """
         import open3d as o3d
 
         return self._from_o3d(
@@ -33,6 +56,18 @@ class MeshManager:
         ex: list[float] = [1, 0, 0],
         ey: list[float] = [0, 1, 0],
     ) -> "TriMesh":
+        """Create a rectangle mesh with a given resolution, width, height, and spanned by the given vectors `ex` and `ey`.
+
+        Args:
+            res_x (int): resolution of the mesh
+            width (float): a width of the rectangle
+            height (float): a height of the rectangle
+            ex (list[float]): a 3D vector to span the rectangle
+            ey (list[float]): a 3D vector to span the rectangle
+
+        Returns:
+            TriMesh: a rectangle mesh, a pair of vertices and triangles
+        """
         ratio = height / width
         res_y = int(res_x * ratio)
         size_x, size_y = width, width * (res_y / res_x)
@@ -72,9 +107,30 @@ class MeshManager:
         ex: list[float] = [1, 0, 0],
         ey: list[float] = [0, 1, 0],
     ) -> "TriMesh":
+        """Create a square mesh with a given resolution and size, spanned by the given vectors `ex` and `ey`.
+
+        Args:
+            res (int): resolution of the mesh
+            size (float): a diameter of the square
+            ex (list[float]): a 3D vector to span the square
+            ey (list[float]): a 3D vector to span the square
+
+        Returns:
+            TriMesh: a square mesh, a pair of vertices and triangles
+        """
         return self.rectangle(res, size, size, ex, ey)
 
     def circle(self, n: int = 32, r: float = 1, ntri: int = 1024) -> "TriMesh":
+        """Create a circle mesh
+
+        Args:
+            n (int): resolution of the circle
+            r (float): radius of the circle
+            ntri (int): approximate number of triangles filling the circle
+
+        Returns:
+            TriMesh: a circle mesh, a pair of 2D vertices and triangles
+        """
         pts = []
         for i in range(n):
             t = 2 * np.pi * i / n
@@ -83,6 +139,15 @@ class MeshManager:
         return self.create.tri(np.array(pts)).triangulate(ntri)
 
     def icosphere(self, r: float = 1, subdiv_count: int = 3) -> "TriMesh":
+        """Create an icosphere mesh with a given radius and subdivision count.
+
+        Args:
+            r (float): radius of the icosphere
+            sunbdiv_count (int): subdivision count of the icosphere
+
+        Returns:
+            TriMesh: an icosphere mesh, a pair of vertices and triangles
+        """
         import gpytoolbox as gpy
 
         V, F = gpy.icosphere(subdiv_count)
@@ -90,6 +155,7 @@ class MeshManager:
         return TriMesh.create(V, F, self._cache_dir)
 
     def _from_o3d(self, o3d_mesh) -> "TriMesh":
+        """Load a mesh from an Open3D mesh"""
         if o3d_mesh.is_self_intersecting():
             print("Warning: Mesh is self-intersecting")
         return TriMesh.create(
@@ -99,6 +165,16 @@ class MeshManager:
         )
 
     def cylinder(self, r: float = 1, height: float = 2, n: int = 32) -> "TriMesh":
+        """Create a cylinder mesh with a given radius, height, and resolution.
+
+        Args:
+            r (float): radius of the cylinder
+            height (float): height of the cylinder
+            n (int): resolution of the cylinder
+
+        Returns:
+            TriMesh: a cylinder mesh, a pair of vertices and triangles
+        """
         import open3d as o3d
 
         return self._from_o3d(o3d.geometry.TriangleMesh.create_cylinder(r, height, n))
@@ -111,6 +187,18 @@ class MeshManager:
         radius: float = 0.5,
         height: float = 2,
     ) -> "TriMesh":
+        """Create a cone mesh with a given number of radial, vertical, and bottom resolution, radius, and height.
+
+        Args:
+            Nr (int): number of radial resolution
+            Ny (int): number of vertical resolution
+            Nb (int): number of bottom resolution
+            radius (float): radius of the cone
+            height (float): height of the cone
+
+        Returns:
+            TriMesh: a cone mesh, a pair of vertices and triangles
+        """
         V = [[0, 0, height], [0, 0, 0]]
         T = []
         ind_btm_center = 0
@@ -184,20 +272,44 @@ class MeshManager:
         return TriMesh.create(np.array(V), np.array(T), self._cache_dir)
 
     def torus(self, r: float = 1, R: float = 0.25, n: int = 32) -> "TriMesh":
+        """Create a torus mesh with a given radius, major radius, and resolution.
+
+        Args:
+            r (float): hole radius of the torus
+            R (float): major radius of the torus
+            n (int): resolution of the torus
+
+        Returns:
+            TriMesh: a torus mesh, a pair of vertices and triangles
+        """
         import open3d as o3d
 
         return self._from_o3d(o3d.geometry.TriangleMesh.create_torus(r, R, n))
 
     def mobius(
         self,
-        length_split=70,
-        width_split=15,
-        twists=1,
-        r=1,
-        flatness=1,
-        width=1,
-        scale=1,
+        length_split: int = 70,
+        width_split: int = 15,
+        twists: int = 1,
+        r: float = 1,
+        flatness: float = 1,
+        width: float = 1,
+        scale: float = 1,
     ) -> "TriMesh":
+        """Creatre a mobius mesh with a given length split, width split, twists, radius, flatness, width, and scale.
+
+        Args:
+            length_split (int): number of length split
+            width_split (int): number of width split
+            twists (int): number of twists
+            r (float): radius of the mobius
+            flatness (float): flatness of the mobius
+            width (float): width of the mobius
+            scale (float): scale of the mobius
+
+        Returns:
+            TriMesh: a mobius mesh, a pair of vertices and triangles
+        """
         import open3d as o3d
 
         return self._from_o3d(
@@ -207,6 +319,14 @@ class MeshManager:
         )
 
     def load_tri(self, path: str) -> "TriMesh":
+        """Load a triangle mesh from a file
+
+        Args:
+            path (str): a path to the file
+
+        Returns:
+            TriMesh: a triangle mesh, a pair of vertices and triangles
+        """
         import open3d as o3d
 
         return self._from_o3d(o3d.io.read_triangle_mesh(path))
@@ -216,6 +336,14 @@ class MeshManager:
             os.makedirs(self._cache_dir)
 
     def preset(self, name: str) -> "TriMesh":
+        """Load a preset mesh
+
+        Args:
+            name (str): a name of the preset mesh. Available names are `armadillo`, `knot`, and `bunny`.
+
+        Returns:
+            TriMesh: a preset mesh, a pair of vertices and triangles
+        """
         cache_name = os.path.join(self._cache_dir, f"preset__{name}.npz")
         if os.path.exists(cache_name):
             data = np.load(cache_name)
@@ -246,23 +374,68 @@ class MeshManager:
 
 
 class CreateManager:
+    """A Manger tghat provides mesh creation functions
+
+    This manager provides a set of functions to create various
+    types of meshes, such as rods, triangles, and tetrahedra.
+
+    """
+
     def __init__(self, cache_dir: str):
         self._cache_dir = cache_dir
 
     def rod(self, vert: np.ndarray, edge: np.ndarray) -> "Rod":
+        """Create a rod mesh
+
+        Args:
+            vert (np.ndarray): a list of vertices
+            edge (np.ndarray): a list of edges
+
+        Returns:
+            Rod: a rod mesh, a pair of vertices and edges
+        """
         return Rod((vert, edge))
 
     def tri(self, vert: np.ndarray, elm: np.ndarray = np.zeros(0)) -> "TriMesh":
+        """Create a triangle mesh
+
+        Args:
+            vert (np.ndarray): a list of vertices
+            elm (np.ndarray): a list of elements
+
+        Returns:
+            TriMesh: a triangle mesh, a pair of vertices and triangles
+        """
         if elm.size == 0:
             cnt = vert.shape[0]
             elm = np.array([[i, (i + 1) % cnt] for i in range(cnt)])
         return TriMesh((vert, elm)).recompute_hash().set_cache_dir(self._cache_dir)
 
     def tet(self, vert: np.ndarray, elm: np.ndarray, tet: np.ndarray) -> "TetMesh":
+        """Create a tetrahedral mesh
+
+        Args:
+            vert (np.ndarray): a list of vertices
+            elm (np.ndarray): a list of surface triangle elements
+            tet (np.ndarray): a list of tetrahedra elements
+
+        Returns:
+            TetMesh: a tetrahedral mesh, a pair of vertices and tetrahedra
+        """
         return TetMesh((vert, elm, tet))
 
 
 def bbox(vert) -> np.ndarray:
+    """Compute a bounding box of a mesh
+
+    Given a list of vertices, this function computes a bounding box of the mesh.
+
+    Args:
+        vert (np.ndarray): a list of vertices
+
+    Returns:
+        3D array: a bounding box of the mesh, represented as [width, height, depth]
+    """
     width = np.max(vert[:, 0]) - np.min(vert[:, 0])
     height = np.max(vert[:, 1]) - np.min(vert[:, 1])
     depth = np.max(vert[:, 2]) - np.min(vert[:, 2])
@@ -270,28 +443,66 @@ def bbox(vert) -> np.ndarray:
 
 
 def normalize(vert):
+    """Normalize a set of vertices
+
+    Normalize a set of vertices so that the maximum bounding box size becomes 1.
+
+    Args:
+        vert (np.ndarray): a list of vertices
+    """
     vert -= np.mean(vert, axis=0)
     vert /= np.max(bbox(vert))
 
 
 class Rod(tuple[np.ndarray, np.ndarray]):
+    """A class representing a rod mesh
+
+    This class represents a rod mesh, which is a pair of vertices and edges.
+    The first element of the tuple is a list of vertices, and the second element is a list of edges.
+
+    """
+
     def normalize(self) -> "Rod":
+        """Normalize the rod mesh
+
+        It normalizes the rod mesh so that the maximum bounding box size becomes 1.
+
+        """
         normalize(self[0])
         return self
 
 
 class TetMesh(tuple[np.ndarray, np.ndarray, np.ndarray]):
+    """A class representing a tetrahedral mesh
+
+    This class represents a tetrahedral mesh, which is a pair of vertices, surface triangles, and tetrahedra.
+
+    """
+
     def normalize(self) -> "TetMesh":
+        """Normalize the tetrahedral mesh
+
+        It normalizes the tetrahedral mesh so that the maximum bounding box size becomes 1.
+
+        """
         normalize(self[0])
         return self
 
 
 class TriMesh(tuple[np.ndarray, np.ndarray]):
+    """A class representing a triangle mesh
+
+    This class represents a triangle mesh, which is a pair of vertices and triangles.
+
+    """
+
     @staticmethod
     def create(vert: np.ndarray, elm: np.ndarray, cache_dir: str) -> "TriMesh":
+        """Create a triangle mesh and recompute the hash"""
         return TriMesh((vert, elm)).recompute_hash().set_cache_dir(cache_dir)
 
     def _make_o3d(self):
+        """Create an Open3D triangle mesh"""
         import open3d as o3d
 
         return o3d.geometry.TriangleMesh(
@@ -300,6 +511,17 @@ class TriMesh(tuple[np.ndarray, np.ndarray]):
         )
 
     def decimate(self, target_tri: int) -> "TriMesh":
+        """Mesh decimation
+
+        Reduce the number of triangles in the mesh to the target number.
+
+        Args:
+            target_tri (int): a target number of triangles
+
+        Returns:
+            TriMesh: a decimated mesh
+        """
+        assert target_tri < self[1].shape[0]
         cache_path = self.compute_cache_path(f"decimate__{target_tri}")
         cached = self.load_cache(cache_path)
         if cached is None:
@@ -315,6 +537,14 @@ class TriMesh(tuple[np.ndarray, np.ndarray]):
             return cached
 
     def subdivide(self, n: int = 1, method: str = "midpoint"):
+        """Mesh subdivision
+
+        Subdivide the mesh with a given number of subdivisions and method.
+
+        Args:
+            n (int): a number of subdivisions
+            method (str): a method of subdivision. Available methods are "midpoint" and "loop".
+        """
         cache_path = self.compute_cache_path(f"subdiv__{method}__{n}")
         cached = self.load_cache(cache_path)
         if cached is None:
@@ -335,6 +565,8 @@ class TriMesh(tuple[np.ndarray, np.ndarray]):
             return cached
 
     def _compute_area(self, pts: np.ndarray) -> float:
+        """Compute the area of a 2D shape"""
+        assert pts.shape[1] == 2
         x = pts[:, 0]
         y = pts[:, 1]
         x_next = np.roll(x, -1)
@@ -343,6 +575,18 @@ class TriMesh(tuple[np.ndarray, np.ndarray]):
         return area
 
     def triangulate(self, target: int = 1024, min_angle: float = 20) -> "TriMesh":
+        """Triangulate a closed line shape with 2D coordinates
+
+        This function triangulates a closed 2D line shape with a given
+        target number of triangles and minimum angle.
+
+        Args:
+            target (int): a target number of triangles
+            min_angle (float): a minimum angle of the triangles
+
+        Returns:
+            TriMesh: a triangulated mesh
+        """
         area = 1.6 * self._compute_area(self[0]) / target
         cache_path = self.compute_cache_path(f"triangulate__{area}_{min_angle}")
         cached = self.load_cache(cache_path)
@@ -363,6 +607,17 @@ class TriMesh(tuple[np.ndarray, np.ndarray]):
             return cached
 
     def tetrahedralize(self, *args, **kwargs) -> TetMesh:
+        """Tetrahedralize a surface triangle mesh
+
+        This function tetrahedralizes a surface triangle mesh with a given TetGen arguments.
+
+        Args:
+            args: a list of arguments
+            kwargs: a list of keyword arguments
+
+        Returns:
+            TetMesh: a tetrahedral mesh
+        """
         arg_str = "_".join([str(a) for a in args])
         if len(kwargs) > 0:
             arg_str += "_".join([f"{k}={v}" for k, v in kwargs.items()])
@@ -384,6 +639,7 @@ class TriMesh(tuple[np.ndarray, np.ndarray]):
             return TetMesh((vert, self[1], tet))
 
     def recompute_hash(self) -> "TriMesh":
+        """Recompute the hash of the mesh"""
         import hashlib
 
         self.hash = hashlib.sha256(
@@ -399,13 +655,16 @@ class TriMesh(tuple[np.ndarray, np.ndarray]):
         return self
 
     def set_cache_dir(self, cache_dir: str) -> "TriMesh":
+        """Set the cache directory of the mesh"""
         self.cache_dir = cache_dir
         return self
 
     def compute_cache_path(self, name: str) -> str:
+        """Compute the cache path of the mesh"""
         return os.path.join(self.cache_dir, f"{self.hash}__{name}.npz")
 
     def save_cache(self, path: str) -> "TriMesh":
+        """Save the mesh to a cache"""
         np.savez(
             path,
             vert=self[0],
@@ -414,6 +673,7 @@ class TriMesh(tuple[np.ndarray, np.ndarray]):
         return self
 
     def load_cache(self, path: str) -> Optional["TriMesh"]:
+        """Load a cached mesh"""
         if os.path.exists(path):
             data = np.load(path)
             return TriMesh.create(data["vert"], data["tri"], self.cache_dir)
@@ -421,5 +681,10 @@ class TriMesh(tuple[np.ndarray, np.ndarray]):
             return None
 
     def normalize(self) -> "TriMesh":
+        """Normalize the triangle mesh
+
+        This function normalizes the triangle mesh so that the maximum bounding box size becomes 1.
+
+        """
         normalize(self[0])
         return self

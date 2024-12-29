@@ -32,7 +32,14 @@ CONSOLE_STYLE = """
 
 
 class Param:
+    """Class to manage simulation parameters."""
+
     def __init__(self, app_root: str):
+        """Initialize the Param class.
+
+        Args:
+            app_root (str): The root directory of the application.
+        """
         path = os.path.abspath(os.path.join(app_root, "src", "args.rs"))
         self._key = None
         self._param = get_default_params(path)
@@ -40,6 +47,15 @@ class Param:
         self._dyn_param = {}
 
     def set(self, key: str, value: Any) -> "Param":
+        """Set a parameter value.
+
+        Args:
+            key (str): The parameter key.
+            value (Any): The parameter value.
+
+        Returns:
+            Param: The updated Param object.
+        """
         if "_" in key:
             raise ValueError("Key cannot contain underscore. Use '-' instead.")
         elif key not in self._param.keys():
@@ -49,6 +65,14 @@ class Param:
         return self
 
     def dyn(self, key: str) -> "Param":
+        """Set a dynamic parameter key.
+
+        Args:
+            key (str): The dynamic parameter key.
+
+        Returns:
+            Param: The updated Param object.
+        """
         if key not in self._param.keys():
             raise ValueError(f"Key {key} does not exist")
         else:
@@ -56,6 +80,14 @@ class Param:
         return self
 
     def change(self, value: float) -> "Param":
+        """Change the value of the dynamic parameter.
+
+        Args:
+            value (float): The new value of the dynamic parameter.
+
+        Returns:
+            Param: The updated Param object.
+        """
         if self._key is None:
             raise ValueError("Key is not set")
         else:
@@ -70,6 +102,11 @@ class Param:
             return self
 
     def hold(self) -> "Param":
+        """Hold the current value of the dynamic parameter.
+
+        Returns:
+            Param: The updated Param object.
+        """
         if self._key is None:
             raise ValueError("Key is not set")
         else:
@@ -85,6 +122,11 @@ class Param:
         return self
 
     def export(self, path: str):
+        """Export the parameters to a file.
+
+        Args:
+            path (str): The path to the export directory.
+        """
         if len(self._param.keys()):
             with open(os.path.join(path, "param.toml"), "w") as f:
                 f.write("[param]\n")
@@ -109,6 +151,14 @@ class Param:
                         f.write(f"{time} {value}\n")
 
     def time(self, time: float) -> "Param":
+        """Set the current time for the dynamic parameter.
+
+        Args:
+            time (float): The current time.
+
+        Returns:
+            Param: The updated Param object.
+        """
         if time <= self._time:
             raise ValueError("Time must be increasing")
         else:
@@ -116,23 +166,52 @@ class Param:
         return self
 
     def get(self, key: Optional[str] = None):
+        """Get the value of a parameter.
+
+        Args:
+            key (Optional[str], optional): The parameter key.
+            If not specified, all parameters are returned.
+
+        Returns:
+            Any: The value of the parameter.
+        """
         if key is None:
             return self._param
         else:
             return self._param[key]
 
     def items(self):
+        """Get all parameter items.
+
+        Returns:
+            ItemsView: The parameter items.
+        """
         return self._param.items()
 
     def delete(self, key: str):
+        """Delete a parameter.
+
+        Args:
+            key (str): The parameter key.
+        """
         del self._param[key]
 
     def clear(self):
+        """Clear all parameters."""
         self._param = {}
 
 
 class SessionManager:
+    """Class to manage simulation sessions."""
+
     def __init__(self, app_root: str, proj_root: str, save_func):
+        """Initialize the SessionManager class.
+
+        Args:
+            app_root (str): The root directory of the application.
+            proj_root (str): The root directory of the project.
+            save_func (Callable): The save function.
+        """
         self._app_root = app_root
         self._proj_root = proj_root
         self._save_func = save_func
@@ -140,21 +219,48 @@ class SessionManager:
         self._curr = None
 
     def list(self):
+        """List all sessions.
+
+        Returns:
+            dict: The sessions.
+        """
         return self._sessions
 
     def select(self, name: str):
+        """Select a session.
+
+        Args:
+            name (str): The name of the session.
+
+        Returns:
+            Session: The selected session.
+        """
         if name not in self._sessions.keys():
             raise ValueError(f"Session {name} does not exist")
         self._curr = name
         return self._sessions[name]
 
     def current(self):
+        """Get the current session.
+
+        Returns:
+            Session: The current session.
+        """
         if self._curr is None:
             return None
         else:
             return self._sessions[self._curr]
 
     def create(self, name: str, delete_if_exists: bool = True) -> "Session":
+        """Create a new session.
+
+        Args:
+            name (str): The name of the session.
+            delete_if_exists (bool, optional): Whether to delete the session if it exists.
+
+        Returns:
+            Session: The created session.
+        """
         if name in self._sessions.keys():
             if delete_if_exists:
                 session = self._sessions[name]
@@ -170,6 +276,11 @@ class SessionManager:
         return session
 
     def _terminate_or_raise(self, force: bool):
+        """Terminate the solver if it is running, or raise an exception.
+
+        Args:
+            force (bool): Whether to force termination.
+        """
         if is_running():
             if force:
                 terminate()
@@ -177,6 +288,12 @@ class SessionManager:
                 raise ValueError("Solver is running. Terminate first.")
 
     def delete(self, name: str, force: bool = True):
+        """Delete a session.
+
+        Args:
+            name (str): The name of the session.
+            force (bool, optional): Whether to force deletion.
+        """
         self._terminate_or_raise(force)
         if name in self._sessions.keys():
             self._sessions[name].delete()
@@ -185,6 +302,11 @@ class SessionManager:
                 self._curr = None
 
     def clear(self, force: bool = True):
+        """Clear all sessions.
+
+        Args:
+            force (bool, optional): Whether to force clearing.
+        """
         self._terminate_or_raise(force)
         for session in self._sessions.values():
             session.delete()
@@ -192,23 +314,51 @@ class SessionManager:
         self._curr = None
 
     def param(self) -> Param:
+        """Get a new Param object.
+
+        Returns:
+            Param: The Param object.
+        """
         return Param(self._proj_root)
 
 
 class SessionInfo:
+    """Class to store session information."""
+
     def __init__(self, name: str, path: str):
+        """Initialize the SessionInfo class.
+
+        Args:
+            name (str): The name of the session.
+            path (str): The path to the session directory.
+        """
         self.name = name
         self.path = path
 
 
 class SessionExport:
+    """Class to handle session export operations."""
+
     def __init__(self, session: "Session"):
+        """Initialize the SessionExport class.
+
+        Args:
+            session (Session): The session object.
+        """
         self._session = session
 
     def shell_command(
         self,
         param: Param,
     ) -> str:
+        """Generate a shell command to run the solver.
+
+        Args:
+            param (Param): The simulation parameters.
+
+        Returns:
+            str: The shell command.
+        """
         param.export(self._session.info.path)
         program_path = os.path.join(
             self._session._proj_root, "target", "release", "ppf-contact-solver"
@@ -230,6 +380,13 @@ class SessionExport:
             raise ValueError("Solver does not exist")
 
     def animation(self, path: str, ext="ply", include_static: bool = True):
+        """Export the animation frames.
+
+        Args:
+            path (str): The path to the export directory.
+            ext (str, optional): The file extension. Defaults to "ply".
+            include_static (bool, optional): Whether to include the static mesh.
+        """
         if os.path.exists(path):
             shutil.rmtree(path)
         else:
@@ -240,6 +397,16 @@ class SessionExport:
     def frame(
         self, path: str, frame: Optional[int] = None, include_static: bool = True
     ) -> "Session":
+        """Export a specific frame.
+
+        Args:
+            path (str): The path to the export file.
+            frame (Optional[int], optional): The frame number. Defaults to None.
+            include_static (bool, optional): Whether to include the static mesh.
+
+        Returns:
+            Session: The session object.
+        """
         if self._session._fixed is None:
             raise ValueError("Scene must be initialized")
         else:
@@ -257,16 +424,35 @@ class SessionExport:
 
 
 class SessionOutput:
+    """Class to handle session output operations."""
+
     def __init__(self, session: "Session"):
+        """Initialize the SessionOutput class.
+
+        Args:
+            session (Session): The session object.
+        """
         self._session = session
         self.path = os.path.join(self._session.info.path, "output")
 
 
 class SessionGet:
+    """Class to handle session data retrieval operations."""
+
     def __init__(self, session: "Session"):
+        """Initialize the SessionGet class.
+
+        Args:
+            session (Session): The session object.
+        """
         self._session = session
 
     def logfiles(self) -> list[str]:
+        """Get the list of log names.
+
+        Returns:
+            list[str]: The list of log names.
+        """
         path = os.path.join(self._session.info.path, "output", "data")
         result = []
         for file in os.listdir(path):
@@ -275,6 +461,15 @@ class SessionGet:
         return result
 
     def _tail_file(self, path: str, n_lines: Optional[int] = None) -> list[str]:
+        """Get the last n lines of a file.
+
+        Args:
+            path (str): The path to the file.
+            n_lines (Optional[int], optional): The number of lines. Defaults to None.
+
+        Returns:
+            list[str]: The last n lines of the file.
+        """
         if os.path.exists(path):
             with open(path, "r") as f:
                 lines = f.readlines()
@@ -286,21 +481,54 @@ class SessionGet:
         return []
 
     def log(self, n_lines: Optional[int] = None) -> list[str]:
+        """Get the last n lines of the log file.
+
+        Args:
+            n_lines (Optional[int], optional): The number of lines. Defaults to None.
+
+        Returns:
+            list[str]: The last n lines of the log file.
+        """
         return self._tail_file(
             os.path.join(self._session.info.path, "output", "cudasim_log.txt"), n_lines
         )
 
     def stdout(self, n_lines: Optional[int] = None) -> list[str]:
+        """Get the last n lines of the stdout log file.
+
+        Args:
+            n_lines (Optional[int], optional): The number of lines. Defaults to None.
+
+        Returns:
+            list[str]: The last n lines of the stdout log file.
+        """
         return self._tail_file(
             os.path.join(self._session.info.path, "stdout.log"), n_lines
         )
 
     def stderr(self, n_lines: Optional[int] = None) -> list[str]:
+        """Get the last n lines of the stderr log file.
+
+        Args:
+            n_lines (Optional[int], optional): The number of lines. Defaults to None.
+
+        Returns:
+            list[str]: The last n lines of the stderr log file.
+        """
         return self._tail_file(
             os.path.join(self._session.info.path, "error.log"), n_lines
         )
 
     def numbers(self, name: str):
+        """Get a pair of numbers from a log file.
+
+        Args:
+            name (str): The name of the log file.
+
+        Returns:
+            list[list[float]]: The list of pair of numbers.
+        """
+
         def float_or_int(var):
             var = float(var)
             if var.is_integer():
@@ -319,6 +547,14 @@ class SessionGet:
         return entries
 
     def number(self, name: str):
+        """Get the latest value from a log file.
+
+        Args:
+            name (str): The name of the log file.
+
+        Returns:
+            float: The latest value.
+        """
         entries = self.numbers(name)
         if entries:
             return entries[-1][1]
@@ -326,6 +562,11 @@ class SessionGet:
             return None
 
     def vertex_frame_count(self) -> int:
+        """Get the vertex count.
+
+        Returns:
+            int: The vertex count.
+        """
         path = os.path.join(self._session.info.path, "output")
         max_frame = 0
         if os.path.exists(path):
@@ -337,6 +578,11 @@ class SessionGet:
         return max_frame
 
     def latest_frame(self) -> int:
+        """Get the latest frame number.
+
+        Returns:
+            int: The latest frame number.
+        """
         path = os.path.join(self._session.info.path, "output")
         if os.path.exists(path):
             files = os.listdir(path)
@@ -350,6 +596,14 @@ class SessionGet:
         return 0
 
     def vertex(self, n: Optional[int] = None) -> Optional[tuple[np.ndarray, int]]:
+        """Get the vertex data for a specific frame.
+
+        Args:
+            n (Optional[int], optional): The frame number. If not specified, the latest frame is returned. Defaults to None.
+
+        Returns:
+            Optional[tuple[np.ndarray, int]]: The vertex data and frame number.
+        """
         if self._session._fixed is None:
             raise ValueError("Scene must be initialized")
         else:
@@ -395,7 +649,17 @@ class SessionGet:
 
 
 class Session:
+    """Class to manage a simulation session."""
+
     def __init__(self, app_root: str, proj_root: str, name: str, save_func):
+        """Initialize the Session class.
+
+        Args:
+            app_root (str): The root directory of the application.
+            proj_root (str): The root directory of the project.
+            name (str): The name of the session.
+            save_func (Callable): The save function.
+        """
         self._in_jupyter_notebook = in_jupyter_notebook()
         self._app_root = app_root
         self._proj_root = proj_root
@@ -405,13 +669,18 @@ class Session:
         self._update_preview_interval = 1.0 / 60.0
         self._update_terminal_interval = 1.0 / 30.0
         self._update_table_interval = 0.25
-        self.info = SessionInfo(name, path)
-        self.export = SessionExport(self)
-        self.get = SessionGet(self)
-        self.output = SessionOutput(self)
+        self.info = SessionInfo(name, path) #: SessionInfo: The session information.
+        self.export = SessionExport(self) #: SessionExport: The session export object.
+        self.get = SessionGet(self) #: SessionGet: The session get object.
+        self.output = SessionOutput(self) #: SessionOutput: The session output object.
         self.delete()
 
     def print(self, message):
+        """Print a message.
+
+        Args:
+            message (str): The message to print.
+        """
         if self._in_jupyter_notebook:
             from IPython.display import display
 
@@ -420,14 +689,24 @@ class Session:
             print(message)
 
     def delete(self):
+        """Delete the session."""
         if os.path.exists(self.info.path):
             shutil.rmtree(self.info.path)
 
     def _check_ready(self):
+        """Check if the session is ready."""
         if self._fixed is None:
             raise ValueError("Scene must be initialized")
 
     def init(self, scene: FixedScene) -> "Session":
+        """Initialize the session with a fixed scene.
+
+        Args:
+            scene (FixedScene): The fixed scene.
+
+        Returns:
+            Session: The initialized session.
+        """
         if is_running():
             self.print("Solver is already running. Teriminate first.")
             if self._in_jupyter_notebook:
@@ -452,6 +731,11 @@ class Session:
         return self
 
     def finished(self) -> bool:
+        """Check if the session is finished.
+
+        Returns:
+            bool: True if the session is finished, False otherwise.
+        """
         finished_path = os.path.join(self.output.path, "finished.txt")
         error = self.get.stderr()
         if len(error) > 0:
@@ -460,6 +744,22 @@ class Session:
         return os.path.exists(finished_path)
 
     def start(self, param: Param, force: bool = True, blocking=False) -> "Session":
+        """Start the session.
+
+        For Jupyter Notebook, the function will return immediately and the solver
+        ill run in the background. If blocking is set to True, the function will block
+        until the solver is finished.
+        When Jupiter Notebook is not detected, the function will block until the solver
+        is finished.
+
+        Args:
+            param (Param): The simulation parameters.
+            force (bool, optional): Whether to force start.
+            blocking (bool, optional): Whether to block the execution.
+
+        Returns:
+            Session: The started session.
+        """
         self._check_ready()
         if is_running():
             if force:
@@ -501,6 +801,14 @@ class Session:
                 raise ValueError("Solver failed to start")
 
     def _terminate_button(self, description: str = "Terminate Solver"):
+        """Create a terminate button.
+
+        Args:
+            description (str, optional): The button description.
+
+        Returns:
+            Optional[widgets.Button]: The terminate button.
+        """
         if self._in_jupyter_notebook:
             import ipywidgets as widgets
 
@@ -519,6 +827,14 @@ class Session:
             return None
 
     def preview(self, live_update: bool = True) -> Optional["Plot"]:
+        """Live view the session.
+
+        Args:
+            live_update (bool, optional): Whether to enable live update.
+
+        Returns:
+            Optional[Plot]: The plot object.
+        """
         if self._in_jupyter_notebook:
             import ipywidgets as widgets
             from IPython.display import display
@@ -626,6 +942,11 @@ class Session:
             return None
 
     def animate(self) -> "Session":
+        """Show the animation.
+
+        Returns:
+            Session: The animated session.
+        """
         if self._in_jupyter_notebook:
             import ipywidgets as widgets
 
@@ -664,6 +985,14 @@ class Session:
         return self
 
     def stream(self, n_lines=40) -> "Session":
+        """Stream the session logs.
+
+        Args:
+            n_lines (int, optional): The number of lines to stream. Defaults to 40.
+
+        Returns:
+            Session: The session object.
+        """
         if self._in_jupyter_notebook:
             import ipywidgets as widgets
             from IPython.display import display
@@ -739,6 +1068,11 @@ class Session:
 
 
 def is_running() -> bool:
+    """Check if the solver is running.
+
+    Returns:
+        bool: True if the solver is running, False otherwise.
+    """
     for proc in psutil.process_iter(["pid", "name", "status"]):
         if (
             PROCESS_NAME in proc.info["name"]
@@ -749,6 +1083,7 @@ def is_running() -> bool:
 
 
 def terminate():
+    """Terminate the solver."""
     for proc in psutil.process_iter(["pid", "name", "status"]):
         if (
             PROCESS_NAME in proc.info["name"]
@@ -759,6 +1094,11 @@ def terminate():
 
 
 def display_log(lines: list[str]):
+    """Display the log lines.
+
+    Args:
+        lines (list[str]): The log lines.
+    """
     if in_jupyter_notebook():
         import ipywidgets as widgets
         from IPython.display import display
@@ -770,6 +1110,14 @@ def display_log(lines: list[str]):
 
 
 def get_default_params(path: str) -> dict[str, Any]:
+    """Get the default parameters.
+
+    Args:
+        path (str): The path to the args.rs file.
+
+    Returns:
+        dict[str, Any]: The default parameters.
+    """
     att_pattern = re.compile(r"#\[(.*?)\]")
     field_pattern = re.compile(r"pub\s+(\w+):\s*([^,]+),?")
     struct_start_pattern = re.compile(r"^pub\s+struct\s+Args\s*\{")

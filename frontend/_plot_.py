@@ -9,6 +9,7 @@ import pythreejs as p3s
 import numpy as np
 from IPython.display import display
 
+"""Default shading settings for light mode."""
 LIGHT_DEFAULT_SHADING = {
     "flat": False,
     "wireframe": True,
@@ -17,6 +18,7 @@ LIGHT_DEFAULT_SHADING = {
     "point_color": "black",
 }
 
+"""Default shading settings for dark mode."""
 DARK_DEFAULT_SHADING = {
     "flat": False,
     "wireframe": True,
@@ -28,6 +30,7 @@ DARK_DEFAULT_SHADING = {
 
 
 def in_jupyter_notebook():
+    """Determine if the code is running in a Jupyter notebook."""
     dirpath = os.path.dirname(os.path.abspath(__file__))
     if os.path.exists(os.path.join(dirpath, ".CLI")):
         return False
@@ -46,26 +49,50 @@ def in_jupyter_notebook():
 
 
 class PlotManager:
+    """PlotManager class. Use this to create a plot."""
+
     def __init__(self) -> None:
+        """Initialize the plot manager."""
         self._darkmode = True
         self._in_jupyter_notebook = in_jupyter_notebook()
 
     def darkmode(self, darkmode: bool) -> None:
+        """Turn on or off dark mode.
+
+        Args:
+            darkmode (bool): True to turn on dark mode, False otherwise.
+        """
         self._darkmode = darkmode
 
     def create(self) -> "Plot":
+        """Create a plot."""
         return Plot(self._darkmode)
 
     def is_jupyter_notebook(self) -> bool:
+        """Check if the code is running in a Jupyter notebook."""
         return self._in_jupyter_notebook
 
 
 class PlotAdder:
+    """PlotAdder class. Use this to add elements to a plot."""
+
     def __init__(self, parent: "Plot") -> None:
+        """Initialize the plot adder."""
         self._parent = parent
         self._in_jupyter_notebook = in_jupyter_notebook()
 
     def tri(self, vert: np.ndarray, tri: np.ndarray, color: np.ndarray) -> "Plot":
+        """Add a triangle mesh to the plot.
+
+        Args:
+            vert (np.ndarray): The vertices (#x3) of the mesh.
+            tri (np.ndarray): The triangle elements (#x3) of the mesh.
+            color (np.ndarray): The color (#x3) of the mesh. Each value should be in [0,1].
+
+        Returns:
+            Plot: The plot object.
+        """
+
         if self._in_jupyter_notebook:
             viewer = self._parent._viewer
             shading = self._parent._shading
@@ -76,6 +103,15 @@ class PlotAdder:
         return self._parent
 
     def edge(self, vert: np.ndarray, edge: np.ndarray) -> "Plot":
+        """Add edges to the plot.
+
+        Args:
+            vert (np.ndarray): The vertices (#x3) of the edges.
+            edge (np.ndarray): The edge elements (#x2) of the edges.
+
+        Returns:
+            Plot: The plot object.
+        """
         if self._in_jupyter_notebook:
             viewer = self._parent._viewer
             shading = self._parent._shading
@@ -107,6 +143,14 @@ class PlotAdder:
         return self._parent
 
     def point(self, vert: np.ndarray) -> "Plot":
+        """Add points to the plot.
+
+        Args:
+            vert (np.ndarray): The vertices (#x3) of the points.
+
+        Returns:
+            Plot: The plot object.
+        """
         if self._in_jupyter_notebook:
             viewer = self._parent._viewer
             shading = self._parent._shading
@@ -118,7 +162,14 @@ class PlotAdder:
 
 
 class Plot:
+    """Plot class. Use this to create a plot."""
+
     def __init__(self, _darkmode: bool):
+        """Initialize the plot.
+
+        Args:
+            _darkmode (bool): True to turn on dark mode, False otherwise.
+        """
         self._in_jupyter_notebook = in_jupyter_notebook()
         self._darkmode = _darkmode
         self._viewer = None
@@ -126,19 +177,27 @@ class Plot:
         self.add = PlotAdder(self)
 
     def is_jupyter_notebook(self) -> bool:
+        """Check if the code is running in a Jupyter notebook."""
         return self._in_jupyter_notebook
 
-    def to_html(self, filename: str = ""):
+    def to_html(self, path: str = ""):
+        """Export an HTML file with the plot.
+
+        Args:
+            path (str): The filename to save the HTML file.
+        """
         if self._in_jupyter_notebook:
             if self._viewer is None:
                 raise Exception("No plot to save")
             else:
-                self._viewer.save(filename)
+                self._viewer.save(path)
 
     def has_view(self) -> bool:
+        """Return if the plot has a view."""
         return self._viewer is not None
 
     def overwrite_shading(self, shading: dict) -> dict:
+        """Overwrite the shading settings with the default settings."""
         default_shading = (
             DARK_DEFAULT_SHADING if self._darkmode else LIGHT_DEFAULT_SHADING
         )
@@ -150,6 +209,16 @@ class Plot:
     def curve(
         self, vert: np.ndarray, _edge: np.ndarray = np.zeros(0), shading: dict = {}
     ) -> "Plot":
+        """Plot a curve.
+
+        Args:
+            vert (np.ndarray): The vertices (#x3) of the curve.
+            _edge (np.ndarray): The edge elements (#x2) of the curve.
+            shading (dict): The shading settings.
+
+        Returns:
+            Plot: The plot object.
+        """
         if self._in_jupyter_notebook:
             shading = self.overwrite_shading(shading)
             if _edge.size == 0:
@@ -176,6 +245,18 @@ class Plot:
         color: np.ndarray = np.array([1.0, 0.85, 0.0]),
         shading: dict = {},
     ) -> "Plot":
+        """Plot a triangle mesh.
+
+        Args:
+            vert (np.ndarray): The vertices (#x3) of the mesh.
+            tri (np.ndarray): The triangle elements (#x3) of the mesh.
+            stitch (tuple[np.ndarray, np.ndarray]): The stitch data (index #x3 and weight #x2).
+            color (np.ndarray): The color (#x3) of the mesh. Each value should be in [0,1].
+            sahding (dict): The shading settings.
+
+        Returns:
+            Plot: The plot object.
+        """
         if self._in_jupyter_notebook:
             if tri.shape[1] != 3:
                 raise ValueError("triangles must have 3 vertices")
@@ -208,6 +289,19 @@ class Plot:
         color: np.ndarray = np.array([1.0, 0.85, 0.0]),
         shading: dict = {},
     ) -> "Plot":
+        """Plot a tetrahedral mesh.
+
+        Args:
+            vert (np.ndarray): The vertices (#x3) of the mesh.
+            tet (np.ndarray): The tetrahedral elements (#x4) of the mesh.
+            axis (int): The axis to cut the mesh.
+            cut (float): The cut ratio.
+            color (np.ndarray): The color (#x3) of the mesh. Each value should be in [0,1].
+            shading (dict): The shading settings.
+
+        Returns:
+            Plot: The plot object.
+        """
         if self._in_jupyter_notebook:
 
             def compute_hash(tri, n):
@@ -240,6 +334,11 @@ class Plot:
             return self
 
     def update(self, vert: np.ndarray):
+        """Update the plot with new vertices.
+
+        Args:
+            vert (np.ndarray): The new vertices (#x3).
+        """
         if self._in_jupyter_notebook:
             viewer = self._viewer
             if viewer is None:

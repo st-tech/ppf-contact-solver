@@ -67,7 +67,7 @@ jobs:
         run: $EXEC_W /root/.cargo/bin/cargo build --release
 
       - name: run headless
-        run: $EXEC_W python3 examples/headless.py
+        run: $EXEC_W bash -c "PYTHONPATH=$TMP_ROOT python3 examples/headless.py"
 
       - name: remove container
         if: always()
