@@ -21,7 +21,6 @@ Published in [ACM Transactions on Graphics (TOG)](https://dl.acm.org/doi/abs/10.
 - **🐍 Documtened Python APIs**: Our Python code is fully [docstringed](https://st-tech.github.io/ppf-contact-solver/frontend.html) and lintable [[Video]](https://drive.google.com/file/d/1vCM7kNgXdqQRBjVaoEb6KwIdRR21V7sV/view).
 - **☁️ Cloud-Ready**: Our solver can be seamlessly deployed on major cloud platforms.
 - **✨ Stay Clean**: You can remove all traces after use.
-- **👌 Open**: We have opted the Apache v2.0 license.
 
 ## 🔖 Table of Contents
 
@@ -46,7 +45,6 @@ Published in [ACM Transactions on Graphics (TOG)](https://dl.acm.org/doi/abs/10.
     - [📦 Deploying on Amazon Web Services](#-deploying-on-amazon-web-services)
     - [📦 Deploying on Google Compute Engine](#-deploying-on-google-compute-engine)
 - [🧑‍💻 Setting Up Your Development Environment](#-setting-up-your-development-environment)
-- [📃 License](#-license)
 - [🙏 Acknowledgements](#-acknowledgements)
 - [🖋 Citation](#-citation)
 
@@ -203,16 +201,16 @@ Below are some representatives.
 `ms` refers to the consumed simulation time in milliseconds recorded as `int`.
 `vid_frame` is the video frame count recorede as `int`.
 
-| **Log Name** | **Description** | **Format**
+| **Name** | **Description** | **Format**
 |---------------|----------------|------------
-| **per_video_frame** | Time per video frame | list[(vid_frame,ms)] |
-| **advance.matrix_assembly** | Matrix assembly time | list[(vid_time,ms)] |
-| **advance.linsolve** | Linear system solve time | list[(vid_time,ms)] |
-| **advance.line_search** | Line search time | list[(vid_time,ms)] |
-| **advance** | Time per step | list[(vid_time,ms)] |
-| **advance.newton_steps** | Newton iterations per step | list[(vid_time,count)] |
-| **advance.num_contact** | Contact count | list[(vid_time,count)] |
-| **advance.max_sigma** | Max stretch | list(vid_time,strech) |
+| per_video_frame | Time per video frame | `list[(vid_frame,ms)]` |
+| advance.matrix_assembly | Matrix assembly time | `list[(vid_time,ms)]` |
+| advance.linsolve | Linear system solve time | `list[(vid_time,ms)]` |
+| advance.line_search | Line search time | `list[(vid_time,ms)]` |
+| advance | Time per step | `list[(vid_time,ms)]` |
+| advance.newton_steps | Newton iterations per step | `list[(vid_time,count)]` |
+| advance.num_contact | Contact count | `list[(vid_time,count)]` |
+| advance.max_sigma | Max stretch | `list(vid_time,strech)` |
 
 Note that some entries have multiple records at the same video time ⏱️. This occurs because the same operation is executed multiple times 🔄 within a single step during the inner Newton's iterations 🧮. For example, the linear system solve is performed at each Newton's step, so if multiple Newton's steps are 🔁 executed, multiple linear system solve times appear in the record at the same 📊 video time.
 
@@ -590,10 +588,6 @@ Replace this with your preferred combination.
 You can now detach from the container by pressing `ctrl-q`.
 
 Now you're good to go! 🚀
-
-## 📃 License
-
-📝 This project is licensed under Apache v2.0 license.
 
 ## 🙏 Acknowledgements
 
