@@ -285,7 +285,6 @@ pub struct ParamSet {
     pub air_density: f32,
     pub strain_limit_tau: f32,
     pub strain_limit_eps: f32,
-    pub binary_search_max_iter: u32,
     pub dt_decrease_factor: f32,
     pub contact_ghat: f32,
     pub contact_offset: f32,

@@ -28,7 +28,7 @@ Published in [ACM Transactions on Graphics (TOG)](https://dl.acm.org/doi/abs/10.
 - [⚡️ Requirements](#️-requirements)
 - [📝 Change History](#-change-history)
 - [🐍 How To Use](#-how-to-use)
-- [📚 Python API Documentation](#-python-api-documentation)
+- [📚 Python API Documentation and Parameters](#-python-api-documentation-and-parameters)
 - [🔍 Obtaining Logs](#-obtaining-logs)
 - [🖼️ Catalogue](#️-catalogue)
 - [🚀 GitHub Actions](#-github-actions)
@@ -44,9 +44,13 @@ Published in [ACM Transactions on Graphics (TOG)](https://dl.acm.org/doi/abs/10.
     - [📦 Deploying on Scaleway](#-deploying-on-scaleway)
     - [📦 Deploying on Amazon Web Services](#-deploying-on-amazon-web-services)
     - [📦 Deploying on Google Compute Engine](#-deploying-on-google-compute-engine)
-- [🧑‍💻 Setting Up Your Development Environment](#-setting-up-your-development-environment)
 - [🙏 Acknowledgements](#-acknowledgements)
 - [🖋 Citation](#-citation)
+
+### 📚 Advanced Contents
+
+- 🧑‍💻 Setting Up Your Development Environment [[Markdown]](./articles/develop.md#-setting-up-your-development-environment)
+- 🐞 Bug Fixes and Updates [[Markdown]](./articles/bug.md)
 
 ## 🎓 Technical Materials
 
@@ -54,7 +58,6 @@ Published in [ACM Transactions on Graphics (TOG)](https://dl.acm.org/doi/abs/10.
 - 🎥 Additional video examples [[Directory]](https://drive.google.com/drive/folders/1O4t3CBcG8qqju_qun0RP60OULK4_1tTf?usp=drive_link)
 - 🎥 Presentation videos [[Short]](https://drive.google.com/file/d/1axAbFRtbOxhkU7K3Wf9F5gh2iDNJn6CZ/view)[[Long]](https://drive.google.com/file/d/1zybHydN0a0cZ-ifl_D_LYLwdMOnz2YnP/view)
 - 📃 Main paper [[PDF]](https://drive.google.com/file/d/1OrOKJH_im1L4j1cJB18sfvNHEbZVSqjL/view?usp=drive_link)[[Hindsight]](./articles/hindsight.md)
-- 🐞 Bug Fixes and Updates [[Markdown]](./articles/bug.md)
 - 📊 Supplementary PDF [[PDF]](https://drive.google.com/file/d/1ptjFNVufPBV4-vb5UDh1yTgz8-esjaSF/view?usp=drive_link)
 - 🤖 Supplementary scripts [[Directory]](https://drive.google.com/drive/folders/13CO068xLkd6ZSxsqtJQdNadgMrbbfSug?usp=drive_link)
 - 🔍 Singular-value eigenanalysis [[Markdown]](./articles/eigensys.md)
@@ -167,11 +170,13 @@ session.export.animation(path)
 ```
 <img src="./asset/image/drape.jpg" alt="drape">
 
-## 📚 Python API Documentation
+## 📚 Python API Documentation and Parameters
 
-Full API documentation 📖 is available on our [GitHub Pages](https://st-tech.github.io/ppf-contact-solver/frontend.html). The major APIs are documented using docstrings ✍️ and compiled with [Sphinx](https://www.sphinx-doc.org/en/master/) ⚙️.
+- Full API documentation 📖 is available on our [GitHub Pages](https://st-tech.github.io/ppf-contact-solver/frontend.html). The major APIs are documented using docstrings ✍️ and compiled with [Sphinx](https://www.sphinx-doc.org/en/master/) ⚙️.
 We have also included [`jupyter-lsp`](https://github.com/jupyter-lsp/jupyterlab-lsp) to provide interactive linting assistance 🛠️ and display docstrings as you type. See this video [[Video]](https://drive.google.com/file/d/1vCM7kNgXdqQRBjVaoEb6KwIdRR21V7sV/view) for an example.
 The behaviors can be changed through the settings.
+
+- A list of parameters used in `param.set(key,value)` is documented here [[GitHub Pages]](https://st-tech.github.io/ppf-contact-solver/parameters.html).
 
 ## 🔍 Obtaining Logs
 
@@ -514,80 +519,6 @@ You can deploy our solver on a RunPod instance. To do this, we need to select an
 - *Do not skip* the Docker container creation in the installation process; it is required.
 
 - CLI instructions are described in [[Markdown]](./articles/cloud.md#-google-compute-engine).
-
-## 🧑‍💻 Setting Up Your Development Environment
-
-Advanced users may be interested in inspecting our 📜 core code to examine how each component ⚙️ contributes to our solver pipeline 🔄. To facilitate this task, we provide a guide below for setting up a comfortable development environment using either 🖥️ [VSCode](https://azure.microsoft.com/en-us/products/visual-studio-code) or ⌨️ [NeoVim](https://neovim.io/).
-In fact, this is how we 🚀 develop.
-
-### 🖥️ Complete Installation
-
-First, complete the entire [installation process](#-getting-started) and keep the Docker container 🚢 running.
-Make sure that your terminal is attached to the container, with the current directory pointing to `ppf-contact-solver` directory.
-
-### 🛠️ [clangd](https://clangd.llvm.org/) Setup
-
-Just to avoid confusion, all the `python3 warmup.py ...` commands below must be executed in the Docker container on the remote, not on your local machine!
-
-Our code is not compatible with [C/C++ IntelliSense](https://marketplace.visualstudio.com/items?itemName=ms-vscode.cpptools) provided by Microsoft.
-We instead employ [clangd](https://clangd.llvm.org/) for linting, so make sure not to install IntelliSense into the container.
-Otherwise, you will be overwhelmed by 🐞 errors and ⚠️ warnings.
-First, run the following command:
-
-```bash
-python3 warmup.py clangd
-```
-
-This generates the `.clangd` and `.clang-format` config files, which we adhere to when writing code 💻.
-They will be automatically detected by [clangd](https://clangd.llvm.org/).
-
-### 🖥️ [VSCode](https://azure.microsoft.com/en-us/products/visual-studio-code) Users
-
-If you intend to use [VSCode](https://azure.microsoft.com/en-us/products/visual-studio-code), run the following command to generate `.vscode/extensions.json` file.
-
-```bash
-python3 warmup.py vscode
-```
-
-The generated file contains a list of recommended extensions.
-You will be prompted to install these extensions when your VSCode connects to the container.
-Finally, connect to the container using the [Dev Containers extension](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-containers).
-
-Now you're good to go! 🚀
-
-### ⌨️ [NeoVim](https://neovim.io/) Users
-
-We provide one-liners to install [NeoVim](https://neovim.io/) and other handy tools into the container:
-
-- [🖥️ NeoVim](https://neovim.io/): `python3 warmup.py nvim`
-- [💤 LazyVim](http://www.lazyvim.org/): `python3 warmup.py lazyvim`
-- [🛠️ Lazygit](https://github.com/jesseduffield/lazygit): `python3 warmup.py lazygit`
-- [🐟 fish shell](https://fishshell.com/): `python3 warmup.py fish`
-- [⌨️ oh-my-zsh](https://ohmyz.sh/): `python3 warmup.py ohmyzsh`
-
-Nevertheless, for security reasons, we strongly encourage you 👀 review `warmup.py` before running these commands.
-The code is not lengthy.
-If possible, we also strongly suggest following the official instructions to install them.
-These commands exist because this is exactly how we initiate our development environment for all new containers.
-
-Once you have a [💤 LazyVim](http://www.lazyvim.org/) environment installed in the container, turn on the `clangd` and `rust` plugins.
-
-> [!NOTE]
-> When you attach to a Docker container and explore the shell, you will quickly notice that the Emacs binding `ctrl-p` does not work as intended.
-> This is because Docker assigns `ctrl-p ctrl-q` as a special key sequence to detach from the container.
-> 
-> To change this behavior, create a Docker config file `$HOME/.docker/config.json` on the remote machine, **not in the container on the remote!**
-> Set its contents to
-> ```
-> {
->   "detachKeys": "ctrl-q"
-> }
-> ```
-> The value `ctrl-q` defines the new key combination for detaching.
-Replace this with your preferred combination.
-You can now detach from the container by pressing `ctrl-q`.
-
-Now you're good to go! 🚀
 
 ## 🙏 Acknowledgements
 

@@ -61,11 +61,11 @@ class Param:
         elif key not in self._param.keys():
             raise ValueError(f"Key {key} does not exist")
         else:
-            self._param[key] = value
+            self._param[key]["value"] = value
         return self
 
     def dyn(self, key: str) -> "Param":
-        """Set a dynamic parameter key.
+        """Set a current dynamic parameter key.
 
         Args:
             key (str): The dynamic parameter key.
@@ -80,7 +80,7 @@ class Param:
         return self
 
     def change(self, value: float) -> "Param":
-        """Change the value of the dynamic parameter.
+        """Change the value of the dynamic parameter at the current time.
 
         Args:
             value (float): The new value of the dynamic parameter.
@@ -114,7 +114,7 @@ class Param:
                 last_val = self._dyn_param[self._key][-1][1]
                 self.change(last_val)
             else:
-                val = self._param[self._key]
+                val = self._param[self._key]["value"]
                 if isinstance(val, float):
                     self.change(val)
                 else:
@@ -131,15 +131,16 @@ class Param:
             with open(os.path.join(path, "param.toml"), "w") as f:
                 f.write("[param]\n")
                 for key, value in self._param.items():
+                    val = value["value"]
                     key = key.replace("-", "_")
-                    if value is not None:
-                        if isinstance(value, str):
-                            f.write(f'{key} = "{value}"\n')
-                        elif isinstance(value, bool):
-                            if value:
+                    if val is not None:
+                        if isinstance(val, str):
+                            f.write(f'{key} = "{val}"\n')
+                        elif isinstance(val, bool):
+                            if val:
                                 f.write(f"{key} = true\n")
                         else:
-                            f.write(f"{key} = {value}\n")
+                            f.write(f"{key} = {val}\n")
                     else:
                         f.write(f"{key} = false\n")
         if len(self._dyn_param.keys()):
@@ -147,8 +148,8 @@ class Param:
                 for key, vals in self._dyn_param.items():
                     f.write(f"[{key}]\n")
                     for entry in vals:
-                        time, value = entry
-                        f.write(f"{time} {value}\n")
+                        time, val = entry
+                        f.write(f"{time} {val}\n")
 
     def time(self, time: float) -> "Param":
         """Set the current time for the dynamic parameter.
@@ -178,7 +179,7 @@ class Param:
         if key is None:
             return self._param
         else:
-            return self._param[key]
+            return self._param[key]["value"]
 
     def items(self):
         """Get all parameter items.
@@ -669,10 +670,10 @@ class Session:
         self._update_preview_interval = 1.0 / 60.0
         self._update_terminal_interval = 1.0 / 30.0
         self._update_table_interval = 0.25
-        self.info = SessionInfo(name, path) #: SessionInfo: The session information.
-        self.export = SessionExport(self) #: SessionExport: The session export object.
-        self.get = SessionGet(self) #: SessionGet: The session get object.
-        self.output = SessionOutput(self) #: SessionOutput: The session output object.
+        self.info = SessionInfo(name, path)  #: SessionInfo: The session information.
+        self.export = SessionExport(self)  #: SessionExport: The session export object.
+        self.get = SessionGet(self)  #: SessionGet: The session get object.
+        self.output = SessionOutput(self)  #: SessionOutput: The session output object.
         self.delete()
 
     def print(self, message):
@@ -1109,7 +1110,7 @@ def display_log(lines: list[str]):
         display(log_widget)
 
 
-def get_default_params(path: str) -> dict[str, Any]:
+def get_default_params(path: str) -> dict[str, dict[str, Any]]:
     """Get the default parameters.
 
     Args:
@@ -1125,6 +1126,49 @@ def get_default_params(path: str) -> dict[str, Any]:
     curr_attributes = []
     inside_struct = False
     result = {}
+    doc = {}
+    var_type = None
+    description_mode = False
+    description = ""
+
+    def parse_line(line):
+        nonlocal doc
+        nonlocal description_mode
+        nonlocal description
+        nonlocal var_type
+        if line.strip().startswith("pub"):
+            parts = line.strip().split()
+            if len(parts) > 2:
+                var_type = parts[2].rstrip(",")
+        if line.strip().startswith("//"):
+            line = line.strip("// ").strip()
+            if "Do not list" in line:
+                doc["list"] = False
+            if line.startswith("Description:"):
+                description_mode = True
+            else:
+                if description_mode:
+                    if description:
+                        description += " "
+                    description += line
+                else:
+                    try:
+                        fields = line.split(":")
+                        field = fields[0].strip()
+                        text = fields[1].strip()
+                        doc[field] = text
+                    except Exception as _:
+                        pass
+
+    def clear_doc():
+        nonlocal doc
+        nonlocal description_mode
+        nonlocal description
+        nonlocal var_type
+        doc = {"list": True}
+        description_mode = False
+        description = ""
+        var_type = None
 
     with open(path, "r") as f:
         for line in f.readlines():
@@ -1133,6 +1177,7 @@ def get_default_params(path: str) -> dict[str, Any]:
                 if struct_start_pattern.match(line.strip()):
                     inside_struct = True
                 continue
+            parse_line(line)
             if struct_end_pattern.match(line.strip()):
                 break
             if not line.strip() or line.strip().startswith("//"):
@@ -1167,7 +1212,13 @@ def get_default_params(path: str) -> dict[str, Any]:
                             )
                         except ValueError:
                             pass
-                    result[field_name] = default_value
+                    doc["Description"] = description
+                    result[field_name] = {
+                        "value": default_value,
+                        "type": var_type,
+                        "doc": doc,
+                    }
+                    clear_doc()
                     curr_attributes = []
                 else:
                     curr_attributes = []

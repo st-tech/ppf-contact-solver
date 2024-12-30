@@ -333,7 +333,6 @@ pub fn make_param(args: &Args) -> data::ParamSet {
         air_density: args.air_density,
         strain_limit_tau,
         strain_limit_eps,
-        binary_search_max_iter: args.binary_search_max_iter,
         dt_decrease_factor: args.dt_decrease_factor,
         contact_ghat: args.contact_ghat,
         contact_offset: args.contact_offset,

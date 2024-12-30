@@ -25,7 +25,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
       - name: Build Docs
-        run: python3 warmup.py docs
+        run: |
+          python3 warmup.py docs-prepare
+          python3 warmup.py docs-build
       - name: List Artifacts
         run: ls -al ./docs/_build/
       - name: Upload Artifact

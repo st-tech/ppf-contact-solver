@@ -258,10 +258,63 @@ def start_jupyter():
 
 def build_docs():
     script_dir = os.path.dirname(os.path.realpath(__file__))
-    run("pip3 install --ignore-installed " + " ".join(python_packages()))
-    run("pip3 install sphinx furo sphinx_autobuild")
-    install_meshplot()
     run("sphinx-build -b html ./ ./_build", cwd=os.path.join(script_dir, "docs"))
+
+
+def make_param_docs():
+    from frontend import App
+
+    param = App.get_default_param()
+    rst_content = export_sphinx_table(param)
+    with open(os.path.join("docs", "parameters.rst"), "w") as file:
+        file.write(rst_content)
+    print("Sphinx .rst file has been exported.")
+
+
+def export_sphinx_table(param):
+    rst_content = []
+
+    title = "parameters"
+    rst_content.append(f"{title}\n")
+    rst_content.append("=" * len(title) + "\n\n")
+
+    for name, entry in param.items():
+        doc = entry["doc"]
+        if doc["list"]:
+            rst_content.append(f"{name}\n")
+            rst_content.append("-" * len(name) + "\n\n")
+
+            rst_content.append(".. list-table::\n\n")
+            rst_content.append("   * - Default Value\n")
+
+            var_type = entry["type"]
+            type_dict = {
+                "bool": "bool",
+                "u8": "int",
+                "u32": "int",
+                "i32": "int",
+                "f32": "float",
+                "f64": "float",
+                "String": "str",
+            }
+            type_str = type_dict[var_type]
+            if type_str == "bool":
+                value_str = "False"
+            else:
+                value_str = entry["value"]
+                if type_str == "str":
+                    value_str = f'"{value_str}"'
+            rst_content.append(f"     - {value_str} ({type_str})\n")
+
+            for key, value in doc.items():
+                if key != "list" and value:
+                    rst_content.append(f"   * - {key}\n")
+                    rst_content.append(f"     - {value}\n")
+
+            rst_content.append("\n")  # Blank line to separate entries
+
+    # Join all the content into a single string
+    return "".join(rst_content)
 
 
 if __name__ == "__main__":
@@ -289,7 +342,12 @@ if __name__ == "__main__":
             set_time()
         elif mode == "jupyter":
             start_jupyter()
-        elif mode == "docs":
+        elif mode == "docs-prepare":
+            run("pip3 install --ignore-installed " + " ".join(python_packages()))
+            run("pip3 install sphinx sphinxawesome-theme sphinx_autobuild")
+            install_meshplot()
+        elif mode == "docs-build":
+            make_param_docs()
             build_docs()
         elif mode == "all":
             create_clang_config()

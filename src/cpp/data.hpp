@@ -211,7 +211,6 @@ struct ParamSet {
     float air_density;
     float strain_limit_tau;
     float strain_limit_eps;
-    float binary_search_max_iter;
     float dt_decrease_factor;
     float contact_ghat;
     float contact_offset;

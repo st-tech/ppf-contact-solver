@@ -6,7 +6,7 @@ from ._asset_ import AssetManager
 from ._extra_ import Extra
 from ._scene_ import SceneManager
 from ._mesh_ import MeshManager
-from ._session_ import SessionManager
+from ._session_ import SessionManager, Param
 from ._plot_ import PlotManager
 import pickle
 import os
@@ -40,6 +40,24 @@ class App:
         """
         return App(name, False, cache_dir)
 
+    @staticmethod
+    def get_proj_root() -> str:
+        """Find the root directory of the project.
+
+        Returns:
+            str: Path to the root directory of the project.
+        """
+        return os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+
+    @staticmethod
+    def get_default_param() -> Param:
+        """Get default parameters for the application.
+
+        Returns:
+            Param: The default parameters.
+        """
+        return Param(App.get_proj_root())
+
     def __init__(self, name: str, renew: bool, cache_dir: str = ""):
         """Initializes the App class.
 
@@ -50,11 +68,6 @@ class App:
             name (str): The name of the application.
             renew (bool): A flag to indicate whether to renew the application state.
             cache_dir (str): The directory to store the cached files. If not provided, it will use `.cache/ppf-cts` directory.
-
-        Examples:
-            ::
-            from frontend import App
-            app = App("my-app-name", renew=True)
         """
         self.extra = Extra()  #: Extra: Extra utilities.
         self._name = name
@@ -62,7 +75,7 @@ class App:
             os.path.join("~", ".local", "share", "ppf-cts", name)
         )
         self._path = os.path.join(self._root, "app.pickle")
-        proj_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        proj_root = App.get_proj_root()
         if cache_dir:
             self.cache_dir = cache_dir
         else:
