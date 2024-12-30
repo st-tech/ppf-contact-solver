@@ -31,11 +31,11 @@ pub struct Args {
     // Name: Lower Bound of Newton Steps
     // Recommended Range: 0 to 32
     // Description:
-    // Minimal newton's steps that must be consumed to advance a step.
+    // Minimal Newton's steps that must be consumed to advance a step.
     // The solver tries to determine the actual Newton's step count, but this number
-    // assumes that the static friction does not present.
-    // If static friction is present, we recommend to set this value to 32.
-    // Also, step size should be somewhat large (e.g. 1e-2) to more accurately account for
+    // assumes that static friction is not present.
+    // If static friction is present, we recommend setting this value to 32.
+    // Also, the step size should be somewhat large (e.g., 1e-2) to more accurately account for
     // static friction.
     #[clap(long, default_value_t = 0)]
     pub min_newton_steps: u32,
@@ -79,9 +79,9 @@ pub struct Args {
     // Name: Contact Gap
     // Recommended Range: 0.25e-3 to 1e-2
     // Description:
-    // This value dictates the maximal gap distance when the nearly touching objects are considered
+    // This value dictates the maximal gap distance when nearly touching objects are considered
     // in contact. A contact barrier is then activated to prevent the objects from penetrating.
-    // Since we employ single preicision floating point, we recommend to set this value to be
+    // Since we employ single precision floating point, we recommend setting this value to be
     // larger than 1e-4.
     #[clap(long, default_value_t = 1e-3)]
     pub contact_ghat: f32,
@@ -120,8 +120,8 @@ pub struct Args {
     // Name: Strain Limit Epsilon
     // Recommended Range: 0 to 0.05
     // Description:
-    // After the strain limit is activated, this value is used to controll the maximal stretch
-    // beyond the `srtraint_limit_tau`. For example, if this value is 0.025 and `strain_limit_tau`
+    // After the strain limit is activated, this value is used to control the maximal stretch
+    // beyond the `strain_limit_tau`. For example, if this value is 0.025 and `strain_limit_tau`
     // is 0.025, the maximal stretch ratio is 5%.
     #[clap(long, default_value_t = 0.025)]
     pub strain_limit_eps: f32,
@@ -195,7 +195,7 @@ pub struct Args {
     #[clap(long, default_value_t = 1e-2)]
     pub eiganalysis_eps: f32,
 
-    // Name: Frition Coefficient
+    // Name: Friction Coefficient
     // Allowed Range: 0 to 1
     // Description:
     // Friction coefficient for the contact.
@@ -206,8 +206,8 @@ pub struct Args {
     // Name: Epsilon for Friction
     // Recommended Range: 1e-5 to 1e-4
     // Description:
-    // We employ a quadratic friction model to approximate the Coulomb friction.
-    // In dosing so, we need to set a small value to avoid the division by zero.
+    // We employ a quadratic friction model to approximate Coulomb friction.
+    // In doing so, we need to set a small value to avoid division by zero.
     // This occurs when the motion undergoes static friction.
     #[clap(long, default_value_t = 1e-5)]
     pub friction_eps: f32,
@@ -267,13 +267,13 @@ pub struct Args {
     #[clap(long, default_value_t = 100.0)]
     pub area_young_mod: f32,
 
-    // Name: Poisson's Ratio for Shellss
+    // Name: Poisson's Ratio for Shells
     // Allowed Range: 0.0 to 0.4999
     // Description:
     // Poisson's ratio for the shell material, encoding how much the material
     // responds to compression.
     // 0.0 means the material does not respond to any compression, while 0.5
-    // completely incompressible. 0.5 leads to numerical instability, so it
+    // means completely incompressible. 0.5 leads to numerical instability, so it
     // must be less than 0.5.
     #[clap(long, default_value_t = 0.25)]
     pub area_poiss_rat: f32,
@@ -289,10 +289,10 @@ pub struct Args {
     // Name: Poisson's Ratio for Volume Solids
     // Allowed Range: 0.0 to 0.4999
     // Description:
-    // Poisson's ratio for the shell material, encoding how much the material
+    // Poisson's ratio for the volumetric solid material, encoding how much the material
     // responds to compression.
     // 0.0 means the material does not respond to any compression, while 0.5
-    // completely incompressible. 0.5 leads to numerical instability, so it
+    // means completely incompressible. 0.5 leads to numerical instability, so it
     // must be less than 0.5.
     #[clap(long, default_value_t = 0.35)]
     pub volume_poiss_rat: f32,
@@ -355,8 +355,7 @@ pub struct Args {
     // Description:
     // Rod bending stiffness.
     // The actual force is amplified by the rod mass, which
-    // include rod density.
-    // The actual
+    // includes rod density.
     #[clap(long, default_value_t = 1e-3)]
     pub rod_bend: f32,
 
