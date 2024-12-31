@@ -28,10 +28,11 @@ Published in [ACM Transactions on Graphics (TOG)](https://dl.acm.org/doi/abs/10.
 - [⚡️ Requirements](#️-requirements)
 - [📝 Change History](#-change-history)
 - [🐍 How To Use](#-how-to-use)
-- [📚 Python API Documentation and Parameters](#-python-api-documentation-and-parameters)
+- [📚 Python APIs and Parameters](#-python-apis-and-parameters)
 - [🔍 Obtaining Logs](#-obtaining-logs)
 - [🖼️ Catalogue](#️-catalogue)
 - [🚀 GitHub Actions](#-github-actions)
+    - [⚔️ Ten Consecutive Runs](#️-ten-consecutive-runs)
 - [💨 Getting Started](#-getting-started)
     - [🎥 Installation Videos](#-installation-videos)
     - [🐳 Installing Docker](#-installing-docker)
@@ -170,7 +171,7 @@ session.export.animation(path)
 ```
 <img src="./asset/image/drape.jpg" alt="drape">
 
-## 📚 Python API Documentation and Parameters
+## 📚 Python APIs and Parameters
 
 - Full API documentation 📖 is available on our [GitHub Pages](https://st-tech.github.io/ppf-contact-solver/frontend.html). The major APIs are documented using docstrings ✍️ and compiled with [Sphinx](https://www.sphinx-doc.org/en/master/) ⚙️.
 We have also included [`jupyter-lsp`](https://github.com/jupyter-lsp/jupyterlab-lsp) to provide interactive linting assistance 🛠️ and display docstrings as you type. See this video [[Video]](https://drive.google.com/file/d/1vCM7kNgXdqQRBjVaoEb6KwIdRR21V7sV/view) for an example.
