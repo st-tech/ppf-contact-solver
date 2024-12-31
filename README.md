@@ -70,7 +70,7 @@ Published in [ACM Transactions on Graphics (TOG)](https://dl.acm.org/doi/abs/10.
 
 ## 📝 Change History
 
-- (2024.12.31) Add full documentation for Python APIs, parameters, and log files.
+- (2024.12.31) Add full documentation for Python APIs, parameters, and log files [[GitHub Pages]](https://st-tech.github.io/ppf-contact-solver).
 - (2024.12.27) Line search for strain limiting is improved [[Markdown]](./articles/bug.md#new-strain-limiting-line-search)
 - (2024.12.23) Added [[Bug Fixes and Updates]](./articles/bug.md)
 - (2024.12.21) Added a [house of cards example](./examples/cards.ipynb) [[Video]](https://drive.google.com/file/d/1PMdDnlyCsjinbvICKph_0UcXUfUvvUmZ/view)
