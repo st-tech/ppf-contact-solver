@@ -355,7 +355,7 @@ Also, install the NVIDIA Container Toolkit by following the guide [[Link]](https
 Then, create a container 📦 by running the following Docker command:
 
 ```
-MY_WEB_PORT=8080  # Port number for JupyterLab web browsing
+MY_WEB_PORT=8080  # Web port number on the host
 MY_TIME_ZONE=Asia/Tokyo  # Your time zone
 MY_CONTAINER_NAME=ppf-contact-solver  # Container name
 
