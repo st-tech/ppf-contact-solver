@@ -5,6 +5,7 @@
 from ._scene_ import FixedScene
 from ._plot_ import Plot
 from ._plot_ import in_jupyter_notebook
+from ._parse_ import ParamParser, CppRustDocStringParser
 from tqdm import tqdm
 import pandas as pd
 import signal
@@ -15,7 +16,6 @@ import psutil
 import os
 import threading
 import time
-import re
 from typing import Any, Optional
 
 
@@ -42,7 +42,7 @@ class Param:
         """
         path = os.path.abspath(os.path.join(app_root, "src", "args.rs"))
         self._key = None
-        self._param = get_default_params(path)
+        self._param = ParamParser.get_default_params(path)
         self._time = 0.0
         self._dyn_param = {}
 
@@ -266,9 +266,8 @@ class SessionManager:
             if delete_if_exists:
                 session = self._sessions[name]
                 if is_running():
-                    raise ValueError(f"Session {name} is running")
-                else:
-                    self._sessions[name].delete()
+                    terminate()
+                self._sessions[name].delete()
             else:
                 raise ValueError(f"Session {name} already exists")
         session = Session(self._app_root, self._proj_root, name, self._save_func)
@@ -437,29 +436,21 @@ class SessionOutput:
         self.path = os.path.join(self._session.info.path, "output")
 
 
-class SessionGet:
-    """Class to handle session data retrieval operations."""
+class SessionLog:
+    """Class to handle session log retrieval operations."""
 
-    def __init__(self, session: "Session"):
-        """Initialize the SessionGet class.
-
-        Args:
-            session (Session): The session object.
-        """
+    def __init__(self, session: "Session") -> None:
+        src_path = os.path.join(session._proj_root, "src")
         self._session = session
+        self._log = CppRustDocStringParser.get_logging_docstrings(src_path)
 
-    def logfiles(self) -> list[str]:
+    def names(self) -> list[str]:
         """Get the list of log names.
 
         Returns:
             list[str]: The list of log names.
         """
-        path = os.path.join(self._session.info.path, "output", "data")
-        result = []
-        for file in os.listdir(path):
-            if file.endswith(".out"):
-                result.append(file.replace(".out", ""))
-        return result
+        return list(self._log.keys())
 
     def _tail_file(self, path: str, n_lines: Optional[int] = None) -> list[str]:
         """Get the last n lines of a file.
@@ -481,7 +472,7 @@ class SessionGet:
                     return lines
         return []
 
-    def log(self, n_lines: Optional[int] = None) -> list[str]:
+    def stream(self, n_lines: Optional[int] = None) -> list[str]:
         """Get the last n lines of the log file.
 
         Args:
@@ -537,7 +528,8 @@ class SessionGet:
             else:
                 return var
 
-        path = os.path.join(self._session.info.path, "output", "data", f"{name}.out")
+        filename = self._log[name]["filename"]
+        path = os.path.join(self._session.info.path, "output", "data", filename)
         entries = []
         if os.path.exists(path):
             with open(path, "r") as f:
@@ -545,7 +537,10 @@ class SessionGet:
                 for line in lines:
                     entry = line.split(" ")
                     entries.append([float_or_int(entry[0]), float_or_int(entry[1])])
-        return entries
+            return entries
+        else:
+            print(f"File {path} does not exist")
+            return None
 
     def number(self, name: str):
         """Get the latest value from a log file.
@@ -561,6 +556,19 @@ class SessionGet:
             return entries[-1][1]
         else:
             return None
+
+
+class SessionGet:
+    """Class to handle session data retrieval operations."""
+
+    def __init__(self, session: "Session"):
+        """Initialize the SessionGet class.
+
+        Args:
+            session (Session): The session object.
+        """
+        self._session = session
+        self.log = SessionLog(session)
 
     def vertex_frame_count(self) -> int:
         """Get the vertex count.
@@ -738,7 +746,7 @@ class Session:
             bool: True if the session is finished, False otherwise.
         """
         finished_path = os.path.join(self.output.path, "finished.txt")
-        error = self.get.stderr()
+        error = self.get.log.stderr()
         if len(error) > 0:
             for line in error:
                 print(line)
@@ -881,12 +889,14 @@ class Session:
             if live_update and is_running():
 
                 def update_dataframe(table, curr_frame):
-                    time_per_frame = convert_time(self.get.number("per_video_frame"))
-                    time_per_step = convert_time(self.get.number("advance"))
-                    n_contact = convert_integer(self.get.number("advance.num_contact"))
-                    n_newton = convert_integer(self.get.number("advance.newton_steps"))
-                    max_sigma = self.get.number("advance.max_sigma")
-                    n_pcg = convert_integer(self.get.number("advance.iter"))
+                    time_per_frame = convert_time(
+                        self.get.log.number("time-per-frame")
+                    )
+                    time_per_step = convert_time(self.get.log.number("time-per-step"))
+                    n_contact = convert_integer(self.get.log.number("num-contact"))
+                    n_newton = convert_integer(self.get.log.number("newton-steps"))
+                    max_sigma = self.get.log.number("max-sigma")
+                    n_pcg = convert_integer(self.get.log.number("pcg-iter"))
                     data = {
                         "Frame": [str(curr_frame)],
                         "Time/Frame": [time_per_frame],
@@ -1108,118 +1118,3 @@ def display_log(lines: list[str]):
         text = "\n".join(lines)
         log_widget.value = CONSOLE_STYLE + f"<pre style='no-scroll'>{text}</pre>"
         display(log_widget)
-
-
-def get_default_params(path: str) -> dict[str, dict[str, Any]]:
-    """Get the default parameters.
-
-    Args:
-        path (str): The path to the args.rs file.
-
-    Returns:
-        dict[str, Any]: The default parameters.
-    """
-    att_pattern = re.compile(r"#\[(.*?)\]")
-    field_pattern = re.compile(r"pub\s+(\w+):\s*([^,]+),?")
-    struct_start_pattern = re.compile(r"^pub\s+struct\s+Args\s*\{")
-    struct_end_pattern = re.compile(r"^\s*\}")
-    curr_attributes = []
-    inside_struct = False
-    result = {}
-    doc = {}
-    var_type = None
-    description_mode = False
-    description = ""
-
-    def parse_line(line):
-        nonlocal doc
-        nonlocal description_mode
-        nonlocal description
-        nonlocal var_type
-        if line.strip().startswith("pub"):
-            parts = line.strip().split()
-            if len(parts) > 2:
-                var_type = parts[2].rstrip(",")
-        if line.strip().startswith("//"):
-            line = line.strip("// ").strip()
-            if "Do not list" in line:
-                doc["list"] = False
-            if line.startswith("Description:"):
-                description_mode = True
-            else:
-                if description_mode:
-                    if description:
-                        description += " "
-                    description += line
-                else:
-                    try:
-                        fields = line.split(":")
-                        field = fields[0].strip()
-                        text = fields[1].strip()
-                        doc[field] = text
-                    except Exception as _:
-                        pass
-
-    def clear_doc():
-        nonlocal doc
-        nonlocal description_mode
-        nonlocal description
-        nonlocal var_type
-        doc = {"list": True}
-        description_mode = False
-        description = ""
-        var_type = None
-
-    with open(path, "r") as f:
-        for line in f.readlines():
-            line = line.rstrip()
-            if not inside_struct:
-                if struct_start_pattern.match(line.strip()):
-                    inside_struct = True
-                continue
-            parse_line(line)
-            if struct_end_pattern.match(line.strip()):
-                break
-            if not line.strip() or line.strip().startswith("//"):
-                continue
-            attr_match = att_pattern.match(line.strip())
-            if attr_match:
-                curr_attributes.append(attr_match.group(1).strip())
-            else:
-                field_match = field_pattern.match(line.strip())
-                if field_match:
-                    field_name = field_match.group(1).replace("_", "-")
-                    default_value = None
-                    for attr in curr_attributes:
-                        clap_match = re.match(r"clap\((.*?)\)", attr)
-                        if clap_match:
-                            args = clap_match.group(1)
-                            arg_list = re.findall(r'(?:[^,"]|"(?:\\.|[^"\\])*")+', args)
-                            for arg in arg_list:
-                                arg = arg.strip()
-                                if "=" in arg:
-                                    key, value = map(str.strip, arg.split("=", 1))
-                                    value = value.strip('"').strip("'")
-                                    if "default_value" in key:
-                                        default_value = value
-                    if default_value is not None:
-                        try:
-                            float_value = float(default_value)
-                            default_value = (
-                                int(float_value)
-                                if float_value.is_integer()
-                                else float_value
-                            )
-                        except ValueError:
-                            pass
-                    doc["Description"] = description
-                    result[field_name] = {
-                        "value": default_value,
-                        "type": var_type,
-                        "doc": doc,
-                    }
-                    clear_doc()
-                    curr_attributes = []
-                else:
-                    curr_attributes = []
-    return result

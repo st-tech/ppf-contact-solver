@@ -261,17 +261,17 @@ def build_docs():
     run("sphinx-build -b html ./ ./_build", cwd=os.path.join(script_dir, "docs"))
 
 
-def make_param_docs():
+def make_docs():
     from frontend import App
 
-    param = App.get_default_param()
-    rst_content = export_sphinx_table(param)
     with open(os.path.join("docs", "parameters.rst"), "w") as file:
-        file.write(rst_content)
-    print("Sphinx .rst file has been exported.")
+        file.write(export_param_sphinx(App.get_default_param()))
+    with open(os.path.join("docs", "logs.rst"), "w") as file:
+        file.write(export_log_sphinx())
+    print("Sphinx .rst files has been exported.")
 
 
-def export_sphinx_table(param):
+def export_param_sphinx(param):
     rst_content = []
 
     title = "parameters"
@@ -311,9 +311,37 @@ def export_sphinx_table(param):
                     rst_content.append(f"   * - {key}\n")
                     rst_content.append(f"     - {value}\n")
 
-            rst_content.append("\n")  # Blank line to separate entries
+            rst_content.append("\n")
 
-    # Join all the content into a single string
+    return "".join(rst_content)
+
+
+def export_log_sphinx():
+    from frontend import CppRustDocStringParser
+
+    script_dir = os.path.dirname(os.path.realpath(__file__))
+    src_dir = os.path.join(script_dir, "src")
+    result = CppRustDocStringParser.get_logging_docstrings(src_dir)
+
+    rst_content = []
+
+    title = "log lookup names"
+    rst_content.append(f"{title}\n")
+    rst_content.append("=" * len(title) + "\n\n")
+
+    for name, doc in result.items():
+        rst_content.append(f"{name}\n")
+        rst_content.append("-" * len(name) + "\n\n")
+
+        rst_content.append(".. list-table::\n\n")
+
+        for key, value in doc.items():
+            if key != "filename" and value:
+                rst_content.append(f"   * - {key}\n")
+                rst_content.append(f"     - {value}\n")
+
+        rst_content.append("\n")
+
     return "".join(rst_content)
 
 
@@ -347,7 +375,7 @@ if __name__ == "__main__":
             run("pip3 install sphinx sphinxawesome-theme sphinx_autobuild")
             install_meshplot()
         elif mode == "docs-build":
-            make_param_docs()
+            make_docs()
             build_docs()
         elif mode == "all":
             create_clang_config()

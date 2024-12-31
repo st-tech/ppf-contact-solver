@@ -1028,6 +1028,10 @@ unsigned embed_contact_force_hessian(
     DynCSRMat &dyn_out, unsigned &max_nnz_row, float &dyn_consumed, float dt,
     const ParamSet &param) {
 
+    // Name: Contact Matrix Assembly Time
+    // Format: list[(vid_time,ms)]
+    // Description:
+    // Time spent in contact matrix assembly.
     SimpleLog logging("contact matrix assembly");
 
     unsigned surface_vert_count = data.surface_vert_count;
@@ -1049,9 +1053,18 @@ unsigned embed_contact_force_hessian(
 
     for (int stage = 0; stage < 2; ++stage) {
         if (stage == 0) {
+            // Name: Dry Pass Time for Counting Matrix Nonzeros
+            // Format: list[(vid_time,ms)]
+            // Description:
+            // Time for a dry pass to count matrix nonzeros.
+            // This pass does not assemble the contact matrix.
             logging.push("dry pass");
             dyn_out.start_rebuild_buffer();
         } else {
+            // Name: Fillin Pass Time for Assembling Contact Matrix
+            // Format: list[(vid_time,ms)]
+            // Description:
+            // Time spent in fill-in pass for assembling the contact matrix.
             logging.push("fillin pass");
         }
         DISPATCH_START(surface_vert_count)
@@ -1158,10 +1171,23 @@ unsigned embed_contact_force_hessian(
         logging.pop();
 
         if (stage == 0) {
+            // Name: Time for Rebuilding Memory Layout for Contact Matrix
+            // Format: list[(vid_time,ms)]
+            // Map: contact_mat_rebuild
+            // Description:
+            // After the dry pass, the memory layout for the contact matrix is
+            // re-computed so that the matrix can be assembled in the fill-in
+            // pass.
             logging.push("rebuild");
             dyn_out.finish_rebuild_buffer(max_nnz_row, dyn_consumed);
             logging.pop();
         } else {
+            // Name: Time for Filializing Contact Matrix
+            // Format: list[(vid_time,ms)]
+            // Map: contact_mat_finalize
+            // Description:
+            // After the fill-in pass, the contact matrix is compressed to
+            // eliminate redundant entries.
             logging.push("finalize");
             dyn_out.finalize();
             logging.pop();

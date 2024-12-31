@@ -121,6 +121,11 @@ void build_kinematic(const DataSet &host_dataset, const DataSet &dev_dataset,
 
 void initialize(DataSet _host_dataset, DataSet _dev_dataset, ParamSet *_param) {
 
+    // Name: Initialization Time
+    // Format: list[(int,ms)]
+    // Description:
+    // Time consumed for the initialization of the simulation.
+    // Only a single record is expected.
     SimpleLog logging("initialize");
 
     host_dataset = _host_dataset;
@@ -176,6 +181,13 @@ void initialize(DataSet _host_dataset, DataSet _dev_dataset, ParamSet *_param) {
     build_kinematic(host_dataset, dev_dataset, *param);
     logging.pop();
 
+    // Name: Initial Check Intersection Time
+    // Format: list[(int,ms)]
+    // Map: initial_check_intersection
+    // Description:
+    // Check if any intersection is detected at the beginning of the simulation.
+    // The consumed time is recorded in milliseconds.
+    // Only a single record is expected.
     logging.push("check intersection");
     contact::update_aabb(host_dataset, dev_dataset, dev_dataset.vertex.prev,
                          dev_dataset.vertex.curr, tmp::kinematic.vertex,
@@ -190,6 +202,13 @@ void initialize(DataSet _host_dataset, DataSet _dev_dataset, ParamSet *_param) {
 
 StepResult advance() {
 
+    // Name: Consumued Time Per Step
+    // Format: list[(vid_time,ms)]
+    // Map: time_per_step
+    // Description:
+    // Time per step in milliseconds. Note that our time step does not
+    // advance by a fixed time step, but a reduced one by the accumulated
+    // time of impact during the inner Newton loop.
     SimpleLog logging("advance");
 
     StepResult result;
@@ -219,10 +238,41 @@ StepResult advance() {
     const unsigned tet_count = host_data.mesh.mesh.tet.size;
     const float strain_limit_sum = prm.strain_limit_tau + prm.strain_limit_eps;
     SimpleLog::set(prm.time);
+
+    // Name: Vertex Count
+    // Format: list[(vid_time,int)]
+    // Description:
+    // Total vertex count in the scene. The format is time-dependent
+    // but should not change during the simulation.
     logging.mark("vertex count", vertex_count);
+
+    // Name: Rod Count
+    // Format: list[(vid_time,int)]
+    // Description:
+    // Total edge rod element count in the scene. The format is time-dependent
+    // but should not change during the simulation.
     logging.mark("rod count", host_data.rod_count);
+
+    // Name: Shell Count
+    // Format: list[(vid_time,int)]
+    // Description:
+    // Total triangular shell element count in the scene. The format is
+    // time-dependent but should not change during the simulation.
     logging.mark("shell count", host_data.shell_face_count);
+
+    // Name: Triangle Count
+    // Format: list[(vid_time,int)]
+    // Map: triangle_count
+    // Description:
+    // Total triangular shell element count in the scene. The format is
+    // time-dependent but should not change during the simulation.
     logging.mark("face count", host_data.mesh.mesh.face.size);
+
+    // Name: Tet Count
+    // Format: list[(vid_time,int)]
+    // Description:
+    // Total tetrahedral element count in the scene. The format is
+    // time-dependent but should not change during the simulation.
     logging.mark("tet count", host_data.mesh.mesh.tet.size);
 
     logging.push("build_kinematic");
@@ -239,8 +289,15 @@ StepResult advance() {
     } DISPATCH_END;
     float max_u =
         sqrtf(utility::max_array(tmp_scalar.data, vertex_count, 0.0f));
+
+    // Name: Max Velocity
+    // Format: list[(vid_time,m/s)]
+    // Map: max_velocity
+    // Description:
+    // Maximum velocity of all the vertices in the mesh.
     logging.mark("max_u", max_u);
 
+    float total_shell_mass = 0.0f;
     if (shell_face_count) {
         tmp_scalar.clear();
         DISPATCH_START(shell_face_count)
@@ -249,11 +306,19 @@ StepResult advance() {
                 tmp_scalar[i] = data.prop.face[i].mass;
             }
         } DISPATCH_END;
-        float total_mass = utility::sum_array(tmp_scalar, shell_face_count);
-        if (total_mass) {
-            logging.mark("total shell mass", total_mass);
-        }
+        total_shell_mass = utility::sum_array(tmp_scalar, shell_face_count);
     }
+
+    if (total_shell_mass > 0.0f) {
+        // Name: Total Shell Mass
+        // Format: list[(vid_time,kg)]
+        // Description:
+        // Total mass of all the shell elements in the scene.
+        // Should not change during the simulation.
+        logging.mark("total shell mass", total_shell_mass);
+    }
+
+    float total_solid_mass = 0.0f;
     if (tet_count) {
         tmp_scalar.clear();
         DISPATCH_START(tet_count)
@@ -262,14 +327,19 @@ StepResult advance() {
                 tmp_scalar[i] = data.prop.tet[i].mass;
             }
         } DISPATCH_END;
-        float total_mass = utility::sum_array(tmp_scalar, tet_count);
-        if (total_mass) {
-            logging.mark("total solid mass", total_mass);
-        }
+        total_solid_mass = utility::sum_array(tmp_scalar, tet_count);
+    }
+
+    if (total_solid_mass > 0.0f) {
+        // Name: Total Solid Mass
+        // Format: list[(vid_time,kg)]
+        // Description:
+        // Total mass of all the tet elements in the scene.
+        // Should not change during the simulation.
+        logging.mark("total solid mass", total_solid_mass);
     }
 
     float dt = param->dt;
-    logging.mark("dt", dt);
 
     if (shell_face_count) {
         utility::compute_svd(data, data.vertex.curr, svd, prm);
@@ -284,7 +354,18 @@ StepResult advance() {
             utility::max_array(tmp_scalar.data, shell_face_count, 0.0f);
         float avg_sigma = utility::sum_array(tmp_scalar, shell_face_count) /
                           tmp::active_shell_count;
+        // Name: Max Stretch
+        // Format: list[(vid_time,float)]
+        // Description:
+        // Maximum stretch among all the shell elements in the scene.
+        // If the maximal stretch is 2%, the recorded value is 1.02.
         logging.mark("max_sigma", max_sigma);
+
+        // Name: Average Stretch
+        // Format: list[(vid_time,float)]
+        // Description:
+        // Average stretch of all the shell elements in the scene.
+        // If the average stretch is 2%, the recorded value is 1.02.
         logging.mark("avg_sigma", avg_sigma);
     }
 
@@ -336,6 +417,11 @@ StepResult advance() {
                 compute_target(dt);
             }
 
+            // Name: Matrix Assembly Time
+            // Format: list[(vid_time,ms)]
+            // Description:
+            // Time consumed for assembling the global matrix
+            // for the linear system solver per Newton's step.
             logging.push("matrix assembly");
 
             DISPATCH_START(vertex_count)
@@ -373,17 +459,45 @@ StepResult advance() {
             num_contact += contact::embed_contact_force_hessian(
                 data, eval_x, kinematic, force, tmp_fixed, fixed_hess, dyn_hess,
                 max_nnz_row, dyn_consumed, dt, prm);
+
+            // Name: Consumption Ratio of Dynamic Matrix Assembly Memory
+            // Format: list[(vid_time,float)]
+            // Description:
+            // The GPU memory for the dynamic matrix assembly for contact is
+            // pre-allocated.
+            // This consumed ratio is the ratio of the memory actually used
+            // for the dynamic matrix assembly. If the ratio exceeds 1.0,
+            // simulation runs out of memory.
+            // One may carefully monitor this value to determine how much
+            // memory is required for the simulation.
+            // This consumption is only related to contacts and does not
+            // affect elastic or inertia terms.
             logging.mark("dyn_consumed", dyn_consumed);
+
+            // Name: Max Row Count for the Contact Matrix
+            // Format: list[(vid_time,int)]
+            // Description:
+            // Records the maximum row count for the contact matrix.
             logging.mark("max_nnz_row", max_nnz_row);
 
             num_contact += contact::embed_constraint_force_hessian(
                 data, eval_x, kinematic, force, tmp_fixed, fixed_hess, dt, prm);
 
+            // Name: Total Contact Count
+            // Format: list[(vid_time,int)]
+            // Description:
+            // Maximal contact count at a Newton's step.
             logging.mark("num_contact", num_contact);
             logging.pop();
 
             unsigned iter;
             float reresid;
+
+            // Name: Linear Solve Time
+            // Format: list[(vid_time,ms)]
+            // Map: pcg_linsolve
+            // Description:
+            // Total PCG linear solve time per Newton's step.
             logging.push("linsolve");
 
             bool success =
@@ -391,7 +505,19 @@ StepResult advance() {
                               prm.cg_tol, prm.cg_max_iter, dx, iter, reresid);
             logging.pop();
 
+            // Name: Linear Solve Iteration Count
+            // Format: list[(vid_time,int)]
+            // Map: pcg_iter
+            // Description:
+            // Count of the PCG linear solve iterations per Newton's step.
             logging.mark("iter", iter);
+
+            // Name: Linear Solve Relative Residual
+            // Format: list[(vid_time,float)]
+            // Map: pcg_resid
+            // Description:
+            // Relative Residual of the PCG linear solve iterations per Newton's
+            // step.
             logging.mark("reresid", reresid);
 
             if (!success) {
@@ -412,6 +538,12 @@ StepResult advance() {
 
             float max_dx =
                 utility::max_array(tmp_scalar.data, vertex_count, 0.0f);
+
+            // Name: Maximal Magnitude of Search Direction
+            // Format: list[(vid_time,float)]
+            // Map: max_search_dir
+            // Description:
+            // Maximum magnitude of the search direction in the Newton's step.
             logging.mark("max_dx", max_dx);
 
             tmp_eval_x.copy(eval_x);
@@ -432,6 +564,12 @@ StepResult advance() {
                 } DISPATCH_END;
             }
 
+            // Name: Line Search Time
+            // Format: list[(vid_time,ms)]
+            // Description:
+            // Line search time per Newton's step.
+            // CCD is performed to find the maximal feasible substep without
+            // collision.
             logging.push("line search");
             contact::update_aabb(host_data, data, tmp_eval_x, eval_x,
                                  tmp::kinematic.vertex, prm);
@@ -453,6 +591,13 @@ StepResult advance() {
             if (!final_step) {
                 toi_advanced += fmaxf(0.0f, 1.0f - toi_advanced) * toi;
             }
+
+            // Name: Time of Impact
+            // Format: list[(vid_time,float)]
+            // Description:
+            // Time of impact (TOI) per Newton's step, encoding the
+            // maximal feasible step size without collision or exceeding strain
+            // limits.
             logging.mark("toi", toi);
 
             DISPATCH_START(vertex_count)
@@ -475,12 +620,31 @@ StepResult advance() {
             logging.message("**** retry requested. dt: %.2e", dt);
             retry_count++;
         } else {
+            // Name: Time to Check Intersection
+            // Format: list[(vid_time,ms)]
+            // Map: runtime_intersection_check
+            // Description:
+            // At the end of step, an explicit intersection check is performed.
+            // This number records the consumed time in milliseconds.
+            logging.push("check intersection");
             if (!contact::check_intersection(data, kinematic, eval_x)) {
                 logging.message("### intersection detected");
                 result.intersection_free = false;
             }
+            logging.pop();
             if (result.success()) {
+                // Name: Advanced Fractional Step Size
+                // Format: list[(vid_time,float)]
+                // Description:
+                // This is an accumulated TOI of all the Newton's steps.
+                // This number is multiplied by the time step to yield the
+                // actual step size advanced in the simulation.
                 logging.mark("toi_advanced", toi_advanced);
+
+                // Name: Total Count of Consumed Newton's Steps
+                // Format: list[(vid_time,int)]
+                // Description:
+                // Total count of Newton's steps consumed in the single step.
                 logging.mark("newton_steps", step);
 
                 param->prev_dt = dt;
@@ -495,9 +659,24 @@ StepResult advance() {
         }
     }
     if (param->enable_retry) {
+        // Name: Total Retry Count
+        // Format: list[(vid_time,int)]
+        // Description:
+        // When the PCG fails and `enable_retry` is set to true, the whole step
+        // is retried with a reduced time step. This count records the total
+        // number of retries.
         logging.mark("retry_count", retry_count);
     }
     result.retry_count = retry_count;
+
+    // Name: Step Size
+    // Format: list[(vid_time,float)]
+    // Description:
+    // Actual step size advanced in the simulation.
+    // For most of the cases, this value is the same as the step size specified
+    // in the parameter. However, the actual step size is reduced when the
+    // option `enable_retry` is set to true and the PCG fails.
+    logging.mark("dt", dt);
     return result;
 }
 

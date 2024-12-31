@@ -185,21 +185,21 @@ Logs for the simulation can also be queried through the Python APIs. Here's an e
 
 ```python
 # get the list of log names as list[str]
-logs = session.get.logfiles()
-assert 'per_video_frame' in logs
-assert 'advance.newton_steps' in logs
+logs = session.get.log.names()
+assert 'per-video-frame' in logs
+assert 'newton-steps' in logs
 
 # list[(int,int)]: pairs of (frame, msec)
-msec_per_video = session.get.numbers('per_video_frame')
+msec_per_video = session.get.log.numbers('per-video-frame')
 
 # compute the average frame per video frame
-print('avg:', sum([n for _,n in msec_per_video])/len(msec_per_video))
+print('avg per frame:', sum([n for _,n in msec_per_video])/len(msec_per_video))
 
 # get newton step count list[tuple[float,int]] pair of (time,count)
-newton_steps = session.get.numbers('advance.newton_steps')
+newton_steps = session.get.log.numbers('newton-steps')
 
 # compute the average of consumed newton steps
-print('avg:', sum([n for _,n in newton_steps])/len(newton_steps))
+print('avg newton steps:', sum([n for _,n in newton_steps])/len(newton_steps))
 ```
 
 Below are some representatives.
@@ -209,14 +209,16 @@ Below are some representatives.
 
 | **Name** | **Description** | **Format**
 |---------------|----------------|------------
-| per_video_frame | Time per video frame | `list[(vid_frame,ms)]` |
-| advance.matrix_assembly | Matrix assembly time | `list[(vid_time,ms)]` |
-| advance.linsolve | Linear system solve time | `list[(vid_time,ms)]` |
-| advance.line_search | Line search time | `list[(vid_time,ms)]` |
-| advance | Time per step | `list[(vid_time,ms)]` |
-| advance.newton_steps | Newton iterations per step | `list[(vid_time,count)]` |
-| advance.num_contact | Contact count | `list[(vid_time,count)]` |
-| advance.max_sigma | Max stretch | `list(vid_time,strech)` |
+| time-per-frame | Time per video frame | `list[(vid_frame,ms)]` |
+| matrix-assembly | Matrix assembly time | `list[(vid_time,ms)]` |
+| pcg-linsolve | Linear system solve time | `list[(vid_time,ms)]` |
+| line-search | Line search time | `list[(vid_time,ms)]` |
+| time-per-step | Time per step | `list[(vid_time,ms)]` |
+| newton-steps | Newton iterations per step | `list[(vid_time,count)]` |
+| num-contact | Contact count | `list[(vid_time,count)]` |
+| max-sigma | Max stretch | `list(vid_time,float)` |
+
+The full list of log names and their descriptions is documented here: [[GitHub Pages]](https://st-tech.github.io/ppf-contact-solver/logs.html).
 
 Note that some entries have multiple records at the same video time ⏱️. This occurs because the same operation is executed multiple times 🔄 within a single step during the inner Newton's iterations 🧮. For example, the linear system solve is performed at each Newton's step, so if multiple Newton's steps are 🔁 executed, multiple linear system solve times appear in the record at the same 📊 video time.
 
@@ -224,7 +226,7 @@ If you would like to retrieve the raw log stream, you can do so by
 
 ```python
 # Last 8 lines. Omit for everything.
-for line in session.get.log(n_lines=8):
+for line in session.get.log.stream(n_lines=8):
     print(line)
 ```
 

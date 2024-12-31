@@ -30,3 +30,4 @@ frontend/**/.*
 _skipped.node
 docs/_*
 docs/parameters.rst
+docs/logs.rst

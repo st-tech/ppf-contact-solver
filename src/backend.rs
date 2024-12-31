@@ -166,29 +166,40 @@ impl Backend {
             }
             let new_frame = (self.state.time * args.fps).floor() as i32;
             if new_frame != self.state.curr_frame {
-                let mut per_video_frame = OpenOptions::new()
+                // Name: Time Per Video Frame
+                // Format: list[(vid_time,ms)]
+                // Description:
+                // Time consumed to compute a single video frame.
+                /*== push "time_per_frame" ==*/
+                let mut time_per_frame = OpenOptions::new()
                     .create(true)
                     .append(true)
-                    .open(format!("{}/data/per_video_frame.out", args.output).as_str())
+                    .open(format!("{}/data/time_per_frame.out", args.output).as_str())
                     .unwrap();
-                let mut per_video_time = OpenOptions::new()
+                // Name: Mapping of Video Frame to Simulation Time
+                // Format: list[(int,ms)]
+                // Description:
+                // This file contains a list of pairs encoding the mapping of video frame to the simulation time.
+                // The format is (frame) -> (ms), where frame is the video frame number and ms is the time of the simulation in milliseconds.
+                /*== push "frame_to_time" ==*/
+                let mut frame_to_time = OpenOptions::new()
                     .create(true)
                     .append(true)
-                    .open(format!("{}/data/per_video_time.out", args.output).as_str())
+                    .open(format!("{}/data/frame_to_time.out", args.output).as_str())
                     .unwrap();
                 let curr_time = Instant::now();
                 let elapsed_time = curr_time - last_time;
                 self.fetch_state(&dataset, &param);
                 self.state.curr_frame = new_frame;
                 writeln!(
-                    per_video_frame,
+                    time_per_frame,
                     "{} {}",
                     new_frame,
                     elapsed_time.as_millis()
                 )
                 .unwrap();
                 writeln!(
-                    per_video_time,
+                    frame_to_time,
                     "{} {}",
                     self.state.curr_frame, self.state.time
                 )

@@ -36,6 +36,7 @@ __all__ = [
     "SessionExport",
     "SessionOutput",
     "SessionGet",
+    "CppRustDocStringParser",
     "Param",
 ]
 
@@ -64,4 +65,4 @@ from ._session_ import (
     SessionGet,
     Param,
 )
-
+from ._parse_ import CppRustDocStringParser
