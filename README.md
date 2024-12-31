@@ -311,10 +311,13 @@ To get the ball ⚽ rolling, we'll configure a Docker environment 🐳 to minimi
 > [!NOTE]
 > If you wish to install our solver on a headless remote machine, SSH into the server with port forwarding using the following command:
 > ```
-> ssh -L 8080:localhost:8080 user@remote_server_address
+> MY_WEB_PORT=8080
+> ssh -L 8080:localhost:$MY_WEB_PORT user@remote_server_address
 > ```
 > This port forwarding will be used to access the frontend afterward.
 > The second port number must match `$MY_WEB_PORT` below.
+>
+> In this case, `$MY_WEB_PORT` refers to a port on the host machine, not on your local computer. In this example, you'll be connecting to the frontend via http://localhost:8080, regardless of the value of `$MY_WEB_PORT`.
 
 First, install the CUDA Toolkit [[Link]](https://developer.nvidia.com/cuda-downloads) along with the driver on your host system.
 Next, follow the instructions below specific to the operating system running on the host.
@@ -326,7 +329,7 @@ You may need to log out or reboot after the installation. After logging back in,
 Then, create a container 📦 by running the following Docker command in PowerShell:
 
 ```
-$MY_WEB_PORT = 8080  # Port number for JupyterLab web browsing
+$MY_WEB_PORT = 8080  # Web port number on the host
 $MY_TIME_ZONE = "Asia/Tokyo"  # Your time zone
 $MY_CONTAINER_NAME = "ppf-contact-solver"  # Container name
 
@@ -431,7 +434,10 @@ python3 warmup.py jupyter
 ```
 
 and now you can access our JupyterLab frontend from http://localhost:8080 on your 🌐 browser.
-The port number `8080` is the one we set for `$MY_WEB_PORT`.
+
+> [!NOTE]
+> The port number `8080` corresponds to the value set for `$MY_WEB_PORT` when the host machine and the local machine are the same. If you're connected to the host computer via SSH port forwarding, the first port option in the command (e.g., `xxxx` in `-L xxxx:localhost:$MY_WEB_PORT`) is the port number.
+
 Enjoy! 😄
 
 ### 🧹 Cleaning Up
