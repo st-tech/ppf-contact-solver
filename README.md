@@ -185,18 +185,18 @@ The behaviors can be changed through the settings.
 Logs for the simulation can also be queried through the Python APIs. Here's an example of how to get the list of recorded logs, fetch them, and compute the average.
 
 ```python
-# get the list of log names as list[str]
+# get a list of log names
 logs = session.get.log.names()
 assert 'per-video-frame' in logs
 assert 'newton-steps' in logs
 
-# list[(int,int)]: pairs of (frame, msec)
+# get a list of time per video frame
 msec_per_video = session.get.log.numbers('per-video-frame')
 
-# compute the average frame per video frame
+# compute the average time per video frame
 print('avg per frame:', sum([n for _,n in msec_per_video])/len(msec_per_video))
 
-# get newton step count list[tuple[float,int]] pair of (time,count)
+# get a list of newton steps
 newton_steps = session.get.log.numbers('newton-steps')
 
 # compute the average of consumed newton steps
