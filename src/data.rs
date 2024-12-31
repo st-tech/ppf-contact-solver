@@ -281,7 +281,7 @@ pub struct Constraint {
 pub struct ParamSet {
     pub time: f64,
     pub fitting: bool,
-    pub aerial_friction: f32,
+    pub air_friction: f32,
     pub air_density: f32,
     pub strain_limit_tau: f32,
     pub strain_limit_eps: f32,
@@ -307,7 +307,7 @@ pub struct ParamSet {
     pub eiganalysis_eps: f32,
     pub friction: f32,
     pub friction_eps: f32,
-    pub isotropic_aerial_friction: f32,
+    pub isotropic_air_friction: f32,
     pub gravity: Vec3f,
     pub wind: Vec3f,
     pub model_shell: Model,

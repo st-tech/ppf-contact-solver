@@ -329,7 +329,7 @@ pub fn make_param(args: &Args) -> data::ParamSet {
     data::ParamSet {
         time: 0.0,
         fitting: false,
-        aerial_friction: args.aerial_friction,
+        air_friction: args.air_friction,
         air_density: args.air_density,
         strain_limit_tau,
         strain_limit_eps,
@@ -355,7 +355,7 @@ pub fn make_param(args: &Args) -> data::ParamSet {
         eiganalysis_eps: args.eiganalysis_eps,
         friction: args.friction,
         friction_eps: args.friction_eps,
-        isotropic_aerial_friction: args.isotropic_aerial_friction,
+        isotropic_air_friction: args.isotropic_air_friction,
         gravity: Vec3f::new(0.0, args.gravity, 0.0),
         wind,
         model_shell: match args.model_shell.as_str() {

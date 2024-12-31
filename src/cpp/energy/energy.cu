@@ -8,7 +8,7 @@
 #include "../eigenanalysis/eigenanalysis.hpp"
 #include "../utility/dispatcher.hpp"
 #include "../utility/utility.hpp"
-#include "model/aerial_damper.hpp"
+#include "model/air_damper.hpp"
 #include "model/arap.hpp"
 #include "model/baraffwitkin.hpp"
 #include "model/dihedral_angle.hpp"
@@ -39,9 +39,9 @@ embed_vertex_force_hessian(const DataSet &data, const Vec<Vec3f> &eval_x,
     Mat3x3f H = Mat3x3f::Zero();
     if (normal.isZero() == false && param.air_density) {
         f += area * param.air_density *
-             aerial_damper::face_gradient(dt, y, x, normal, wind, param);
+             air_damper::face_gradient(dt, y, x, normal, wind, param);
         H += area * param.air_density *
-             aerial_damper::face_hessian(dt, normal, param);
+             air_damper::face_hessian(dt, normal, param);
     }
     bool pulled(false);
     for (unsigned j = 0; j < data.constraint.pull.size; ++j) {
@@ -58,10 +58,10 @@ embed_vertex_force_hessian(const DataSet &data, const Vec<Vec3f> &eval_x,
         f += mass * momentum::gradient(dt, y, target[i]);
         H += mass * momentum::hessian(dt);
     }
-    if (param.isotropic_aerial_friction) {
-        f += param.isotropic_aerial_friction * (y - x) / (dt * dt);
+    if (param.isotropic_air_friction) {
+        f += param.isotropic_air_friction * (y - x) / (dt * dt);
         H +=
-            (param.isotropic_aerial_friction / (dt * dt)) * Mat3x3f::Identity();
+            (param.isotropic_air_friction / (dt * dt)) * Mat3x3f::Identity();
     }
     if (param.fix_xz && y[1] > param.fix_xz) {
         float t = fmin(1.0f, y[1] - param.fix_xz);

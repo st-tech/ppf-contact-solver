@@ -207,7 +207,7 @@ struct Constraint {
 struct ParamSet {
     double time;
     bool fitting;
-    float aerial_friction;
+    float air_friction;
     float air_density;
     float strain_limit_tau;
     float strain_limit_eps;
@@ -233,7 +233,7 @@ struct ParamSet {
     float eiganalysis_eps;
     float friction;
     float friction_eps;
-    float isotropic_aerial_friction;
+    float isotropic_air_friction;
     Vec3f gravity;
     Vec3f wind;
     Model model_shell;

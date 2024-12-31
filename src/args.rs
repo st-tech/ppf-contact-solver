@@ -63,7 +63,7 @@ pub struct Args {
     // When an object is moving in the air, both drag and lift forces are computed.
     // This value controls the ratio of the tangential friction to the normal friction.
     #[clap(long, default_value_t = 0.2)]
-    pub aerial_friction: f32,
+    pub air_friction: f32,
 
     // Name: Extended Line Search Maximum Time
     // Recommended Range: 1.25 to 1.75
@@ -339,7 +339,7 @@ pub struct Args {
     // Description:
     // Per-vertex air dragging coefficient.
     #[clap(long, default_value_t = 0.0)]
-    pub isotropic_aerial_friction: f32,
+    pub isotropic_air_friction: f32,
 
     // Name: Bend Stiffness for Shells
     // Recommended Range: 0.0 to 1e2

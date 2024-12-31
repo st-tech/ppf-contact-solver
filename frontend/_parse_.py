@@ -12,33 +12,47 @@ class CppRustDocStringParser:
         desc = ""
         description_mode = False
 
+        def clear():
+            nonlocal doc
+            nonlocal desc
+            nonlocal description_mode
+            doc = {}
+            desc = ""
+            description_mode = False
+
         def register(name):
             nonlocal par_name
             nonlocal doc
             nonlocal desc
             nonlocal description_mode
-            if desc:
-                doc["Description"] = desc
-            if par_name:
-                doc["filename"] = f"{par_name}.{name}.out"
-            else:
-                doc["filename"] = f"{name}.out"
-            if "Map" in doc:
-                name = doc["Map"]
-                del doc["Map"]
-            desc = ""
-            description_mode = False
-            result[name.replace("_", "-")] = doc.copy()
+
+            if "Name" in doc.keys():
+                if desc:
+                    doc["Description"] = desc
+                if par_name:
+                    doc["filename"] = f"{par_name}.{name}.out"
+                else:
+                    doc["filename"] = f"{name}.out"
+                if "Map" in doc:
+                    name = doc["Map"]
+                    del doc["Map"]
+                result[name.replace("_", "-")] = doc.copy()
+            clear()
 
         def extract_name(line):
             start = line.find('"') + 1
             end = line.find('"', start)
-            return line[start:end].replace(" ", "_")
+            name = line[start:end].replace(" ", "_")
+            return name
 
         def parse_line(line: str):
             nonlocal par_name
             nonlocal description_mode
             nonlocal desc
+            nonlocal doc
+
+            if line.strip() == "":
+                clear()
 
             skip_lables = ["File", "Author", "License", "https"]
             if line.startswith("//"):
@@ -58,7 +72,10 @@ class CppRustDocStringParser:
                     content = fields[1].strip()
                     doc[label] = content
             elif line.startswith("SimpleLog logging"):
-                par_name = extract_name(line)
+                par_name = ""
+                name = extract_name(line)
+                register(name)
+                par_name = name
             elif line.startswith("/*== push"):
                 register(extract_name(line))
             elif "logging.push(" in line:
@@ -78,6 +95,7 @@ class CppRustDocStringParser:
                             if "#include" not in line:
                                 parse_line(line)
 
+        result = dict(sorted(result.items()))
         return result
 
 
@@ -197,4 +215,6 @@ class ParamParser:
                         curr_attributes = []
                     else:
                         curr_attributes = []
+
+        result = dict(sorted(result.items()))
         return result

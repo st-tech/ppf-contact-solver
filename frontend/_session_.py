@@ -539,7 +539,6 @@ class SessionLog:
                     entries.append([float_or_int(entry[0]), float_or_int(entry[1])])
             return entries
         else:
-            print(f"File {path} does not exist")
             return None
 
     def number(self, name: str):
@@ -889,9 +888,7 @@ class Session:
             if live_update and is_running():
 
                 def update_dataframe(table, curr_frame):
-                    time_per_frame = convert_time(
-                        self.get.log.number("time-per-frame")
-                    )
+                    time_per_frame = convert_time(self.get.log.number("time-per-frame"))
                     time_per_step = convert_time(self.get.log.number("time-per-step"))
                     n_contact = convert_integer(self.get.log.number("num-contact"))
                     n_newton = convert_integer(self.get.log.number("newton-steps"))
