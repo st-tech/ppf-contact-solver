@@ -187,11 +187,11 @@ Logs for the simulation can also be queried through the Python APIs. Here's an e
 ```python
 # get a list of log names
 logs = session.get.log.names()
-assert 'per-video-frame' in logs
+assert 'time-per-frame' in logs
 assert 'newton-steps' in logs
 
 # get a list of time per video frame
-msec_per_video = session.get.log.numbers('per-video-frame')
+msec_per_video = session.get.log.numbers('time-per-frame')
 
 # compute the average time per video frame
 print('avg per frame:', sum([n for _,n in msec_per_video])/len(msec_per_video))
