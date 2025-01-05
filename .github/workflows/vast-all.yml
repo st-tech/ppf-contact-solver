@@ -101,6 +101,9 @@ jobs:
         timeout-minutes: 30
         run: bash $HELPER_PATH create $VAST_API_KEY
 
+      - name: twist
+        run: bash $HELPER_PATH run twist.py
+
       - name: trampoline
         run: bash $HELPER_PATH run trampoline.py
 
