@@ -26,5 +26,5 @@ param.set("dt", 0.01)
 param.set("min-newton-steps", 8)
 param.set("frames", 60)
 
-session = app.session.create("dt-001-newton-8").init(fixed).start(param, blocking=True)
+session = app.session.create(fixed).start(param, blocking=True)
 assert session.finished()

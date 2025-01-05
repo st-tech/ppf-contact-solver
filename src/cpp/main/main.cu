@@ -15,6 +15,7 @@
 #include "cuda_utils.hpp"
 #include "mem.hpp"
 #include <cassert>
+#include <limits>
 
 namespace tmp {
 
@@ -185,8 +186,8 @@ void initialize(DataSet _host_dataset, DataSet _dev_dataset, ParamSet *_param) {
     // Format: list[(int,ms)]
     // Map: initial_check_intersection
     // Description:
-    // Check if any intersection is detected at the beginning of the simulation.
-    // The consumed time is recorded in milliseconds.
+    // Time consumed to check if any intersection is detected at the
+    // beginning of the simulation.
     // Only a single record is expected.
     logging.push("check intersection");
     contact::update_aabb(host_dataset, dev_dataset, dev_dataset.vertex.prev,
@@ -582,9 +583,13 @@ StepResult advance() {
             }
             logging.pop();
 
-            if (toi <= 0.0f) {
-                logging.message("### ccd failed (toi: %.2e)", toi);
-                result.ccd_success = false;
+            if (toi <= std::numeric_limits<float>::epsilon()) {
+                if (param->enable_retry && dt > DT_MIN) {
+                    retry = true;
+                } else {
+                    logging.message("### ccd failed (toi: %.2e)", toi);
+                    result.ccd_success = false;
+                }
                 break;
             }
 
@@ -662,9 +667,9 @@ StepResult advance() {
         // Name: Total Retry Count
         // Format: list[(vid_time,int)]
         // Description:
-        // When the PCG fails and `enable_retry` is set to true, the whole step
-        // is retried with a reduced time step. This count records the total
-        // number of retries.
+        // When the PCG fails or line search fails and `enable_retry` is set to
+        // true, the whole step is retried with a reduced time step. This count
+        // records the total number of retries.
         logging.mark("retry_count", retry_count);
     }
     result.retry_count = retry_count;

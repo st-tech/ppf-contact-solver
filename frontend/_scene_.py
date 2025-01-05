@@ -11,6 +11,7 @@ import colorsys
 from typing import Optional
 from ._plot_ import PlotManager, Plot
 from ._asset_ import AssetManager
+from dataclasses import dataclass
 
 EPS = 1e-3
 
@@ -86,6 +87,7 @@ class Wall:
         """Initialize the wall."""
         self._normal = [0, 1, 0]
         self._entry = []
+        self._transition = "smooth"
 
     def get_entry(self) -> list[tuple[list[float], float]]:
         """Get a list of time-dependent wall entries.
@@ -150,6 +152,11 @@ class Wall:
         self._entry.append((pos, time))
         return self
 
+    def interp(self, transition: str) -> "Wall":
+        """Set the transition type for the wall."""
+        self._transition = transition
+        return self
+
 
 class Sphere:
     """An invisible sphere class."""
@@ -159,6 +166,7 @@ class Sphere:
         self._entry = []
         self._hemisphere = False
         self._invert = False
+        self._transition = "smooth"
 
     def hemisphere(self) -> "Sphere":
         """Turn the sphere into a hemisphere, so the half of the sphere top becomes empty, like a bowl."""
@@ -168,6 +176,11 @@ class Sphere:
     def invert(self) -> "Sphere":
         """Invert the sphere, so the inside becomes empty and the outside becomes solid."""
         self._invert = True
+        return self
+
+    def interp(self, transition: str) -> "Sphere":
+        """Set the transition type for the sphere."""
+        self._transition = transition
         return self
 
     def get_entry(self) -> list[tuple[list[float], float, float]]:
@@ -264,12 +277,206 @@ class Sphere:
         return self
 
 
+@dataclass
+class SpinData:
+    """Represents spinning data for a set of vertices."""
+
+    center: np.ndarray
+    axis: np.ndarray
+    angular_velocity: float
+    t_start: float
+    t_end: float
+
+
+@dataclass
+class PinKeyframe:
+    """Represents a single keyframe for pinned vertices."""
+
+    position: np.ndarray
+    time: float
+
+
+@dataclass
+class PinData:
+    """Represents pinning data for a set of vertices."""
+
+    index: list[int]
+    keyframe: list[PinKeyframe]
+    spin: list[SpinData]
+    should_unpin: bool = False
+    transition: str = "smooth"
+    pull_strength: float = 0.0
+
+
+class PinHolder:
+    """Class to manage pinning behavior of objects."""
+
+    def __init__(self, obj: "Object", indices: list[int]):
+        """Initialize pin object.
+
+        Args:
+            obj (Object): The object to pin.
+            indices (list[int]): The indices of the vertices to pin.
+        """
+        self._obj = obj
+        self._data = PinData(
+            index=indices,
+            spin=[],
+            keyframe=[],
+        )
+
+    def set_pull(self, strength: float) -> "PinHolder":
+        """Set pull strength for pinned vertices.
+
+        Args:
+            strength (float): The pull strength.
+
+        Returns:
+            PinHolder: The pinholder with the updated pull strength.
+        """
+        self._data.pull_strength = strength
+        return self
+
+    def interp(self, transition: str) -> "PinHolder":
+        """Set the transition type for the pinning.
+
+        Args:
+            transition (str): The transition type. Currently supported: "smooth", "linear". Default is "smooth".
+
+        Returns:
+            PinHolder: The pinholder with the updated transition type.
+        """
+        self._data.transition = transition
+        return self
+
+    def unpin(self) -> "PinHolder":
+        """Unpin the object.
+
+        Returns:
+            PinHolder: The pinholder with the unpinned vertices.
+        """
+        self._data.should_unpin = True
+        return self
+
+    def move_by(self, delta_pos, time: float) -> "PinHolder":
+        """Move the object by a positional delta over a specified time.
+
+        Args:
+            delta_pos (list[float]): The positional delta.
+            time (float): The time over which to move the object.
+
+        Returns:
+            PinHolder: The pinholder with the updated position.
+        """
+        delta_pos = np.array(delta_pos).reshape((-1, 3))
+        if not self._data.keyframe:
+            target = self._obj.vertex()[self._data.index] + delta_pos
+        else:
+            target = self._data.keyframe[-1].position + delta_pos
+        return self.move_to(target, time)
+
+    def hold(self, time: float) -> "PinHolder":
+        """Hold the object in its current position for a specified time.
+
+        Args:
+            time (float): The time to hold the object.
+
+        Returns:
+            PinHolder: The pinholder with the held position.
+        """
+        return self.move_by([0, 0, 0], time)
+
+    def move_to(
+        self,
+        target: np.ndarray,
+        time: float,
+    ) -> "PinHolder":
+        """Move the object to a target position at a specified time.
+
+        Args:
+            target (np.ndarray): The target position.
+            time (float): The absolute time over which to move the object.
+
+        Returns:
+            PinHolder: The pinholder with the updated position.
+        """
+        if len(target) != len(self.index):
+            raise Exception("target must have the same length as pin")
+        elif time == 0:
+            raise Exception("time must be greater than zero")
+
+        if not self.keyframe:
+            self._add_movement(self._obj.vertex()[self.index], 0)
+
+        self._add_movement(target, time)
+        return self
+
+    def _add_movement(self, target_pos: np.ndarray, time: float):
+        final_time = self._data.keyframe[-1].time if self._data.keyframe else None
+        if final_time is not None and time <= final_time:
+            raise Exception("time must be greater than the last time")
+        self._data.keyframe.append(PinKeyframe(target_pos, time))
+
+    def spin(
+        self,
+        center: list[float] = [0.0, 0.0, 0.0],
+        axis: list[float] = [0.0, 1.0, 0.0],
+        angular_velocity: float = 360.0,
+        t_start: float = 0.0,
+        t_end: float = float("inf"),
+    ) -> "PinHolder":
+        self._data.spin.append(
+            SpinData(np.array(center), np.array(axis), angular_velocity, t_start, t_end)
+        )
+        return self
+
+    @property
+    def data(self) -> Optional[PinData]:
+        """Get the pinning data.
+
+        Returns:
+            PinData: The pinning data.
+        """
+        return self._data
+
+    @property
+    def index(self) -> list[int]:
+        """Get pinned vertex indices."""
+        return self._data.index
+
+    @property
+    def spinner(self) -> list[SpinData]:
+        """Get list of spins."""
+        return self._data.spin
+
+    @property
+    def keyframe(self) -> list[PinKeyframe]:
+        """Get list of movement keyframes."""
+        return self._data.keyframe
+
+    @property
+    def should_unpin(self) -> bool:
+        """Check if vertices should unpin after movement."""
+        return self._data.should_unpin
+
+    @property
+    def pull_strength(self) -> float:
+        """Get pull force strength."""
+        return self._data.pull_strength
+
+    @property
+    def transition(self) -> str:
+        """Get the transition type."""
+        return self._data.transition
+
+
 class FixedScene:
     """A fixed scene class."""
 
     def __init__(
         self,
         plot: PlotManager,
+        name: str,
         vert: np.ndarray,
         color: np.ndarray,
         vel: np.ndarray,
@@ -288,6 +495,7 @@ class FixedScene:
 
         Args:
             plot (PlotManager): The plot manager.
+            name (str): The name of the scene.
             vert (np.ndarray): The vertices of the scene.
             color (np.ndarray): The colors of the vertices.
             vel (np.ndarray): The velocities of the vertices.
@@ -304,6 +512,7 @@ class FixedScene:
         """
 
         self._plot = plot
+        self._name = name
         self._vert = vert
         self._color = color
         self._vel = vel
@@ -311,7 +520,8 @@ class FixedScene:
         self._rod = rod
         self._tri = tri
         self._tet = tet
-        self._pin = []
+        self._pin: list[PinData] = []
+        self._spin: list[SpinData] = []
         self._static_vert = np.zeros(0)
         self._static_color = np.zeros(0)
         self._static_tri = np.zeros(0)
@@ -335,8 +545,7 @@ class FixedScene:
         if len(self._tet):
             data["#tet"] = len(self._tet)
         if len(self._pin):
-            val = sum([len(pin) for pin, _, _, _, _ in self._pin])
-            data["#pin"] = val
+            data["#pin"] = sum([len(pin.index) for pin in self._pin])
         if len(self._static_vert) and len(self._static_tri):
             data["#static_vert"] = len(self._static_vert)
             data["#static_tri"] = len(self._static_tri)
@@ -440,13 +649,14 @@ class FixedScene:
             f.write(f"shell_count = {self._shell_count}\n")
             f.write("\n")
 
-            for i, (pin, target, _, unpin, pull) in enumerate(self._pin):
+            for i, pin in enumerate(self._pin):
                 f.write(f"[pin-{i}]\n")
-                f.write(f"keyframe = {len(target)}\n")
-                f.write(f"pin = {len(pin)}\n")
-                f.write(f"pull = {float(pull)}\n")
-                f.write(f"unpin = {'true' if unpin else 'false'}\n")
-                f.write("\n")
+                f.write(f"keyframe = {len(pin.keyframe)}\n")
+                f.write(f"spin = {len(pin.spin)}\n")
+                f.write(f"pin = {len(pin.index)}\n")
+                f.write(f"pull = {float(pin.pull_strength)}\n")
+                f.write(f"unpin = {'true' if pin.should_unpin else 'false'}\n")
+                f.write(f'transition = "{pin.transition}"\n')
 
             for i, wall in enumerate(self._wall):
                 normal = wall._normal
@@ -455,6 +665,7 @@ class FixedScene:
                 f.write(f"nx = {float(normal[0])}\n")
                 f.write(f"ny = {float(normal[1])}\n")
                 f.write(f"nz = {float(normal[2])}\n")
+                f.write(f'transition = "{wall._transition}"\n')
                 f.write("\n")
 
             for i, sphere in enumerate(self._sphere):
@@ -462,6 +673,7 @@ class FixedScene:
                 f.write(f"keyframe = {len(sphere._entry)}\n")
                 f.write(f"hemisphere = {'true' if sphere._hemisphere else 'false'}\n")
                 f.write(f"invert = {'true' if sphere._invert else 'false'}\n")
+                f.write(f'transition = "{sphere._transition}"\n')
                 f.write("\n")
 
         bin_path = os.path.join(path, "bin")
@@ -496,18 +708,33 @@ class FixedScene:
             self._stitch_w.astype(np.float32).tofile(
                 os.path.join(bin_path, "stitch_w.bin")
             )
-        for i, (pin, target, timing, _, _) in enumerate(self._pin):
+        for i, pin in enumerate(self._pin):
             with open(os.path.join(bin_path, f"pin-ind-{i}.bin"), "wb") as f:
-                np.array(pin, dtype=np.uint64).tofile(f)
-            if len(target):
+                np.array(pin.index, dtype=np.uint64).tofile(f)
+            if len(pin.keyframe):
                 target_dir = os.path.join(bin_path, f"pin-{i}")
                 os.makedirs(target_dir)
-                for j, pos in enumerate(target):
-                    with open(os.path.join(target_dir, f"{j}.bin"), "wb") as f:
-                        np.array(pos, dtype=np.float32).tofile(f)
-            if len(timing):
                 with open(os.path.join(bin_path, f"pin-timing-{i}.bin"), "wb") as f:
-                    np.array(timing, dtype=np.float32).tofile(f)
+                    time_array = [entry.time for entry in pin.keyframe]
+                    np.array(time_array, dtype=np.float32).tofile(f)
+                for j, entry in enumerate(pin.keyframe):
+                    with open(os.path.join(target_dir, f"{j}.bin"), "wb") as f:
+                        np.array(entry.position, dtype=np.float32).tofile(f)
+            if len(pin.spin):
+                spin_dir = os.path.join(path, "spin")
+                os.makedirs(spin_dir, exist_ok=True)
+                with open(os.path.join(spin_dir, f"spin-{i}.toml"), "w") as f:
+                    for j, spin in enumerate(pin.spin):
+                        f.write(f"[spin-{j}]\n")
+                        f.write(f"center_x = {float(spin.center[0])}\n")
+                        f.write(f"center_y = {float(spin.center[1])}\n")
+                        f.write(f"center_z = {float(spin.center[2])}\n")
+                        f.write(f"axis_x = {float(spin.axis[0])}\n")
+                        f.write(f"axis_y = {float(spin.axis[1])}\n")
+                        f.write(f"axis_z = {float(spin.axis[2])}\n")
+                        f.write(f"angular_velocity = {float(spin.angular_velocity)}\n")
+                        f.write(f"t_start = {float(spin.t_start)}\n")
+                        f.write(f"t_end = {float(spin.t_end)}\n")
 
         for i, wall in enumerate(self._wall):
             with open(os.path.join(bin_path, f"wall-pos-{i}.bin"), "wb") as f:
@@ -580,15 +807,21 @@ class FixedScene:
         else:
             return 0.0
 
-    def set_pin(
-        self, pin: list[tuple[list[int], list[np.ndarray], list[float], bool, float]]
-    ):
+    def set_pin(self, pin: list[PinData]):
         """Set the pinning data of all the objects.
 
         Args:
-            pin (list[tuple[list[int], list[np.ndarray], list[float], bool, float]]): A list of pinning data.
+            pin_data (list[PinData]): A list of pinning data.
         """
         self._pin = pin
+
+    def set_spin(self, spin: list[SpinData]):
+        """Set the spinning data of all the objects.
+
+        Args:
+            spin_data (list[SpinData]): A list of spinning data.
+        """
+        self._spin = spin
 
     def set_static(self, vert: np.ndarray, tri: np.ndarray, color: np.ndarray):
         """Set the static mesh data.
@@ -622,17 +855,41 @@ class FixedScene:
             np.ndarray: The vertex positions at the specified time.
         """
         vert = self._vert.copy()
-        if len(self._pin):
-            for pin, _target, _timing, _, _ in self._pin:
-                for i, (_, _) in enumerate(zip(_target, _timing)):
-                    if time >= _timing[-1]:
-                        vert[pin] = _target[-1]
+        for pin in self._pin:
+            last_time = pin.keyframe[-1].time if len(pin.keyframe) else 0.0
+            last_position = (
+                pin.keyframe[-1].position if len(pin.keyframe) else vert[pin.index]
+            )
+            for i, entry in enumerate(pin.keyframe):
+                next_entry = pin.keyframe[i + 1] if i + 1 < len(pin.keyframe) else None
+                if entry.time >= last_time:
+                    vert[pin.index] = last_position
+                    break
+                elif next_entry is not None:
+                    if time >= entry.time and time < next_entry.time:
+                        t1, t2 = entry.time, next_entry.time
+                        q1, q2 = entry.position, next_entry.position
+                        r = (time - t1) / (t2 - t1)
+                        if pin.transition == "smooth":
+                            r = r * r * (3.0 - 2.0 * r)
+                        vert[pin.index] = q1 * (1 - r) + q2 * r
                         break
-                    elif time >= _timing[i] and time < _timing[i + 1]:
-                        q1, q2 = _target[i], _target[i + 1]
-                        r = (time - _timing[i]) / (_timing[i + 1] - _timing[i])
-                        vert[pin] = q1 * (1 - r) + q2 * r
-                        break
+            for p in pin.spin:
+                t = min(time, p.t_end) - p.t_start
+                radian_velocity = p.angular_velocity / 180.0 * np.pi
+                angle = radian_velocity * t
+                axis = p.axis / np.linalg.norm(p.axis)
+
+                # Rodrigues rotation formula
+                cos_theta = np.cos(angle)
+                sin_theta = np.sin(angle)
+                points = vert[pin.index] - p.center
+                rotated = (
+                    points * cos_theta
+                    + np.cross(axis, points) * sin_theta
+                    + np.outer(np.dot(points, axis), axis) * (1.0 - cos_theta)
+                )
+                vert[pin.index] = rotated + p.center
         vert += time * self._vel
         return vert
 
@@ -739,16 +996,20 @@ class FixedScene:
                         avg_area = self._average_tri_area()
                         avg_length = np.sqrt(avg_area)
                         shading["point_size"] = 5 * avg_length
-                        pin_verts = np.vstack(
-                            [vert[pin] for pin, _, _, _, _ in self._pin]
-                        )
+                        pin_verts = np.vstack([vert[pin.index] for pin in self._pin])
                         plot.add.point(pin_verts)
                         max_time = max(
                             [
-                                timing[-1] if len(timing) else 0
-                                for _, _, timing, _, _ in self._pin
+                                pin.keyframe[-1].time if len(pin.keyframe) else 0
+                                for pin in self._pin
                             ]
                         )
+                        for p in self._pin:
+                            for spin in p.spin:
+                                if spin.t_end == float("inf"):
+                                    max_time = max(max_time, 1.0)
+                                else:
+                                    max_time = max(max_time, spin.t_end)
                     if has_vel:
                         max_time = max(max_time, 1.0)
                     if max_time > 0:
@@ -809,7 +1070,9 @@ class InvisibleAdder:
 class ObjectAdder:
     def __init__(self, scene: "Scene"):
         self._scene = scene
-        self.invisible = InvisibleAdder(scene) #: InvisibleAdder: The invisible object adder.
+        self.invisible = InvisibleAdder(
+            scene
+        )  #: InvisibleAdder: The invisible object adder.
 
     def __call__(self, mesh_name: str, ref_name: str = "") -> "Object":
         """Add a mesh to the scene.
@@ -846,11 +1109,11 @@ class Scene:
         self._plot = plot
         self._asset = asset
         self._save_func = save_func
-        self._object = {}
-        self._sphere = []
-        self._wall = []
-        self.add = ObjectAdder(self) #: ObjectAdder: The object adder.
-        self.info = SceneInfo(name, self) #: SceneInfo: The scene information.
+        self._object: dict[str, Object] = {}
+        self._sphere: list[Sphere] = []
+        self._wall: list[Wall] = []
+        self.add = ObjectAdder(self)  #: ObjectAdder: The object adder.
+        self.info = SceneInfo(name, self)  #: SceneInfo: The scene information.
 
     def clear(self) -> "Scene":
         """Clear all objects from the scene.
@@ -874,11 +1137,12 @@ class Scene:
             FixedScene: The built fixed scene.
         """
         pbar = tqdm(total=10, desc="build", ncols=70)
+        for _, obj in self._object.items():
+            obj.update_static()
+
         concat_count = 0
         dyn_objects = [
-            obj
-            for obj in self._object.values()
-            if not obj.is_static() and not obj._color
+            obj for obj in self._object.values() if not obj.static and not obj._color
         ]
         n = len(dyn_objects)
         for i, obj in enumerate(dyn_objects):
@@ -899,13 +1163,14 @@ class Scene:
         tag = {}
         for name, obj in self._object.items():
             assert name not in tag
-            if not obj.is_static():
+            if not obj.static:
                 vert = obj.get("V")
-                tag[name] = [-1] * len(vert)
+                if vert is not None:
+                    tag[name] = [-1] * len(vert)
 
         pbar.update(1)
         for name, obj in self._object.items():
-            if not obj.is_static() and obj.get("T") is None:
+            if not obj.static and obj.get("T") is None:
                 map = tag[name]
                 vert, edge = obj.get("V"), obj.get("E")
                 if vert is not None and edge is not None:
@@ -917,7 +1182,7 @@ class Scene:
 
         pbar.update(1)
         for name, obj in self._object.items():
-            if not obj.is_static() and obj.get("T") is None:
+            if not obj.static and obj.get("T") is None:
                 map = tag[name]
                 vert, tri = obj.get("V"), obj.get("F")
                 if vert is not None and tri is not None:
@@ -929,13 +1194,14 @@ class Scene:
 
         pbar.update(1)
         for name, obj in self._object.items():
-            if not obj.is_static():
+            if not obj.static:
                 vert = obj.get("V")
-                map = tag[name]
-                for i in range(len(vert)):
-                    if map[i] == -1:
-                        map[i] = concat_count
-                        concat_count += 1
+                if vert is not None:
+                    map = tag[name]
+                    for i in range(len(vert)):
+                        if map[i] == -1:
+                            map[i] = concat_count
+                            concat_count += 1
 
         concat_vert = np.zeros((concat_count, 3))
         concat_color = np.zeros((concat_count, 3))
@@ -959,7 +1225,7 @@ class Scene:
 
         pbar.update(1)
         for name, obj in self._object.items():
-            if not obj.is_static():
+            if not obj.static:
                 map = tag[name]
                 vert, uv = obj.vertex(), obj._uv
                 if vert is not None:
@@ -971,7 +1237,7 @@ class Scene:
 
         pbar.update(1)
         for name, obj in self._object.items():
-            if not obj.is_static():
+            if not obj.static:
                 map = tag[name]
                 edge = obj.get("E")
                 if edge is not None and obj.get("T") is None:
@@ -980,7 +1246,7 @@ class Scene:
 
         pbar.update(1)
         for name, obj in self._object.items():
-            if not obj.is_static():
+            if not obj.static:
                 map = tag[name]
                 tri = obj.get("F")
                 if tri is not None and obj.get("T") is None:
@@ -989,7 +1255,7 @@ class Scene:
 
         pbar.update(1)
         for name, obj in self._object.items():
-            if not obj.is_static():
+            if not obj.static:
                 map = tag[name]
                 tet = obj.get("T")
                 tri = obj.get("F")
@@ -999,33 +1265,35 @@ class Scene:
 
         pbar.update(1)
         for name, obj in self._object.items():
-            if not obj.is_static():
+            if not obj.static:
                 map = tag[name]
-                stitch_ind = obj.get("Ind")
-                stitch_w = obj.get("W")
-                if len(obj._pin):
+                for p in obj._pin:
                     concat_pin.append(
-                        (
-                            [map[vi] for vi in obj._pin],
-                            obj._move,
-                            obj._time,
-                            obj._unpin,
-                            obj._pull,
+                        PinData(
+                            index=[map[vi] for vi in p.index],
+                            keyframe=p.keyframe,
+                            spin=p.spinner,
+                            should_unpin=p.should_unpin,
+                            pull_strength=p.pull_strength,
+                            transition=p.transition,
                         )
                     )
+                stitch_ind = obj.get("Ind")
+                stitch_w = obj.get("W")
                 if stitch_ind is not None and stitch_w is not None:
                     concat_stitch_ind.extend(vec_map(map, stitch_ind))
                     concat_stitch_w.extend(stitch_w)
 
         pbar.update(1)
         for name, obj in self._object.items():
-            if obj.is_static():
+            if obj.static:
                 color = obj.get("color")
                 offset = len(concat_static_vert)
                 tri = obj.get("F")
+                vert = obj.get("V")
                 if tri is not None:
-                    vert = obj.get("V")
                     concat_static_tri.extend(tri + offset)
+                if vert is not None:
                     concat_static_vert.extend(obj.apply_transform(vert))
                     concat_static_color.extend([color] * len(vert))
 
@@ -1034,6 +1302,7 @@ class Scene:
 
         fixed = FixedScene(
             self._plot,
+            self.info.name,
             concat_vert,
             concat_color,
             concat_vel,
@@ -1074,7 +1343,18 @@ class Object:
     def __init__(self, asset: AssetManager, name: str):
         self._asset = asset
         self._name = name
+        self._static = False
         self.clear()
+
+    @property
+    def name(self) -> str:
+        """Get name of the object."""
+        return self._name
+
+    @property
+    def static(self) -> bool:
+        """Get whether the object is static."""
+        return self._static
 
     def clear(self):
         """Clear the object data."""
@@ -1086,11 +1366,7 @@ class Object:
         self._static_color = [0.75, 0.75, 0.75]
         self._default_color = [1.0, 0.85, 0.0]
         self._velocity = [0, 0, 0]
-        self._pin = []
-        self._unpin = False
-        self._pull = 0
-        self._move = []
-        self._time = []
+        self._pin: list[PinHolder] = []
         self._normalize = False
         self._stitch = None
         self._uv = None
@@ -1104,7 +1380,11 @@ class Object:
         print("color:", self._color)
         print("velocity:", self._velocity)
         print("normalize:", self._normalize)
-        print("pin:", len(self._pin))
+        self.update_static()
+        if self.static:
+            print("pin: static")
+        else:
+            print("pin:", sum([len(p.index) for p in self._pin]))
 
     def bbox(self) -> tuple[np.ndarray, np.ndarray]:
         """Compute the bounding box of the object.
@@ -1157,7 +1437,7 @@ class Object:
             if self._color:
                 return np.array(self._color)
             else:
-                if self.is_static():
+                if self.static:
                     return np.array(self._static_color)
                 else:
                     return np.array(self._default_color)
@@ -1188,22 +1468,21 @@ class Object:
         if vert is None:
             raise Exception("vertex does not exist")
         else:
-            transformed = self.apply_transform(vert)
-            return transformed
+            return self.apply_transform(vert)
 
-    def grab(self, uv: list[float], eps: float = 1e-3) -> list[int]:
+    def grab(self, direction: list[float], eps: float = 1e-3) -> list[int]:
         """Grab vertices max towards a specified direction.
 
         Args:
-            uv (list[float]): The direction vector.
+            direction (list[float]): The direction vector.
             eps (float, optional): The distance threshold.
 
         Returns:
             list[int]: The indices of the grabbed vertices.
         """
         vert = self.vertex()
-        val = np.max(np.dot(vert, np.array(uv)))
-        return np.where(np.dot(vert, uv) > val - eps)[0].tolist()
+        val = np.max(np.dot(vert, np.array(direction)))
+        return np.where(np.dot(vert, direction) > val - eps)[0].tolist()
 
     def set(self, key: str, value) -> "Object":
         """Set a parameter of the object.
@@ -1416,13 +1695,13 @@ class Object:
         Returns:
             Object: The object with the updated velocity.
         """
-        if self.is_static():
+        if self.static:
             raise Exception("object is static")
         else:
             self._velocity = np.array([u, v, w])
             return self
 
-    def is_static(self) -> bool:
+    def update_static(self):
         """Check if the object is static.
         When all the vertices are pinned and the object is not moving,
         it is considered static.
@@ -1430,17 +1709,28 @@ class Object:
         Returns:
             bool: True if the object is static, False otherwise.
         """
-        if len(self._pin) == 0:
-            return False
-        else:
-            vert = self.get("V")
-            if vert is None:
-                return False
-            else:
-                n_vert = len(vert)
-                return len(self._move) == 0 and self._pin == list(range(n_vert))
+        if not self._pin:
+            self._static = False
+            return
 
-    def pin(self, ind: Optional[list[int]] = None) -> "Object":
+        for p in self._pin:
+            if len(p.keyframe) > 0 or p.pull_strength:
+                return False
+            if len(p.spinner) > 0:
+                return False
+
+        vert = self.get("V")
+        if vert is None:
+            self._static = False
+            return
+
+        vert_flag = np.zeros(len(vert))
+        for p in self._pin:
+            for i in p.index:
+                vert_flag[i] = 1
+        self._static = np.sum(vert_flag) == len(vert)
+
+    def pin(self, ind: Optional[list[int]] = None) -> PinHolder:
         """Set specified vertices as pinned.
 
         Args:
@@ -1448,98 +1738,34 @@ class Object:
             If None, all vertices are pinned. Defaults to None.
 
         Returns:
-            Object: The object with the pinned vertices.
+            PinHolder: The pin holder.
         """
         if ind is None:
             vert: np.ndarray = self.vertex()
             ind = list(range(len(vert)))
-        self._pin = ind
-        return self
+        for p in self._pin:
+            if set(p.index) & set(ind):
+                raise Exception("duplicated indices")
 
-    def pull_pin(self, value: float = 1.0, ind: Optional[list[int]] = None) -> "Object":
+        holder = PinHolder(self, ind)
+        self._pin.append(holder)
+        return holder
+
+    def pull_pin(
+        self, strength: float = 1.0, ind: Optional[list[int]] = None
+    ) -> PinHolder:
         """Pin and pull the object at specified vertices.
 
         Args:
-            value (float, optional): The pull value. Defaults to 1.0.
+            strength (float, optional): The pull strength. Defaults to 1.0.
             ind (Optional[list[int]], optional): The indices of the vertices to pin. Defaults to None.
 
         Returns:
-            Object: The object with the pinned and pulled vertices.
+            PinHolder: The pinholder with the pinned and pulled vertices.
         """
-        self.pin(ind)
-        self._pull = value
-        return self
-
-    def unpin(self) -> "Object":
-        """Unpin the object.
-
-        Returns:
-            Object: The object with the unpinned vertices.
-        """
-        if len(self._pin) == 0:
-            raise Exception("pin must be set before unpinning")
-        self._unpin = True
-        return self
-
-    def move_by(self, delta_pos, time: float) -> "Object":
-        """Move the object by a positional delta over a specified time.
-
-        Args:
-            delta_pos (list[float]): The positional delta.
-            time (float): The time over which to move the object.
-
-        Returns:
-            Object: The object with the updated position.
-        """
-        delta_pos = np.array(delta_pos).reshape((-1, 3))
-        if len(self._move) == 0:
-            target = self.vertex()[self._pin] + delta_pos
-        else:
-            target = self._move[-1] + delta_pos
-        return self.move_to(target, time)
-
-    def hold(self, time: float) -> "Object":
-        """Hold the object in its current position for a specified time.
-
-        Args:
-            time (float): The time to hold the object.
-
-        Returns:
-            Object: The object with the held position.
-        """
-        return self.move_by([0, 0, 0], time)
-
-    def move_to(
-        self,
-        target: np.ndarray,
-        time: float,
-    ) -> "Object":
-        """Move the object to a target position at a specified time.
-
-        Args:
-            target (np.ndarray): The target position.
-            time (float): The absolute time over which to move the object.
-
-        Returns:
-            Object: The object with the updated position.
-        """
-        if len(self._pin) == 0:
-            raise Exception("pin must be set before moving")
-        elif len(target) != len(self._pin):
-            raise Exception("target must have the same length as pin")
-        elif time == 0:
-            raise Exception("time must be greater than zero")
-        else:
-            if len(self._time) and time <= self._time[-1]:
-                raise Exception("time must be greater than the last time")
-            elif len(self._time) == 0:
-                vert = self.vertex()[self._pin]
-                self._move = [vert, target]
-                self._time = [0, time]
-            else:
-                self._move.append(target)
-                self._time.append(time)
-            return self
+        holder = self.pin(ind)
+        holder.set_pull(strength)
+        return holder
 
     def stitch(self, name: str) -> "Object":
         """Apply stitch to the object.
@@ -1550,7 +1776,7 @@ class Object:
         Returns:
             Object: The stitched object.
         """
-        if self.is_static():
+        if self.static:
             raise Exception("object is static")
         else:
             stitch = self._asset.fetch.get(name)

@@ -69,7 +69,7 @@ class App:
             renew (bool): A flag to indicate whether to renew the application state.
             cache_dir (str): The directory to store the cached files. If not provided, it will use `.cache/ppf-cts` directory.
         """
-        self.extra = Extra()  #: Extra: Extra utilities.
+        self._extra = Extra()
         self._name = name
         self._root = os.path.expanduser(
             os.path.join("~", ".local", "share", "ppf-cts", name)
@@ -84,37 +84,78 @@ class App:
             os.makedirs(self.cache_dir)
 
         if os.path.exists(self._path) and not renew:
-            (self.asset, self.scene, self.mesh, self.session, self.plot) = pickle.load(
-                open(self._path, "rb")
+            (self._asset, self._scene, self.mesh, self._session, self._plot) = (
+                pickle.load(open(self._path, "rb"))
             )
         else:
             os.makedirs(self._root, exist_ok=True)
-            self.plot = PlotManager()  #: PlotManager: The plot manager.
-            self.session = SessionManager(
-                self._root, proj_root, self.save
-            )  #: SessionManager: The session manager.
-            self.asset = AssetManager()  #: AssetManager: The asset manager.
-            self.scene = SceneManager(
-                self.plot, self.asset, self.save
-            )  #: SceneManager: The scene manager.
+            self._plot = PlotManager()
+            self._session = SessionManager(self._root, proj_root, self.save)
+            self._asset = AssetManager()
+            self._scene = SceneManager(self._plot, self.asset, self.save)
             self.mesh = MeshManager(self.cache_dir)  #: MeshManager: The mesh manager.
+
+    @property
+    def plot(self) -> PlotManager:
+        """Get the plot manager.
+
+        Returns:
+            PlotManager: The plot manager.
+        """
+        return self._plot
+
+    @property
+    def scene(self) -> SceneManager:
+        """Get the scene manager.
+
+        Returns:
+            SceneManager: The scene manager.
+        """
+        return self._scene
+
+    @property
+    def asset(self) -> AssetManager:
+        """Get the asset manager.
+
+        Returns:
+            AssetManager: The asset manager.
+        """
+        return self._asset
+
+    @property
+    def extra(self) -> Extra:
+        """Get the extra manager.
+
+        Returns:
+            Extra: The extra manager.
+        """
+        return self._extra
+
+    @property
+    def session(self) -> SessionManager:
+        """Get the session manager.
+
+        Returns:
+            SessionManager: The session manager.
+        """
+        return self._session
 
     def clear(self) -> "App":
         """Clears the application state."""
         self.asset.clear()
-        self.scene.clear()
-        self.session.clear()
+        self._scene.clear()
+        self._session.clear()
         return App(self._name, True, self.cache_dir)
 
     def darkmode(self) -> "App":
         """Tunrs on the dark mode."""
-        self.plot.darkmode(True)
+        self._plot.darkmode(True)
         return self
 
     def save(self) -> "App":
         """Saves the application state."""
         pickle.dump(
-            (self.asset, self.scene, self.mesh, self.session, self.plot),
+            (self.asset, self._scene, self.mesh, self._session, self._plot),
             open(self._path, "wb"),
         )
         return self

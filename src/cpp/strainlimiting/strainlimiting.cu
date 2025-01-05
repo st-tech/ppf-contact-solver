@@ -129,7 +129,6 @@ float line_search(const DataSet &data, const Kinematic &kinematic,
                     }
                 }
                 t = lower_t;
-                assert(t > std::numeric_limits<float>::epsilon());
             }
         }
         toi[i] = t;

@@ -30,11 +30,21 @@ pub struct Scene {
     shell_count: usize,
 }
 
+struct Spin {
+    center: Vector3<f32>,
+    axis: Vector3<f32>,
+    angular_velocity: f32,
+    t_start: f32,
+    t_end: f32,
+}
+
 struct Pin {
     index: Vec<usize>,
     timing: Vec<f32>,
     target: Vec<Matrix3xX<f32>>,
+    spin: Vec<Spin>,
     unpin: bool,
+    transition: String,
     pull_w: f32,
 }
 
@@ -44,12 +54,14 @@ struct InvisibleSphere {
     timing: Vec<f32>,
     inverted: bool,
     hemisphere: bool,
+    transition: String,
 }
 
 struct InvisibleWall {
     normal: Vector3<f32>,
     position: Matrix3xX<f32>,
     timing: Vec<f32>,
+    transition: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -162,6 +174,13 @@ impl Scene {
                 .and_then(|v| v.as_float())
                 .unwrap_or_else(|| panic!("Failed to read {}", key)) as f32
         };
+        let read_string = |count: &Value, key: &str| {
+            count
+                .get(key)
+                .and_then(|v| v.as_str())
+                .unwrap_or_else(|| panic!("Failed to read {}", key))
+                .to_string()
+        };
 
         let count = parsed.get("count").expect("Failed to read count");
         let n_vert = read_usize(count, "vert");
@@ -246,6 +265,7 @@ impl Scene {
             let n_keyframe = read_usize(count, "keyframe");
             let unpin = read_bool(count, "unpin");
             let pull_w = read_f32(count, "pull");
+            let transition = read_string(count, "transition");
             let pin_ind_path = format!("{}/bin/pin-ind-{}.bin", args.path, i);
             let pin_dir = format!("{}/bin/pin-{}", args.path, i);
 
@@ -264,12 +284,44 @@ impl Scene {
                 read_vec::<f32>(format!("{}/bin/pin-timing-{}.bin", args.path, i).as_str());
             assert_eq!(pin_ind.len(), n_pin as usize);
             assert_eq!(pin_timing.len(), target.len());
+
+            let n_spin = read_usize(count, "spin");
+            let mut spin = Vec::new();
+            if n_spin > 0 {
+                let spin_path = format!("{}/spin/spin-{}.toml", args.path, i);
+                let content = fs::read_to_string(spin_path).expect("Failed to read spin");
+                let parsed: Value = content.parse::<Value>().expect("Failed to parse spin");
+                for j in 0..n_spin {
+                    let spin_title = format!("spin-{}", j);
+                    let entry = parsed.get(&spin_title).expect("Failed to read spin");
+                    let center_x = read_f32(entry, "center_x");
+                    let center_y = read_f32(entry, "center_y");
+                    let center_z = read_f32(entry, "center_z");
+                    let axis_x = read_f32(entry, "axis_x");
+                    let axis_y = read_f32(entry, "axis_y");
+                    let axis_z = read_f32(entry, "axis_z");
+                    let angular_velocity = read_f32(entry, "angular_velocity");
+                    let t_start = read_f32(entry, "t_start");
+                    let t_end = read_f32(entry, "t_end");
+                    let center = Vector3::new(center_x, center_y, center_z);
+                    let axis = Vector3::new(axis_x, axis_y, axis_z);
+                    spin.push(Spin {
+                        center,
+                        axis,
+                        angular_velocity,
+                        t_start,
+                        t_end,
+                    });
+                }
+            }
             pin.push(Pin {
                 index: pin_ind,
                 timing: pin_timing,
                 target,
                 unpin,
+                transition,
                 pull_w,
+                spin,
             });
         }
 
@@ -284,6 +336,7 @@ impl Scene {
                 let nx = read_f32(count, "nx");
                 let ny = read_f32(count, "ny");
                 let nz = read_f32(count, "nz");
+                let transition = read_string(count, "transition");
                 let mut normal = Vector3::new(nx, ny, nz);
                 normal.normalize_mut();
                 let position =
@@ -297,6 +350,7 @@ impl Scene {
                     normal,
                     position,
                     timing: wall_timing,
+                    transition,
                 });
             }
         }
@@ -309,6 +363,7 @@ impl Scene {
                 .unwrap_or_else(|| panic!("Failed to read sphere {}", i));
             let inverted = read_bool(count, "invert");
             let hemisphere = read_bool(count, "hemisphere");
+            let transition = read_string(count, "transition");
             let n_keyframe = read_usize(count, "keyframe");
             let center =
                 read_mat_from_file::<f32, 3>(&format!("{}/bin/sphere-pos-{}.bin", args.path, i))
@@ -324,6 +379,7 @@ impl Scene {
                 timing,
                 inverted,
                 hemisphere,
+                transition,
             });
         }
 
@@ -385,31 +441,35 @@ impl Scene {
         } else {
             CollisionMesh::new()
         };
-        let calc_coefficient = |time: f64, timings: &[f32]| -> ([usize; 2], f32) {
-            if timings.is_empty() {
-                ([0, 0], 1.0)
-            } else {
-                let last_time = timings[timings.len() - 1] as f64;
-                if time > last_time {
-                    ([timings.len() - 1, timings.len() - 1], 1.0)
+        let calc_coefficient =
+            |time: f64, timings: &[f32], transition: &str| -> ([usize; 2], f32) {
+                if timings.is_empty() {
+                    ([0, 0], 1.0)
                 } else {
-                    for i in 0..timings.len() - 1 {
-                        let t0 = timings[i] as f64;
-                        let t1 = timings[i + 1] as f64;
-                        if time >= t0 && time < t1 {
-                            let w: f32 = (time - t0) as f32 / (t1 - t0) as f32;
-                            return ([i, i + 1], w);
+                    let last_time = timings[timings.len() - 1] as f64;
+                    if time > last_time {
+                        ([timings.len() - 1, timings.len() - 1], 1.0)
+                    } else {
+                        for i in 0..timings.len() - 1 {
+                            let t0 = timings[i] as f64;
+                            let t1 = timings[i + 1] as f64;
+                            if time >= t0 && time < t1 {
+                                let mut w: f32 = (time - t0) as f32 / (t1 - t0) as f32;
+                                if transition == "smooth" {
+                                    w = w * w * (3.0 - 2.0 * w);
+                                }
+                                return ([i, i + 1], w);
+                            }
                         }
+                        panic!("Failed to calculate coefficient")
                     }
-                    panic!("Failed to calculate coefficient")
                 }
-            }
-        };
+            };
         let mut fix = Vec::new();
         let mut pull = Vec::new();
         for pin in self.pin.iter() {
             for (i, &ind) in pin.index.iter().enumerate() {
-                let (kinematic, position) = {
+                let (mut kinematic, mut position) = {
                     if pin.timing.len() <= 1 {
                         let position = Some(self.vert.column(ind).into());
                         (false, position)
@@ -419,7 +479,7 @@ impl Scene {
                         if time > last_time && pin.unpin {
                             (true, None)
                         } else {
-                            let coeff = calc_coefficient(time, &pin.timing);
+                            let coeff = calc_coefficient(time, &pin.timing, &pin.transition);
                             let (j, k) = (coeff.0[0], coeff.0[1]);
                             let w = coeff.1;
                             let p0: Vector3<f32> = pin.target[j].column(i).into();
@@ -428,6 +488,25 @@ impl Scene {
                         }
                     }
                 };
+                let time = time as f32;
+                for spin in pin.spin.iter() {
+                    let time = time.min(spin.t_end);
+                    if time > spin.t_start {
+                        let angle = spin.angular_velocity / 180.0
+                            * std::f32::consts::PI
+                            * (time - spin.t_start);
+                        let axis = spin.axis / spin.axis.norm();
+                        let cos_theta = angle.cos();
+                        let sin_theta = angle.sin();
+                        let p = position.unwrap_or_else(|| self.vert.column(ind).into());
+                        let p = p - spin.center;
+                        let rotated = p * cos_theta
+                            + axis.cross(&p) * sin_theta
+                            + axis * axis.dot(&p) * (1.0 - cos_theta);
+                        position = Some(rotated + spin.center);
+                        kinematic = true;
+                    }
+                }
                 if let Some(position) = position {
                     if pin.pull_w > 0.0 {
                         pull.push(PullPair {
@@ -471,7 +550,7 @@ impl Scene {
                     kinematic: false,
                 });
             } else {
-                let coeff = calc_coefficient(time, &wall.timing);
+                let coeff = calc_coefficient(time, &wall.timing, &wall.transition);
                 let (j, k) = (coeff.0[0], coeff.0[1]);
                 let w = coeff.1;
                 let position = wall.position.column(j) * (1.0 - w) + wall.position.column(k) * w;
@@ -497,7 +576,7 @@ impl Scene {
                     kinematic: false,
                 });
             } else {
-                let coeff = calc_coefficient(time, &s.timing);
+                let coeff = calc_coefficient(time, &s.timing, &s.transition);
                 let (j, k) = (coeff.0[0], coeff.0[1]);
                 let w = coeff.1;
                 let center = s.center.column(j) * (1.0 - w) + s.center.column(k) * w;

@@ -2,6 +2,15 @@
 # Author: Ryoichi Ando (ryoichi.ando@zozo.com)
 # License: Apache v2.0
 
+# CUDA tester file path
+CUDA_TESTER_PATH=$(pwd)/.github/workflows/vast/cuda-tester.cu
+
+# check if the CUDA tester file exists
+if [ ! -f "$CUDA_TESTER_PATH" ]; then
+  echo "Error: CUDA tester file not found: $CUDA_TESTER_PATH"
+  exit 1
+fi
+
 # set working directory
 WORKDIR=/tmp/vast-ci
 
@@ -186,6 +195,7 @@ while true; do
   # Loop until SSH connection is successful
   retry_count=0
   ssh_ready=false
+  cuda_ready=false
   while true; do
     sleep $RETRY_INTERVAL
     echo "trying to establish SSH connection..."
@@ -205,6 +215,20 @@ while true; do
     fi
   done
   if [ "$ssh_ready" = true ]; then
-    break
+    scp_command="scp -i $WORKDIR/id_ed25519 -o StrictHostKeyChecking=no -o ConnectTimeout=5 -P $port $CUDA_TESTER_PATH root@${hostname}:/tmp/"
+    echo "==== copy cuda-tester.cu ======"
+    echo $scp_command
+    eval $scp_command
+    echo "==== compile cuda ======"
+    eval $ssh_command "nvcc /tmp/cuda-tester.cu -o /tmp/cuda-tester"
+    echo "==== run cuda ======"
+    eval $ssh_command "/tmp/cuda-tester"
+    if [ $? -eq 0 ]; then
+      cuda_ready=true
+      break
+    else
+      echo "CUDA test failed"
+      $WORKDIR/delete-instance.sh
+    fi
   fi
 done

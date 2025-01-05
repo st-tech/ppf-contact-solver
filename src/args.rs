@@ -24,7 +24,7 @@ pub struct Args {
     // We recommend to use 1e-3 for most cases. Setting a larger value can results in
     // PCG solver divergence.
     // You may turn on `enable_retry` option to retry the step with a smaller step size when
-    // the PCG solver diverges.
+    // either the PCG solver diverges or line search fails.
     #[clap(long, default_value_t = 1e-3)]
     pub dt: f32,
 
@@ -136,14 +136,15 @@ pub struct Args {
     // Name: Flag to Enable Retry when PCG Diverges
     // Description:
     // When this flag is enabled, the simulation will retry the step with a smaller step size
-    // when the PCG solver diverges. This is possible when the step size is set large.
+    // when the PCG solver diverges or line search fails.
+    // This is possible when the step size is set large.
     #[clap(long)]
     pub enable_retry: bool,
 
     // Name: Step Size Reduction Factor
     // Description:
-    // When PCG solver diverges, the step size is reduced by this factor and the step is retried
-    // if `enable_retry` is enabled.
+    // When PCG solver diverges or line search fails, the step size is reduced
+    // by this factor and the step is retried if `enable_retry` is enabled.
     #[clap(long, default_value_t = 0.75)]
     pub dt_decrease_factor: f32,
 

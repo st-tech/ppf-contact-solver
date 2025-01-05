@@ -70,6 +70,7 @@ Published in [ACM Transactions on Graphics (TOG)](https://dl.acm.org/doi/abs/10.
 
 ## 📝 Change History
 
+- (2025.1.5) Added a [single twist example](./examples/twist.ipynb) [[Video]](https://drive.google.com/file/d/1LDFKS-iBvl2uDdPVKaazQL25tYGEEyXr/view).
 - (2024.12.31) Added full documentation for Python APIs, parameters, and log files [[GitHub Pages]](https://st-tech.github.io/ppf-contact-solver).
 - (2024.12.27) Line search for strain limiting is improved [[Markdown]](./articles/bug.md#new-strain-limiting-line-search)
 - (2024.12.23) Added [[Bug Fixes and Updates]](./articles/bug.md)
@@ -154,8 +155,8 @@ fixed.preview()
 param = app.session.param()
 param.set("dt", 0.01)
 
-# create a new session with a name
-session = app.session.create("dt-001").init(fixed)
+# create a new session with the built scene
+session = app.session.create(fixed)
 
 # start the simulation and live-preview the results (image right)
 session.start(param).preview()
@@ -166,9 +167,9 @@ session.stream()
 # or interactively view the animation sequences
 session.animate()
 
-# export all simulated frames (downloadable from the file browser)
+# export all simulated frames and zip them
 path = f"export/{scene.info.name}/{session.info.name}"
-session.export.animation(path)
+session.export.animation(path).zip()
 ```
 <img src="./asset/image/drape.jpg" alt="drape">
 
@@ -182,7 +183,7 @@ The behaviors can be changed through the settings.
 
 ## 🔍 Obtaining Logs
 
-Logs for the simulation can also be queried through the Python APIs. Here's an example of how to get the list of recorded logs, fetch them, and compute the average.
+📊 Logs for the simulation can also be queried through the Python APIs 🐍. Here's an example of how to get the list of recorded logs 📝, fetch them 📥, and compute the average 🧮.
 
 ```python
 # get a list of log names
@@ -256,7 +257,7 @@ All the log files 📂 are available ✅ and can be fetched ⬇️ during the si
 |![](./asset/image/catalogue/woven.mp4.gif)|![](./asset/image/catalogue/stack.mp4.gif)|![](./asset/image/catalogue/trampoline.mp4.gif)|![](./asset/image/catalogue/needle.mp4.gif)|
 |[cards](./examples/cards.ipynb) [[Video]](https://drive.google.com/file/d/1PMdDnlyCsjinbvICKph_0UcXUfUvvUmZ/view)|codim|[hang](./examples/hang.ipynb) [[Video]](https://drive.google.com/file/d/1gIjwaRrEifH0FQnZ8HO8Q9-f9FF5ZivG/view)|[trapped](./examples/trapped.ipynb)|
 |![](./asset/image/catalogue/cards.mp4.gif)|![](./asset/image/catalogue/codim.mp4.gif)|![](./asset/image/catalogue/hang.mp4.gif)|![](./asset/image/catalogue/trapped.mp4.gif)|
-|domino|noodle|[drape](./examples/drape.ipynb) [[Video]](https://drive.google.com/file/d/1PGL3tbA451VhHOViSJJNNdQvmUpg7bQd/view)|quintuple|
+|domino|noodle|[drape](./examples/drape.ipynb) [[Video]](https://drive.google.com/file/d/1PGL3tbA451VhHOViSJJNNdQvmUpg7bQd/view)|[twist](./examples/twist.ipynb) [[Video]](https://drive.google.com/file/d/1LDFKS-iBvl2uDdPVKaazQL25tYGEEyXr/view)|
 |![](./asset/image/catalogue/domino.mp4.gif)|![](./asset/image/catalogue/noodle.mp4.gif)|![](./asset/image/catalogue/drape.mp4.gif)|![](./asset/image/catalogue/quintupletwist.mp4.gif)|
 |ribbon|[curtain](./examples/curtain.ipynb) [[Video]](https://drive.google.com/file/d/1c9W3YAFAS5r9m9i7sZHsFu8h98C8yy1T/view)|fishingknot|[friction](./examples/friction.ipynb) [[Video]](https://drive.google.com/file/d/12WGdfDTFIwCT0UFGEZzfmQreM6WSSHet/view)|
 |![](./asset/image/catalogue/ribbon.mp4.gif)|![](./asset/image/catalogue/curtain.mp4.gif)|![](./asset/image/catalogue/fishingknot.mp4.gif)|![](./asset/image/catalogue/friction-armadillo.mp4.gif)|
@@ -461,13 +462,13 @@ docker rm $MY_CONTAINER_NAME
 
 Our contact solver is designed for heavy use in cloud services ☁️, enabling us to:
 
-- Quickly deploy testing environments 🚀 and delete them when not in use, saving costs 💰.
-- Scale as needed based on demand 📈. For example, you can create multiple instances to perform numerous tasks before a specific deadline ⏰.
-- Design a fully automated pipeline 🔄 for trial-and-error iterations without human involvement 🤖.
-- Allow anyone with an internet connection 🌍 to try our solver, even on a smartphone 📱 or tablet 🖥️.
+- **💰 Cost-Effective Development**: Quickly deploy testing environments 🚀 and delete 🗑️ them when not in use, saving costs.
+- **📈 Flexible Scalability**: Scale as needed based on demand 📈. For example, you can launch multiple instances before a specific deadline ⏰.
+- **🌍 High Accessibility**: Allow anyone with an internet connection 🌍 to try our solver, even on a smartphone 📱 or tablet 🖥️.
+- **🐛 Easier Bug Tracking**: Users and developers can easily share the same hardware, kernel, and driver environment, making it easier to track and fix bugs.
 
 This is all made possible with our purely web-based frontends 🌐 and scalable capability 🧩.
-Our solver also runs on the NVIDIA L4 🖱️, a data-center-targeted GPU 🖥️ that offers reasonable pricing 💲, delivering both practical performance 💪 and scalability 📊 without investing in expensive hardware 💻.
+Our main target is the NVIDIA L4 🖱️, a data-center-targeted GPU 🖥️ that offers reasonable pricing 💲, delivering both practical performance 💪 and scalability 📊 without investing in expensive hardware 💻.
 
 Below, we describe how to deploy our solver on major cloud services ☁️. These instructions are up to date as of late 2024 📅 and are subject to change 🔄.
 

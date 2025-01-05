@@ -68,6 +68,7 @@ def list_packages():
         "clang",
         "clangd",
         "wget",
+        "zip",
         "unzip",
         "cmake",
         "python3-venv",

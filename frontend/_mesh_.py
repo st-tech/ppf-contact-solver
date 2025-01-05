@@ -13,7 +13,12 @@ class MeshManager:
     def __init__(self, cache_dir: str):
         """Initialize the mesh manager"""
         self._cache_dir = cache_dir
-        self.create = CreateManager(cache_dir) #: CreateManager: a manager to create meshes
+        self._create = CreateManager(cache_dir)
+
+    @property
+    def create(self) -> "CreateManager":
+        """Get the mesh creation manager"""
+        return self._create
 
     def line(self, _p0: list[float], _p1: list[float], n: int) -> "Rod":
         """Create a line mesh with a given start and end points and resolution.
@@ -164,20 +169,51 @@ class MeshManager:
             self._cache_dir,
         )
 
-    def cylinder(self, r: float = 1, height: float = 2, n: int = 32) -> "TriMesh":
-        """Create a cylinder mesh with a given radius, height, and resolution.
+    def cylinder(self, r: float, min_x: float, max_x: float, n: int):
+        """Create a cylinder along x-axis
 
         Args:
-            r (float): radius of the cylinder
-            height (float): height of the cylinder
-            n (int): resolution of the cylinder
+            r (float): Radius of the cylinder
+            min_x (float): Minimum x coordinate
+            max_x (float): Maximum x coordinate
+            n (int): Number of divisions along x-axis
 
         Returns:
-            TriMesh: a cylinder mesh, a pair of vertices and triangles
+            tuple: (V, F) where:
+                - V: ndarray of shape (#x3) containing vertex positions
+                - F: ndarray of shape (#x3) containing triangle indices
         """
-        import open3d as o3d
+        dx = (max_x - min_x) / n
+        ny = int(2.0 * np.pi * r / dx)
+        dy = 2.0 * np.pi / ny
+        n_vert = (n + 1) * ny
 
-        return self._from_o3d(o3d.geometry.TriangleMesh.create_cylinder(r, height, n))
+        V = np.zeros((n_vert, 3))
+        for j in range(ny):
+            for i in range(n + 1):
+                theta = j * dy
+                idx = (n + 1) * j + i
+                x = min_x + i * dx
+                y = np.sin(theta) * r
+                z = np.cos(theta) * r
+                V[idx] = [x, y, z]
+
+        F = np.zeros((2 * n * ny, 3), dtype=np.int32)
+        for j in range(ny):
+            for i in range(n):
+                idx = j * n + i
+                v0 = (n + 1) * j + i
+                v1 = (n + 1) * j + i + 1
+                v2 = (n + 1) * ((j + 1) % ny) + (i + 1)
+                v3 = (n + 1) * ((j + 1) % ny) + i
+                if (i % 2) == (j % 2):
+                    F[2 * idx] = [v1, v2, v0]
+                    F[2 * idx + 1] = [v3, v0, v2]
+                else:
+                    F[2 * idx] = [v0, v1, v3]
+                    F[2 * idx + 1] = [v2, v3, v1]
+
+        return V, F
 
     def cone(
         self,

@@ -11,8 +11,8 @@ class AssetManager:
     def __init__(self):
         """Initialize the asset manager."""
         self._mesh: dict[str, tuple] = {}
-        self.add = AssetUploader(self) #: AssetUploader: The asset uploader.
-        self.fetch = AssetFetcher(self) #: AssetFetcher: The asset fetcher.
+        self._add = AssetUploader(self)
+        self._fetch = AssetFetcher(self)
 
     def list(self) -> list[str]:
         """List all the assets in the manager.
@@ -39,6 +39,16 @@ class AssetManager:
     def clear(self):
         """Clear all the assets in the manager."""
         self._mesh = {}
+
+    @property
+    def add(self) -> "AssetUploader":
+        """Get the asset uploader."""
+        return self._add
+
+    @property
+    def fetch(self) -> "AssetFetcher":
+        """Get the asset fetcher."""
+        return self._fetch
 
 
 class AssetUploader:

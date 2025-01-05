@@ -16,6 +16,7 @@ import psutil
 import os
 import threading
 import time
+import copy
 from typing import Any, Optional
 
 
@@ -42,9 +43,18 @@ class Param:
         """
         path = os.path.abspath(os.path.join(app_root, "src", "args.rs"))
         self._key = None
-        self._param = ParamParser.get_default_params(path)
+        self._default_param = ParamParser.get_default_params(path)
+        self._param = self._default_param.copy()
         self._time = 0.0
         self._dyn_param = {}
+
+    def copy(self) -> "Param":
+        """Copy the Param object.
+
+        Returns:
+            Param: The copied Param object.
+        """
+        return copy.deepcopy(self)
 
     def set(self, key: str, value: Any) -> "Param":
         """Set a parameter value.
@@ -62,6 +72,17 @@ class Param:
             raise ValueError(f"Key {key} does not exist")
         else:
             self._param[key]["value"] = value
+        return self
+
+    def clear(self, key: str) -> "Param":
+        """Clear a parameter.
+
+        Args:
+            key (str): The parameter key.
+        """
+        self._param[key]["value"] = self._default_param[key]["value"]
+        if key in self._dyn_param.keys():
+            del self._dyn_param[key]
         return self
 
     def dyn(self, key: str) -> "Param":
@@ -189,18 +210,6 @@ class Param:
         """
         return self._param.items()
 
-    def delete(self, key: str):
-        """Delete a parameter.
-
-        Args:
-            key (str): The parameter key.
-        """
-        del self._param[key]
-
-    def clear(self):
-        """Clear all parameters."""
-        self._param = {}
-
 
 class SessionManager:
     """Class to manage simulation sessions."""
@@ -252,16 +261,21 @@ class SessionManager:
         else:
             return self._sessions[self._curr]
 
-    def create(self, name: str, delete_if_exists: bool = True) -> "Session":
+    def create(
+        self, scene: FixedScene, name: str = "", delete_if_exists: bool = True
+    ) -> "Session":
         """Create a new session.
 
         Args:
-            name (str): The name of the session.
+            scene (FixedScene): The scene object.
+            name (str): The name of the session. If not specified, current time is used.
             delete_if_exists (bool, optional): Whether to delete the session if it exists.
 
         Returns:
             Session: The created session.
         """
+        if name == "":
+            name = time.strftime("%Y-%m-%d-%H-%M-%S")
         if name in self._sessions.keys():
             if delete_if_exists:
                 session = self._sessions[name]
@@ -273,7 +287,7 @@ class SessionManager:
         session = Session(self._app_root, self._proj_root, name, self._save_func)
         self._sessions[name] = session
         self._curr = name
-        return session
+        return session.init(scene)
 
     def _terminate_or_raise(self, force: bool):
         """Terminate the solver if it is running, or raise an exception.
@@ -325,15 +339,45 @@ class SessionManager:
 class SessionInfo:
     """Class to store session information."""
 
-    def __init__(self, name: str, path: str):
+    def __init__(self, name: str):
         """Initialize the SessionInfo class.
 
         Args:
             name (str): The name of the session.
             path (str): The path to the session directory.
         """
-        self.name = name
-        self.path = path
+        self._name = name
+        self._path = ""
+
+    def set_path(self, path: str):
+        """Set the path to the session directory.
+
+        Args:
+            path (str): The path to the session directory.
+        """
+        self._path = path
+
+    @property
+    def name(self) -> str:
+        """Get the name of the session."""
+        return self._name
+
+    @property
+    def path(self) -> str:
+        """Get the path to the session directory."""
+        return self._path
+
+
+class Zippable:
+    def __init__(self, dirpath: str):
+        self._dirpath = dirpath
+
+    def zip(self):
+        """Zip the directory."""
+        path = f"{self._dirpath}.zip"
+        print(f"zipping to {path}")
+        shutil.make_archive(self._dirpath, "zip", self._dirpath)
+        print("done")
 
 
 class SessionExport:
@@ -379,7 +423,7 @@ class SessionExport:
         else:
             raise ValueError("Solver does not exist")
 
-    def animation(self, path: str, ext="ply", include_static: bool = True):
+    def animation(self, path: str, ext="ply", include_static: bool = True) -> Zippable:
         """Export the animation frames.
 
         Args:
@@ -393,6 +437,7 @@ class SessionExport:
             os.makedirs(path)
         for i in tqdm(range(self._session.get.latest_frame()), desc="export", ncols=70):
             self.frame(os.path.join(path, f"frame_{i}.{ext}"), i, include_static)
+        return Zippable(path)
 
     def frame(
         self, path: str, frame: Optional[int] = None, include_static: bool = True
@@ -433,7 +478,11 @@ class SessionOutput:
             session (Session): The session object.
         """
         self._session = session
-        self.path = os.path.join(self._session.info.path, "output")
+
+    @property
+    def path(self) -> str:
+        """Get the path to the output directory."""
+        return os.path.join(self._session.info.path, "output")
 
 
 class SessionLog:
@@ -567,7 +616,12 @@ class SessionGet:
             session (Session): The session object.
         """
         self._session = session
-        self.log = SessionLog(session)
+        self._log = SessionLog(session)
+
+    @property
+    def log(self) -> SessionLog:
+        """Get the session log object."""
+        return self._log
 
     def vertex_frame_count(self) -> int:
         """Get the vertex count.
@@ -672,16 +726,35 @@ class Session:
         self._app_root = app_root
         self._proj_root = proj_root
         self._fixed = None
-        path = os.path.expanduser(os.path.join(app_root, "session", name))
         self._save_func = save_func
         self._update_preview_interval = 1.0 / 60.0
         self._update_terminal_interval = 1.0 / 30.0
         self._update_table_interval = 0.25
-        self.info = SessionInfo(name, path)  #: SessionInfo: The session information.
-        self.export = SessionExport(self)  #: SessionExport: The session export object.
-        self.get = SessionGet(self)  #: SessionGet: The session get object.
-        self.output = SessionOutput(self)  #: SessionOutput: The session output object.
+        self._info = SessionInfo(name)
+        self._export = SessionExport(self)
+        self._get = SessionGet(self)
+        self._output = SessionOutput(self)
         self.delete()
+
+    @property
+    def info(self) -> SessionInfo:
+        """Get the session information."""
+        return self._info
+
+    @property
+    def export(self) -> SessionExport:
+        """Get the session export object."""
+        return self._export
+
+    @property
+    def get(self) -> SessionGet:
+        """Get the session get object."""
+        return self._get
+
+    @property
+    def output(self) -> SessionOutput:
+        """Get the session output object."""
+        return self._output
 
     def print(self, message):
         """Print a message.
@@ -715,6 +788,10 @@ class Session:
         Returns:
             Session: The initialized session.
         """
+        path = os.path.expanduser(
+            os.path.join(self._app_root, "session", scene._name, self.info.name)
+        )
+        self.info.set_path(path)
         if is_running():
             self.print("Solver is already running. Teriminate first.")
             if self._in_jupyter_notebook:
@@ -931,6 +1008,11 @@ class Session:
                     assert button is not None
                     button.disabled = True
                     button.description = "Terminated"
+                    time.sleep(self._update_preview_interval)
+                    last_frame = self.get.latest_frame()
+                    update_dataframe(table, last_frame)
+                    vert, _ = self.get.vertex(last_frame)
+                    plot.update(vert)
 
                 def live_table(self):
                     nonlocal table
