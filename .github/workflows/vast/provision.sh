@@ -222,7 +222,7 @@ while true; do
     echo "==== compile cuda ======"
     eval $ssh_command "nvcc /tmp/cuda-tester.cu -o /tmp/cuda-tester"
     echo "==== run cuda ======"
-    eval $ssh_command "/tmp/cuda-tester"
+    eval $ssh_command "timeout 10s /tmp/cuda-tester"
     if [ $? -eq 0 ]; then
       cuda_ready=true
       break
