@@ -191,13 +191,7 @@ impl Backend {
                 let elapsed_time = curr_time - last_time;
                 self.fetch_state(&dataset, &param);
                 self.state.curr_frame = new_frame;
-                writeln!(
-                    time_per_frame,
-                    "{} {}",
-                    new_frame,
-                    elapsed_time.as_millis()
-                )
-                .unwrap();
+                writeln!(time_per_frame, "{} {}", new_frame, elapsed_time.as_millis()).unwrap();
                 writeln!(
                     frame_to_time,
                     "{} {}",
@@ -222,6 +216,10 @@ impl Backend {
                 file.flush().unwrap();
                 std::fs::rename(path.clone(), path.replace(".tmp", "")).unwrap();
                 last_time = Instant::now();
+
+                if self.state.curr_frame == args.fake_crash_frame {
+                    panic!("fake crash!");
+                }
             }
             if self.state.curr_frame >= args.frames {
                 break;

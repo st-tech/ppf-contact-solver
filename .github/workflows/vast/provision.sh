@@ -220,9 +220,9 @@ while true; do
     echo $scp_command
     eval $scp_command
     echo "==== compile cuda ======"
-    eval $ssh_command "nvcc /tmp/cuda-tester.cu -o /tmp/cuda-tester"
+    $WORKDIR/ssh-command.sh "nvcc /tmp/cuda-tester.cu -o /tmp/cuda-tester"
     echo "==== run cuda ======"
-    eval $ssh_command "timeout 10s /tmp/cuda-tester"
+    timeout 10s $WORKDIR/ssh-command.sh "/tmp/cuda-tester"
     if [ $? -eq 0 ]; then
       cuda_ready=true
       break

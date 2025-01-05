@@ -390,4 +390,11 @@ pub struct Args {
     // their xz positions are fixed.
     #[clap(long, default_value_t = 0.0)]
     pub fix_xz: f32,
+
+    // Name: Fake Crash Frame
+    // Description:
+    // Frame number at which to intentionally crash the simulation for testing purposes.
+    // Set to -1 to disable fake crashing.
+    #[clap(long, default_value_t = -1)]
+    pub fake_crash_frame: i32,
 }

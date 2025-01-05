@@ -858,32 +858,56 @@ class Session:
         cmd_path = self.export.shell_command(param)
         err_path = os.path.join(self.info.path, "error.log")
         log_path = os.path.join(self.info.path, "stdout.log")
-        if blocking or not self._in_jupyter_notebook:
-            subprocess.run(cmd_path, cwd=self._proj_root, shell=True)
-            return self
+        command = open(cmd_path, "r").read()
+        process = subprocess.Popen(
+            command.split(),
+            stdout=open(log_path, "w"),
+            stderr=open(err_path, "w"),
+            start_new_session=True,
+            cwd=self._proj_root,
+        )
+        if process.poll() is not None:
+            raise ValueError("Solver failed to start")
         else:
-            command = open(cmd_path, "r").read()
-            process = subprocess.Popen(
-                command.split(),
-                stdout=open(log_path, "w"),
-                stderr=open(err_path, "w"),
-                start_new_session=True,
-                cwd=self._proj_root,
-            )
-            if process.poll() is not None:
-                raise ValueError("Solver failed to start")
-            else:
-                init_path = os.path.join(
-                    self.info.path, "output", "data", "initialize.out"
-                )
+            init_path = os.path.join(self.info.path, "output", "data", "initialize.out")
+            time.sleep(1)
+            while is_running():
+                if os.path.exists(init_path):
+                    break
                 time.sleep(1)
-                while is_running():
-                    if os.path.exists(init_path):
-                        return self
-                    time.sleep(0.25)
+            if not os.path.exists(init_path):
                 err_content = open(err_path, "r").readlines()
                 display_log(err_content)
                 raise ValueError("Solver failed to start")
+        if blocking or not self._in_jupyter_notebook:
+            print(f">>> Log path: {log_path}")
+            print(">>> Waiting for solver to finish...")
+            total_frames = param.get("frames")
+            with tqdm(total=total_frames, desc="Progress") as pbar:
+                last_frame = 0
+                while process.poll() is None:
+                    frame = self.get.latest_frame()
+                    if frame > last_frame:
+                        pbar.update(frame - last_frame)
+                        last_frame = frame
+                    time.sleep(1)
+            if os.path.exists(err_path):
+                err_lines = open(err_path, "r").readlines()
+            if len(err_lines) > 0:
+                print("*** Solver FAILED ***")
+            else:
+                print("*** Solver finished ***")
+            n_logs = 16
+            log_lines = open(log_path, "r").readlines()
+            print(">>> Log:")
+            for line in log_lines[-n_logs:]:
+                print(line.rstrip())
+            if len(err_lines) > 0:
+                print(">>> Error:")
+                for line in err_lines:
+                    print(line.rstrip())
+                print(f">>> Error log path: {err_path}")
+        return self
 
     def _terminate_button(self, description: str = "Terminate Solver"):
         """Create a terminate button.

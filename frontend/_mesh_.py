@@ -478,16 +478,42 @@ def bbox(vert) -> np.ndarray:
     return np.array([width, height, depth])
 
 
-def normalize(vert):
+def normalize(vert: np.ndarray) -> np.ndarray:
     """Normalize a set of vertices
 
     Normalize a set of vertices so that the maximum bounding box size becomes 1.
 
     Args:
         vert (np.ndarray): a list of vertices
+
+    Return:
+        np.ndarray: a normalized set of vertices
     """
     vert -= np.mean(vert, axis=0)
     vert /= np.max(bbox(vert))
+
+
+def scale(
+    vert: np.ndarray, scale_x: float, scale_y: float, scale_z: float
+) -> np.ndarray:
+    """Scale a set of vertices
+
+    Scale a set of vertices with given scaling factors.
+
+    Args:
+        vert (np.ndarray): a list of vertices
+        scale_x (float): a scaling factor for the x-axis
+        scale_y (float): a scaling factor for the y-axis
+        scale_z (float): a scaling factor for the z-axis
+
+    Return:
+        np.ndarray: a scaled set of vertices
+    """
+    mean = np.mean(vert, axis=0)
+    vert -= mean
+    vert *= np.array([scale_x, scale_y, scale_z])
+    vert += mean
+    return vert
 
 
 class Rod(tuple[np.ndarray, np.ndarray]):
@@ -507,6 +533,15 @@ class Rod(tuple[np.ndarray, np.ndarray]):
         normalize(self[0])
         return self
 
+    def scale(self, scale_x: float, scale_y: float, scale_z: float) -> "Rod":
+        """Scale the rod mesh
+
+        Scale the rod mesh with given scaling factors.
+
+        """
+        scale(self[0], scale_x, scale_y, scale_z)
+        return self
+
 
 class TetMesh(tuple[np.ndarray, np.ndarray, np.ndarray]):
     """A class representing a tetrahedral mesh
@@ -522,6 +557,15 @@ class TetMesh(tuple[np.ndarray, np.ndarray, np.ndarray]):
 
         """
         normalize(self[0])
+        return self
+
+    def scale(self, scale_x: float, scale_y: float, scale_z: float) -> "TetMesh":
+        """Scale the tetrahedral mesh
+
+        Scale the tetrahedral mesh with given scaling factors.
+
+        """
+        scale(self[0], scale_x, scale_y, scale_z)
         return self
 
 
@@ -723,4 +767,13 @@ class TriMesh(tuple[np.ndarray, np.ndarray]):
 
         """
         normalize(self[0])
+        return self
+
+    def scale(self, scale_x: float, scale_y: float, scale_z: float) -> "TriMesh":
+        """Scale the triangle mesh
+
+        Scale the triangle mesh with given scaling factors.
+
+        """
+        scale(self[0], scale_x, scale_y, scale_z)
         return self

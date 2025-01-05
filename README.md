@@ -183,7 +183,7 @@ The behaviors can be changed through the settings.
 
 ## 🔍 Obtaining Logs
 
-📊 Logs for the simulation can also be queried through the Python APIs 🐍. Here's an example of how to get the list of recorded logs 📝, fetch them 📥, and compute the average 🧮.
+📊 Logs for the simulation can also be queried through the Python APIs 🐍. Here's an example of how to get a list of recorded logs 📝, fetch them 📥, and compute the average 🧮.
 
 ```python
 # get a list of log names
