@@ -222,6 +222,7 @@ class MeshManager:
         Nb: int = 4,
         radius: float = 0.5,
         height: float = 2,
+        sharpen: float = 1.0,
     ) -> "TriMesh":
         """Create a cone mesh with a given number of radial, vertical, and bottom resolution, radius, and height.
 
@@ -231,6 +232,7 @@ class MeshManager:
             Nb (int): number of bottom resolution
             radius (float): radius of the cone
             height (float): height of the cone
+            sharpen (float): sharpening subdivision factor at the top
 
         Returns:
             TriMesh: a cone mesh, a pair of vertices and triangles
@@ -245,7 +247,7 @@ class MeshManager:
         for k in reversed(range(Ny)):
             if k > 0:
                 r = k / (Ny - 1)
-                r = r * r
+                r = r**sharpen
                 offset.append(len(V))
                 for i in range(Nr):
                     t = 2 * np.pi * i / Nr

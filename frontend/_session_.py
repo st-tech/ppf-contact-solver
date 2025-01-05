@@ -4,7 +4,7 @@
 
 from ._scene_ import FixedScene
 from ._plot_ import Plot
-from ._plot_ import in_jupyter_notebook
+from ._utils_ import Utils
 from ._parse_ import ParamParser, CppRustDocStringParser
 from tqdm import tqdm
 import pandas as pd
@@ -722,7 +722,7 @@ class Session:
             name (str): The name of the session.
             save_func (Callable): The save function.
         """
-        self._in_jupyter_notebook = in_jupyter_notebook()
+        self._in_jupyter_notebook = Utils.in_jupyter_notebook()
         self._app_root = app_root
         self._proj_root = proj_root
         self._fixed = None
@@ -883,6 +883,7 @@ class Session:
             print(f">>> Log path: {log_path}")
             print(">>> Waiting for solver to finish...")
             total_frames = param.get("frames")
+            assert isinstance(total_frames, int)
             with tqdm(total=total_frames, desc="Progress") as pbar:
                 last_frame = 0
                 while process.poll() is None:
@@ -893,6 +894,8 @@ class Session:
                     time.sleep(1)
             if os.path.exists(err_path):
                 err_lines = open(err_path, "r").readlines()
+            else:
+                err_lines = []
             if len(err_lines) > 0:
                 print("*** Solver FAILED ***")
             else:
@@ -1213,7 +1216,7 @@ def display_log(lines: list[str]):
     Args:
         lines (list[str]): The log lines.
     """
-    if in_jupyter_notebook():
+    if Utils.in_jupyter_notebook():
         import ipywidgets as widgets
         from IPython.display import display
 

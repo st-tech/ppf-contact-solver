@@ -38,6 +38,7 @@ __all__ = [
     "SessionGet",
     "CppRustDocStringParser",
     "Param",
+    "Utils",
 ]
 
 from ._app_ import App
@@ -66,3 +67,4 @@ from ._session_ import (
     Param,
 )
 from ._parse_ import CppRustDocStringParser
+from ._utils_ import Utils

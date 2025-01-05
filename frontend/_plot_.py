@@ -3,8 +3,8 @@
 # License: Apache v2.0
 
 from meshplot import plot
-import os
 from meshplot.Viewer import Viewer
+from frontend._utils_ import Utils
 import pythreejs as p3s
 import numpy as np
 from IPython.display import display
@@ -29,32 +29,13 @@ DARK_DEFAULT_SHADING = {
 }
 
 
-def in_jupyter_notebook():
-    """Determine if the code is running in a Jupyter notebook."""
-    dirpath = os.path.dirname(os.path.abspath(__file__))
-    if os.path.exists(os.path.join(dirpath, ".CLI")):
-        return False
-    try:
-        from IPython import get_ipython  # type: ignore
-
-        shell = get_ipython().__class__.__name__
-        if shell == "ZMQInteractiveShell":
-            return True
-        elif shell == "TerminalInteractiveShell":
-            return False
-        else:
-            return False
-    except (NameError, ImportError):
-        return False
-
-
 class PlotManager:
     """PlotManager class. Use this to create a plot."""
 
     def __init__(self) -> None:
         """Initialize the plot manager."""
         self._darkmode = True
-        self._in_jupyter_notebook = in_jupyter_notebook()
+        self._in_jupyter_notebook = Utils.in_jupyter_notebook()
 
     def darkmode(self, darkmode: bool) -> None:
         """Turn on or off dark mode.
@@ -79,7 +60,7 @@ class PlotAdder:
     def __init__(self, parent: "Plot") -> None:
         """Initialize the plot adder."""
         self._parent = parent
-        self._in_jupyter_notebook = in_jupyter_notebook()
+        self._in_jupyter_notebook = Utils.in_jupyter_notebook()
 
     def tri(self, vert: np.ndarray, tri: np.ndarray, color: np.ndarray) -> "Plot":
         """Add a triangle mesh to the plot.
@@ -170,7 +151,7 @@ class Plot:
         Args:
             _darkmode (bool): True to turn on dark mode, False otherwise.
         """
-        self._in_jupyter_notebook = in_jupyter_notebook()
+        self._in_jupyter_notebook = Utils.in_jupyter_notebook()
         self._darkmode = _darkmode
         self._viewer = None
         self._shading = {}

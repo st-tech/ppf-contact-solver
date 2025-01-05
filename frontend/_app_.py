@@ -8,6 +8,7 @@ from ._scene_ import SceneManager
 from ._mesh_ import MeshManager
 from ._session_ import SessionManager, Param
 from ._plot_ import PlotManager
+from ._utils_ import Utils
 import pickle
 import os
 import shutil
@@ -94,6 +95,15 @@ class App:
             self._asset = AssetManager()
             self._scene = SceneManager(self._plot, self.asset, self.save)
             self.mesh = MeshManager(self.cache_dir)  #: MeshManager: The mesh manager.
+
+    @property
+    def CI(self) -> bool:
+        """Determine if the code is running in a CI environment.
+
+        Returns:
+            bool: True if the code is running in a CI environment, False otherwise.
+        """
+        return Utils.in_CI()
 
     @property
     def plot(self) -> PlotManager:

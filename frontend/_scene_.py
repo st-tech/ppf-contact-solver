@@ -325,18 +325,6 @@ class PinHolder:
             keyframe=[],
         )
 
-    def set_pull(self, strength: float) -> "PinHolder":
-        """Set pull strength for pinned vertices.
-
-        Args:
-            strength (float): The pull strength.
-
-        Returns:
-            PinHolder: The pinholder with the updated pull strength.
-        """
-        self._data.pull_strength = strength
-        return self
-
     def interp(self, transition: str) -> "PinHolder":
         """Set the transition type for the pinning.
 
@@ -385,6 +373,18 @@ class PinHolder:
             PinHolder: The pinholder with the held position.
         """
         return self.move_by([0, 0, 0], time)
+
+    def pull(self, strength: float = 1.0) -> "PinHolder":
+        """Pull the object at specified vertices.
+
+        Args:
+            strength (float, optional): The pull strength. Defaults to 1.0.
+
+        Returns:
+            PinHolder: The pinholder with the pinned and pulled vertices.
+        """
+        self._data.pull_strength = strength
+        return self
 
     def move_to(
         self,
@@ -1749,22 +1749,6 @@ class Object:
 
         holder = PinHolder(self, ind)
         self._pin.append(holder)
-        return holder
-
-    def pull_pin(
-        self, strength: float = 1.0, ind: Optional[list[int]] = None
-    ) -> PinHolder:
-        """Pin and pull the object at specified vertices.
-
-        Args:
-            strength (float, optional): The pull strength. Defaults to 1.0.
-            ind (Optional[list[int]], optional): The indices of the vertices to pin. Defaults to None.
-
-        Returns:
-            PinHolder: The pinholder with the pinned and pulled vertices.
-        """
-        holder = self.pin(ind)
-        holder.set_pull(strength)
         return holder
 
     def stitch(self, name: str) -> "Object":
