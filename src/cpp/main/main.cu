@@ -342,6 +342,12 @@ StepResult advance() {
 
     float dt = param->dt;
 
+    // Name: Step Size
+    // Format: list[(vid_time,float)]
+    // Description:
+    // Target step size.
+    logging.mark("dt", dt);
+
     if (shell_face_count) {
         utility::compute_svd(data, data.vertex.curr, svd, prm);
         tmp_scalar.clear();
@@ -664,6 +670,17 @@ StepResult advance() {
                 // Total count of Newton's steps consumed in the single step.
                 logging.mark("newton_steps", step);
 
+                // Name: Final Step Size
+                // Format: list[(vid_time,float)]
+                // Description:
+                // Actual step size advanced in the simulation.
+                // For most of the cases, this value is the same as the step
+                // size specified in the parameter. However, the actual step
+                // size is reduced by `toi_advanced` and may be also reduced
+                // when the option `enable_retry` is set to
+                // true and the PCG fails.
+                logging.mark("final_dt", dt);
+
                 param->prev_dt = dt;
                 param->time += param->prev_dt;
 
@@ -685,15 +702,6 @@ StepResult advance() {
         logging.mark("retry_count", retry_count);
     }
     result.retry_count = retry_count;
-
-    // Name: Step Size
-    // Format: list[(vid_time,float)]
-    // Description:
-    // Actual step size advanced in the simulation.
-    // For most of the cases, this value is the same as the step size specified
-    // in the parameter. However, the actual step size is reduced when the
-    // option `enable_retry` is set to true and the PCG fails.
-    logging.mark("dt", dt);
     return result;
 }
 
