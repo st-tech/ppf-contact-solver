@@ -348,7 +348,7 @@ pub struct Args {
     // This bending stiffness not scaled by the density.
     // If you change the density, you need to adjust this value accordingly.
     // This behavior also change by the material thickness.
-    #[clap(long, default_value_t = 10.0)]
+    #[clap(long, default_value_t = 1.0)]
     pub bend: f32,
 
     // Name: Bend Stiffness for Rods

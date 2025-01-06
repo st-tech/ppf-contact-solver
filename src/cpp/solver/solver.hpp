@@ -10,9 +10,6 @@
 
 namespace solver {
 
-void apply(const DynCSRMat &A, const FixedCSRMat &B, const Vec<Mat3x3f> &C,
-           float D, const Vec<float> &x, Vec<float> &result);
-
 bool solve(const DynCSRMat &A, const FixedCSRMat &B, const Vec<Mat3x3f> &C,
            Vec<float> b, float tol, unsigned max_iter, Vec<float> x,
            unsigned &iter, float &resid);
