@@ -302,10 +302,10 @@ Also, we apply small jitters to the position of objects in the scene 🔄, so at
 #### ⚠️ Disclaimer
 
 <img align="right" width="150" src="./asset/image/snag-failure.jpg">
-We are constantly updating our algorithms 🔄, which may lead to some failures ❌.
-Of course, we push our code after a few tests ✅, but still, some failures may occur 🚫 in this long stress test.
-Please understand that this stress test is designed for this purpose 🎯.
-A failure can be also due to excessively difficult test cases 🔬.
+We are constantly updating our algorithms 🔄, which may lead to failures ❌.
+Of course, we push our code after a few tests ✅ passed, but still, failures can occur 🚫 in this long stress test.
+Please understand that this stress test is indeed designed for this purpose 🎯.
+Failures can be also due to excessively difficult spots 🔬, which are unintended.
 An example is shown in the right inset 👉.
 We also update scene settings to avoid such unreasonable cases 🔧.
 
