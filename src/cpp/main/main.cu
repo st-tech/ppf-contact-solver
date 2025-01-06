@@ -574,28 +574,22 @@ StepResult advance() {
             logging.push("line search");
             contact::update_aabb(host_data, data, tmp_eval_x, eval_x,
                                  tmp::kinematic.vertex, prm);
+            float SL_toi = 1.0f;
             float toi =
                 contact::line_search(data, kinematic, tmp_eval_x, eval_x, prm);
             if (strain_limit_sum && shell_face_count > 0) {
-                toi = fminf(toi, strainlimiting::line_search(data, kinematic,
-                                                             eval_x, tmp_eval_x,
-                                                             tmp_scalar, prm));
+                SL_toi = strainlimiting::line_search(
+                    data, kinematic, eval_x, tmp_eval_x, tmp_scalar, prm);
+                toi = fminf(toi, SL_toi);
+                // Name: Strain Limiting Time of Impact
+                // Format: list[(vid_time,float)]
+                // Description:
+                // Time of impact (TOI) per Newton's step, encoding the
+                // maximal feasible step size without exceeding
+                // strain limits.
+                logging.mark("SL_toi", SL_toi);
             }
             logging.pop();
-
-            if (toi <= std::numeric_limits<float>::epsilon()) {
-                if (param->enable_retry && dt > DT_MIN) {
-                    retry = true;
-                } else {
-                    logging.message("### ccd failed (toi: %.2e)", toi);
-                    result.ccd_success = false;
-                }
-                break;
-            }
-
-            if (!final_step) {
-                toi_advanced += fmaxf(0.0f, 1.0f - toi_advanced) * toi;
-            }
 
             // Name: Time of Impact
             // Format: list[(vid_time,float)]
@@ -604,6 +598,23 @@ StepResult advance() {
             // maximal feasible step size without collision or exceeding strain
             // limits.
             logging.mark("toi", toi);
+
+            if (toi <= std::numeric_limits<float>::epsilon()) {
+                if (param->enable_retry && dt > DT_MIN) {
+                    retry = true;
+                } else {
+                    logging.message("### ccd failed (toi: %.2e)", toi);
+                    if (SL_toi < 1.0f) {
+                        logging.message("strain limiting toi: %.2e", SL_toi);
+                    }
+                    result.ccd_success = false;
+                }
+                break;
+            }
+
+            if (!final_step) {
+                toi_advanced += fmaxf(0.0f, 1.0f - toi_advanced) * toi;
+            }
 
             DISPATCH_START(vertex_count)
             [eval_x, tmp_eval_x, data, toi] __device__(unsigned i) mutable {
@@ -625,19 +636,20 @@ StepResult advance() {
             logging.message("**** retry requested. dt: %.2e", dt);
             retry_count++;
         } else {
-            // Name: Time to Check Intersection
-            // Format: list[(vid_time,ms)]
-            // Map: runtime_intersection_check
-            // Description:
-            // At the end of step, an explicit intersection check is performed.
-            // This number records the consumed time in milliseconds.
-            logging.push("check intersection");
-            if (!contact::check_intersection(data, kinematic, eval_x)) {
-                logging.message("### intersection detected");
-                result.intersection_free = false;
-            }
-            logging.pop();
             if (result.success()) {
+                // Name: Time to Check Intersection
+                // Format: list[(vid_time,ms)]
+                // Map: runtime_intersection_check
+                // Description:
+                // At the end of step, an explicit intersection check is
+                // performed. This number records the consumed time in
+                // milliseconds.
+                logging.push("check intersection");
+                if (!contact::check_intersection(data, kinematic, eval_x)) {
+                    logging.message("### intersection detected");
+                    result.intersection_free = false;
+                }
+                logging.pop();
                 // Name: Advanced Fractional Step Size
                 // Format: list[(vid_time,float)]
                 // Description:

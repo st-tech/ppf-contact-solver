@@ -126,7 +126,8 @@ while true; do
 
   if [[ -z "$INSTANCE_ID" ]]; then
     echo "No valid instance found"
-    exit 1
+    sleep $RETRY_INTERVAL
+    continue
   fi
 
   # create an instance
@@ -144,6 +145,7 @@ while true; do
   else
     echo "success: $success"
     echo "instance creation failed."
+    sleep $RETRY_INTERVAL
     continue
   fi
 

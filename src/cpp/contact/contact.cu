@@ -1474,8 +1474,7 @@ vertex_constraint_line_search(const DataSet &data, const Kinematic &kinematic,
             float r0 = (x0 - position).norm();
             float r1 = (x1 - position).norm();
             assert(r0 < param.constraint_ghat);
-            float r = param.constraint_ghat -
-                      param.ccd_reduction * (param.constraint_ghat - r0);
+            float r = param.constraint_ghat;
             if (r1 > r) {
                 // (1.0f - t) r0 + t r1 = r
                 // r0 - t r0 + t r1 = r
@@ -1510,7 +1509,6 @@ vertex_constraint_line_search(const DataSet &data, const Kinematic &kinematic,
                 } else {
                     assert(r0 > r);
                 }
-                r += param.ccd_reduction * (r0 - r);
                 bool intersected = (r0 - r) * (r1 - r) <= 0.0f;
                 if (intersected) {
                     // (1.0f - t) r0 + t r1 = r
@@ -1532,13 +1530,12 @@ vertex_constraint_line_search(const DataSet &data, const Kinematic &kinematic,
                 float h0 = up.dot(x0 - ground);
                 float h1 = up.dot(x1 - ground);
                 assert(h0 >= 0.0f);
-                float h = param.ccd_reduction * h0;
-                if (h1 < h) {
-                    // (1.0f - t) h0 + t h1 = h
-                    // h0 - t h0 + t h1 = h
-                    // t (h1 - h0) = h - h0
-                    // t = (h - h0) / (h1 - h0)
-                    float t = (h - h0) / (h1 - h0);
+                if (h1 < 0.0f) {
+                    // (1.0f - t) h0 + t h1 = 0
+                    // h0 - t h0 + t h1 = 0
+                    // t (h1 - h0) = - h0
+                    // t = - h0 / (h1 - h0)
+                    float t = -h0 / (h1 - h0);
                     toi_vert[i] =
                         fminf(toi_vert[i], param.line_search_max_t * t);
                 }
