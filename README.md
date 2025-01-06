@@ -283,7 +283,7 @@ We take advantage of the ability to deploy on the cloud; this action is performe
 
 ### ⚔️ Ten Consecutive Runs
 
-We know that you can't fully measure the reliability of contact resolution by simply watching a success case in a single 🎥 video.
+We know that you can't judge the reliability of contact resolution by simply watching a success case in a single 🎥 video.
 To ensure greater transparency, we implemented GitHub Actions to run many of our examples via automated GitHub Actions ⚙️, not just once, but 10 times in a row 🔁.
 
 [![drape.ipynb](https://github.com/st-tech/ppf-contact-solver/actions/workflows/example_drape.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/example_drape.yml)
@@ -298,6 +298,11 @@ To ensure greater transparency, we implemented GitHub Actions to run many of our
 [![twist.ipynb](https://github.com/st-tech/ppf-contact-solver/actions/workflows/example_twist.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/example_twist.yml)
 
 Also, we apply small jitters to the position of objects in the scene 🔄, so at each run, the scene is slightly different.
+
+> [!NOTE]
+> We are constantly updating our algorithms 🔄, which may lead to some failures ❌.
+> Of course, we push our code after quick testing ✅, but still, some failures may occur 🚫 in this long stress test.
+> This proves the importance of these stress tests 🧪, and these results more clearly demonstrate the reliability of our solver 💪, not by simply providing a single success case as a showcase 🎯.
 
 ## 💨 Getting Started
 
