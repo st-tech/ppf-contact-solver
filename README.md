@@ -267,8 +267,9 @@ The author is actively woriking on it.
 
 ## 🚀 GitHub Actions
 
-We implemented GitHub Actions to verify that all works without errors.
-We perform explicit intersection checks 🔍 at the end of each step, which raises an error ❌ if an intersection is detected. This ensures that all steps are confirmed to be penetration-free ✅.
+We implemented GitHub Actions that test all of our examples.
+We perform explicit intersection checks 🔍 at the end of each step, which raises an error ❌ if an intersection is detected.
+This ensures that all steps are confirmed to be penetration-free if tests are pass ✅.
 The runner types are described as follows:
 
 ### [![Getting Started](https://github.com/st-tech/ppf-contact-solver/actions/workflows/getting-started.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/getting-started.yml)
