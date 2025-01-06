@@ -299,10 +299,15 @@ To ensure greater transparency, we implemented GitHub Actions to run many of our
 
 Also, we apply small jitters to the position of objects in the scene 🔄, so at each run, the scene is slightly different.
 
-> [!NOTE]
-> We are constantly updating our algorithms 🔄, which may lead to some failures ❌.
-> Of course, we push our code after quick testing ✅, but still, some failures may occur 🚫 in this long stress test.
-> This proves the importance of these stress tests 🧪, and these results more clearly demonstrate the reliability of our solver 💪, not by simply providing a single success case as a showcase 🎯.
+#### ⚠️ Disclaimer
+
+<img align="right" width="150" src="./asset/image/snag-failure.jpg">
+We are constantly updating our algorithms 🔄, which may lead to some failures ❌.
+Of course, we push our code after a few tests ✅, but still, some failures may occur 🚫 in this long stress test.
+Please understand that this stress test is designed for this purpose 🎯.
+A failure can be also due to excessively difficult test cases 🔬.
+An example is shown in the right inset 👉.
+We also update scene settings to avoid such unreasonable cases 🔧.
 
 ## 💨 Getting Started
 

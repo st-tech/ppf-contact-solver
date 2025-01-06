@@ -31,3 +31,4 @@ _skipped.node
 docs/_*
 docs/parameters.rst
 docs/logs.rst
+private/vast-dev
