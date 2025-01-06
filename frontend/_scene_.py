@@ -363,6 +363,23 @@ class PinHolder:
             target = self._data.keyframe[-1].position + delta_pos
         return self.move_to(target, time)
 
+    def scale(self, scale: float, time: float) -> "PinHolder":
+        """Scale the object by a specified factor at a specific time.
+
+        Args:
+            scale (float): The scaling factor.
+            time (float): The absolute time to scale the object.
+
+        Returns:
+            PinHolder: The pinholder with the updated scaling.
+        """
+        vertex = self._obj.vertex()[self._data.index]
+        mean = np.mean(vertex, axis=0)
+        vertex = vertex - mean
+        vertex = vertex * scale
+        vertex = vertex + mean
+        return self.move_to(vertex, time)
+
     def hold(self, time: float) -> "PinHolder":
         """Hold the object in its current position for a specified time.
 
