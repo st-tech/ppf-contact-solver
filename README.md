@@ -14,7 +14,7 @@ Published in [ACM Transactions on Graphics (TOG)](https://dl.acm.org/doi/abs/10.
 - **🚲 Cache Efficient**: All on the GPU runs in single precision. No double precision.
 - **🥼 Inextensible**: Cloth never extends beyond very strict upper bounds, such as 1%.
 - **📐 Physically Accurate**: Our deformable solver is driven by the Finite Element Method.
-- **⚔️ Stress Proof**: We run GitHub Actions to confirm success [10 times in a row](#️-ten-consecutive-runs).
+- **⚔️ Highly Stressed**: We run GitHub Actions to run stress tests [10 times in a row](#️-ten-consecutive-runs).
 - **🚀 Massively Parallel**: Both contact and elasticity solvers are run on the GPU.
 - **🐳 Docker Sealed**: Everything is designed to work out of the box.
 - **🌐 JupyterLab Included**: Open your browser and run examples right away [[Video]](https://drive.google.com/file/d/1n068Ai_hlfgapf2xkAutOHo3PkLpJXA4/view).
@@ -283,8 +283,8 @@ We take advantage of the ability to deploy on the cloud; this action is performe
 
 ### ⚔️ Ten Consecutive Runs
 
-We know that you can't fully trust the reliability of contact resolution by simply watching a success case in a single 🎥 video.
-To ensure greater reliability, we verify that all the examples run without errors via automated GitHub Actions ⚙️, not just once, but 10 times in a row 🔁.
+We know that you can't fully measure the reliability of contact resolution by simply watching a success case in a single 🎥 video.
+To ensure greater transparency, we implemented GitHub Actions to run many of our examples via automated GitHub Actions ⚙️, not just once, but 10 times in a row 🔁.
 
 [![drape.ipynb](https://github.com/st-tech/ppf-contact-solver/actions/workflows/example_drape.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/example_drape.yml)
 [![cards.ipynb](https://github.com/st-tech/ppf-contact-solver/actions/workflows/example_cards.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/example_cards.yml)
@@ -297,7 +297,7 @@ To ensure greater reliability, we verify that all the examples run without error
 [![trapped.ipynb](https://github.com/st-tech/ppf-contact-solver/actions/workflows/example_trapped.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/example_trapped.yml)
 [![twist.ipynb](https://github.com/st-tech/ppf-contact-solver/actions/workflows/example_twist.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/example_twist.yml)
 
-Also, we apply small jitters to the position of objects in the scene 🔄, so at each run, the scene is slightly different. This means that success 🎯 is not just due to a lucky spot 🍀.
+Also, we apply small jitters to the position of objects in the scene 🔄, so at each run, the scene is slightly different.
 
 ## 💨 Getting Started
 
