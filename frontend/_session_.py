@@ -734,6 +734,7 @@ class Session:
         self._export = SessionExport(self)
         self._get = SessionGet(self)
         self._output = SessionOutput(self)
+        self._shading = {}
         self.delete()
 
     @property
@@ -755,6 +756,7 @@ class Session:
     def output(self) -> SessionOutput:
         """Get the session output object."""
         return self._output
+
 
     def print(self, message):
         """Print a message.
@@ -791,6 +793,7 @@ class Session:
         path = os.path.expanduser(
             os.path.join(self._app_root, "session", scene._name, self.info.name)
         )
+        self._shading = scene._shading
         self.info.set_path(path)
         if is_running():
             self.print("Solver is already running. Teriminate first.")
@@ -942,6 +945,7 @@ class Session:
         """Live view the session.
 
         Args:
+            shading (dict, optional): The shading options.
             live_update (bool, optional): Whether to enable live update.
 
         Returns:
@@ -951,7 +955,7 @@ class Session:
             import ipywidgets as widgets
             from IPython.display import display
 
-            shading = {"wireframe": False}
+            _shading = {"wireframe": False}
             if self._fixed is None:
                 raise ValueError("Scene must be initialized")
             else:
@@ -961,7 +965,7 @@ class Session:
                 else:
                     vert, curr_frame = result
                 plot = self._fixed.preview(
-                    vert, shading=shading, show_pin=False, show_stitch=False
+                    vert, shading=_shading, show_pin=False, show_stitch=False
                 )
 
             table = widgets.HTML()
@@ -1067,13 +1071,13 @@ class Session:
         if self._in_jupyter_notebook:
             import ipywidgets as widgets
 
-            shading = {"wireframe": False}
+            _shading = {"wireframe": False} | self._shading
             if self._fixed is None:
                 raise ValueError("Scene must be initialized")
             else:
                 plot = self._fixed.preview(
                     self._fixed._vert,
-                    shading=shading,
+                    shading=_shading,
                     show_pin=False,
                     show_stitch=False,
                 )

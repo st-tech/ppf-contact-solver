@@ -20,6 +20,18 @@ class MeshManager:
         """Get the mesh creation manager"""
         return self._create
 
+    def export(self, V: np.ndarray, F: np.ndarray, path: str):
+        """Export the mesh to a file"""
+        import open3d as o3d
+
+        o3d.io.write_triangle_mesh(
+            path,
+            o3d.geometry.TriangleMesh(
+                vertices=o3d.utility.Vector3dVector(V),
+                triangles=o3d.utility.Vector3iVector(F),
+            ),
+        )
+
     def line(self, _p0: list[float], _p1: list[float], n: int) -> "Rod":
         """Create a line mesh with a given start and end points and resolution.
 
@@ -52,6 +64,282 @@ class MeshManager:
         return self._from_o3d(
             o3d.geometry.TriangleMesh.create_box(width, height, depth)
         )
+    
+    def cube(
+        self,
+        Nx: int = 15,
+        Ny: int = 15,
+        Nz: int = 15,
+        size_x: float = 2.0,
+        size_y: float = 2.0,
+        size_z: float = 2.0,
+    ) -> "TriMesh":
+        """Create a cube mesh with a given resolution and size.
+
+        Args:
+            Nx (int): resolution of the mesh
+            Ny (int): resolution of the mesh
+            Nz (int): resolution of the mesh
+            size_x (float): a width of the cube
+            size_y (float): a height of the cube
+            size_z (float): a depth of the cube
+
+        Returns:
+            TriMesh: a cube mesh, a pair of vertices and triangles
+        """
+        x = np.linspace(-size_x / 2, size_x / 2, Nx)
+        y = np.linspace(-size_y / 2, size_y / 2, Ny)
+        X, Y = np.meshgrid(x, y, indexing="ij")
+        X_flat, Y_flat = X.flatten(), Y.flatten()
+        Z_flat = np.ones_like(X_flat) * size_z / 2
+        V = np.vstack((X_flat, Y_flat, Z_flat)).T
+
+        F = []
+        for j in range(Ny - 1):
+            for i in range(Nx - 1):
+                v0 = i * Ny + j
+                v1 = v0 + 1
+                v2 = v0 + Ny
+                v3 = v2 + 1
+                if (i % 2) == (j % 2):
+                    F.extend([[v0, v2, v1], [v1, v2, v3]])
+                else:
+                    F.extend([[v0, v3, v1], [v0, v2, v3]])
+        F = np.array(F)
+
+        Z_flat_bottom = np.ones_like(X_flat) * (-size_z / 2)
+        V_bottom = np.vstack((X_flat, Y_flat, Z_flat_bottom)).T
+
+        V = np.vstack((V, V_bottom))
+        F_bottom = []
+        offset = Nx * Ny
+        for face in F:
+            # Reverse vertex order for bottom faces
+            F_bottom.append([face[2] + offset, face[1] + offset, face[0] + offset])
+        F_bottom = np.array(F_bottom)
+        F = np.vstack((F, F_bottom))
+
+        front_indices = []
+        x_coords = np.linspace(-size_x / 2, size_x / 2, Nx)
+        z = np.linspace(-size_z / 2, size_z / 2, Nz)
+        new_vertices = []
+        map_front_right = {}
+        map_front_left = {}
+
+        vertex_map = {}
+        for i in range(Nx):
+            x_coord = x_coords[i]  # Get x coordinate from x_coords array
+            y = size_y / 2  # Front face is at y=size_y/2
+            for k in range(Nz):
+                if k == 0:
+                    vertex_map[(i, k)] = i * Ny + (Ny - 1) + (Nx * Ny)
+                elif k == Nz - 1:
+                    vertex_map[(i, k)] = i * Ny + (Ny - 1)  # Index in top rectangle
+                else:
+                    new_vertices.append([x_coord, y, z[k]])
+                    vertex_map[(i, k)] = None
+                    if i == 0:
+                        map_front_left[k] = len(new_vertices) - 1 + len(V)
+                    elif i == Nx - 1:
+                        map_front_right[k] = len(new_vertices) - 1 + len(V)
+
+        V = np.vstack((V, np.array(new_vertices)))
+        start_idx = len(V) - len(new_vertices)
+
+        vertex_count = 0
+        for i in range(Nx):
+            for k in range(Nz):
+                if vertex_map[(i, k)] is None:
+                    vertex_map[(i, k)] = start_idx + vertex_count
+                    vertex_count += 1
+
+        for i in range(Nx - 1):
+            for k in range(Nz - 1):
+                v0 = vertex_map[(i, k)]
+                v1 = vertex_map[(i, k + 1)]
+                v2 = vertex_map[(i + 1, k)]
+                v3 = vertex_map[(i + 1, k + 1)]
+                if (i % 2) == (k % 2):
+                    front_indices.extend(
+                        [
+                            [v1, v2, v0],
+                            [v3, v2, v1],
+                        ]
+                    )
+                else:
+                    front_indices.extend(
+                        [
+                            [v1, v3, v0],
+                            [v3, v2, v0],
+                        ]
+                    )
+
+        F = np.vstack((F, np.array(front_indices)))
+
+        back_indices = []
+        new_vertices = []
+        map_back_right = {}
+        map_back_left = {}
+
+        vertex_map = {}
+        for i in range(Nx):
+            x_coord = x_coords[i]
+            y = -size_y / 2
+            for k in range(Nz):
+                if k == 0:
+                    vertex_map[(i, k)] = i * Ny + (Nx * Ny)
+                elif k == Nz - 1:
+                    vertex_map[(i, k)] = i * Ny
+                else:
+                    new_vertices.append([x_coord, y, z[k]])
+                    vertex_map[(i, k)] = None
+                    if i == 0:
+                        map_back_left[k] = len(new_vertices) - 1 + len(V)
+                    elif i == Nx - 1:
+                        map_back_right[k] = len(new_vertices) - 1 + len(V)
+
+        V = np.vstack((V, np.array(new_vertices)))
+        start_idx = len(V) - len(new_vertices)
+
+        vertex_count = 0
+        for i in range(Nx):
+            for k in range(Nz):
+                if vertex_map[(i, k)] is None:
+                    vertex_map[(i, k)] = start_idx + vertex_count
+                    vertex_count += 1
+
+        for i in range(Nx - 1):
+            for k in range(Nz - 1):
+                v0 = vertex_map[(i, k)]
+                v1 = vertex_map[(i, k + 1)]
+                v2 = vertex_map[(i + 1, k)]
+                v3 = vertex_map[(i + 1, k + 1)]
+                if (i % 2) == (k % 2):
+                    back_indices.extend(
+                        [
+                            [v1, v0, v2],
+                            [v3, v1, v2],
+                        ]
+                    )
+                else:
+                    back_indices.extend(
+                        [
+                            [v1, v0, v3],
+                            [v3, v0, v2],
+                        ]
+                    )
+
+        F = np.vstack((F, np.array(back_indices)))
+
+        right_indices = []
+        new_vertices = []
+
+        vertex_map = {}
+        y = np.linspace(-size_y / 2, size_y / 2, Ny)
+
+        for j in range(Ny):
+            y_coord = y[j]
+            x = size_x / 2
+            for k in range(Nz):
+                if k == 0:
+                    vertex_map[(j, k)] = (Nx - 1) * Ny + j + (Nx * Ny)
+                elif k == Nz - 1:
+                    vertex_map[(j, k)] = (Nx - 1) * Ny + j
+                elif j == 0:
+                    vertex_map[(j, k)] = map_back_right[k]
+                elif j == Ny - 1:
+                    vertex_map[(j, k)] = map_front_right[k]
+                else:
+                    new_vertices.append([x, y_coord, z[k]])
+                    vertex_map[(j, k)] = None
+
+        V = np.vstack((V, np.array(new_vertices)))
+        start_idx = len(V) - len(new_vertices)
+
+        vertex_count = 0
+        for j in range(Ny):
+            for k in range(Nz):
+                if vertex_map[(j, k)] is None:
+                    vertex_map[(j, k)] = start_idx + vertex_count
+                    vertex_count += 1
+
+        for j in range(Ny - 1):
+            for k in range(Nz - 1):
+                v0 = vertex_map[(j, k)]
+                v1 = vertex_map[(j, k + 1)]
+                v2 = vertex_map[(j + 1, k)]
+                v3 = vertex_map[(j + 1, k + 1)]
+                if (j % 2) == (k % 2):
+                    right_indices.extend(
+                        [
+                            [v0, v2, v1],
+                            [v1, v2, v3],
+                        ]
+                    )
+                else:
+                    right_indices.extend(
+                        [
+                            [v0, v3, v1],
+                            [v0, v2, v3],
+                        ]
+                    )
+
+        F = np.vstack((F, np.array(right_indices)))
+
+        left_indices = []
+        new_vertices = []
+
+        vertex_map = {}
+
+        for j in range(Ny):
+            y_coord = y[j]
+            x = -size_x / 2
+            for k in range(Nz):
+                if k == 0:
+                    vertex_map[(j, k)] = j + (Nx * Ny)
+                elif k == Nz - 1:
+                    vertex_map[(j, k)] = j
+                elif j == 0:
+                    vertex_map[(j, k)] = map_back_left[k]
+                elif j == Ny - 1:
+                    vertex_map[(j, k)] = map_front_left[k]
+                else:
+                    new_vertices.append([x, y_coord, z[k]])
+                    vertex_map[(j, k)] = None
+
+        V = np.vstack((V, np.array(new_vertices)))
+        start_idx = len(V) - len(new_vertices)
+
+        vertex_count = 0
+        for j in range(Ny):
+            for k in range(Nz):
+                if vertex_map[(j, k)] is None:
+                    vertex_map[(j, k)] = start_idx + vertex_count
+                    vertex_count += 1
+
+        for j in range(Ny - 1):
+            for k in range(Nz - 1):
+                v0 = vertex_map[(j, k)]
+                v1 = vertex_map[(j, k + 1)]
+                v2 = vertex_map[(j + 1, k)]
+                v3 = vertex_map[(j + 1, k + 1)]
+                if (j % 2) == (k % 2):
+                    left_indices.extend(
+                        [
+                            [v0, v1, v2],
+                            [v1, v3, v2],
+                        ]
+                    )
+                else:
+                    left_indices.extend(
+                        [
+                            [v0, v1, v3],
+                            [v0, v3, v2],
+                        ]
+                    )
+
+        F = np.vstack((F, np.array(left_indices)))
+        return TriMesh.create(V, F, self._cache_dir)
 
     def rectangle(
         self,
@@ -480,7 +768,7 @@ def bbox(vert) -> np.ndarray:
     return np.array([width, height, depth])
 
 
-def normalize(vert: np.ndarray) -> np.ndarray:
+def normalize(vert: np.ndarray):
     """Normalize a set of vertices
 
     Normalize a set of vertices so that the maximum bounding box size becomes 1.
@@ -535,12 +823,25 @@ class Rod(tuple[np.ndarray, np.ndarray]):
         normalize(self[0])
         return self
 
-    def scale(self, scale_x: float, scale_y: float, scale_z: float) -> "Rod":
+    def scale(
+        self, scale_x: float, scale_y: Optional[float] = None, scale_z: Optional[float] = None
+    ) -> "Rod":
         """Scale the rod mesh
 
         Scale the rod mesh with given scaling factors.
 
+        Args:
+            scale_x (float): a scaling factor for the x-axis
+            scale_y (float): a scaling factor for the y-axis. If None, it is set to the same value as scale_x.
+            scale_z (float): a scaling factor for the z-axis. If None, it is set to the same value as scale_x.
+
+        Returns:
+            Rod: a scaled rod mesh
         """
+        if scale_y is None:
+            scale_y = scale_x
+        if scale_z is None:
+            scale_z = scale_x
         scale(self[0], scale_x, scale_y, scale_z)
         return self
 
@@ -561,12 +862,25 @@ class TetMesh(tuple[np.ndarray, np.ndarray, np.ndarray]):
         normalize(self[0])
         return self
 
-    def scale(self, scale_x: float, scale_y: float, scale_z: float) -> "TetMesh":
-        """Scale the tetrahedral mesh
+    def scale(
+        self, scale_x: float, scale_y: Optional[float] = None, scale_z: Optional[float] = None
+    ) -> "Rod":
+        """Scale the rod mesh
 
-        Scale the tetrahedral mesh with given scaling factors.
+        Scale the rod mesh with given scaling factors.
 
+        Args:
+            scale_x (float): a scaling factor for the x-axis
+            scale_y (float): a scaling factor for the y-axis. If None, it is set to the same value as scale_x.
+            scale_z (float): a scaling factor for the z-axis. If None, it is set to the same value as scale_x.
+
+        Returns:
+            Rod: a scaled rod mesh
         """
+        if scale_y is None:
+            scale_y = scale_x
+        if scale_z is None:
+            scale_z = scale_x
         scale(self[0], scale_x, scale_y, scale_z)
         return self
 
@@ -591,6 +905,17 @@ class TriMesh(tuple[np.ndarray, np.ndarray]):
             o3d.utility.Vector3dVector(self[0]),
             o3d.utility.Vector3iVector(self[1]),
         )
+
+    def export(self, path):
+        """Export mesh as PLY or OBJ
+
+        Args:
+            path (str): export path
+        """
+        import open3d as o3d
+
+        o3d_mesh = self._make_o3d()
+        o3d.io.write_triangle_mesh(path, o3d_mesh)
 
     def decimate(self, target_tri: int) -> "TriMesh":
         """Mesh decimation
@@ -771,11 +1096,24 @@ class TriMesh(tuple[np.ndarray, np.ndarray]):
         normalize(self[0])
         return self
 
-    def scale(self, scale_x: float, scale_y: float, scale_z: float) -> "TriMesh":
-        """Scale the triangle mesh
+    def scale(
+        self, scale_x: float, scale_y: Optional[float] = None, scale_z: Optional[float] = None
+    ) -> "Rod":
+        """Scale the rod mesh
 
-        Scale the triangle mesh with given scaling factors.
+        Scale the rod mesh with given scaling factors.
 
+        Args:
+            scale_x (float): a scaling factor for the x-axis
+            scale_y (float): a scaling factor for the y-axis. If None, it is set to the same value as scale_x.
+            scale_z (float): a scaling factor for the z-axis. If None, it is set to the same value as scale_x.
+
+        Returns:
+            Rod: a scaled rod mesh
         """
+        if scale_y is None:
+            scale_y = scale_x
+        if scale_z is None:
+            scale_z = scale_x
         scale(self[0], scale_x, scale_y, scale_z)
         return self

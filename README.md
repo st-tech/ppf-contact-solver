@@ -70,6 +70,7 @@ Published in [ACM Transactions on Graphics (TOG)](https://dl.acm.org/doi/abs/10.
 
 ## 📝 Change History
 
+- (2025.1.8) Added a [domino example](./examples/domino.ipynb) [[Video]](https://drive.google.com/file/d/1N9y8eZrjSQhAUhKwiO9w8jW_T18zPnYf/view).
 - (2025.1.5) Added a [single twist example](./examples/twist.ipynb) [[Video]](https://drive.google.com/file/d/1LDFKS-iBvl2uDdPVKaazQL25tYGEEyXr/view).
 - (2024.12.31) Added full documentation for Python APIs, parameters, and log files [[GitHub Pages]](https://st-tech.github.io/ppf-contact-solver).
 - (2024.12.27) Line search for strain limiting is improved [[Markdown]](./articles/bug.md#new-strain-limiting-line-search)
@@ -181,6 +182,9 @@ The behaviors can be changed through the settings.
 
 - A list of parameters used in `param.set(key,value)` is documented here [[GitHub Pages]](https://st-tech.github.io/ppf-contact-solver/parameters.html).
 
+> [!NOTE]
+> ⚠️ Please note that our Python APIs are subject to breaking changes as this repository undergoes frequent iterations. 🚧
+
 ## 🔍 Obtaining Logs
 
 📊 Logs for the simulation can also be queried through the Python APIs 🐍. Here's an example of how to get a list of recorded logs 📝, fetch them 📥, and compute the average 🧮.
@@ -257,7 +261,7 @@ All the log files 📂 are available ✅ and can be fetched ⬇️ during the si
 |![](./asset/image/catalogue/woven.mp4.gif)|![](./asset/image/catalogue/stack.mp4.gif)|![](./asset/image/catalogue/trampoline.mp4.gif)|![](./asset/image/catalogue/needle.mp4.gif)|
 |[cards](./examples/cards.ipynb) [[Video]](https://drive.google.com/file/d/1PMdDnlyCsjinbvICKph_0UcXUfUvvUmZ/view)|codim|[hang](./examples/hang.ipynb) [[Video]](https://drive.google.com/file/d/1gIjwaRrEifH0FQnZ8HO8Q9-f9FF5ZivG/view)|[trapped](./examples/trapped.ipynb)|
 |![](./asset/image/catalogue/cards.mp4.gif)|![](./asset/image/catalogue/codim.mp4.gif)|![](./asset/image/catalogue/hang.mp4.gif)|![](./asset/image/catalogue/trapped.mp4.gif)|
-|domino|noodle|[drape](./examples/drape.ipynb) [[Video]](https://drive.google.com/file/d/1PGL3tbA451VhHOViSJJNNdQvmUpg7bQd/view)|[twist](./examples/twist.ipynb) [[Video]](https://drive.google.com/file/d/1LDFKS-iBvl2uDdPVKaazQL25tYGEEyXr/view)|
+|[domino](./examples/domino.ipynb) [[Video]](https://drive.google.com/file/d/1N9y8eZrjSQhAUhKwiO9w8jW_T18zPnYf/view)|noodle|[drape](./examples/drape.ipynb) [[Video]](https://drive.google.com/file/d/1PGL3tbA451VhHOViSJJNNdQvmUpg7bQd/view)|[twist](./examples/twist.ipynb) [[Video]](https://drive.google.com/file/d/1LDFKS-iBvl2uDdPVKaazQL25tYGEEyXr/view)|
 |![](./asset/image/catalogue/domino.mp4.gif)|![](./asset/image/catalogue/noodle.mp4.gif)|![](./asset/image/catalogue/drape.mp4.gif)|![](./asset/image/catalogue/quintupletwist.mp4.gif)|
 |ribbon|[curtain](./examples/curtain.ipynb) [[Video]](https://drive.google.com/file/d/1c9W3YAFAS5r9m9i7sZHsFu8h98C8yy1T/view)|fishingknot|[friction](./examples/friction.ipynb) [[Video]](https://drive.google.com/file/d/12WGdfDTFIwCT0UFGEZzfmQreM6WSSHet/view)|
 |![](./asset/image/catalogue/ribbon.mp4.gif)|![](./asset/image/catalogue/curtain.mp4.gif)|![](./asset/image/catalogue/fishingknot.mp4.gif)|![](./asset/image/catalogue/friction-armadillo.mp4.gif)|
@@ -302,13 +306,15 @@ Also, we apply small jitters to the position of objects in the scene 🔄, so at
 
 #### ⚠️ Disclaimer
 
+
+Our long stress tests can fail due to following reasons:
+
 <img align="right" width="150" src="./asset/image/snag-failure.jpg">
-We are constantly updating our algorithms 🔄, which may lead to failures ❌.
-Of course, we push our code after a few tests ✅ passed, but still, failures can occur 🚫 in this long stress test.
-Please understand that this stress test is indeed designed for this purpose 🎯.
-Failures can be also due to excessively difficult spots 🔬, which are unintended.
+
+- We are constantly updating our algorithms 🔄, which may introduce bugs. This stress test is indeed designed for this purpose 🎯.
+- Failures can be also due to excessively difficult spots 🔬, which are unintended.
 An example is shown in the right inset 👉.
-We also update scene settings to avoid such unreasonable cases 🔧.
+- Occasionally, we experience [vast.ai](https://vast.ai) instances shutting down before simulations finish.
 
 ## 💨 Getting Started
 

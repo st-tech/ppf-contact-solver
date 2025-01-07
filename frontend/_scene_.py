@@ -550,6 +550,19 @@ class FixedScene:
         self._shell_vert_range = shell_vert_range
         self._rod_count = rod_count
         self._shell_count = shell_count
+        self._shading = {}
+
+    def shading(self, shading: dict) -> "FixedScene":
+        """Set the shading options.
+
+        Args:
+            shading (dict): The shading options.
+
+        Returns:
+            Session: The session object.
+        """
+        self._shading = shading
+        return self
 
     def report(self) -> "FixedScene":
         """Print a summary of the scene."""
@@ -947,7 +960,7 @@ class FixedScene:
 
         Args:
             vert (Optional[np.ndarray], optional): The vertices to preview. Defaults to None.
-            shading (dict, optional): The shading options. Defaults to {}.
+            shading (dict, optional): Additional shading options. Defaults to {}.
             show_stitch (bool, optional): Whether to show the stitch. Defaults to True.
             show_pin (bool, optional): Whether to show the pin. Defaults to True.
 
@@ -955,6 +968,7 @@ class FixedScene:
             Optional[Plot]: The plot object if in a Jupyter notebook, otherwise None.
         """
         if self._plot.is_jupyter_notebook():
+            shading = self._shading | shading
             if vert is None:
                 vert = self._vert
             color = self._color
@@ -974,6 +988,7 @@ class FixedScene:
                         self._static_vert,
                         self._static_tri,
                         color=self._static_color,
+                        shading=self._shading | shading,
                     )
                 else:
                     plot.add.tri(
@@ -984,7 +999,9 @@ class FixedScene:
 
             if len(self._rod):
                 if plot is None:
-                    plot = self._plot.create().curve(vert, self._rod, shading=shading)
+                    plot = self._plot.create().curve(
+                        vert, self._rod, shading=shading
+                    )   
                 else:
                     plot.add.edge(vert, self._rod)
 
@@ -1146,6 +1163,40 @@ class Scene:
             raise Exception(f"object {name} does not exist")
         else:
             return self._object[name]
+
+    def min(self, axis: str) -> float:
+        """Get the minimum value of the scene along a specific axis.
+
+        Args:
+            axis (str): The axis to get the minimum value along, either "x", "y", or "z".
+
+        Returns:
+            float: The minimum vertex coordinate along the specified axis.
+        """
+        result = float("inf")
+        _axis = {"x": 0, "y": 1, "z": 2}
+        for obj in self._object.values():
+            vert = obj.vertex()
+            if vert is not None:
+                result = min(result, np.min(vert[:, _axis[axis]]))
+        return result
+
+    def max(self, axis: int) -> float:
+        """Get the maximum value of the scene along a specific axis.
+
+        Args:
+            axis (str): The axis to get the minimum value along, either "x", "y", or "z".
+
+        Returns:
+            float: The maximum vertex coordinate along the specified axis.
+        """
+        result = float("-inf")
+        _axis = {"x": 0, "y": 1, "z": 2}
+        for obj in self._object.values():
+            vert = obj.vertex()
+            if vert is not None:
+                result = max(result, np.max(vert[:, _axis[axis]]))
+        return result
 
     def build(self) -> FixedScene:
         """Build the fixed scene from the current scene.
@@ -1615,29 +1666,29 @@ class Object:
             raise Exception("invalid axis")
         return self
 
-    def max(self, dim: int):
+    def max(self, dim: str) -> float:
         """Get the maximum coordinate value along a specified dimension.
 
         Args:
-            dim (int): The dimension index (0 for x, 1 for y, 2 for z).
+            dim (str): The dimension to get the maximum value along, either "x", "y", or "z".
 
         Returns:
             float: The maximum coordinate value.
         """
         vert = self.vertex()
-        return np.max([x[dim] for x in vert])
+        return np.max([x[{"x": 0, "y": 1, "z": 2}[dim]] for x in vert])
 
-    def min(self, dim: int):
+    def min(self, dim: str) -> float:
         """Get the minimum coordinate value along a specified dimension.
 
         Args:
-            dim (int): The dimension index (0 for x, 1 for y, 2 for z).
+            dim (str): The dimension to get the minimum value along, either "x", "y", or "z".
 
         Returns:
             float: The minimum coordinate value.
         """
         vert = self.vertex()
-        return np.min([x[dim] for x in vert])
+        return np.min([x[{"x": 0, "y": 1, "z": 2}[dim]] for x in vert])
 
     def apply_transform(self, x: np.ndarray) -> np.ndarray:
         """Apply the object's transformation to a set of vertices.

@@ -1,0 +1,68 @@
+# File: example_domino.yml
+# Author: Ryoichi Ando (ryoichi.ando@zozo.com)
+# License: Apache v2.0
+
+name: domino.ipynb
+
+on:
+  workflow_dispatch:
+    inputs:
+      runner:
+        type: string
+        required: true
+        description: 'Runner Name'
+
+env:
+  VAST_API_KEY: ${{ secrets.VAST_API_KEY }}
+  EXAMPLE_NAME: domino
+  HELPER_PATH: .github/workflows/vast/helper.sh
+  
+jobs:
+  run:
+    runs-on: ${{ github.event.inputs.runner }}
+    steps:
+
+      - name: check out repo
+        uses: actions/checkout@v3
+
+      - name: print scene
+        run: |
+          echo "Scene: $EXAMPLE_NAME" >> $GITHUB_STEP_SUMMARY
+
+      - name: prepare
+        timeout-minutes: 30
+        run: bash $HELPER_PATH create $VAST_API_KEY
+
+      - name: 1st run
+        run: bash $HELPER_PATH run ${EXAMPLE_NAME}.py
+
+      - name: 2nd run
+        run: bash $HELPER_PATH run ${EXAMPLE_NAME}.py
+
+      - name: 3rd run
+        run: bash $HELPER_PATH run ${EXAMPLE_NAME}.py
+
+      - name: 4th run
+        run: bash $HELPER_PATH run ${EXAMPLE_NAME}.py
+
+      - name: 5th run
+        run: bash $HELPER_PATH run ${EXAMPLE_NAME}.py
+
+      - name: 6th run
+        run: bash $HELPER_PATH run ${EXAMPLE_NAME}.py
+
+      - name: 7th run
+        run: bash $HELPER_PATH run ${EXAMPLE_NAME}.py
+
+      - name: 8th run
+        run: bash $HELPER_PATH run ${EXAMPLE_NAME}.py
+
+      - name: 9th run
+        run: bash $HELPER_PATH run ${EXAMPLE_NAME}.py
+
+      - name: 10th run
+        run: bash $HELPER_PATH run ${EXAMPLE_NAME}.py
+
+      - name: shutdown
+        if: always()
+        run: bash $HELPER_PATH delete
