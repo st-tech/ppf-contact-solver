@@ -301,6 +301,7 @@ To ensure greater transparency, we implemented GitHub Actions to run many of our
 [![trampoline.ipynb](https://github.com/st-tech/ppf-contact-solver/actions/workflows/example_trampoline.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/example_trampoline.yml)
 [![trapped.ipynb](https://github.com/st-tech/ppf-contact-solver/actions/workflows/example_trapped.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/example_trapped.yml)
 [![twist.ipynb](https://github.com/st-tech/ppf-contact-solver/actions/workflows/example_twist.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/example_twist.yml)
+[![domino.ipynb](https://github.com/st-tech/ppf-contact-solver/actions/workflows/example_domino.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/example_domino.yml)
 
 Also, we apply small jitters to the position of objects in the scene 🔄, so at each run, the scene is slightly different.
 
