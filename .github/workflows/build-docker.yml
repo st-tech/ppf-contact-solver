@@ -8,7 +8,7 @@ env:
   NAME: ppf-contact-solver-base
 jobs:
   build-image:
-    runs-on: ppf-contact-solver-NVIDIA
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
