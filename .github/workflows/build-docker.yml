@@ -7,7 +7,7 @@ env:
   REGISTRY: ghcr.io
   NAME: ppf-contact-solver-base
 jobs:
-  build-and-push:
+  build-image:
     runs-on: ppf-contact-solver-NVIDIA
     permissions:
       contents: read
