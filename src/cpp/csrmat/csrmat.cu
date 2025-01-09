@@ -10,6 +10,8 @@
 #include "../utility/utility.hpp"
 #include "csrmat.hpp"
 
+#define BLOCK_SIZE 1024
+
 __device__ void Row::alloc() {
     head = 0;
     ref_head = 0;
@@ -139,7 +141,7 @@ void DynCSRMat::start_rebuild_buffer() {
 
 __global__ void block_scan_kernel(unsigned *d_data, unsigned *d_block_sums,
                                   unsigned n) {
-    extern __shared__ unsigned temp[];
+    __shared__ unsigned temp[BLOCK_SIZE];
     unsigned tid = threadIdx.x;
     unsigned idx = blockIdx.x * blockDim.x + threadIdx.x;
     temp[tid] = (idx < n) ? d_data[idx] : 0;
@@ -183,8 +185,7 @@ __global__ void add_block_offsets_kernel(unsigned *d_data,
 }
 
 void exclusive_scan(unsigned *d_data, unsigned n) {
-    const unsigned block_size = 1024;
-    const unsigned num_blocks = (n + block_size - 1) / block_size;
+    const unsigned num_blocks = (n + BLOCK_SIZE - 1) / BLOCK_SIZE;
     static unsigned *d_block_sums = nullptr;
     static unsigned *h_block_sums = nullptr;
     static unsigned max_num_blocks = 0;
@@ -199,8 +200,8 @@ void exclusive_scan(unsigned *d_data, unsigned n) {
         h_block_sums = new unsigned[num_blocks];
         max_num_blocks = num_blocks;
     }
-    block_scan_kernel<<<num_blocks, block_size,
-                        block_size * sizeof(unsigned)>>>(d_data, d_block_sums,
+    block_scan_kernel<<<num_blocks, BLOCK_SIZE,
+                        BLOCK_SIZE * sizeof(unsigned)>>>(d_data, d_block_sums,
                                                          n);
     cudaDeviceSynchronize();
     cudaMemcpy(h_block_sums, d_block_sums, num_blocks * sizeof(unsigned),
@@ -210,7 +211,7 @@ void exclusive_scan(unsigned *d_data, unsigned n) {
     }
     cudaMemcpy(d_block_sums, h_block_sums, num_blocks * sizeof(unsigned),
                cudaMemcpyHostToDevice);
-    add_block_offsets_kernel<<<num_blocks, block_size>>>(d_data, d_block_sums,
+    add_block_offsets_kernel<<<num_blocks, BLOCK_SIZE>>>(d_data, d_block_sums,
                                                          n);
 }
 
