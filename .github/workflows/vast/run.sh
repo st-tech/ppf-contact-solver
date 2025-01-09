@@ -6,10 +6,7 @@ SSH=/tmp/vast-ci/ssh-command.sh
 REMOTE_WORKDIR=/root/ppf-contact-solver
 
 ARG=$1
-if [ "$ARG" = "warmup" ]; then
-    $SSH "apt update"
-    $SSH "cd ppf-contact-solver && python3 warmup.py"
-elif [ "$ARG" = "build" ]; then
+if [ "$ARG" = "build" ]; then
     $SSH "cd ppf-contact-solver && /root/.cargo/bin/cargo build --release"
 elif [ "$ARG" = "convert" ]; then
     $SSH "cd ppf-contact-solver/examples && jupyter nbconvert --to script *.ipynb"

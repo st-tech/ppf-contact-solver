@@ -4,6 +4,7 @@ A contact solver for physics-based simulations involving 👚 shells, 🪵 solid
 Published in [ACM Transactions on Graphics (TOG)](https://dl.acm.org/doi/abs/10.1145/3687908).
 
 [![Getting Started](https://github.com/st-tech/ppf-contact-solver/actions/workflows/getting-started.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/getting-started.yml) [![All Examples](https://github.com/st-tech/ppf-contact-solver/actions/workflows/vast-all.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/vast-all.yml) [![Python API Docs](https://github.com/st-tech/ppf-contact-solver/actions/workflows/make-docs.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/make-docs.yml)
+[![Docker Build](https://github.com/st-tech/ppf-contact-solver/actions/workflows/build-docker.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/build-docker.yml)
 
 <img src="./asset/image/teaser-image.jpg" alt="solver logo">
   
@@ -26,25 +27,20 @@ Published in [ACM Transactions on Graphics (TOG)](https://dl.acm.org/doi/abs/10.
 
 - [🎓 Technical Materials](#-technical-materials)
 - [⚡️ Requirements](#️-requirements)
-- [📝 Change History](#-change-history)
+- [💨 Getting Started](#-getting-started)
 - [🐍 How To Use](#-how-to-use)
 - [📚 Python APIs and Parameters](#-python-apis-and-parameters)
 - [🔍 Obtaining Logs](#-obtaining-logs)
 - [🖼️ Catalogue](#️-catalogue)
 - [🚀 GitHub Actions](#-github-actions)
     - [⚔️ Ten Consecutive Runs](#️-ten-consecutive-runs)
-- [💨 Getting Started](#-getting-started)
-    - [🎥 Installation Videos](#-installation-videos)
-    - [🐳 Installing Docker](#-installing-docker)
-    - [🪟 Windows](#-windows)
-    - [🐧 Linux](#-linux)
-    - [🧹 Cleaning Up](#-cleaning-up)
 - [📡 Deploying on Cloud Services](#-deploying-on-cloud-services)
     - [📦 Deploying on vast.ai](#-deploying-on-vastai)
     - [📦 Deploying on RunPod](#-deploying-on-runpod)
     - [📦 Deploying on Scaleway](#-deploying-on-scaleway)
     - [📦 Deploying on Amazon Web Services](#-deploying-on-amazon-web-services)
     - [📦 Deploying on Google Compute Engine](#-deploying-on-google-compute-engine)
+- [📝 Change History](#-change-history)
 - [🙏 Acknowledgements](#-acknowledgements)
 - [🖋 Citation](#-citation)
 
@@ -68,17 +64,45 @@ Published in [ACM Transactions on Graphics (TOG)](https://dl.acm.org/doi/abs/10.
 - 🔥 A modern NVIDIA GPU (Turing or newer)
 - 🐳 A Docker environment (see [below](#-getting-started))
 
-## 📝 Change History
+## 💨 Getting Started
 
-- (2025.1.8) Added a [domino example](./examples/domino.ipynb) [[Video]](https://drive.google.com/file/d/1N9y8eZrjSQhAUhKwiO9w8jW_T18zPnYf/view).
-- (2025.1.5) Added a [single twist example](./examples/twist.ipynb) [[Video]](https://drive.google.com/file/d/1LDFKS-iBvl2uDdPVKaazQL25tYGEEyXr/view).
-- (2024.12.31) Added full documentation for Python APIs, parameters, and log files [[GitHub Pages]](https://st-tech.github.io/ppf-contact-solver).
-- (2024.12.27) Line search for strain limiting is improved [[Markdown]](./articles/bug.md#new-strain-limiting-line-search)
-- (2024.12.23) Added [[Bug Fixes and Updates]](./articles/bug.md)
-- (2024.12.21) Added a [house of cards example](./examples/cards.ipynb) [[Video]](https://drive.google.com/file/d/1PMdDnlyCsjinbvICKph_0UcXUfUvvUmZ/view)
-- (2024.12.18) Added a [frictional contact example](./examples/friction.ipynb): armadillo sliding on the slope [[Video]](https://drive.google.com/file/d/12WGdfDTFIwCT0UFGEZzfmQreM6WSSHet/view)
-- (2024.12.18) Added a [hindsight](./articles/hindsight.md) noting that the tilt angle was not $30^\circ$, but rather $26.57^\circ$
-- (2024.12.16) Removed thrust dependencies to fix runtime errors for the driver version `560.94` [[Issue Link]](https://github.com/st-tech/ppf-contact-solver/issues/1)
+Install a 🎮 NVIDIA driver [[Link]](https://www.nvidia.com/en-us/drivers/) on your 💻 host system and follow the 📝 instructions below specific to the 🖥️ operating system.
+
+🐧 Linux | 🪟 Windows
+----|----
+Install the Docker engine from here [[Link]](https://docs.docker.com/engine/install/). Also, install the NVIDIA Container Toolkit [[Link]](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html). | Install the Docker Desktop [[Link]](https://docs.docker.com/desktop/setup/install/windows-install/). You may need to log out or reboot after the installation. After logging back in, launch Docker Desktop to ensure that Docker is running.
+
+Next, run the following command to start the 📦 container. 
+
+#### 🪟 Windows
+
+```
+$MY_WEB_PORT = 8080  # Web port number for web interface
+$IMAGE_NAME = "ghcr.io/st-tech/ppf-contact-solver/ppf-contact-solver:latest"
+docker run --rm --gpus all -p ${MY_WEB_PORT}:8080 $IMAGE_NAME
+```
+
+#### 🐧 Linux
+
+```
+MY_WEB_PORT=8080  # Web port number for web interface
+IMAGE_NAME=ghcr.io/st-tech/ppf-contact-solver/ppf-contact-solver:latest
+docker run --rm --gpus all -p ${MY_WEB_PORT}:8080 $IMAGE_NAME
+```
+
+⏳ Wait for a while until the container becomes a steady state.
+Next, open your 🌐 browser and navigate to http://localhost:8080, where `8080` is the port number specified in the `MY_WEB_PORT` variable.
+
+🎉 Now you are ready to go! 🚀
+
+### 🛑 Shutting Down
+
+To shut down the container, just press `Ctrl+C` in the terminal.
+The container will be removed and all traces will be 🧹 cleaned up.
+
+### 🔧 Advanced Installation
+
+If you wish to build the container from scratch 🛠️ or install on a remote machine, please refer to the cleaner installation guide [[Markdown]](./articles/install.md) 📝.
 
 ## 🐍 How To Use
 
@@ -307,7 +331,6 @@ Also, we apply small jitters to the position of objects in the scene 🔄, so at
 
 #### ⚠️ Disclaimer
 
-
 Our long stress tests can fail due to following reasons:
 
 <img align="right" width="150" src="./asset/image/snag-failure.jpg">
@@ -316,170 +339,6 @@ Our long stress tests can fail due to following reasons:
 - Failures can be also due to excessively difficult spots 🔬, which are unintended.
 An example is shown in the right inset 👉.
 - Occasionally, we experience [vast.ai](https://vast.ai) instances shutting down before simulations finish.
-
-## 💨 Getting Started
-
-### 🎥 Installation Videos
-
-We provide uninterrupted recorded installation videos (🪟 Windows [[Video]](https://drive.google.com/file/d/1Np3MwUtSlppQPMrawtobzoGtZZWrmFgG/view), 🐧 Linux [[Video]](https://drive.google.com/file/d/1ZDnzsn46E1I6xNzyg0S8Q6xvgXw_Lw7M/view), ☁ [vast.ai](https://vast.ai) [[Video]](https://drive.google.com/file/d/1k0LnkPKXuEwZZvElaKohWZeDd6M3ONe1/view), and ☁️ [Google Cloud](https://cloud.google.com/products/compute) [[Video]](https://drive.google.com/file/d/1dj6TvR2IVLKLFXtO8QRrRl-8xQ7G547A/view))
-to reduce stress 😣 during the installation process. We encourage you to 👀 check them out to get a sense of how things go ⏳ and how long ⏱️ each step takes.
-
-### 🐳 Installing Docker
-
-To get the ball ⚽ rolling, we'll configure a Docker environment 🐳 to minimize any trouble 🤯 that 🥊 hits you.
-
-> [!NOTE]
-> If you wish to install our solver on a headless remote machine, SSH into the server with port forwarding using the following command:
-> ```
-> MY_WEB_PORT=8080
-> ssh -L 8080:localhost:$MY_WEB_PORT user@remote_server_address
-> ```
-> This port forwarding will be used to access the frontend afterward.
-> The second port number must match `$MY_WEB_PORT` below.
->
-> In this case, `$MY_WEB_PORT` refers to a port on the host machine, not on your local computer. In this example, you'll be connecting to the frontend via http://localhost:8080, regardless of the value of `$MY_WEB_PORT`.
-
-First, install the CUDA Toolkit [[Link]](https://developer.nvidia.com/cuda-downloads) along with the driver on your host system.
-Next, follow the instructions below specific to the operating system running on the host.
-
-### 🪟 Windows
-
-Install the latest version of Docker Desktop [[Link]](https://docs.docker.com/desktop/setup/install/windows-install/) on the host computer.
-You may need to log out or reboot after the installation. After logging back in, launch Docker Desktop to ensure that Docker is running.
-Then, create a container 📦 by running the following Docker command in PowerShell:
-
-```
-$MY_WEB_PORT = 8080  # Web port number on the host
-$MY_TIME_ZONE = "Asia/Tokyo"  # Your time zone
-$MY_CONTAINER_NAME = "ppf-contact-solver"  # Container name
-
-docker run -it `
-    --gpus all `
-    -p ${MY_WEB_PORT}:8080 `
-    -e TERM `
-    -e TZ=$MY_TIME_ZONE `
-    -e LANG=en_US.UTF-8 `
-    --hostname ppf-dev `
-    --name $MY_CONTAINER_NAME `
-    -e NVIDIA_DRIVER_CAPABILITIES="graphics,compute,utility" `
-    nvidia/cuda:11.8.0-devel-ubuntu22.04
-```
-
-Windows users do not need to install the NVIDIA Container Toolkit.
-
-### 🐧 Linux
-
-Linux users will also need to install Docker 🐋 on their system.
-Please refer to the installation guide [[Link]](https://docs.docker.com/engine/install/).
-Also, install the NVIDIA Container Toolkit by following the guide [[Link]](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html).
-Then, create a container 📦 by running the following Docker command:
-
-```
-MY_WEB_PORT=8080  # Web port number on the host
-MY_TIME_ZONE=Asia/Tokyo  # Your time zone
-MY_CONTAINER_NAME=ppf-contact-solver  # Container name
-
-docker run -it \
-    --gpus all \
-    -p $MY_WEB_PORT:8080 \
-    -e TERM -e TZ=$MY_TIME_ZONE \
-    -e LANG=en_US.UTF-8 \
-    --hostname ppf-dev \
-    --name $MY_CONTAINER_NAME -e \
-    NVIDIA_DRIVER_CAPABILITIES=graphics,compute,utility \
-    nvidia/cuda:11.8.0-devel-ubuntu22.04
-```
-
-### 🪟🐧 Both Systems
-
-At the end of the line, you should see:
-
-```
-root@ppf-dev:/#
-```
-
-From here on, all commands will happen in the 📦 container, not on your host.
-Next, we'll make sure that a NVIDIA driver is visible from the Docker container. Try this
-
-```
-nvidia-smi
-```
-
-> [!NOTE]
-> If an error occurs 🥵, ensure that `nvidia-smi` is working on your host. For Linux users, make sure the NVIDIA Container Toolkit is properly installed. If the issue persists, try running `sudo service docker restart` on your host to resolve it.
-
-Please confirm that your GPU is listed here.
-Now let's get the installation started.
-No worries 🤙; all the commands below only disturb things in the container, so your host environment stays clean ✨.
-First, install following packages
-
-```
-apt update
-apt install -y git python3
-```
-
-Next, clone our respository
-
-```
-git clone https://github.com/st-tech/ppf-contact-solver.git
-```
-
-Move into the ```ppf-contact-solver``` and let ```warmup.py``` do all the rest 💤:
-
-> [!NOTE]
-> If you’re suspicious, you can look around ```warmup.py``` before you proceed. Run `less warmup.py`, scroll all the way to the bottom, and hit `q` to quit.
-
-```
-cd ppf-contact-solver
-python3 warmup.py
-```
-
-> [!NOTE]
-> If you encounter issues in ```warmup.py```, you can try our pre-build Docker image ```ghcr.io/st-tech/ppf-contact-solver-base:latest```, which does not need to run ```warmup.py```.
-> See ``Dockerfile`` to learn how this image is built.
-
-Now we're set. Let's kick in the compilation!🏃
-
-```
-source "$HOME/.cargo/env"
-cargo build --release
-```
-
-Be patient; this takes some time... ⏰⏰ If the last line says 
-
-```
-Finished `release` profile [optimized] target(s) in ...
-```
-
-We're done! 🎉 Start our frontend by
-
-```
-python3 warmup.py jupyter
-```
-
-and now you can access our JupyterLab frontend from http://localhost:8080 on your 🌐 browser.
-
-> [!NOTE]
-> The port number `8080` corresponds to the value set for `$MY_WEB_PORT` when the host machine and the local machine are the same. If you're connected to the host computer via SSH port forwarding, the first port option in the command (e.g., `xxxx` in `-L xxxx:localhost:$MY_WEB_PORT`) is the port number.
-
-Enjoy! 😄
-
-### 🧹 Cleaning Up
-
-To remove all traces, simply stop 🛑 the container and ❌ delete it.
-Be aware that all simulation data will be also lost. Back up any important data if needed.
-
-```
-docker stop $MY_CONTAINER_NAME
-docker rm $MY_CONTAINER_NAME
-```
-
-> [!NOTE]
-> If you wish to completely wipe what we’ve done here, you may also need to purge the Docker image by:
-> ```
-> docker rmi $(docker images | grep 'nvidia/cuda' | grep '11.8.0-devel-ubuntu22.04' | awk '{print $3}')
-> ```
-> but don't do this if you still need it.
 
 ## 📡 Deploying on Cloud Services
 
@@ -499,16 +358,8 @@ Below, we describe how to deploy our solver on major cloud services ☁️. Thes
 
 ### 📦 Deploying on [vast.ai](https://vast.ai)
 
-The exact same steps above should work, except that you'll need to create a Docker template. Here's one:
-
-- **Image Path/Tag**: `nvidia/cuda:11.8.0-devel-ubuntu22.04`
-- **Docker Options**: `-e TZ=Asia/Tokyo` (Your time zone, of course)
-- Make sure to select ✅ ***Run interactive shell server, SSH.***
-- When connecting via SSH, make sure to include `-L 8080:localhost:8080` in the command.
-- For a better experience, choose a geographically nearby server with a high connection speed.
-- Also, make sure to allocate a large disk space, such as 64GB.
-- Skip the Docker container creation in the installation process; it is already made.
-- CLI instructions are described in [[Markdown]](./articles/cloud.md#-vastai).
+- Select our template [[Link]](https://cloud.vast.ai/?creator_id=85288&name=ppf-contact-solver).
+- Create an instance and click `Open` button.
 
 ### 📦 Deploying on [RunPod](https://runpod.io)
 
@@ -523,6 +374,7 @@ You can deploy our solver on a RunPod instance. To do this, we need to select an
 - ✅ Make sure to select `SSH Terminal Access`
 - ❌ Deselect `Start Jupyter Notebook`
 - Skip the Docker container creation in the installation process; it is already made.
+- Follow the advanced installation [[Markdown]](./articles/install.md).
 - CLI instructions are described in [[Markdown]](./articles/cloud.md#-runpod).
 
 ### 📦 Deploying on [Scaleway](https://www.scaleway.com/en/)
@@ -532,7 +384,6 @@ You can deploy our solver on a RunPod instance. To do this, we need to select an
 - Choose `Ubuntu Jammy GPU OS 12`
 - *Do not skip* the Docker container creation in the installation process; it is required.
 - This setup costs approximately €0.76 per hour.
-
 - CLI instructions are described in [[Markdown]](./articles/cloud.md#-scaleway).
 
 ### 📦 Deploying on [Amazon Web Services](https://aws.amazon.com/en/)
@@ -553,6 +404,18 @@ You can deploy our solver on a RunPod instance. To do this, we need to select an
 - *Do not skip* the Docker container creation in the installation process; it is required.
 
 - CLI instructions are described in [[Markdown]](./articles/cloud.md#-google-compute-engine).
+
+## 📝 Change History
+
+- (2025.1.8) Added a [domino example](./examples/domino.ipynb) [[Video]](https://drive.google.com/file/d/1N9y8eZrjSQhAUhKwiO9w8jW_T18zPnYf/view).
+- (2025.1.5) Added a [single twist example](./examples/twist.ipynb) [[Video]](https://drive.google.com/file/d/1LDFKS-iBvl2uDdPVKaazQL25tYGEEyXr/view).
+- (2024.12.31) Added full documentation for Python APIs, parameters, and log files [[GitHub Pages]](https://st-tech.github.io/ppf-contact-solver).
+- (2024.12.27) Line search for strain limiting is improved [[Markdown]](./articles/bug.md#new-strain-limiting-line-search)
+- (2024.12.23) Added [[Bug Fixes and Updates]](./articles/bug.md)
+- (2024.12.21) Added a [house of cards example](./examples/cards.ipynb) [[Video]](https://drive.google.com/file/d/1PMdDnlyCsjinbvICKph_0UcXUfUvvUmZ/view)
+- (2024.12.18) Added a [frictional contact example](./examples/friction.ipynb): armadillo sliding on the slope [[Video]](https://drive.google.com/file/d/12WGdfDTFIwCT0UFGEZzfmQreM6WSSHet/view)
+- (2024.12.18) Added a [hindsight](./articles/hindsight.md) noting that the tilt angle was not $30^\circ$, but rather $26.57^\circ$
+- (2024.12.16) Removed thrust dependencies to fix runtime errors for the driver version `560.94` [[Issue Link]](https://github.com/st-tech/ppf-contact-solver/issues/1)
 
 ## 🙏 Acknowledgements
 

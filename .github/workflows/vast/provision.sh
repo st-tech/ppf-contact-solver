@@ -2,17 +2,35 @@
 # Author: Ryoichi Ando (ryoichi.ando@zozo.com)
 # License: Apache v2.0
 
+# Working directory
+WORKDIR=/tmp/vast-ci
+
 # CUDA tester file path
 CUDA_TESTER_PATH=$(pwd)/.github/workflows/vast/cuda-tester.cu
+
+# your local public ssh key
+SSH_PUB_KEY=$WORKDIR/id_ed25519.pub
+
+# disk space 32GB
+DISK_SPACE=32
+
+# GPU
+GPU_NAME=RTX_4090
+
+# Image
+VAST_IMAGE="ghcr.io/st-tech/ppf-contact-solver/ppf-contact-solver-base:latest"
+
+# Retry interval
+RETRY_INTERVAL=10
+
+# max retries
+MAX_RETRIES=30
 
 # check if the CUDA tester file exists
 if [ ! -f "$CUDA_TESTER_PATH" ]; then
   echo "Error: CUDA tester file not found: $CUDA_TESTER_PATH"
   exit 1
 fi
-
-# set working directory
-WORKDIR=/tmp/vast-ci
 
 if [ -d "$WORKDIR" ]; then
   echo "$WORKDIR already exists."
@@ -59,24 +77,6 @@ else
   ssh-keygen -q -t ed25519 -N '' -f $WORKDIR/id_ed25519
 
 fi
-
-# your local public ssh key
-SSH_PUB_KEY=$WORKDIR/id_ed25519.pub
-
-# disk space 32GB
-DISK_SPACE=32
-
-# GPU
-GPU_NAME=RTX_4090
-
-# Image
-VAST_IMAGE="nvidia/cuda:11.8.0-devel-ubuntu22.04"
-
-# Retry interval
-RETRY_INTERVAL=10
-
-# max retries
-MAX_RETRIES=10
 
 # https://vast.ai/docs/cli/commands
 query=""
@@ -164,6 +164,10 @@ while true; do
       echo "host ready"
       host_ready=true
       break
+    elif [[ "$STATUS" == "offline" || "$STATUS" == "error" ]]; then
+      echo "host failed"
+      $WORKDIR/delete-instance.sh
+      break
     else
       echo "instance status: $STATUS. retrying in $RETRY_INTERVAL seconds..."
       ((retry_count++))
@@ -227,6 +231,8 @@ while true; do
     timeout 10s $WORKDIR/ssh-command.sh "/tmp/cuda-tester"
     if [ $? -eq 0 ]; then
       cuda_ready=true
+      echo "=== apt update ==="
+      $WORKDIR/ssh-command.sh "apt update"
       break
     else
       echo "CUDA test failed"

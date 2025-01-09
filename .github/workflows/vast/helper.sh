@@ -5,14 +5,11 @@ if [ "$ARG" = "create" ]; then
 
   VAST_API_KEY=$2
 
-  echo "helper: priovision..."
+  echo "helper: provision..."
   bash .github/workflows/vast/provision.sh $VAST_API_KEY
 
   echo "helper: transfer..."
   bash /tmp/vast-ci/rsync-command.sh
-
-  echo "helper: warmup..."
-  bash .github/workflows/vast/run.sh warmup
 
   echo "helper: build..."
   bash .github/workflows/vast/run.sh build

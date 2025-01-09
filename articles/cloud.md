@@ -118,7 +118,7 @@ If the first connection attempt fails, try again after a few seconds.
 ssh -p $SSH_PORT root@${SSH_IP} -L 8080:localhost:8080
 ```
 
-After logging in, follow the instructions from [Both Systems](../README.md#-both-systems) to install our solver.
+After logging in, follow the instructions from [Both Systems](../articles/install.md#-both-systems) to install our solver.
 Once the JupyterLab frontend is up, you can access it at http://localhost:8080.
 After use, follow the instructions below to destroy the instance.
 
@@ -208,7 +208,7 @@ If the first connection attempt fails, try again after a few seconds.
 eval $(runpodctl ssh connect $POD_ID) -L 8080:localhost:8080
 ```
 
-After logging in, follow the instructions from [Both Systems](../README.md#-both-systems) to install our solver.
+After logging in, follow the instructions from [Both Systems](../articles/install.md#-both-systems) to install our solver.
 Once the JupyterLab frontend is up, you can access it at http://localhost:8080.
 After use, follow the instructions below to destroy the instance.
 
