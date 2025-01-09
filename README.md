@@ -74,7 +74,7 @@ Install the Docker engine from here [[Link]](https://docs.docker.com/engine/inst
 
 Next, run the following command to start the 📦 container:
 
-#### 🪟 Windows
+#### 🪟 Windows (PowerShell)
 
 ```
 $MY_WEB_PORT = 8080  # Web port number for web interface
@@ -82,7 +82,7 @@ $IMAGE_NAME = "ghcr.io/st-tech/ppf-contact-solver/ppf-contact-solver:latest"
 docker run --rm --gpus all -p ${MY_WEB_PORT}:8080 $IMAGE_NAME
 ```
 
-#### 🐧 Linux
+#### 🐧 Linux (Bash/Zsh)
 
 ```
 MY_WEB_PORT=8080  # Web port number for web interface
