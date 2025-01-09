@@ -14,6 +14,8 @@
 #include "eig-hpp/eigsolve2x2.hpp"
 #include "eig-hpp/eigsolve3x3.hpp"
 
+#define BLOCK_SIZE 256
+
 namespace utility {
 
 __device__ Vec3f compute_vertex_normal(const DataSet &data,
@@ -197,7 +199,7 @@ __device__ float compute_face_area(const Mat3x3f &vertex) {
 template <class T, class Y, typename Op>
 __global__ void reduce_op_kernel(const T *input, Y *output, Op func, Y init_val,
                                  unsigned n) {
-    extern __shared__ unsigned char _shared_data[];
+    __shared__ unsigned char _shared_data[BLOCK_SIZE];
     Y *shared_data = reinterpret_cast<Y *>(_shared_data);
     unsigned tid = threadIdx.x;
     unsigned global_idx = blockIdx.x * blockDim.x + tid;
@@ -217,8 +219,7 @@ __global__ void reduce_op_kernel(const T *input, Y *output, Op func, Y init_val,
 
 template <class T, class Y, typename Op>
 Y reduce(const T *d_input, Op func, Y init_val, unsigned n) {
-    unsigned block_size = 256;
-    unsigned grid_size = (n + block_size - 1) / block_size;
+    unsigned grid_size = (n + BLOCK_SIZE - 1) / BLOCK_SIZE;
     static Y *d_output = nullptr;
     static Y *h_results = nullptr;
     static unsigned max_grid_size = 0;
@@ -233,8 +234,8 @@ Y reduce(const T *d_input, Op func, Y init_val, unsigned n) {
         cudaMalloc(&d_output, grid_size * sizeof(Y));
         h_results = new Y[grid_size];
     }
-    size_t shared_mem_size = block_size * sizeof(Y);
-    reduce_op_kernel<T, Y><<<grid_size, block_size, shared_mem_size>>>(
+    size_t shared_mem_size = BLOCK_SIZE * sizeof(Y);
+    reduce_op_kernel<T, Y><<<grid_size, BLOCK_SIZE, shared_mem_size>>>(
         d_input, d_output, func, init_val, n);
     cudaMemcpy(h_results, d_output, grid_size * sizeof(Y),
                cudaMemcpyDeviceToHost);

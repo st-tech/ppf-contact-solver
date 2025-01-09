@@ -1,6 +1,6 @@
 #include "../data.hpp"
 
-const unsigned block_size = 256;
+#define BLOCK_SIZE 256
 
 namespace VecDev {
 
@@ -38,7 +38,7 @@ __global__ void combine_kernel(const T *src_A, const T *src_B, T *dst, T a, T b,
 
 template <class T>
 __global__ void inner_product_kernel(const T *a, const T *b, T *c, unsigned n) {
-    extern __shared__ unsigned char _shared_data[];
+    __shared__ unsigned char _shared_data[BLOCK_SIZE];
     T *shared_data = reinterpret_cast<T *>(_shared_data);
     unsigned tid = threadIdx.x;
     unsigned global_idx = blockIdx.x * blockDim.x + tid;
@@ -56,7 +56,7 @@ __global__ void inner_product_kernel(const T *a, const T *b, T *c, unsigned n) {
 }
 
 template <class T> T inner_product(const T *a, const T *b, unsigned n) {
-    unsigned grid_size = (n + block_size - 1) / block_size;
+    unsigned grid_size = (n + BLOCK_SIZE - 1) / BLOCK_SIZE;
     static unsigned max_grid_size = 0;
     static T *d_c = nullptr;
     static T *h_c = nullptr;
@@ -71,7 +71,7 @@ template <class T> T inner_product(const T *a, const T *b, unsigned n) {
         h_c = new T[grid_size];
         max_grid_size = grid_size;
     }
-    inner_product_kernel<<<grid_size, block_size, block_size * sizeof(T)>>>(a, b, d_c, n);
+    inner_product_kernel<<<grid_size, BLOCK_SIZE, BLOCK_SIZE * sizeof(T)>>>(a, b, d_c, n);
     cudaMemcpy(h_c, d_c, grid_size * sizeof(T), cudaMemcpyDeviceToHost);
     T result = T();
     for (unsigned i = 0; i < grid_size; ++i) {
@@ -81,24 +81,24 @@ template <class T> T inner_product(const T *a, const T *b, unsigned n) {
 }
 
 template <class T> void set(T *array, unsigned n, T val) {
-    unsigned grid_size = (n + block_size - 1) / block_size;
-    set_kernel<<<grid_size, block_size>>>(array, n, val);
+    unsigned grid_size = (n + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    set_kernel<<<grid_size, BLOCK_SIZE>>>(array, n, val);
 }
 
 template <class T> void copy(const T *src, T *dst, unsigned n) {
-    unsigned grid_size = (n + block_size - 1) / block_size;
-    copy_kernel<<<grid_size, block_size>>>(src, dst, n);
+    unsigned grid_size = (n + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    copy_kernel<<<grid_size, BLOCK_SIZE>>>(src, dst, n);
 }
 
 template <class T> void add_scaled(const T *src, T *dst, T scale, unsigned n) {
-    unsigned grid_size = (n + block_size - 1) / block_size;
-    add_scaled_kernel<<<grid_size, block_size>>>(src, dst, scale, n);
+    unsigned grid_size = (n + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    add_scaled_kernel<<<grid_size, BLOCK_SIZE>>>(src, dst, scale, n);
 }
 
 template <class T>
 void combine(const T *src_A, const T *src_B, T *dst, T a, T b, unsigned n) {
-    unsigned grid_size = (n + block_size - 1) / block_size;
-    combine_kernel<<<grid_size, block_size>>>(src_A, src_B, dst, a, b, n);
+    unsigned grid_size = (n + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    combine_kernel<<<grid_size, BLOCK_SIZE>>>(src_A, src_B, dst, a, b, n);
 }
 
 } // namespace VecDev
