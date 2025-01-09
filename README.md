@@ -66,13 +66,13 @@ Published in [ACM Transactions on Graphics (TOG)](https://dl.acm.org/doi/abs/10.
 
 ## 💨 Getting Started
 
-Install a 🎮 NVIDIA driver [[Link]](https://www.nvidia.com/en-us/drivers/) on your 💻 host system and follow the 📝 instructions below specific to the 🖥️ operating system.
+Install a 🎮 NVIDIA driver [[Link]](https://www.nvidia.com/en-us/drivers/) on your 💻 host system and follow the 📝 instructions below specific to the 🖥️ operating system to get a 🐳 Docker running:
 
 🐧 Linux | 🪟 Windows
 ----|----
-Install the Docker engine from here [[Link]](https://docs.docker.com/engine/install/). Also, install the NVIDIA Container Toolkit [[Link]](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html). | Install the Docker Desktop [[Link]](https://docs.docker.com/desktop/setup/install/windows-install/). You may need to log out or reboot after the installation. After logging back in, launch Docker Desktop to ensure that Docker is running.
+Install the Docker engine from here [[Link]](https://docs.docker.com/engine/install/). Also, install the NVIDIA Container Toolkit [[Link]](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html). Just to make sure that the Container Toolkit is loaded, run `sudo service docker restart`. | Install the Docker Desktop [[Link]](https://docs.docker.com/desktop/setup/install/windows-install/). You may need to log out or reboot after the installation. After logging back in, launch Docker Desktop to ensure that Docker is running.
 
-Next, run the following command to start the 📦 container. 
+Next, run the following command to start the 📦 container:
 
 #### 🪟 Windows
 
@@ -92,6 +92,7 @@ docker run --rm --gpus all -p ${MY_WEB_PORT}:8080 $IMAGE_NAME
 
 ⏳ Wait for a while until the container becomes a steady state.
 Next, open your 🌐 browser and navigate to http://localhost:8080, where `8080` is the port number specified in the `MY_WEB_PORT` variable.
+Keep your terminal window open.
 
 🎉 Now you are ready to go! 🚀
 
@@ -102,7 +103,7 @@ The container will be removed and all traces will be 🧹 cleaned up.
 
 ### 🔧 Advanced Installation
 
-If you wish to build the container from scratch 🛠️ or install on a remote machine, please refer to the cleaner installation guide [[Markdown]](./articles/install.md) 📝.
+If you wish to build the container from scratch 🛠️, please refer to the cleaner installation guide [[Markdown]](./articles/install.md) 📝.
 
 ## 🐍 How To Use
 
