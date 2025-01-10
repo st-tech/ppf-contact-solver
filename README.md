@@ -25,6 +25,7 @@ Published in [ACM Transactions on Graphics (TOG)](https://dl.acm.org/doi/abs/10.
 
 ## 🔖 Table of Contents
 
+- [📝 Change History](#-change-history)
 - [🎓 Technical Materials](#-technical-materials)
 - [⚡️ Requirements](#️-requirements)
 - [💨 Getting Started](#-getting-started)
@@ -40,7 +41,6 @@ Published in [ACM Transactions on Graphics (TOG)](https://dl.acm.org/doi/abs/10.
     - [📦 Deploying on Scaleway](#-deploying-on-scaleway)
     - [📦 Deploying on Amazon Web Services](#-deploying-on-amazon-web-services)
     - [📦 Deploying on Google Compute Engine](#-deploying-on-google-compute-engine)
-- [📝 Change History](#-change-history)
 - [🙏 Acknowledgements](#-acknowledgements)
 - [🖋 Citation](#-citation)
 
@@ -48,6 +48,19 @@ Published in [ACM Transactions on Graphics (TOG)](https://dl.acm.org/doi/abs/10.
 
 - 🧑‍💻 Setting Up Your Development Environment [[Markdown]](./articles/develop.md#-setting-up-your-development-environment)
 - 🐞 Bug Fixes and Updates [[Markdown]](./articles/bug.md)
+
+## 📝 Change History
+
+- (2025.1.8) Added a [domino example](./examples/domino.ipynb) [[Video]](https://drive.google.com/file/d/1N9y8eZrjSQhAUhKwiO9w8jW_T18zPnYf/view).
+- (2025.1.5) Added a [single twist example](./examples/twist.ipynb) [[Video]](https://drive.google.com/file/d/1LDFKS-iBvl2uDdPVKaazQL25tYGEEyXr/view).
+- (2024.12.31) Added full documentation for Python APIs, parameters, and log files [[GitHub Pages]](https://st-tech.github.io/ppf-contact-solver).
+- (2024.12.27) Line search for strain limiting is improved [[Markdown]](./articles/bug.md#new-strain-limiting-line-search)
+- (2024.12.23) Added [[Bug Fixes and Updates]](./articles/bug.md)
+- (2024.12.21) Added a [house of cards example](./examples/cards.ipynb) [[Video]](https://drive.google.com/file/d/1PMdDnlyCsjinbvICKph_0UcXUfUvvUmZ/view)
+- (2024.12.18) Added a [frictional contact example](./examples/friction.ipynb): armadillo sliding on the slope [[Video]](https://drive.google.com/file/d/12WGdfDTFIwCT0UFGEZzfmQreM6WSSHet/view)
+- (2024.12.18) Added a [hindsight](./articles/hindsight.md) noting that the tilt angle was not $30^\circ$, but rather $26.57^\circ$
+- (2024.12.16) Removed thrust dependencies to fix runtime errors for the driver version `560.94` [[Issue Link]](https://github.com/st-tech/ppf-contact-solver/issues/1)
+
 
 ## 🎓 Technical Materials
 
@@ -406,18 +419,6 @@ You can deploy our solver on a RunPod instance. To do this, we need to select an
 - *Do not skip* the Docker container creation in the installation process; it is required.
 
 - CLI instructions are described in [[Markdown]](./articles/cloud.md#-google-compute-engine).
-
-## 📝 Change History
-
-- (2025.1.8) Added a [domino example](./examples/domino.ipynb) [[Video]](https://drive.google.com/file/d/1N9y8eZrjSQhAUhKwiO9w8jW_T18zPnYf/view).
-- (2025.1.5) Added a [single twist example](./examples/twist.ipynb) [[Video]](https://drive.google.com/file/d/1LDFKS-iBvl2uDdPVKaazQL25tYGEEyXr/view).
-- (2024.12.31) Added full documentation for Python APIs, parameters, and log files [[GitHub Pages]](https://st-tech.github.io/ppf-contact-solver).
-- (2024.12.27) Line search for strain limiting is improved [[Markdown]](./articles/bug.md#new-strain-limiting-line-search)
-- (2024.12.23) Added [[Bug Fixes and Updates]](./articles/bug.md)
-- (2024.12.21) Added a [house of cards example](./examples/cards.ipynb) [[Video]](https://drive.google.com/file/d/1PMdDnlyCsjinbvICKph_0UcXUfUvvUmZ/view)
-- (2024.12.18) Added a [frictional contact example](./examples/friction.ipynb): armadillo sliding on the slope [[Video]](https://drive.google.com/file/d/12WGdfDTFIwCT0UFGEZzfmQreM6WSSHet/view)
-- (2024.12.18) Added a [hindsight](./articles/hindsight.md) noting that the tilt angle was not $30^\circ$, but rather $26.57^\circ$
-- (2024.12.16) Removed thrust dependencies to fix runtime errors for the driver version `560.94` [[Issue Link]](https://github.com/st-tech/ppf-contact-solver/issues/1)
 
 ## 🙏 Acknowledgements
 
