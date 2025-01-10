@@ -2,12 +2,18 @@ name: Docker Build
 
 on:
   workflow_dispatch:
+    inputs:
+      target:
+        type: choice
+        description: Build Target
+        options:
+        - compiled
+        - base
 
 env:
   REGISTRY: ghcr.io
-  NAME: ppf-contact-solver
 jobs:
-  compiled:
+  build-image:
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -25,25 +31,5 @@ jobs:
       uses: docker/build-push-action@v5
       with:
         push: true
-        build-args: BUILD_MODE=compile
-        tags: ${{ env.REGISTRY }}/${{ github.repository }}/${{ env.NAME }}:latest
-  base:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-    steps:
-    - name: Checkout
-      uses: actions/checkout@v3
-    - name: Docker Login
-      uses: docker/login-action@v3
-      with:
-        registry: ${{ env.REGISTRY }}
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
-    - name: Build Image
-      uses: docker/build-push-action@v5
-      with:
-        push: true
-        build-args: BUILD_MODE=base
-        tags: ${{ env.REGISTRY }}/${{ github.repository }}/${{ env.NAME }}-base:latest
+        build-args: BUILD_MODE=${{ github.event.inputs.target }}
+        tags: ${{ env.REGISTRY }}/${{ github.repository }}/${{ github.event.inputs.target }}:latest

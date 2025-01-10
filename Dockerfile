@@ -17,7 +17,7 @@ RUN apt update
 RUN apt install -y git python3 curl
 RUN python3 warmup.py
 
-RUN if [ "$BUILD_MODE" = "compile" ]; then \
+RUN if [ "$BUILD_MODE" = "compiled" ]; then \
         /root/.cargo/bin/cargo build --release; \
     else \
         cd /root && rm -rf /root/${PROJ_NAME}; \
@@ -26,7 +26,7 @@ RUN if [ "$BUILD_MODE" = "compile" ]; then \
 WORKDIR /root
 RUN rm -rf /var/lib/apt/lists/*
 
-CMD if [ "$BUILT_MODE" = "compile" ]; then \
+CMD if [ "$BUILT_MODE" = "compiled" ]; then \
         cd /root/${PROJ_NAME} && python3 warmup.py jupyter; \
     else \
         bash; \
