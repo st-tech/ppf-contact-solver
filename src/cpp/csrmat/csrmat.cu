@@ -210,11 +210,11 @@ unsigned exclusive_scan(unsigned *d_data, unsigned n) {
                                  num_blocks * sizeof(unsigned),
                                  cudaMemcpyDeviceToHost));
     unsigned total_sum = 0;
-    for (unsigned i = 1; i < num_blocks; i++) {
-        h_block_sums[i] += h_block_sums[i - 1];
-    }
     for (unsigned i = 0; i < num_blocks; i++) {
         total_sum += h_block_sums[i];
+    }
+    for (unsigned i = 1; i < num_blocks; i++) {
+        h_block_sums[i] += h_block_sums[i - 1];
     }
     CUDA_HANDLE_ERROR(cudaMemcpy(d_block_sums, h_block_sums,
                                  num_blocks * sizeof(unsigned),
