@@ -24,7 +24,10 @@ VAST_IMAGE="ghcr.io/st-tech/ppf-contact-solver-base:latest"
 RETRY_INTERVAL=10
 
 # max retries
-MAX_RETRIES=30
+MAX_LOAD_RETRIES=30
+
+# max retries
+MAX_SSH_RETRIES=5
 
 # check if the CUDA tester file exists
 if [ ! -f "$CUDA_TESTER_PATH" ]; then
@@ -83,20 +86,20 @@ query=""
 query+="reliability > 0.99 "           # high reliability
 query+="num_gpus=1 "                   # single gpu
 query+="gpu_name=$GPU_NAME "           # GPU
-query+="driver_version >= 535.154.05 " # driver version
+query+="driver_version >= 520.000.00 " # driver version (520 minimum)
 query+="cuda_vers >= 11.8 "            # cuda version
 query+="compute_cap >= 750 "           # compute capability
-query+="geolocation in [US] "          # country US,CA,IS,TW,VN,GB,NO
-query+="rentable=True "                # rentable only
-query+="verified=True "                # verified by vast.ai
-query+="disk_space >= $DISK_SPACE "    # available disk space
-query+="dph <= 1.0 "                   # less than $1 per hour
-query+="duration >= 7 "                # at least 7 days online
-query+="inet_up >= 200 "               # at least 200MB/s upload
-query+="inet_down >= 200 "             # at least 200MB/s download
-query+="cpu_ram >= 32 "                # at least 32GB ram
-query+="inet_up_cost <= 0.25 "         # upload cheaper than $0.25/GB
-query+="inet_down_cost <= 0.25 "       # download cheaper than $0.25/GB
+# query+="geolocation in [US] "        # country US,CA,IS,TW,VN,GB,NO
+query+="rentable=True "             # rentable only
+query+="verified=True "             # verified by vast.ai
+query+="disk_space >= $DISK_SPACE " # available disk space
+query+="dph <= 1.0 "                # less than $1 per hour
+query+="duration >= 7 "             # at least 7 days online
+query+="inet_up >= 200 "            # at least 200MB/s upload
+query+="inet_down >= 200 "          # at least 200MB/s download
+query+="cpu_ram >= 32 "             # at least 32GB ram
+query+="inet_up_cost <= 0.25 "      # upload cheaper than $0.25/GB
+query+="inet_down_cost <= 0.25 "    # download cheaper than $0.25/GB
 
 TRIED_LIST=()
 while true; do
@@ -140,11 +143,9 @@ while true; do
   success=$(printf "%s\n" "$RESULT" | jq -r '.success')
   echo $RESULT
   INSTANCE_ID=$(printf "%s\n" "$RESULT" | jq -r '.new_contract')
-  if [[ "$success" == "true" ]]; then
-    echo "new INSTANCE_ID: $INSTANCE_ID"
-  else
-    echo "success: $success"
-    echo "instance creation failed."
+
+  if [[ -z "$INSTANCE_ID" ]]; then
+    echo "No valid instance found"
     sleep $RETRY_INTERVAL
     continue
   fi
@@ -152,6 +153,16 @@ while true; do
   # write down the delete command
   echo "source $WORKDIR/venv/bin/activate; $WORKDIR/vast destroy instance $INSTANCE_ID" >$WORKDIR/delete-instance.sh
   chmod +x $WORKDIR/delete-instance.sh
+  
+  if [[ "$success" == "true" ]]; then
+    echo "new INSTANCE_ID: $INSTANCE_ID"
+  else
+    echo "success: $success"
+    echo "instance creation failed."
+    $WORKDIR/delete-instance.sh
+    sleep $RETRY_INTERVAL
+    continue
+  fi
 
   # wait until the instance is loaded
   VAST_INSTANCE_JSON=$WORKDIR/instance.json
@@ -171,7 +182,7 @@ while true; do
     else
       echo "instance status: $STATUS. retrying in $RETRY_INTERVAL seconds..."
       ((retry_count++))
-      if [ "$retry_count" -ge "$MAX_RETRIES" ]; then
+      if [ "$retry_count" -ge "$MAX_LOAD_RETRIES" ]; then
         echo "Maximum retries reached. Exiting..."
         $WORKDIR/delete-instance.sh
         break
@@ -201,7 +212,6 @@ while true; do
   # Loop until SSH connection is successful
   retry_count=0
   ssh_ready=false
-  cuda_ready=false
   while true; do
     sleep $RETRY_INTERVAL
     echo "trying to establish SSH connection..."
@@ -213,30 +223,53 @@ while true; do
     else
       echo "Connection failed. Retrying in $RETRY_INTERVAL seconds..."
       ((retry_count++))
-      if [ "$retry_count" -ge "$MAX_RETRIES" ]; then
+      if [ "$retry_count" -ge "$MAX_SSH_RETRIES" ]; then
         echo "Maximum retries reached."
         $WORKDIR/delete-instance.sh
         break
       fi
     fi
   done
-  if [ "$ssh_ready" = true ]; then
-    scp_command="scp -i $WORKDIR/id_ed25519 -o StrictHostKeyChecking=no -o ConnectTimeout=5 -P $port $CUDA_TESTER_PATH root@${hostname}:/tmp/"
-    echo "==== copy cuda-tester.cu ======"
-    echo $scp_command
-    eval $scp_command
-    echo "==== compile cuda ======"
-    $WORKDIR/ssh-command.sh "nvcc /tmp/cuda-tester.cu -o /tmp/cuda-tester"
-    echo "==== run cuda ======"
-    timeout 10s $WORKDIR/ssh-command.sh "/tmp/cuda-tester"
-    if [ $? -eq 0 ]; then
-      cuda_ready=true
-      echo "=== apt update ==="
-      $WORKDIR/ssh-command.sh "apt update"
-      break
-    else
-      echo "CUDA test failed"
+
+  if [ "$ssh_ready" = false ]; then
+    continue
+  fi
+
+  driver_version_confirmed=false
+  driver_version=$($WORKDIR/ssh-command.sh "nvidia-smi --query-gpu=driver_version --format=csv,noheader")
+  required_version="520"
+
+  # Compare versions
+  if [[ "$(echo -e "$driver_version\n$required_version" | sort -V | head -n 1)" == "$required_version" ]]; then
+      echo "Driver version is greater than or equal to $required_version."
+      driver_version_confirmed=true
+  else
+      echo "Driver version is less than $required_version."
       $WORKDIR/delete-instance.sh
-    fi
+      continue
+  fi
+
+  if [ "$driver_version_confirmed" = false ]; then
+    continue
+  fi
+
+  scp_command="scp -i $WORKDIR/id_ed25519 -o StrictHostKeyChecking=no -o ConnectTimeout=5 -P $port $CUDA_TESTER_PATH root@${hostname}:/tmp/"
+  echo "==== copy cuda-tester.cu ======"
+  echo $scp_command
+  eval $scp_command
+  echo "==== compile cuda ======"
+  $WORKDIR/ssh-command.sh "nvcc /tmp/cuda-tester.cu -o /tmp/cuda-tester"
+  echo "==== run cuda ======"
+  timeout 10s $WORKDIR/ssh-command.sh "/tmp/cuda-tester"
+  if [ $? -eq 0 ]; then
+    cuda_ready=true
+    echo "=== apt update ==="
+    $WORKDIR/ssh-command.sh "apt update"
+    break
+  else
+    echo "CUDA test failed"
+    $WORKDIR/delete-instance.sh
+    continue
   fi
 done
+

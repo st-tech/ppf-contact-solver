@@ -757,7 +757,6 @@ class Session:
         """Get the session output object."""
         return self._output
 
-
     def print(self, message):
         """Print a message.
 
@@ -848,6 +847,20 @@ class Session:
         Returns:
             Session: The started session.
         """
+        gpu_count = Utils.get_gpu_count()
+        if gpu_count == 0:
+            raise ValueError("GPU is not detected.")
+
+        driver_version = Utils.get_driver_version()
+        min_driver_version = 520
+        if driver_version:
+            if driver_version < min_driver_version:
+                raise ValueError(
+                    f"Driver version is {driver_version}. It must be newer than {min_driver_version}"
+                )
+        else:
+            raise ValueError("Driver version could not be detected.")
+
         self._check_ready()
         if is_running():
             if force:
@@ -869,6 +882,8 @@ class Session:
             start_new_session=True,
             cwd=self._proj_root,
         )
+        while not os.path.exists(log_path) and not os.path.exists(err_path):
+            time.sleep(1)
         if process.poll() is not None:
             raise ValueError("Solver failed to start")
         else:
