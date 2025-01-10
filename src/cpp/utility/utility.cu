@@ -219,19 +219,20 @@ __global__ void reduce_op_kernel(const T *input, Y *output, Op func, Y init_val,
 template <class T, class Y, typename Op>
 Y reduce(const T *d_input, Op func, Y init_val, unsigned n) {
     unsigned grid_size = (n + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    const unsigned scale_factor = 2;
     static Y *d_output = nullptr;
     static Y *h_results = nullptr;
     static unsigned max_grid_size = 0;
     if (d_output == nullptr) {
-        cudaMalloc(&d_output, grid_size * sizeof(Y));
-        h_results = new Y[grid_size];
-        max_grid_size = grid_size;
+        max_grid_size = scale_factor * grid_size;
+        cudaMalloc(&d_output, max_grid_size * sizeof(Y));
+        h_results = new Y[max_grid_size];
     } else if (grid_size > max_grid_size) {
-        max_grid_size = grid_size;
+        max_grid_size = scale_factor * grid_size;
         cudaFree(d_output);
         delete[] h_results;
-        cudaMalloc(&d_output, grid_size * sizeof(Y));
-        h_results = new Y[grid_size];
+        cudaMalloc(&d_output, max_grid_size * sizeof(Y));
+        h_results = new Y[max_grid_size];
     }
     size_t shared_mem_size = sizeof(Y) * BLOCK_SIZE;
     reduce_op_kernel<T, Y><<<grid_size, BLOCK_SIZE, shared_mem_size>>>(
