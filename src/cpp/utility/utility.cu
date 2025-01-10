@@ -199,8 +199,7 @@ __device__ float compute_face_area(const Mat3x3f &vertex) {
 template <class T, class Y, typename Op>
 __global__ void reduce_op_kernel(const T *input, Y *output, Op func, Y init_val,
                                  unsigned n) {
-    __shared__ unsigned char _shared_data[BLOCK_SIZE];
-    Y *shared_data = reinterpret_cast<Y *>(_shared_data);
+    __shared__ Y shared_data[BLOCK_SIZE];
     unsigned tid = threadIdx.x;
     unsigned global_idx = blockIdx.x * blockDim.x + tid;
     shared_data[tid] = (global_idx < n) ? input[global_idx] : init_val;
@@ -234,7 +233,7 @@ Y reduce(const T *d_input, Op func, Y init_val, unsigned n) {
         cudaMalloc(&d_output, grid_size * sizeof(Y));
         h_results = new Y[grid_size];
     }
-    size_t shared_mem_size = BLOCK_SIZE * sizeof(Y);
+    size_t shared_mem_size = sizeof(Y) * BLOCK_SIZE;
     reduce_op_kernel<T, Y><<<grid_size, BLOCK_SIZE, shared_mem_size>>>(
         d_input, d_output, func, init_val, n);
     cudaMemcpy(h_results, d_output, grid_size * sizeof(Y),
