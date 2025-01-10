@@ -89,7 +89,7 @@ query+="gpu_name=$GPU_NAME "           # GPU
 query+="driver_version >= 520.000.00 " # driver version (520 minimum)
 query+="cuda_vers >= 11.8 "            # cuda version
 query+="compute_cap >= 750 "           # compute capability
-query+="geolocation in [US] "       # country US,CA,IS,TW,VN,GB,NO
+# query+="geolocation in [US] "        # country US,CA,IS,TW,VN,GB,NO
 query+="rentable=True "             # rentable only
 query+="verified=True "             # verified by vast.ai
 query+="disk_space >= $DISK_SPACE " # available disk space
