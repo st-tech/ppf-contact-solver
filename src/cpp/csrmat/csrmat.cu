@@ -186,21 +186,22 @@ __global__ void add_block_offsets_kernel(unsigned *d_data,
 
 unsigned exclusive_scan(unsigned *d_data, unsigned n) {
     const unsigned num_blocks = (n + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    const unsigned extra_scale = 2;
     static unsigned *d_block_sums = nullptr;
     static unsigned *h_block_sums = nullptr;
     static unsigned max_num_blocks = 0;
     if (d_block_sums == nullptr) {
-        CUDA_HANDLE_ERROR(
-            cudaMalloc((void **)&d_block_sums, num_blocks * sizeof(unsigned)));
-        h_block_sums = new unsigned[num_blocks];
-        max_num_blocks = num_blocks;
+        max_num_blocks = extra_scale * num_blocks;
+        CUDA_HANDLE_ERROR(cudaMalloc((void **)&d_block_sums,
+                                     max_num_blocks * sizeof(unsigned)));
+        h_block_sums = new unsigned[max_num_blocks];
     } else if (max_num_blocks < num_blocks) {
+        max_num_blocks = extra_scale * num_blocks;
         CUDA_HANDLE_ERROR(cudaFree(d_block_sums));
-        CUDA_HANDLE_ERROR(
-            cudaMalloc((void **)&d_block_sums, num_blocks * sizeof(unsigned)));
+        CUDA_HANDLE_ERROR(cudaMalloc((void **)&d_block_sums,
+                                     max_num_blocks * sizeof(unsigned)));
         delete[] h_block_sums;
-        h_block_sums = new unsigned[num_blocks];
-        max_num_blocks = num_blocks;
+        h_block_sums = new unsigned[max_num_blocks];
     }
     block_scan_kernel<<<num_blocks, BLOCK_SIZE,
                         BLOCK_SIZE * sizeof(unsigned)>>>(d_data, d_block_sums,
