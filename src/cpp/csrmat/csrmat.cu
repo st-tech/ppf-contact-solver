@@ -184,7 +184,7 @@ __global__ void add_block_offsets_kernel(unsigned *d_data,
     }
 }
 
-void exclusive_scan(unsigned *d_data, unsigned n) {
+unsigned exclusive_scan(unsigned *d_data, unsigned n) {
     const unsigned num_blocks = (n + BLOCK_SIZE - 1) / BLOCK_SIZE;
     static unsigned *d_block_sums = nullptr;
     static unsigned *h_block_sums = nullptr;
@@ -209,14 +209,19 @@ void exclusive_scan(unsigned *d_data, unsigned n) {
     CUDA_HANDLE_ERROR(cudaMemcpy(h_block_sums, d_block_sums,
                                  num_blocks * sizeof(unsigned),
                                  cudaMemcpyDeviceToHost));
+    unsigned total_sum = 0;
     for (unsigned i = 1; i < num_blocks; i++) {
         h_block_sums[i] += h_block_sums[i - 1];
+    }
+    for (unsigned i = 0; i < num_blocks; i++) {
+        total_sum += h_block_sums[i];
     }
     CUDA_HANDLE_ERROR(cudaMemcpy(d_block_sums, h_block_sums,
                                  num_blocks * sizeof(unsigned),
                                  cudaMemcpyHostToDevice));
     add_block_offsets_kernel<<<num_blocks, BLOCK_SIZE>>>(d_data, d_block_sums,
                                                          n);
+    return total_sum;
 }
 
 void DynCSRMat::finish_rebuild_buffer(unsigned &max_nnz_row,
@@ -234,16 +239,7 @@ void DynCSRMat::finish_rebuild_buffer(unsigned &max_nnz_row,
     } DISPATCH_END;
 
     max_nnz_row = utility::max_array(tmp_array.data, nrow, 0u);
-
-    unsigned tmp0, tmp1;
-    CUDA_HANDLE_ERROR(cudaMemcpy(&tmp0, dyn_row_offsets.data + nrow - 1,
-                                 sizeof(unsigned), cudaMemcpyDeviceToHost));
-
-    exclusive_scan(dyn_row_offsets.data, nrow);
-    CUDA_HANDLE_ERROR(cudaMemcpy(&tmp1, dyn_row_offsets.data + nrow - 1,
-                                 sizeof(unsigned), cudaMemcpyDeviceToHost));
-
-    unsigned num_nnz = tmp0 + tmp1;
+    unsigned num_nnz = exclusive_scan(dyn_row_offsets.data, nrow);
     if (num_nnz >= max_nnz) {
         printf("finish_rebuild_buffer: num_nnz %u, max_nnz: %u\n", num_nnz,
                max_nnz);
