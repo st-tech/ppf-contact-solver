@@ -18,7 +18,7 @@ DISK_SPACE=32
 GPU_NAME=RTX_4090
 
 # Image
-VAST_IMAGE="ghcr.io/st-tech/ppf-contact-solver/ppf-contact-solver-base:latest"
+VAST_IMAGE="ghcr.io/st-tech/ppf-contact-solver-base:latest"
 
 # Retry interval
 RETRY_INTERVAL=10

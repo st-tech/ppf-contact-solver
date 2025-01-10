@@ -19,6 +19,9 @@ jobs:
       contents: read
       packages: write
     steps:
+    - name: print mode
+      run: |
+        echo "Mode: ${{ github.event.inputs.target }}" >> $GITHUB_STEP_SUMMARY
     - name: Checkout
       uses: actions/checkout@v3
     - name: Docker Login
@@ -27,9 +30,21 @@ jobs:
         registry: ${{ env.REGISTRY }}
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
-    - name: Build Image
+    - name: Build Base Image
+      if: github.event.inputs.target == 'base'
       uses: docker/build-push-action@v5
       with:
         push: true
-        build-args: BUILD_MODE=${{ github.event.inputs.target }}
-        tags: ${{ env.REGISTRY }}/${{ github.repository }}/${{ github.event.inputs.target }}:latest
+        build-args: |
+          MODE=base
+          IMAGE=nvidia/cuda:11.8.0-devel-ubuntu22.04
+        tags: ${{ env.REGISTRY }}/${{ github.repository }}-base:latest
+    - name: Build Compiled Image
+      if: github.event.inputs.target == 'compiled'
+      uses: docker/build-push-action@v5
+      with:
+        push: true
+        build-args: |
+          MODE=compiled
+          IMAGE=ghcr.io/st-tech/ppf-contact-solver-base:latest
+        tags: ${{ env.REGISTRY }}/${{ github.repository }}-compiled:latest
