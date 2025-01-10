@@ -190,12 +190,14 @@ void exclusive_scan(unsigned *d_data, unsigned n) {
     static unsigned *h_block_sums = nullptr;
     static unsigned max_num_blocks = 0;
     if (d_block_sums == nullptr) {
-        cudaMalloc((void **)&d_block_sums, num_blocks * sizeof(unsigned));
+        CUDA_HANDLE_ERROR(
+            cudaMalloc((void **)&d_block_sums, num_blocks * sizeof(unsigned)));
         h_block_sums = new unsigned[num_blocks];
         max_num_blocks = num_blocks;
     } else if (max_num_blocks < num_blocks) {
-        cudaFree(d_block_sums);
-        cudaMalloc((void **)&d_block_sums, num_blocks * sizeof(unsigned));
+        CUDA_HANDLE_ERROR(cudaFree(d_block_sums));
+        CUDA_HANDLE_ERROR(
+            cudaMalloc((void **)&d_block_sums, num_blocks * sizeof(unsigned)));
         delete[] h_block_sums;
         h_block_sums = new unsigned[num_blocks];
         max_num_blocks = num_blocks;
@@ -203,14 +205,16 @@ void exclusive_scan(unsigned *d_data, unsigned n) {
     block_scan_kernel<<<num_blocks, BLOCK_SIZE,
                         BLOCK_SIZE * sizeof(unsigned)>>>(d_data, d_block_sums,
                                                          n);
-    cudaDeviceSynchronize();
-    cudaMemcpy(h_block_sums, d_block_sums, num_blocks * sizeof(unsigned),
-               cudaMemcpyDeviceToHost);
+    CUDA_HANDLE_ERROR(cudaDeviceSynchronize());
+    CUDA_HANDLE_ERROR(cudaMemcpy(h_block_sums, d_block_sums,
+                                 num_blocks * sizeof(unsigned),
+                                 cudaMemcpyDeviceToHost));
     for (unsigned i = 1; i < num_blocks; i++) {
         h_block_sums[i] += h_block_sums[i - 1];
     }
-    cudaMemcpy(d_block_sums, h_block_sums, num_blocks * sizeof(unsigned),
-               cudaMemcpyHostToDevice);
+    CUDA_HANDLE_ERROR(cudaMemcpy(d_block_sums, h_block_sums,
+                                 num_blocks * sizeof(unsigned),
+                                 cudaMemcpyHostToDevice));
     add_block_offsets_kernel<<<num_blocks, BLOCK_SIZE>>>(d_data, d_block_sums,
                                                          n);
 }
