@@ -1702,17 +1702,12 @@ __device__ bool edge_triangle_intersect(const Vec3f &_e0, const Vec3f &_e1,
     Vec3f n = e1.cross(e2);
     float s1 = r1.dot(n);
     float s2 = r2.dot(n);
-    if (s1 * s2 > 0.0f) {
-        return false;
-    } else {
-        float det = s1 - s2;
-        if (det) {
-            Vec3f r = (r2 - r1) * s1 / det + r1;
-            Vec3f c = distance::point_triangle_distance_coeff(r, Vec3f::Zero(),
-                                                              e1, e2);
-            if (c.maxCoeff() <= 1.0f && c.minCoeff() >= 0.0f) {
-                return true;
-            }
+    if (s1 * s2 < 0.0f) {
+        Vec3f r = (r2 - r1) * s1 / (s1 - s2) + r1;
+        Vec3f c =
+            distance::point_triangle_distance_coeff(r, Vec3f::Zero(), e1, e2);
+        if (c.maxCoeff() < 1.0f && c.minCoeff() > 0.0f) {
+            return true;
         }
     }
     return false;
