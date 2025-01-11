@@ -48,7 +48,7 @@ jobs:
         push: true
         build-args: |
           MODE=compiled
-          IMAGE=ghcr.io/st-tech/${{ github.repository }}-base:latest
+          IMAGE=${{ env.REGISTRY }}/${{ github.repository }}-base:latest
         tags: ${{ env.REGISTRY }}/${{ github.repository }}-compiled:latest
     - name: Build Runpod Base Image
       if: github.event.inputs.target == 'runpod-base'
@@ -66,5 +66,5 @@ jobs:
         push: true
         build-args: |
           MODE=compiled
-          IMAGE=ghcr.io/st-tech/${{ github.repository }}-runpod-base:latest
+          IMAGE=${{ env.REGISTRY }}/${{ github.repository }}-runpod-base:latest
         tags: ${{ env.REGISTRY }}/${{ github.repository }}-runpod-compiled:latest
