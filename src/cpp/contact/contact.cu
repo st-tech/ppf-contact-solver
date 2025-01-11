@@ -1692,35 +1692,30 @@ float line_search(const DataSet &data, const Kinematic &kinematic,
     return toi / param.line_search_max_t;
 }
 
-// https://en.wikipedia.org/wiki/M%C3%B6ller%E2%80%93Trumbore_intersection_algorithm
-__device__ bool edge_triangle_intersect(const Vec3f &e0, const Vec3f &e1,
-                                        const Vec3f &x0, const Vec3f &x1,
-                                        const Vec3f &x2) {
-    Vec3f edge1 = x1 - x0;
-    Vec3f edge2 = x2 - x0;
-    Vec3f r = e1 - e0;
-    Vec3f h = r.cross(edge2);
-    float a = edge1.dot(h);
-    if (std::abs(a) < 1e-10f) {
+__device__ bool edge_triangle_intersect(const Vec3f &_e0, const Vec3f &_e1,
+                                        const Vec3f &_x0, const Vec3f &_x1,
+                                        const Vec3f &_x2) {
+    Vec3f e1 = _x1 - _x0;
+    Vec3f e2 = _x2 - _x0;
+    Vec3f r1 = _e0 - _x0;
+    Vec3f r2 = _e1 - _x0;
+    Vec3f n = e1.cross(e2);
+    float s1 = r1.dot(n);
+    float s2 = r2.dot(n);
+    if (s1 * s2 > 0.0f) {
         return false;
-    }
-    float f = 1.0f / a;
-    Vec3f s = e0 - x0;
-    float u = f * s.dot(h);
-    if (u < 0.0f || u > 1.0f) {
-        return false;
-    }
-    Vec3f q = s.cross(edge1);
-    float v = f * r.dot(q);
-    if (v < 0.0f || u + v > 1.0f) {
-        return false;
-    }
-    float t = f * edge2.dot(q);
-    if (t >= 0.0f && t <= 1.0f) {
-        return true;
     } else {
-        return false;
+        float det = s1 - s2;
+        if (det) {
+            Vec3f r = (r2 - r1) * s1 / det + r1;
+            Vec3f c = distance::point_triangle_distance_coeff(r, Vec3f::Zero(),
+                                                              e1, e2);
+            if (c.maxCoeff() <= 1.0f && c.minCoeff() >= 0.0f) {
+                return true;
+            }
+        }
     }
+    return false;
 }
 
 class FaceEdgeIntersectTester {
