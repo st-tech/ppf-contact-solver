@@ -244,7 +244,7 @@ def start_jupyter():
             f.write(lines)
 
     try:
-        command = "jupyter-lab -y --no-browser --port=8080 --ip=0.0.0.0 --allow-root --NotebookApp.token='' --NotebookApp.password=''"
+        command = "jupyter-lab -y --no-browser --port=8080 --ip=0.0.0.0 --allow-root --NotebookApp.token='' --NotebookApp.password='' --NotebookApp.allow_origin='*'"
         env = os.environ.copy()
         key = "PYTHONPATH"
         if key in env:
