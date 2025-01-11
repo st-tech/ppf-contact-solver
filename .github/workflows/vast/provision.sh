@@ -11,8 +11,8 @@ CUDA_TESTER_PATH=$(pwd)/.github/workflows/vast/cuda-tester.cu
 # your local public ssh key
 SSH_PUB_KEY=$WORKDIR/id_ed25519.pub
 
-# disk space 32GB
-DISK_SPACE=32
+# disk space 16GB
+DISK_SPACE=16
 
 # GPU
 GPU_NAME=RTX_4090
@@ -83,18 +83,18 @@ fi
 
 # https://vast.ai/docs/cli/commands
 query=""
-query+="reliability > 0.99 "           # high reliability
+query+="reliability > 0.90 "           # high reliability
 query+="num_gpus=1 "                   # single gpu
 query+="gpu_name=$GPU_NAME "           # GPU
 query+="driver_version >= 520.000.00 " # driver version (520 minimum)
 query+="cuda_vers >= 11.8 "            # cuda version
 query+="compute_cap >= 750 "           # compute capability
-query+="geolocation in [US,CA,JP,TW,VN,GB,NO] " # country
+query+="geolocation in [US] "          # country
 query+="rentable=True "             # rentable only
 query+="verified=True "             # verified by vast.ai
 query+="disk_space >= $DISK_SPACE " # available disk space
 query+="dph <= 1.0 "                # less than $1 per hour
-query+="duration >= 7 "             # at least 7 days online
+query+="duration >= 1 "             # at least 7 days online
 query+="inet_up >= 200 "            # at least 200MB/s upload
 query+="inet_down >= 200 "          # at least 200MB/s download
 query+="cpu_ram >= 32 "             # at least 32GB ram
