@@ -104,27 +104,11 @@ jobs:
       - name: twist
         run: bash $HELPER_PATH run twist.py
 
-      - name: trampoline
-        run: bash $HELPER_PATH run trampoline.py
-
-      - name: shutdown
-        if: always()
-        run: bash $HELPER_PATH delete
-
-  part_5:
-    runs-on: ${{ github.event.inputs.runner }}
-    timeout-minutes: 300
-    steps:
-    
-      - name: check out repo
-        uses: actions/checkout@v3
-
-      - name: prepare
-        timeout-minutes: 30
-        run: bash $HELPER_PATH create $VAST_API_KEY
-
       - name: domino
         run: bash $HELPER_PATH run domino.py
+
+      - name: trampoline
+        run: bash $HELPER_PATH run trampoline.py
 
       - name: shutdown
         if: always()
