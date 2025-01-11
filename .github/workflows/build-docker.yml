@@ -9,6 +9,8 @@ on:
         options:
         - compiled
         - base
+        - runpod-compiled
+        - runpod-base
 
 env:
   REGISTRY: ghcr.io
@@ -19,7 +21,7 @@ jobs:
       contents: read
       packages: write
     steps:
-    - name: print mode
+    - name: Print Mode
       run: |
         echo "Mode: ${{ github.event.inputs.target }}" >> $GITHUB_STEP_SUMMARY
     - name: Checkout
@@ -46,5 +48,23 @@ jobs:
         push: true
         build-args: |
           MODE=compiled
-          IMAGE=ghcr.io/st-tech/ppf-contact-solver-base:latest
+          IMAGE=ghcr.io/st-tech/${{ github.repository }}-base:latest
         tags: ${{ env.REGISTRY }}/${{ github.repository }}-compiled:latest
+    - name: Build Runpod Base Image
+      if: github.event.inputs.target == 'runpod-base'
+      uses: docker/build-push-action@v5
+      with:
+        push: true
+        build-args: |
+          MODE=base
+          IMAGE=runpod/pytorch:2.0.1-py3.10-cuda11.8.0-devel-ubuntu22.04
+        tags: ${{ env.REGISTRY }}/${{ github.repository }}-runpod-base:latest
+    - name: Build Runpod Compiled Image
+      if: github.event.inputs.target == 'runpod-compiled'
+      uses: docker/build-push-action@v5
+      with:
+        push: true
+        build-args: |
+          MODE=compiled
+          IMAGE=ghcr.io/st-tech/${{ github.repository }}-runpod-base:latest
+        tags: ${{ env.REGISTRY }}/${{ github.repository }}-runpod-compiled:latest
