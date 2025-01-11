@@ -1695,17 +1695,12 @@ float line_search(const DataSet &data, const Kinematic &kinematic,
 __device__ bool edge_triangle_intersect(const Vec3f &_e0, const Vec3f &_e1,
                                         const Vec3f &_x0, const Vec3f &_x1,
                                         const Vec3f &_x2) {
-    Vec3f e1 = _x1 - _x0;
-    Vec3f e2 = _x2 - _x0;
-    Vec3f r1 = _e0 - _x0;
-    Vec3f r2 = _e1 - _x0;
-    Vec3f n = e1.cross(e2);
-    float s1 = r1.dot(n);
-    float s2 = r2.dot(n);
+    Vec3f n = (_x1 - _x0).cross(_x2 - _x0);
+    float s1 = (_e0 - _x0).dot(n);
+    float s2 = (_e1 - _x0).dot(n);
     if (s1 * s2 < 0.0f) {
-        Vec3f r = (r2 - r1) * s1 / (s1 - s2) + r1;
-        Vec3f c =
-            distance::point_triangle_distance_coeff(r, Vec3f::Zero(), e1, e2);
+        Vec3f r = (_e1 - _e0) * s1 / (s1 - s2) + _e0;
+        Vec3f c = distance::point_triangle_distance_coeff(r, _x0, _x1, _x2);
         if (c.maxCoeff() < 1.0f && c.minCoeff() > 0.0f) {
             return true;
         }
