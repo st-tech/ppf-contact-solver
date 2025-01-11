@@ -378,19 +378,8 @@ Below, we describe how to deploy our solver on major cloud services ☁️. Thes
 
 ### 📦 Deploying on [RunPod](https://runpod.io)
 
-You can deploy our solver on a RunPod instance. To do this, we need to select an official RunPod Docker image instead.
-
-- **Container Image**: `runpod/pytorch:2.0.1-py3.10-cuda11.8.0-devel-ubuntu22.04`
-- **Expose HTTP Ports**: Empty
-- **Expose TCP Ports**: `22`
-- When connecting via SSH, make sure to include `-L 8080:localhost:8080` in the command.
-- For a better experience, choose a geographically nearby server with a high connection speed.
-- Also, make sure to allocate a large disk space, such as 64GB.
-- ✅ Make sure to select `SSH Terminal Access`
-- ❌ Deselect `Start Jupyter Notebook`
-- Skip the Docker container creation in the installation process; it is already made.
-- Follow the advanced installation [[Markdown]](./articles/install.md).
-- CLI instructions are described in [[Markdown]](./articles/cloud.md#-runpod).
+- Follow this link [[Link]](https://runpod.io/console/deploy?template=we8ta2hy86&ref=bhy3csxy) and deploy an instance using our template.
+- Click `Connect` button and open the `HTTP Services` link.
 
 ### 📦 Deploying on [Scaleway](https://www.scaleway.com/en/)
 
