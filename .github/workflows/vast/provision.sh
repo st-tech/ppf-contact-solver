@@ -131,7 +131,8 @@ while true; do
 	echo "host_id: $HOST_ID"
 
 	if [[ -z "$INSTANCE_ID" ]]; then
-		echo "No valid instance found"
+		echo "No offer found"
+		echo "retrying in $RECREATE_INTERVAL seconds..."
 		sleep $RECREATE_INTERVAL
 		continue
 	fi
@@ -148,7 +149,8 @@ while true; do
 	INSTANCE_ID=$(printf "%s\n" "$RESULT" | jq -r '.new_contract')
 
 	if [[ -z "$INSTANCE_ID" ]]; then
-		echo "No valid instance found"
+		echo "Creation response is empty."
+		echo "retrying in $RETRY_INTERVAL seconds..."
 		sleep $RETRY_INTERVAL
 		continue
 	fi
@@ -161,8 +163,9 @@ while true; do
 		echo "new INSTANCE_ID: $INSTANCE_ID"
 	else
 		echo "success: $success"
-		echo "instance creation failed."
+		echo "Creation failed."
 		$WORKDIR/delete-instance.sh
+		echo "retrying in $RETRY_INTERVAL seconds..."
 		sleep $RETRY_INTERVAL
 		continue
 	fi
@@ -238,9 +241,12 @@ while true; do
 		continue
 	fi
 
+	# check driver version
+	echo "==== check driver version ===="
 	driver_version_confirmed=false
 	driver_version=$($WORKDIR/ssh-command.sh "nvidia-smi --query-gpu=driver_version --format=csv,noheader")
 	required_version="520"
+	echo "driver_version: $driver_version"
 
 	# Compare versions
 	if [[ "$(echo -e "$driver_version\n$required_version" | sort -V | head -n 1)" == "$required_version" ]]; then
@@ -256,10 +262,36 @@ while true; do
 		continue
 	fi
 
-	scp_command="scp -i $WORKDIR/id_ed25519 -o StrictHostKeyChecking=no -o ConnectTimeout=5 -P $port $CUDA_TESTER_PATH root@${hostname}:/tmp/"
+	# check GPU utilization
+	echo "==== check GPU utilization ===="
+	GPU_UTIL=$($WORKDIR/ssh-command.sh "nvidia-smi --query-gpu=utilization.gpu --format=csv,noheader")
+	MEM_UTIL=$($WORKDIR/ssh-command.sh "nvidia-smi --query-gpu=utilization.memory --format=csv,noheader")
+	echo "GPU_UTIL: $GPU_UTIL"
+	echo "MEM_UTIL: $MEM_UTIL"
+
+	if [ $(echo $GPU_UTIL | awk '{print $1}') -lt 5 ]; then
+		echo "GPU utilization is less than 5%."
+	else
+		echo "*** GPU utilization is 5% or more. ***"
+		$WORKDIR/delete-instance.sh
+		continue
+	fi
+
+	if [ $(echo $MEM_UTIL | awk '{print $1}') -lt 5 ]; then
+		echo "Memory utilization is less than 5%."
+	else
+		echo "*** Memory utilization is 5% or more. ***"
+		$WORKDIR/delete-instance.sh
+		continue
+	fi
+
+	# copy cuda-tester.cu
 	echo "==== copy cuda-tester.cu ======"
+	scp_command="scp -i $WORKDIR/id_ed25519 -o StrictHostKeyChecking=no -o ConnectTimeout=5 -P $port $CUDA_TESTER_PATH root@${hostname}:/tmp/"
 	echo $scp_command
 	eval $scp_command
+
+	# compile cuda-tester.cu
 	echo "==== compile cuda ======"
 	$WORKDIR/ssh-command.sh "nvcc /tmp/cuda-tester.cu -o /tmp/cuda-tester"
 	echo "==== run cuda ======"
@@ -270,7 +302,7 @@ while true; do
 		$WORKDIR/ssh-command.sh "apt update"
 		break
 	else
-		echo "CUDA test failed"
+		echo "*** CUDA test failed ***"
 		$WORKDIR/delete-instance.sh
 		continue
 	fi
