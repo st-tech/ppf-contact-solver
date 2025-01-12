@@ -26,7 +26,7 @@ jobs:
         uses: actions/checkout@v3
 
       - name: prepare
-        timeout-minutes: 30
+        timeout-minutes: 20
         run: bash $HELPER_PATH create $VAST_API_KEY
           
       - name: hang
@@ -60,7 +60,7 @@ jobs:
         uses: actions/checkout@v3
 
       - name: prepare
-        timeout-minutes: 30
+        timeout-minutes: 20
         run: bash $HELPER_PATH create $VAST_API_KEY
 
       - name: stack
@@ -79,7 +79,7 @@ jobs:
         uses: actions/checkout@v3
 
       - name: prepare
-        timeout-minutes: 30
+        timeout-minutes: 20
         run: bash $HELPER_PATH create $VAST_API_KEY
 
       - name: friction
@@ -98,7 +98,7 @@ jobs:
         uses: actions/checkout@v3
 
       - name: prepare
-        timeout-minutes: 30
+        timeout-minutes: 20
         run: bash $HELPER_PATH create $VAST_API_KEY
 
       - name: twist

@@ -30,7 +30,7 @@ jobs:
           echo "Scene: $EXAMPLE_NAME" >> $GITHUB_STEP_SUMMARY
 
       - name: prepare
-        timeout-minutes: 30
+        timeout-minutes: 20
         run: bash $HELPER_PATH create $VAST_API_KEY
 
       - name: 1st run
