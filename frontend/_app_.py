@@ -179,4 +179,7 @@ class App:
                     shutil.rmtree(item_path)
                 else:
                     os.remove(item_path)
+        open3d_data_path = os.path.expanduser(os.path.join("~", "open3d_data"))
+        if os.path.exists(os.path.expanduser(open3d_data_path)):
+            shutil.rmtree(open3d_data_path)
         return self

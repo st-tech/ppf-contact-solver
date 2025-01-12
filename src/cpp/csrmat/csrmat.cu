@@ -308,7 +308,6 @@ void DynCSRMat::finalize() {
     DISPATCH_START(rows.size)
     [rows] __device__(unsigned i) mutable { rows[i].finalize(); } DISPATCH_END;
     assert(check());
-    unsigned num_fixed_nnz = 0;
 
     Vec<unsigned> fixed_row_offsets = this->fixed_row_offsets;
     DISPATCH_START(nrow)
@@ -316,15 +315,7 @@ void DynCSRMat::finalize() {
         fixed_row_offsets[i] = rows[i].head;
     } DISPATCH_END;
 
-    unsigned tmp0, tmp1;
-    CUDA_HANDLE_ERROR(cudaMemcpy(&tmp0, fixed_row_offsets.data + nrow - 1,
-                                 sizeof(unsigned), cudaMemcpyDeviceToHost));
-
-    exclusive_scan(fixed_row_offsets.data, nrow);
-    CUDA_HANDLE_ERROR(cudaMemcpy(&tmp1, fixed_row_offsets.data + nrow - 1,
-                                 sizeof(unsigned), cudaMemcpyDeviceToHost));
-
-    num_fixed_nnz = tmp0 + tmp1;
+    unsigned num_fixed_nnz = exclusive_scan(fixed_row_offsets.data, nrow);
     if (num_fixed_nnz > max_nnz) {
         printf("num_fixed_nnz: %u, max_nnz: %u\n", num_fixed_nnz, max_nnz);
         assert(false);
@@ -348,14 +339,7 @@ void DynCSRMat::finalize() {
         }
     } DISPATCH_END;
 
-    CUDA_HANDLE_ERROR(cudaMemcpy(&tmp0, ref_index_offsets.data + nrow - 1,
-                                 sizeof(unsigned), cudaMemcpyDeviceToHost));
-
-    exclusive_scan(ref_index_offsets.data, nrow);
-    CUDA_HANDLE_ERROR(cudaMemcpy(&tmp1, ref_index_offsets.data + nrow - 1,
-                                 sizeof(unsigned), cudaMemcpyDeviceToHost));
-
-    unsigned num_nnz = tmp0 + tmp1;
+    unsigned num_nnz = exclusive_scan(ref_index_offsets.data, nrow);
     if (num_nnz >= max_nnz) {
         printf("transpose num_nnz %u, max_nnz: %u\n", num_nnz, max_nnz);
         assert(false);

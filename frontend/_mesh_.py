@@ -5,6 +5,7 @@
 import numpy as np
 from typing import Optional
 import os
+import time
 
 
 class MeshManager:
@@ -426,12 +427,27 @@ class MeshManager:
             import open3d as o3d
 
             mesh = None
-            if name == "armadillo":
-                mesh = o3d.data.ArmadilloMesh()
-            elif name == "knot":
-                mesh = o3d.data.KnotMesh()
-            elif name == "bunny":
-                mesh = o3d.data.BunnyMesh()
+            num_try, max_try, success, wait_time = 0, 5, False, 3
+            while num_try < max_try:
+                try:
+                    if name == "armadillo":
+                        mesh = o3d.data.ArmadilloMesh()
+                    elif name == "knot":
+                        mesh = o3d.data.KnotMesh()
+                    elif name == "bunny":
+                        mesh = o3d.data.BunnyMesh()
+                    success = True
+                    break
+                except Exception as e:
+                    num_try += 1
+                    print(
+                        f"Mesh {name} could not be downloaded: {e}. Retrying... in {wait_time} seconds"
+                    )
+                    time.sleep(wait_time)
+
+            if not success:
+                raise Exception(f"Mesh {name} could not be downloaded")
+
             if mesh is not None:
                 mesh = o3d.io.read_triangle_mesh(mesh.path)
                 vert = np.asarray(mesh.vertices)
