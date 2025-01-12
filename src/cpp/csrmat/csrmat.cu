@@ -146,7 +146,10 @@ __global__ void block_scan_kernel(unsigned *d_data, unsigned *d_block_sums,
     unsigned idx = blockIdx.x * blockDim.x + threadIdx.x;
     temp[tid] = (idx < n) ? d_data[idx] : 0;
     __syncthreads();
-    unsigned last_element = temp[blockDim.x - 1];
+    unsigned last_element = 0;
+    if (tid == 0 && d_block_sums != nullptr) {
+        last_element = temp[blockDim.x - 1];
+    }
     __syncthreads();
     for (int offset = 1; offset < blockDim.x; offset *= 2) {
         int index = (tid + 1) * offset * 2 - 1;
