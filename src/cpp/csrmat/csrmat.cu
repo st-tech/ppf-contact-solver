@@ -144,12 +144,8 @@ __global__ void block_scan_kernel(unsigned *d_data, unsigned *d_block_sums,
     __shared__ unsigned temp[BLOCK_SIZE];
     unsigned tid = threadIdx.x;
     unsigned idx = blockIdx.x * blockDim.x + threadIdx.x;
-    temp[tid] = (idx < n) ? d_data[idx] : 0;
-    __syncthreads();
-    unsigned last_element = 0;
-    if (tid == 0 && d_block_sums != nullptr) {
-        last_element = temp[blockDim.x - 1];
-    }
+    unsigned val = (idx < n) ? d_data[idx] : 0;
+    temp[tid] = val;
     __syncthreads();
     for (int offset = 1; offset < blockDim.x; offset *= 2) {
         int index = (tid + 1) * offset * 2 - 1;
@@ -158,8 +154,8 @@ __global__ void block_scan_kernel(unsigned *d_data, unsigned *d_block_sums,
         }
         __syncthreads();
     }
-    if (tid == 0) {
-        temp[blockDim.x - 1] = 0;
+    if (tid == blockDim.x - 1) {
+        temp[tid] = 0;
     }
     __syncthreads();
     for (int offset = blockDim.x / 2; offset > 0; offset /= 2) {
@@ -171,11 +167,12 @@ __global__ void block_scan_kernel(unsigned *d_data, unsigned *d_block_sums,
         }
         __syncthreads();
     }
+    unsigned new_val = temp[tid];
     if (idx < n) {
-        d_data[idx] = temp[tid];
+        d_data[idx] = new_val;
     }
-    if (tid == 0 && d_block_sums != nullptr) {
-        d_block_sums[blockIdx.x] = temp[blockDim.x - 1] + last_element;
+    if (tid == blockDim.x - 1 && d_block_sums != nullptr) {
+        d_block_sums[blockIdx.x] = new_val + val;
     }
 }
 
