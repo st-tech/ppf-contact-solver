@@ -16,6 +16,22 @@
 
 namespace utility {
 
+struct ReduceInfo {
+    unsigned n = 0;
+    unsigned *d_block_sums = nullptr;
+    unsigned *h_results = nullptr;
+
+    void init(unsigned n) {
+        this->n = n;
+        unsigned num_blocks = (n + BLOCK_SIZE - 1) / BLOCK_SIZE;
+        CUDA_HANDLE_ERROR(
+            cudaMalloc(&d_block_sums, num_blocks * sizeof(unsigned)));
+        h_results = new unsigned[num_blocks];
+    }
+};
+
+static ReduceInfo reduce_info;
+
 __device__ Vec3f compute_vertex_normal(const DataSet &data,
                                        const Vec<Vec3f> &vertex, unsigned i) {
     Vec3f normal = Vec3f::Zero();
@@ -216,32 +232,25 @@ __global__ void reduce_op_kernel(const T *input, Y *output, Op func, Y init_val,
 
 template <class T, class Y, typename Op>
 Y reduce(const T *d_input, Op func, Y init_val, unsigned n) {
-    unsigned grid_size = (n + BLOCK_SIZE - 1) / BLOCK_SIZE;
-    const unsigned scale_factor = 2;
-    static Y *d_output = nullptr;
-    static Y *h_results = nullptr;
-    static unsigned max_grid_size = 0;
-    if (d_output == nullptr) {
-        max_grid_size = scale_factor * grid_size;
-        cudaMalloc(&d_output, max_grid_size * sizeof(Y));
-        h_results = new Y[max_grid_size];
-    } else if (grid_size > max_grid_size) {
-        max_grid_size = scale_factor * grid_size;
-        cudaFree(d_output);
-        delete[] h_results;
-        cudaMalloc(&d_output, max_grid_size * sizeof(Y));
-        h_results = new Y[max_grid_size];
+    if (sizeof(Y) * n <= sizeof(unsigned) * reduce_info.n) {
+        unsigned grid_size = (n + BLOCK_SIZE - 1) / BLOCK_SIZE;
+        Y *d_output = reinterpret_cast<Y *>(reduce_info.d_block_sums);
+        Y *h_results = reinterpret_cast<Y *>(reduce_info.h_results);
+        size_t shared_mem_size = sizeof(Y) * BLOCK_SIZE;
+        reduce_op_kernel<T, Y><<<grid_size, BLOCK_SIZE, shared_mem_size>>>(
+            d_input, d_output, func, init_val, n);
+        cudaMemcpy(h_results, d_output, grid_size * sizeof(Y),
+                   cudaMemcpyDeviceToHost);
+        Y result = init_val;
+        for (unsigned i = 0; i < grid_size; i++) {
+            result = func(result, h_results[i]);
+        }
+        return result;
+    } else {
+        fprintf(stderr, "Error: reduce buffer size is too small\n");
+        fprintf(stderr, "n: %u, reduce_info.n: %u\n", n, reduce_info.n);
+        exit(1);
     }
-    size_t shared_mem_size = sizeof(Y) * BLOCK_SIZE;
-    reduce_op_kernel<T, Y><<<grid_size, BLOCK_SIZE, shared_mem_size>>>(
-        d_input, d_output, func, init_val, n);
-    cudaMemcpy(h_results, d_output, grid_size * sizeof(Y),
-               cudaMemcpyDeviceToHost);
-    Y result = init_val;
-    for (unsigned i = 0; i < grid_size; i++) {
-        result = func(result, h_results[i]);
-    }
-    return result;
 }
 
 template <class T> T sum_array(Vec<T> array, unsigned size) {
@@ -287,6 +296,8 @@ __device__ float get_wind_weight(float time) {
     float t = 0.25f;
     return t * (0.5f * (1.0f + sinf(angle))) + (1.0f - t);
 }
+
+void set_max_reduce_count(unsigned n) { reduce_info.init(n); }
 
 } // namespace utility
 

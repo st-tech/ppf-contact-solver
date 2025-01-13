@@ -138,6 +138,11 @@ void initialize(DataSet _host_dataset, DataSet _dev_dataset, ParamSet *_param) {
     unsigned face_count = host_dataset.mesh.mesh.face.size;
     unsigned hinge_count = host_dataset.mesh.mesh.hinge.size;
     unsigned tet_count = host_dataset.mesh.mesh.tet.size;
+
+    const unsigned max_reduce_count = std::max(
+        std::max(face_count, edge_count), std::max(tet_count, 3 * vert_count));
+    utility::set_max_reduce_count(max_reduce_count);
+
     unsigned collision_mesh_vert_count =
         host_dataset.constraint.mesh.active
             ? host_dataset.constraint.mesh.vertex.size
@@ -238,43 +243,8 @@ StepResult advance() {
     const unsigned shell_face_count = host_dataset.shell_face_count;
     const unsigned tet_count = host_data.mesh.mesh.tet.size;
     const float strain_limit_sum = prm.strain_limit_tau + prm.strain_limit_eps;
+
     SimpleLog::set(prm.time);
-
-    // Name: Vertex Count
-    // Format: list[(vid_time,int)]
-    // Description:
-    // Total vertex count in the scene. The format is time-dependent
-    // but should not change during the simulation.
-    logging.mark("vertex count", vertex_count);
-
-    // Name: Rod Count
-    // Format: list[(vid_time,int)]
-    // Description:
-    // Total edge rod element count in the scene. The format is time-dependent
-    // but should not change during the simulation.
-    logging.mark("rod count", host_data.rod_count);
-
-    // Name: Shell Count
-    // Format: list[(vid_time,int)]
-    // Description:
-    // Total triangular shell element count in the scene. The format is
-    // time-dependent but should not change during the simulation.
-    logging.mark("shell count", host_data.shell_face_count);
-
-    // Name: Triangle Count
-    // Format: list[(vid_time,int)]
-    // Map: triangle_count
-    // Description:
-    // Total triangular shell element count in the scene. The format is
-    // time-dependent but should not change during the simulation.
-    logging.mark("face count", host_data.mesh.mesh.face.size);
-
-    // Name: Tet Count
-    // Format: list[(vid_time,int)]
-    // Description:
-    // Total tetrahedral element count in the scene. The format is
-    // time-dependent but should not change during the simulation.
-    logging.mark("tet count", host_data.mesh.mesh.tet.size);
 
     logging.push("build_kinematic");
     build_kinematic(host_dataset, dev_dataset, *param);
@@ -307,16 +277,6 @@ StepResult advance() {
                 tmp_scalar[i] = data.prop.face[i].mass;
             }
         } DISPATCH_END;
-        total_shell_mass = utility::sum_array(tmp_scalar, shell_face_count);
-    }
-
-    if (total_shell_mass > 0.0f) {
-        // Name: Total Shell Mass
-        // Format: list[(vid_time,kg)]
-        // Description:
-        // Total mass of all the shell elements in the scene.
-        // Should not change during the simulation.
-        logging.mark("total shell mass", total_shell_mass);
     }
 
     float total_solid_mass = 0.0f;
@@ -328,16 +288,6 @@ StepResult advance() {
                 tmp_scalar[i] = data.prop.tet[i].mass;
             }
         } DISPATCH_END;
-        total_solid_mass = utility::sum_array(tmp_scalar, tet_count);
-    }
-
-    if (total_solid_mass > 0.0f) {
-        // Name: Total Solid Mass
-        // Format: list[(vid_time,kg)]
-        // Description:
-        // Total mass of all the tet elements in the scene.
-        // Should not change during the simulation.
-        logging.mark("total solid mass", total_solid_mass);
     }
 
     float dt = param->dt;

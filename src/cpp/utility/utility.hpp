@@ -73,6 +73,8 @@ void compute_svd(DataSet data, Vec<Vec3f> curr, Vec<Svd3x2> svd,
                  ParamSet param);
 __device__ float get_wind_weight(float time);
 
+void set_max_reduce_count(unsigned n);
+
 } // namespace utility
 
 #endif
