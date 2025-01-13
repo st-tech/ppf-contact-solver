@@ -14,8 +14,6 @@
 #include "eig-hpp/eigsolve2x2.hpp"
 #include "eig-hpp/eigsolve3x3.hpp"
 
-#define BLOCK_SIZE 256
-
 namespace utility {
 
 __device__ Vec3f compute_vertex_normal(const DataSet &data,
