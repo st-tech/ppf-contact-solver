@@ -12,7 +12,9 @@ on:
         - base
 
 env:
+  SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
   REGISTRY: ghcr.io
+
 jobs:
   build-image:
     runs-on: ubuntu-latest
@@ -49,3 +51,16 @@ jobs:
           MODE=compiled
           IMAGE=${{ env.REGISTRY }}/${{ github.repository }}-base:latest
         tags: ${{ env.REGISTRY }}/${{ github.repository }}-compiled:latest
+
+  notify_failure:
+    runs-on: ${{ github.event.inputs.runner }}
+    needs: build-image
+    if: ${{ failure() }}
+    steps:
+
+      - name: Slack Notification Failure
+        uses: rtCamp/action-slack-notify@v2
+        env:
+          SLACK_TITLE: Deploy / Failure
+          SLACK_COLOR: danger
+          SLACK_MESSAGE: One or more tests failed.

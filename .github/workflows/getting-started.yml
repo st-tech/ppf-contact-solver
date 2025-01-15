@@ -8,6 +8,7 @@ on:
   workflow_dispatch:
 
 env:
+  SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
   DOCKER_IMAGE: nvidia/cuda:11.8.0-devel-ubuntu22.04
   TMP_CONTAINER_NAME: tmp-ppf-dev
   TMP_ROOT: /root/ppf-contact-solver
@@ -74,3 +75,16 @@ jobs:
         run: |
           docker stop $TMP_CONTAINER_NAME
           docker rm $TMP_CONTAINER_NAME
+
+  notify_failure:
+    runs-on: ${{ github.event.inputs.runner }}
+    needs: headless
+    if: ${{ failure() }}
+    steps:
+
+      - name: Slack Notification Failure
+        uses: rtCamp/action-slack-notify@v2
+        env:
+          SLACK_TITLE: Deploy / Failure
+          SLACK_COLOR: danger
+          SLACK_MESSAGE: One or more tests failed.
