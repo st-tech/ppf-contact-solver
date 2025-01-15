@@ -1,4 +1,5 @@
 name: Docker Build
+run-name: Docker Build (${{ github.event.inputs.target }})
 
 on:
   workflow_dispatch:

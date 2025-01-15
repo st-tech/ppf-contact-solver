@@ -14,6 +14,7 @@ on:
 
 env:
   VAST_API_KEY: ${{ secrets.VAST_API_KEY }}
+  SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
   EXAMPLE_NAME: curtain
   HELPER_PATH: .github/workflows/vast/helper.sh
   
@@ -66,3 +67,16 @@ jobs:
       - name: shutdown
         if: always()
         run: bash $HELPER_PATH delete
+    
+  notify_failure:
+    runs-on: ${{ github.event.inputs.runner }}
+    needs: run
+    if: ${{ failure() }}
+    steps:
+
+      - name: Slack Notification Failure
+        uses: rtCamp/action-slack-notify@v2
+        env:
+          SLACK_TITLE: Deploy / Failure
+          SLACK_COLOR: danger
+          SLACK_MESSAGE: One or more tests failed.
