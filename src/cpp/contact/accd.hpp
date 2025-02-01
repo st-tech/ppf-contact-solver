@@ -15,6 +15,9 @@ __device__ void centerize(Vec3f **x, unsigned count) {
         mov += *x[k];
     }
     mov /= count;
+    for (unsigned k = 0; k < count; k++) {
+        *x[k] -= mov;
+    }
 }
 
 template <typename F>

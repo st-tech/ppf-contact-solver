@@ -1,12 +1,17 @@
 #!/bin/bash
 
 if [ -z "$1" ]; then
-	echo "Error: Missing string parameter."
-	echo "Usage: $0 <runner>"
+	echo "Error: Missing branch parameter."
 	exit 1
 fi
 
-runner="$1"
+if [ -z "$2" ]; then
+	echo "Error: Missing runner parameter."
+	exit 1
+fi
+
+branch="$1"
+runner="$2"
 
 WORKFLOW_PATTERN="example_*"
 WORKFLOW_FILES=$(ls $WORKFLOW_PATTERN*.yml 2>/dev/null)
@@ -18,5 +23,5 @@ fi
 
 for WORKFLOW_FILE in $WORKFLOW_FILES; do
 	echo "Triggering GitHub Action workflow: $WORKFLOW_FILE with runner=$runner"
-	gh workflow run "$WORKFLOW_FILE" -f runner="$runner"
+	gh workflow run "$WORKFLOW_FILE" -f runner="$runner" --ref $branch
 done

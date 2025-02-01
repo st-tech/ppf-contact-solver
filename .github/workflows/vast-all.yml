@@ -116,7 +116,7 @@ jobs:
         run: bash $HELPER_PATH delete
 
   notify_success:
-    runs-on: ${{ github.event.inputs.runner }}
+    runs-on: ubuntu-latest
     needs: [part_1, part_2, part_3, part_4]
     if: ${{ success() }}
     steps:
@@ -130,7 +130,7 @@ jobs:
           SLACK_MESSAGE: All tests passed.
     
   notify_failure:
-    runs-on: ${{ github.event.inputs.runner }}
+    runs-on: ubuntu-latest
     needs: [part_1, part_2, part_3, part_4]
     if: ${{ failure() }}
     steps:

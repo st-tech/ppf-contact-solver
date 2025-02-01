@@ -155,7 +155,7 @@ __device__ Vec4f edge_edge_distance_coeff_unclassified(const Vec3f &ea0,
             Vec4f(c3(0), c3(1), 1.0f, 0.0f), Vec4f(c4(0), c4(1), 0.0f, 1.0f)};
         unsigned index = 0;
         float di = FLT_MAX;
-        for (unsigned i = 0; i < 9; ++i) {
+        for (unsigned i = 0; i < 4; ++i) {
             const auto &c = types[i];
             Vec3f x0 = c(0) * ea0 + c(1) * ea1;
             Vec3f x1 = c(2) * eb0 + c(3) * eb1;

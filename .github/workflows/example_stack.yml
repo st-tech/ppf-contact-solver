@@ -69,7 +69,7 @@ jobs:
         run: bash $HELPER_PATH delete
     
   notify_failure:
-    runs-on: ${{ github.event.inputs.runner }}
+    runs-on: ubuntu-latest
     needs: run
     if: ${{ failure() }}
     steps:
