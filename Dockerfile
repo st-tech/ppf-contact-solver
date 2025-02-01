@@ -23,9 +23,6 @@ RUN if [ "$MODE" = "compiled" ]; then \
         apt update; \
         apt install -y git python3 curl; \
         python3 warmup.py; \
-        rm -rf src; \
-        mkdir src; \
-        echo "// empty file" > src/lib.rs; \
         /root/.cargo/bin/cargo build; \
         cd /root && rm -rf /root/${PROJ_NAME}; \
     else \
