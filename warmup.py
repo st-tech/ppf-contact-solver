@@ -125,11 +125,9 @@ def install_lazygit():
 
 def install_nvim():
     print("installing nvim")
-    run(
-        "curl -LO https://github.com/neovim/neovim/releases/latest/download/nvim-linux64.tar.gz"
-    )
-    run("tar -C /opt -xzf nvim-linux64.tar.gz")
-    run("ln -s /opt/nvim-linux64/bin/nvim /usr/bin/nvim")
+    run("curl -LO https://github.com/neovim/neovim/releases/latest/download/nvim-linux-x86_64.tar.gz")
+    run("tar -C /opt -xzf nvim-linux-x86_64.tar.gz")
+    run("ln -s /opt/nvim-linux-x86_64/bin/nvim /usr/bin/nvim")
     run("apt install -y fzf fd-find bat")
     run("/root/.cargo/bin/rustup component add rust-analyzer")
     run("ln -s $(which fdfind) /usr/bin/fd")
@@ -175,6 +173,9 @@ def install_meshplot():
     run("git clone https://github.com/skoch9/meshplot /tmp/meshplot")
     run("pip3 install --ignore-installed /tmp/meshplot")
 
+def install_sdf():
+    run("git clone https://github.com/fogleman/sdf.git /tmp/sdf")
+    run("pip3 install /tmp/sdf")
 
 def setup():
     script_dir = os.path.dirname(os.path.realpath(__file__))
@@ -183,6 +184,7 @@ def setup():
     run("DEBIAN_FRONTEND=noninteractive apt install -y " + " ".join(list_packages()))
     run("pip3 install --ignore-installed " + " ".join(python_packages()))
     install_meshplot()
+    install_sdf()
     run("curl -fsSL https://deb.nodesource.com/setup_21.x | bash -")
     run("apt install -y nodejs")
     run("curl https://www.npmjs.com/install.sh | sh")
@@ -375,6 +377,7 @@ if __name__ == "__main__":
             run("pip3 install --ignore-installed " + " ".join(python_packages()))
             run("pip3 install sphinx sphinxawesome-theme sphinx_autobuild")
             install_meshplot()
+            install_sdf()
         elif mode == "docs-build":
             make_docs()
             build_docs()
