@@ -292,6 +292,7 @@ pub struct ParamSet {
     pub constraint_ghat: f32,
     pub prev_dt: f32,
     pub dt: f32,
+    pub playback: f32,
     pub min_newton_steps: u32,
     pub target_toi: f32,
     pub bend: f32,

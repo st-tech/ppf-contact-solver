@@ -290,13 +290,19 @@ StepResult advance() {
         } DISPATCH_END;
     }
 
-    float dt = param->dt;
+    float dt = param->playback * param->dt;
 
     // Name: Step Size
     // Format: list[(vid_time,float)]
     // Description:
     // Target step size.
     logging.mark("dt", dt);
+
+    // Name: playback
+    // Format: list[(vid_time,float)]
+    // Description:
+    // Playback speed.
+    logging.mark("playback", param->playback);
 
     if (shell_face_count) {
         utility::compute_svd(data, data.vertex.curr, svd, prm);
@@ -632,7 +638,7 @@ StepResult advance() {
                 logging.mark("final_dt", dt);
 
                 param->prev_dt = dt;
-                param->time += param->prev_dt;
+                param->time += param->prev_dt / param->playback;
 
                 dev_dataset.vertex.prev.copy(dev_dataset.vertex.curr);
                 dev_dataset.vertex.curr.copy(eval_x);

@@ -218,6 +218,7 @@ struct ParamSet {
     float constraint_ghat;
     float prev_dt;
     float dt;
+    float playback;
     unsigned min_newton_steps;
     float target_toi;
     float bend;

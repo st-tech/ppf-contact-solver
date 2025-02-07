@@ -201,6 +201,8 @@ class ParamParser:
                                 default_value = (
                                     int(float_value)
                                     if float_value.is_integer()
+                                    and var_type != "f32"
+                                    and var_type != "f64"
                                     else float_value
                                 )
                             except ValueError:

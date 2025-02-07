@@ -340,6 +340,7 @@ pub fn make_param(args: &Args) -> data::ParamSet {
         constraint_ghat: args.constraint_ghat,
         prev_dt: dt,
         dt,
+        playback: args.playback,
         min_newton_steps: args.min_newton_steps,
         target_toi: args.target_toi,
         bend: args.bend,

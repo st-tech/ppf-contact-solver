@@ -28,6 +28,14 @@ pub struct Args {
     #[clap(long, default_value_t = 1e-3)]
     pub dt: f32,
 
+    // Name: Playback Speed
+    // Description:
+    // The speed at which the simulation is played back.
+    // 1.0 means unaltered playback, values greater than 1.0 speed up the playback,
+    // and values less than 1.0 slow down the playback.
+    #[clap(long, default_value_t = 1.0)]
+    pub playback: f32,
+
     // Name: Lower Bound of Newton Steps
     // Recommended Range: 0 to 32
     // Description:

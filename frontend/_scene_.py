@@ -999,9 +999,7 @@ class FixedScene:
 
             if len(self._rod):
                 if plot is None:
-                    plot = self._plot.create().curve(
-                        vert, self._rod, shading=shading
-                    )   
+                    plot = self._plot.create().curve(vert, self._rod, shading=shading)
                 else:
                     plot.add.edge(vert, self._rod)
 
@@ -1181,7 +1179,7 @@ class Scene:
                 result = min(result, np.min(vert[:, _axis[axis]]))
         return result
 
-    def max(self, axis: int) -> float:
+    def max(self, axis: str) -> float:
         """Get the maximum value of the scene along a specific axis.
 
         Args:
@@ -1240,8 +1238,8 @@ class Scene:
         for name, obj in self._object.items():
             if not obj.static and obj.get("T") is None:
                 map = tag[name]
-                vert, edge = obj.get("V"), obj.get("E")
-                if vert is not None and edge is not None:
+                edge = obj.get("E")
+                if edge is not None:
                     add_entry(
                         map,
                         edge,
@@ -1252,13 +1250,23 @@ class Scene:
         for name, obj in self._object.items():
             if not obj.static and obj.get("T") is None:
                 map = tag[name]
-                vert, tri = obj.get("V"), obj.get("F")
-                if vert is not None and tri is not None:
+                tri = obj.get("F")
+                if tri is not None:
                     add_entry(
                         map,
                         tri,
                     )
         shell_vert_start, shell_vert_end = rod_vert_end, concat_count
+
+        for name, obj in self._object.items():
+            if not obj.static:
+                map = tag[name]
+                tri = obj.get("F")
+                if tri is not None:
+                    add_entry(
+                        map,
+                        tri,
+                    )
 
         pbar.update(1)
         for name, obj in self._object.items():
@@ -1325,10 +1333,15 @@ class Scene:
         for name, obj in self._object.items():
             if not obj.static:
                 map = tag[name]
-                tet = obj.get("T")
                 tri = obj.get("F")
-                if tet is not None and tri is not None:
+                if tri is not None and obj.get("T") is not None:
                     concat_tri.extend(vec_map(map, tri))
+
+        for name, obj in self._object.items():
+            if not obj.static:
+                map = tag[name]
+                tet = obj.get("T")
+                if tet is not None:
                     concat_tet.extend(vec_map(map, tet))
 
         pbar.update(1)

@@ -619,6 +619,7 @@ impl Scene {
                     match title.as_str() {
                         "gravity" => param.gravity = Vec3f::new(0.0, val, 0.0),
                         "dt" => param.dt = val,
+                        "playback" => param.playback = val,
                         "friction" => param.friction = val,
                         _ => (),
                     }

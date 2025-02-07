@@ -136,10 +136,13 @@ class Param:
                 self.change(last_val)
             else:
                 val = self._param[self._key]["value"]
+                val_type = self._param[self._key]["type"]
                 if isinstance(val, float):
                     self.change(val)
                 else:
-                    raise ValueError("Key must be float")
+                    raise ValueError(
+                        f"Key must be float. {val} is given. type: {val_type}"
+                    )
         return self
 
     def export(self, path: str):
@@ -885,6 +888,7 @@ class Session:
         while not os.path.exists(log_path) and not os.path.exists(err_path):
             time.sleep(1)
         if process.poll() is not None:
+            display_log(open(err_path, "r").readlines())
             raise ValueError("Solver failed to start")
         else:
             init_path = os.path.join(self.info.path, "output", "data", "initialize.out")
@@ -894,8 +898,7 @@ class Session:
                     break
                 time.sleep(1)
             if not os.path.exists(init_path):
-                err_content = open(err_path, "r").readlines()
-                display_log(err_content)
+                display_log(open(err_path, "r").readlines())
                 raise ValueError("Solver failed to start")
         if blocking or not self._in_jupyter_notebook:
             print(f">>> Log path: {log_path}")
@@ -918,7 +921,7 @@ class Session:
                 print("*** Solver FAILED ***")
             else:
                 print("*** Solver finished ***")
-            n_logs = 16
+            n_logs = 32
             log_lines = open(log_path, "r").readlines()
             print(">>> Log:")
             for line in log_lines[-n_logs:]:
@@ -992,11 +995,11 @@ class Session:
                 elif number < 1000:
                     return str(number)
                 elif number < 1_000_000:
-                    return f"{number/1_000:.2f}k"
+                    return f"{number / 1_000:.2f}k"
                 elif number < 1_000_000_000:
-                    return f"{number/1_000_000:.2f}M"
+                    return f"{number / 1_000_000:.2f}M"
                 else:
-                    return f"{number/1_000_000_000:.2f}B"
+                    return f"{number / 1_000_000_000:.2f}B"
 
             def convert_time(time) -> str:
                 if time is None:
@@ -1004,9 +1007,9 @@ class Session:
                 elif time < 1_000:
                     return f"{int(time)}ms"
                 elif time < 60_000:
-                    return f"{time/1_000:.2f}s"
+                    return f"{time / 1_000:.2f}s"
                 else:
-                    return f"{time/60_000:.2f}m"
+                    return f"{time / 60_000:.2f}m"
 
             if live_update and is_running():
 
@@ -1243,3 +1246,6 @@ def display_log(lines: list[str]):
         text = "\n".join(lines)
         log_widget.value = CONSOLE_STYLE + f"<pre style='no-scroll'>{text}</pre>"
         display(log_widget)
+    else:
+        for line in lines:
+            print(line)

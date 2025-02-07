@@ -198,8 +198,6 @@ class MeshManager:
 
     def _from_o3d(self, o3d_mesh) -> "TriMesh":
         """Load a mesh from an Open3D mesh"""
-        if o3d_mesh.is_self_intersecting():
-            print("Warning: Mesh is self-intersecting")
         return TriMesh.create(
             np.asarray(o3d_mesh.vertices),
             np.asarray(o3d_mesh.triangles),
@@ -819,16 +817,15 @@ class TriMesh(tuple[np.ndarray, np.ndarray]):
         """Recompute the hash of the mesh"""
         import hashlib
 
-        self.hash = hashlib.sha256(
-            np.concatenate(
-                [
-                    np.array(self[0].shape),
-                    self[0].ravel(),
-                    np.array(self[1].shape),
-                    self[1].ravel(),
-                ]
-            )
-        ).hexdigest()
+        obj = np.concatenate(
+            [
+                np.array(self[0].shape),
+                self[0].ravel(),
+                np.array(self[1].shape),
+                self[1].ravel(),
+            ]
+        )
+        self.hash = hashlib.sha256(obj.tobytes()).hexdigest()
         return self
 
     def set_cache_dir(self, cache_dir: str) -> "TriMesh":
