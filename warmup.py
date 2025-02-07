@@ -88,6 +88,7 @@ def python_packages():
         "plyfile",
         "requests",
         "trimesh",
+        "pyrender",
         "pywavefront",
         "matplotlib",
         "tqdm",
@@ -125,7 +126,9 @@ def install_lazygit():
 
 def install_nvim():
     print("installing nvim")
-    run("curl -LO https://github.com/neovim/neovim/releases/latest/download/nvim-linux-x86_64.tar.gz")
+    run(
+        "curl -LO https://github.com/neovim/neovim/releases/latest/download/nvim-linux-x86_64.tar.gz"
+    )
     run("tar -C /opt -xzf nvim-linux-x86_64.tar.gz")
     run("ln -s /opt/nvim-linux-x86_64/bin/nvim /usr/bin/nvim")
     run("apt install -y fzf fd-find bat")
@@ -173,9 +176,20 @@ def install_meshplot():
     run("git clone https://github.com/skoch9/meshplot /tmp/meshplot")
     run("pip3 install --ignore-installed /tmp/meshplot")
 
+
 def install_sdf():
     run("git clone https://github.com/fogleman/sdf.git /tmp/sdf")
     run("pip3 install /tmp/sdf")
+
+
+def install_mesa():
+    run("apt update")
+    run(
+        "wget https://github.com/mmatl/travis_debs/raw/master/xenial/mesa_18.3.3-0.deb -O /tmp/mesa_18.3.3-0.deb"
+    )
+    run("dpkg -i /tmp/mesa_18.3.3-0.deb || true")
+    run("apt install -y -f")
+
 
 def setup():
     script_dir = os.path.dirname(os.path.realpath(__file__))
@@ -190,6 +204,7 @@ def setup():
     run("curl https://www.npmjs.com/install.sh | sh")
     run("curl https://sh.rustup.rs -sSf | sh -s -- -y")
     run(f"echo 'export PYTHONPATH={script_dir}:$PYTHONPATH' >> ~/.bashrc")
+    install_mesa()
 
 
 def set_tmux():
@@ -374,7 +389,7 @@ if __name__ == "__main__":
         elif mode == "jupyter":
             start_jupyter()
         elif mode == "docs-prepare":
-            run("pip3 install --ignore-installed " + " ".join(python_packages()))
+            run("pip3 install " + " ".join(python_packages()))
             run("pip3 install sphinx sphinxawesome-theme sphinx_autobuild")
             install_meshplot()
             install_sdf()
