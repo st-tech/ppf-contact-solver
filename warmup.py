@@ -75,6 +75,7 @@ def list_packages():
         "xorg-dev",
         "libgl1-mesa-dev",
         "libglu1-mesa-dev",
+        "libosmesa6-dev",
         "libc++-dev",
         "libeigen3-dev",
     ]
@@ -182,13 +183,9 @@ def install_sdf():
     run("pip3 install /tmp/sdf")
 
 
-def install_mesa():
-    run("apt update")
-    run(
-        "wget https://github.com/mmatl/travis_debs/raw/master/xenial/mesa_18.3.3-0.deb -O /tmp/mesa_18.3.3-0.deb"
-    )
-    run("dpkg -i /tmp/mesa_18.3.3-0.deb || true")
-    run("apt install -y -f")
+def reinstall_pyopengl():
+    run("pip3 uninstall -y pyopengl")
+    run("pip3 install pyopengl==3.1.5")
 
 
 def setup():
@@ -204,7 +201,7 @@ def setup():
     run("curl https://www.npmjs.com/install.sh | sh")
     run("curl https://sh.rustup.rs -sSf | sh -s -- -y")
     run(f"echo 'export PYTHONPATH={script_dir}:$PYTHONPATH' >> ~/.bashrc")
-    install_mesa()
+    reinstall_pyopengl()
 
 
 def set_tmux():
