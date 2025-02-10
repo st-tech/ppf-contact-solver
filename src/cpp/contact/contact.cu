@@ -924,7 +924,7 @@ __device__ unsigned embed_vertex_constraint_force_hessian(
                     if (bowl) {
                         reverse = true;
                     }
-                    float stiff_k = mass / (dt * dt);
+                    float stiff_k = mass / (ghat * ghat);
                     float r2 = radius * radius;
                     if (reverse == true && d2 > r2) {
                         f +=
