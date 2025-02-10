@@ -19,11 +19,11 @@
 
 namespace energy {
 
-__device__ void
-embed_vertex_force_hessian(const DataSet &data, const Vec<Vec3f> &eval_x,
-                           const Vec<Vec3f> &velocity, const Vec<Vec3f> &target,
-                           Vec<float> &force, Vec<Mat3x3f> &diag_hess, float dt,
-                           const ParamSet &param, unsigned i) {
+__device__ void embed_vertex_force_hessian(
+    const DataSet &data, const Vec<Vec3f> &eval_x, const Vec<Vec3f> &velocity,
+    const Vec<Vec3f> &target, Vec<float> &force, Vec<Mat3x3f> &diag_hess,
+    float dt, const ParamSet &param, unsigned i) {
+
     float mass = data.prop.vertex[i].mass;
     float area = data.prop.vertex[i].area;
 
@@ -35,6 +35,7 @@ embed_vertex_force_hessian(const DataSet &data, const Vec<Vec3f> &eval_x,
     if (!param.fitting) {
         wind = utility::get_wind_weight(param.time) * param.wind;
     }
+
     Vec3f f = Vec3f::Zero();
     Mat3x3f H = Mat3x3f::Zero();
     if (normal.isZero() == false && param.air_density) {
@@ -43,26 +44,29 @@ embed_vertex_force_hessian(const DataSet &data, const Vec<Vec3f> &eval_x,
         H += area * param.air_density *
              air_damper::face_hessian(dt, normal, param);
     }
+
     bool pulled(false);
     for (unsigned j = 0; j < data.constraint.pull.size; ++j) {
         if (i == data.constraint.pull[j].index) {
             Vec3f position = data.constraint.pull[j].position;
             float weight = data.constraint.pull[j].weight;
-            f += weight * (y - position);
+            f += weight * (y - position).cast<float>();
             H += weight * Mat3x3f::Identity();
             pulled = true;
             break;
         }
     }
+
     if (!pulled) {
         f += mass * momentum::gradient(dt, y, target[i]);
         H += mass * momentum::hessian(dt);
     }
+
     if (param.isotropic_air_friction) {
         f += param.isotropic_air_friction * (y - x) / (dt * dt);
-        H +=
-            (param.isotropic_air_friction / (dt * dt)) * Mat3x3f::Identity();
+        H += (param.isotropic_air_friction / (dt * dt)) * Mat3x3f::Identity();
     }
+
     if (param.fix_xz && y[1] > param.fix_xz) {
         float t = fmin(1.0f, y[1] - param.fix_xz);
         Vec3f n(0.0f, 1.0f, 0.0f);
@@ -70,6 +74,7 @@ embed_vertex_force_hessian(const DataSet &data, const Vec<Vec3f> &eval_x,
         f += P * t * mass * (y - x) / (dt * dt);
         H += P * t * mass * (dt * dt);
     }
+
     Map<Vec3f>(force.data + 3 * i) += f;
     diag_hess[i] += H;
 }
@@ -82,8 +87,9 @@ __device__ void embed_rod_force_hessian(const DataSet &data,
     const Vec2u &edge = data.mesh.mesh.edge[i];
     const Vec3f &x0 = eval_x[edge[0]];
     const Vec3f &x1 = eval_x[edge[1]];
+
     float l0 = data.prop.rod[i].length;
-    Vec3f t = x1 - x0;
+    Vec3f t = (x1 - x0).cast<float>();
     float l = t.norm();
     float mass = data.prop.rod[i].mass;
     float stiffness = data.prop.rod[i].stiffness;
@@ -136,6 +142,8 @@ __device__ void embed_face_force_hessian(const DataSet &data,
                 table = StVK::make_diff_table2(svd.S, mu, lambda);
             } else if (param.model_shell == Model::SNHk) {
                 table = SNHk::make_diff_table2(svd.S, mu, lambda);
+            } else {
+                assert(false);
             }
             dedF = eigenanalysis::compute_force(table, svd);
             d2edF2 = eigenanalysis::compute_hessian(table, svd,
@@ -178,6 +186,8 @@ __device__ void embed_tet_force_hessian(const DataSet &data,
             table = StVK::make_diff_table3(svd.S, mu, lambda);
         } else if (param.model_tet == Model::SNHk) {
             table = SNHk::make_diff_table3(svd.S, mu, lambda);
+        } else {
+            assert(false);
         }
         dedF = eigenanalysis::compute_force(table, svd);
         d2edF2 =
@@ -233,12 +243,10 @@ embed_rod_bend_force_hessian(const DataSet &data, const Vec<Vec3f> &eval_x,
     }
 }
 
-void embed_momentum_force_hessian(const DataSet &data, const Vec<Vec3f> &eval_x,
-                                  const Kinematic &kinematic,
-                                  const Vec<Vec3f> &velocity, float dt,
-                                  const Vec<Vec3f> &target, Vec<float> &force,
-                                  Vec<Mat3x3f> &diag_hess,
-                                  const ParamSet &param) {
+void embed_momentum_force_hessian(
+    const DataSet &data, const Vec<Vec3f> &eval_x, const Kinematic &kinematic,
+    const Vec<Vec3f> &velocity, float dt, const Vec<Vec3f> &target,
+    Vec<float> &force, Vec<Mat3x3f> &diag_hess, const ParamSet &param) {
     DISPATCH_START(data.vertex.curr.size)
     [data, eval_x, kinematic, velocity, dt, target, force, diag_hess,
      param] __device__(unsigned i) mutable {

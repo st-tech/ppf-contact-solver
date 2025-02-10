@@ -13,7 +13,7 @@ use toml::Value;
 
 pub struct Scene {
     args: Args,
-    dyn_args: Vec<(String, Vec<(f32, f32)>)>,
+    dyn_args: Vec<(String, Vec<(f64, f64)>)>,
     vert: Matrix3xX<f32>,
     vel: Matrix3xX<f32>,
     uv: Option<Matrix2xX<f32>>,
@@ -34,13 +34,13 @@ struct Spin {
     center: Vector3<f32>,
     axis: Vector3<f32>,
     angular_velocity: f32,
-    t_start: f32,
-    t_end: f32,
+    t_start: f64,
+    t_end: f64,
 }
 
 struct Pin {
     index: Vec<usize>,
-    timing: Vec<f32>,
+    timing: Vec<f64>,
     target: Vec<Matrix3xX<f32>>,
     spin: Vec<Spin>,
     unpin: bool,
@@ -51,7 +51,7 @@ struct Pin {
 struct InvisibleSphere {
     center: Matrix3xX<f32>,
     radius: Vec<f32>,
-    timing: Vec<f32>,
+    timing: Vec<f64>,
     inverted: bool,
     hemisphere: bool,
     transition: String,
@@ -60,7 +60,7 @@ struct InvisibleSphere {
 struct InvisibleWall {
     normal: Vector3<f32>,
     position: Matrix3xX<f32>,
-    timing: Vec<f32>,
+    timing: Vec<f64>,
     transition: String,
 }
 
@@ -71,8 +71,7 @@ struct Config {
 
 type MatReadResult<T, const C: usize> =
     io::Result<Matrix<T, Const<C>, na::Dyn, VecStorage<T, Const<C>, na::Dyn>>>;
-
-type DynParamTable = Vec<(String, Vec<(f32, f32)>)>;
+type DynParamTable = Vec<(String, Vec<(f64, f64)>)>;
 
 fn read_mat_from_file<T, const C: usize>(path: &str) -> MatReadResult<T, C>
 where
@@ -137,8 +136,8 @@ fn read_dyn_param(path: &str) -> io::Result<DynParamTable> {
         } else if !line.is_empty() {
             let pair: Vec<&str> = line.split_whitespace().collect();
             if pair.len() == 2 {
-                let time: f32 = pair[0].parse().expect("Failed to parse time");
-                let value: f32 = pair[1].parse().expect("Failed to parse value");
+                let time: f64 = pair[0].parse().expect("Failed to parse time");
+                let value: f64 = pair[1].parse().expect("Failed to parse value");
                 curr_entry.push((time, value));
             }
         }
@@ -173,6 +172,12 @@ impl Scene {
                 .get(key)
                 .and_then(|v| v.as_float())
                 .unwrap_or_else(|| panic!("Failed to read {}", key)) as f32
+        };
+        let read_f64 = |count: &Value, key: &str| {
+            count
+                .get(key)
+                .and_then(|v| v.as_float())
+                .unwrap_or_else(|| panic!("Failed to read {}", key))
         };
         let read_string = |count: &Value, key: &str| {
             count
@@ -211,7 +216,9 @@ impl Scene {
         let stitch_ind_path = format!("{}/bin/stitch_ind.bin", args.path);
         let stitch_w_path = format!("{}/bin/stitch_w.bin", args.path);
 
-        let vert_mat = read_mat_from_file::<f32, 3>(&vert_path).expect("Failed to read vert");
+        let vert_mat = read_mat_from_file::<f64, 3>(&vert_path)
+            .expect("Failed to read vert")
+            .map(|x| x as f32);
         let vel_mat = read_mat_from_file::<f32, 3>(&vel_path).expect("Failed to read velocity");
         let uv_mat = if std::path::Path::new(&uv_path).exists() {
             let mat = read_mat_from_file::<f32, 2>(&uv_path).expect("Failed to read uv");
@@ -236,7 +243,9 @@ impl Scene {
             Matrix4xX::<usize>::zeros(0)
         };
         let static_vert_mat = if n_static_vert > 0 {
-            read_mat_from_file::<f32, 3>(&static_vert_path).expect("Failed to read static_vert")
+            read_mat_from_file::<f64, 3>(&static_vert_path)
+                .expect("Failed to read static_vert")
+                .map(|x| x as f32)
         } else {
             Matrix3xX::<f32>::zeros(0)
         };
@@ -275,13 +284,15 @@ impl Scene {
                 for j in 0..n_keyframe {
                     let target_path = format!("{}/{}.bin", pin_dir, j);
                     target.push(
-                        read_mat_from_file::<f32, 3>(&target_path).expect("Failed to read target"),
+                        read_mat_from_file::<f64, 3>(&target_path)
+                            .expect("Failed to read target")
+                            .map(|x| x as f32),
                     );
                 }
             }
             let pin_ind = read_vec::<usize>(&pin_ind_path);
             let pin_timing =
-                read_vec::<f32>(format!("{}/bin/pin-timing-{}.bin", args.path, i).as_str());
+                read_vec::<f64>(format!("{}/bin/pin-timing-{}.bin", args.path, i).as_str());
             assert_eq!(pin_ind.len(), n_pin as usize);
             assert_eq!(pin_timing.len(), target.len());
 
@@ -301,9 +312,9 @@ impl Scene {
                     let axis_y = read_f32(entry, "axis_y");
                     let axis_z = read_f32(entry, "axis_z");
                     let angular_velocity = read_f32(entry, "angular_velocity");
-                    let t_start = read_f32(entry, "t_start");
-                    let t_end = read_f32(entry, "t_end");
-                    let center = Vector3::new(center_x, center_y, center_z);
+                    let t_start = read_f64(entry, "t_start");
+                    let t_end = read_f64(entry, "t_end");
+                    let center = Vector3::new(center_x, center_y, center_z).map(f32::from);
                     let axis = Vector3::new(axis_x, axis_y, axis_z);
                     spin.push(Spin {
                         center,
@@ -340,10 +351,11 @@ impl Scene {
                 let mut normal = Vector3::new(nx, ny, nz);
                 normal.normalize_mut();
                 let position =
-                    read_mat_from_file::<f32, 3>(&format!("{}/bin/wall-pos-{}.bin", args.path, i))
-                        .expect("Failed to read pos_path");
+                    read_mat_from_file::<f64, 3>(&format!("{}/bin/wall-pos-{}.bin", args.path, i))
+                        .expect("Failed to read pos_path")
+                        .map(|x| x as f32);
                 let wall_timing =
-                    read_vec::<f32>(&format!("{}/bin/wall-timing-{}.bin", args.path, i));
+                    read_vec::<f64>(&format!("{}/bin/wall-timing-{}.bin", args.path, i));
                 assert_eq!(position.ncols(), n_keyframe as usize);
                 assert_eq!(wall_timing.len(), n_keyframe);
                 wall.push(InvisibleWall {
@@ -366,10 +378,11 @@ impl Scene {
             let transition = read_string(count, "transition");
             let n_keyframe = read_usize(count, "keyframe");
             let center =
-                read_mat_from_file::<f32, 3>(&format!("{}/bin/sphere-pos-{}.bin", args.path, i))
-                    .expect("Failed to read sphere pos_path");
+                read_mat_from_file::<f64, 3>(&format!("{}/bin/sphere-pos-{}.bin", args.path, i))
+                    .expect("Failed to read sphere pos_path")
+                    .map(|x| x as f32);
             let radius = read_vec::<f32>(&format!("{}/bin/sphere-radius-{}.bin", args.path, i));
-            let timing = read_vec::<f32>(&format!("{}/bin/sphere-timing-{}.bin", args.path, i));
+            let timing = read_vec::<f64>(&format!("{}/bin/sphere-timing-{}.bin", args.path, i));
             assert_eq!(center.ncols(), n_keyframe);
             assert_eq!(radius.len(), n_keyframe);
             assert_eq!(timing.len(), n_keyframe);
@@ -442,23 +455,23 @@ impl Scene {
             CollisionMesh::new()
         };
         let calc_coefficient =
-            |time: f64, timings: &[f32], transition: &str| -> ([usize; 2], f32) {
+            |time: f64, timings: &[f64], transition: &str| -> ([usize; 2], f32) {
                 if timings.is_empty() {
                     ([0, 0], 1.0)
                 } else {
-                    let last_time = timings[timings.len() - 1] as f64;
+                    let last_time = timings[timings.len() - 1];
                     if time > last_time {
                         ([timings.len() - 1, timings.len() - 1], 1.0)
                     } else {
                         for i in 0..timings.len() - 1 {
-                            let t0 = timings[i] as f64;
-                            let t1 = timings[i + 1] as f64;
+                            let t0 = timings[i];
+                            let t1 = timings[i + 1];
                             if time >= t0 && time < t1 {
-                                let mut w: f32 = (time - t0) as f32 / (t1 - t0) as f32;
+                                let mut w = (time - t0) / (t1 - t0);
                                 if transition == "smooth" {
                                     w = w * w * (3.0 - 2.0 * w);
                                 }
-                                return ([i, i + 1], w);
+                                return ([i, i + 1], w as f32);
                             }
                         }
                         panic!("Failed to calculate coefficient")
@@ -475,7 +488,7 @@ impl Scene {
                         (false, position)
                     } else {
                         assert_eq!(pin.timing.len(), pin.target.len());
-                        let last_time = pin.timing[pin.timing.len() - 1] as f64;
+                        let last_time = pin.timing[pin.timing.len() - 1];
                         if time > last_time && pin.unpin {
                             (true, None)
                         } else {
@@ -488,21 +501,20 @@ impl Scene {
                         }
                     }
                 };
-                let time = time as f32;
                 for spin in pin.spin.iter() {
                     let time = time.min(spin.t_end);
                     if time > spin.t_start {
-                        let angle = spin.angular_velocity / 180.0
-                            * std::f32::consts::PI
+                        let angle = spin.angular_velocity as f64 / 180.0
+                            * std::f64::consts::PI
                             * (time - spin.t_start);
-                        let axis = spin.axis / spin.axis.norm();
+                        let axis = (spin.axis / spin.axis.norm()).map(f32::from);
                         let cos_theta = angle.cos();
                         let sin_theta = angle.sin();
                         let p = position.unwrap_or_else(|| self.vert.column(ind).into());
                         let p = p - spin.center;
-                        let rotated = p * cos_theta
-                            + axis.cross(&p) * sin_theta
-                            + axis * axis.dot(&p) * (1.0 - cos_theta);
+                        let rotated = p * (cos_theta as f32)
+                            + axis.cross(&p) * (sin_theta as f32)
+                            + axis * axis.dot(&p) * (1.0 - cos_theta) as f32;
                         position = Some(rotated + spin.center);
                         kinematic = true;
                     }
@@ -600,16 +612,13 @@ impl Scene {
         }
     }
 
-    pub fn update_param(&self, _: &Args, time: f64, param: &mut ParamSet) {
-        let mut time = time as f32;
+    pub fn update_param(&self, _: &Args, mut time: f64, param: &mut ParamSet) {
         for (title, entries) in self.dyn_args.iter() {
-            let mut max_time = 0.0_f32;
-            for (t, _) in entries.iter() {
-                max_time = max_time.max(*t);
-            }
-            if time > max_time {
-                time = max_time;
-            }
+            time = time.min(
+                entries
+                    .iter()
+                    .fold(0.0_f64, |max_time, (t, _)| max_time.max(*t)),
+            );
             for i in 0..entries.len() - 1 {
                 let (t0, v0) = entries[i];
                 let (t1, v1) = entries[i + 1];
@@ -617,10 +626,10 @@ impl Scene {
                     let w = (time - t0) / (t1 - t0);
                     let val = v0 * (1.0 - w) + v1 * w;
                     match title.as_str() {
-                        "gravity" => param.gravity = Vec3f::new(0.0, val, 0.0),
-                        "dt" => param.dt = val,
-                        "playback" => param.playback = val,
-                        "friction" => param.friction = val,
+                        "gravity" => param.gravity = Vec3f::new(0.0, val as f32, 0.0),
+                        "dt" => param.dt = val as f32,
+                        "playback" => param.playback = val as f32,
+                        "friction" => param.friction = val as f32,
                         _ => (),
                     }
                 }

@@ -12,6 +12,7 @@ from ._utils_ import Utils
 import pickle
 import os
 import shutil
+from typing import Optional
 
 
 class App:
@@ -72,9 +73,12 @@ class App:
         """
         self._extra = Extra()
         self._name = name
-        self._root = os.path.expanduser(
-            os.path.join("~", ".local", "share", "ppf-cts", name)
-        )
+        if self.ci:
+            self._root = Utils.get_ci_dir()
+        else:
+            self._root = os.path.expanduser(
+                os.path.join("~", ".local", "share", "ppf-cts", name)
+            )
         self._path = os.path.join(self._root, "app.pickle")
         proj_root = App.get_proj_root()
         if cache_dir:
@@ -95,15 +99,6 @@ class App:
             self._asset = AssetManager()
             self._scene = SceneManager(self._plot, self.asset, self.save)
             self.mesh = MeshManager(self.cache_dir)  #: MeshManager: The mesh manager.
-
-    @property
-    def CI(self) -> bool:
-        """Determine if the code is running in a CI environment.
-
-        Returns:
-            bool: True if the code is running in a CI environment, False otherwise.
-        """
-        return Utils.in_CI()
 
     @property
     def plot(self) -> PlotManager:
@@ -150,6 +145,31 @@ class App:
         """
         return self._session
 
+    @property
+    def ci(self) -> bool:
+        """Check if the code is running in a CI environment.
+
+        Returns:
+            result (bool): True if the code is running in a CI environment, False otherwise.
+        """
+        ci_name = Utils.ci_name()
+        if ci_name is not None:
+            return True
+        else:
+            return False
+
+    @property
+    def ci_dir(self) -> Optional[str]:
+        """Get the path to the CI directory.
+
+        Returns:
+        path (str): The path to the CI directory.
+        """
+        if self.ci:
+            return Utils.get_ci_dir()
+        else:
+            return None
+
     def clear(self) -> "App":
         """Clears the application state."""
         self.asset.clear()
@@ -163,11 +183,12 @@ class App:
         return self
 
     def save(self) -> "App":
-        """Saves the application state."""
-        pickle.dump(
-            (self.asset, self._scene, self.mesh, self._session, self._plot),
-            open(self._path, "wb"),
-        )
+        if not self.ci:
+            """Saves the application state."""
+            pickle.dump(
+                (self.asset, self._scene, self.mesh, self._session, self._plot),
+                open(self._path, "wb"),
+            )
         return self
 
     def clear_cache(self) -> "App":

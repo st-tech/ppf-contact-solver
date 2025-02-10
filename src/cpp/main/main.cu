@@ -18,7 +18,6 @@
 #include <limits>
 
 namespace tmp {
-
 Vec<Vec3f> eval_x;
 Vec<Vec3f> tmp_eval_x;
 Vec<Vec3f> target;
@@ -218,7 +217,6 @@ StepResult advance() {
     SimpleLog logging("advance");
 
     StepResult result;
-    result.retry_count = 0;
     result.pcg_success = true;
     result.ccd_success = true;
     result.intersection_free = true;
@@ -242,7 +240,6 @@ StepResult advance() {
     const unsigned vertex_count = host_data.vertex.curr.size;
     const unsigned shell_face_count = host_dataset.shell_face_count;
     const unsigned tet_count = host_data.mesh.mesh.tet.size;
-    const float strain_limit_sum = prm.strain_limit_tau + prm.strain_limit_eps;
 
     SimpleLog::set(prm.time);
 
@@ -268,7 +265,6 @@ StepResult advance() {
     // Maximum velocity of all the vertices in the mesh.
     logging.mark("max_u", max_u);
 
-    float total_shell_mass = 0.0f;
     if (shell_face_count) {
         tmp_scalar.clear();
         DISPATCH_START(shell_face_count)
@@ -279,7 +275,6 @@ StepResult advance() {
         } DISPATCH_END;
     }
 
-    float total_solid_mass = 0.0f;
     if (tet_count) {
         tmp_scalar.clear();
         DISPATCH_START(tet_count)
@@ -290,7 +285,7 @@ StepResult advance() {
         } DISPATCH_END;
     }
 
-    float dt = param->playback * param->dt;
+    float dt = param->dt * param->playback;
 
     // Name: Step Size
     // Format: list[(vid_time,float)]
@@ -351,313 +346,282 @@ StepResult advance() {
         } DISPATCH_END;
     };
 
-    unsigned retry_count(0);
+    compute_target(dt);
+
+    eval_x.copy(data.vertex.curr);
+
+    double toi_advanced = 0.0f;
+    unsigned step(1);
+    bool final_step(false);
+
     while (true) {
-        compute_target(dt);
+        if (final_step) {
+            logging.message("------ error reduction step ------");
+        } else {
+            logging.message("------ newton step %u ------", step);
+        }
 
-        eval_x.copy(data.vertex.curr);
+        dyn_hess.clear();
+        diag_hess.clear(Mat3x3f::Zero());
+        fixed_hess.clear();
+        force.clear();
+        dx.clear();
 
-        float toi_advanced = 0.0f;
-        unsigned step(1);
-        bool final_step(false);
-        bool retry(false);
+        if (final_step) {
+            dt *= toi_advanced;
+            compute_target(dt);
+        }
 
-        while (true) {
-            if (final_step) {
-                logging.message("------ error reduction step ------");
-            } else {
-                logging.message("------ newton step %u ------", step);
+        // Name: Matrix Assembly Time
+        // Format: list[(vid_time,ms)]
+        // Description:
+        // Time consumed for assembling the global matrix
+        // for the linear system solver per Newton's step.
+        logging.push("matrix assembly");
+
+        DISPATCH_START(vertex_count)
+        [data, eval_x, kinematic, dx, target, prm,
+         dt] __device__(unsigned i) mutable {
+            if (kinematic.vertex[i].active) {
+                Map<Vec3f>(dx.data + 3 * i) = eval_x[i] - target[i];
             }
+        } DISPATCH_END;
 
-            dyn_hess.clear();
-            diag_hess.clear(Mat3x3f::Zero());
-            fixed_hess.clear();
-            force.clear();
-            dx.clear();
+        energy::embed_momentum_force_hessian(data, eval_x, kinematic, velocity,
+                                             dt, target, force, diag_hess, prm);
 
-            if (final_step) {
-                dt *= toi_advanced;
-                compute_target(dt);
-            }
+        energy::embed_elastic_force_hessian(data, eval_x, kinematic, force,
+                                            fixed_hess, dt, prm);
 
-            // Name: Matrix Assembly Time
-            // Format: list[(vid_time,ms)]
-            // Description:
-            // Time consumed for assembling the global matrix
-            // for the linear system solver per Newton's step.
-            logging.push("matrix assembly");
+        if (host_data.constraint.stitch.size) {
+            energy::embed_stitch_force_hessian(data, eval_x, force, fixed_hess,
+                                               prm);
+        }
 
+        tmp_fixed.copy(fixed_hess);
+
+        if (prm.strain_limit_eps && data.shell_face_count > 0) {
+            strainlimiting::embed_strainlimiting_force_hessian(
+                data, eval_x, kinematic, force, tmp_fixed, fixed_hess, prm);
+        }
+
+        unsigned num_contact = 0;
+        float dyn_consumed = 0.0f;
+        unsigned max_nnz_row = 0;
+        contact::update_aabb(host_data, data, eval_x, eval_x,
+                             tmp::kinematic.vertex, prm);
+        num_contact += contact::embed_contact_force_hessian(
+            data, eval_x, kinematic, force, tmp_fixed, fixed_hess, dyn_hess,
+            max_nnz_row, dyn_consumed, dt, prm);
+
+        // Name: Consumption Ratio of Dynamic Matrix Assembly Memory
+        // Format: list[(vid_time,float)]
+        // Description:
+        // The GPU memory for the dynamic matrix assembly for contact is
+        // pre-allocated.
+        // This consumed ratio is the ratio of the memory actually used
+        // for the dynamic matrix assembly. If the ratio exceeds 1.0,
+        // simulation runs out of memory.
+        // One may carefully monitor this value to determine how much
+        // memory is required for the simulation.
+        // This consumption is only related to contacts and does not
+        // affect elastic or inertia terms.
+        logging.mark("dyn_consumed", dyn_consumed);
+
+        // Name: Max Row Count for the Contact Matrix
+        // Format: list[(vid_time,int)]
+        // Description:
+        // Records the maximum row count for the contact matrix.
+        logging.mark("max_nnz_row", max_nnz_row);
+
+        num_contact += contact::embed_constraint_force_hessian(
+            data, eval_x, kinematic, force, tmp_fixed, fixed_hess, dt, prm);
+
+        // Name: Total Contact Count
+        // Format: list[(vid_time,int)]
+        // Description:
+        // Maximal contact count at a Newton's step.
+        logging.mark("num_contact", num_contact);
+        logging.pop();
+
+        unsigned iter;
+        float reresid;
+
+        // Name: Linear Solve Time
+        // Format: list[(vid_time,ms)]
+        // Map: pcg_linsolve
+        // Description:
+        // Total PCG linear solve time per Newton's step.
+        logging.push("linsolve");
+
+        bool success =
+            solver::solve(dyn_hess, fixed_hess, diag_hess, force, prm.cg_tol,
+                          prm.cg_max_iter, dx, iter, reresid);
+        logging.pop();
+
+        // Name: Linear Solve Iteration Count
+        // Format: list[(vid_time,int)]
+        // Map: pcg_iter
+        // Description:
+        // Count of the PCG linear solve iterations per Newton's step.
+        logging.mark("iter", iter);
+
+        // Name: Linear Solve Relative Residual
+        // Format: list[(vid_time,float)]
+        // Map: pcg_resid
+        // Description:
+        // Relative Residual of the PCG linear solve iterations per Newton's
+        // step.
+        logging.mark("reresid", reresid);
+
+        if (!success) {
+            logging.message("### cg failed");
+            result.pcg_success = false;
+            break;
+        }
+
+        tmp_scalar.clear();
+        DISPATCH_START(vertex_count)
+        [dx, tmp_scalar] __device__(unsigned i) mutable {
+            tmp_scalar[i] = Map<Vec3f>(dx.data + 3 * i).norm();
+        } DISPATCH_END;
+
+        float max_dx = utility::max_array(tmp_scalar.data, vertex_count, 0.0f);
+
+        // Name: Maximal Magnitude of Search Direction
+        // Format: list[(vid_time,float)]
+        // Map: max_search_dir
+        // Description:
+        // Maximum magnitude of the search direction in the Newton's step.
+        logging.mark("max_dx", max_dx);
+
+        tmp_eval_x.copy(eval_x);
+        DISPATCH_START(vertex_count)
+        [eval_x, data, dx] __device__(unsigned i) mutable {
+            eval_x[i] -= Map<Vec3f>(dx.data + 3 * i);
+        } DISPATCH_END;
+
+        if (param->fix_xz) {
             DISPATCH_START(vertex_count)
-            [data, eval_x, kinematic, dx, target, prm,
-             dt] __device__(unsigned i) mutable {
-                if (kinematic.vertex[i].active) {
-                    Map<Vec3f>(dx.data + 3 * i) = eval_x[i] - target[i];
+            [eval_x, data, prm] __device__(unsigned i) mutable {
+                if (eval_x[i][1] > prm.fix_xz) {
+                    float y = fmin(1.0f, eval_x[i][1] - prm.fix_xz);
+                    Vec3f z = data.vertex.prev[i];
+                    eval_x[i][0] -= y * (eval_x[i][0] - z[0]);
+                    eval_x[i][2] -= y * (eval_x[i][2] - z[2]);
                 }
             } DISPATCH_END;
+        }
 
-            energy::embed_momentum_force_hessian(data, eval_x, kinematic,
-                                                 velocity, dt, target, force,
-                                                 diag_hess, prm);
-
-            energy::embed_elastic_force_hessian(data, eval_x, kinematic, force,
-                                                fixed_hess, dt, prm);
-
-            if (host_data.constraint.stitch.size) {
-                energy::embed_stitch_force_hessian(data, eval_x, force,
-                                                   fixed_hess, prm);
-            }
-
-            tmp_fixed.copy(fixed_hess);
-
-            if (strain_limit_sum && data.shell_face_count > 0) {
-                strainlimiting::embed_strainlimiting_force_hessian(
-                    data, eval_x, kinematic, force, tmp_fixed, fixed_hess, prm);
-            }
-
-            unsigned num_contact = 0;
-            float dyn_consumed;
-            unsigned max_nnz_row;
-            contact::update_aabb(host_data, data, eval_x, eval_x,
-                                 tmp::kinematic.vertex, prm);
-            num_contact += contact::embed_contact_force_hessian(
-                data, eval_x, kinematic, force, tmp_fixed, fixed_hess, dyn_hess,
-                max_nnz_row, dyn_consumed, dt, prm);
-
-            // Name: Consumption Ratio of Dynamic Matrix Assembly Memory
-            // Format: list[(vid_time,float)]
-            // Description:
-            // The GPU memory for the dynamic matrix assembly for contact is
-            // pre-allocated.
-            // This consumed ratio is the ratio of the memory actually used
-            // for the dynamic matrix assembly. If the ratio exceeds 1.0,
-            // simulation runs out of memory.
-            // One may carefully monitor this value to determine how much
-            // memory is required for the simulation.
-            // This consumption is only related to contacts and does not
-            // affect elastic or inertia terms.
-            logging.mark("dyn_consumed", dyn_consumed);
-
-            // Name: Max Row Count for the Contact Matrix
-            // Format: list[(vid_time,int)]
-            // Description:
-            // Records the maximum row count for the contact matrix.
-            logging.mark("max_nnz_row", max_nnz_row);
-
-            num_contact += contact::embed_constraint_force_hessian(
-                data, eval_x, kinematic, force, tmp_fixed, fixed_hess, dt, prm);
-
-            // Name: Total Contact Count
-            // Format: list[(vid_time,int)]
-            // Description:
-            // Maximal contact count at a Newton's step.
-            logging.mark("num_contact", num_contact);
-            logging.pop();
-
-            unsigned iter;
-            float reresid;
-
-            // Name: Linear Solve Time
-            // Format: list[(vid_time,ms)]
-            // Map: pcg_linsolve
-            // Description:
-            // Total PCG linear solve time per Newton's step.
-            logging.push("linsolve");
-
-            bool success =
-                solver::solve(dyn_hess, fixed_hess, diag_hess, force,
-                              prm.cg_tol, prm.cg_max_iter, dx, iter, reresid);
-            logging.pop();
-
-            // Name: Linear Solve Iteration Count
-            // Format: list[(vid_time,int)]
-            // Map: pcg_iter
-            // Description:
-            // Count of the PCG linear solve iterations per Newton's step.
-            logging.mark("iter", iter);
-
-            // Name: Linear Solve Relative Residual
-            // Format: list[(vid_time,float)]
-            // Map: pcg_resid
-            // Description:
-            // Relative Residual of the PCG linear solve iterations per Newton's
-            // step.
-            logging.mark("reresid", reresid);
-
-            if (!success) {
-                logging.message("### cg failed");
-                if (param->enable_retry && dt > DT_MIN) {
-                    retry = true;
-                } else {
-                    result.pcg_success = false;
-                }
-                break;
-            }
-
-            tmp_scalar.clear();
-            DISPATCH_START(vertex_count)
-            [dx, tmp_scalar] __device__(unsigned i) mutable {
-                tmp_scalar[i] = Map<Vec3f>(dx.data + 3 * i).norm();
-            } DISPATCH_END;
-
-            float max_dx =
-                utility::max_array(tmp_scalar.data, vertex_count, 0.0f);
-
-            // Name: Maximal Magnitude of Search Direction
-            // Format: list[(vid_time,float)]
-            // Map: max_search_dir
-            // Description:
-            // Maximum magnitude of the search direction in the Newton's step.
-            logging.mark("max_dx", max_dx);
-
-            tmp_eval_x.copy(eval_x);
-            DISPATCH_START(vertex_count)
-            [eval_x, data, dx] __device__(unsigned i) mutable {
-                eval_x[i] -= Map<Vec3f>(dx.data + 3 * i);
-            } DISPATCH_END;
-
-            if (param->fix_xz) {
-                DISPATCH_START(vertex_count)
-                [eval_x, data, prm] __device__(unsigned i) mutable {
-                    if (eval_x[i][1] > prm.fix_xz) {
-                        float y = fmin(1.0f, eval_x[i][1] - prm.fix_xz);
-                        Vec3f z = data.vertex.prev[i];
-                        eval_x[i][0] = (1.0f - y) * eval_x[i][0] + y * z[0];
-                        eval_x[i][2] = (1.0f - y) * eval_x[i][2] + y * z[2];
-                    }
-                } DISPATCH_END;
-            }
-
-            // Name: Line Search Time
-            // Format: list[(vid_time,ms)]
-            // Description:
-            // Line search time per Newton's step.
-            // CCD is performed to find the maximal feasible substep without
-            // collision.
-            logging.push("line search");
-            contact::update_aabb(host_data, data, tmp_eval_x, eval_x,
-                                 tmp::kinematic.vertex, prm);
-            float SL_toi = 1.0f;
-            float toi =
-                contact::line_search(data, kinematic, tmp_eval_x, eval_x, prm);
-            if (strain_limit_sum && shell_face_count > 0) {
-                SL_toi = strainlimiting::line_search(
-                    data, kinematic, eval_x, tmp_eval_x, tmp_scalar, prm);
-                toi = fminf(toi, SL_toi);
-                // Name: Strain Limiting Time of Impact
-                // Format: list[(vid_time,float)]
-                // Description:
-                // Time of impact (TOI) per Newton's step, encoding the
-                // maximal feasible step size without exceeding
-                // strain limits.
-                logging.mark("SL_toi", SL_toi);
-            }
-            logging.pop();
-
-            // Name: Time of Impact
+        // Name: Line Search Time
+        // Format: list[(vid_time,ms)]
+        // Description:
+        // Line search time per Newton's step.
+        // CCD is performed to find the maximal feasible substep without
+        // collision.
+        logging.push("line search");
+        contact::update_aabb(host_data, data, tmp_eval_x, eval_x,
+                             tmp::kinematic.vertex, prm);
+        float SL_toi = 1.0f;
+        float toi = 1.0f;
+        toi = fmin(toi, contact::line_search(data, kinematic, tmp_eval_x,
+                                             eval_x, prm));
+        if (prm.strain_limit_eps && shell_face_count > 0) {
+            SL_toi = strainlimiting::line_search(data, kinematic, eval_x,
+                                                 tmp_eval_x, tmp_scalar, prm);
+            toi = fminf(toi, SL_toi);
+            // Name: Strain Limiting Time of Impact
             // Format: list[(vid_time,float)]
             // Description:
             // Time of impact (TOI) per Newton's step, encoding the
-            // maximal feasible step size without collision or exceeding strain
-            // limits.
-            logging.mark("toi", toi);
-
-            if (toi <= std::numeric_limits<float>::epsilon()) {
-                if (param->enable_retry && dt > DT_MIN) {
-                    retry = true;
-                } else {
-                    logging.message("### ccd failed (toi: %.2e)", toi);
-                    if (SL_toi < 1.0f) {
-                        logging.message("strain limiting toi: %.2e", SL_toi);
-                    }
-                    result.ccd_success = false;
-                }
-                break;
-            }
-
-            if (!final_step) {
-                toi_advanced += fmaxf(0.0f, 1.0f - toi_advanced) * toi;
-            }
-
-            DISPATCH_START(vertex_count)
-            [eval_x, tmp_eval_x, data, toi] __device__(unsigned i) mutable {
-                eval_x[i] = (1.0f - toi) * tmp_eval_x[i] + toi * eval_x[i];
-            } DISPATCH_END;
-
-            if (final_step) {
-                break;
-            } else if (toi_advanced >= param->target_toi &&
-                       step >= param->min_newton_steps) {
-                final_step = true;
-            } else {
-                logging.message("* toi_advanced: %.2e", toi_advanced);
-                ++step;
-            }
+            // maximal feasible step size without exceeding
+            // strain limits.
+            logging.mark("SL_toi", SL_toi);
         }
-        if (retry) {
-            dt *= param->dt_decrease_factor;
-            logging.message("**** retry requested. dt: %.2e", dt);
-            retry_count++;
-        } else {
-            if (result.success()) {
-                // Name: Time to Check Intersection
-                // Format: list[(vid_time,ms)]
-                // Map: runtime_intersection_check
-                // Description:
-                // At the end of step, an explicit intersection check is
-                // performed. This number records the consumed time in
-                // milliseconds.
-                logging.push("check intersection");
-                if (!contact::check_intersection(data, kinematic, eval_x)) {
-                    logging.message("### intersection detected");
-                    result.intersection_free = false;
-                }
-                logging.pop();
-                // Name: Advanced Fractional Step Size
-                // Format: list[(vid_time,float)]
-                // Description:
-                // This is an accumulated TOI of all the Newton's steps.
-                // This number is multiplied by the time step to yield the
-                // actual step size advanced in the simulation.
-                logging.mark("toi_advanced", toi_advanced);
+        logging.pop();
 
-                // Name: Total Count of Consumed Newton's Steps
-                // Format: list[(vid_time,int)]
-                // Description:
-                // Total count of Newton's steps consumed in the single step.
-                logging.mark("newton_steps", step);
+        // Name: Time of Impact
+        // Format: list[(vid_time,float)]
+        // Description:
+        // Time of impact (TOI) per Newton's step, encoding the
+        // maximal feasible step size without collision or exceeding strain
+        // limits.
+        logging.mark("toi", toi);
 
-                // Name: Final Step Size
-                // Format: list[(vid_time,float)]
-                // Description:
-                // Actual step size advanced in the simulation.
-                // For most of the cases, this value is the same as the step
-                // size specified in the parameter. However, the actual step
-                // size is reduced by `toi_advanced` and may be also reduced
-                // when the option `enable_retry` is set to
-                // true and the PCG fails.
-                logging.mark("final_dt", dt);
-
-                param->prev_dt = dt;
-                param->time += param->prev_dt / param->playback;
-
-                dev_dataset.vertex.prev.copy(dev_dataset.vertex.curr);
-                dev_dataset.vertex.curr.copy(eval_x);
-
-                result.time = param->time;
+        if (toi <= std::numeric_limits<float>::epsilon()) {
+            logging.message("### ccd failed (toi: %.2e)", toi);
+            if (SL_toi < 1.0f) {
+                logging.message("strain limiting toi: %.2e", SL_toi);
             }
+            result.ccd_success = false;
             break;
         }
+
+        if (!final_step) {
+            toi_advanced +=
+                std::max(0.0, 1.0 - toi_advanced) * static_cast<double>(toi);
+        }
+
+        DISPATCH_START(vertex_count)
+        [eval_x, tmp_eval_x, data, toi] __device__(unsigned i) mutable {
+            Vec3f d = toi * (eval_x[i] - tmp_eval_x[i]);
+            eval_x[i] = tmp_eval_x[i] + d;
+        } DISPATCH_END;
+
+        if (final_step) {
+            break;
+        } else if (toi_advanced >= param->target_toi &&
+                   step >= param->min_newton_steps) {
+            final_step = true;
+        } else {
+            logging.message("* toi_advanced: %.2e", toi_advanced);
+            ++step;
+        }
     }
-    if (param->enable_retry) {
-        // Name: Total Retry Count
+    if (result.success()) {
+        // Name: Time to Check Intersection
+        // Format: list[(vid_time,ms)]
+        // Map: runtime_intersection_check
+        // Description:
+        // At the end of step, an explicit intersection check is
+        // performed. This number records the consumed time in
+        // milliseconds.
+        logging.push("check intersection");
+        if (!contact::check_intersection(data, kinematic, eval_x)) {
+            logging.message("### intersection detected");
+            result.intersection_free = false;
+        }
+        logging.pop();
+        // Name: Advanced Fractional Step Size
+        // Format: list[(vid_time,float)]
+        // Description:
+        // This is an accumulated TOI of all the Newton's steps.
+        // This number is multiplied by the time step to yield the
+        // actual step size advanced in the simulation.
+        logging.mark("toi_advanced", toi_advanced);
+
+        // Name: Total Count of Consumed Newton's Steps
         // Format: list[(vid_time,int)]
         // Description:
-        // When the PCG fails or line search fails and `enable_retry` is set to
-        // true, the whole step is retried with a reduced time step. This count
-        // records the total number of retries.
-        logging.mark("retry_count", retry_count);
+        // Total count of Newton's steps consumed in the single step.
+        logging.mark("newton_steps", step);
+
+        // Name: Final Step Size
+        // Format: list[(vid_time,float)]
+        // Description:
+        // Actual step size advanced in the simulation.
+        // For most of the cases, this value is the same as the step
+        // size specified in the parameter.
+        logging.mark("final_dt", dt);
+
+        param->prev_dt = dt;
+        param->time += static_cast<double>(param->prev_dt / param->playback);
+
+        dev_dataset.vertex.prev.copy(dev_dataset.vertex.curr);
+        dev_dataset.vertex.curr.copy(eval_x);
+
+        result.time = param->time;
     }
-    result.retry_count = retry_count;
     return result;
 }
 
@@ -670,13 +634,12 @@ void update_bvh(BVHSet bvh) {
 
 } // namespace main_helper
 
-extern "C" void set_log_path(const char *log_path, const char *data_dir) {
-    SimpleLog::setPath(log_path, data_dir);
+extern "C" void set_log_path(const char *data_dir) {
+    SimpleLog::setPath(data_dir);
 }
 
 DataSet malloc_dataset(DataSet dataset, ParamSet param) {
 
-    logging::info("cuda: dev_neighbor...");
     VertexNeighbor dev_vertex_neighbor = {
         mem::malloc_device(dataset.mesh.neighbor.vertex.face),
         mem::malloc_device(dataset.mesh.neighbor.vertex.hinge),
@@ -690,7 +653,6 @@ DataSet malloc_dataset(DataSet dataset, ParamSet param) {
     EdgeNeighbor dev_edge_neighbor = {
         mem::malloc_device(dataset.mesh.neighbor.edge.face)};
 
-    logging::info("cuda: dev_mesh_info...");
     MeshInfo dev_mesh_info = //
         {{
              mem::malloc_device(dataset.mesh.mesh.face),
@@ -709,14 +671,12 @@ DataSet malloc_dataset(DataSet dataset, ParamSet param) {
              mem::malloc_device(dataset.mesh.type.hinge),
          }};
 
-    logging::info("cuda: dev_prop_info...");
     PropSet dev_prop_info = {mem::malloc_device(dataset.prop.vertex),
                              mem::malloc_device(dataset.prop.rod),
                              mem::malloc_device(dataset.prop.face),
                              mem::malloc_device(dataset.prop.hinge),
                              mem::malloc_device(dataset.prop.tet)};
 
-    logging::info("cuda: tmp_collision_mesh...");
     CollisionMesh tmp_collision_mesh = dataset.constraint.mesh;
     {
         tmp_collision_mesh.vertex =
@@ -751,7 +711,6 @@ DataSet malloc_dataset(DataSet dataset, ParamSet param) {
         };
     }
 
-    logging::info("cuda: dev_constraint...");
     Constraint dev_constraint = {
         mem::malloc_device(dataset.constraint.fix),
         mem::malloc_device(dataset.constraint.pull),
@@ -761,7 +720,6 @@ DataSet malloc_dataset(DataSet dataset, ParamSet param) {
         tmp_collision_mesh,
     };
 
-    logging::info("cuda: bvh...");
     BVH face_bvh = {
         mem::malloc_device(dataset.bvh.face.node, param.bvh_alloc_factor),
         mem::malloc_device(dataset.bvh.face.level, param.bvh_alloc_factor),
@@ -776,17 +734,14 @@ DataSet malloc_dataset(DataSet dataset, ParamSet param) {
     };
     BVHSet dev_bvhset = {face_bvh, edge_bvh, vertex_bvh};
 
-    logging::info("cuda: inv_rest...");
     Vec<Mat2x2f> dev_inv_rest2x2 = mem::malloc_device(dataset.inv_rest2x2);
     Vec<Mat3x3f> dev_inv_rest3x3 = mem::malloc_device(dataset.inv_rest3x3);
 
-    logging::info("cuda: dev_vertex...");
     VertexSet dev_vertex = {
         mem::malloc_device(dataset.vertex.prev),
         mem::malloc_device(dataset.vertex.curr),
     };
 
-    logging::info("cuda: dev_index_table...");
     VecVec<unsigned> dev_fixed_index_table =
         mem::malloc_device(dataset.fixed_index_table);
     VecVec<Vec2u> dev_transpose_table =
@@ -809,7 +764,6 @@ DataSet malloc_dataset(DataSet dataset, ParamSet param) {
 }
 
 extern "C" void initialize(DataSet *dataset, ParamSet *param) {
-    logging::info("GPU::initialize");
 
     int num_device;
     CUDA_HANDLE_ERROR(cudaGetDeviceCount(&num_device));
@@ -825,13 +779,11 @@ extern "C" void initialize(DataSet *dataset, ParamSet *param) {
     main_helper::initialize(*dataset, dev_dataset, param);
 }
 
-extern "C" StepResult advance() {
-    logging::info("GPU::advance");
-    return main_helper::advance();
+extern "C" void advance(StepResult *result) {
+    *result = main_helper::advance();
 }
 
 extern "C" void fetch() {
-    logging::info("GPU::fetch");
     mem::copy_from_device_to_host(main_helper::dev_dataset.vertex.curr.data,
                                   main_helper::host_dataset.vertex.curr.data,
                                   main_helper::host_dataset.vertex.curr.size);
@@ -841,7 +793,6 @@ extern "C" void fetch() {
 }
 
 extern "C" void update_bvh(const BVHSet *bvh) {
-    logging::info("GPU::update_bvh");
     main_helper::host_dataset.bvh = *bvh;
     if (bvh->face.node.size) {
         mem::copy_to_device(bvh->face.node,
@@ -865,7 +816,6 @@ extern "C" void update_bvh(const BVHSet *bvh) {
 }
 
 extern "C" void fetch_dyn_counts(unsigned *n_value, unsigned *n_offset) {
-    logging::info("GPU::fetch_counts");
     unsigned nrow = tmp::dyn_hess.nrow;
     *n_offset = nrow + 1;
     CUDA_HANDLE_ERROR(cudaMemcpy(n_value,
@@ -874,17 +824,14 @@ extern "C" void fetch_dyn_counts(unsigned *n_value, unsigned *n_offset) {
 }
 
 extern "C" void fetch_dyn(unsigned *index, Mat3x3f *value, unsigned *offset) {
-    logging::info("GPU::fetch_dyn");
     tmp::dyn_hess.fetch(index, value, offset);
 }
 
 extern "C" void update_dyn(unsigned *index, unsigned *offset) {
-    logging::info("GPU::update_dyn");
     tmp::dyn_hess.update(index, offset);
 }
 
 extern "C" void update_constraint(const Constraint *constraint) {
-    logging::info("GPU::update_constraint");
     main_helper::host_dataset.constraint = *constraint;
     mem::copy_to_device(constraint->fix,
                         main_helper::dev_dataset.constraint.fix);

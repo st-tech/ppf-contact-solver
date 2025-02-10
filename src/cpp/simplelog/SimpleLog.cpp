@@ -14,7 +14,7 @@
 
 static char g_buffer[MAX_BUFFER_SIZE];
 static char g_small_buffer[SMALL_BUFFER_SIZE];
-static std::string g_path, g_data_directory_path;
+static std::string g_data_directory_path;
 static int g_depth = 0;
 static double g_time = 0.0;
 
@@ -41,10 +41,8 @@ static const char *tstr(uint64_t msec) {
     return g_small_buffer;
 }
 
-void SimpleLog::setPath(std::string path, std::string data_directory_path) {
-    g_path = path;
+void SimpleLog::setPath(std::string data_directory_path) {
     g_data_directory_path = data_directory_path;
-    message("* log path = %s", g_path.c_str());
     message("* data_directory_path path = %s", data_directory_path.c_str());
     mkdir(data_directory_path.c_str(), S_IRWXU | S_IRWXG | S_IROTH | S_IXOTH);
 }
@@ -67,15 +65,7 @@ void SimpleLog::message(std::string format, ...) {
     vsnprintf(g_buffer, MAX_BUFFER_SIZE, format.c_str(), args);
     va_end(args);
     printf("%s\n", g_buffer);
-    if (g_path.size()) {
-        FILE *fp = fopen(g_path.c_str(), "a");
-        if (fp) {
-            for (int i = 1; i < g_depth; ++i)
-                fprintf(fp, "   ");
-            fprintf(fp, "%s\n", g_buffer);
-            fclose(fp);
-        }
-    }
+    fflush(stdout);
 }
 //
 SimpleLog::SimpleLog(std::string name) {
@@ -112,6 +102,7 @@ SimpleLog::~SimpleLog() {
                     } else {
                         fprintf(fp, "%f %e\n", g_time, entry);
                     }
+                    fflush(stdout);
                 }
                 fclose(fp);
             }
@@ -123,6 +114,7 @@ void SimpleLog::check_empty(std::string file, int line) const {
     if (!m_stack.empty()) {
         fprintf(stderr, "ERROR: %s (L%d): stack is not empty\n", file.c_str(),
                 line);
+        fflush(stderr);
         assert(false);
     }
 }

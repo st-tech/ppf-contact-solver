@@ -189,14 +189,13 @@ unsigned exclusive_scan(unsigned *d_data, unsigned n) {
     static unsigned *d_block_sums = nullptr;
     static unsigned *h_block_sums = nullptr;
     if (d_block_sums == nullptr) {
-        CUDA_HANDLE_ERROR(cudaMalloc((void **)&d_block_sums,
-                                     num_blocks * sizeof(unsigned)));
+        CUDA_HANDLE_ERROR(
+            cudaMalloc((void **)&d_block_sums, num_blocks * sizeof(unsigned)));
         h_block_sums = new unsigned[num_blocks];
     }
     block_scan_kernel<<<num_blocks, BLOCK_SIZE,
                         BLOCK_SIZE * sizeof(unsigned)>>>(d_data, d_block_sums,
                                                          n);
-    CUDA_HANDLE_ERROR(cudaDeviceSynchronize());
     CUDA_HANDLE_ERROR(cudaMemcpy(h_block_sums, d_block_sums,
                                  num_blocks * sizeof(unsigned),
                                  cudaMemcpyDeviceToHost));

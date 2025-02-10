@@ -283,13 +283,12 @@ pub struct ParamSet {
     pub fitting: bool,
     pub air_friction: f32,
     pub air_density: f32,
-    pub strain_limit_tau: f32,
     pub strain_limit_eps: f32,
-    pub dt_decrease_factor: f32,
     pub contact_ghat: f32,
     pub contact_offset: f32,
     pub rod_offset: f32,
     pub constraint_ghat: f32,
+    pub constraint_tol: f32,
     pub prev_dt: f32,
     pub dt: f32,
     pub playback: f32,
@@ -300,11 +299,9 @@ pub struct ParamSet {
     pub stitch_stiffness: f32,
     pub cg_max_iter: u32,
     pub cg_tol: f32,
-    pub enable_retry: bool,
     pub line_search_max_t: f32,
     pub ccd_tol: f32,
     pub ccd_reduction: f32,
-    pub ccd_max_iters: u32,
     pub eiganalysis_eps: f32,
     pub friction: f32,
     pub friction_eps: f32,
@@ -320,12 +317,11 @@ pub struct ParamSet {
 }
 
 #[repr(C)]
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Default)]
 pub struct StepResult {
     pub time: f64,
     pub ccd_success: bool,
     pub pcg_success: bool,
-    pub retry_count: u32,
     pub intersection_free: bool,
 }
 

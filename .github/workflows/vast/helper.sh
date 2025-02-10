@@ -20,9 +20,17 @@ if [ "$ARG" = "create" ]; then
 elif [ "$ARG" = "run" ]; then
 
   SCRIPT_NAME=$2
+  NAME=$3
 
   echo "helper: run..."
-  bash .github/workflows/vast/run.sh run $SCRIPT_NAME
+  bash .github/workflows/vast/run.sh run $SCRIPT_NAME $NAME
+
+elif [ "$ARG" = "collect" ]; then
+
+  echo "helper: collect..."
+
+  NAME=$2
+  bash /tmp/vast-ci/collect.sh $NAME
 
 elif [ "$ARG" = "delete" ]; then
 

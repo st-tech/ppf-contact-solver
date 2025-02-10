@@ -18,9 +18,7 @@ __device__ Vec3f gradient(float dt, const Vec3f &x, const Vec3f &y) {
     return (x - y) / (dt * dt);
 }
 
-__device__ Mat3x3f hessian(float dt) {
-    return Mat3x3f::Identity() / (dt * dt);
-}
+__device__ Mat3x3f hessian(float dt) { return Mat3x3f::Identity() / (dt * dt); }
 
 } // namespace momentum
 

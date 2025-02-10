@@ -155,7 +155,11 @@ template <class T> struct Vec {
         return *this;
     }
     __device__ void atomic_add(unsigned i, const T &val) {
-        assert(i < size);
+        if (i >= size) {
+            printf("Vec: atomic_add i = %u, size = %u, sizeof(T) = %u\n", i,
+                   size, sizeof(T));
+            assert(false);
+        }
         if (val) {
             atomicAdd(&data[i], val);
         }

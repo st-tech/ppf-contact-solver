@@ -65,6 +65,17 @@ __device__ void solve_symm_eigen3x3(const Mat3x3f &matrix, Vec3f &eigenvalues,
     eigenvectors = result.eigvecs;
 }
 
+__device__ Svd3x2 svd3x2_shifted(const Mat3x2f &F) {
+    Mat2x2f A = F.transpose() * F - Mat2x2f::Identity();
+    eig_tuple_2x2 result = sym_eigsolve_2x2(A);
+    Mat2x2f V = result.eigvecs;
+    Mat3x2f U = F * V;
+    for (int i = 0; i < U.cols(); i++) {
+        U.col(i).normalize();
+    }
+    return {U, singular_vals_minus_one(F), V.transpose()};
+}
+
 __device__ Svd3x2 svd3x2(const Mat3x2f &F) {
     eig_tuple_2x2 result = sym_eigsolve_2x2(F.transpose() * F);
     Vec2f sigma = result.lambda;
@@ -111,29 +122,29 @@ __device__ Svd3x3 svd3x3_rv(const Mat3x3f &F) {
     return svd;
 }
 
-__device__ Mat3x2f make_diff_mat3x2() {
-    Mat3x2f result = Mat3x2f::Zero();
-    result(0, 0) = -1.0f;
-    result(0, 1) = -1.0f;
-    result(1, 0) = 1.0f;
-    result(2, 1) = 1.0f;
+template <typename T> __device__ SMat<T, 3, 2> make_diff_mat3x2() {
+    SMat<T, 3, 2> result = SMat<T, 3, 2>::Zero();
+    result(0, 0) = T(-1.0f);
+    result(0, 1) = T(-1.0f);
+    result(1, 0) = T(1.0f);
+    result(2, 1) = T(1.0f);
     return result;
 }
 
-__device__ Mat4x3f make_diff_mat4x3() {
-    Mat4x3f result = Mat4x3f::Zero();
-    result(0, 0) = -1.0f;
-    result(0, 1) = -1.0f;
-    result(0, 2) = -1.0f;
-    result(1, 0) = 1.0f;
-    result(2, 1) = 1.0f;
-    result(3, 2) = 1.0f;
+template <typename T> __device__ SMat<T, 4, 3> make_diff_mat4x3() {
+    SMat<T, 4, 3> result = SMat<T, 4, 3>::Zero();
+    result(0, 0) = T(-1.0f);
+    result(0, 1) = T(-1.0f);
+    result(0, 2) = T(-1.0f);
+    result(1, 0) = T(1.0f);
+    result(2, 1) = T(1.0f);
+    result(3, 2) = T(1.0f);
     return result;
 }
 
 __device__ Mat3x3f convert_force(const Mat3x2f &dedF,
                                  const Mat2x2f &inv_rest2x2) {
-    const Mat3x2f g = make_diff_mat3x2() * inv_rest2x2;
+    const Mat3x2f g = make_diff_mat3x2<float>() * inv_rest2x2;
     Mat3x3f result;
     for (unsigned i = 0; i < 3; ++i) {
         for (unsigned dim = 0; dim < 3; ++dim) {
@@ -145,7 +156,7 @@ __device__ Mat3x3f convert_force(const Mat3x2f &dedF,
 
 __device__ Mat3x4f convert_force(const Mat3x3f &dedF,
                                  const Mat3x3f &inv_rest3x3) {
-    const Mat4x3f g = make_diff_mat4x3() * inv_rest3x3;
+    const Mat4x3f g = make_diff_mat4x3<float>() * inv_rest3x3;
     Mat3x4f result;
     for (unsigned i = 0; i < 4; ++i) {
         for (unsigned dim = 0; dim < 3; ++dim) {
@@ -157,7 +168,7 @@ __device__ Mat3x4f convert_force(const Mat3x3f &dedF,
 
 __device__ Mat9x9f convert_hessian(const Mat6x6f &d2ed2f,
                                    const Mat2x2f &inv_rest2x2) {
-    const Mat3x2f g = make_diff_mat3x2() * inv_rest2x2;
+    const Mat3x2f g = make_diff_mat3x2<float>() * inv_rest2x2;
     Mat6x9f dfdx;
     for (unsigned j = 0; j < 9; ++j) {
         Mat3x3f dx_mat = Mat3x3f::Zero();
@@ -176,7 +187,7 @@ __device__ Mat9x9f convert_hessian(const Mat6x6f &d2ed2f,
 
 __device__ Mat12x12f convert_hessian(const Mat9x9f &d2ed2f,
                                      const Mat3x3f &inv_rest3x3) {
-    const Mat4x3f g = make_diff_mat4x3() * inv_rest3x3;
+    const Mat4x3f g = make_diff_mat4x3<float>() * inv_rest3x3;
     Mat9x12f dfdx;
     for (unsigned j = 0; j < 12; ++j) {
         Mat3x4f dx_mat = Mat3x4f::Zero();
@@ -195,12 +206,12 @@ __device__ Mat12x12f convert_hessian(const Mat9x9f &d2ed2f,
 
 __device__ Mat3x2f compute_deformation_grad(const Mat3x3f &x,
                                             const Mat2x2f &inv_rest2x2) {
-    return x * make_diff_mat3x2() * inv_rest2x2;
+    return (x * make_diff_mat3x2<float>()) * inv_rest2x2;
 }
 
 __device__ Mat3x3f compute_deformation_grad(const Mat3x4f &x,
                                             const Mat3x3f &inv_rest3x3) {
-    return x * make_diff_mat4x3() * inv_rest3x3;
+    return (x * make_diff_mat4x3<float>()) * inv_rest3x3;
 }
 
 __device__ float compute_face_area(const Mat3x3f &vertex) {

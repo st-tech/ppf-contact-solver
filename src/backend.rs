@@ -19,7 +19,7 @@ use log::*;
 use na::{Matrix2xX, Matrix3xX};
 
 extern "C" {
-    fn advance() -> StepResult;
+    fn advance(result: *mut StepResult);
     fn fetch();
     fn update_bvh(bvhset: *const BvhSet);
     fn fetch_dyn_counts(n_value: *mut u32, n_offset: *mut u32);
@@ -55,13 +55,12 @@ pub struct State {
 
 impl Backend {
     pub fn new(_: &Args, mesh: MeshSet) -> Self {
-        info!("initializing backend");
         let state = State {
             curr_vertex: mesh.vertex.clone(),
             prev_vertex: mesh.vertex.clone(),
             dyn_index: Vec::new(),
             dyn_offset: Vec::new(),
-            time: f64::EPSILON,
+            time: 0.0,
             prev_dt: 1.0,
             curr_frame: -1,
         };
@@ -129,10 +128,10 @@ impl Backend {
         let (result_sender, result_receiver) = mpsc::channel();
 
         std::thread::spawn(move || {
-            while let Ok((vertex, face, edge)) = task_receiver.recv() {
-                let face = builder::build_bvh(&vertex, Some(&face));
-                let edge = builder::build_bvh(&vertex, Some(&edge));
-                let vertex = builder::build_bvh::<1>(&vertex, None);
+            while let Ok((vertex, face, edge, vert_elm)) = task_receiver.recv() {
+                let face = builder::build_bvh(&vertex, &face);
+                let edge = builder::build_bvh(&vertex, &edge);
+                let vertex = builder::build_bvh(&vertex, &vert_elm);
                 let _ = result_sender.send(BvhSet { face, edge, vertex });
             }
         });
@@ -144,7 +143,6 @@ impl Backend {
             if !first_step {
                 match result_receiver.try_recv() {
                     Ok(bvh) => {
-                        log::info!("bvh update");
                         self.bvh = Box::new(Some(bvh));
                         unsafe {
                             update_bvh(self.bvh.as_ref().as_ref().unwrap());
@@ -153,12 +151,11 @@ impl Backend {
                             self.state.curr_vertex.clone(),
                             self.mesh.mesh.mesh.face.clone(),
                             self.mesh.mesh.mesh.edge.clone(),
+                            self.mesh.mesh.mesh.vertex.clone(),
                         );
                         task_sender.send(data).unwrap();
                     }
-                    Err(mpsc::TryRecvError::Empty) => {
-                        log::info!("bvh still building...");
-                    }
+                    Err(mpsc::TryRecvError::Empty) => {}
                     Err(mpsc::TryRecvError::Disconnected) => {
                         panic!("bvh thread disconnected");
                     }
@@ -205,11 +202,18 @@ impl Backend {
                     .truncate(true)
                     .open(path.clone())
                     .unwrap();
-                let data = self.state.curr_vertex.as_slice();
+                let surface_vert_count = self.mesh.mesh.mesh.vertex_count;
+                let data: Vec<f32> = self
+                    .state
+                    .curr_vertex
+                    .columns(0, surface_vert_count)
+                    .iter()
+                    .copied()
+                    .collect();
                 let buff = unsafe {
                     std::slice::from_raw_parts(
                         data.as_ptr() as *const u8,
-                        std::mem::size_of_val(data),
+                        data.len() * std::mem::size_of::<f32>(),
                     )
                 };
                 file.write_all(buff).unwrap();
@@ -225,20 +229,18 @@ impl Backend {
                 break;
             }
             scene.update_param(args, self.state.time, &mut param);
-            let result = unsafe { advance() };
+            let mut result = StepResult::default();
+            unsafe { advance(&mut result) };
             if !result.success() {
                 panic!("failed to advance");
             }
             self.state.time = result.time;
-            info!(
-                "frame = {} time = {:.4} seconds",
-                self.state.curr_frame, self.state.time
-            );
             if first_step {
                 let data = (
                     self.state.curr_vertex.clone(),
                     self.mesh.mesh.mesh.face.clone(),
                     self.mesh.mesh.mesh.edge.clone(),
+                    self.mesh.mesh.mesh.vertex.clone(),
                 );
                 task_sender.send(data).unwrap();
                 first_step = false;
@@ -251,12 +253,9 @@ impl Backend {
 
 fn write_current_time_to_file(file_path: &str) -> std::io::Result<()> {
     let now = Local::now();
-    let time_str = now.to_rfc3339(); // For example, "2024-12-23T12:34:56+00:00"
+    let time_str = now.to_rfc3339();
     let path = Path::new(file_path);
-    let mut file = OpenOptions::new()
-        .create(true) // Create the file if it doesn't exist
-        .append(true) // Append to the file if it exists
-        .open(path)?;
+    let mut file = OpenOptions::new().create(true).append(true).open(path)?;
     writeln!(file, "{}", time_str)?;
     Ok(())
 }

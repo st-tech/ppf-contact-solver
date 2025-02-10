@@ -19,7 +19,6 @@ using Vec4f = SVecf<4>;
 using Vec6f = SVecf<6>;
 using Vec9f = SVecf<9>;
 using Vec12f = SVecf<12>;
-using Vec12d = SVecf<12>;
 using Vec1u = SVecu<1>;
 using Vec2u = SVecu<2>;
 using Vec3u = SVecu<3>;
@@ -209,13 +208,12 @@ struct ParamSet {
     bool fitting;
     float air_friction;
     float air_density;
-    float strain_limit_tau;
     float strain_limit_eps;
-    float dt_decrease_factor;
     float contact_ghat;
     float contact_offset;
     float rod_offset;
     float constraint_ghat;
+    float constraint_tol;
     float prev_dt;
     float dt;
     float playback;
@@ -226,11 +224,9 @@ struct ParamSet {
     float stitch_stiffness;
     unsigned cg_max_iter;
     float cg_tol;
-    bool enable_retry;
     float line_search_max_t;
     float ccd_tol;
     float ccd_reduction;
-    unsigned ccd_max_iters;
     float eiganalysis_eps;
     float friction;
     float friction_eps;
@@ -249,7 +245,6 @@ struct StepResult {
     double time;
     bool ccd_success;
     bool pcg_success;
-    unsigned retry_count;
     bool intersection_free;
     bool success() const {
         return ccd_success && pcg_success && intersection_free;

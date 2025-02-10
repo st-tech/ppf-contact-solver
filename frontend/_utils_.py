@@ -28,10 +28,40 @@ class Utils:
             return False
 
     @staticmethod
-    def in_CI() -> bool:
-        """Determine if the code is running in a CI environment."""
+    def ci_name() -> Optional[str]:
+        """Determine if the code is running in a CI environment.
+
+        Returns:
+            name (str): The name of the CI environment, or an empty string if not in a CI environment.
+        """
         dirpath = os.path.dirname(os.path.abspath(__file__))
-        return os.path.exists(os.path.join(dirpath, ".CI"))
+        path = os.path.join(dirpath, ".CI")
+        if os.path.exists(path):
+            with open(path, "r") as f:
+                lines = f.readlines()
+                last_line = ""
+                if len(lines) > 0:
+                    last_line = lines[-1].strip()
+                if last_line == "":
+                    raise ValueError(
+                        "The .CI file is empty. Please add the name of the CI environment."
+                    )
+                else:
+                    return last_line
+        else:
+            return None
+
+    @staticmethod
+    def get_ci_root() -> str:
+        """Get the path to the CI directory."""
+        return os.path.join("/", "tmp", "ci")
+
+    @staticmethod
+    def get_ci_dir() -> str:
+        """Get the path to the CI local directory."""
+        ci_name = Utils.ci_name()
+        assert ci_name is not None
+        return os.path.join(Utils.get_ci_root(), ci_name)
 
     @staticmethod
     def get_gpu_count():

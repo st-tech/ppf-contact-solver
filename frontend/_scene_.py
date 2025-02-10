@@ -9,11 +9,15 @@ import shutil
 import os
 import colorsys
 from typing import Optional
+from ._utils_ import Utils
 from ._plot_ import PlotManager, Plot
 from ._asset_ import AssetManager
+from ._render_ import render, create_offscreen_renderer
 from dataclasses import dataclass
 
 EPS = 1e-3
+
+g_renderer = create_offscreen_renderer(256, 256)
 
 
 class SceneManager:
@@ -615,25 +619,28 @@ class FixedScene:
             FixedScene: The fixed scene.
         """
 
-        import open3d as o3d
-
-        o3d_mesh = o3d.geometry.TriangleMesh(
-            o3d.utility.Vector3dVector(vert),
-            o3d.utility.Vector3iVector(self._tri),
-        )
-        o3d_mesh.vertex_colors = o3d.utility.Vector3dVector(self._color)
+        import trimesh
 
         if include_static and len(self._static_vert) and len(self._static_tri):
-            o3d_static = o3d.geometry.TriangleMesh(
-                o3d.utility.Vector3dVector(self._static_vert),
-                o3d.utility.Vector3iVector(self._static_tri),
-            )
-            o3d_static.vertex_colors = o3d.utility.Vector3dVector(self._static_color)
-            o3d_mesh += o3d_static
+            tri = np.concatenate([self._tri, self._static_tri + len(vert)])
+            vert = np.concatenate([vert, self._static_vert], axis=0)
+            color = np.concatenate([self._color, self._static_color], axis=0)
+        else:
+            tri, color = self._tri, self._color
 
         if not os.path.exists(os.path.dirname(path)):
             os.makedirs(os.path.dirname(path))
-        o3d.io.write_triangle_mesh(path, o3d_mesh)
+
+        mesh = trimesh.Trimesh(
+            vertices=vert, faces=tri, vertex_colors=color, process=False
+        )
+        ci_name = Utils.ci_name()
+        if ci_name is None:
+            mesh.export(path)
+
+        path += ".png"
+        render(g_renderer, vert, tri, color, path)
+
         return self
 
     def export_fixed(self, path: str, delete_exist: bool) -> "FixedScene":
@@ -709,7 +716,7 @@ class FixedScene:
         bin_path = os.path.join(path, "bin")
         os.makedirs(bin_path)
 
-        self._vert.astype(np.float32).tofile(os.path.join(bin_path, "vert.bin"))
+        self._vert.astype(np.float64).tofile(os.path.join(bin_path, "vert.bin"))
         self._color.astype(np.float32).tofile(os.path.join(bin_path, "color.bin"))
         self._vel.astype(np.float32).tofile(os.path.join(bin_path, "vel.bin"))
         if np.linalg.norm(self._uv) > 0:
@@ -722,7 +729,7 @@ class FixedScene:
         if len(self._tet):
             self._tet.astype(np.uint64).tofile(os.path.join(bin_path, "tet.bin"))
         if len(self._static_vert):
-            self._static_vert.astype(np.float32).tofile(
+            self._static_vert.astype(np.float64).tofile(
                 os.path.join(bin_path, "static_vert.bin")
             )
             self._static_tri.astype(np.uint64).tofile(
@@ -746,10 +753,10 @@ class FixedScene:
                 os.makedirs(target_dir)
                 with open(os.path.join(bin_path, f"pin-timing-{i}.bin"), "wb") as f:
                     time_array = [entry.time for entry in pin.keyframe]
-                    np.array(time_array, dtype=np.float32).tofile(f)
+                    np.array(time_array, dtype=np.float64).tofile(f)
                 for j, entry in enumerate(pin.keyframe):
                     with open(os.path.join(target_dir, f"{j}.bin"), "wb") as f:
-                        np.array(entry.position, dtype=np.float32).tofile(f)
+                        np.array(entry.position, dtype=np.float64).tofile(f)
             if len(pin.spin):
                 spin_dir = os.path.join(path, "spin")
                 os.makedirs(spin_dir, exist_ok=True)
@@ -769,24 +776,24 @@ class FixedScene:
         for i, wall in enumerate(self._wall):
             with open(os.path.join(bin_path, f"wall-pos-{i}.bin"), "wb") as f:
                 pos = np.array(
-                    [p for pos, _ in wall._entry for p in pos], dtype=np.float32
+                    [p for pos, _ in wall._entry for p in pos], dtype=np.float64
                 )
                 pos.tofile(f)
             with open(os.path.join(bin_path, f"wall-timing-{i}.bin"), "wb") as f:
-                timing = np.array([t for _, t in wall._entry], dtype=np.float32)
+                timing = np.array([t for _, t in wall._entry], dtype=np.float64)
                 timing.tofile(f)
 
         for i, sphere in enumerate(self._sphere):
             with open(os.path.join(bin_path, f"sphere-pos-{i}.bin"), "wb") as f:
                 pos = np.array(
-                    [p for pos, _, _ in sphere._entry for p in pos], dtype=np.float32
+                    [p for pos, _, _ in sphere._entry for p in pos], dtype=np.float64
                 )
                 pos.tofile(f)
             with open(os.path.join(bin_path, f"sphere-radius-{i}.bin"), "wb") as f:
                 radius = np.array([r for _, r, _ in sphere._entry], dtype=np.float32)
                 radius.tofile(f)
             with open(os.path.join(bin_path, f"sphere-timing-{i}.bin"), "wb") as f:
-                timing = np.array([t for _, _, t in sphere._entry], dtype=np.float32)
+                timing = np.array([t for _, _, t in sphere._entry], dtype=np.float64)
                 timing.tofile(f)
 
         return self
@@ -1151,7 +1158,7 @@ class Scene:
         """Clear all objects from the scene.
 
         Returns:
-            Scene: The cle  ared scene.
+            Scene: The cleared scene.
         """
         self._object.clear()
         return self
@@ -1208,10 +1215,12 @@ class Scene:
 
         concat_count = 0
         dyn_objects = [
-            obj for obj in self._object.values() if not obj.static and not obj._color
+            (name, obj)
+            for name, obj in self._object.items()
+            if not obj.static and not obj._color
         ]
         n = len(dyn_objects)
-        for i, obj in enumerate(dyn_objects):
+        for i, (name, obj) in enumerate(dyn_objects):
             r, g, b = colorsys.hsv_to_rgb(i / n, 0.75, 1.0)
             obj.default_color(r, g, b)
 
@@ -1227,16 +1236,14 @@ class Scene:
                         concat_count += 1
 
         tag = {}
-        for name, obj in self._object.items():
-            assert name not in tag
-            if not obj.static:
-                vert = obj.get("V")
-                if vert is not None:
-                    tag[name] = [-1] * len(vert)
+        for name, obj in dyn_objects:
+            vert = obj.get("V")
+            if vert is not None:
+                tag[name] = [-1] * len(vert)
 
         pbar.update(1)
-        for name, obj in self._object.items():
-            if not obj.static and obj.get("T") is None:
+        for name, obj in dyn_objects:
+            if obj.get("T") is None:
                 map = tag[name]
                 edge = obj.get("E")
                 if edge is not None:
@@ -1246,11 +1253,9 @@ class Scene:
                     )
         rod_vert_start, rod_vert_end = 0, concat_count
 
-        pbar.update(1)
-        for name, obj in self._object.items():
-            if not obj.static and obj.get("T") is None:
-                map = tag[name]
-                tri = obj.get("F")
+        for name, obj in dyn_objects:
+            if obj.get("T") is None:
+                map, tri = tag[name], obj.get("F")
                 if tri is not None:
                     add_entry(
                         map,
@@ -1258,10 +1263,10 @@ class Scene:
                     )
         shell_vert_start, shell_vert_end = rod_vert_end, concat_count
 
-        for name, obj in self._object.items():
-            if not obj.static:
-                map = tag[name]
-                tri = obj.get("F")
+        pbar.update(1)
+        for name, obj in dyn_objects:
+            map, tri = tag[name], obj.get("F")
+            if tri is not None:
                 if tri is not None:
                     add_entry(
                         map,
@@ -1269,15 +1274,14 @@ class Scene:
                     )
 
         pbar.update(1)
-        for name, obj in self._object.items():
-            if not obj.static:
-                vert = obj.get("V")
-                if vert is not None:
-                    map = tag[name]
-                    for i in range(len(vert)):
-                        if map[i] == -1:
-                            map[i] = concat_count
-                            concat_count += 1
+        for name, obj in dyn_objects:
+            vert = obj.get("V")
+            if vert is not None:
+                map = tag[name]
+                for i in range(len(vert)):
+                    if map[i] == -1:
+                        map[i] = concat_count
+                        concat_count += 1
 
         concat_vert = np.zeros((concat_count, 3))
         concat_color = np.zeros((concat_count, 3))
@@ -1300,78 +1304,71 @@ class Scene:
             return result
 
         pbar.update(1)
-        for name, obj in self._object.items():
-            if not obj.static:
-                map = tag[name]
-                vert, uv = obj.vertex(), obj._uv
-                if vert is not None:
-                    concat_vert[map] = vert
-                    concat_vel[map] = obj._velocity
-                    concat_color[map] = obj.get("color")
-                if uv is not None:
-                    concat_uv[map] = uv
+        for name, obj in dyn_objects:
+            map = tag[name]
+            vert, uv = obj.vertex(), obj._uv
+            if vert is not None:
+                concat_vert[map] = vert
+                concat_vel[map] = obj._velocity
+                concat_color[map] = obj.get("color")
+            if uv is not None:
+                concat_uv[map] = uv
 
         pbar.update(1)
-        for name, obj in self._object.items():
-            if not obj.static:
-                map = tag[name]
-                edge = obj.get("E")
-                if edge is not None and obj.get("T") is None:
-                    concat_rod.extend(vec_map(map, edge))
+        for name, obj in dyn_objects:
+            map = tag[name]
+            edge = obj.get("E")
+            if edge is not None and obj.get("T") is None:
+                concat_rod.extend(vec_map(map, edge))
         rod_count = len(concat_rod)
 
         pbar.update(1)
-        for name, obj in self._object.items():
-            if not obj.static:
-                map = tag[name]
-                tri = obj.get("F")
-                if tri is not None and obj.get("T") is None:
-                    concat_tri.extend(vec_map(map, tri))
+        for name, obj in dyn_objects:
+            map = tag[name]
+            tri = obj.get("F")
+            if tri is not None and obj.get("T") is None:
+                concat_tri.extend(vec_map(map, tri))
         shell_count = len(concat_tri)
 
         pbar.update(1)
-        for name, obj in self._object.items():
-            if not obj.static:
-                map = tag[name]
-                tri = obj.get("F")
-                if tri is not None and obj.get("T") is not None:
-                    concat_tri.extend(vec_map(map, tri))
+        for name, obj in dyn_objects:
+            map = tag[name]
+            tet, tri = obj.get("T"), obj.get("F")
+            if tet is not None and tri is not None:
+                concat_tri.extend(vec_map(map, tri))
 
-        for name, obj in self._object.items():
-            if not obj.static:
-                map = tag[name]
-                tet = obj.get("T")
-                if tet is not None:
-                    concat_tet.extend(vec_map(map, tet))
+        for name, obj in dyn_objects:
+            map = tag[name]
+            tet = obj.get("T")
+            if tet is not None:
+                concat_tet.extend(vec_map(map, tet))
 
         pbar.update(1)
-        for name, obj in self._object.items():
-            if not obj.static:
-                map = tag[name]
-                for p in obj._pin:
-                    concat_pin.append(
-                        PinData(
-                            index=[map[vi] for vi in p.index],
-                            keyframe=p.keyframe,
-                            spin=p.spinner,
-                            should_unpin=p.should_unpin,
-                            pull_strength=p.pull_strength,
-                            transition=p.transition,
-                        )
+        for name, obj in dyn_objects:
+            map = tag[name]
+            for p in obj._pin:
+                concat_pin.append(
+                    PinData(
+                        index=[map[vi] for vi in p.index],
+                        keyframe=p.keyframe,
+                        spin=p.spinner,
+                        should_unpin=p.should_unpin,
+                        pull_strength=p.pull_strength,
+                        transition=p.transition,
                     )
-                stitch_ind = obj.get("Ind")
-                stitch_w = obj.get("W")
-                if stitch_ind is not None and stitch_w is not None:
-                    concat_stitch_ind.extend(vec_map(map, stitch_ind))
-                    concat_stitch_w.extend(stitch_w)
+                )
+            stitch_ind = obj.get("Ind")
+            stitch_w = obj.get("W")
+            if stitch_ind is not None and stitch_w is not None:
+                concat_stitch_ind.extend(vec_map(map, stitch_ind))
+                concat_stitch_w.extend(stitch_w)
 
         pbar.update(1)
         for name, obj in self._object.items():
             if obj.static:
                 color = obj.get("color")
                 offset = len(concat_static_vert)
-                tri = obj.get("F")
-                vert = obj.get("V")
+                tri, vert = obj.get("F"), obj.get("V")
                 if tri is not None:
                     concat_static_tri.extend(tri + offset)
                 if vert is not None:
@@ -1608,22 +1605,6 @@ class Object:
         self._at[1] += r * dy
         self._at[2] += r * dz
         return self
-
-    def atop(self, object: "Object", margin: float = 0.0) -> "Object":
-        """Place the object on top of another object.
-
-        Args:
-            object (Object): The reference object.
-            margin (float, optional): The margin between the objects. Defaults to 0.0.
-
-        Returns:
-            Object: The object placed on top of the reference object.
-        """
-        a_bbox, a_center = self.bbox()
-        b_bbox, b_center = object.bbox()
-        center = b_center - a_center
-        center[1] += (a_bbox[1] + b_bbox[1]) / 2.0 + margin
-        return self.at(*center)
 
     def scale(self, _scale: float) -> "Object":
         """Set the scale of the object.

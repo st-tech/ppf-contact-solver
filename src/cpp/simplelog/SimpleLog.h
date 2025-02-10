@@ -21,7 +21,7 @@ class SimpleLog {
     void pop(bool print = true);
     void check_empty(std::string file, int line) const;
 
-    static void setPath(std::string log_path, std::string data_directory_path);
+    static void setPath(std::string data_directory_path);
     static void set(double time);
     static void message(std::string format, ...);
 

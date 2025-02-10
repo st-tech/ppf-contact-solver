@@ -10,12 +10,10 @@
 
 namespace energy {
 
-void embed_momentum_force_hessian(const DataSet &data, const Vec<Vec3f> &eval_x,
-                                  const Kinematic &kinematic,
-                                  const Vec<Vec3f> &velocity, float dt,
-                                  const Vec<Vec3f> &target, Vec<float> &force,
-                                  Vec<Mat3x3f> &fixed_hess,
-                                  const ParamSet &param);
+void embed_momentum_force_hessian(
+    const DataSet &data, const Vec<Vec3f> &eval_x, const Kinematic &kinematic,
+    const Vec<Vec3f> &velocity, float dt, const Vec<Vec3f> &target,
+    Vec<float> &force, Vec<Mat3x3f> &fixed_hess, const ParamSet &param);
 
 void embed_elastic_force_hessian(const DataSet &data, const Vec<Vec3f> &eval_x,
                                  const Kinematic &kinematic, Vec<float> &force,

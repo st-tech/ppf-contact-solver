@@ -31,38 +31,60 @@ jobs:
           echo "Scene: $EXAMPLE_NAME" >> $GITHUB_STEP_SUMMARY
 
       - name: prepare
-        timeout-minutes: 20
+        timeout-minutes: 30
         run: bash $HELPER_PATH create $VAST_API_KEY
 
       - name: 1st run
-        run: bash $HELPER_PATH run ${EXAMPLE_NAME}.py
+        timeout-minutes: 40
+        run: bash $HELPER_PATH run ${EXAMPLE_NAME}.py 1st
 
       - name: 2nd run
-        run: bash $HELPER_PATH run ${EXAMPLE_NAME}.py
+        timeout-minutes: 40
+        run: bash $HELPER_PATH run ${EXAMPLE_NAME}.py 2nd
 
       - name: 3rd run
-        run: bash $HELPER_PATH run ${EXAMPLE_NAME}.py
+        timeout-minutes: 40
+        run: bash $HELPER_PATH run ${EXAMPLE_NAME}.py 3rd
 
       - name: 4th run
-        run: bash $HELPER_PATH run ${EXAMPLE_NAME}.py
+        timeout-minutes: 40
+        run: bash $HELPER_PATH run ${EXAMPLE_NAME}.py 4th
 
       - name: 5th run
-        run: bash $HELPER_PATH run ${EXAMPLE_NAME}.py
+        timeout-minutes: 40
+        run: bash $HELPER_PATH run ${EXAMPLE_NAME}.py 5th
 
       - name: 6th run
-        run: bash $HELPER_PATH run ${EXAMPLE_NAME}.py
+        timeout-minutes: 40
+        run: bash $HELPER_PATH run ${EXAMPLE_NAME}.py 6th
 
       - name: 7th run
-        run: bash $HELPER_PATH run ${EXAMPLE_NAME}.py
+        timeout-minutes: 40
+        run: bash $HELPER_PATH run ${EXAMPLE_NAME}.py 7th
 
       - name: 8th run
-        run: bash $HELPER_PATH run ${EXAMPLE_NAME}.py
+        timeout-minutes: 40
+        run: bash $HELPER_PATH run ${EXAMPLE_NAME}.py 8th
 
       - name: 9th run
-        run: bash $HELPER_PATH run ${EXAMPLE_NAME}.py
+        timeout-minutes: 40
+        run: bash $HELPER_PATH run ${EXAMPLE_NAME}.py 9th
 
       - name: 10th run
-        run: bash $HELPER_PATH run ${EXAMPLE_NAME}.py
+        timeout-minutes: 40
+        run: bash $HELPER_PATH run ${EXAMPLE_NAME}.py 10th
+
+      - name: collect
+        if: success() || failure()
+        run: bash $HELPER_PATH collect
+
+      - name: upload artifact
+        if: success() || failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-friction
+          path: ci
+          retention-days: 30
 
       - name: shutdown
         if: always()

@@ -14,8 +14,8 @@ pub struct Tree {
 
 #[derive(Copy, Clone, Debug)]
 pub struct Aabb {
-    pub min: Vector3<f32>,
-    pub max: Vector3<f32>,
+    pub min: Vector3<f64>,
+    pub max: Vector3<f64>,
 }
 
 #[derive(Copy, Clone)]
@@ -70,11 +70,13 @@ pub fn generate_aabb<const N: usize>(
         .par_chunks(N)
         .enumerate()
         .map(|(i, elm)| {
-            let x = Matrix3xX::from_fn(N, |i, j| vertex.column(elm[j])[i]);
+            let x = Matrix3xX::from_fn(N, |i, j| f64::from(vertex.column(elm[j])[i]));
             (
                 Aabb {
-                    min: Vector3::<f32>::from_fn(|i, _| x.row(i).min()),
-                    max: Vector3::<f32>::from_fn(|i, _| x.row(i).max()),
+                    min: Vector3::<f64>::from_fn(|k, _| x.row(k).min())
+                        - Vector3::<f64>::repeat(f64::EPSILON),
+                    max: Vector3::<f64>::from_fn(|k, _| x.row(k).max())
+                        + Vector3::<f64>::repeat(f64::EPSILON),
                 },
                 i,
             )
@@ -108,19 +110,18 @@ fn subdivide(mut obj: Vec<(Aabb, usize)>, node: &mut Vec<Node>) -> Node {
     }
 }
 
-pub fn compute_mean<'a>(aabb_iter: impl Iterator<Item = &'a Aabb>) -> Vector3<f32> {
-    let (count, sum) = aabb_iter.fold((0, Vector3::<f32>::zeros()), |acc, x| {
-        let mean = (x.min + x.max) / 2.0;
-        (acc.0 + 1, acc.1 + mean)
+pub fn compute_mean<'a>(aabb_iter: impl Iterator<Item = &'a Aabb>) -> Vector3<f64> {
+    let (count, sum) = aabb_iter.fold((0, Vector3::<f64>::zeros()), |acc, x| {
+        (acc.0 + 1, acc.1 + (x.min + x.max) / 2.0)
     });
-    sum / count as f32
+    sum / count as f64
 }
 
 pub fn compute_var<'a>(
     aabb_iter: impl Iterator<Item = &'a Aabb>,
-    mean: Vector3<f32>,
-) -> Vector3<f32> {
-    aabb_iter.fold(Vector3::<f32>::zeros(), |acc, aabb| {
+    mean: Vector3<f64>,
+) -> Vector3<f64> {
+    aabb_iter.fold(Vector3::<f64>::zeros(), |acc, aabb| {
         let m = (aabb.min + aabb.max) / 2.0;
         let x = (mean.x - m.x) * (mean.x - m.x);
         let y = (mean.y - m.y) * (mean.y - m.y);

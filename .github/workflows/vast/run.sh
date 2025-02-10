@@ -7,11 +7,12 @@ REMOTE_WORKDIR=/root/ppf-contact-solver
 
 ARG=$1
 if [ "$ARG" = "build" ]; then
-    $SSH "cd ppf-contact-solver && /root/.cargo/bin/cargo build --release"
+  $SSH "cd ppf-contact-solver && /root/.cargo/bin/cargo build --release"
 elif [ "$ARG" = "convert" ]; then
-    $SSH "cd ppf-contact-solver/examples && jupyter nbconvert --to script *.ipynb"
-    $SSH "touch /root/ppf-contact-solver/frontend/.CI"
+  $SSH "cd ppf-contact-solver/examples && jupyter nbconvert --to script *.ipynb"
 elif [ "$ARG" = "run" ]; then
-    EXAMPLE=$2
-    $SSH "PYTHONPATH=/root/ppf-contact-solver python3 ppf-contact-solver/examples/$EXAMPLE"
+  EXAMPLE=$2
+  NAME=$3
+  PROJDIR=/root/ppf-contact-solver
+  $SSH "echo $NAME > $PROJDIR/frontend/.CI; PYTHONPATH=$PROJDIR python3 ppf-contact-solver/examples/$EXAMPLE"
 fi

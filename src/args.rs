@@ -23,8 +23,6 @@ pub struct Args {
     // Large step size may make the simulation faster but can introduce noticeable damping.
     // We recommend to use 1e-3 for most cases. Setting a larger value can results in
     // PCG solver divergence.
-    // You may turn on `enable_retry` option to retry the step with a smaller step size when
-    // either the PCG solver diverges or line search fails.
     #[clap(long, default_value_t = 1e-3)]
     pub dt: f32,
 
@@ -116,45 +114,27 @@ pub struct Args {
     #[clap(long, default_value_t = 1e-3)]
     pub constraint_ghat: f32,
 
-    // Name: Strain Limit Trigger Threshold
-    // Recommended Range: 0 to 0.05
+    // Name: Moving Constraint Minimum Gap Tolerance
+    // Recommended Range: 1e-3 to 0.1
     // Description:
-    // When the strain limit is enabled, this value allocates some margin before the strain limit
-    // is activated. For example, if this value is 0.025, the strain limit is activated when the
-    // stretch ratio exceeds 2.5%.
-    #[clap(long, default_value_t = 0.025)]
-    pub strain_limit_tau: f32,
+    // For moving constraints, the gap distance can be negative at Newton's steps.
+    // This value multiplies the constraint gap is used to cap such small gaps.
+    #[clap(long, default_value_t = 0.01)]
+    pub constraint_tol: f32,
 
     // Name: Strain Limit Epsilon
     // Recommended Range: 0 to 0.05
     // Description:
-    // After the strain limit is activated, this value is used to control the maximal stretch
-    // beyond the `strain_limit_tau`. For example, if this value is 0.025 and `strain_limit_tau`
-    // is 0.025, the maximal stretch ratio is 5%.
-    #[clap(long, default_value_t = 0.025)]
+    // After the strain limit is activated, this value is used to control the maximal stretch.
+    // For example, if this value is 0.05, the maximal stretch ratio is 5%.
+    #[clap(long, default_value_t = 0.05)]
     pub strain_limit_eps: f32,
 
     // Name: Flag to Disable Strain Limit
     // Description:
-    // When this flag is enabled, the strain limit is disabled regardless of parameters
-    // `strain_limit_tau` and `strain_limit_eps`.
+    // When this flag is enabled, the strain limit is disabled regardless of `strain_limit_eps`.
     #[clap(long)]
     pub disable_strain_limit: bool,
-
-    // Name: Flag to Enable Retry when PCG Diverges
-    // Description:
-    // When this flag is enabled, the simulation will retry the step with a smaller step size
-    // when the PCG solver diverges or line search fails.
-    // This is possible when the step size is set large.
-    #[clap(long)]
-    pub enable_retry: bool,
-
-    // Name: Step Size Reduction Factor
-    // Description:
-    // When PCG solver diverges or line search fails, the step size is reduced
-    // by this factor and the step is retried if `enable_retry` is enabled.
-    #[clap(long, default_value_t = 0.75)]
-    pub dt_decrease_factor: f32,
 
     // Name: Frame Per Second for Video Frames
     // Description:
@@ -166,8 +146,6 @@ pub struct Args {
     // Name: Maximum Number of PCG Iterations
     // Description:
     // When PCG iterations exceed this value, the solver is regarded as diverged.
-    // If `enable_retry` is enabled, the step size is reduced and the step is retried.
-    // If not, simulation is terminated.
     #[clap(long, default_value_t = 10000)]
     pub cg_max_iter: u32,
 
@@ -179,16 +157,8 @@ pub struct Args {
     #[clap(long, default_value_t = 1e-3)]
     pub cg_tol: f32,
 
-    // Name: ACCD Maximum Iterations
-    // Recommended Range: 1024 to 2048
-    // Description:
-    // ACCD seeks for the maximal time of impact (TOI) by iteratively advancing the time.
-    // If the maximal TOI is not found within this number of iterations, the seek is terminated.
-    #[clap(long, default_value_t = 1024)]
-    pub ccd_max_iters: u32,
-
     // Name: ACCD Reduction Factor
-    // Recommended Range: 1e-3 to 1e-2
+    // Recommended Range: 1e-2 to 0.5
     // Description:
     // ACCD needs some small number to determine that the gap distance is close enough to the surface.
     // This factor is multiplied to the initial gap to set this threshold.
@@ -229,7 +199,7 @@ pub struct Args {
     // If this value is too large, the GPU runs out of memory.
     // On the other hand, if this value is too small, the simulation may fail
     // due to the lack of memory for contact matrix assembly.
-    #[clap(long, default_value_t = 70000000)]
+    #[clap(long, default_value_t = 10000000)]
     pub csrmat_max_nnz: u32,
 
     // Name: Extra Memory Allocation Factor for BVH on the GPU

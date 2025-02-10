@@ -19,6 +19,7 @@ __device__ void solve_symm_eigen2x2(const Mat2x2f &matrix, Vec2f &eigenvalues,
 __device__ void solve_symm_eigen3x3(const Mat3x3f &matrix, Vec3f &eigenvalues,
                                     Mat3x3f &eigenvectors);
 __device__ Svd3x2 svd3x2(const Mat3x2f &F);
+__device__ Svd3x2 svd3x2_shifted(const Mat3x2f &F);
 __device__ Svd3x3 svd3x3_rv(const Mat3x3f &F);
 
 template <unsigned N, class MatType>
@@ -47,8 +48,6 @@ atomic_embed_force(const Eigen::Vector<unsigned, N> &index,
     }
 }
 
-__device__ Mat3x2f make_diff_mat3x2();
-__device__ Mat4x3f make_diff_mat4x3();
 __device__ Mat3x3f convert_force(const Mat3x2f &dedF,
                                  const Mat2x2f &inv_rest2x2);
 __device__ Mat3x4f convert_force(const Mat3x3f &dedF,

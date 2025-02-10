@@ -35,6 +35,7 @@ Published in [ACM Transactions on Graphics (TOG)](https://dl.acm.org/doi/abs/10.
 - [🖼️ Catalogue](#️-catalogue)
 - [🚀 GitHub Actions](#-github-actions)
     - [⚔️ Ten Consecutive Runs](#️-ten-consecutive-runs)
+    - [📦 Action Artifacts](#-action-artifacts)
 - [📡 Deploying on Cloud Services](#-deploying-on-cloud-services)
     - [📦 Deploying on vast.ai](#-deploying-on-vastai)
     - [📦 Deploying on RunPod](#-deploying-on-runpod)
@@ -148,15 +149,15 @@ Please look into the [examples](./examples/) directory for more examples.
 from frontend import App
 
 # make an app with the label "drape"
-app = App("drape", renew=True)
+app = App.create("drape")
 
 # create a square mesh resolution 128 spanning the xz plane
-V, F = app.mesh.square(res=128, ex=[1,0,0], ey=[0,0,1])
+V, F = app.mesh.square(res=128, ex=[1, 0, 0], ey=[0, 0, 1])
 
 # add to the asset and name it "sheet"
 app.asset.add.tri("sheet", V, F)
 
-# create an icosphere mesh radius 0.5 and 5 subdivisions
+# create an icosphere mesh radius 0.5 and 5 subdiv
 V, F = app.mesh.icosphere(r=0.5, subdiv_count=5)
 
 # add to the asset and name it "sphere"
@@ -165,30 +166,30 @@ app.asset.add.tri("sphere", V, F)
 # create a scene "five-sheets"
 scene = app.scene.create("five-sheets")
 
-# define gap between sheets
+# gap between sheets
 gap = 0.01
 
 for i in range(5):
-    
-    # add a sheet to the scene
+
+    # add the sheet asset to the scene
     obj = scene.add("sheet")
 
-    # pick two vertices max towards directions [1,0,-1] and [-1,0,-1]
+    # pick two corners
     corner = obj.grab([1, 0, -1]) + obj.grab([-1, 0, -1])
 
-    # place it with a vertical offset and pin the corners
+    # place it with an vertical offset and pin the corners
     obj.at(0, gap * i, 0).pin(corner)
 
-    # set fiber directions required for the Baraff-Witkin model
+    # set fiber directions required for Baraff-Witkin
     obj.direction([1, 0, 0], [0, 0, 1])
 
-# add a sphere mesh at a lower position and set it to a static collider
-scene.add("sphere").at(0, -0.5 - gap, 0).pin()
+# add a sphere mesh at a lower position with jitter and set it static collider
+scene.add("sphere").at(0, -0.5 - gap, 0).jitter().pin()
 
 # compile the scene and report stats
 fixed = scene.build().report()
 
-# interactively preview the built scene (image left)
+# preview the initial scene
 fixed.preview()
 
 # set simulation parameter(s)
@@ -207,9 +208,8 @@ session.stream()
 # or interactively view the animation sequences
 session.animate()
 
-# export all simulated frames and zip them
-path = f"export/{scene.info.name}/{session.info.name}"
-session.export.animation(path).zip()
+# export all simulated frames and make a zip file
+session.export.animation().zip()
 ```
 <img src="./asset/image/drape.jpg" alt="drape">
 
@@ -231,20 +231,20 @@ The behaviors can be changed through the settings.
 ```python
 # get a list of log names
 logs = session.get.log.names()
-assert 'time-per-frame' in logs
-assert 'newton-steps' in logs
+assert "time-per-frame" in logs
+assert "newton-steps" in logs
 
 # get a list of time per video frame
-msec_per_video = session.get.log.numbers('time-per-frame')
+msec_per_video = session.get.log.numbers("time-per-frame")
 
 # compute the average time per video frame
-print('avg per frame:', sum([n for _,n in msec_per_video])/len(msec_per_video))
+print("avg per frame:", sum([n for _, n in msec_per_video]) / len(msec_per_video))
 
 # get a list of newton steps
-newton_steps = session.get.log.numbers('newton-steps')
+newton_steps = session.get.log.numbers("newton-steps")
 
 # compute the average of consumed newton steps
-print('avg newton steps:', sum([n for _,n in newton_steps])/len(newton_steps))
+print("avg newton steps:", sum([n for _, n in newton_steps]) / len(newton_steps))
 ```
 
 Below are some representatives.
@@ -271,7 +271,7 @@ If you would like to retrieve the raw log stream, you can do so by
 
 ```python
 # Last 8 lines. Omit for everything.
-for line in session.get.log.stream(n_lines=8):
+for line in session.get.log.stdout(n_lines=8):
     print(line)
 ```
 
@@ -324,6 +324,16 @@ This is not a self-hosted runner, meaning that each time the runner launches, al
 
 We use the GitHub-hosted runner 🖥️, but the actual simulation runs on a provisioned [vast.ai](https://vast.ai) instance 🌐. We do this for performance ⚡ and budget 💰 reasons. We choose an RTX 4090 🎮, which typically costs less than $0.50 per hour 💵. Since we start with a fresh 🌱 instance, the environment is clean 🧹 every time.
 We take advantage of the ability to deploy on the cloud; this action is performed in parallel, which reduces the total action time.
+
+### 📦 Action Artifacts
+
+We generate zipped action artifacts 📦 for each run. These artifacts include:
+
+- **📝 Logs**: Detailed logs of the simulation runs.
+- **📊 Metrics**: Performance metrics and statistics.
+- **📹 Previews**: A sequence of preview images.
+
+Please note that these artifacts will be deleted after a month.
 
 ### ⚔️ Ten Consecutive Runs
 

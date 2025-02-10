@@ -55,23 +55,18 @@ __global__ void inner_product_kernel(const T *a, const T *b, T *c, unsigned n) {
     }
 }
 
-template <class T> T inner_product(const T *a, const T *b, unsigned n) {
-    unsigned grid_size = (n + BLOCK_SIZE - 1) / BLOCK_SIZE;
-    static unsigned max_grid_size = 0;
+template <class T> T inner_product(const T *a, const T *b, unsigned _n) {
+    static unsigned n = _n;
+    static unsigned grid_size = (n + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    assert(n == _n);
     static T *d_c = nullptr;
     static T *h_c = nullptr;
     if (d_c == nullptr) {
         cudaMalloc(&d_c, grid_size * sizeof(T));
         h_c = new T[grid_size];
-        max_grid_size = grid_size;
-    } else if (max_grid_size < grid_size) {
-        cudaFree(d_c);
-        delete[] h_c;
-        cudaMalloc(&d_c, grid_size * sizeof(T));
-        h_c = new T[grid_size];
-        max_grid_size = grid_size;
     }
-    inner_product_kernel<<<grid_size, BLOCK_SIZE, BLOCK_SIZE * sizeof(T)>>>(a, b, d_c, n);
+    inner_product_kernel<<<grid_size, BLOCK_SIZE, BLOCK_SIZE * sizeof(T)>>>(
+        a, b, d_c, n);
     cudaMemcpy(h_c, d_c, grid_size * sizeof(T), cudaMemcpyDeviceToHost);
     T result = T();
     for (unsigned i = 0; i < grid_size; ++i) {

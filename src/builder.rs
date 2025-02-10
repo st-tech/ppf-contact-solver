@@ -2,7 +2,7 @@
 // Author: Ryoichi Ando (ryoichi.ando@zozo.com)
 // License: Apache v2.0
 
-use super::bvh::{self, Aabb};
+use super::bvh::{self};
 use super::cvec::*;
 use super::cvecvec::*;
 use super::data::{self, *};
@@ -70,7 +70,8 @@ pub fn build(
 
     let mut hinge_prop = Vec::new();
     for hinge in mesh.mesh.mesh.hinge.column_iter() {
-        let length = (vertex.column(hinge[0]) - vertex.column(hinge[1])).norm();
+        let x = vertex.column(hinge[0]) - vertex.column(hinge[1]);
+        let length = x.norm();
         hinge_prop.push(HingeProp { length });
     }
     let prop_set = PropSet {
@@ -82,9 +83,9 @@ pub fn build(
     };
 
     let bvh_set = BvhSet {
-        face: build_bvh(vertex, Some(&mesh.mesh.mesh.face)),
-        edge: build_bvh(vertex, Some(&mesh.mesh.mesh.edge)),
-        vertex: build_bvh::<1>(vertex, None),
+        face: build_bvh(vertex, &mesh.mesh.mesh.face),
+        edge: build_bvh(vertex, &mesh.mesh.mesh.edge),
+        vertex: build_bvh(vertex, &mesh.mesh.mesh.vertex),
     };
     let mut inv_rest2x2 = Vec::new();
     for i in 0..mesh.mesh.mesh.shell_face_count {
@@ -310,11 +311,6 @@ pub fn build(
 
 pub fn make_param(args: &Args) -> data::ParamSet {
     let dt = args.dt.min(0.9999 / args.fps as f32);
-    let strain_limit_tau = if args.disable_strain_limit {
-        0.0
-    } else {
-        args.strain_limit_tau
-    };
     let strain_limit_eps = if args.disable_strain_limit {
         0.0
     } else {
@@ -331,13 +327,12 @@ pub fn make_param(args: &Args) -> data::ParamSet {
         fitting: false,
         air_friction: args.air_friction,
         air_density: args.air_density,
-        strain_limit_tau,
         strain_limit_eps,
-        dt_decrease_factor: args.dt_decrease_factor,
         contact_ghat: args.contact_ghat,
         contact_offset: args.contact_offset,
         rod_offset: args.rod_offset,
         constraint_ghat: args.constraint_ghat,
+        constraint_tol: args.constraint_tol,
         prev_dt: dt,
         dt,
         playback: args.playback,
@@ -348,11 +343,9 @@ pub fn make_param(args: &Args) -> data::ParamSet {
         stitch_stiffness: args.stitch_stiffness,
         cg_max_iter: args.cg_max_iter,
         cg_tol: args.cg_tol,
-        enable_retry: args.enable_retry,
         line_search_max_t: args.line_search_max_t,
         ccd_tol: args.contact_ghat,
         ccd_reduction: args.ccd_reduction,
-        ccd_max_iters: args.ccd_max_iters,
         eiganalysis_eps: args.eiganalysis_eps,
         friction: args.friction,
         friction_eps: args.friction_eps,
@@ -399,27 +392,8 @@ impl ConvertToU32 for Vec<Vec<usize>> {
 pub type ArbitrayElement<const N: usize> =
     na::Matrix<usize, na::Const<N>, na::Dyn, na::VecStorage<usize, na::Const<N>, na::Dyn>>;
 
-pub fn build_bvh<const N: usize>(
-    vertex: &Matrix3xX<f32>,
-    elements: Option<&ArbitrayElement<N>>,
-) -> Bvh {
-    let aabb = if let Some(elements) = elements {
-        bvh::generate_aabb(vertex, elements)
-    } else {
-        vertex
-            .column_iter()
-            .enumerate()
-            .map(|(i, x)| {
-                (
-                    Aabb {
-                        min: x + f32::EPSILON * na::vector![-1.0, -1.0, -1.0],
-                        max: x + f32::EPSILON * na::vector![1.0, 1.0, 1.0],
-                    },
-                    i,
-                )
-            })
-            .collect::<Vec<_>>()
-    };
+pub fn build_bvh<const N: usize>(vertex: &Matrix3xX<f32>, elements: &ArbitrayElement<N>) -> Bvh {
+    let aabb = bvh::generate_aabb(vertex, elements);
     if !aabb.is_empty() {
         let tree = bvh::Tree::build_tree(aabb);
         let node = tree
@@ -496,8 +470,8 @@ pub fn make_collision_mesh(vertex: &Matrix3xX<f32>, face: &Matrix3xX<usize>) -> 
                 .collect::<Vec<_>>()
                 .as_slice(),
         ),
-        face_bvh: build_bvh(vertex, Some(&mesh.mesh.face)),
-        edge_bvh: build_bvh(vertex, Some(&mesh.mesh.edge)),
+        face_bvh: build_bvh(vertex, &mesh.mesh.face),
+        edge_bvh: build_bvh(vertex, &mesh.mesh.edge),
         neighbor,
     }
 }

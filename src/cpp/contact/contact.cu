@@ -347,6 +347,7 @@ __device__ void embed_contact_force_hess(
     Vec3f normal = ex.normalized();
     float stiff_k = barrier::compute_stiffness<N>(prox, mass, fixed_in, ex,
                                                   ghat, offset, param);
+
     if (stage == 0) {
         dry_atomic_embed_hessian<N>(prox.index, fixed_out, dyn_out);
     } else {
@@ -492,8 +493,7 @@ struct PointEdgeContactForceHessEmbed {
             const Vec3f &t1 = eval_x[f[1]];
             Vec2f c = distance::point_edge_distance_coeff(p, t0, t1);
             if (c.maxCoeff() < 1.0f && c.minCoeff() > 0.0f) {
-                Vec3f x = c[0] * t0 + c[1] * t1;
-                Vec3f e = p - x;
+                Vec3f e = c[0] * (p - t0) + c[1] * (p - t1);
                 float offset =
                     make_vertex_offset(vertex_index, kinematic.vertex, param) +
                     make_edge_offset(f, kinematic.vertex, param);
@@ -570,8 +570,7 @@ struct PointFaceContactForceHessEmbed {
             const Vec3f &t2 = eval_x[f[2]];
             Vec3f c = distance::point_triangle_distance_coeff(p, t0, t1, t2);
             if (c.maxCoeff() < 1.0f && c.minCoeff() > 0.0f) {
-                Vec3f x = c[0] * t0 + c[1] * t1 + c[2] * t2;
-                Vec3f e = p - x;
+                Vec3f e = c[0] * (p - t0) + c[1] * (p - t1) + c[2] * (p - t2);
                 float offset =
                     make_face_offset(param) +
                     make_vertex_offset(vertex_index, kinematic.vertex, param);
@@ -616,10 +615,11 @@ struct EdgeEdgeContactForceHessEmbed {
         if (edge_index < index && intersect_free(e0[0], e0[1], e1[0], e1[1]) &&
             check_kinematic_pair(kinematic.edge[edge_index],
                                  kinematic.edge[index])) {
-            const Vec3f &p0 = eval_x[e0[0]];
-            const Vec3f &p1 = eval_x[e0[1]];
-            const Vec3f &q0 = eval_x[e1[0]];
-            const Vec3f &q1 = eval_x[e1[1]];
+            Vec3f p0 = eval_x[e0[0]];
+            Vec3f p1 = eval_x[e0[1]];
+            Vec3f q0 = eval_x[e1[0]];
+            Vec3f q1 = eval_x[e1[1]];
+            float s(0.25f);
             Vec4f c = distance::edge_edge_distance_coeff(p0, p1, q0, q1);
             if (c.maxCoeff() < 1.0f && c.minCoeff() > 0.0f) {
                 Vec3f x0 = c[0] * p0 + c[1] * p1;
@@ -672,17 +672,17 @@ struct CollisionMeshVertexFaceContactForceHessEmbed_M2C {
 
     __device__ bool operator()(unsigned index) {
         if (check_kinematic_pair(kinematic.vertex[vertex_index].active, true)) {
-            const Vec3f &q = vertex[vertex_index];
-            const Vec3f &p = eval_x[vertex_index];
             const Vec3u &f = collision_mesh_face[index];
-            const Vec3f &t0 = collision_mesh_vertex[f[0]];
-            const Vec3f &t1 = collision_mesh_vertex[f[1]];
-            const Vec3f &t2 = collision_mesh_vertex[f[2]];
+            Vec3f p = eval_x[vertex_index];
+            Vec3f q = vertex[vertex_index] - p;
+            Vec3f t0 = (collision_mesh_vertex[f[0]] - p);
+            Vec3f t1 = (collision_mesh_vertex[f[1]] - p);
+            Vec3f t2 = (collision_mesh_vertex[f[2]] - p);
+            Vec3f zero = Vec3f::Zero();
             Vec3f c = distance::point_triangle_distance_coeff_unclassified(
-                p, t0, t1, t2);
+                zero, t0, t1, t2);
             Vec3f y = c[0] * t0 + c[1] * t1 + c[2] * t2;
-            Vec3f e = p - y;
-            Vec3f dx = p - q;
+            Vec3f e = -y;
             Vec3f normal = e.normalized();
             float d = e.norm();
             if (d < param.contact_ghat) {
@@ -692,10 +692,10 @@ struct CollisionMeshVertexFaceContactForceHessEmbed_M2C {
                 float stiff_k =
                     normal.dot(local_hess * normal) + mass / gap_squared;
                 Vec3f f = stiff_k *
-                          push::gradient(p, proj_x, normal, param.contact_ghat);
-                Mat3x3f H = stiff_k * push::hessian(p, proj_x, normal,
-                                                    param.contact_ghat);
-                Friction friction(f, p - q, normal, param.friction,
+                          push::gradient(-proj_x, normal, param.contact_ghat);
+                Mat3x3f H = stiff_k *
+                            push::hessian(-proj_x, normal, param.contact_ghat);
+                Friction friction(f, -q, normal, param.friction,
                                   param.friction_eps);
                 f += friction.gradient();
                 H += friction.hessian();
@@ -726,19 +726,21 @@ struct CollisionMeshVertexFaceContactForceHessEmbed_C2M {
 
     __device__ bool operator()(unsigned index) {
         if (check_kinematic_pair(kinematic.face[index], true)) {
-            const Vec3f &y = data.constraint.mesh.vertex[vertex_index];
             const Vec3u &fc = data.mesh.mesh.face[index];
-            const Vec3f &t0 = eval_x[fc[0]];
-            const Vec3f &t1 = eval_x[fc[1]];
-            const Vec3f &t2 = eval_x[fc[2]];
-            const Vec3f &s0 = vertex[fc[0]];
-            const Vec3f &s1 = vertex[fc[1]];
-            const Vec3f &s2 = vertex[fc[2]];
-            Vec3f c = distance::point_triangle_distance_coeff_unclassified(
-                y, t0, t1, t2);
+            const Vec3f &y = data.constraint.mesh.vertex[vertex_index];
+            const Vec3f t0 = eval_x[fc[0]] - y;
+            const Vec3f t1 = eval_x[fc[1]] - y;
+            const Vec3f t2 = eval_x[fc[2]] - y;
+            const Vec3f s0 = vertex[fc[0]] - y;
+            const Vec3f s1 = vertex[fc[1]] - y;
+            const Vec3f s2 = vertex[fc[2]] - y;
+            const Vec3f zero = Vec3f::Zero();
+            const Vec3f c =
+                distance::point_triangle_distance_coeff_unclassified(zero, t0,
+                                                                     t1, t2);
             Vec3f p = c[0] * t0 + c[1] * t1 + c[2] * t2;
             Vec3f q = c[0] * s0 + c[1] * s1 + c[2] * s2;
-            Vec3f e = p - y;
+            const Vec3f &e = p;
             Vec3f dx = p - q;
             Vec3f normal = e.normalized();
             float d = e.norm();
@@ -762,10 +764,10 @@ struct CollisionMeshVertexFaceContactForceHessEmbed_C2M {
                 float area = c[0] * prop[fc[0]].area + c[1] * prop[fc[1]].area +
                              c[2] * prop[fc[2]].area;
 
-                Vec3f proj_x = y + normal * param.contact_ghat;
-                Vec3f f = stiff_k *
-                          push::gradient(p, proj_x, normal, param.contact_ghat);
-                Mat3x3f H = stiff_k * push::hessian(p, proj_x, normal,
+                Vec3f proj_x = normal * param.contact_ghat;
+                Vec3f f = stiff_k * push::gradient(p - proj_x, normal,
+                                                   param.contact_ghat);
+                Mat3x3f H = stiff_k * push::hessian(p - proj_x, normal,
                                                     param.contact_ghat);
                 Friction friction(f, p - q, normal, param.friction,
                                   param.friction_eps);
@@ -810,12 +812,12 @@ struct CollisionMeshEdgeEdgeContactForceHessEmbed {
         if (check_kinematic_pair(kinematic.edge[i], true)) {
             const Vec2u &mesh_edge = this->mesh_edge[i];
             const Vec2u &coll_edge = collision_mesh_edge[index];
-            const Vec3f &p0 = eval_x[mesh_edge[0]];
-            const Vec3f &p1 = eval_x[mesh_edge[1]];
-            const Vec3f &q0 = collision_mesh_vertex[coll_edge[0]];
-            const Vec3f &q1 = collision_mesh_vertex[coll_edge[1]];
-            const Vec3f &b0 = vertex[mesh_edge[0]];
-            const Vec3f &b1 = vertex[mesh_edge[1]];
+            Vec3f p0 = eval_x[mesh_edge[0]];
+            Vec3f p1 = eval_x[mesh_edge[1]];
+            Vec3f q0 = collision_mesh_vertex[coll_edge[0]];
+            Vec3f q1 = collision_mesh_vertex[coll_edge[1]];
+            Vec3f b0 = vertex[mesh_edge[0]];
+            Vec3f b1 = vertex[mesh_edge[1]];
             Vec4f c =
                 distance::edge_edge_distance_coeff_unclassified(p0, p1, q0, q1);
             Vec3f x = c[0] * p0 + c[1] * p1;
@@ -826,7 +828,7 @@ struct CollisionMeshEdgeEdgeContactForceHessEmbed {
             Vec3f normal = e.normalized();
             float d = e.norm();
             if (d < param.contact_ghat) {
-                Vec3f proj_x = y + param.contact_ghat * normal;
+                Vec3f proj_x = param.contact_ghat * normal;
                 Vec6f normal_ext;
                 for (int j = 0; j < 6; ++j) {
                     normal_ext[j] = c[j / 3] * normal[j % 3];
@@ -842,9 +844,9 @@ struct CollisionMeshEdgeEdgeContactForceHessEmbed {
                     normal_ext.squaredNorm();
                 float area = c[0] * prop[mesh_edge[0]].area +
                              c[1] * prop[mesh_edge[1]].area;
-                Vec3f f = stiff_k *
-                          push::gradient(x, proj_x, normal, param.contact_ghat);
-                Mat3x3f H = stiff_k * push::hessian(x, proj_x, normal,
+                Vec3f f = stiff_k * push::gradient(e - proj_x, normal,
+                                                   param.contact_ghat);
+                Mat3x3f H = stiff_k * push::hessian(e - proj_x, normal,
                                                     param.contact_ghat);
 
                 Friction friction(f, x - z, normal, param.friction,
@@ -876,6 +878,7 @@ __device__ unsigned embed_vertex_constraint_force_hessian(
     Vec<float> &force, const FixedCSRMat &fixed_hess_in, FixedCSRMat &fixed_out,
     const CollisionHessForceEmbedArgs &args, float dt, const ParamSet &param,
     unsigned i) {
+
     float ghat = param.constraint_ghat;
     float area = data.prop.vertex[i].area;
     float mass = data.prop.vertex[i].mass;
@@ -893,7 +896,7 @@ __device__ unsigned embed_vertex_constraint_force_hessian(
         float d = w.norm();
         float gap = ghat - d;
         if (kinematic.vertex[i].kinematic) {
-            gap = fmaxf(gap, param.ccd_reduction * ghat);
+            gap = fmaxf(gap, param.constraint_tol * ghat);
         } else {
             assert(gap >= 0.0f);
         }
@@ -915,19 +918,21 @@ __device__ unsigned embed_vertex_constraint_force_hessian(
             float d2 = (x - center).squaredNorm();
             if (sphere.kinematic) {
                 if (d2) {
-                    float r2 = radius * radius;
                     Vec3f normal = (x - center).normalized();
-                    Vec3f target = center + radius * normal;
+                    Vec3f target = radius * normal;
+                    Vec3f o = x - center;
                     if (bowl) {
                         reverse = true;
                     }
                     float stiff_k = mass / (dt * dt);
+                    float r2 = radius * radius;
                     if (reverse == true && d2 > r2) {
-                        f += stiff_k * push::gradient(x, target, -normal, ghat);
-                        H += stiff_k * push::hessian(x, target, -normal, ghat);
+                        f +=
+                            stiff_k * push::gradient(o - target, -normal, ghat);
+                        H += stiff_k * push::hessian(o - target, -normal, ghat);
                     } else if (reverse == false && d2 < r2) {
-                        f += stiff_k * push::gradient(x, target, normal, ghat);
-                        H += stiff_k * push::hessian(x, target, normal, ghat);
+                        f += stiff_k * push::gradient(o - target, normal, ghat);
+                        H += stiff_k * push::hessian(o - target, normal, ghat);
                     }
                 }
             } else {
@@ -941,7 +946,8 @@ __device__ unsigned embed_vertex_constraint_force_hessian(
                 if (intersected) {
                     num_contact += 1;
                     Vec3f normal = (x - center).normalized();
-                    Vec3f projected_x = center + radius * normal;
+                    Vec3f projected_x = radius * normal;
+                    Vec3f o = x - center;
                     if (reverse) {
                         normal = -normal;
                     }
@@ -955,9 +961,9 @@ __device__ unsigned embed_vertex_constraint_force_hessian(
                     float stiff_k =
                         (normal.dot(local_hess * normal) + mass / (gap * gap));
                     Vec3f f_push =
-                        stiff_k * push::gradient(x, projected_x, normal, ghat);
+                        stiff_k * push::gradient(o - projected_x, normal, ghat);
                     f += f_push;
-                    H += stiff_k * push::hessian(x, projected_x, normal, ghat);
+                    H += stiff_k * push::hessian(o - projected_x, normal, ghat);
 
                     Friction friction(f_push, dx, normal, param.friction,
                                       param.friction_eps);
@@ -970,20 +976,21 @@ __device__ unsigned embed_vertex_constraint_force_hessian(
         for (unsigned j = 0; j < data.constraint.floor.size; ++j) {
             const Floor &floor = data.constraint.floor[j];
             const Vec3f &up = floor.up;
-            Vec3f ground = floor.ground + up * (floor.kinematic ? 0.0f : ghat);
-            if ((x - ground).dot(up) < 0.0f) {
+            Vec3f ground = floor.ground + (floor.kinematic ? 0.0f : ghat) * up;
+
+            Vec3f e = x - ground;
+            if (e.dot(up) < 0.0f) {
                 num_contact += 1;
-                Vec3f projected_x = x - (x - ground).dot(up) * up;
+                Vec3f projected_x = -e.dot(up) * up;
                 float gap = (x - floor.ground).dot(up);
                 if (floor.kinematic) {
-                    gap = fmaxf(gap, param.ccd_reduction * ghat);
+                    gap = fmaxf(gap, param.constraint_tol * ghat);
                 }
                 assert(gap >= 0.0f);
                 float stiff_k = (up.dot(local_hess * up) + mass / (gap * gap));
-                Vec3f f_push =
-                    stiff_k * push::gradient(x, projected_x, up, ghat);
+                Vec3f f_push = stiff_k * push::gradient(-projected_x, up, ghat);
                 Mat3x3f H_push =
-                    stiff_k * push::hessian(x, projected_x, up, ghat);
+                    stiff_k * push::hessian(-projected_x, up, ghat);
                 f += f_push;
                 H += H_push;
                 Friction friction(f_push, dx, up, param.friction,
@@ -1320,6 +1327,7 @@ struct CollisionMeshPointFaceCCD_M2C {
                                                     t2, 0.0f, param);
             if (result < param.line_search_max_t) {
                 toi = fminf(toi, result);
+                assert(toi > 0.0f);
                 return true;
             }
         }
@@ -1351,6 +1359,7 @@ struct CollisionMeshPointFaceCCD_C2M {
                                                     t11, t12, 0.0f, param);
             if (result < param.line_search_max_t) {
                 toi = fminf(toi, result);
+                assert(toi > 0.0f);
                 return true;
             }
         }
@@ -1382,6 +1391,7 @@ struct CollisionMeshEdgeEdgeCCD {
                                                q1, 0.0f, param);
             if (result < param.line_search_max_t) {
                 toi = fminf(toi, result);
+                assert(toi > 0.0f);
                 return true;
             }
         }
@@ -1418,6 +1428,7 @@ struct PointFaceCCD {
                                                     t11, t12, offset, param);
             if (result < param.line_search_max_t) {
                 toi = fminf(toi, result);
+                assert(toi > 0.0f);
                 return true;
             }
         }
@@ -1454,6 +1465,7 @@ struct EdgeEdgeCCD {
                                                    q10, q11, offset, param);
                 if (result < param.line_search_max_t) {
                     toi = fminf(toi, result);
+                    assert(toi > 0.0f);
                     return true;
                 }
             }
@@ -1485,6 +1497,7 @@ vertex_constraint_line_search(const DataSet &data, const Kinematic &kinematic,
                     float t = (r - r0) / denom;
                     toi_vert[i] =
                         fminf(toi_vert[i], param.line_search_max_t * t);
+                    assert(toi_vert[i] > 0.0f);
                 }
             }
         }
@@ -1518,6 +1531,7 @@ vertex_constraint_line_search(const DataSet &data, const Kinematic &kinematic,
                     float t = (r - r0) / (r1 - r0);
                     toi_vert[i] =
                         fminf(toi_vert[i], param.line_search_max_t * t);
+                    assert(toi_vert[i] > 0.0f);
                 }
             }
         }
@@ -1538,6 +1552,7 @@ vertex_constraint_line_search(const DataSet &data, const Kinematic &kinematic,
                     float t = -h0 / (h1 - h0);
                     toi_vert[i] =
                         fminf(toi_vert[i], param.line_search_max_t * t);
+                    assert(toi_vert[i] > 0.0f);
                 }
             }
         }
@@ -1748,7 +1763,8 @@ class CollisionMeshFaceEdgeIntersectTester {
     __device__ CollisionMeshFaceEdgeIntersectTester(const Vec<Vec3f> &vertex,
                                                     const Vec<Vec3u> &face,
                                                     const Kinematic &kinematic,
-                                                    Vec3f y0, Vec3f y1)
+                                                    const Vec3f &y0,
+                                                    const Vec3f &y1)
         : vertex(vertex), face(face), kinematic(kinematic), y0(y0), y1(y1) {}
     __device__ bool operator()(unsigned index) {
         if (check_kinematic_pair(kinematic.face[index], true)) {

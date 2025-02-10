@@ -29,4 +29,6 @@ param = (
 )
 
 session = app.session.create(fixed).start(param, blocking=True)
+session.export.animation().zip()
+
 assert session.finished()

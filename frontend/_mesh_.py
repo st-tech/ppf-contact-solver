@@ -817,15 +817,16 @@ class TriMesh(tuple[np.ndarray, np.ndarray]):
         """Recompute the hash of the mesh"""
         import hashlib
 
-        obj = np.concatenate(
-            [
-                np.array(self[0].shape),
-                self[0].ravel(),
-                np.array(self[1].shape),
-                self[1].ravel(),
-            ]
-        )
-        self.hash = hashlib.sha256(obj.tobytes()).hexdigest()
+        self.hash = hashlib.sha256(
+            np.concatenate(
+                [
+                    np.array(self[0].shape),
+                    self[0].ravel(),
+                    np.array(self[1].shape),
+                    self[1].ravel(),
+                ]
+            ).tobytes()
+        ).hexdigest()
         return self
 
     def set_cache_dir(self, cache_dir: str) -> "TriMesh":

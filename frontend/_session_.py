@@ -56,7 +56,7 @@ class Param:
         """
         return copy.deepcopy(self)
 
-    def set(self, key: str, value: Any) -> "Param":
+    def set(self, key: str, value: Optional[Any] = None) -> "Param":
         """Set a parameter value.
 
         Args:
@@ -71,6 +71,8 @@ class Param:
         elif key not in self._param.keys():
             raise ValueError(f"Key {key} does not exist")
         else:
+            if value is None:
+                value = True
             self._param[key]["value"] = value
         return self
 
@@ -115,7 +117,7 @@ class Param:
             if self._key in self._dyn_param.keys():
                 self._dyn_param[self._key].append((self._time, value))
             else:
-                initial_val = self._param[self._key]
+                initial_val = self._param[self._key]["value"]
                 self._dyn_param[self._key] = [
                     (0.0, initial_val),
                     (self._time, value),
@@ -377,10 +379,16 @@ class Zippable:
 
     def zip(self):
         """Zip the directory."""
-        path = f"{self._dirpath}.zip"
-        print(f"zipping to {path}")
-        shutil.make_archive(self._dirpath, "zip", self._dirpath)
-        print("done")
+        ci_name = Utils.ci_name()
+        if ci_name is not None:
+            print("CI detected. Skipping zipping.")
+        else:
+            path = f"{self._dirpath}.zip"
+            if os.path.exists(path):
+                os.remove(path)
+            print(f"zipping to {path}")
+            shutil.make_archive(self._dirpath, "zip", self._dirpath)
+            print("done")
 
 
 class SessionExport:
@@ -426,14 +434,29 @@ class SessionExport:
         else:
             raise ValueError("Solver does not exist")
 
-    def animation(self, path: str, ext="ply", include_static: bool = True) -> Zippable:
+    def animation(
+        self,
+        path: str = "",
+        ext="ply",
+        include_static: bool = True,
+    ) -> Zippable:
         """Export the animation frames.
 
         Args:
-            path (str): The path to the export directory.
+            path (str): The path to the export directory. If set empty, it will use the default path.
             ext (str, optional): The file extension. Defaults to "ply".
             include_static (bool, optional): Whether to include the static mesh.
         """
+        if path == "":
+            ci_name = Utils.ci_name()
+            if ci_name is not None:
+                path = os.path.join(self._session.info.path, "preview")
+            else:
+                session = self._session
+                scene = session._fixed
+                assert scene is not None
+                path = os.path.join("export", scene._name, session.info.name)
+
         if os.path.exists(path):
             shutil.rmtree(path)
         else:
@@ -443,7 +466,10 @@ class SessionExport:
         return Zippable(path)
 
     def frame(
-        self, path: str, frame: Optional[int] = None, include_static: bool = True
+        self,
+        path: str = "",
+        frame: Optional[int] = None,
+        include_static: bool = True,
     ) -> "Session":
         """Export a specific frame.
 
@@ -455,6 +481,7 @@ class SessionExport:
         Returns:
             Session: The session object.
         """
+
         if self._session._fixed is None:
             raise ValueError("Scene must be initialized")
         else:
@@ -523,19 +550,6 @@ class SessionLog:
                 else:
                     return lines
         return []
-
-    def stream(self, n_lines: Optional[int] = None) -> list[str]:
-        """Get the last n lines of the log file.
-
-        Args:
-            n_lines (Optional[int], optional): The number of lines. Defaults to None.
-
-        Returns:
-            list[str]: The last n lines of the log file.
-        """
-        return self._tail_file(
-            os.path.join(self._session.info.path, "output", "cudasim_log.txt"), n_lines
-        )
 
     def stdout(self, n_lines: Optional[int] = None) -> list[str]:
         """Get the last n lines of the stdout log file.
@@ -691,10 +705,10 @@ class SessionGet:
                                 vert = np.frombuffer(data, dtype=np.float32).reshape(
                                     -1, 3
                                 )
-                            if len(vert) == len(self._session._fixed._vert):
-                                return (vert, last_frame)
-                            else:
-                                return None
+                            return (
+                                vert,
+                                last_frame,
+                            )
                         except ValueError:
                             return None
                 else:
@@ -793,7 +807,7 @@ class Session:
             Session: The initialized session.
         """
         path = os.path.expanduser(
-            os.path.join(self._app_root, "session", scene._name, self.info.name)
+            os.path.join(self._app_root, scene._name, self.info.name)
         )
         self._shading = scene._shading
         self.info.set_path(path)
@@ -1143,7 +1157,7 @@ class Session:
             display(widgets.HBox((button, terminate_button)))
 
             stop = False
-            log_path = os.path.join(self.info.path, "output", "cudasim_log.txt")
+            log_path = os.path.join(self.info.path, "stdout.log")
             err_path = os.path.join(self.info.path, "error.log")
             if os.path.exists(log_path):
 

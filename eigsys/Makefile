@@ -3,7 +3,7 @@
 # License: Apache v2.0
 
 CXX = g++
-CXXFLAGS = -O2 -std=c++17
+CXXFLAGS = -O3 -std=c++17
 
 EXEC2 = eigen2
 EXEC3 = eigen3
@@ -28,7 +28,7 @@ $(BENCH3): $(BENCH3_SRC) $(INC3)
 	$(CXX) $(CXXFLAGS) -I$(EIGEN_DIR) $(BENCH3_SRC) -o $(BENCH3)
 
 clean:
-	rm -f $(EXEC2) $(EXEC3) $(BENCH3)
+	rm -f $(EXEC2) $(EXEC3) $(EXEC4) $(BENCH3)
 
 run2: $(EXEC2)
 	./$(EXEC2)

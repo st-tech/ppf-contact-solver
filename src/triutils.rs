@@ -9,7 +9,9 @@ pub fn area(x: &Matrix3xX<f32>, faces: &Matrix3xX<usize>, index: usize) -> f32 {
     let x0 = x.column(f[0]);
     let x1 = x.column(f[1]);
     let x2 = x.column(f[2]);
-    0.5 * (x1 - x0).cross(&(x2 - x0)).norm()
+    let e0 = x1 - x0;
+    let e1 = x2 - x0;
+    0.5 * e0.cross(&e1).norm()
 }
 
 pub fn tet_volume(x: &Matrix3xX<f32>, tets: &Matrix4xX<usize>, index: usize) -> f32 {
@@ -18,7 +20,10 @@ pub fn tet_volume(x: &Matrix3xX<f32>, tets: &Matrix4xX<usize>, index: usize) -> 
     let x1 = x.column(t[1]);
     let x2 = x.column(t[2]);
     let x3 = x.column(t[3]);
-    (x1 - x0).cross(&(x2 - x0)).dot(&(x3 - x0)).abs() / 6.0
+    let e0 = x1 - x0;
+    let e1 = x2 - x0;
+    let e2 = x3 - x0;
+    (e0.cross(&e1).dot(&e2)).abs() / 6.0
 }
 
 pub fn face_areas(x: &Matrix3xX<f32>, faces: &Matrix3xX<usize>) -> Vec<f32> {

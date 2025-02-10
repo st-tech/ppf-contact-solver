@@ -10,10 +10,6 @@
 
 namespace strainlimiting {
 
-float find_mimimal_stretch_gap(const DataSet &data, const Vec<Vec3f> &eval_x,
-                               Vec<float> &tmp_face, const Kinematic &Kinematic,
-                               const ParamSet &param);
-
 void embed_strainlimiting_force_hessian(
     const DataSet &data, const Vec<Vec3f> &eval_x, const Kinematic &Kinematic,
     Vec<float> &force, const FixedCSRMat &fixed_hess_in,

@@ -92,4 +92,18 @@ static __device__ svd_tuple_3x2 run_svd_3x2(const Mat3x2r &F) {
     return {U, lambda, V.transpose()};
 }
 
+static __device__ Vec2r singular_vals_minus_one(const Mat3x2r &F) {
+    Mat2r A(F.transpose() * F);
+#ifdef USE_EIGEN_SYMM_EIGSOLVE
+    Eigen::SelfAdjointEigenSolver<Mat2r> eigensolver(A, 0);
+    Vec2r lmd = eigensolver.eigenvalues();
+#else
+    Vec2r lmd = eigvalues(A);
+#endif
+    for (int i = 0; i < 2; ++i) {
+        lmd[i] = sqrt(lmd[i]) - _real_(1.0);
+    }
+    return lmd;
+}
+
 #endif // EIGEN_SOLVER_2X2_H

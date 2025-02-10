@@ -18,13 +18,13 @@ use backend::MeshSet;
 use clap::Parser;
 use data::{BvhSet, DataSet, FaceProp, ParamSet, TetProp};
 use log::*;
-use log4rs::append::{console::ConsoleAppender, file::FileAppender};
+use log4rs::append::console::ConsoleAppender;
 use log4rs::config::{Appender, Config, Root};
 use log4rs::encode::pattern::PatternEncoder;
 use mesh::Mesh as SimMesh;
 use scene::Scene;
 use std::ffi::CString;
-use std::fs::{File, OpenOptions};
+use std::fs::OpenOptions;
 use std::io::Write;
 use std::os::raw::c_char;
 use {builder::Props, cvec::CVec};
@@ -32,7 +32,7 @@ use {builder::Props, cvec::CVec};
 extern crate nalgebra as na;
 
 extern "C" {
-    fn set_log_path(log_path: *const c_char, data_dir: *const c_char);
+    fn set_log_path(data_dir: *const c_char);
 }
 
 #[no_mangle]
@@ -164,36 +164,19 @@ fn setup(args: &Args) {
     }
 
     let pattern = "{d(%Y-%m-%d %H:%M:%S)} [{t}] {m}{n}";
-    let logfile = FileAppender::builder()
-        .encoder(Box::new(PatternEncoder::new(pattern)))
-        .build(format!("{}/log.txt", args.output))
-        .unwrap();
-
     let stdout = ConsoleAppender::builder()
         .encoder(Box::new(PatternEncoder::new(pattern)))
         .build();
-
     let config = Config::builder()
-        .appender(Appender::builder().build("logfile", Box::new(logfile)))
         .appender(Appender::builder().build("stdout", Box::new(stdout)))
-        .build(
-            Root::builder()
-                .appender("logfile")
-                .appender("stdout")
-                .build(LevelFilter::Info),
-        )
+        .build(Root::builder().appender("stdout").build(LevelFilter::Info))
         .unwrap();
 
     log4rs::init_config(config).unwrap();
 
     info!("{}", std::env::args().collect::<Vec<_>>().join(" "));
-    let serialized_args = serde_json::to_string_pretty(&args).unwrap();
-    let mut file = File::create(format!("{}/args.txt", args.output)).unwrap();
-    write!(file, "{}", serialized_args).unwrap();
-
-    let log_path = CString::new(format!("{}/cudasim_log.txt", args.output)).unwrap();
     let data_dir = CString::new(format!("{}/data", args.output)).unwrap();
     unsafe {
-        set_log_path(log_path.as_ptr(), data_dir.as_ptr());
+        set_log_path(data_dir.as_ptr());
     }
 }
