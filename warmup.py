@@ -390,6 +390,7 @@ if __name__ == "__main__":
             run("pip3 install sphinx sphinxawesome-theme sphinx_autobuild")
             install_meshplot()
             install_sdf()
+            reinstall_pyopengl()
         elif mode == "docs-build":
             make_docs()
             build_docs()
