@@ -1,5 +1,18 @@
 ## ️🧐 Hindsight and Follow-Ups
 
+### Floating Point-Rounding Errors in ACCD (2025. Feb 26.)
+
+Additive Continuous Collision Detection (ACCD) works only if we can precisely compute the gap distance at any sub-step time.
+With our single-precision solver, the computed distance may be inaccurate when the gap is extremely tight, potentially leading to pass-through, as illustrated in the figure below.
+
+Our paper does not attempt to fundamentally fix this issue, but our cubic energy helps to drive the distance curve away from such a numerically dangerous zone.
+
+Note that this issue alone is not easy to confirm in simulation because, for such tight gaps (if any), ill-conditioned systems appear before this error emerges.
+
+<div align="center">
+<img src="../asset/image/hindsight/accd-danger.png" alt="equation" width="450">
+</div>
+
 ### Quadratic Barrier Function (Section 5.4)
 
 In the paper we presented the following barrier as a quadratic energy counterpart:
