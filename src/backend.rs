@@ -10,7 +10,6 @@ use serde::{Deserialize, Serialize};
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::Path;
-use std::sync::mpsc;
 use std::time::Instant;
 
 extern crate nalgebra as na;
@@ -123,44 +122,9 @@ impl Backend {
         }
         let mut last_time = Instant::now();
         let mut constraint;
-
-        let (task_sender, task_receiver) = mpsc::channel();
-        let (result_sender, result_receiver) = mpsc::channel();
-
-        std::thread::spawn(move || {
-            while let Ok((vertex, face, edge, vert_elm)) = task_receiver.recv() {
-                let face = builder::build_bvh(&vertex, &face);
-                let edge = builder::build_bvh(&vertex, &edge);
-                let vertex = builder::build_bvh(&vertex, &vert_elm);
-                let _ = result_sender.send(BvhSet { face, edge, vertex });
-            }
-        });
-
-        let mut first_step = true;
         loop {
             constraint = scene.make_constraint(args, self.state.time, &self.mesh);
             unsafe { update_constraint(&constraint) };
-            if !first_step {
-                match result_receiver.try_recv() {
-                    Ok(bvh) => {
-                        self.bvh = Box::new(Some(bvh));
-                        unsafe {
-                            update_bvh(self.bvh.as_ref().as_ref().unwrap());
-                        }
-                        let data = (
-                            self.state.curr_vertex.clone(),
-                            self.mesh.mesh.mesh.face.clone(),
-                            self.mesh.mesh.mesh.edge.clone(),
-                            self.mesh.mesh.mesh.vertex.clone(),
-                        );
-                        task_sender.send(data).unwrap();
-                    }
-                    Err(mpsc::TryRecvError::Empty) => {}
-                    Err(mpsc::TryRecvError::Disconnected) => {
-                        panic!("bvh thread disconnected");
-                    }
-                }
-            }
             let new_frame = (self.state.time * args.fps).floor() as i32;
             if new_frame != self.state.curr_frame {
                 // Name: Time Per Video Frame
@@ -224,6 +188,23 @@ impl Backend {
                 if self.state.curr_frame == args.fake_crash_frame {
                     panic!("fake crash!");
                 }
+                if (self.state.curr_frame + 1) % args.bvh_build_interval == 0 {
+                    info!("building BVH...");
+                    let data = (
+                        &self.state.curr_vertex,
+                        &self.mesh.mesh.mesh.face,
+                        &self.mesh.mesh.mesh.edge,
+                        &self.mesh.mesh.mesh.vertex,
+                    );
+                    let (vertex, face, edge, vert_elm) = data;
+                    let face = builder::build_bvh(vertex, face);
+                    let edge = builder::build_bvh(vertex, edge);
+                    let vertex = builder::build_bvh(vertex, vert_elm);
+                    self.bvh = Box::new(Some(BvhSet { face, edge, vertex }));
+                    unsafe {
+                        update_bvh(self.bvh.as_ref().as_ref().unwrap());
+                    }
+                }
             }
             if self.state.curr_frame >= args.frames {
                 break;
@@ -235,18 +216,7 @@ impl Backend {
                 panic!("failed to advance");
             }
             self.state.time = result.time;
-            if first_step {
-                let data = (
-                    self.state.curr_vertex.clone(),
-                    self.mesh.mesh.mesh.face.clone(),
-                    self.mesh.mesh.mesh.edge.clone(),
-                    self.mesh.mesh.mesh.vertex.clone(),
-                );
-                task_sender.send(data).unwrap();
-                first_step = false;
-            }
         }
-        let _ = result_receiver.try_recv();
         write_current_time_to_file(finished_path.to_str().unwrap()).unwrap();
     }
 }

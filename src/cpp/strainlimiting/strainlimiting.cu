@@ -19,13 +19,13 @@ namespace strainlimiting {
 
 Vec<float> tmp_face;
 
-__device__ float minimal_stretch_gap(const Svd3x2 &svd, float eps) {
-    return eps - svd.S.maxCoeff();
+__device__ float minimal_stretch_gap(const Svd3x2 &svd, float tau, float eps) {
+    return tau + eps - svd.S.maxCoeff();
 }
 
 __device__ float compute_stiffness(const Vec<Vec3f> &eval_x, const Vec3u &face,
                                    const FixedCSRMat &fixed_hess_in, float mass,
-                                   const Svd3x2 &svd, float eps) {
+                                   const Svd3x2 &svd, float tau, float eps) {
     const Vec3f &x0 = eval_x[face[0]];
     const Vec3f &x1 = eval_x[face[1]];
     const Vec3f &x2 = eval_x[face[2]];
@@ -33,8 +33,8 @@ __device__ float compute_stiffness(const Vec<Vec3f> &eval_x, const Vec3u &face,
     Vec3f center = s * x0 + s * x1 + s * x2;
     Mat3x3f R;
     R << x0 - center, //
-         x1 - center, //
-         x2 - center;
+        x1 - center,  //
+        x2 - center;
     Vec9f w = Map<Vec9f>(R.data());
     Mat9x9f local_hess = Mat9x9f::Zero();
     for (unsigned ii = 0; ii < 3; ++ii) {
@@ -43,7 +43,7 @@ __device__ float compute_stiffness(const Vec<Vec3f> &eval_x, const Vec3u &face,
                 fixed_hess_in(face[ii], face[jj]);
         }
     }
-    float d = minimal_stretch_gap(svd, eps);
+    float d = minimal_stretch_gap(svd, tau, eps);
     return w.dot(local_hess * w) + mass / (d * d);
 }
 
@@ -54,11 +54,12 @@ void embed_strainlimiting_force_hessian(
 
     const Vec<Vec3f> &curr = data.vertex.curr;
     unsigned shell_face_count = data.shell_face_count;
+    float tau(param.strain_limit_tau);
     float eps(param.strain_limit_eps);
 
     DISPATCH_START(shell_face_count)
-    [data, eval_x, kinematic, curr, force, fixed_hess_in, fixed_hess_out, eps,
-     param] __device__(unsigned i) mutable {
+    [data, eval_x, kinematic, curr, force, fixed_hess_in, fixed_hess_out, tau,
+     eps, param] __device__(unsigned i) mutable {
         if (!kinematic.face[i]) {
             const Vec3u &face = data.mesh.mesh.face[i];
             Mat3x3f X;
@@ -66,15 +67,15 @@ void embed_strainlimiting_force_hessian(
             Mat3x2f F =
                 utility::compute_deformation_grad(X, data.inv_rest2x2[i]);
             Svd3x2 svd = utility::svd3x2_shifted(F);
-            if (svd.S.maxCoeff() > 0.0f) {
+            if (svd.S.maxCoeff() > tau) {
                 const Vec3u &face = data.mesh.mesh.face[i];
                 Mat3x3f dedx = Mat3x3f::Zero();
                 Mat9x9f d2edx2 = Mat9x9f::Zero();
                 DiffTable2 table = barrier::compute_strainlimiting_diff_table(
-                    svd.S, eps, param.barrier);
+                    svd.S, tau, eps, param.barrier);
                 float mass = data.prop.face[i].mass;
                 float stiffness = compute_stiffness(
-                    data.vertex.curr, face, fixed_hess_in, mass, svd, eps);
+                    data.vertex.curr, face, fixed_hess_in, mass, svd, tau, eps);
                 svd.S += Vec2f::Ones();
                 Mat3x2f dedF = eigenanalysis::compute_force(table, svd);
                 Mat6x6f d2edF2 = eigenanalysis::compute_hessian(
@@ -98,11 +99,15 @@ float line_search(const DataSet &data, const Kinematic &kinematic,
     unsigned shell_face_count = data.shell_face_count;
     Vec<float> toi = tmp_face;
     toi.size = shell_face_count;
+    float tau(param.strain_limit_tau);
     float eps(param.strain_limit_eps);
+    float tol(param.strain_limit_reduction * eps);
+    float toi_reduction(param.toi_reduction);
+    float target = tau + eps - 2.0f * tol;
 
     DISPATCH_START(shell_face_count)
-    [inv_rest2x2, kinematic, mesh, eval_x, prev, param, toi,
-     eps] __device__(unsigned i) mutable {
+    [inv_rest2x2, kinematic, mesh, eval_x, prev, param, toi, tau, eps, tol,
+     toi_reduction, target] __device__(unsigned i) mutable {
         float t = param.line_search_max_t;
         if (!kinematic.face[i]) {
             Vec3u face = mesh.mesh.face[i];
@@ -114,27 +119,26 @@ float line_search(const DataSet &data, const Kinematic &kinematic,
             const Mat3x2f F1 =
                 utility::compute_deformation_grad(x1, inv_rest2x2[i]);
             const Mat3x2f dF = F1 - F0;
-            if (singular_vals_minus_one(F0 + t * dF).maxCoeff() >= eps) {
+            if (singular_vals_minus_one(F0 + t * dF).maxCoeff() >=
+                target + tol) {
                 float upper_t = t;
                 float lower_t = 0.0f;
-                float window = upper_t - lower_t;
-                while (true) {
+                for (unsigned k = 0; k < param.binary_search_max_iter; ++k) {
                     t = 0.5f * (upper_t + lower_t);
                     Vec2f singular_vals = singular_vals_minus_one(F0 + t * dF);
-                    float diff = singular_vals.maxCoeff() - eps;
-                    if (diff < 0.0f) {
+                    float diff = singular_vals.maxCoeff() - target;
+                    if (fabs(diff) < tol) {
+                        break;
+                    } else if (diff < 0.0f) {
                         lower_t = t;
                     } else {
                         upper_t = t;
                     }
-                    float new_window = upper_t - lower_t;
-                    if (new_window == window) {
-                        break;
-                    } else {
-                        window = new_window;
-                    }
                 }
-                t = lower_t;
+            }
+            if (singular_vals_minus_one(F0 + t * dF).maxCoeff() >=
+                target + tol) {
+                t *= toi_reduction;
             }
         }
         toi[i] = t;

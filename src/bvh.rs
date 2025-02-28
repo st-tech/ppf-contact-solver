@@ -89,14 +89,34 @@ fn subdivide(mut obj: Vec<(Aabb, usize)>, node: &mut Vec<Node>) -> Node {
         let mean = compute_mean(obj.iter().map(|(aabb, _)| aabb));
         let var = compute_var(obj.iter().map(|(aabb, _)| aabb), mean);
         let (dim, _) = var.argmax();
-        obj.sort_by(|a, b| {
+        let mut left_obj = Vec::new();
+        let mut right_obj = Vec::new();
+        let mut deferred = Vec::new();
+        obj.iter().for_each(|&e| {
+            if e.0.max[dim] < mean[dim] {
+                left_obj.push(e);
+            } else if e.0.min[dim] > mean[dim] {
+                right_obj.push(e);
+            } else {
+                deferred.push(e);
+            }
+        });
+        deferred.sort_by(|a, b| {
             let a = a.0.min[dim] + a.0.max[dim];
             let b = b.0.min[dim] + b.0.max[dim];
             a.partial_cmp(&b).unwrap()
         });
-        let obj_len = obj.len();
-        let left_obj = Vec::from_iter(obj.drain(..obj_len / 2));
-        let right_obj = obj;
+        let deffered_len = deferred.len();
+        if deffered_len == 1 {
+            if left_obj.len() < right_obj.len() {
+                left_obj.push(deferred.pop().unwrap());
+            } else {
+                right_obj.push(deferred.pop().unwrap());
+            }
+        } else if deffered_len > 0 {
+            left_obj.extend(deferred.drain(..deffered_len / 2));
+            right_obj.extend(deferred);
+        }
         let (left_node, right_node) = (subdivide(left_obj, node), subdivide(right_obj, node));
         let left_index = node.len();
         node.push(left_node);

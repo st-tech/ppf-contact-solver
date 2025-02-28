@@ -105,30 +105,30 @@ __device__ Mat3x3f compute_edge_hessian(const Vec3f &e, float ghat,
 }
 
 __device__ DiffTable2 compute_strainlimiting_diff_table(const Vec2f &a,
-                                                        float ghat,
+                                                        float tau, float eps,
                                                         Barrier barrier) {
     DiffTable2 table;
     table.d2ed2a = Mat2x2f::Zero();
     table.deda = Vec2f::Zero();
     for (int i = 0; i < 2; ++i) {
         float g = a[i];
-        if (g > 0.0f) {
-            float y = ghat - g;
-            table.deda[i] = -gradient(y, ghat, 0.0f, barrier);
-            table.d2ed2a(i, i) = curvature(y, ghat, 0.0f, barrier);
+        if (g > tau) {
+            float y = tau + eps - g;
+            table.deda[i] = -gradient(y, eps, 0.0f, barrier);
+            table.d2ed2a(i, i) = curvature(y, eps, 0.0f, barrier);
         }
     }
     return table;
 }
 
-__device__ float strainlimiting_energy(const Vec2f &a, float ghat,
+__device__ float strainlimiting_energy(const Vec2f &a, float tau, float eps,
                                        Barrier barrier) {
     float result(0.0f);
     for (int i = 0; i < 2; ++i) {
         float g = a[i];
-        if (g > 0.0f) {
-            float y = ghat - g;
-            result += energy(y, ghat, 0.0f, barrier);
+        if (g > tau) {
+            float y = tau + eps - g;
+            result += energy(y, eps, 0.0f, barrier);
         }
     }
     return result;
