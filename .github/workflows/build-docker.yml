@@ -30,7 +30,7 @@ jobs:
         build-args: |
           MODE=compiled
           IMAGE=${{ env.REGISTRY }}/${{ github.repository }}-base:latest
-        tags: ${{ env.REGISTRY }}/${{ github.repository }}-compiled-siga-2024:latest
+        tags: ${{ env.REGISTRY }}/${{ github.repository }}-compiled-sigasia-2024:latest
 
   notify_failure:
     runs-on: ubuntu-latest
