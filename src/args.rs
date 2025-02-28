@@ -165,6 +165,15 @@ pub struct Args {
     #[clap(long, default_value_t = 0.01)]
     pub ccd_reduction: f32,
 
+    // Name: Maximum Search Direction Velocity
+    // Recommended Range: 5 m/s to 50 m/s
+    // Description:
+    // This parameter defines the maximum allowable search direction magnitude
+    // during optimization processes. It helps in controlling the step size
+    // and ensuring stability.
+    #[clap(long, default_value_t = 10.0)]
+    pub max_search_dir_vel: f32,
+
     // Name: Epsilon for Eigenvalue Analysis
     // Recommended Range: 1e-3 to 1e-2
     // Description:

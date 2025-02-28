@@ -52,6 +52,7 @@ Published in [ACM Transactions on Graphics (TOG)](https://dl.acm.org/doi/abs/10.
 
 ## 📝 Change History
 
+- (2025.02.28) Added a [reference branch and a Docker image of our TOG paper](#-technical-materials).
 - (2025.2.26) Added Floating Point-Rounding Errors in ACCD in [hindsight](./articles/hindsight.md).
 - (2025.2.7) Updated the [trapped example](./examples/trapped.ipynb) [[Video]](https://drive.google.com/file/d/1Qek0e0qBNWPlBb1hSOZ6o_e2Cqf5rGst/view) with squishy balls.
 - (2025.1.8) Added a [domino example](./examples/domino.ipynb) [[Video]](https://drive.google.com/file/d/1N9y8eZrjSQhAUhKwiO9w8jW_T18zPnYf/view).
@@ -64,7 +65,6 @@ Published in [ACM Transactions on Graphics (TOG)](https://dl.acm.org/doi/abs/10.
 - (2024.12.18) Added a [hindsight](./articles/hindsight.md) noting that the tilt angle was not $30^\circ$, but rather $26.57^\circ$
 - (2024.12.16) Removed thrust dependencies to fix runtime errors for the driver version `560.94` [[Issue Link]](https://github.com/st-tech/ppf-contact-solver/issues/1)
 
-
 ## 🎓 Technical Materials
 
 - 🎥 Main video [[Video]](https://drive.google.com/file/d/1OzPbUoqddUYDvXMvRnUHH7kz0nZhmt7K/view?usp=drive_link)
@@ -74,6 +74,20 @@ Published in [ACM Transactions on Graphics (TOG)](https://dl.acm.org/doi/abs/10.
 - 📊 Supplementary PDF [[PDF]](https://drive.google.com/file/d/1ptjFNVufPBV4-vb5UDh1yTgz8-esjaSF/view?usp=drive_link)
 - 🤖 Supplementary scripts [[Directory]](https://drive.google.com/drive/folders/13CO068xLkd6ZSxsqtJQdNadgMrbbfSug?usp=drive_link)
 - 🔍 Singular-value eigenanalysis [[Markdown]](./articles/eigensys.md)
+
+#### 📌 Reference Implementation
+
+The main branch is undergoing frequent updates and may introduce breaking 🚧 changes relative to the paper.
+✨ Although the latest version offers a superior experience, we have created a new branch, ```sigasia-2024```, to retain consistency with the paper.
+
+- 🛠️ Only maintenance updates are planned for this branch.
+- 🚫 All algorithmic changes listed in this [[Markdown]](./articles/bug.md) are excluded from this branch.
+
+- 📦 We also provide a pre-compiled Docker image: ```ghcr.io/st-tech/ppf-contact-solver-compiled-sigasia-2024:latest``` of this branch.
+
+- 🌐 [Template Link for vast.ai](https://cloud.vast.ai/?ref_id=85288&creator_id=85288&name=ppf-contact-solver-sigasia-2024).
+
+- 🌐 [Template Link for RunPods](https://runpod.io/console/deploy?template=ooqpniuixi&ref=bhy3csxy)
 
 ## ⚡️ Requirements
 

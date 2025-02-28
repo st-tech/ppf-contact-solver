@@ -13,36 +13,61 @@ template <class T, unsigned N> using SVec = Eigen::Vector<T, N>;
 template <unsigned N> using SVecf = SVec<float, N>;
 template <unsigned N> using SVecu = SVec<unsigned, N>;
 
-using Vec2f = SVecf<2>;
-using Vec3f = SVecf<3>;
-using Vec4f = SVecf<4>;
-using Vec6f = SVecf<6>;
-using Vec9f = SVecf<9>;
-using Vec12f = SVecf<12>;
-using Vec1u = SVecu<1>;
-using Vec2u = SVecu<2>;
-using Vec3u = SVecu<3>;
-using Vec4u = SVecu<4>;
+template <class T> using Vec1 = SVec<T, 1>;
+template <class T> using Vec2 = SVec<T, 2>;
+template <class T> using Vec3 = SVec<T, 3>;
+template <class T> using Vec4 = SVec<T, 4>;
+template <class T> using Vec6 = SVec<T, 6>;
+template <class T> using Vec9 = SVec<T, 9>;
+template <class T> using Vec12 = SVec<T, 12>;
+
+using Vec1f = Vec1<float>;
+using Vec2f = Vec2<float>;
+using Vec3f = Vec3<float>;
+using Vec4f = Vec4<float>;
+using Vec6f = Vec6<float>;
+using Vec9f = Vec9<float>;
+using Vec12f = Vec12<float>;
+
+using Vec1u = Vec1<unsigned>;
+using Vec2u = Vec2<unsigned>;
+using Vec3u = Vec3<unsigned>;
+using Vec4u = Vec4<unsigned>;
 
 template <class T, unsigned R, unsigned C>
 using SMat = Eigen::Matrix<T, R, C, Eigen::ColMajor>;
 template <unsigned R, unsigned C>
 using SMatf = Eigen::Matrix<float, R, C, Eigen::ColMajor>;
 
-using Mat2x3f = SMatf<2, 3>;
-using Mat3x2f = SMatf<3, 2>;
-using Mat2x2f = SMatf<2, 2>;
-using Mat3x3f = SMatf<3, 3>;
-using Mat3x4f = SMatf<3, 4>;
-using Mat3x6f = SMatf<3, 6>;
-using Mat4x3f = SMatf<4, 3>;
-using Mat4x4f = SMatf<4, 4>;
-using Mat3x9f = SMatf<3, 9>;
-using Mat6x6f = SMatf<6, 6>;
-using Mat6x9f = SMatf<6, 9>;
-using Mat9x9f = SMatf<9, 9>;
-using Mat9x12f = SMatf<9, 12>;
-using Mat12x12f = SMatf<12, 12>;
+template <class T> using Mat3x2 = SMat<T, 3, 2>;
+template <class T> using Mat2x2 = SMat<T, 2, 2>;
+template <class T> using Mat2x3 = SMat<T, 2, 3>;
+template <class T> using Mat3x3 = SMat<T, 3, 3>;
+template <class T> using Mat3x4 = SMat<T, 3, 4>;
+template <class T> using Mat3x6 = SMat<T, 3, 6>;
+template <class T> using Mat4x3 = SMat<T, 4, 3>;
+template <class T> using Mat4x4 = SMat<T, 4, 4>;
+template <class T> using Mat3x9 = SMat<T, 3, 9>;
+template <class T> using Mat6x6 = SMat<T, 6, 6>;
+template <class T> using Mat6x9 = SMat<T, 6, 9>;
+template <class T> using Mat9x9 = SMat<T, 9, 9>;
+template <class T> using Mat9x12 = SMat<T, 9, 12>;
+template <class T> using Mat12x12 = SMat<T, 12, 12>;
+
+using Mat2x3f = Mat2x3<float>;
+using Mat3x2f = Mat3x2<float>;
+using Mat2x2f = Mat2x2<float>;
+using Mat3x3f = Mat3x3<float>;
+using Mat3x4f = Mat3x4<float>;
+using Mat3x6f = Mat3x6<float>;
+using Mat4x3f = Mat4x3<float>;
+using Mat4x4f = Mat4x4<float>;
+using Mat3x9f = Mat3x9<float>;
+using Mat6x6f = Mat6x6<float>;
+using Mat6x9f = Mat6x9<float>;
+using Mat9x9f = Mat9x9<float>;
+using Mat9x12f = Mat9x12<float>;
+using Mat12x12f = Mat12x12<float>;
 
 struct VertexNeighbor {
     VecVec<unsigned> face;
@@ -227,6 +252,7 @@ struct ParamSet {
     float line_search_max_t;
     float ccd_tol;
     float ccd_reduction;
+    float max_search_dir_vel;
     float eiganalysis_eps;
     float friction;
     float friction_eps;
