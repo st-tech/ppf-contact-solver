@@ -122,13 +122,28 @@ pub struct Args {
     #[clap(long, default_value_t = 0.01)]
     pub constraint_tol: f32,
 
+    // Name: Strain Limit Tau
+    // Recommended Range: 0 to 0.05
+    // Description:
+    // Starting from this value, the strain limit is activated.
+    #[clap(long, default_value_t = 0.025)]
+    pub strain_limit_tau: f32,
+
     // Name: Strain Limit Epsilon
     // Recommended Range: 0 to 0.05
     // Description:
     // After the strain limit is activated, this value is used to control the maximal stretch.
-    // For example, if this value is 0.05, the maximal stretch ratio is 5%.
-    #[clap(long, default_value_t = 0.05)]
+    // For example, if this value is 0.025 and the strain limit tau is 0.025,
+    // the maximal stretch ratio is 5%.
+    #[clap(long, default_value_t = 0.025)]
     pub strain_limit_eps: f32,
+
+    // Name: Strain Limit Reduction
+    // Recommended Range: 1e-4 to 1e-3
+    // Description:
+    // This factor is used to reduce the strain limit over time.
+    #[clap(long, default_value_t = 1e-4)]
+    pub strain_limit_reduction: f32,
 
     // Name: Flag to Disable Strain Limit
     // Description:
@@ -164,6 +179,15 @@ pub struct Args {
     // This factor is multiplied to the initial gap to set this threshold.
     #[clap(long, default_value_t = 0.01)]
     pub ccd_reduction: f32,
+
+    // Name: Maximum Search Direction Velocity
+    // Recommended Range: 5 m/s to 50 m/s
+    // Description:
+    // This parameter defines the maximum allowable search direction magnitude
+    // during optimization processes. It helps in controlling the step size
+    // and ensuring stability.
+    #[clap(long, default_value_t = 10.0)]
+    pub max_search_dir_vel: f32,
 
     // Name: Epsilon for Eigenvalue Analysis
     // Recommended Range: 1e-3 to 1e-2
@@ -210,6 +234,26 @@ pub struct Args {
     // This number is multiplied to the initial BVH size to allocate the memory.
     #[clap(long, default_value_t = 2)]
     pub bvh_alloc_factor: u32,
+
+    // Name: BVH Build Interval
+    // Description:
+    // The interval at which the Bounding Volume Hierarchy (BVH) is rebuilt during the simulation.
+    // A smaller interval may lead to more efficient collision detection but can increase computational cost.
+    #[clap(long, default_value_t = 10)]
+    pub bvh_build_interval: i32,
+
+    // Name: Maximum Iterations for Binary Search
+    // Description:
+    // The maximum number of iterations for binary search.
+    #[clap(long, default_value_t = 1024)]
+    pub binary_search_max_iter: u32,
+
+    // Name: TOI Reduction Rate
+    // Description:
+    // This parameter defines the rate at which the Time of Impact (TOI) is reduced
+    // when the strain limiting line search does not settle.
+    #[clap(long, default_value_t = 0.9)]
+    pub toi_reduction: f32,
 
     // Name: Maximal Frame Count to Simulate
     // Description:

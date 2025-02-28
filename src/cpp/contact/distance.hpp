@@ -66,7 +66,18 @@ __device__ Vec4f edge_edge_distance_coeff(const SVec<T, 3> &ea0,
     Vec2f x;
     if (solve(a.transpose() * a,
               a.transpose() * (eb0 - ea0).template cast<float>(), x)) {
-        return Vec4f(1.0f - x[0], x[0], 1.0f - x[1], x[1]);
+        Vec2f w0, w1;
+        Vec3f q0 = (eb0 - ea0).template cast<float>();
+        Vec3f q1 = (eb1 - ea0).template cast<float>();
+        Vec3f p0 = (ea0 - eb0).template cast<float>();
+        Vec3f p1 = (ea1 - eb0).template cast<float>();
+        for (int k = 0; k < 4; k++) {
+            w0 = point_edge_distance_coeff<T>(x(0) * r0, q0, q1);
+            w1 = point_edge_distance_coeff<T>(x(1) * r1, p0, p1);
+            x(0) = 0.5f * (w1(1) + x(0));
+            x(1) = 0.5f * (w0(1) + x(1));
+        }
+        return Vec4f(1.0 - x(0), x(0), 1.0 - x(1), x(1));
     } else {
         return Vec4f(0.5f, 0.5f, 0.5f, 0.5f);
     }
@@ -189,10 +200,10 @@ __device__ float edge_edge_distance_squared_unclassified(
     const SVec<T, 3> &ea0, const SVec<T, 3> &ea1, const SVec<T, 3> &eb0,
     const SVec<T, 3> &eb1) {
     Vec4f c = edge_edge_distance_coeff_unclassified(ea0, ea1, eb0, eb1);
-    Vec3f x0 = c[0] * ea0.template cast<float>() +
-               c[1] * ea1.template cast<float>();
-    Vec3f x1 = c[2] * eb0.template cast<float>() +
-               c[3] * eb1.template cast<float>();
+    Vec3f x0 =
+        c[0] * ea0.template cast<float>() + c[1] * ea1.template cast<float>();
+    Vec3f x1 =
+        c[2] * eb0.template cast<float>() + c[3] * eb1.template cast<float>();
     return (x1 - x0).squaredNorm();
 }
 

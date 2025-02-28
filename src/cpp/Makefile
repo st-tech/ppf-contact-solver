@@ -14,7 +14,7 @@ CPP_FLAGS=-O3 -std=c++1z -Wall -Wno-unused-function -Wno-unused-function -Wno-st
 EIGEN_PATH=/usr/include/eigen3
 EIGSYS_PATH=../../eigsys
 
-BASE_DIRS=main vec utility csrmat contact aabb energy eigenanalysis barrier strainlimiting solver
+BASE_DIRS=main vec utility csrmat contact energy eigenanalysis barrier strainlimiting solver
 CUDA_FILES=$(foreach dir,$(BASE_DIRS),$(dir)/$(dir).cu)
 CPP_FILES=$(foreach dir,$(BASE_DIRS),$(dir)/$(dir).cpp)
 SIMPLELOG_FILES=simplelog/SimpleLog.cpp

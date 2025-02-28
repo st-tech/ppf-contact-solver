@@ -5,7 +5,6 @@
 #ifndef CONTACT_DEF_HPP
 #define CONTACT_DEF_HPP
 
-#include "../aabb/aabb.hpp"
 #include "../csrmat/csrmat.hpp"
 #include "../data.hpp"
 

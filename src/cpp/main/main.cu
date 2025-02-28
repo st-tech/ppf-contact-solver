@@ -494,11 +494,20 @@ StepResult advance() {
         // Description:
         // Maximum magnitude of the search direction in the Newton's step.
         logging.mark("max_dx", max_dx);
+        float toi_recale = fmin(1.0f, dt * prm.max_search_dir_vel / max_dx);
+
+        // Name: Time of Impact Recalibration
+        // Format: list[(vid_time,float)]
+        // Description:
+        // Recalibration factor for the time of impact (TOI) to ensure
+        // the search direction does not exceed the maximum allowed
+        // magnitude.
+        logging.mark("toi_recale", toi_recale);
 
         tmp_eval_x.copy(eval_x);
         DISPATCH_START(vertex_count)
-        [eval_x, data, dx] __device__(unsigned i) mutable {
-            eval_x[i] -= Map<Vec3f>(dx.data + 3 * i);
+        [eval_x, data, toi_recale, dx] __device__(unsigned i) mutable {
+            eval_x[i] -= toi_recale * Map<Vec3f>(dx.data + 3 * i);
         } DISPATCH_END;
 
         if (param->fix_xz) {
@@ -558,8 +567,8 @@ StepResult advance() {
         }
 
         if (!final_step) {
-            toi_advanced +=
-                std::max(0.0, 1.0 - toi_advanced) * static_cast<double>(toi);
+            toi_advanced += std::max(0.0, 1.0 - toi_advanced) *
+                            static_cast<double>(toi_recale * toi);
         }
 
         DISPATCH_START(vertex_count)

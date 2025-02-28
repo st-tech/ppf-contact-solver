@@ -5,13 +5,13 @@
 #ifndef ACCD_HPP
 #define ACCD_HPP
 
-#include "../math/distance.hpp"
+#include "distance.hpp"
 #include <cassert>
 
 namespace accd {
 
-template <class T> __device__ void centerize(SMat<T, 3, 4> &x) {
-    SVec<T, 3> mov = SVec<T, 3>::Zero();
+template <class T> __device__ void centerize(Mat3x4<T> &x) {
+    Vec3f mov = Vec3f::Zero();
     T scale(0.25f);
     for (int k = 0; k < 4; k++) {
         mov += scale * x.col(k);

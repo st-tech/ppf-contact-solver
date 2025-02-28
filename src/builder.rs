@@ -311,10 +311,10 @@ pub fn build(
 
 pub fn make_param(args: &Args) -> data::ParamSet {
     let dt = args.dt.min(0.9999 / args.fps as f32);
-    let strain_limit_eps = if args.disable_strain_limit {
-        0.0
+    let (strain_limit_tau, strain_limit_eps) = if args.disable_strain_limit {
+        (0.0, 0.0)
     } else {
-        args.strain_limit_eps
+        (args.strain_limit_tau, args.strain_limit_eps)
     };
     let wind = match args.wind_dim {
         0 => Vec3f::new(args.wind, 0.0, 0.0),
@@ -327,7 +327,9 @@ pub fn make_param(args: &Args) -> data::ParamSet {
         fitting: false,
         air_friction: args.air_friction,
         air_density: args.air_density,
+        strain_limit_tau,
         strain_limit_eps,
+        strain_limit_reduction: args.strain_limit_reduction,
         contact_ghat: args.contact_ghat,
         contact_offset: args.contact_offset,
         rod_offset: args.rod_offset,
@@ -344,8 +346,11 @@ pub fn make_param(args: &Args) -> data::ParamSet {
         cg_max_iter: args.cg_max_iter,
         cg_tol: args.cg_tol,
         line_search_max_t: args.line_search_max_t,
+        binary_search_max_iter: args.binary_search_max_iter,
+        toi_reduction: args.toi_reduction,
         ccd_tol: args.contact_ghat,
         ccd_reduction: args.ccd_reduction,
+        max_search_dir_vel: args.max_search_dir_vel,
         eiganalysis_eps: args.eiganalysis_eps,
         friction: args.friction,
         friction_eps: args.friction_eps,

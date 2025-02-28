@@ -5,19 +5,19 @@
 #ifndef CONTACT_HPP
 #define CONTACT_HPP
 
-#include "../aabb/aabb.hpp"
 #include "../barrier/barrier.hpp"
 #include "../csrmat/csrmat.hpp"
 #include "../data.hpp"
 #include "../energy/model/fix.hpp"
 #include "../energy/model/friction.hpp"
 #include "../energy/model/push.hpp"
-#include "../math/distance.hpp"
 #include "../simplelog/SimpleLog.h"
 #include "../utility/dispatcher.hpp"
 #include "../utility/utility.hpp"
+#include "aabb.hpp"
 #include "accd.hpp"
 #include "contact.hpp"
+#include "distance.hpp"
 
 namespace contact {
 
@@ -413,37 +413,30 @@ struct PointPointContactForceHessEmbed {
             float sqr_dist = e.squaredNorm();
             if (sqr_dist < ghat_sqr) {
                 unsigned count = 0;
-                if (neighbor.edge.nnz) {
-                    if (neighbor.edge.count(index)) {
-                        for (unsigned j = neighbor.edge.offset[index];
-                             j < neighbor.edge.offset[index + 1]; ++j) {
-                            Vec2u f = edge[neighbor.edge.data[j]];
-                            Vec2f c = distance::point_edge_distance_coeff(
-                                x, eval_x[f[0]], eval_x[f[1]]);
+                if (neighbor.edge.nnz && neighbor.edge.count(index)) {
+                    for (unsigned j = neighbor.edge.offset[index];
+                         j < neighbor.edge.offset[index + 1]; ++j) {
+                        Vec2u f = edge[neighbor.edge.data[j]];
+                        Vec2f c = distance::point_edge_distance_coeff(
+                            x, eval_x[f[0]], eval_x[f[1]]);
+                        if (c.maxCoeff() < 1.0f && c.minCoeff() > 0.0f) {
+                            continue;
+                        } else {
+                            ++count;
+                        }
+                    }
+                    if (neighbor.face.nnz) {
+                        for (unsigned j = neighbor.face.offset[index];
+                             j < neighbor.face.offset[index + 1]; ++j) {
+                            Vec3u f = face[neighbor.face.data[j]];
+                            Vec3f c = distance::point_triangle_distance_coeff(
+                                x, eval_x[f[0]], eval_x[f[1]], eval_x[f[2]]);
                             if (c.maxCoeff() < 1.0f && c.minCoeff() > 0.0f) {
                                 continue;
                             } else {
                                 ++count;
                             }
                         }
-                        if (neighbor.face.nnz) {
-                            for (unsigned j = neighbor.face.offset[index];
-                                 j < neighbor.face.offset[index + 1]; ++j) {
-                                Vec3u f = face[neighbor.face.data[j]];
-                                Vec3f c =
-                                    distance::point_triangle_distance_coeff(
-                                        x, eval_x[f[0]], eval_x[f[1]],
-                                        eval_x[f[2]]);
-                                if (c.maxCoeff() < 1.0f &&
-                                    c.minCoeff() > 0.0f) {
-                                    continue;
-                                } else {
-                                    ++count;
-                                }
-                            }
-                        }
-                    } else {
-                        count = 1;
                     }
                 } else {
                     count = 1;
@@ -501,24 +494,17 @@ struct PointEdgeContactForceHessEmbed {
                 float sqr_dist = e.squaredNorm();
                 if (sqr_dist < ghat_sqr) {
                     unsigned count = 0;
-                    if (neighbor.face.nnz) {
-                        if (neighbor.face.count(index)) {
-                            for (unsigned j = neighbor.face.offset[index];
-                                 j < neighbor.face.offset[index + 1]; ++j) {
-                                Vec3u f = face[neighbor.face.data[j]];
-                                Vec3f c =
-                                    distance::point_triangle_distance_coeff(
-                                        p, eval_x[f[0]], eval_x[f[1]],
-                                        eval_x[f[2]]);
-                                if (c.maxCoeff() < 1.0f &&
-                                    c.minCoeff() > 0.0f) {
-                                    continue;
-                                } else {
-                                    ++count;
-                                }
+                    if (neighbor.face.nnz && neighbor.face.count(index)) {
+                        for (unsigned j = neighbor.face.offset[index];
+                             j < neighbor.face.offset[index + 1]; ++j) {
+                            Vec3u f = face[neighbor.face.data[j]];
+                            Vec3f c = distance::point_triangle_distance_coeff(
+                                p, eval_x[f[0]], eval_x[f[1]], eval_x[f[2]]);
+                            if (c.maxCoeff() < 1.0f && c.minCoeff() > 0.0f) {
+                                continue;
+                            } else {
+                                ++count;
                             }
-                        } else {
-                            count = 1;
                         }
                     } else {
                         count = 1;
@@ -619,7 +605,6 @@ struct EdgeEdgeContactForceHessEmbed {
             Vec3f p1 = eval_x[e0[1]];
             Vec3f q0 = eval_x[e1[0]];
             Vec3f q1 = eval_x[e1[1]];
-            float s(0.25f);
             Vec4f c = distance::edge_edge_distance_coeff(p0, p1, q0, q1);
             if (c.maxCoeff() < 1.0f && c.minCoeff() > 0.0f) {
                 Vec3f x0 = c[0] * p0 + c[1] * p1;
