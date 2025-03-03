@@ -33,6 +33,7 @@ Published in [ACM Transactions on Graphics (TOG)](https://dl.acm.org/doi/abs/10.
 - [📚 Python APIs and Parameters](#-python-apis-and-parameters)
 - [🔍 Obtaining Logs](#-obtaining-logs)
 - [🖼️ Catalogue](#️-catalogue)
+    - [💰 Budget Table on AWS](#-budget-table-on-aws)
 - [🚀 GitHub Actions](#-github-actions)
     - [⚔️ Ten Consecutive Runs](#️-ten-consecutive-runs)
     - [📦 Action Artifacts](#-action-artifacts)
@@ -52,11 +53,17 @@ Published in [ACM Transactions on Graphics (TOG)](https://dl.acm.org/doi/abs/10.
 
 ## 📝 Change History
 
+- (2025.03.03) Added a [budget table on AWS](#-budget-table-on-aws).
 - (2025.02.28) Added a [reference branch and a Docker image of our TOG paper](#-technical-materials).
 - (2025.2.26) Added Floating Point-Rounding Errors in ACCD in [hindsight](./articles/hindsight.md).
 - (2025.2.7) Updated the [trapped example](./examples/trapped.ipynb) [[Video]](https://drive.google.com/file/d/1Qek0e0qBNWPlBb1hSOZ6o_e2Cqf5rGst/view) with squishy balls.
 - (2025.1.8) Added a [domino example](./examples/domino.ipynb) [[Video]](https://drive.google.com/file/d/1N9y8eZrjSQhAUhKwiO9w8jW_T18zPnYf/view).
 - (2025.1.5) Added a [single twist example](./examples/twist.ipynb) [[Video]](https://drive.google.com/file/d/1LDFKS-iBvl2uDdPVKaazQL25tYGEEyXr/view).
+
+<details>
+
+<summary>More history records</summary>
+
 - (2024.12.31) Added full documentation for Python APIs, parameters, and log files [[GitHub Pages]](https://st-tech.github.io/ppf-contact-solver).
 - (2024.12.27) Line search for strain limiting is improved [[Markdown]](./articles/bug.md#new-strain-limiting-line-search)
 - (2024.12.23) Added [[Bug Fixes and Updates]](./articles/bug.md)
@@ -64,6 +71,7 @@ Published in [ACM Transactions on Graphics (TOG)](https://dl.acm.org/doi/abs/10.
 - (2024.12.18) Added a [frictional contact example](./examples/friction.ipynb): armadillo sliding on the slope [[Video]](https://drive.google.com/file/d/12WGdfDTFIwCT0UFGEZzfmQreM6WSSHet/view)
 - (2024.12.18) Added a [hindsight](./articles/hindsight.md) noting that the tilt angle was not $30^\circ$, but rather $26.57^\circ$
 - (2024.12.16) Removed thrust dependencies to fix runtime errors for the driver version `560.94` [[Issue Link]](https://github.com/st-tech/ppf-contact-solver/issues/1)
+</details>
 
 ## 🎓 Technical Materials
 
@@ -78,14 +86,14 @@ Published in [ACM Transactions on Graphics (TOG)](https://dl.acm.org/doi/abs/10.
 #### 📌 Reference Implementation
 
 The main branch is undergoing frequent updates and may introduce breaking 🚧 changes relative to the paper.
-✨ Although the latest version offers a superior experience, we have created a new branch, ```sigasia-2024```, to retain consistency with the paper.
+Although the latest version offers a superior ✨ experience, we have created a new branch, ```sigasia-2024```, to retain consistency with the paper.
 
 - 🛠️ Only maintenance updates are planned for this branch.
 - 🚫 All algorithmic changes listed in this [[Markdown]](./articles/bug.md) are excluded from this branch.
 
 - 📦 We also provide a pre-compiled Docker image: ```ghcr.io/st-tech/ppf-contact-solver-compiled-sigasia-2024:latest``` of this branch.
 
-- 🌐 [Template Link for vast.ai](https://cloud.vast.ai/?ref_id=85288&creator_id=85288&name=ppf-contact-solver-sigasia-2024).
+- 🌐 [Template Link for vast.ai](https://cloud.vast.ai/?ref_id=85288&creator_id=85288&name=ppf-contact-solver-sigasia-2024)
 
 - 🌐 [Template Link for RunPods](https://runpod.io/console/deploy?template=ooqpniuixi&ref=bhy3csxy)
 
@@ -303,8 +311,7 @@ This will output something like:
    > fillin_pass...0 msec
 ```
 
-If you would like to read `stdout` and `stderr`, you can do so using `session.get.stdout()` and `session.get.stderr()` (if it exists). They return `list[str]`.
-
+If you would like to read `stderr`, you can do so using `session.get.stderr()` (if it exists). They return `list[str]`.
 All the log files 📂 are available ✅ and can be fetched ⬇️ during the simulation 🧑‍💻.
   
 ## 🖼️ Catalogue
@@ -322,6 +329,29 @@ All the log files 📂 are available ✅ and can be fetched ⬇️ during the si
 
 At the moment, not all examples are ready yet, but they will be added/updated one by one.
 The author is actively woriking on it.
+
+### 💰 Budget Table on AWS
+
+Below is a table summarizing the estimated costs for running our examples on a NVIDIA L4 instance `g6.2xlarge` at Amazon Web Services US regions (`us-east-1` and `us-east-2`).
+
+- 💰 Uptime cost is approximately as $1 per hour.
+- ⏳ Deployment time is approximately 8 minutes ($0.13). Instance loading takes 3 minutes, and Docker pull & load takes 5 minutes.
+- 🎮 The NVIDIA L4 delivers [30.3 TFLOPS for FP32](https://www.nvidia.com/en-us/data-center/l4/), offering approximately 36% of the [performance of an RTX 4090](https://www.nvidia.com/en-us/geforce/graphics-cards/40-series/rtx-4090/).
+- 🎥 Video frame rate is 60fps.
+
+| **Example** | **Cost** | **Duration** | **Frames** | **#Vert** | **#Face** | **#Tet** | **Max Strain** |
+|-------------|----------|--------------|-----------|-----------|-----------|----------|----------------|
+| trapped     | $0.37    | 22.6m        | 300       | 263K      | 299K      | 885K     | N/A            |
+| twist       | $0.91    | 55m          | 500       | 203K      | 406K      | N/A      | N/A            |
+| stack       | $0.60    | 36.2m        | 120       | 166.7K    | 327.7K    | 8.8K     | 5%             |
+| trampoline  | $0.74    | 44.5m        | 120       | 56.8K     | 62.2K     | 158.0K   | 1%             |
+| needle      | $0.31    | 18.4m        | 120       | 86K       | 168.9K    | 8.8K     | 5%             |
+| cards       | $0.29    | 17.5m        | 300       | 8.7K      | 13.8K     | 1.9K     | 5%             |
+| domino      | $0.12    | 4.3m         | 250       | 0.5K      | 0.8K      | N/A      | N/A            |
+| drape       | $0.10    | 3.5m         | 100       | 81.9K     | 161.3K    | N/A      | N/A            |
+| curtain     | $0.33    | 19.6m        | 300       | 64K       | 124K      | N/A      | N/A            |
+| friction    | $0.17    | 10m          | 700       | 1.1K      | N/A       | 1K       | N/A            |
+| hang        | $0.12    | 7.5m         | 200       | 16.3K     | 32.2K     | N/A      | 1%             |
 
 ## 🚀 GitHub Actions
 
@@ -389,6 +419,7 @@ Our contact solver is designed for heavy use in cloud services ☁️, enabling 
 - **📈 Flexible Scalability**: Scale as needed based on demand 📈. For example, you can launch multiple instances before a specific deadline ⏰.
 - **🌍 High Accessibility**: Allow anyone with an internet connection 🌍 to try our solver, even on a smartphone 📱 or tablet 🖥️.
 - **🐛 Easier Bug Tracking**: Users and developers can easily share the same hardware, kernel, and driver environment, making it easier to track and fix bugs.
+- **🛠️ Free Maintenance Cost**: No need to maintain hardware for everyday operations or introduce redundancy for malfunctions.
 
 This is all made possible with our purely web-based frontends 🌐 and scalable capability 🧩.
 Our main target is the NVIDIA L4 🖱️, a data-center-targeted GPU 🖥️ that offers reasonable pricing 💲, delivering both practical performance 💪 and scalability 📊 without investing in expensive hardware 💻.
