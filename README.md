@@ -334,24 +334,24 @@ The author is actively woriking on it.
 
 Below is a table summarizing the estimated costs for running our examples on a NVIDIA L4 instance `g6.2xlarge` at Amazon Web Services US regions (`us-east-1` and `us-east-2`).
 
-- 💰 Uptime cost is approximately as $1 per hour.
+- 💰 Uptime cost is approximately $1 per hour.
 - ⏳ Deployment time is approximately 8 minutes ($0.13). Instance loading takes 3 minutes, and Docker pull & load takes 5 minutes.
 - 🎮 The NVIDIA L4 delivers [30.3 TFLOPS for FP32](https://www.nvidia.com/en-us/data-center/l4/), offering approximately 36% of the [performance of an RTX 4090](https://www.nvidia.com/en-us/geforce/graphics-cards/40-series/rtx-4090/).
 - 🎥 Video frame rate is 60fps.
 
 | **Example** | **Cost** | **Duration** | **Frames** | **#Vert** | **#Face** | **#Tet** | **Max Strain** |
 |-------------|----------|--------------|-----------|-----------|-----------|----------|----------------|
-| trapped     | $0.37    | 22.6m        | 300       | 263K      | 299K      | 885K     | N/A            |
-| twist       | $0.91    | 55m          | 500       | 203K      | 406K      | N/A      | N/A            |
+| trapped     | $0.37    | 22.6m        | 300       | 263K      | 299K      | 885K     | ```N/A```            |
+| twist       | $0.91    | 55m          | 500       | 203K      | 406K      | ```N/A```      | ```N/A```            |
 | stack       | $0.60    | 36.2m        | 120       | 166.7K    | 327.7K    | 8.8K     | 5%             |
 | trampoline  | $0.74    | 44.5m        | 120       | 56.8K     | 62.2K     | 158.0K   | 1%             |
 | needle      | $0.31    | 18.4m        | 120       | 86K       | 168.9K    | 8.8K     | 5%             |
 | cards       | $0.29    | 17.5m        | 300       | 8.7K      | 13.8K     | 1.9K     | 5%             |
-| domino      | $0.12    | 4.3m         | 250       | 0.5K      | 0.8K      | N/A      | N/A            |
-| drape       | $0.10    | 3.5m         | 100       | 81.9K     | 161.3K    | N/A      | N/A            |
-| curtain     | $0.33    | 19.6m        | 300       | 64K       | 124K      | N/A      | N/A            |
-| friction    | $0.17    | 10m          | 700       | 1.1K      | N/A       | 1K       | N/A            |
-| hang        | $0.12    | 7.5m         | 200       | 16.3K     | 32.2K     | N/A      | 1%             |
+| domino      | $0.12    | 4.3m         | 250       | 0.5K      | 0.8K      | ```N/A```      | ```N/A```            |
+| drape       | $0.10    | 3.5m         | 100       | 81.9K     | 161.3K    | ```N/A```      | ```N/A```            |
+| curtain     | $0.33    | 19.6m        | 300       | 64K       | 124K      | ```N/A```      | ```N/A```            |
+| friction    | $0.17    | 10m          | 700       | 1.1K      | ```N/A```       | 1K       | ```N/A```            |
+| hang        | $0.12    | 7.5m         | 200       | 16.3K     | 32.2K     | ```N/A```      | 1%             |
 
 ## 🚀 GitHub Actions
 
