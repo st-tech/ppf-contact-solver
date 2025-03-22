@@ -88,6 +88,8 @@ def python_packages():
         "libigl",
         "plyfile",
         "requests",
+        "gdown",
+        "numba",
         "trimesh",
         "pyrender",
         "pywavefront",
