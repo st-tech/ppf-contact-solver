@@ -78,6 +78,7 @@ def list_packages():
         "libosmesa6-dev",
         "libc++-dev",
         "libeigen3-dev",
+        "ffmpeg",
     ]
     return packages
 
