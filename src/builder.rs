@@ -324,7 +324,7 @@ pub fn make_param(args: &Args) -> data::ParamSet {
     };
     data::ParamSet {
         time: 0.0,
-        fitting: false,
+        fitting: args.fitting,
         air_friction: args.air_friction,
         air_density: args.air_density,
         strain_limit_tau,
@@ -332,6 +332,7 @@ pub fn make_param(args: &Args) -> data::ParamSet {
         strain_limit_reduction: args.strain_limit_reduction,
         contact_ghat: args.contact_ghat,
         contact_offset: args.contact_offset,
+        static_mesh_offset: args.static_mesh_offset,
         rod_offset: args.rod_offset,
         constraint_ghat: args.constraint_ghat,
         constraint_tol: args.constraint_tol,
@@ -350,7 +351,8 @@ pub fn make_param(args: &Args) -> data::ParamSet {
         toi_reduction: args.toi_reduction,
         ccd_tol: args.contact_ghat,
         ccd_reduction: args.ccd_reduction,
-        max_search_dir_vel: args.max_search_dir_vel,
+        ccd_max_iter: args.ccd_max_iter,
+        max_dx: args.max_dx,
         eiganalysis_eps: args.eiganalysis_eps,
         friction: args.friction,
         friction_eps: args.friction_eps,

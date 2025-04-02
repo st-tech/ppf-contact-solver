@@ -11,22 +11,25 @@ from ._plot_ import PlotManager
 from ._utils_ import Utils
 import pickle
 import os
+import time
 import shutil
 from typing import Optional
 
 
 class App:
     @staticmethod
-    def create(name: str, cache_dir: str = "") -> "App":
+    def create(name: str = "", cache_dir: str = "") -> "App":
         """Start a new application.
 
         Args:
-            name (str): The name of the application.
+            name (str): The name of the application. If not provided, it will use the current time as the name.
             cache_dir (str): The directory to store the cached files. If not provided, it will use `.cache/ppf-cts` directory.
 
         Returns:
             App: A new instance of the App class.
         """
+        if name == "":
+            name = time.strftime("app-%Y-%m-%d-%H-%M-%S")
         return App(name, True, cache_dir)
 
     @staticmethod
@@ -176,11 +179,6 @@ class App:
         self._scene.clear()
         self._session.clear()
         return App(self._name, True, self.cache_dir)
-
-    def darkmode(self) -> "App":
-        """Tunrs on the dark mode."""
-        self._plot.darkmode(True)
-        return self
 
     def save(self) -> "App":
         if not self.ci:

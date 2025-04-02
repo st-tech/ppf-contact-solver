@@ -10,20 +10,33 @@
 
 namespace accd {
 
-template <class T> __device__ void centerize(Mat3x4<T> &x) {
-    Vec3f mov = Vec3f::Zero();
-    T scale(0.25f);
-    for (int k = 0; k < 4; k++) {
+template <class T, unsigned R, unsigned C>
+__device__ void centerize(SMat<T, R, C> &x) {
+    SVec<T, R> mov = SVec<T, R>::Zero();
+    T scale(1.0 / C);
+    for (int k = 0; k < C; k++) {
         mov += scale * x.col(k);
     }
-    for (int k = 0; k < 4; k++) {
+    for (int k = 0; k < C; k++) {
         x.col(k) -= mov;
     }
 }
 
-template <typename F>
-__device__ float ccd_helper(const Mat3x4f &x0, const Mat3x4f &dx, float u_max,
-                            F square_dist_func, float offset,
+template <class T, unsigned R, unsigned C>
+__device__ float max_relative_u(const SMat<T, R, C> &u) {
+    float max_u = 0.0f;
+    for (int i = 0; i < C; i++) {
+        for (int j = i + 1; j < C; j++) {
+            SVec<float, R> du = (u.col(i) - u.col(j)).template cast<float>();
+            max_u = std::max<float>(max_u, du.squaredNorm());
+        }
+    }
+    return sqrt(max_u);
+}
+
+template <typename F, typename T, unsigned R, unsigned C>
+__device__ float ccd_helper(const SMat<T, R, C> &x0, const SMat<T, R, C> &dx,
+                            float u_max, F square_dist_func, float offset,
                             const ParamSet &param) {
     float toi = 0.0f;
     float max_t = param.line_search_max_t;
@@ -31,7 +44,7 @@ __device__ float ccd_helper(const Mat3x4f &x0, const Mat3x4f &dx, float u_max,
     float target = eps + offset;
     float eps_sqr = eps * eps;
     float inv_u_max = 1.0f / u_max;
-    while (true) {
+    for (unsigned k = 0; k < param.ccd_max_iter; k++) {
         float d2 = square_dist_func(x0 + toi * dx);
         float d_minus_target = (d2 - target * target) / (sqrtf(d2) + target);
         if ((max_t - toi) * u_max < d_minus_target - eps) {
@@ -55,38 +68,47 @@ __device__ float ccd_helper(const Mat3x4f &x0, const Mat3x4f &dx, float u_max,
     return toi;
 }
 
-struct EdgeEdgeSquaredDist {
-    __device__ float operator()(const Mat3x4f &x) {
-        const Vec3f &p0 = x.col(0);
-        const Vec3f &p1 = x.col(1);
-        const Vec3f &q0 = x.col(2);
-        const Vec3f &q1 = x.col(3);
-        return distance::edge_edge_distance_squared_unclassified(p0, p1, q0,
-                                                                 q1);
+template <typename T, typename Y> struct EdgeEdgeSquaredDist {
+    __device__ float operator()(const Mat3x4<T> &x) {
+        const Vec3<T> &p0 = x.col(0);
+        const Vec3<T> &p1 = x.col(1);
+        const Vec3<T> &q0 = x.col(2);
+        const Vec3<T> &q1 = x.col(3);
+        Vec4<T> c = distance::edge_edge_distance_coeff_unclassified<T, Y>(
+                        p0, p1, q0, q1)
+                        .template cast<T>();
+        Vec3<T> x0 = c[0] * p0 + c[1] * p1;
+        Vec3<T> x1 = c[2] * q0 + c[3] * q1;
+        return Y((x1 - x0).dot(x1 - x0));
     }
 };
 
-struct PointTriangleSquaredDist {
-    __device__ float operator()(const Mat3x4f &x) {
-        const Vec3f &p = x.col(0);
-        const Vec3f &t0 = x.col(1);
-        const Vec3f &t1 = x.col(2);
-        const Vec3f &t2 = x.col(3);
-        return distance::point_triangle_distance_squared_unclassified(p, t0, t1,
-                                                                      t2);
+template <typename T, typename Y> struct PointEdgeSquaredDist {
+    __device__ float operator()(const Mat3x3<T> &x) {
+        const Vec3<T> &p = x.col(0);
+        const Vec3<T> &q0 = x.col(1);
+        const Vec3<T> &q1 = x.col(2);
+        Vec2<T> c =
+            distance::point_edge_distance_coeff_unclassified<T, Y>(p, q0, q1)
+                .template cast<T>();
+        Vec3<T> q = c[0] * q0 + c[1] * q1;
+        return Y((p - q).dot(p - q));
     }
 };
 
-__device__ float max_relative_u(const Mat3x4f &u) {
-    float max_u = 0.0f;
-    for (int i = 0; i < 4; i++) {
-        for (int j = i + 1; j < 4; j++) {
-            Vec3f du = u.col(i) - u.col(j);
-            max_u = std::max(max_u, du.squaredNorm());
-        }
+template <typename T, typename Y> struct PointTriangleSquaredDist {
+    __device__ float operator()(const Mat3x4<T> &x) {
+        const Vec3<T> &p = x.col(0);
+        const Vec3<T> &t0 = x.col(1);
+        const Vec3<T> &t1 = x.col(2);
+        const Vec3<T> &t2 = x.col(3);
+        Vec3<T> c = distance::point_triangle_distance_coeff_unclassified<T, Y>(
+                        p, t0, t1, t2)
+                        .template cast<T>();
+        Vec3<T> y = c(0) * (t0 - p) + c(1) * (t1 - p) + c(2) * (t2 - p);
+        return Y(y.dot(y));
     }
-    return sqrt(max_u);
-}
+};
 
 __device__ float point_triangle_ccd(const Vec3f &p0, const Vec3f &p1,
                                     const Vec3f &t00, const Vec3f &t01,
@@ -100,13 +122,37 @@ __device__ float point_triangle_ccd(const Vec3f &p0, const Vec3f &p1,
     Mat3x4f x0;
     Mat3x4f dx;
     x0 << p0, t00, t01, t02;
-    centerize(x0);
     dx << dp, dt0, dt1, dt2;
-    centerize(dx);
-    float u_max = max_relative_u(dx);
+    centerize<float, 3, 4>(x0);
+    centerize<float, 3, 4>(dx);
+    float u_max = max_relative_u<float, 3, 4>(dx);
     if (u_max) {
-        PointTriangleSquaredDist dist_func;
-        return ccd_helper(x0, dx, u_max, dist_func, offset, param);
+        PointTriangleSquaredDist<float, float> dist_func;
+        return ccd_helper<PointTriangleSquaredDist<float, float>, float, 3, 4>(
+            x0, dx, u_max, dist_func, offset, param);
+    } else {
+        return param.line_search_max_t;
+    }
+}
+
+__device__ float point_edge_ccd(const Vec3f &p0, const Vec3f &p1,
+                                const Vec3f &e00, const Vec3f &e01,
+                                const Vec3f &e10, const Vec3f &e11,
+                                float offset, const ParamSet &param) {
+    Vec3f dp = p1 - p0;
+    Vec3f dt0 = e10 - e00;
+    Vec3f dt1 = e11 - e01;
+    Mat3x3f x0;
+    Mat3x3f dx;
+    x0 << p0, e00, e01;
+    dx << dp, dt0, dt1;
+    centerize<float, 3, 3>(x0);
+    centerize<float, 3, 3>(dx);
+    float u_max = max_relative_u<float, 3, 3>(dx);
+    if (u_max) {
+        PointEdgeSquaredDist<float, float> dist_func;
+        return ccd_helper<PointEdgeSquaredDist<float, float>, float, 3, 3>(
+            x0, dx, u_max, dist_func, offset, param);
     } else {
         return param.line_search_max_t;
     }
@@ -124,13 +170,14 @@ __device__ float edge_edge_ccd(const Vec3f &ea00, const Vec3f &ea01,
     Mat3x4f x0;
     Mat3x4f dx;
     x0 << ea00, ea01, eb00, eb01;
-    centerize(x0);
     dx << dea0, dea1, deb0, deb1;
-    centerize(dx);
-    float u_max = max_relative_u(dx);
+    centerize<float, 3, 4>(x0);
+    centerize<float, 3, 4>(dx);
+    float u_max = max_relative_u<float, 3, 4>(dx);
     if (u_max) {
-        EdgeEdgeSquaredDist dist_func;
-        return ccd_helper(x0, dx, u_max, dist_func, offset, param);
+        EdgeEdgeSquaredDist<float, float> dist_func;
+        return ccd_helper<EdgeEdgeSquaredDist<float, float>, float, 3, 4>(
+            x0, dx, u_max, dist_func, offset, param);
     } else {
         return param.line_search_max_t;
     }

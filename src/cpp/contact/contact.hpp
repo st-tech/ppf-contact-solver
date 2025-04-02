@@ -35,7 +35,7 @@ float line_search(const DataSet &data, const Kinematic &kinematic,
                   const ParamSet &param);
 
 bool check_intersection(const DataSet &data, const Kinematic &kinematic,
-                        const Vec<Vec3f> &vertex);
+                        const Vec<Vec3f> &vertex, const ParamSet &param);
 
 } // namespace contact
 

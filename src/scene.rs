@@ -14,12 +14,16 @@ use toml::Value;
 pub struct Scene {
     args: Args,
     dyn_args: Vec<(String, Vec<(f64, f64)>)>,
+    displacement: Matrix3xX<f32>,
+    vert_dmap: Vec<u32>,
     vert: Matrix3xX<f32>,
     vel: Matrix3xX<f32>,
     uv: Option<Matrix2xX<f32>>,
     rod: Matrix2xX<usize>,
+    rod_scale_factor: Vec<f32>,
     tri: Matrix3xX<usize>,
     tet: Matrix4xX<usize>,
+    static_vert_dmap: Vec<u32>,
     static_vert: Matrix3xX<f32>,
     static_tri: Matrix3xX<usize>,
     stitch_ind: Matrix3xX<usize>,
@@ -205,17 +209,25 @@ impl Scene {
         let _rod_count = read_usize(count, "rod_count");
         let shell_count = read_usize(count, "shell_count");
 
+        let displacement_path = format!("{}/bin/displacement.bin", args.path);
+        let vert_dmap_path = format!("{}/bin/vert_dmap.bin", args.path);
         let vert_path = format!("{}/bin/vert.bin", args.path);
         let vel_path = format!("{}/bin/vel.bin", args.path);
         let uv_path = format!("{}/bin/uv.bin", args.path);
         let rod_path = format!("{}/bin/rod.bin", args.path);
+        let rod_length_factor_path = format!("{}/bin/rod_length_factor.bin", args.path);
         let tri_path = format!("{}/bin/tri.bin", args.path);
         let tet_path = format!("{}/bin/tet.bin", args.path);
+        let static_vert_dmap_path = format!("{}/bin/static_vert_dmap.bin", args.path);
         let static_vert_path = format!("{}/bin/static_vert.bin", args.path);
         let static_tri_path = format!("{}/bin/static_tri.bin", args.path);
         let stitch_ind_path = format!("{}/bin/stitch_ind.bin", args.path);
         let stitch_w_path = format!("{}/bin/stitch_w.bin", args.path);
 
+        let displacement_mat = read_mat_from_file::<f64, 3>(&displacement_path)
+            .expect("Failed to read displacement")
+            .map(|x| x as f32);
+        let vert_dmap_mat = read_vec::<u32>(&vert_dmap_path);
         let vert_mat = read_mat_from_file::<f64, 3>(&vert_path)
             .expect("Failed to read vert")
             .map(|x| x as f32);
@@ -232,6 +244,7 @@ impl Scene {
         } else {
             Matrix2xX::<usize>::zeros(0)
         };
+        let rod_scale_factor = read_vec::<f32>(&rod_length_factor_path);
         let tri_mat = if n_tri > 0 {
             read_mat_from_file::<usize, 3>(&tri_path).expect("Failed to read tri")
         } else {
@@ -242,12 +255,15 @@ impl Scene {
         } else {
             Matrix4xX::<usize>::zeros(0)
         };
-        let static_vert_mat = if n_static_vert > 0 {
-            read_mat_from_file::<f64, 3>(&static_vert_path)
-                .expect("Failed to read static_vert")
-                .map(|x| x as f32)
+        let (static_vert_dmap_mat, static_vert_mat) = if n_static_vert > 0 {
+            (
+                read_vec::<u32>(&static_vert_dmap_path),
+                read_mat_from_file::<f64, 3>(&static_vert_path)
+                    .expect("Failed to read static_vert")
+                    .map(|x| x as f32),
+            )
         } else {
-            Matrix3xX::<f32>::zeros(0)
+            (Vec::new(), Matrix3xX::<f32>::zeros(0))
         };
         let static_tri_mat = if n_static_tri > 0 {
             read_mat_from_file::<usize, 3>(&static_tri_path).expect("Failed to read static_tri")
@@ -423,12 +439,16 @@ impl Scene {
         Self {
             args: config.param,
             dyn_args,
+            displacement: displacement_mat,
+            vert_dmap: vert_dmap_mat,
             vert: vert_mat,
             vel: vel_mat,
             uv: uv_mat,
             rod: rod_mat,
+            rod_scale_factor,
             tri: tri_mat,
             tet: tet_mat,
+            static_vert_dmap: static_vert_dmap_mat,
             static_vert: static_vert_mat,
             static_tri: static_tri_mat,
             stitch_ind: stitch_ind_mat,
@@ -450,7 +470,11 @@ impl Scene {
 
     pub fn make_constraint(&self, _: &Args, time: f64, _: &MeshSet) -> Constraint {
         let collision_mesh = if self.static_vert.ncols() > 0 {
-            builder::make_collision_mesh(&self.static_vert, &self.static_tri)
+            let mut vert = self.static_vert.clone();
+            for (i, mut x) in vert.column_iter_mut().enumerate() {
+                x += self.displacement.column(self.static_vert_dmap[i] as usize);
+            }
+            builder::make_collision_mesh(&vert, &self.static_tri)
         } else {
             CollisionMesh::new()
         };
@@ -482,6 +506,7 @@ impl Scene {
         let mut pull = Vec::new();
         for pin in self.pin.iter() {
             for (i, &ind) in pin.index.iter().enumerate() {
+                let dx = self.displacement.column(self.vert_dmap[ind] as usize);
                 let (mut kinematic, mut position) = {
                     if pin.timing.len() <= 1 {
                         let position = Some(self.vert.column(ind).into());
@@ -522,13 +547,13 @@ impl Scene {
                 if let Some(position) = position {
                     if pin.pull_w > 0.0 {
                         pull.push(PullPair {
-                            position,
+                            position: position + dx,
                             index: ind as u32,
                             weight: pin.pull_w,
                         });
                     } else {
                         fix.push(FixPair {
-                            position,
+                            position: position + dx,
                             index: ind as u32,
                             kinematic,
                         });
@@ -623,13 +648,19 @@ impl Scene {
                 let (t0, v0) = entries[i];
                 let (t1, v1) = entries[i + 1];
                 if time >= t0 && time <= t1 {
-                    let w = (time - t0) / (t1 - t0);
+                    let delta_t = t1 - t0;
+                    let w = if delta_t > 0.0 {
+                        (time - t0) / (t1 - t0)
+                    } else {
+                        1.0
+                    };
                     let val = v0 * (1.0 - w) + v1 * w;
                     match title.as_str() {
                         "gravity" => param.gravity = Vec3f::new(0.0, val as f32, 0.0),
                         "dt" => param.dt = val as f32,
                         "playback" => param.playback = val as f32,
                         "friction" => param.friction = val as f32,
+                        "fitting" => param.fitting = val > 0.0,
                         _ => (),
                     }
                 }
@@ -638,14 +669,19 @@ impl Scene {
     }
 
     pub fn make_mesh(&mut self, _: &Args) -> MeshSet {
+        let mut vert = self.vert.clone();
+        for (i, mut x) in vert.column_iter_mut().enumerate() {
+            x += self.displacement.column(self.vert_dmap[i] as usize);
+        }
         MeshSet {
-            vertex: self.vert.clone(),
+            vertex: vert,
             uv: self.uv.clone(),
-            mesh: SimMesh::new(
+            mesh: SimMesh::new_with_seg_factor(
                 self.rod.clone(),
                 self.tri.clone(),
                 self.tet.clone(),
                 self.shell_count,
+                Some(self.rod_scale_factor.clone()),
             ),
         }
     }

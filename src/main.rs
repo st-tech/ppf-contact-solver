@@ -75,12 +75,11 @@ fn main() {
         let x0 = mesh.vertex.column(rod[0]);
         let x1 = mesh.vertex.column(rod[1]);
         let r = args.rod_offset;
-        let mut length = (x1 - x0).norm();
-        let volume = r * r * std::f32::consts::PI * length;
+        let mut length = (x1 - x0).map(f32::from).norm();
         if let Some(seg_len_factor) = mesh.mesh.mesh.rod_length_factor.as_ref() {
             length *= seg_len_factor[i];
         }
-        let mass = volume * args.rod_density;
+        let mass = length * args.rod_density;
         props.rod.push(data::RodProp {
             length,
             radius: r,

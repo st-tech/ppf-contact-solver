@@ -63,8 +63,7 @@ __device__ bool overlap(const AABB &a, const AABB &b) {
 }
 
 template <typename F, typename T>
-__device__ static unsigned query(const BVH &bvh, Vec<AABB> aabb, F op,
-                                 T query) {
+__device__ unsigned query(const BVH &bvh, Vec<AABB> aabb, F op, T query) {
     unsigned stack[AABB_MAX_QUERY];
     unsigned count = 0;
     unsigned head = 0;

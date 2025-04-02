@@ -243,24 +243,28 @@ __global__ void reduce_op_kernel(const T *input, Y *output, Op func, Y init_val,
 
 template <class T, class Y, typename Op>
 Y reduce(const T *d_input, Op func, Y init_val, unsigned n) {
-    if (sizeof(Y) * n <= sizeof(unsigned) * reduce_info.n) {
-        unsigned grid_size = (n + BLOCK_SIZE - 1) / BLOCK_SIZE;
-        Y *d_output = reinterpret_cast<Y *>(reduce_info.d_block_sums);
-        Y *h_results = reinterpret_cast<Y *>(reduce_info.h_results);
-        size_t shared_mem_size = sizeof(Y) * BLOCK_SIZE;
-        reduce_op_kernel<T, Y><<<grid_size, BLOCK_SIZE, shared_mem_size>>>(
-            d_input, d_output, func, init_val, n);
-        cudaMemcpy(h_results, d_output, grid_size * sizeof(Y),
-                   cudaMemcpyDeviceToHost);
-        Y result = init_val;
-        for (unsigned i = 0; i < grid_size; i++) {
-            result = func(result, h_results[i]);
+    if (n > 0) {
+        if (sizeof(Y) * n <= sizeof(unsigned) * reduce_info.n) {
+            unsigned grid_size = (n + BLOCK_SIZE - 1) / BLOCK_SIZE;
+            Y *d_output = reinterpret_cast<Y *>(reduce_info.d_block_sums);
+            Y *h_results = reinterpret_cast<Y *>(reduce_info.h_results);
+            size_t shared_mem_size = sizeof(Y) * BLOCK_SIZE;
+            reduce_op_kernel<T, Y><<<grid_size, BLOCK_SIZE, shared_mem_size>>>(
+                d_input, d_output, func, init_val, n);
+            cudaMemcpy(h_results, d_output, grid_size * sizeof(Y),
+                       cudaMemcpyDeviceToHost);
+            Y result = init_val;
+            for (unsigned i = 0; i < grid_size; i++) {
+                result = func(result, h_results[i]);
+            }
+            return result;
+        } else {
+            fprintf(stderr, "Error: reduce buffer size is too small\n");
+            fprintf(stderr, "n: %u, reduce_info.n: %u\n", n, reduce_info.n);
+            exit(1);
         }
-        return result;
     } else {
-        fprintf(stderr, "Error: reduce buffer size is too small\n");
-        fprintf(stderr, "n: %u, reduce_info.n: %u\n", n, reduce_info.n);
-        exit(1);
+        return init_val;
     }
 }
 

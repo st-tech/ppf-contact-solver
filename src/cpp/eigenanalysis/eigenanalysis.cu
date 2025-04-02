@@ -58,9 +58,9 @@ __device__ Mat6x6f compute_hessian(const DiffTable2 &table, const Svd3x2 &svd,
     lambda[0] = fmax(0.0f, (table.deda[0] + table.deda[1]) / (a0 + a1));
     lambda[1] =
         fmax(0.0f, fabs(denom) > eps
-                      ? (table.deda[0] - table.deda[1]) / denom
-                      : 0.5f * (table.d2ed2a(0, 0) + table.d2ed2a(1, 1)) -
-                            0.5f * (table.d2ed2a(0, 1) + table.d2ed2a(1, 0)));
+                       ? (table.deda[0] - table.deda[1]) / denom
+                       : 0.5f * (table.d2ed2a(0, 0) + table.d2ed2a(1, 1)) -
+                             0.5f * (table.d2ed2a(0, 1) + table.d2ed2a(1, 0)));
     lambda[2] = fmax(0.0f, table.deda[0] / a0);
     lambda[3] = fmax(0.0f, table.deda[1] / a1);
     lambda[4] = fmax(0.0f, eigvalues[0]);
@@ -96,14 +96,14 @@ __device__ Mat9x9f compute_hessian(const DiffTable3 &table, const Svd3x3 &svd,
     Vec3f eigvalues;
     Mat3x3f eigvectors;
     utility::solve_symm_eigen3x3(table.d2ed2a, eigvalues, eigvectors);
-    float ivsqrt2 = 0.7071067811865475f;
+    float inv_sqrt2 = 0.7071067811865475f;
     Mat3x3f Q[9];
-    Q[0] = ivsqrt2 * Mat3x3f({{0., 1., 0.}, {-1., 0., 0.}, {0., 0., 0.}});
-    Q[1] = ivsqrt2 * Mat3x3f({{0., 0., 1.}, {0., 0., 0.}, {-1., 0., 0.}});
-    Q[2] = ivsqrt2 * Mat3x3f({{0., 0., 0.}, {0., 0., 1.}, {0., -1., 0.}});
-    Q[3] = ivsqrt2 * Mat3x3f({{0., 1., 0.}, {1., 0., 0.}, {0., 0., 0.}});
-    Q[4] = ivsqrt2 * Mat3x3f({{0., 0., 1.}, {0., 0., 0.}, {1., 0., 0.}});
-    Q[5] = ivsqrt2 * Mat3x3f({{0., 0., 0.}, {0., 0., 1.}, {0., 1., 0.}});
+    Q[0] = inv_sqrt2 * Mat3x3f({{0., 1., 0.}, {-1., 0., 0.}, {0., 0., 0.}});
+    Q[1] = inv_sqrt2 * Mat3x3f({{0., 0., 1.}, {0., 0., 0.}, {-1., 0., 0.}});
+    Q[2] = inv_sqrt2 * Mat3x3f({{0., 0., 0.}, {0., 0., 1.}, {0., -1., 0.}});
+    Q[3] = inv_sqrt2 * Mat3x3f({{0., 1., 0.}, {1., 0., 0.}, {0., 0., 0.}});
+    Q[4] = inv_sqrt2 * Mat3x3f({{0., 0., 1.}, {0., 0., 0.}, {1., 0., 0.}});
+    Q[5] = inv_sqrt2 * Mat3x3f({{0., 0., 0.}, {0., 0., 1.}, {0., 1., 0.}});
     Q[6] = Mat3x3f::Zero();
     Q[7] = Mat3x3f::Zero();
     Q[8] = Mat3x3f::Zero();
@@ -124,19 +124,19 @@ __device__ Mat9x9f compute_hessian(const DiffTable3 &table, const Svd3x3 &svd,
     lambda[2] = fmax(0.0f, (table.deda[1] + table.deda[2]) / (b + c));
     lambda[3] =
         fmax(0.0f, fabs(denom_ab) > eps
-                      ? (table.deda[0] - table.deda[1]) / denom_ab
-                      : 0.5f * (table.d2ed2a(0, 0) + table.d2ed2a(1, 1)) -
-                            0.5f * (table.d2ed2a(0, 1) + table.d2ed2a(1, 0)));
+                       ? (table.deda[0] - table.deda[1]) / denom_ab
+                       : 0.5f * (table.d2ed2a(0, 0) + table.d2ed2a(1, 1)) -
+                             0.5f * (table.d2ed2a(0, 1) + table.d2ed2a(1, 0)));
     lambda[4] =
         fmax(0.0f, fabs(denom_ac) > eps
-                      ? (table.deda[0] - table.deda[2]) / denom_ac
-                      : 0.5f * (table.d2ed2a(0, 0) + table.d2ed2a(2, 2)) -
-                            0.5f * (table.d2ed2a(0, 2) + table.d2ed2a(2, 0)));
+                       ? (table.deda[0] - table.deda[2]) / denom_ac
+                       : 0.5f * (table.d2ed2a(0, 0) + table.d2ed2a(2, 2)) -
+                             0.5f * (table.d2ed2a(0, 2) + table.d2ed2a(2, 0)));
     lambda[5] =
         fmax(0.0f, fabs(denom_bc) > eps
-                      ? (table.deda[1] - table.deda[2]) / denom_bc
-                      : 0.5f * (table.d2ed2a(1, 1) + table.d2ed2a(2, 2)) -
-                            0.5f * (table.d2ed2a(1, 2) + table.d2ed2a(2, 1)));
+                       ? (table.deda[1] - table.deda[2]) / denom_bc
+                       : 0.5f * (table.d2ed2a(1, 1) + table.d2ed2a(2, 2)) -
+                             0.5f * (table.d2ed2a(1, 2) + table.d2ed2a(2, 1)));
     lambda[6] = fmax(0.0f, eigvalues[0]);
     lambda[7] = fmax(0.0f, eigvalues[1]);
     lambda[8] = fmax(0.0f, eigvalues[2]);

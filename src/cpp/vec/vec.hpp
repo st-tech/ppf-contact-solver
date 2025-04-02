@@ -46,14 +46,14 @@ template <class T> struct VecVec {
 #if DEBUG_MODE
         if (i >= size) {
             printf("VecVec: operator() i = %u, size = %u\n", i, size);
-            assert(false);
+            assert(false && "T &operator");
         }
 #endif
         unsigned k = offset[i] + j;
 #if DEBUG_MODE
         if (k >= offset[i + 1]) {
             printf("VecVec: k >= offset[i + 1] failed\n");
-            assert(false);
+            assert(false && "T &operator");
         }
 #endif
         return data[k];
@@ -70,6 +70,7 @@ template <class T> struct VecVec {
         if (k >= offset[i + 1]) {
             printf("VecVec: k >= offset[i + 1] failed\n");
             assert(false);
+            assert(false && "T &operator");
         }
 #endif
         return data[k];
@@ -81,7 +82,7 @@ template <class T> struct VecVec {
 #if DEBUG_MODE
         if (i >= size) {
             printf("VecVec: count() i = %u, size = %u\n", i, size);
-            assert(false);
+            assert(false && "count");
         }
 #endif
         return offset[i + 1] - offset[i];
@@ -105,6 +106,7 @@ template <class T> struct Vec {
         if (i >= size) {
             printf("Vec: operator[] i = %u, size = %u\n", i, size);
             assert(false);
+            assert(false && "T &operator[]");
         }
 #endif
         return data[i];
@@ -113,7 +115,7 @@ template <class T> struct Vec {
 #if DEBUG_MODE
         if (i >= size) {
             printf("Vec: const T &operator[] i = %u, size = %u\n", i, size);
-            assert(false);
+            assert(false && "const T &operator[]");
         }
 #endif
         return data[i];
@@ -158,7 +160,7 @@ template <class T> struct Vec {
         if (i >= size) {
             printf("Vec: atomic_add i = %u, size = %u, sizeof(T) = %u\n", i,
                    size, sizeof(T));
-            assert(false);
+            assert(false && "atomic_add");
         }
         if (val) {
             atomicAdd(&data[i], val);
