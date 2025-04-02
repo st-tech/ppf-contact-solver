@@ -1,6 +1,10 @@
+# File: headless.py
+# Author: Ryoichi Ando (ryoichi.ando@zozo.com)
+# License: Apache v2.0
+
 from frontend import App
 
-app = App.create("headless")
+app = App.create()
 
 V, F = app.mesh.square(res=64, ex=[0, 0, 1], ey=[0, 1, 0])
 app.asset.add.tri("sheet", V, F)

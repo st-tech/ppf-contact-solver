@@ -7,17 +7,19 @@ import pandas as pd
 from tqdm import tqdm
 import shutil
 import os
+import time
 import colorsys
+from scipy.sparse import csr_matrix
+from numba import njit
+from dataclasses import dataclass
 from typing import Optional
-from ._utils_ import Utils
+from enum import Enum
 from ._plot_ import PlotManager, Plot
 from ._asset_ import AssetManager
-from ._render_ import render, create_offscreen_renderer
-from dataclasses import dataclass
+from ._render_ import OpenGLRenderer
+from ._utils_ import Utils
 
 EPS = 1e-3
-
-g_renderer = create_offscreen_renderer(256, 256)
 
 
 class SceneManager:
@@ -30,17 +32,20 @@ class SceneManager:
         self._scene: dict[str, Scene] = {}
         self._save_func = save_func
 
-    def create(self, name: str) -> "Scene":
+    def create(self, name: str = "") -> "Scene":
         """Create a new scene.
 
         Create a scene only if the name does not exist. Raise an exception if the name already exists.
 
         Args:
-            name (str): The name of the scene to create.
+            name (str): The name of the scene to create. If not provided, it will use the current time as the name.
 
         Returns:
             Scene: The created scene.
         """
+        if name == "":
+            name = time.strftime("scene-%Y-%m-%d-%H-%M-%S")
+
         if name in self._scene.keys():
             raise Exception(f"scene {name} already exists")
         else:
@@ -75,7 +80,6 @@ class SceneManager:
         """Clear all the scenes in the manager."""
         self._scene = {}
 
-    def list(self) -> list[str]:
         """List all the scenes in the manager.
 
         Returns:
@@ -89,7 +93,6 @@ class Wall:
 
     def __init__(self):
         """Initialize the wall."""
-        self._normal = [0, 1, 0]
         self._entry = []
         self._transition = "smooth"
 
@@ -104,7 +107,6 @@ class Wall:
     def add(self, pos: list[float], normal: list[float]) -> "Wall":
         """Add an invisible wall information.
 
-        Args:
             pos (list[float]): The position of the wall.
             normal (list[float]): The outer normal of the wall.
 
@@ -362,7 +364,7 @@ class PinHolder:
         """
         delta_pos = np.array(delta_pos).reshape((-1, 3))
         if not self._data.keyframe:
-            target = self._obj.vertex()[self._data.index] + delta_pos
+            target = self._obj.vertex(False)[self._data.index] + delta_pos
         else:
             target = self._data.keyframe[-1].position + delta_pos
         return self.move_to(target, time)
@@ -377,7 +379,7 @@ class PinHolder:
         Returns:
             PinHolder: The pinholder with the updated scaling.
         """
-        vertex = self._obj.vertex()[self._data.index]
+        vertex = self._obj.vertex(False)[self._data.index]
         mean = np.mean(vertex, axis=0)
         vertex = vertex - mean
         vertex = vertex * scale
@@ -427,7 +429,7 @@ class PinHolder:
             raise Exception("time must be greater than zero")
 
         if not self.keyframe:
-            self._add_movement(self._obj.vertex()[self.index], 0)
+            self._add_movement(self._obj.vertex(False)[self.index], 0)
 
         self._add_movement(target, time)
         return self
@@ -491,6 +493,34 @@ class PinHolder:
         return self._data.transition
 
 
+class EnumColor(Enum):
+    """Dynamic face color enumeration."""
+
+    NONE = 0
+    AREA = 1
+
+
+@njit
+def _area(f: np.ndarray, vert: np.ndarray) -> float:
+    a, b, c = vert[f[0]], vert[f[1]], vert[f[2]]
+    area = 0.5 * float(np.linalg.norm(np.cross(b - a, c - a)))
+    return area
+
+
+@njit
+def _compute_area(vert: np.ndarray, tri: np.ndarray, area: np.ndarray):
+    for i, f in enumerate(tri):
+        area[i] = _area(f, vert)
+
+
+@njit
+def _compute_area_change(
+    vert: np.ndarray, tri: np.ndarray, init_area: np.ndarray, rat: np.ndarray
+):
+    for i, f in enumerate(tri):
+        rat[i] = _area(f, vert) / init_area[i]
+
+
 class FixedScene:
     """A fixed scene class."""
 
@@ -498,11 +528,15 @@ class FixedScene:
         self,
         plot: PlotManager,
         name: str,
-        vert: np.ndarray,
+        displacement: np.ndarray,
+        vert: tuple[np.ndarray, np.ndarray],
         color: np.ndarray,
+        dyn_face_color: list[EnumColor],
+        dyn_face_intensity: list[float],
         vel: np.ndarray,
         uv: np.ndarray,
         rod: np.ndarray,
+        rod_length_factor: np.ndarray,
         tri: np.ndarray,
         tet: np.ndarray,
         wall: list[Wall],
@@ -517,11 +551,15 @@ class FixedScene:
         Args:
             plot (PlotManager): The plot manager.
             name (str): The name of the scene.
-            vert (np.ndarray): The vertices of the scene.
+            displacement (np.ndarray): The displacement of the vertices.
+            vert (np.ndarray, np.ndarray): The vertices of the scene. The first array is the displacement map reference.
             color (np.ndarray): The colors of the vertices.
+            dyn_face_color (list[EnumColor]): The dynamic face colors.
+            dyn_face_intensity (list[float]): The dynamic face color intensity.
             vel (np.ndarray): The velocities of the vertices.
             uv (np.ndarray): The UV coordinates of the vertices.
             rod (np.ndarray): The rod elements.
+            rod_length_factor (np.ndarray): The rod length factors.
             tri (np.ndarray): The triangle elements.
             tet (np.ndarray): The tetrahedral elements.
             wall (list[Wall]): The invisible walls.
@@ -534,16 +572,20 @@ class FixedScene:
 
         self._plot = plot
         self._name = name
+        self._displacement = displacement
         self._vert = vert
         self._color = color
+        self._dyn_face_color = dyn_face_color
+        self._dyn_face_intensity = dyn_face_intensity
         self._vel = vel
         self._uv = uv
         self._rod = rod
+        self._rod_length_factor = rod_length_factor
         self._tri = tri
         self._tet = tet
         self._pin: list[PinData] = []
         self._spin: list[SpinData] = []
-        self._static_vert = np.zeros(0)
+        self._static_vert = (np.zeros(0, dtype=np.uint32), np.zeros(0))
         self._static_color = np.zeros(0)
         self._static_tri = np.zeros(0)
         self._stitch_ind = np.zeros(0)
@@ -554,24 +596,38 @@ class FixedScene:
         self._shell_vert_range = shell_vert_range
         self._rod_count = rod_count
         self._shell_count = shell_count
-        self._shading = {}
+        self._has_dyn_color = any(entry != EnumColor.NONE for entry in dyn_face_color)
 
-    def shading(self, shading: dict) -> "FixedScene":
-        """Set the shading options.
+        assert len(self._vert[0]) == len(self._color)
+        assert len(self._vert[1]) == len(self._color)
+        assert len(self._tri) == len(self._dyn_face_color)
 
-        Args:
-            shading (dict): The shading options.
+        if len(self._tri):
+            self._area = np.zeros(len(self._tri))
+            _compute_area(self._vert[1], self._tri, self._area)
+        else:
+            self._area = np.zeros(0)
 
-        Returns:
-            Session: The session object.
-        """
-        self._shading = shading
-        return self
+        if self._has_dyn_color:
+            sum = np.zeros(len(self._vert[0])) + 0.0001
+            rows, cols, vals = [], [], []
+            for i, f in enumerate(self._tri):
+                for j in f:
+                    rows.append(j)
+                    cols.append(i)
+                    vals.append(1.0)
+                    sum[j] += 1
+            self._face_to_vert_mat = csr_matrix(
+                (vals, (rows, cols)), shape=(len(sum), len(self._tri))
+            )
+            self._face_to_vert_mat = self._face_to_vert_mat.multiply(1.0 / sum[:, None])
+        else:
+            self._face_to_vert_mat = None
 
     def report(self) -> "FixedScene":
         """Print a summary of the scene."""
         data = {}
-        data["#vert"] = len(self._vert)
+        data["#vert"] = len(self._vert[1])
         if len(self._rod):
             data["#rod"] = len(self._rod)
         if len(self._tri):
@@ -581,7 +637,7 @@ class FixedScene:
         if len(self._pin):
             data["#pin"] = sum([len(pin.index) for pin in self._pin])
         if len(self._static_vert) and len(self._static_tri):
-            data["#static_vert"] = len(self._static_vert)
+            data["#static_vert"] = len(self._static_vert[1])
             data["#static_tri"] = len(self._static_tri)
         if len(self._stitch_ind) and len(self._stitch_w):
             data["#stitch_ind"] = len(self._stitch_ind)
@@ -603,8 +659,66 @@ class FixedScene:
             print(data)
         return self
 
+    def color(self, vert: np.ndarray, hint: dict = {}) -> np.ndarray:
+        """Compute the color of the scene given the vertex array.
+
+        Args:
+            vert (np.ndarray): The vertices of the scene.
+            hint (dict, optional): The hint for the color computation. Defaults to {}.
+
+        Returns:
+            color (np.ndarray): The vertex color of the scene.
+        """
+        if self._has_dyn_color:
+            assert self._face_to_vert_mat is not None
+            assert self._area is not None
+
+            max_area = 2.0
+
+            if "max-area" in hint:
+                max_area = hint["max-area"]
+
+            rat = np.zeros(len(self._tri))
+            face_color = np.zeros((len(self._tri), 3))
+            intensity = np.zeros(len(self._tri))
+            _compute_area_change(vert, self._tri, self._area, rat)
+
+            for i in range(len(face_color)):
+                if self._dyn_face_color[i] != EnumColor.NONE:
+                    val = max(0.0, min(1.0, (rat[i] - 1.0) / (max_area - 1.0)))
+                    intensity[i] = self._dyn_face_intensity[i]
+                    hue = 240.0 * (1.0 - val) / 360.0
+                    face_color[i] = np.array(colorsys.hsv_to_rgb(hue, 0.75, 1.0))
+            intensity = self._face_to_vert_mat.dot(intensity)
+            color = (1.0 - intensity[:, None]) * self._color + intensity[
+                :, None
+            ] * self._face_to_vert_mat.dot(face_color)
+            return color
+        else:
+            return self._color
+
+    def vertex(self, transform: bool = True) -> np.ndarray:
+        """Get the vertices of the scene.
+
+        Args:
+            transform (bool, optional): Whether to transform the vertices. Defaults to True.
+
+        Returns:
+            np.ndarray: The vertices of the scene.
+        """
+        if transform:
+            return self._vert[1] + self._displacement[self._vert[0]]
+        else:
+            return self._vert[1]
+
     def export(
-        self, vert: np.ndarray, path: str, include_static: bool = True
+        self,
+        vert: np.ndarray,
+        color: np.ndarray,
+        path: str,
+        include_static: bool = True,
+        args: dict = {},
+        delete_exist: bool = False,
     ) -> "FixedScene":
         """Export the scene to a mesh file.
 
@@ -612,34 +726,56 @@ class FixedScene:
 
         Args:
             vert (np.ndarray): The vertices of the scene.
+            color (np.ndarray): The colors of the vertices.
             path (str): The path to the mesh file. Supported formats are `.ply`, `.obj`
             include_static (bool, optional): Whether to include the static mesh. Defaults to True.
+            args (dict, optional): Additional arguments passed to a renderer.
+            delete_exist (bool, optional): Whether to delete the existing file. Defaults to False.
 
         Returns:
             FixedScene: The fixed scene.
         """
 
-        import trimesh
-
-        if include_static and len(self._static_vert) and len(self._static_tri):
-            tri = np.concatenate([self._tri, self._static_tri + len(vert)])
-            vert = np.concatenate([vert, self._static_vert], axis=0)
-            color = np.concatenate([self._color, self._static_color], axis=0)
-        else:
-            tri, color = self._tri, self._color
+        image_path = path + ".png"
+        if delete_exist:
+            if os.path.exists(path):
+                os.remove(path)
+            if os.path.exists(image_path):
+                os.remove(image_path)
 
         if not os.path.exists(os.path.dirname(path)):
             os.makedirs(os.path.dirname(path))
 
-        mesh = trimesh.Trimesh(
-            vertices=vert, faces=tri, vertex_colors=color, process=False
-        )
-        ci_name = Utils.ci_name()
-        if ci_name is None:
+        seg, tri = self._rod, None
+        if not os.path.exists(path) or not os.path.exists(image_path):
+            if include_static and len(self._static_vert) and len(self._static_tri):
+                static_vert = (
+                    self._static_vert[1] + self._displacement[self._static_vert[0]]
+                )
+                tri = np.concatenate([self._tri, self._static_tri + len(vert)])
+                vert = np.concatenate([vert, static_vert], axis=0)
+                color = np.concatenate([color, self._static_color], axis=0)
+            else:
+                tri = self._tri
+
+        if tri is not None and len(tri) == 0:
+            tri = np.array([[0, 0, 0]])
+        if not os.path.exists(path) and Utils.ci_name() is None:
+            import trimesh
+
+            mesh = trimesh.Trimesh(
+                vertices=vert, faces=tri, vertex_colors=color, process=False
+            )
             mesh.export(path)
 
-        path += ".png"
-        render(g_renderer, vert, tri, color, path)
+        if not os.path.exists(image_path):
+            if Utils.ci_name() is not None:
+                args["width"] = 320
+                args["height"] = 240
+            renderer = OpenGLRenderer(args)
+            assert tri is not None
+            assert color is not None
+            renderer.render(vert, color, seg, tri, image_path)
 
         return self
 
@@ -668,11 +804,11 @@ class FixedScene:
         info_path = os.path.join(path, "info.toml")
         with open(info_path, "w") as f:
             f.write("[count]\n")
-            f.write(f"vert = {len(self._vert)}\n")
+            f.write(f"vert = {len(self._vert[1])}\n")
             f.write(f"rod = {len(self._rod)}\n")
             f.write(f"tri = {len(self._tri)}\n")
             f.write(f"tet = {len(self._tet)}\n")
-            f.write(f"static_vert = {len(self._static_vert)}\n")
+            f.write(f"static_vert = {len(self._static_vert[1])}\n")
             f.write(f"static_tri = {len(self._static_tri)}\n")
             f.write(f"pin_block = {len(self._pin)}\n")
             f.write(f"wall = {len(self._wall)}\n")
@@ -716,7 +852,11 @@ class FixedScene:
         bin_path = os.path.join(path, "bin")
         os.makedirs(bin_path)
 
-        self._vert.astype(np.float64).tofile(os.path.join(bin_path, "vert.bin"))
+        self._displacement.astype(np.float64).tofile(
+            os.path.join(bin_path, "displacement.bin")
+        )
+        self._vert[0].astype(np.uint32).tofile(os.path.join(bin_path, "vert_dmap.bin"))
+        self._vert[1].astype(np.float64).tofile(os.path.join(bin_path, "vert.bin"))
         self._color.astype(np.float32).tofile(os.path.join(bin_path, "color.bin"))
         self._vel.astype(np.float32).tofile(os.path.join(bin_path, "vel.bin"))
         if np.linalg.norm(self._uv) > 0:
@@ -724,12 +864,19 @@ class FixedScene:
 
         if len(self._rod):
             self._rod.astype(np.uint64).tofile(os.path.join(bin_path, "rod.bin"))
+        if len(self._rod_length_factor):
+            self._rod_length_factor.astype(np.float32).tofile(
+                os.path.join(bin_path, "rod_length_factor.bin")
+            )
         if len(self._tri):
             self._tri.astype(np.uint64).tofile(os.path.join(bin_path, "tri.bin"))
         if len(self._tet):
             self._tet.astype(np.uint64).tofile(os.path.join(bin_path, "tet.bin"))
         if len(self._static_vert):
-            self._static_vert.astype(np.float64).tofile(
+            self._static_vert[0].astype(np.uint32).tofile(
+                os.path.join(bin_path, "static_vert_dmap.bin")
+            )
+            self._static_vert[1].astype(np.float64).tofile(
                 os.path.join(bin_path, "static_vert.bin")
             )
             self._static_tri.astype(np.uint64).tofile(
@@ -804,7 +951,7 @@ class FixedScene:
         Returns:
             tuple[np.ndarray, np.ndarray]: The maximum and minimum coordinates of the bounding box.
         """
-        vert = self._vert
+        vert = self._vert[1] + self._displacement[self._vert[0]]
         return (np.max(vert, axis=0), np.min(vert, axis=0))
 
     def center(self) -> np.ndarray:
@@ -813,14 +960,14 @@ class FixedScene:
         Returns:
             np.ndarray: The area-weighted center of the scene.
         """
-        vert = self._vert
+        vert = self._vert[1] + self._displacement[self._vert[0]]
         tri = self._tri
         center = np.zeros(3)
         area_sum = 0
         for f in tri:
             a, b, c = vert[f[0]], vert[f[1]], vert[f[2]]
-            area = 0.5 * np.linalg.norm(np.cross(b - a, c - a))
-            center += area * (a + b + c) / 3
+            area = _area(f, self._vert[1])
+            center += area * (a + b + c) / 3.0
             area_sum += area
         if area_sum == 0:
             raise Exception("no area")
@@ -833,14 +980,8 @@ class FixedScene:
         Returns:
             float: The average triangle area of the scene.
         """
-        vert = self._vert
-        tri = self._tri
-        area = 0.0
-        if len(tri):
-            for f in tri:
-                a, b, c = vert[f[0]], vert[f[1]], vert[f[2]]
-                area += 0.5 * float(np.linalg.norm(np.cross(b - a, c - a)))
-            return area / len(tri)
+        if len(self._area):
+            return self._area.mean()
         else:
             return 0.0
 
@@ -860,11 +1001,13 @@ class FixedScene:
         """
         self._spin = spin
 
-    def set_static(self, vert: np.ndarray, tri: np.ndarray, color: np.ndarray):
+    def set_static(
+        self, vert: tuple[np.ndarray, np.ndarray], tri: np.ndarray, color: np.ndarray
+    ):
         """Set the static mesh data.
 
         Args:
-            vert (np.ndarray): The vertices of the static mesh.
+            vert (np.ndarray, np.ndarray): The vertices of the static mesh. The first array is the displacement map reference.
             tri (np.ndarray): The triangle elements of the static mesh.
             color (np.ndarray): The colors of the static mesh.
         """
@@ -891,7 +1034,7 @@ class FixedScene:
         Returns:
             np.ndarray: The vertex positions at the specified time.
         """
-        vert = self._vert.copy()
+        vert = self._vert[1].copy()
         for pin in self._pin:
             last_time = pin.keyframe[-1].time if len(pin.keyframe) else 0.0
             last_position = (
@@ -913,21 +1056,24 @@ class FixedScene:
                         break
             for p in pin.spin:
                 t = min(time, p.t_end) - p.t_start
-                radian_velocity = p.angular_velocity / 180.0 * np.pi
-                angle = radian_velocity * t
-                axis = p.axis / np.linalg.norm(p.axis)
+                if t > 0:
+                    radian_velocity = p.angular_velocity / 180.0 * np.pi
+                    angle = radian_velocity * t
+                    axis = p.axis / np.linalg.norm(p.axis)
 
-                # Rodrigues rotation formula
-                cos_theta = np.cos(angle)
-                sin_theta = np.sin(angle)
-                points = vert[pin.index] - p.center
-                rotated = (
-                    points * cos_theta
-                    + np.cross(axis, points) * sin_theta
-                    + np.outer(np.dot(points, axis), axis) * (1.0 - cos_theta)
-                )
-                vert[pin.index] = rotated + p.center
+                    # Rodrigues rotation formula
+                    cos_theta = np.cos(angle)
+                    sin_theta = np.sin(angle)
+                    points = vert[pin.index] - p.center
+                    rotated = (
+                        points * cos_theta
+                        + np.cross(axis, points) * sin_theta
+                        + np.outer(np.dot(points, axis), axis) * (1.0 - cos_theta)
+                    )
+                    vert[pin.index] = rotated + p.center
+
         vert += time * self._vel
+        vert += self._displacement[self._vert[0]]
         return vert
 
     def check_intersection(self) -> "FixedScene":
@@ -959,112 +1105,112 @@ class FixedScene:
     def preview(
         self,
         vert: Optional[np.ndarray] = None,
-        shading: dict = {},
-        show_stitch: bool = True,
-        show_pin: bool = True,
+        options: dict = {},
+        show_slider: bool = True,
     ) -> Optional["Plot"]:
         """Preview the scene.
 
         Args:
             vert (Optional[np.ndarray], optional): The vertices to preview. Defaults to None.
-            shading (dict, optional): Additional shading options. Defaults to {}.
-            show_stitch (bool, optional): Whether to show the stitch. Defaults to True.
-            show_pin (bool, optional): Whether to show the pin. Defaults to True.
+            options (dict, optional): The options for the plot. Defaults to {}.
+            show_slider (bool, optional): Whether to show the time slider. Defaults to True.
 
         Returns:
             Optional[Plot]: The plot object if in a Jupyter notebook, otherwise None.
         """
+        default_opts = {
+            "flat_shading": False,
+            "wireframe": True,
+            "stitch": True,
+            "pin": True,
+        }
+        options = dict(options)
+        for key, value in default_opts.items():
+            if key not in options:
+                options[key] = value
+
         if self._plot.is_jupyter_notebook():
-            shading = self._shading | shading
             if vert is None:
-                vert = self._vert
-            color = self._color
-            plot = None
+                vert = self.vertex()
+            color = self.color(vert, options)
+            assert len(color) == len(vert)
+            tri = self._tri.copy()
+            edge = self._rod.copy()
+            pts = np.zeros(0)
+            plotter = self._plot.create()
 
-            if len(self._tri):
-                if plot is None:
-                    plot = self._plot.create().tri(
-                        vert, self._tri, color=color, shading=shading
-                    )
+            if len(self._static_vert[1]):
+                static_vert = (
+                    self._static_vert[1] + self._displacement[self._static_vert[0]]
+                )
+                static_color = np.zeros_like(static_vert)
+                static_color[:, :] = self._static_color
+                if len(tri):
+                    tri = np.vstack([tri, self._static_tri + len(vert)])
                 else:
-                    plot.add.tri(vert, self._tri, color)
+                    tri = self._static_tri + len(vert)
+                vert = np.vstack([vert, static_vert])
+                color = np.vstack([color, static_color])
+                assert len(color) == len(vert)
 
-            if len(self._static_vert):
-                if plot is None:
-                    plot = self._plot.create().tri(
-                        self._static_vert,
-                        self._static_tri,
-                        color=self._static_color,
-                        shading=self._shading | shading,
-                    )
+            if options["stitch"] and len(self._stitch_ind) and len(self._stitch_w):
+                stitch_vert, stitch_edge = [], []
+                for ind, w in zip(self._stitch_ind, self._stitch_w):
+                    x0, y0, y1 = vert[ind[0]], vert[ind[1]], vert[ind[2]]
+                    w0, w1 = w[0], w[1]
+                    idx0 = len(stitch_vert) + len(vert)
+                    idx1 = idx0 + 1
+                    stitch_vert.append(x0)
+                    stitch_vert.append(w0 * y0 + w1 * y1)
+                    stitch_edge.append([idx0, idx1])
+                stitch_vert = np.array(stitch_vert)
+                stitch_edge = np.array(stitch_edge)
+                stitch_color = np.tile(np.array([1.0, 1.0, 1.0]), (len(stitch_vert), 1))
+                vert = np.vstack([vert, stitch_vert])
+                if edge:
+                    edge = np.vstack([edge, stitch_edge])
                 else:
-                    plot.add.tri(
-                        self._static_vert,
-                        self._static_tri,
-                        self._static_color,
+                    edge = stitch_edge
+                color = np.vstack([color, stitch_color])
+
+            if options["pin"] and self._pin:
+                options["pts_scale"] = np.sqrt(self._average_tri_area())
+                pts = []
+                for pin in self._pin:
+                    pts.extend(pin.index)
+                pts = np.array(pts)
+
+            plotter.plot(vert, color, tri, edge, pts, options)
+
+            has_vel = np.linalg.norm(self._vel) > 0
+            if show_slider and (self._pin or has_vel):
+                max_time = 0
+                if self._pin:
+                    max_time = max(
+                        [
+                            pin.keyframe[-1].time if len(pin.keyframe) else 0
+                            for pin in self._pin
+                        ]
                     )
+                    for p in self._pin:
+                        for spin in p.spin:
+                            if spin.t_end == float("inf"):
+                                max_time = max(max_time, 1.0)
+                            else:
+                                max_time = max(max_time, spin.t_end)
+                if has_vel:
+                    max_time = max(max_time, 1.0)
+                if max_time > 0:
 
-            if len(self._rod):
-                if plot is None:
-                    plot = self._plot.create().curve(vert, self._rod, shading=shading)
-                else:
-                    plot.add.edge(vert, self._rod)
+                    def update(time=0):
+                        nonlocal p
+                        vert = self.time(time)
+                        plotter.update(vert)
 
-            if plot is not None:
-                if show_stitch and len(self._stitch_ind) and len(self._stitch_w):
-                    stitch_vert, stitch_edge = [], []
-                    for ind, w in zip(self._stitch_ind, self._stitch_w):
-                        x0, y0, y1 = vert[ind[0]], vert[ind[1]], vert[ind[2]]
-                        w0, w1 = w[0], w[1]
-                        idx0, idx1 = len(stitch_vert), len(stitch_vert) + 1
-                        stitch_vert.append(x0)
-                        stitch_vert.append(w0 * y0 + w1 * y1)
-                        stitch_edge.append([idx0, idx1])
-                    stitch_vert = np.array(stitch_vert)
-                    stitch_edge = np.array(stitch_edge)
-                    if plot._darkmode:
-                        color = np.array([1, 1, 1])
-                    else:
-                        color = np.array([0, 0, 0])
-                    plot.add.edge(stitch_vert, stitch_edge)
+                    from ipywidgets import interact
 
-                has_vel = np.linalg.norm(self._vel) > 0
-                if show_pin and (self._pin or has_vel):
-                    max_time = 0
-                    if self._pin:
-                        avg_area = self._average_tri_area()
-                        avg_length = np.sqrt(avg_area)
-                        shading["point_size"] = 5 * avg_length
-                        pin_verts = np.vstack([vert[pin.index] for pin in self._pin])
-                        plot.add.point(pin_verts)
-                        max_time = max(
-                            [
-                                pin.keyframe[-1].time if len(pin.keyframe) else 0
-                                for pin in self._pin
-                            ]
-                        )
-                        for p in self._pin:
-                            for spin in p.spin:
-                                if spin.t_end == float("inf"):
-                                    max_time = max(max_time, 1.0)
-                                else:
-                                    max_time = max(max_time, spin.t_end)
-                    if has_vel:
-                        max_time = max(max_time, 1.0)
-                    if max_time > 0:
-
-                        def update(time=0):
-                            nonlocal plot
-                            vert = self.time(time)
-                            if plot is not None:
-                                plot.update(vert)
-
-                        from ipywidgets import interact
-
-                        interact(update, time=(0, max_time, 0.01))
-                return plot
-            else:
-                raise Exception("no plot")
+                    interact(update, time=(0, max_time, 0.01))
+            return plotter
         else:
             return None
 
@@ -1181,7 +1327,7 @@ class Scene:
         result = float("inf")
         _axis = {"x": 0, "y": 1, "z": 2}
         for obj in self._object.values():
-            vert = obj.vertex()
+            vert = obj.vertex(True)
             if vert is not None:
                 result = min(result, np.min(vert[:, _axis[axis]]))
         return result
@@ -1198,7 +1344,7 @@ class Scene:
         result = float("-inf")
         _axis = {"x": 0, "y": 1, "z": 2}
         for obj in self._object.values():
-            vert = obj.vertex()
+            vert = obj.vertex(True)
             if vert is not None:
                 result = max(result, np.max(vert[:, _axis[axis]]))
         return result
@@ -1215,14 +1361,13 @@ class Scene:
 
         concat_count = 0
         dyn_objects = [
-            (name, obj)
-            for name, obj in self._object.items()
-            if not obj.static and not obj._color
+            (name, obj) for name, obj in self._object.items() if not obj.static
         ]
         n = len(dyn_objects)
-        for i, (name, obj) in enumerate(dyn_objects):
+        for i, (_, obj) in enumerate(dyn_objects):
             r, g, b = colorsys.hsv_to_rgb(i / n, 0.75, 1.0)
-            obj.default_color(r, g, b)
+            if obj._color is None:
+                obj.default_color(r, g, b)
 
         def add_entry(
             map,
@@ -1267,11 +1412,10 @@ class Scene:
         for name, obj in dyn_objects:
             map, tri = tag[name], obj.get("F")
             if tri is not None:
-                if tri is not None:
-                    add_entry(
-                        map,
-                        tri,
-                    )
+                add_entry(
+                    map,
+                    tri,
+                )
 
         pbar.update(1)
         for name, obj in dyn_objects:
@@ -1283,14 +1427,21 @@ class Scene:
                         map[i] = concat_count
                         concat_count += 1
 
+        dmap = {}
+        concat_displacement = []
+        concat_vert_dmap = np.zeros(concat_count, dtype=np.uint32)
         concat_vert = np.zeros((concat_count, 3))
         concat_color = np.zeros((concat_count, 3))
+        concat_dyn_tri_color = []
+        concat_dyn_tri_intensity = []
         concat_vel = np.zeros((concat_count, 3))
         concat_uv = np.zeros((concat_count, 2))
         concat_pin = []
         concat_rod = []
+        concat_rod_length_factor = []
         concat_tri = []
         concat_tet = []
+        concat_static_vert_dmap = []
         concat_static_vert = []
         concat_static_tri = []
         concat_static_color = []
@@ -1303,12 +1454,18 @@ class Scene:
                 result[i] = [map[vi] for vi in elm[i]]
             return result
 
+        for name, obj in self._object.items():
+            dmap[name] = len(concat_displacement)
+            concat_displacement.append(obj._at)
+        concat_displacement = np.array(concat_displacement)
+
         pbar.update(1)
         for name, obj in dyn_objects:
             map = tag[name]
-            vert, uv = obj.vertex(), obj._uv
+            vert, uv = obj.vertex(False), obj._uv
             if vert is not None:
                 concat_vert[map] = vert
+                concat_vert_dmap[map] = [dmap[name]] * len(map)
                 concat_vel[map] = obj._velocity
                 concat_color[map] = obj.get("color")
             if uv is not None:
@@ -1320,6 +1477,7 @@ class Scene:
             edge = obj.get("E")
             if edge is not None and obj.get("T") is None:
                 concat_rod.extend(vec_map(map, edge))
+                concat_rod_length_factor.extend([obj._rod_length_factor] * len(edge))
         rod_count = len(concat_rod)
 
         pbar.update(1)
@@ -1327,7 +1485,10 @@ class Scene:
             map = tag[name]
             tri = obj.get("F")
             if tri is not None and obj.get("T") is None:
-                concat_tri.extend(vec_map(map, tri))
+                t = vec_map(map, tri)
+                concat_tri.extend(t)
+                concat_dyn_tri_color.extend([obj._dyn_color] * len(t))
+                concat_dyn_tri_intensity.extend([obj._dyn_intensity] * len(t))
         shell_count = len(concat_tri)
 
         pbar.update(1)
@@ -1335,7 +1496,10 @@ class Scene:
             map = tag[name]
             tet, tri = obj.get("T"), obj.get("F")
             if tet is not None and tri is not None:
-                concat_tri.extend(vec_map(map, tri))
+                t = vec_map(map, tri)
+                concat_tri.extend(t)
+                concat_dyn_tri_color.extend([obj._dyn_color] * len(t))
+                concat_dyn_tri_intensity.extend([obj._dyn_intensity] * len(t))
 
         for name, obj in dyn_objects:
             map = tag[name]
@@ -1372,8 +1536,9 @@ class Scene:
                 if tri is not None:
                     concat_static_tri.extend(tri + offset)
                 if vert is not None:
-                    concat_static_vert.extend(obj.apply_transform(vert))
+                    concat_static_vert.extend(obj.apply_transform(vert, False))
                     concat_static_color.extend([color] * len(vert))
+                    concat_static_vert_dmap.extend([dmap[name]] * len(vert))
 
         self._save_func()
         pbar.update(1)
@@ -1381,11 +1546,15 @@ class Scene:
         fixed = FixedScene(
             self._plot,
             self.info.name,
-            concat_vert,
+            concat_displacement,
+            (concat_vert_dmap, concat_vert),
             concat_color,
+            concat_dyn_tri_color,
+            concat_dyn_tri_intensity,
             concat_vel,
             concat_uv,
             np.array(concat_rod),
+            np.array(concat_rod_length_factor),
             np.array(concat_tri),
             np.array(concat_tet),
             self._wall,
@@ -1401,7 +1570,7 @@ class Scene:
 
         if len(concat_static_vert):
             fixed.set_static(
-                np.array(concat_static_vert),
+                (np.array(concat_static_vert_dmap), np.array(concat_static_vert)),
                 np.array(concat_static_tri),
                 np.array(concat_static_color),
             )
@@ -1438,9 +1607,12 @@ class Object:
         """Clear the object data."""
         self._param = {}
         self._at = [0.0, 0.0, 0.0]
+        self._rod_length_factor = 1.0
         self._scale = 1.0
         self._rotation = np.eye(3)
-        self._color = []
+        self._color = None
+        self._dyn_color = EnumColor.NONE
+        self._dyn_intensity = 1.0
         self._static_color = [0.75, 0.75, 0.75]
         self._default_color = [1.0, 0.85, 0.0]
         self._velocity = [0, 0, 0]
@@ -1474,7 +1646,7 @@ class Object:
         if vert is None:
             raise Exception("vertex does not exist")
         else:
-            transformed = self.apply_transform(vert)
+            transformed = self.apply_transform(vert, False)
             max_x, max_y, max_z = np.max(transformed, axis=0)
             min_x, min_y, min_z = np.min(transformed, axis=0)
             return (
@@ -1512,7 +1684,7 @@ class Object:
             Optional[np.ndarray]: The value associated with the key.
         """
         if key == "color":
-            if self._color:
+            if self._color is not None:
                 return np.array(self._color)
             else:
                 if self.static:
@@ -1536,8 +1708,11 @@ class Object:
             else:
                 return None
 
-    def vertex(self) -> np.ndarray:
+    def vertex(self, translate: bool) -> np.ndarray:
         """Get the transformed vertices of the object.
+
+        Args:
+            translate (bool): Whether to translate the vertices.
 
         Returns:
             np.ndarray: The transformed vertices.
@@ -1546,7 +1721,7 @@ class Object:
         if vert is None:
             raise Exception("vertex does not exist")
         else:
-            return self.apply_transform(vert)
+            return self.apply_transform(vert, translate)
 
     def grab(self, direction: list[float], eps: float = 1e-3) -> list[int]:
         """Grab vertices max towards a specified direction.
@@ -1558,7 +1733,7 @@ class Object:
         Returns:
             list[int]: The indices of the grabbed vertices.
         """
-        vert = self.vertex()
+        vert = self.vertex(False)
         val = np.max(np.dot(vert, np.array(direction)))
         return np.where(np.dot(vert, direction) > val - eps)[0].tolist()
 
@@ -1660,6 +1835,18 @@ class Object:
             raise Exception("invalid axis")
         return self
 
+    def length_factor(self, factor: float) -> "Object":
+        """Set the rod length factor of the object.
+
+        Args:
+            factor (float): The rod length factor.
+
+        Returns:
+            Object: The object with the updated rod length factor.
+        """
+        self._rod_length_factor = factor
+        return self
+
     def max(self, dim: str) -> float:
         """Get the maximum coordinate value along a specified dimension.
 
@@ -1669,7 +1856,7 @@ class Object:
         Returns:
             float: The maximum coordinate value.
         """
-        vert = self.vertex()
+        vert = self.vertex(True)
         return np.max([x[{"x": 0, "y": 1, "z": 2}[dim]] for x in vert])
 
     def min(self, dim: str) -> float:
@@ -1681,14 +1868,15 @@ class Object:
         Returns:
             float: The minimum coordinate value.
         """
-        vert = self.vertex()
+        vert = self.vertex(True)
         return np.min([x[{"x": 0, "y": 1, "z": 2}[dim]] for x in vert])
 
-    def apply_transform(self, x: np.ndarray) -> np.ndarray:
+    def apply_transform(self, x: np.ndarray, translate: bool) -> np.ndarray:
         """Apply the object's transformation to a set of vertices.
 
         Args:
             x (np.ndarray): The vertices to transform.
+            translate (bool, optional): Whether to translate the vertices.
 
         Returns:
             np.ndarray: The transformed vertices.
@@ -1700,7 +1888,9 @@ class Object:
         if self._normalize:
             x = (x - self._center) / np.max(self._bbox)
         x = self._rotation @ x
-        x = x * self._scale + np.array(self._at).reshape((3, 1))
+        x = x * self._scale
+        if translate:
+            x += np.array(self._at).reshape((3, 1))
         return x.transpose()
 
     def static_color(self, red: float, green: float, blue: float) -> "Object":
@@ -1743,6 +1933,55 @@ class Object:
             Object: The object with the updated color.
         """
         self._color = [red, green, blue]
+        return self
+
+    def vert_color(self, color: np.ndarray) -> "Object":
+        """Set the vertex colors of the object.
+
+        Args:
+            color (np.ndarray): The vertex colors.
+
+        Returns:
+            Object: The object with the updated vertex colors.
+        """
+        self._color = color
+        return self
+
+    def direction_color(self, x: float, y: float, z: float) -> "Object":
+        """Set the color along the direction of the object.
+
+        Args:
+            x (float): The x-component of the direction.
+            y (float): The y-component of the direction.
+            z (float): The z-component of the direction.
+
+        Returns:
+            Object: The object with the updated color.
+        """
+        vertex = self.vertex(False)
+        vals = vertex.dot([x, y, z])
+        min_val, max_val = np.min(vals), np.max(vals)
+        color = np.zeros((len(vertex), 3))
+        for i, val in enumerate(vals):
+            y = (val - min_val) / (max_val - min_val)
+            hue = 240.0 * (1.0 - y) / 360.0
+            color[i] = colorsys.hsv_to_rgb(hue, 0.75, 1.0)
+        return self.vert_color(color)
+
+    def dyn_color(self, color: str, intensity: float = 0.75) -> "Object":
+        """Set the dynamic color of the object.
+
+        Args:
+            color (str): The dynamic color type.
+
+        Returns:
+            Object: The object with the updated dynamic color.
+        """
+        if color == "area":
+            self._dyn_color = EnumColor.AREA
+            self._dyn_intensity = intensity
+        else:
+            raise Exception("invalid color type")
         return self
 
     def velocity(self, u: float, v: float, w: float) -> "Object":
@@ -1803,7 +2042,7 @@ class Object:
             PinHolder: The pin holder.
         """
         if ind is None:
-            vert: np.ndarray = self.vertex()
+            vert: np.ndarray = self.vertex(False)
             ind = list(range(len(vert)))
         for p in self._pin:
             if set(p.index) & set(ind):
@@ -1844,7 +2083,7 @@ class Object:
         Returns:
             Object: The object with the updated direction.
         """
-        vert, tri = self.vertex(), self.get("F")
+        vert, tri = self.vertex(False), self.get("F")
         ex = np.array(_ex)
         ex = ex / np.linalg.norm(ex)
         ey = np.array(_ey)

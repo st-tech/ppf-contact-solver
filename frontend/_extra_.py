@@ -3,6 +3,9 @@
 # License: Apache v2.0
 
 import numpy as np
+import os
+import subprocess
+import shutil
 
 
 class Extra:
@@ -11,7 +14,7 @@ class Extra:
     def load_CIPC_stitch_mesh(
         self, path: str
     ) -> tuple[np.ndarray, np.ndarray, tuple[np.ndarray, np.ndarray]]:
-        """Load a stitch mesh data used in CIPC paper
+        """Load a stitch mesh data in the CIPC paper repository.
 
         Args:
             path (str): The path to the stitch mesh data.
@@ -47,3 +50,40 @@ class Extra:
             np.array(faces) - 1,
             (np.array(stitch_ind), np.array(stitch_w)),
         )
+
+    def sparse_clone(
+        self, url: str, dest: str, paths: list[str], delete_exist: bool = False
+    ):
+        """Fetch a git repository with sparse-checkout
+
+        Args:
+            url (str): The URL to the git repository.
+            dest (str): The destination directory to clone the repository.
+            paths (list[str]): The list of paths to fetch.
+            delete_exist (bool): If True, delete the existing repository.
+        """
+        if delete_exist and os.path.exists(dest):
+            shutil.rmtree(dest)
+        if not os.path.exists(dest):
+            clone_cmd = [
+                "git",
+                "clone",
+                "--filter=blob:none",
+                "--no-checkout",
+                url,
+                dest,
+            ]
+            print(" ".join(clone_cmd))
+            subprocess.run(clone_cmd, check=True)
+            set_cmd = ["git", "sparse-checkout", "set"]
+            print(" ".join(set_cmd))
+            subprocess.run(set_cmd, cwd=dest, check=True)
+        for path in paths:
+            if not os.path.exists(os.path.join(dest, path)):
+                set_cmd = ["git", "sparse-checkout", "add"] + [path]
+                print(" ".join(set_cmd))
+                subprocess.run(set_cmd, cwd=dest, check=True)
+                checkout_cmd = ["git", "checkout"]
+                print(" ".join(checkout_cmd))
+                subprocess.run(checkout_cmd, cwd=dest, check=True)
+            assert os.path.exists(os.path.join(dest, path))

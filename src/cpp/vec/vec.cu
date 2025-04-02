@@ -1,7 +1,5 @@
 #include "../data.hpp"
 
-#define BLOCK_SIZE 256
-
 namespace VecDev {
 
 template <class T> __global__ void set_kernel(T *array, unsigned n, T val) {
