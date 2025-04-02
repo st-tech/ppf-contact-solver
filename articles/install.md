@@ -2,18 +2,20 @@
 
 > [!NOTE]
 > If you wish to install our solver on a headless remote machine, SSH into the server with port forwarding using the following command:
-> ```
+>
+> ```bash
 > MY_WEB_PORT=8080
 > ssh -L 8080:localhost:$MY_WEB_PORT user@remote_server_address
 > ```
+>
 > This port forwarding will be used to access the frontend afterward.
 > The second port number must match `$MY_WEB_PORT` below.
 >
-> In this case, `$MY_WEB_PORT` refers to a port on the host machine, not on your local computer. In this example, you'll be connecting to the frontend via http://localhost:8080, regardless of the value of `$MY_WEB_PORT`.
+> In this case, `$MY_WEB_PORT` refers to a port on the host machine, not on your local computer. In this example, you'll be connecting to the frontend via <http://localhost:8080>, regardless of the value of `$MY_WEB_PORT`.
 
 ### 🎥 Installation Videos
 
-We provide uninterrupted recorded installation videos (🪟 Windows [[Video]](https://drive.google.com/file/d/1Np3MwUtSlppQPMrawtobzoGtZZWrmFgG/view), 🐧 Linux [[Video]](https://drive.google.com/file/d/1ZDnzsn46E1I6xNzyg0S8Q6xvgXw_Lw7M/view), ☁ [vast.ai](https://vast.ai) [[Video]](https://drive.google.com/file/d/1k0LnkPKXuEwZZvElaKohWZeDd6M3ONe1/view), and ☁️ [Google Cloud](https://cloud.google.com/products/compute) [[Video]](https://drive.google.com/file/d/1dj6TvR2IVLKLFXtO8QRrRl-8xQ7G547A/view))
+We provide uninterrupted recorded installation videos (🪟 Windows [(Video)](https://drive.google.com/file/d/1Np3MwUtSlppQPMrawtobzoGtZZWrmFgG/view), 🐧 Linux [(Video)](https://drive.google.com/file/d/1ZDnzsn46E1I6xNzyg0S8Q6xvgXw_Lw7M/view), ☁ [vast.ai](https://vast.ai) [(Video)](https://drive.google.com/file/d/1k0LnkPKXuEwZZvElaKohWZeDd6M3ONe1/view), and ☁️ [Google Cloud](https://cloud.google.com/products/compute) [(Video)](https://drive.google.com/file/d/1dj6TvR2IVLKLFXtO8QRrRl-8xQ7G547A/view))
 to reduce stress 😣 during the installation process. We encourage you to 👀 check them out to get a sense of how things go ⏳ and how long ⏱️ each step takes.
 
 ### 🪟 Windows
@@ -112,7 +114,7 @@ source "$HOME/.cargo/env"
 cargo build --release
 ```
 
-Be patient; this takes some time... ⏰⏰ If the last line says 
+Be patient; this takes some time... ⏰⏰ If the last line says
 
 ```
 Finished `release` profile [optimized] target(s) in ...
@@ -124,7 +126,7 @@ We're done! 🎉 Start our frontend by
 python3 warmup.py jupyter
 ```
 
-and now you can access our JupyterLab frontend from http://localhost:8080 on your 🌐 browser.
+and now you can access our JupyterLab frontend from <http://localhost:8080> on your 🌐 browser.
 
 > [!NOTE]
 > The port number `8080` corresponds to the value set for `$MY_WEB_PORT` when the host machine and the local machine are the same. If you're connected to the host computer via SSH port forwarding, the first port option in the command (e.g., `xxxx` in `-L xxxx:localhost:$MY_WEB_PORT`) is the port number.
@@ -141,7 +143,10 @@ docker rm $MY_CONTAINER_NAME
 
 > [!NOTE]
 > If you wish to completely wipe what we’ve done here, you may also need to purge the Docker image by:
+>
 > ```
 > docker rmi $(docker images | grep 'nvidia/cuda' | grep '11.8.0-devel-ubuntu22.04' | awk '{print $3}')
 > ```
+>
 > but don't do this if you still need it.
+

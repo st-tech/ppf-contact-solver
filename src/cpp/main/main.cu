@@ -133,15 +133,11 @@ void initialize(DataSet _host_dataset, DataSet _dev_dataset, ParamSet *_param) {
     param = _param;
 
     unsigned vert_count = host_dataset.vertex.curr.size;
+    unsigned surface_vert_count = host_dataset.surface_vert_count;
     unsigned edge_count = host_dataset.mesh.mesh.edge.size;
     unsigned face_count = host_dataset.mesh.mesh.face.size;
     unsigned hinge_count = host_dataset.mesh.mesh.hinge.size;
     unsigned tet_count = host_dataset.mesh.mesh.tet.size;
-
-    const unsigned max_reduce_count = std::max(
-        std::max(face_count, edge_count), std::max(tet_count, 3 * vert_count));
-    utility::set_max_reduce_count(max_reduce_count);
-
     unsigned collision_mesh_vert_count =
         host_dataset.constraint.mesh.active
             ? host_dataset.constraint.mesh.vertex.size
@@ -150,6 +146,7 @@ void initialize(DataSet _host_dataset, DataSet _dev_dataset, ParamSet *_param) {
         host_dataset.constraint.mesh.active
             ? host_dataset.constraint.mesh.edge.size
             : 0;
+
     unsigned shell_face_count = host_dataset.shell_face_count;
     unsigned max_n = 0;
     max_n = std::max(max_n, vert_count);
@@ -160,6 +157,7 @@ void initialize(DataSet _host_dataset, DataSet _dev_dataset, ParamSet *_param) {
     max_n = std::max(max_n, collision_mesh_vert_count);
     max_n = std::max(max_n, collision_mesh_edge_count);
     max_n = std::max(max_n, shell_face_count);
+    utility::set_max_reduce_count(std::max(max_n, 3 * vert_count));
     tmp::tmp_scalar = Vec<float>::alloc(max_n);
     tmp::dx = Vec<float>::alloc(3 * vert_count);
     tmp::eval_x = Vec<Vec3f>::alloc(vert_count);
@@ -199,9 +197,9 @@ void initialize(DataSet _host_dataset, DataSet _dev_dataset, ParamSet *_param) {
                          *param);
     contact::update_collision_mesh_aabb(host_dataset, dev_dataset, *param);
     assert(contact::check_intersection(dev_dataset, tmp::kinematic,
-                                       dev_dataset.vertex.prev));
+                                       dev_dataset.vertex.prev, *param));
     assert(contact::check_intersection(dev_dataset, tmp::kinematic,
-                                       dev_dataset.vertex.curr));
+                                       dev_dataset.vertex.curr, *param));
     logging.pop();
 }
 
@@ -408,8 +406,6 @@ StepResult advance() {
         unsigned num_contact = 0;
         float dyn_consumed = 0.0f;
         unsigned max_nnz_row = 0;
-        contact::update_aabb(host_data, data, eval_x, eval_x,
-                             tmp::kinematic.vertex, prm);
         num_contact += contact::embed_contact_force_hessian(
             data, eval_x, kinematic, force, tmp_fixed, fixed_hess, dyn_hess,
             max_nnz_row, dyn_consumed, dt, prm);
@@ -494,7 +490,7 @@ StepResult advance() {
         // Description:
         // Maximum magnitude of the search direction in the Newton's step.
         logging.mark("max_dx", max_dx);
-        float toi_recale = fmin(1.0f, dt * prm.max_search_dir_vel / max_dx);
+        float toi_recale = fmin(1.0f, prm.max_dx / max_dx);
 
         // Name: Time of Impact Recalibration
         // Format: list[(vid_time,float)]
@@ -556,7 +552,6 @@ StepResult advance() {
         // maximal feasible step size without collision or exceeding strain
         // limits.
         logging.mark("toi", toi);
-
         if (toi <= std::numeric_limits<float>::epsilon()) {
             logging.message("### ccd failed (toi: %.2e)", toi);
             if (SL_toi < 1.0f) {
@@ -577,6 +572,23 @@ StepResult advance() {
             eval_x[i] = tmp_eval_x[i] + d;
         } DISPATCH_END;
 
+        // Name: Time to Check Intersection
+        // Format: list[(vid_time,ms)]
+        // Map: runtime_intersection_check
+        // Description:
+        // At the end of step, an explicit intersection check is
+        // performed. This number records the consumed time in
+        // milliseconds.
+        logging.push("check intersection");
+        if (!contact::check_intersection(data, kinematic, eval_x, prm)) {
+            logging.message("### intersection detected");
+            result.intersection_free = false;
+        }
+        logging.pop();
+        if (!result.success()) {
+            break;
+        }
+
         if (final_step) {
             break;
         } else if (toi_advanced >= param->target_toi &&
@@ -587,20 +599,8 @@ StepResult advance() {
             ++step;
         }
     }
+
     if (result.success()) {
-        // Name: Time to Check Intersection
-        // Format: list[(vid_time,ms)]
-        // Map: runtime_intersection_check
-        // Description:
-        // At the end of step, an explicit intersection check is
-        // performed. This number records the consumed time in
-        // milliseconds.
-        logging.push("check intersection");
-        if (!contact::check_intersection(data, kinematic, eval_x)) {
-            logging.message("### intersection detected");
-            result.intersection_free = false;
-        }
-        logging.pop();
         // Name: Advanced Fractional Step Size
         // Format: list[(vid_time,float)]
         // Description:
@@ -620,7 +620,10 @@ StepResult advance() {
         // Description:
         // Actual step size advanced in the simulation.
         // For most of the cases, this value is the same as the step
-        // size specified in the parameter.
+        // size specified in the parameter. However, the actual step
+        // size is reduced by `toi_advanced` and may be also reduced
+        // when the option `enable_retry` is set to
+        // true and the PCG fails.
         logging.mark("final_dt", dt);
 
         param->prev_dt = dt;

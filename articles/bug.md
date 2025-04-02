@@ -64,3 +64,4 @@ We understand that this is a limitation: for some large step sizes, our method m
 One promising fix is to monitor the PCG, and if it fails, re-do the entire step with a smaller step size.
 This option can be enabled by `param.set("enable_retry", True)`, but it is disabled by default.
 We confirmed that with this option enabled, a larger step size of `0.1` can be chosen.
+

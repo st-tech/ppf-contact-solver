@@ -56,6 +56,7 @@ compute_stiffness(const Proximity<N> &prox, const SVecf<N> &mass,
     SMatf<N * 3, N * 3> local_hess = SMatf<N * 3, N * 3>::Zero();
     float norm = e.norm();
     float g = norm - offset;
+    assert(g > 0.0f);
     float sqr_x = g * g;
     for (unsigned ii = 0; ii < N; ++ii) {
         for (unsigned jj = 0; jj < N; ++jj) {

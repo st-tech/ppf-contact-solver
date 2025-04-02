@@ -99,10 +99,11 @@ class Param:
         if key not in self._param.keys():
             raise ValueError(f"Key {key} does not exist")
         else:
+            self._time = 0.0
             self._key = key
         return self
 
-    def change(self, value: float) -> "Param":
+    def change(self, value: Any) -> "Param":
         """Change the value of the dynamic parameter at the current time.
 
         Args:
@@ -139,11 +140,23 @@ class Param:
             else:
                 val = self._param[self._key]["value"]
                 val_type = self._param[self._key]["type"]
-                if isinstance(val, float):
-                    self.change(val)
+                if val_type == "f32" or val_type == "f64":
+                    if isinstance(val, float):
+                        self.change(val)
+                    else:
+                        raise ValueError(
+                            f"Key must be float. {val} is given. type: {val_type}"
+                        )
+                elif val_type == "bool":
+                    if isinstance(val, bool):
+                        self.change(val)
+                    else:
+                        raise ValueError(
+                            f"Key must be bool. {val} is given. type: {val_type}"
+                        )
                 else:
                     raise ValueError(
-                        f"Key must be float. {val} is given. type: {val_type}"
+                        f"Key must be float or bool. {val} is given. type: {val_type}"
                     )
         return self
 
@@ -175,7 +188,14 @@ class Param:
                     f.write(f"[{key}]\n")
                     for entry in vals:
                         time, val = entry
-                        f.write(f"{time} {val}\n")
+                        if isinstance(val, float):
+                            f.write(f"{time} {val}\n")
+                        elif isinstance(val, bool):
+                            f.write(f"{time} {float(val)}\n")
+                        else:
+                            raise ValueError(
+                                f"Value must be float or bool. {val} is given."
+                            )
 
     def time(self, time: float) -> "Param":
         """Set the current time for the dynamic parameter.
@@ -192,7 +212,7 @@ class Param:
             self._time = time
         return self
 
-    def get(self, key: Optional[str] = None):
+    def get(self, key: Optional[str] = None) -> bool | float:
         """Get the value of a parameter.
 
         Args:
@@ -203,7 +223,7 @@ class Param:
             Any: The value of the parameter.
         """
         if key is None:
-            return self._param
+            raise ValueError("Key must be specified")
         else:
             return self._param[key]["value"]
 
@@ -280,7 +300,7 @@ class SessionManager:
             Session: The created session.
         """
         if name == "":
-            name = time.strftime("%Y-%m-%d-%H-%M-%S")
+            name = time.strftime("session-%Y-%m-%d-%H-%M-%S")
         if name in self._sessions.keys():
             if delete_if_exists:
                 session = self._sessions[name]
@@ -439,6 +459,8 @@ class SessionExport:
         path: str = "",
         ext="ply",
         include_static: bool = True,
+        clear: bool = False,
+        options: dict = {},
     ) -> Zippable:
         """Export the animation frames.
 
@@ -446,9 +468,12 @@ class SessionExport:
             path (str): The path to the export directory. If set empty, it will use the default path.
             ext (str, optional): The file extension. Defaults to "ply".
             include_static (bool, optional): Whether to include the static mesh.
+            options (dict, optional): Additional arguments passed to a renderer.
+            clear (bool, optional): Whether to clear the existing files.
         """
+        options = self._session._update_options(options)
+        ci_name = Utils.ci_name()
         if path == "":
-            ci_name = Utils.ci_name()
             if ci_name is not None:
                 path = os.path.join(self._session.info.path, "preview")
             else:
@@ -458,11 +483,31 @@ class SessionExport:
                 path = os.path.join("export", scene._name, session.info.name)
 
         if os.path.exists(path):
-            shutil.rmtree(path)
+            if clear:
+                shutil.rmtree(path)
         else:
             os.makedirs(path)
         for i in tqdm(range(self._session.get.latest_frame()), desc="export", ncols=70):
-            self.frame(os.path.join(path, f"frame_{i}.{ext}"), i, include_static)
+            self.frame(
+                os.path.join(path, f"frame_{i}.{ext}"),
+                i,
+                include_static,
+                options,
+                delete_exist=clear,
+            )
+        if shutil.which("ffmpeg") is not None:
+            vid_name = "frame.mp4"
+            command = f"ffmpeg -hide_banner -loglevel error -y -r 60 -i frame_%d.{ext}.png -pix_fmt yuv420p -b:v 50000k {vid_name}"
+            subprocess.run(command, shell=True, cwd=path)
+            if self._session._in_jupyter_notebook:
+                from IPython.display import Video, display
+
+                display(Video(os.path.join(path, vid_name)))
+            if ci_name is not None:
+                for file in os.listdir(path):
+                    if file.endswith(".png"):
+                        os.remove(os.path.join(path, file))
+
         return Zippable(path)
 
     def frame(
@@ -470,6 +515,8 @@ class SessionExport:
         path: str = "",
         frame: Optional[int] = None,
         include_static: bool = True,
+        options: dict = {},
+        delete_exist: bool = False,
     ) -> "Session":
         """Export a specific frame.
 
@@ -477,15 +524,18 @@ class SessionExport:
             path (str): The path to the export file.
             frame (Optional[int], optional): The frame number. Defaults to None.
             include_static (bool, optional): Whether to include the static mesh.
+            options (dict, optional): Additional arguments passed to a renderer.
+            delete_exist (bool, optional): Whether to delete the existing file.
 
         Returns:
             Session: The session object.
         """
 
+        options = self._session._update_options(options)
         if self._session._fixed is None:
             raise ValueError("Scene must be initialized")
         else:
-            vert = self._session._fixed._vert
+            vert = self._session._fixed.vertex(True)
             if frame is not None:
                 result = self._session.get.vertex(frame)
                 if result is not None:
@@ -494,7 +544,10 @@ class SessionExport:
                 result = self._session.get.vertex()
                 if result is not None:
                     vert, _ = result
-            self._session._fixed.export(vert, path, include_static)
+            color = self._session._fixed.color(vert, options)
+            self._session._fixed.export(
+                vert, color, path, include_static, options, delete_exist
+            )
         return self._session
 
 
@@ -751,7 +804,12 @@ class Session:
         self._export = SessionExport(self)
         self._get = SessionGet(self)
         self._output = SessionOutput(self)
-        self._shading = {}
+        self._default_opts: dict[str, Any] = {
+            "flat_shading": False,
+            "wireframe": False,
+            "pin": False,
+            "stitch": False,
+        }
         self.delete()
 
     @property
@@ -809,7 +867,6 @@ class Session:
         path = os.path.expanduser(
             os.path.join(self._app_root, scene._name, self.info.name)
         )
-        self._shading = scene._shading
         self.info.set_path(path)
         if is_running():
             self.print("Solver is already running. Teriminate first.")
@@ -945,6 +1002,9 @@ class Session:
                 for line in err_lines:
                     print(line.rstrip())
                 print(f">>> Error log path: {err_path}")
+
+        strain_limit_eps = param.get("strain-limit-eps")
+        self._default_opts["max-area"] = 1.0 + strain_limit_eps
         return self
 
     def _terminate_button(self, description: str = "Terminate Solver"):
@@ -973,32 +1033,36 @@ class Session:
         else:
             return None
 
-    def preview(self, live_update: bool = True) -> Optional["Plot"]:
+    def _update_options(self, options: dict) -> dict:
+        options = dict(options)
+        for key, value in self._default_opts.items():
+            if key not in options.keys():
+                options[key] = value
+        return options
+
+    def preview(self, options: dict = {}, live_update: bool = True) -> Optional["Plot"]:
         """Live view the session.
 
         Args:
-            shading (dict, optional): The shading options.
             live_update (bool, optional): Whether to enable live update.
 
         Returns:
             Optional[Plot]: The plot object.
         """
+        options = self._update_options(options)
         if self._in_jupyter_notebook:
             import ipywidgets as widgets
             from IPython.display import display
 
-            _shading = {"wireframe": False}
             if self._fixed is None:
                 raise ValueError("Scene must be initialized")
             else:
                 result = self.get.vertex()
                 if result is None:
-                    vert, curr_frame = self._fixed._vert, 0
+                    vert, curr_frame = self._fixed.vertex(True), 0
                 else:
                     vert, curr_frame = result
-                plot = self._fixed.preview(
-                    vert, shading=_shading, show_pin=False, show_stitch=False
-                )
+                plot = self._fixed.preview(vert, options, show_slider=False)
 
             table = widgets.HTML()
             button = self._terminate_button()
@@ -1042,7 +1106,7 @@ class Session:
                         "#Newton": [n_newton],
                         "#PCG": [n_pcg],
                     }
-                    if max_sigma is not None:
+                    if max_sigma is not None and max_sigma > 0.0:
                         stretch = f"{100.0 * (max_sigma - 1.0):.2f}%"
                         data["Max Stretch"] = [stretch]
                     df = pd.DataFrame(data)
@@ -1054,6 +1118,7 @@ class Session:
                     nonlocal plot
                     nonlocal button
                     nonlocal table
+                    nonlocal options
                     nonlocal curr_frame
                     assert plot is not None
                     while True:
@@ -1063,8 +1128,9 @@ class Session:
                             result = self.get.vertex(curr_frame)
                             if result is not None:
                                 vert, _ = result
+                                color = self._fixed.color(vert, options)
                                 update_dataframe(table, curr_frame)
-                                plot.update(vert)
+                                plot.update(vert, color)
                         if not is_running():
                             break
                         time.sleep(self._update_preview_interval)
@@ -1075,7 +1141,8 @@ class Session:
                     last_frame = self.get.latest_frame()
                     update_dataframe(table, last_frame)
                     vert, _ = self.get.vertex(last_frame)
-                    plot.update(vert)
+                    color = self._fixed.color(vert, options)
+                    plot.update(vert, color)
 
                 def live_table(self):
                     nonlocal table
@@ -1094,24 +1161,27 @@ class Session:
         else:
             return None
 
-    def animate(self) -> "Session":
+    def animate(self, options: dict = {}) -> "Session":
         """Show the animation.
+
+        Args:
+            options (dict, optional): The render options.
 
         Returns:
             Session: The animated session.
         """
+        options = self._update_options(options)
+
         if self._in_jupyter_notebook:
             import ipywidgets as widgets
 
-            _shading = {"wireframe": False} | self._shading
             if self._fixed is None:
                 raise ValueError("Scene must be initialized")
             else:
                 plot = self._fixed.preview(
-                    self._fixed._vert,
-                    shading=_shading,
-                    show_pin=False,
-                    show_stitch=False,
+                    self._fixed.vertex(True),
+                    options,
+                    show_slider=False,
                 )
                 try:
                     if self._fixed is not None:
@@ -1130,7 +1200,9 @@ class Session:
                             nonlocal plot
                             assert plot is not None
                             if self._fixed is not None:
-                                plot.update(vert_list[frame - 1])
+                                vert = vert_list[frame - 1]
+                                color = self._fixed.color(vert, options)
+                                plot.update(vert, color)
 
                         widgets.interact(update, frame=(1, frame_count))
                 except Exception as _:

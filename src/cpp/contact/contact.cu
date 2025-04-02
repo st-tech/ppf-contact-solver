@@ -68,7 +68,14 @@ void resize_aabb(const BVHSet &bvh) {
     storage::edge_aabb.resize(bvh.edge.node.size);
 }
 
-__device__ float make_face_offset(const ParamSet &param) {
+__device__ bool is_edge_rod(const Vec2u &edge,
+                            const Vec<VertexKinematic> &kinematic) {
+    return kinematic[edge[0]].rod && kinematic[edge[1]].rod;
+}
+
+__device__ float make_face_offset(const Vec3u &face,
+                                  const Vec<VertexKinematic> &kinematic,
+                                  const ParamSet &param) {
     return param.contact_offset;
 }
 
@@ -96,19 +103,27 @@ __device__ void update_face_aabb(const Vec<Vec3f> &x0, const Vec<Vec3f> &x1,
                                  const BVH &bvh, Vec<AABB> &aabb,
                                  const Vec<Vec3u> &face, unsigned level,
                                  const ParamSet &param, float ext_eps,
-                                 unsigned i) {
-    if (!ext_eps) {
-        ext_eps = 0.5f * param.contact_ghat + make_face_offset(param);
-    }
+                                 const Vec<VertexKinematic> &kinematic,
+                                 float extrapolate, unsigned i) {
     unsigned index = bvh.level(level, i);
     Vec2u node = bvh.node[index];
     if (node[1] == 0) {
         unsigned leaf = node[0] - 1;
-        aabb[index] =
-            aabb::join(aabb::make(x0[face[leaf][0]], x0[face[leaf][1]],
-                                  x0[face[leaf][2]], ext_eps),
-                       aabb::make(x1[face[leaf][0]], x1[face[leaf][1]],
-                                  x1[face[leaf][2]], ext_eps));
+        if (!ext_eps) {
+            ext_eps = 0.5f * param.contact_ghat +
+                      make_face_offset(face[leaf], kinematic, param);
+        }
+        Vec3f y00 = x0[face[leaf][0]];
+        Vec3f y01 = x0[face[leaf][1]];
+        Vec3f y02 = x0[face[leaf][2]];
+        Vec3f y10 = x1[face[leaf][0]];
+        Vec3f y11 = x1[face[leaf][1]];
+        Vec3f y12 = x1[face[leaf][2]];
+        Vec3f z10 = extrapolate * (y10 - y00) + y00;
+        Vec3f z11 = extrapolate * (y11 - y01) + y01;
+        Vec3f z12 = extrapolate * (y12 - y02) + y02;
+        aabb[index] = aabb::join(aabb::make(y00, y01, y02, ext_eps),
+                                 aabb::make(z10, z11, z12, ext_eps));
     } else {
         unsigned left = node[0] - 1;
         unsigned right = node[1] - 1;
@@ -121,22 +136,25 @@ __device__ void update_edge_aabb(const Vec<Vec3f> &x0, const Vec<Vec3f> &x1,
                                  const Vec<Vec2u> &edge, unsigned level,
                                  const ParamSet &param, float ext_eps,
                                  const Vec<VertexKinematic> &kinematic,
-                                 unsigned i) {
+                                 float extrapolate, unsigned i) {
     unsigned index = bvh.level(level, i);
     Vec2u node = bvh.node[index];
     if (node[1] == 0) {
         unsigned leaf = node[0] - 1;
         unsigned i0 = edge[leaf][0];
         unsigned i1 = edge[leaf][1];
+        Vec3f y00 = x0[i0];
+        Vec3f y01 = x0[i1];
+        Vec3f y10 = x1[i0];
+        Vec3f y11 = x1[i1];
+        Vec3f z10 = extrapolate * (y10 - y00) + y00;
+        Vec3f z11 = extrapolate * (y11 - y01) + y01;
         if (!ext_eps) {
             ext_eps = 0.5f * param.contact_ghat +
                       make_edge_offset(edge[leaf], kinematic, param);
-            aabb[index] = aabb::join(aabb::make(x0[i0], x0[i1], ext_eps),
-                                     aabb::make(x1[i0], x1[i1], ext_eps));
-        } else {
-            aabb[index] = aabb::join(aabb::make(x0[i0], x0[i1], ext_eps),
-                                     aabb::make(x1[i0], x1[i1], ext_eps));
         }
+        aabb[index] = aabb::join(aabb::make(y00, y01, ext_eps),
+                                 aabb::make(z10, z11, ext_eps));
     } else {
         unsigned left = node[0] - 1;
         unsigned right = node[1] - 1;
@@ -149,7 +167,7 @@ __device__ void update_vertex_aabb(const Vec<Vec3f> &x0, const Vec<Vec3f> &x1,
                                    unsigned level, const ParamSet &param,
                                    float ext_eps,
                                    const Vec<VertexKinematic> &kinematic,
-                                   unsigned i) {
+                                   float extrapolate, unsigned i) {
     unsigned index = bvh.level(level, i);
     Vec2u node = bvh.node[index];
     if (node[1] == 0) {
@@ -158,7 +176,10 @@ __device__ void update_vertex_aabb(const Vec<Vec3f> &x0, const Vec<Vec3f> &x1,
             ext_eps = 0.5f * param.contact_ghat +
                       make_vertex_offset(leaf, kinematic, param);
         }
-        aabb[index] = aabb::make(x0[leaf], x1[leaf], ext_eps);
+        Vec3f y0 = x0[leaf];
+        Vec3f y1 = x1[leaf];
+        Vec3f z1 = extrapolate * (y1 - y0) + y0;
+        aabb[index] = aabb::make(y0, z1, ext_eps);
     } else {
         unsigned left = node[0] - 1;
         unsigned right = node[1] - 1;
@@ -172,16 +193,17 @@ void update_aabb(const DataSet &host_data, const DataSet &dev_data,
 
     const MeshInfo &mesh = dev_data.mesh;
     const BVHSet &bvhset = dev_data.bvh;
+    float extrapolate = param.line_search_max_t;
 
     const BVH &face_bvh = bvhset.face;
     Vec<AABB> &face_aabb = storage::face_aabb;
     for (unsigned level = 0; level < bvhset.face.level.size; ++level) {
         unsigned count = host_data.bvh.face.level.count(level);
         DISPATCH_START(count)
-        [mesh, param, x0, x1, face_bvh, level,
+        [mesh, param, x0, x1, face_bvh, level, kinematic, extrapolate,
          face_aabb] __device__(unsigned i) mutable {
             update_face_aabb(x0, x1, face_bvh, face_aabb, mesh.mesh.face, level,
-                             param, 0.0f, i);
+                             param, 0.0f, kinematic, extrapolate, i);
         } DISPATCH_END;
     }
     const BVH &edge_bvh = bvhset.edge;
@@ -189,10 +211,10 @@ void update_aabb(const DataSet &host_data, const DataSet &dev_data,
     for (unsigned level = 0; level < bvhset.edge.level.size; ++level) {
         unsigned count = host_data.bvh.edge.level.count(level);
         DISPATCH_START(count)
-        [mesh, kinematic, param, x0, x1, edge_bvh, level,
+        [mesh, kinematic, param, x0, x1, edge_bvh, level, extrapolate,
          edge_aabb] __device__(unsigned i) mutable {
             update_edge_aabb(x0, x1, edge_bvh, edge_aabb, mesh.mesh.edge, level,
-                             param, 0.0f, kinematic, i);
+                             param, 0.0f, kinematic, extrapolate, i);
         } DISPATCH_END;
     }
     const BVH &vertex_bvh = bvhset.vertex;
@@ -200,10 +222,10 @@ void update_aabb(const DataSet &host_data, const DataSet &dev_data,
     for (unsigned level = 0; level < bvhset.vertex.level.size; ++level) {
         unsigned count = host_data.bvh.vertex.level.count(level);
         DISPATCH_START(count)
-        [mesh, kinematic, param, x0, x1, vertex_bvh, level,
+        [mesh, kinematic, param, x0, x1, vertex_bvh, level, extrapolate,
          vertex_aabb] __device__(unsigned i) mutable {
             update_vertex_aabb(x0, x1, vertex_bvh, vertex_aabb, level, param,
-                               0.0f, kinematic, i);
+                               0.0f, kinematic, extrapolate, i);
         } DISPATCH_END;
     }
 }
@@ -215,16 +237,17 @@ void update_collision_mesh_aabb(const DataSet &host_data,
         const Vec<Vec3f> &vertex = dev_data.constraint.mesh.vertex;
         const BVH &face_bvh = dev_data.constraint.mesh.face_bvh;
         Vec<AABB> &face_aabb = storage::collision_mesh_face_aabb;
-        float margin = 0.5f * param.contact_ghat;
+        float margin = 0.5f * param.contact_ghat + param.static_mesh_offset;
         const Vec<Vec3u> &face = dev_data.constraint.mesh.face;
         for (unsigned level = 0; level < face_bvh.level.size; ++level) {
             unsigned count =
                 host_data.constraint.mesh.face_bvh.level.count(level);
+            Vec<VertexKinematic> kinematic;
             DISPATCH_START(count)
-            [vertex, face_bvh, param, level, face_aabb, margin,
+            [vertex, face_bvh, kinematic, param, level, face_aabb, margin,
              face] __device__(unsigned i) mutable {
                 update_face_aabb(vertex, vertex, face_bvh, face_aabb, face,
-                                 level, param, margin, i);
+                                 level, param, margin, kinematic, 0.0f, i);
             } DISPATCH_END;
         }
         const BVH &edge_bvh = dev_data.constraint.mesh.edge_bvh;
@@ -239,14 +262,20 @@ void update_collision_mesh_aabb(const DataSet &host_data,
             [vertex, edge_bvh, kinematic, param, level, edge_aabb, margin,
              edge] __device__(unsigned i) mutable {
                 update_edge_aabb(vertex, vertex, edge_bvh, edge_aabb, edge,
-                                 level, param, margin, kinematic, i);
+                                 level, param, margin, kinematic, 0.0f, i);
             } DISPATCH_END;
         }
     }
 }
 
-__device__ bool intersect_free(unsigned a, unsigned b, unsigned c, unsigned d) {
-    return a != b && a != c && a != d && b != c && b != d && c != d;
+__device__ bool edge_has_shared_vert(const Vec2u &e0, const Vec2u &e1) {
+    for (int i = 0; i < 2; i++) {
+        for (int j = 0; j < 2; j++) {
+            if (e0[i] == e1[j])
+                return true;
+        }
+    }
+    return false;
 }
 
 void check_success(Vec<char> array) {
@@ -323,7 +352,7 @@ __device__ void embed_contact_force_hess(
     const FixedCSRMat &fixed_in, FixedCSRMat &fixed_out, Vec<float> &force_out,
     const Vec<float> &force_in, DynCSRMat &dyn_out, float ghat, float offset,
     const Vec<VertexProp> &prop, Barrier barrier, float dt, unsigned count,
-    const ParamSet &param, int stage, unsigned i) {
+    const ParamSet &param, int stage, bool include_friction, unsigned i) {
 
     SVecf<N> mass;
     Vec3f ex0 = Vec3f::Zero();
@@ -339,6 +368,10 @@ __device__ void embed_contact_force_hess(
         ex0 += w * x0[index];
         ex += w * x[index];
     }
+
+    assert(ex0.squaredNorm() > sqr(offset));
+    assert(ex.squaredNorm() > sqr(offset));
+
     Vec3f dx = ex - ex0;
     Vec3f du = dx / dt;
     if (wsum) {
@@ -356,10 +389,12 @@ __device__ void embed_contact_force_hess(
         Mat3x3f H =
             stiff_k * barrier::compute_edge_hessian(ex, ghat, offset, barrier);
 
-        Friction friction(f, ex - ex0, normal, param.friction,
-                          param.friction_eps);
-        f += friction.gradient();
-        H += friction.hessian();
+        if (include_friction) {
+            Friction friction(f, ex - ex0, normal, param.friction,
+                              param.friction_eps);
+            f += friction.gradient();
+            H += friction.hessian();
+        }
 
         SMatf<3, N> ext_force;
         SMatf<N * 3, N * 3> ext_hess;
@@ -409,28 +444,19 @@ struct PointPointContactForceHessEmbed {
             float offset =
                 make_vertex_offset(index, kinematic.vertex, param) +
                 make_vertex_offset(vertex_index, kinematic.vertex, param);
-            float ghat_sqr = sqr(param.contact_ghat + offset);
-            float sqr_dist = e.squaredNorm();
-            if (sqr_dist < ghat_sqr) {
+            if (e.squaredNorm() < sqr(param.contact_ghat + offset)) {
                 unsigned count = 0;
-                if (neighbor.edge.nnz && neighbor.edge.count(index)) {
+                bool include_friction = true;
+                if (neighbor.edge.count(index)) {
                     for (unsigned j = neighbor.edge.offset[index];
                          j < neighbor.edge.offset[index + 1]; ++j) {
                         Vec2u f = edge[neighbor.edge.data[j]];
-                        Vec2f c = distance::point_edge_distance_coeff(
-                            x, eval_x[f[0]], eval_x[f[1]]);
-                        if (c.maxCoeff() < 1.0f && c.minCoeff() > 0.0f) {
-                            continue;
-                        } else {
+                        if (f[0] == vertex_index || f[1] == vertex_index) {
                             ++count;
-                        }
-                    }
-                    if (neighbor.face.nnz) {
-                        for (unsigned j = neighbor.face.offset[index];
-                             j < neighbor.face.offset[index + 1]; ++j) {
-                            Vec3u f = face[neighbor.face.data[j]];
-                            Vec3f c = distance::point_triangle_distance_coeff(
-                                x, eval_x[f[0]], eval_x[f[1]], eval_x[f[2]]);
+                            include_friction = false;
+                        } else {
+                            Vec2f c = distance::point_edge_distance_coeff<
+                                float, float>(x, eval_x[f[0]], eval_x[f[1]]);
                             if (c.maxCoeff() < 1.0f && c.minCoeff() > 0.0f) {
                                 continue;
                             } else {
@@ -438,17 +464,42 @@ struct PointPointContactForceHessEmbed {
                             }
                         }
                     }
+                    if (neighbor.face.count(index)) {
+                        for (unsigned j = neighbor.face.offset[index];
+                             j < neighbor.face.offset[index + 1]; ++j) {
+                            Vec3u f = face[neighbor.face.data[j]];
+                            if (f[0] == vertex_index || f[1] == vertex_index ||
+                                f[2] == vertex_index) {
+                                ++count;
+                                include_friction = false;
+                            } else {
+                                Vec3f c =
+                                    distance::point_triangle_distance_coeff<
+                                        float, float>(x, eval_x[f[0]],
+                                                      eval_x[f[1]],
+                                                      eval_x[f[2]]);
+                                if (c.maxCoeff() < 1.0f &&
+                                    c.minCoeff() > 0.0f) {
+                                    continue;
+                                } else {
+                                    ++count;
+                                }
+                            }
+                        }
+                    }
                 } else {
-                    count = 1;
+                    count = 1u;
                 }
                 if (count) {
+                    assert(e.squaredNorm() > sqr(offset));
                     Proximity<2> prox;
                     prox.index = Vec2u(vertex_index, index);
                     prox.value = Vec2f(1.0f, -1.0f);
                     embed_contact_force_hess(
                         prox, vertex, eval_x, fixed_hess_in, fixed_out, force,
                         force_in, dyn_out, param.contact_ghat, offset, prop,
-                        param.barrier, dt, count, param, stage, vertex_index);
+                        param.barrier, dt, count, param, stage,
+                        include_friction, vertex_index);
                     return true;
                 }
             }
@@ -484,32 +535,43 @@ struct PointEdgeContactForceHessEmbed {
             const Vec3f &p = eval_x[vertex_index];
             const Vec3f &t0 = eval_x[f[0]];
             const Vec3f &t1 = eval_x[f[1]];
-            Vec2f c = distance::point_edge_distance_coeff(p, t0, t1);
+            Vec2f c =
+                distance::point_edge_distance_coeff<float, float>(p, t0, t1);
             if (c.maxCoeff() < 1.0f && c.minCoeff() > 0.0f) {
                 Vec3f e = c[0] * (p - t0) + c[1] * (p - t1);
                 float offset =
                     make_vertex_offset(vertex_index, kinematic.vertex, param) +
                     make_edge_offset(f, kinematic.vertex, param);
-                float ghat_sqr = sqr(param.contact_ghat + offset);
-                float sqr_dist = e.squaredNorm();
-                if (sqr_dist < ghat_sqr) {
+                if (e.squaredNorm() < sqr(param.contact_ghat + offset)) {
                     unsigned count = 0;
-                    if (neighbor.face.nnz && neighbor.face.count(index)) {
+                    bool include_friction = true;
+                    if (neighbor.face.count(index)) {
                         for (unsigned j = neighbor.face.offset[index];
                              j < neighbor.face.offset[index + 1]; ++j) {
                             Vec3u f = face[neighbor.face.data[j]];
-                            Vec3f c = distance::point_triangle_distance_coeff(
-                                p, eval_x[f[0]], eval_x[f[1]], eval_x[f[2]]);
-                            if (c.maxCoeff() < 1.0f && c.minCoeff() > 0.0f) {
-                                continue;
-                            } else {
+                            if (f[0] == vertex_index || f[1] == vertex_index ||
+                                f[2] == vertex_index) {
                                 ++count;
+                                include_friction = false;
+                            } else {
+                                Vec3f c =
+                                    distance::point_triangle_distance_coeff<
+                                        float, float>(p, eval_x[f[0]],
+                                                      eval_x[f[1]],
+                                                      eval_x[f[2]]);
+                                if (c.maxCoeff() < 1.0f &&
+                                    c.minCoeff() > 0.0f) {
+                                    continue;
+                                } else {
+                                    ++count;
+                                }
                             }
                         }
                     } else {
-                        count = 1;
+                        count = 1u;
                     }
                     if (count) {
+                        assert(e.squaredNorm() > sqr(offset));
                         Proximity<3> prox;
                         prox.index = Vec3u(vertex_index, f[0], f[1]);
                         prox.value = Vec3f(1.0f, -c[0], -c[1]);
@@ -517,7 +579,7 @@ struct PointEdgeContactForceHessEmbed {
                             prox, vertex, eval_x, fixed_hess_in, fixed_out,
                             force, force_in, dyn_out, param.contact_ghat,
                             offset, prop, param.barrier, dt, count, param,
-                            stage, vertex_index);
+                            stage, include_friction, vertex_index);
                         return true;
                     }
                 }
@@ -554,22 +616,22 @@ struct PointFaceContactForceHessEmbed {
             const Vec3f &t0 = eval_x[f[0]];
             const Vec3f &t1 = eval_x[f[1]];
             const Vec3f &t2 = eval_x[f[2]];
-            Vec3f c = distance::point_triangle_distance_coeff(p, t0, t1, t2);
+            Vec3f c = distance::point_triangle_distance_coeff<float, float>(
+                p, t0, t1, t2);
             if (c.maxCoeff() < 1.0f && c.minCoeff() > 0.0f) {
                 Vec3f e = c[0] * (p - t0) + c[1] * (p - t1) + c[2] * (p - t2);
                 float offset =
-                    make_face_offset(param) +
+                    make_face_offset(f, kinematic.vertex, param) +
                     make_vertex_offset(vertex_index, kinematic.vertex, param);
-                float ghat_sqr = sqr(param.contact_ghat + offset);
-                float sqr_dist = e.squaredNorm();
-                if (sqr_dist < ghat_sqr) {
+                if (e.squaredNorm() < sqr(param.contact_ghat + offset)) {
+                    assert(e.squaredNorm() > sqr(offset));
                     Proximity<4> prox;
                     prox.index = Vec4u(vertex_index, f[0], f[1], f[2]);
                     prox.value = Vec4f(1.0f, -c[0], -c[1], -c[2]);
                     embed_contact_force_hess(
                         prox, vertex, eval_x, fixed_hess_in, fixed_out, force,
                         force_in, dyn_out, param.contact_ghat, offset, prop,
-                        param.barrier, dt, 1, param, stage, vertex_index);
+                        param.barrier, dt, 1, param, stage, true, vertex_index);
                     return true;
                 }
             }
@@ -598,30 +660,30 @@ struct EdgeEdgeContactForceHessEmbed {
     __device__ bool operator()(unsigned index) {
         const Vec2u &e0 = edge[edge_index];
         const Vec2u &e1 = edge[index];
-        if (edge_index < index && intersect_free(e0[0], e0[1], e1[0], e1[1]) &&
+        if (edge_index < index && edge_has_shared_vert(e0, e1) == false &&
             check_kinematic_pair(kinematic.edge[edge_index],
                                  kinematic.edge[index])) {
             Vec3f p0 = eval_x[e0[0]];
             Vec3f p1 = eval_x[e0[1]];
             Vec3f q0 = eval_x[e1[0]];
             Vec3f q1 = eval_x[e1[1]];
-            Vec4f c = distance::edge_edge_distance_coeff(p0, p1, q0, q1);
+            Vec4f c = distance::edge_edge_distance_coeff<float, float>(p0, p1,
+                                                                       q0, q1);
             if (c.maxCoeff() < 1.0f && c.minCoeff() > 0.0f) {
                 Vec3f x0 = c[0] * p0 + c[1] * p1;
                 Vec3f x1 = c[2] * q0 + c[3] * q1;
                 Vec3f e = x0 - x1;
                 float offset = make_edge_offset(e0, kinematic.vertex, param) +
                                make_edge_offset(e1, kinematic.vertex, param);
-                float ghat_sqr = sqr(param.contact_ghat + offset);
-                float sqr_dist = e.squaredNorm();
-                if (sqr_dist < ghat_sqr) {
+                if (e.squaredNorm() < sqr(param.contact_ghat + offset)) {
+                    assert(e.squaredNorm() > sqr(offset));
                     Proximity<4> prox;
                     prox.index = Vec4u(e0[0], e0[1], e1[0], e1[1]);
                     prox.value = Vec4f(c[0], c[1], -c[2], -c[3]);
                     embed_contact_force_hess(
                         prox, vertex, eval_x, fixed_hess_in, fixed_out, force,
                         force_in, dyn_out, param.contact_ghat, offset, prop,
-                        param.barrier, dt, 1, param, stage, edge_index);
+                        param.barrier, dt, 1, param, stage, true, edge_index);
                     return true;
                 }
             }
@@ -664,16 +726,19 @@ struct CollisionMeshVertexFaceContactForceHessEmbed_M2C {
             Vec3f t1 = (collision_mesh_vertex[f[1]] - p);
             Vec3f t2 = (collision_mesh_vertex[f[2]] - p);
             Vec3f zero = Vec3f::Zero();
-            Vec3f c = distance::point_triangle_distance_coeff_unclassified(
-                zero, t0, t1, t2);
+            Vec3f c = distance::point_triangle_distance_coeff_unclassified<
+                float, float>(zero, t0, t1, t2);
             Vec3f y = c[0] * t0 + c[1] * t1 + c[2] * t2;
             Vec3f e = -y;
-            Vec3f normal = e.normalized();
-            float d = e.norm();
-            if (d < param.contact_ghat) {
+            float offset =
+                make_vertex_offset(vertex_index, kinematic.vertex, param) +
+                param.static_mesh_offset;
+            if (e.squaredNorm() < sqr(offset + param.contact_ghat)) {
+                assert(e.squaredNorm() > sqr(offset));
+                Vec3f normal = e.normalized();
                 float mass = prop[vertex_index].mass;
-                Vec3f proj_x = y + normal * param.contact_ghat;
-                float gap_squared = e.squaredNorm();
+                Vec3f proj_x = y + normal * (offset + param.contact_ghat);
+                float gap_squared = sqr(e.norm() - offset);
                 float stiff_k =
                     normal.dot(local_hess * normal) + mass / gap_squared;
                 Vec3f f = stiff_k *
@@ -721,24 +786,27 @@ struct CollisionMeshVertexFaceContactForceHessEmbed_C2M {
             const Vec3f s2 = vertex[fc[2]] - y;
             const Vec3f zero = Vec3f::Zero();
             const Vec3f c =
-                distance::point_triangle_distance_coeff_unclassified(zero, t0,
-                                                                     t1, t2);
+                distance::point_triangle_distance_coeff_unclassified<float,
+                                                                     float>(
+                    zero, t0, t1, t2);
             Vec3f p = c[0] * t0 + c[1] * t1 + c[2] * t2;
             Vec3f q = c[0] * s0 + c[1] * s1 + c[2] * s2;
             const Vec3f &e = p;
             Vec3f dx = p - q;
-            Vec3f normal = e.normalized();
-            float d = e.norm();
-            if (d < param.contact_ghat) {
+            float offset = make_face_offset(fc, kinematic.vertex, param) +
+                           param.static_mesh_offset;
+            if (e.squaredNorm() < sqr(offset + param.contact_ghat)) {
+                assert(e.squaredNorm() > sqr(offset));
+                Vec3f normal = e.normalized();
                 Mat9x9f local_hess = Mat9x9f::Zero();
-                float sqr_e = e.squaredNorm();
+                float gap_squared = sqr(e.norm() - offset);
                 for (unsigned ii = 0; ii < 3; ++ii) {
                     for (unsigned jj = 0; jj < 3; ++jj) {
                         local_hess.block<3, 3>(3 * ii, 3 * jj) =
                             fixed_hess_in(fc[ii], fc[jj]);
                     }
                     local_hess.block<3, 3>(3 * ii, 3 * ii) +=
-                        (prop[fc[ii]].mass / sqr_e) * Mat3x3f::Identity();
+                        (prop[fc[ii]].mass / gap_squared) * Mat3x3f::Identity();
                 }
                 Vec9f normal_ext;
                 for (int j = 0; j < 9; ++j) {
@@ -749,7 +817,7 @@ struct CollisionMeshVertexFaceContactForceHessEmbed_C2M {
                 float area = c[0] * prop[fc[0]].area + c[1] * prop[fc[1]].area +
                              c[2] * prop[fc[2]].area;
 
-                Vec3f proj_x = normal * param.contact_ghat;
+                Vec3f proj_x = normal * (offset + param.contact_ghat);
                 Vec3f f = stiff_k * push::gradient(p - proj_x, normal,
                                                    param.contact_ghat);
                 Mat3x3f H = stiff_k * push::hessian(p - proj_x, normal,
@@ -804,26 +872,32 @@ struct CollisionMeshEdgeEdgeContactForceHessEmbed {
             Vec3f b0 = vertex[mesh_edge[0]];
             Vec3f b1 = vertex[mesh_edge[1]];
             Vec4f c =
-                distance::edge_edge_distance_coeff_unclassified(p0, p1, q0, q1);
+                distance::edge_edge_distance_coeff_unclassified<float, float>(
+                    p0, p1, q0, q1);
             Vec3f x = c[0] * p0 + c[1] * p1;
             Vec3f y = c[2] * q0 + c[3] * q1;
             Vec3f z = c[0] * b0 + c[1] * b1;
             Vec3f e = x - y;
             Vec3f dx = x - z;
-            Vec3f normal = e.normalized();
-            float d = e.norm();
-            if (d < param.contact_ghat) {
-                Vec3f proj_x = param.contact_ghat * normal;
+            float offset =
+                make_edge_offset(mesh_edge, kinematic.vertex, param) +
+                param.static_mesh_offset;
+            if (e.squaredNorm() < sqr(offset + param.contact_ghat)) {
+                assert(e.squaredNorm() > sqr(offset));
+                Vec3f normal = e.normalized();
+                Vec3f proj_x = (offset + param.contact_ghat) * normal;
                 Vec6f normal_ext;
                 for (int j = 0; j < 6; ++j) {
                     normal_ext[j] = c[j / 3] * normal[j % 3];
                 }
                 Mat6x6f mass_diag = Mat6x6f::Zero();
-                float sqr_e = e.squaredNorm();
+                float gap_squared = sqr(e.norm() - offset);
                 mass_diag.block<3, 3>(0, 0) =
-                    (prop[mesh_edge[0]].mass / sqr_e) * Mat3x3f::Identity();
+                    (prop[mesh_edge[0]].mass / gap_squared) *
+                    Mat3x3f::Identity();
                 mass_diag.block<3, 3>(3, 3) =
-                    (prop[mesh_edge[1]].mass / sqr_e) * Mat3x3f::Identity();
+                    (prop[mesh_edge[1]].mass / gap_squared) *
+                    Mat3x3f::Identity();
                 float stiff_k =
                     ((local_hess + mass_diag) * normal_ext).dot(normal_ext) /
                     normal_ext.squaredNorm();
@@ -1001,7 +1075,9 @@ __device__ unsigned embed_vertex_constraint_force_hessian(
             dt,
             param};
 
-        AABB pt_aabb = aabb::make(eval_x[i], 0.5f * param.contact_ghat);
+        float ext_eps = 0.5f * param.contact_ghat +
+                        make_vertex_offset(i, kinematic.vertex, param);
+        AABB pt_aabb = aabb::make(eval_x[i], ext_eps);
         AABB_AABB_Tester<CollisionMeshVertexFaceContactForceHessEmbed_M2C> op(
             embed);
         num_contact += aabb::query(args.collision_mesh_face_bvh,
@@ -1059,6 +1135,7 @@ unsigned embed_contact_force_hessian(
             // Time spent in fill-in pass for assembling the contact matrix.
             logging.push("fillin pass");
         }
+
         DISPATCH_START(surface_vert_count)
         [data, kinematic, eval_x, rod_count, contact_force, force,
          fixed_hess_in, fixed_out, dyn_out, face_bvh, face_aabb, edge_bvh,
@@ -1167,9 +1244,9 @@ unsigned embed_contact_force_hessian(
             // Format: list[(vid_time,ms)]
             // Map: contact_mat_rebuild
             // Description:
-            // After the dry pass, the memory layout for the contact matrix is
-            // re-computed so that the matrix can be assembled in the fill-in
-            // pass.
+            // After the dry pass, the memory layout for the contact matrix
+            // is re-computed so that the matrix can be assembled in the
+            // fill-in pass.
             logging.push("rebuild");
             dyn_out.finish_rebuild_buffer(max_nnz_row, dyn_consumed);
             logging.pop();
@@ -1230,7 +1307,8 @@ unsigned embed_constraint_force_hessian(
         [data, kinematic, eval_x, force, fixed_hess_in, fixed_out, args,
          num_contact_vtf, face_bvh, face_aabb, dt,
          param] __device__(unsigned i) mutable {
-            float ext_eps = 0.5f * param.contact_ghat;
+            float ext_eps =
+                param.static_mesh_offset + 0.5f * param.contact_ghat;
             CollisionMeshVertexFaceContactForceHessEmbed_C2M embed = {
                 data,
                 i,
@@ -1308,8 +1386,11 @@ struct CollisionMeshPointFaceCCD_M2C {
             const Vec3f &t2 = collision_mesh_vertex[f[2]];
             const Vec3f &p0 = x0[vertex_index];
             const Vec3f &p1 = x1[vertex_index];
+            float offset =
+                make_vertex_offset(vertex_index, kinematic.vertex, param) +
+                param.static_mesh_offset;
             float result = accd::point_triangle_ccd(p0, p1, t0, t1, t2, t0, t1,
-                                                    t2, 0.0f, param);
+                                                    t2, offset, param);
             if (result < param.line_search_max_t) {
                 toi = fminf(toi, result);
                 assert(toi > 0.0f);
@@ -1340,8 +1421,10 @@ struct CollisionMeshPointFaceCCD_C2M {
             const Vec3f &t11 = x1[f[1]];
             const Vec3f &t12 = x1[f[2]];
             const Vec3f &p = collision_mesh_vertex[vertex_index];
+            float offset = make_face_offset(f, kinematic.vertex, param) +
+                           param.static_mesh_offset;
             float result = accd::point_triangle_ccd(p, p, t00, t01, t02, t10,
-                                                    t11, t12, 0.0f, param);
+                                                    t11, t12, offset, param);
             if (result < param.line_search_max_t) {
                 toi = fminf(toi, result);
                 assert(toi > 0.0f);
@@ -1372,8 +1455,10 @@ struct CollisionMeshEdgeEdgeCCD {
             const Vec3f &p11 = x1[e0[1]];
             const Vec3f &q0 = collision_mesh_vertex[e1[0]];
             const Vec3f &q1 = collision_mesh_vertex[e1[1]];
+            float offset = make_edge_offset(e0, kinematic.vertex, param) +
+                           param.static_mesh_offset;
             float result = accd::edge_edge_ccd(p00, p01, q0, q1, p10, p11, q0,
-                                               q1, 0.0f, param);
+                                               q1, offset, param);
             if (result < param.line_search_max_t) {
                 toi = fminf(toi, result);
                 assert(toi > 0.0f);
@@ -1394,23 +1479,45 @@ struct PointFaceCCD {
     const ParamSet &param;
     __device__ bool operator()(unsigned index) {
         const Vec3u &f = face[index];
-        if (f[0] != vertex_index && f[1] != vertex_index &&
-            f[2] != vertex_index &&
-            check_kinematic_pair(kinematic.vertex[vertex_index].active,
+        if (check_kinematic_pair(kinematic.vertex[vertex_index].active,
                                  kinematic.face[index])) {
-            float offset =
-                make_face_offset(param) +
-                make_vertex_offset(vertex_index, kinematic.vertex, param);
-            const Vec3f &p0 = x0[vertex_index];
-            const Vec3f &p1 = x1[vertex_index];
-            const Vec3f &t00 = x0[f[0]];
-            const Vec3f &t01 = x0[f[1]];
-            const Vec3f &t02 = x0[f[2]];
-            const Vec3f &t10 = x1[f[0]];
-            const Vec3f &t11 = x1[f[1]];
-            const Vec3f &t12 = x1[f[2]];
-            float result = accd::point_triangle_ccd(p0, p1, t00, t01, t02, t10,
-                                                    t11, t12, offset, param);
+            int dup_i = -1;
+            for (int i = 0; i < 3; ++i) {
+                if (f[i] == vertex_index) {
+                    dup_i = i;
+                    break;
+                }
+            }
+            float result = param.line_search_max_t;
+            if (dup_i == -1) {
+                float offset =
+                    make_face_offset(f, kinematic.vertex, param) +
+                    make_vertex_offset(vertex_index, kinematic.vertex, param);
+                const Vec3f &p0 = x0[vertex_index];
+                const Vec3f &p1 = x1[vertex_index];
+                const Vec3f &t00 = x0[f[0]];
+                const Vec3f &t01 = x0[f[1]];
+                const Vec3f &t02 = x0[f[2]];
+                const Vec3f &t10 = x1[f[0]];
+                const Vec3f &t11 = x1[f[1]];
+                const Vec3f &t12 = x1[f[2]];
+                result = accd::point_triangle_ccd(p0, p1, t00, t01, t02, t10,
+                                                  t11, t12, offset, param);
+            } else {
+                float offset =
+                    2.0f * make_face_offset(f, kinematic.vertex, param);
+                unsigned i = dup_i;
+                unsigned j = (i + 1) % 3;
+                unsigned k = (i + 2) % 3;
+                const Vec3f &p0 = x0[f[i]];
+                const Vec3f &p1 = x1[f[i]];
+                const Vec3f &q00 = x0[f[j]];
+                const Vec3f &q10 = x1[f[j]];
+                const Vec3f &q01 = x0[f[k]];
+                const Vec3f &q11 = x1[f[k]];
+                result = accd::point_edge_ccd(p0, p1, q00, q01, q10, q11,
+                                              offset, param);
+            }
             if (result < param.line_search_max_t) {
                 toi = fminf(toi, result);
                 assert(toi > 0.0f);
@@ -1430,14 +1537,15 @@ struct EdgeEdgeCCD {
     float &toi;
     const ParamSet &param;
     __device__ bool operator()(unsigned index) {
-        const Vec2u &e0 = edge[edge_index];
-        const Vec2u &e1 = edge[index];
         if (edge_index < index &&
             check_kinematic_pair(kinematic.edge[edge_index],
                                  kinematic.edge[index])) {
-            if (intersect_free(e0[0], e0[1], e1[0], e1[1])) {
-                float offset = make_edge_offset(e0, kinematic.vertex, param) +
-                               make_edge_offset(e1, kinematic.vertex, param);
+            const Vec2u &e0 = edge[edge_index];
+            const Vec2u &e1 = edge[index];
+            float result = param.line_search_max_t;
+            float offset = make_edge_offset(e0, kinematic.vertex, param) +
+                           make_edge_offset(e1, kinematic.vertex, param);
+            if (!edge_has_shared_vert(e0, e1)) {
                 const Vec3f &p00 = x0[e0[0]];
                 const Vec3f &p01 = x0[e0[1]];
                 const Vec3f &q00 = x0[e1[0]];
@@ -1446,13 +1554,37 @@ struct EdgeEdgeCCD {
                 const Vec3f &p11 = x1[e0[1]];
                 const Vec3f &q10 = x1[e1[0]];
                 const Vec3f &q11 = x1[e1[1]];
-                float result = accd::edge_edge_ccd(p00, p01, q00, q01, p10, p11,
-                                                   q10, q11, offset, param);
-                if (result < param.line_search_max_t) {
-                    toi = fminf(toi, result);
-                    assert(toi > 0.0f);
-                    return true;
+                result = accd::edge_edge_ccd(p00, p01, q00, q01, p10, p11, q10,
+                                             q11, offset, param);
+            } else {
+                const Vec2u ij[] = {Vec2u(0, 0), Vec2u(0, 1), Vec2u(1, 0),
+                                    Vec2u(1, 1)};
+                for (unsigned k = 0; k < 4; ++k) {
+                    unsigned i = ij[k][0];
+                    unsigned j = ij[k][1];
+                    if (e0[i] == e1[j]) {
+                        unsigned idx0 = e0[i];
+                        unsigned idx1 = e0[1 - i];
+                        unsigned idx2 = e1[1 - j];
+                        const Vec3f &q00 = x0[idx0];
+                        const Vec3f &q10 = x1[idx0];
+                        const Vec3f &q01 = x0[idx1];
+                        const Vec3f &q11 = x1[idx1];
+                        const Vec3f &q02 = x0[idx2];
+                        const Vec3f &q12 = x1[idx2];
+                        float toi_0 = accd::point_edge_ccd(
+                            q01, q11, q00, q02, q10, q12, offset, param);
+                        float toi_1 = accd::point_edge_ccd(
+                            q02, q12, q00, q01, q10, q11, offset, param);
+                        result = fminf(toi_0, toi_1);
+                        break;
+                    }
                 }
+            }
+            if (result < param.line_search_max_t) {
+                toi = fminf(toi, result);
+                assert(toi > 0.0f);
+                return true;
             }
         }
         return false;
@@ -1586,7 +1718,7 @@ float line_search(const DataSet &data, const Kinematic &kinematic,
         float toi = param.line_search_max_t;
         PointFaceCCD ccd = {x0, x1, mesh.mesh.face, i, kinematic, toi, param};
         AABB_AABB_Tester<PointFaceCCD> op(ccd);
-        AABB aabb = aabb::make(x0[i], x1[i], ext_eps);
+        AABB aabb = aabb::make(x0[i], toi * (x1[i] - x0[i]) + x0[i], ext_eps);
         num_contact_vtf[i] = aabb::query(face_bvh, face_aabb, op, aabb);
         toi_vtf[i] = fmin(toi_vtf[i], toi);
         vertex_constraint_line_search(data, kinematic, x0, x1, toi_vtf, param,
@@ -1611,7 +1743,8 @@ float line_search(const DataSet &data, const Kinematic &kinematic,
                                                  toi,
                                                  param};
             AABB_AABB_Tester<CollisionMeshPointFaceCCD_M2C> op(ccd);
-            AABB aabb = aabb::make(x0[i], x1[i], ext_eps);
+            AABB aabb =
+                aabb::make(x0[i], toi * (x1[i] - x0[i]) + x0[i], ext_eps);
             num_contact_vtf[i] = aabb::query(
                 collision_mesh_face_bvh, collision_mesh_face_aabb, op, aabb);
             toi_vtf[i] = fmin(toi_vtf[i], toi);
@@ -1634,9 +1767,10 @@ float line_search(const DataSet &data, const Kinematic &kinematic,
                                                  param};
             AABB_AABB_Tester<CollisionMeshPointFaceCCD_C2M> op(ccd);
             Vec3f q = collision_mesh_vertex[i];
+            float ext_eps =
+                param.static_mesh_offset + 0.5f * param.contact_ghat;
             num_contact_vtf[i] =
-                aabb::query(face_bvh, face_aabb, op,
-                            aabb::make(q, 0.5f * param.contact_ghat));
+                aabb::query(face_bvh, face_aabb, op, aabb::make(q, ext_eps));
             toi_vtf[i] = fmin(toi_vtf[i], toi);
         } DISPATCH_END;
     }
@@ -1645,12 +1779,14 @@ float line_search(const DataSet &data, const Kinematic &kinematic,
     [mesh, kinematic, x0, x1, edge_bvh, edge_aabb, num_contact_ee, toi_ee,
      param] __device__(unsigned i) mutable {
         Vec2u edge = mesh.mesh.edge[i];
+        float toi = param.line_search_max_t;
         float ext_eps = 0.5f * param.contact_ghat +
                         make_edge_offset(edge, kinematic.vertex, param);
         AABB aabb0 = aabb::make(x0[edge[0]], x0[edge[1]], ext_eps);
-        AABB aabb1 = aabb::make(x1[edge[0]], x1[edge[1]], ext_eps);
+        AABB aabb1 = aabb::make(toi * (x1[edge[0]] - x0[edge[0]]) + x0[edge[0]],
+                                toi * (x1[edge[1]] - x0[edge[1]]) + x0[edge[1]],
+                                ext_eps);
         AABB aabb = aabb::join(aabb0, aabb1);
-        float toi = param.line_search_max_t;
         EdgeEdgeCCD ccd = {x0, x1, mesh.mesh.edge, i, kinematic, toi, param};
         AABB_AABB_Tester<EdgeEdgeCCD> op(ccd);
         num_contact_ee[i] = aabb::query(edge_bvh, edge_aabb, op, aabb);
@@ -1663,12 +1799,14 @@ float line_search(const DataSet &data, const Kinematic &kinematic,
          collision_mesh_vertex, collision_mesh_edge_aabb, num_contact_ee,
          toi_ee, param] __device__(unsigned i) mutable {
             Vec2u edge = mesh.mesh.edge[i];
+            float toi = param.line_search_max_t;
             float ext_eps = 0.5f * param.contact_ghat +
                             make_edge_offset(edge, kinematic.vertex, param);
             AABB aabb0 = aabb::make(x0[edge[0]], x0[edge[1]], ext_eps);
-            AABB aabb1 = aabb::make(x1[edge[0]], x1[edge[1]], ext_eps);
+            AABB aabb1 = aabb::make(
+                toi * (x1[edge[0]] - x0[edge[0]]) + x0[edge[0]],
+                toi * (x1[edge[1]] - x0[edge[1]]) + x0[edge[1]], ext_eps);
             AABB aabb = aabb::join(aabb0, aabb1);
-            float toi = param.line_search_max_t;
             CollisionMeshEdgeEdgeCCD ccd = {x0,
                                             x1,
                                             mesh.mesh.edge,
@@ -1692,6 +1830,25 @@ float line_search(const DataSet &data, const Kinematic &kinematic,
     return toi / param.line_search_max_t;
 }
 
+template <class T, class Y>
+__device__ bool point_triangle_inside(const Vec3<T> &p, const Vec3<T> &t0,
+                                      const Vec3<T> &t1, const Vec3<T> &t2) {
+    Vec3<Y> r0 = (t1 - t0).template cast<Y>();
+    Vec3<Y> r1 = (t2 - t0).template cast<Y>();
+    Mat3x2<Y> a;
+    a << r0, r1;
+    Eigen::Transpose<Mat3x2<Y>> a_t = a.transpose();
+    Y det;
+    Vec2<Y> c;
+    distance::solve<Y>(a_t * a, a_t * (p - t0).template cast<Y>(), c, det);
+    if (det) {
+        Vec3<Y> w = Vec3<Y>(det - c[0] - c[1], c[0], c[1]) / det;
+        return w.minCoeff() >= 0.0f && w.maxCoeff() <= 1.0f;
+    } else {
+        return false;
+    }
+}
+
 __device__ bool edge_triangle_intersect(const Vec3f &_e0, const Vec3f &_e1,
                                         const Vec3f &_x0, const Vec3f &_x1,
                                         const Vec3f &_x2) {
@@ -1699,14 +1856,87 @@ __device__ bool edge_triangle_intersect(const Vec3f &_e0, const Vec3f &_e1,
     float s1 = (_e0 - _x0).dot(n);
     float s2 = (_e1 - _x0).dot(n);
     if (s1 * s2 < 0.0f) {
-        Vec3f r = (_e1 - _e0) * s1 / (s1 - s2) + _e0;
-        Vec3f c = distance::point_triangle_distance_coeff(r, _x0, _x1, _x2);
-        if (c.maxCoeff() < 1.0f && c.minCoeff() > 0.0f) {
-            return true;
+        float det = s1 - s2;
+        if (det) {
+            Vec3f r = (_e1 - _e0) * s1 / det;
+            Vec3f t0 = _x0 - _e0;
+            Vec3f t1 = _x1 - _e0;
+            Vec3f t2 = _x2 - _e0;
+            return point_triangle_inside<float, float>(r, t0, t1, t2);
         }
     }
     return false;
 }
+
+class EdgeEdgeIntersectTester {
+  public:
+    __device__
+    EdgeEdgeIntersectTester(const Vec<Vec3f> &vertex, const Vec<Vec2u> &edge,
+                            const Kinematic &kinematic, const ParamSet &param,
+                            unsigned edge_index)
+        : vertex(vertex), edge(edge), kinematic(kinematic), param(param),
+          edge_index(edge_index) {}
+    __device__ bool operator()(unsigned index) {
+        if (index < edge_index) {
+            const Vec2u &e0 = edge[edge_index];
+            const Vec2u &e1 = edge[index];
+            if (is_edge_rod(e0, kinematic.vertex) &&
+                is_edge_rod(e1, kinematic.vertex)) {
+                float offset = 2.0f * param.rod_offset;
+                if (!edge_has_shared_vert(e0, e1)) {
+                    Vec3f p0 = vertex[e0[0]];
+                    Vec3f p1 = vertex[e0[1]];
+                    Vec3f q0 = vertex[e1[0]];
+                    Vec3f q1 = vertex[e1[1]];
+                    Vec4f c = distance::edge_edge_distance_coeff_unclassified<
+                        float, float>(p0, p1, q0, q1);
+                    Vec3f x0 = c[0] * p0 + c[1] * p1;
+                    Vec3f x1 = c[2] * q0 + c[3] * q1;
+                    Vec3f e = x0 - x1;
+                    if (e.dot(e) < offset * offset) {
+                        return true;
+                    }
+                } else {
+                    const Vec2u ij[] = {Vec2u(0, 0), Vec2u(0, 1), Vec2u(1, 0),
+                                        Vec2u(1, 1)};
+                    for (unsigned k = 0; k < 4; ++k) {
+                        unsigned i = ij[k][0];
+                        unsigned j = ij[k][1];
+                        if (e0[i] == e1[j]) {
+                            unsigned idx0 = e0[i];
+                            unsigned idx1 = e0[1 - i];
+                            unsigned idx2 = e1[1 - j];
+                            const Vec3f &q0 = vertex[idx0];
+                            const Vec3f &q1 = vertex[idx1];
+                            const Vec3f &q2 = vertex[idx2];
+                            Vec2f c_0 = distance::
+                                point_edge_distance_coeff_unclassified<float,
+                                                                       float>(
+                                    q1, q0, q2);
+                            Vec2f c_1 = distance::
+                                point_edge_distance_coeff_unclassified<float,
+                                                                       float>(
+                                    q2, q0, q1);
+                            Vec3f e_0 = ((c_0[0] * q0 + c_0[1] * q2) - q1);
+                            Vec3f e_1 = ((c_1[0] * q0 + c_1[1] * q1) - q2);
+                            float sqr_d0 = e_0.dot(e_0);
+                            float sqr_d1 = e_1.dot(e_1);
+                            if (std::min(sqr_d0, sqr_d1) < offset * offset) {
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return false;
+    }
+    const Vec<Vec3f> &vertex;
+    const Vec<Vec2u> &edge;
+    const Kinematic &kinematic;
+    const ParamSet &param;
+    unsigned edge_index;
+};
 
 class FaceEdgeIntersectTester {
   public:
@@ -1747,37 +1977,35 @@ class CollisionMeshFaceEdgeIntersectTester {
   public:
     __device__ CollisionMeshFaceEdgeIntersectTester(const Vec<Vec3f> &vertex,
                                                     const Vec<Vec3u> &face,
-                                                    const Kinematic &kinematic,
                                                     const Vec3f &y0,
                                                     const Vec3f &y1)
-        : vertex(vertex), face(face), kinematic(kinematic), y0(y0), y1(y1) {}
+        : vertex(vertex), face(face), y0(y0), y1(y1) {}
     __device__ bool operator()(unsigned index) {
-        if (check_kinematic_pair(kinematic.face[index], true)) {
-            Vec3u f = face[index];
-            const Vec3f &x0 = vertex[f[0]];
-            const Vec3f &x1 = vertex[f[1]];
-            const Vec3f &x2 = vertex[f[2]];
-            if (edge_triangle_intersect(y0, y1, x0, x1, x2)) {
-                return true;
-            }
+        Vec3u f = face[index];
+        const Vec3f &x0 = vertex[f[0]];
+        const Vec3f &x1 = vertex[f[1]];
+        const Vec3f &x2 = vertex[f[2]];
+        if (edge_triangle_intersect(y0, y1, x0, x1, x2)) {
+            return true;
         }
         return false;
     }
     const Vec<Vec3f> &vertex;
     const Vec<Vec3u> &face;
-    const Kinematic &kinematic;
     Vec3f y0, y1;
 };
 
 bool check_intersection(const DataSet &data, const Kinematic &kinematic,
-                        const Vec<Vec3f> &vertex) {
+                        const Vec<Vec3f> &vertex, const ParamSet &param) {
 
     unsigned edge_count = data.mesh.mesh.edge.size;
     const BVH &face_bvh = data.bvh.face;
+    const BVH &edge_bvh = data.bvh.edge;
     const BVH &collision_mesh_face_bvh = data.constraint.mesh.face_bvh;
     const MeshInfo &mesh = data.mesh;
     const Vec<Vec3u> &collision_mesh_face = data.constraint.mesh.face;
     const Vec<AABB> &face_aabb = storage::face_aabb;
+    const Vec<AABB> &edge_aabb = storage::edge_aabb;
     const Vec<AABB> &collision_mesh_face_aabb =
         storage::collision_mesh_face_aabb;
     Vec<char> &intersection_flag = storage::intersection_flag;
@@ -1787,8 +2015,9 @@ bool check_intersection(const DataSet &data, const Kinematic &kinematic,
 
     DISPATCH_START(edge_count)
     [mesh, kinematic, vertex, collision_mesh_vertex, face_bvh, face_aabb,
-     collision_mesh_face_bvh, collision_mesh_face_aabb, collision_mesh_face,
-     intersection_flag, collision_mesh_active] __device__(unsigned i) mutable {
+     edge_bvh, edge_aabb, collision_mesh_face_bvh, collision_mesh_face_aabb,
+     collision_mesh_face, intersection_flag, collision_mesh_active,
+     param] __device__(unsigned i) mutable {
         const Vec2u &edge = mesh.mesh.edge[i];
         Vec3f y0 = vertex[edge[0]];
         Vec3f y1 = vertex[edge[1]];
@@ -1799,13 +2028,19 @@ bool check_intersection(const DataSet &data, const Kinematic &kinematic,
         if (aabb::query(face_bvh, face_aabb, op_0, aabb)) {
             intersection_flag[i] = 1;
         }
+        EdgeEdgeIntersectTester tester_1(vertex, mesh.mesh.edge, kinematic,
+                                         param, i);
+        AABB_AABB_Tester<EdgeEdgeIntersectTester> op_1(tester_1);
+        if (aabb::query(edge_bvh, edge_aabb, op_1, aabb)) {
+            intersection_flag[i] = 1;
+        }
         if (collision_mesh_active) {
-            CollisionMeshFaceEdgeIntersectTester tester_1(
-                collision_mesh_vertex, collision_mesh_face, kinematic, y0, y1);
-            AABB_AABB_Tester<CollisionMeshFaceEdgeIntersectTester> op_1(
-                tester_1);
+            CollisionMeshFaceEdgeIntersectTester tester_2(
+                collision_mesh_vertex, collision_mesh_face, y0, y1);
+            AABB_AABB_Tester<CollisionMeshFaceEdgeIntersectTester> op_2(
+                tester_2);
             if (aabb::query(collision_mesh_face_bvh, collision_mesh_face_aabb,
-                            op_1, aabb)) {
+                            op_2, aabb)) {
                 intersection_flag[i] = 1;
             }
         }

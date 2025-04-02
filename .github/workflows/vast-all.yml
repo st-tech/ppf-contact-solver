@@ -46,6 +46,10 @@ jobs:
         timeout-minutes: 40
         run: bash $HELPER_PATH run drape.py drape part-1
 
+      - name: woven
+        timeout-minutes: 40
+        run: bash $HELPER_PATH run woven.py woven part-1
+
       - name: collect
         if: success() || failure()
         run: bash $HELPER_PATH collect
@@ -76,7 +80,7 @@ jobs:
       
       - name: cards
         timeout-minutes: 40
-        run: bash $HELPER_PATH run cards.py cards part-1
+        run: bash $HELPER_PATH run cards.py cards part-2
 
       - name: stack
         timeout-minutes: 40
@@ -85,6 +89,14 @@ jobs:
       - name: friction
         timeout-minutes: 40
         run: bash $HELPER_PATH run friction.py friction part-2
+
+      - name: yarn
+        timeout-minutes: 40
+        run: bash $HELPER_PATH run yarn.py yarn part-2
+
+      - name: roller
+        timeout-minutes: 40
+        run: bash $HELPER_PATH run roller.py roller part-2
 
       - name: collect
         if: success() || failure()
@@ -128,7 +140,7 @@ jobs:
       
       - name: trapped
         timeout-minutes: 40
-        run: bash $HELPER_PATH run trapped.py trapped part-1
+        run: bash $HELPER_PATH run trapped.py trapped part-3
 
       - name: collect
         if: success() || failure()
@@ -146,9 +158,57 @@ jobs:
         if: always()
         run: bash $HELPER_PATH delete
 
+  part_4:
+    runs-on: ${{ github.event.inputs.runner }}
+    timeout-minutes: 300
+    steps:
+
+      - name: check out repo
+        uses: actions/checkout@v3
+
+      - name: prepare
+        timeout-minutes: 30
+        run: bash $HELPER_PATH create $VAST_API_KEY
+
+      - name: ribbon
+        timeout-minutes: 40
+        run: bash $HELPER_PATH run ribbon.py ribbon part-4
+
+      - name: fitting
+        timeout-minutes: 40
+        run: bash $HELPER_PATH run fitting.py fitting part-4
+
+      - name: codim
+        timeout-minutes: 40
+        run: bash $HELPER_PATH run codim.py codim part-4
+
+      - name: fishingknot
+        timeout-minutes: 40
+        run: bash $HELPER_PATH run fishingknot.py fishingknot part-4
+
+      - name: belt
+        timeout-minutes: 40
+        run: bash $HELPER_PATH run belt.py belt part-4
+
+      - name: collect
+        if: success() || failure()
+        run: bash $HELPER_PATH collect
+
+      - name: upload artifact
+        if: success() || failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-part-4
+          path: ci
+          retention-days: 3
+
+      - name: shutdown
+        if: always()
+        run: bash $HELPER_PATH delete
+
   notify_success:
     runs-on: ubuntu-latest
-    needs: [part_1, part_2, part_3]
+    needs: [part_1, part_2, part_3, part_4]
     if: ${{ success() }}
     steps:
 
@@ -162,7 +222,7 @@ jobs:
     
   notify_failure:
     runs-on: ubuntu-latest
-    needs: [part_1, part_2, part_3]
+    needs: [part_1, part_2, part_3, part_4]
     if: ${{ failure() }}
     steps:
 

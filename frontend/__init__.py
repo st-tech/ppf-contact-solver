@@ -29,7 +29,6 @@ __all__ = [
     "TriMesh",
     "PlotManager",
     "Plot",
-    "PlotAdder",
     "SessionManager",
     "Session",
     "SessionInfo",
@@ -56,7 +55,7 @@ from ._scene_ import (
 )
 from ._extra_ import Extra
 from ._mesh_ import MeshManager, CreateManager, Rod, TetMesh, TriMesh
-from ._plot_ import PlotManager, Plot, PlotAdder
+from ._plot_ import PlotManager, Plot
 from ._session_ import (
     SessionManager,
     Session,

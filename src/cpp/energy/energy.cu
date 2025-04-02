@@ -19,10 +19,11 @@
 
 namespace energy {
 
-__device__ void embed_vertex_force_hessian(
-    const DataSet &data, const Vec<Vec3f> &eval_x, const Vec<Vec3f> &velocity,
-    const Vec<Vec3f> &target, Vec<float> &force, Vec<Mat3x3f> &diag_hess,
-    float dt, const ParamSet &param, unsigned i) {
+__device__ void
+embed_vertex_force_hessian(const DataSet &data, const Vec<Vec3f> &eval_x,
+                           const Vec<Vec3f> &velocity, const Vec<Vec3f> &target,
+                           Vec<float> &force, Vec<Mat3x3f> &diag_hess, float dt,
+                           const ParamSet &param, unsigned i) {
 
     float mass = data.prop.vertex[i].mass;
     float area = data.prop.vertex[i].area;
@@ -50,7 +51,7 @@ __device__ void embed_vertex_force_hessian(
         if (i == data.constraint.pull[j].index) {
             Vec3f position = data.constraint.pull[j].position;
             float weight = data.constraint.pull[j].weight;
-            f += weight * (y - position).cast<float>();
+            f += weight * (y - position);
             H += weight * Mat3x3f::Identity();
             pulled = true;
             break;
@@ -89,7 +90,7 @@ __device__ void embed_rod_force_hessian(const DataSet &data,
     const Vec3f &x1 = eval_x[edge[1]];
 
     float l0 = data.prop.rod[i].length;
-    Vec3f t = (x1 - x0).cast<float>();
+    Vec3f t = x1 - x0;
     float l = t.norm();
     float mass = data.prop.rod[i].mass;
     float stiffness = data.prop.rod[i].stiffness;
@@ -243,10 +244,12 @@ embed_rod_bend_force_hessian(const DataSet &data, const Vec<Vec3f> &eval_x,
     }
 }
 
-void embed_momentum_force_hessian(
-    const DataSet &data, const Vec<Vec3f> &eval_x, const Kinematic &kinematic,
-    const Vec<Vec3f> &velocity, float dt, const Vec<Vec3f> &target,
-    Vec<float> &force, Vec<Mat3x3f> &diag_hess, const ParamSet &param) {
+void embed_momentum_force_hessian(const DataSet &data, const Vec<Vec3f> &eval_x,
+                                  const Kinematic &kinematic,
+                                  const Vec<Vec3f> &velocity, float dt,
+                                  const Vec<Vec3f> &target, Vec<float> &force,
+                                  Vec<Mat3x3f> &diag_hess,
+                                  const ParamSet &param) {
     DISPATCH_START(data.vertex.curr.size)
     [data, eval_x, kinematic, velocity, dt, target, force, diag_hess,
      param] __device__(unsigned i) mutable {
@@ -337,6 +340,7 @@ void embed_stitch_force_hessian(const DataSet &data, const Vec<Vec3f> &eval_x,
                 const Vec3f &x2 = eval_x[index[2]];
                 float w[] = {1.0f, 1.0f - stitch.weight, stitch.weight};
                 float l0 = param.contact_ghat;
+                float s(1.0f / 3.0f);
                 Vec3f z0 = w[0] * x0;
                 Vec3f z1 = w[1] * x1 + w[2] * x2;
                 Vec3f t = z0 - z1;

@@ -26,6 +26,13 @@ pub struct Args {
     #[clap(long, default_value_t = 1e-3)]
     pub dt: f32,
 
+    // Name: Fitting Mode
+    // Description:
+    // Enable fitting mode for the simulation.
+    // This mode adjusts the simulation step size and disable inertia.
+    #[clap(long)]
+    pub fitting: bool,
+
     // Name: Playback Speed
     // Description:
     // The speed at which the simulation is played back.
@@ -55,13 +62,6 @@ pub struct Args {
     // Newton's loop and compute the actual step size advanced.
     #[clap(long, default_value_t = 0.25)]
     pub target_toi: f32,
-
-    // Name: Step Size When Fitting
-    // Recommended Range: 1e-3 to 1e-2
-    // Description:
-    // When simulation undergoes fitting, this step size is used instead of the regular step size.
-    #[clap(long, default_value_t = 1e-3)]
-    pub fitting_dt: f32,
 
     // Name: Air Tangental Friction
     // Recommended Range: 0 to 1
@@ -98,6 +98,14 @@ pub struct Args {
     // This value is used to offset the contact to give a visible thickness to shell contact surfaces.
     #[clap(long, default_value_t = 0.0)]
     pub contact_offset: f32,
+
+    // Name: Offset for Static Mesh
+    // Recommended Range: 0 to 1e-2
+    // Description:
+    // This value is used to offset the contact to give a visible thickness to surfaces on static
+    // mesh surfaces.
+    #[clap(long, default_value_t = 0.0)]
+    pub static_mesh_offset: f32,
 
     // Name: Rod Contact Offset
     // Recommended Range: 0 to 1e-2
@@ -165,14 +173,20 @@ pub struct Args {
     #[clap(long, default_value_t = 0.01)]
     pub ccd_reduction: f32,
 
-    // Name: Maximum Search Direction Velocity
-    // Recommended Range: 5 m/s to 50 m/s
+    // Name: Maximum CCD Iterations
+    // Description:
+    // The maximum number of iterations for ACCD.
+    #[clap(long, default_value_t = 4096)]
+    pub ccd_max_iter: u32,
+
+    // Name: Maximum Search Direction
+    // Recommended Range: 0.01m to 1m
     // Description:
     // This parameter defines the maximum allowable search direction magnitude
     // during optimization processes. It helps in controlling the step size
     // and ensuring stability.
-    #[clap(long, default_value_t = 10.0)]
-    pub max_search_dir_vel: f32,
+    #[clap(long, default_value_t = 1.0)]
+    pub max_dx: f32,
 
     // Name: Epsilon for Eigenvalue Analysis
     // Recommended Range: 1e-3 to 1e-2
@@ -313,8 +327,8 @@ pub struct Args {
 
     // Name: Rod Density
     // Description:
-    // Material density for the rod.
-    #[clap(long, default_value_t = 1e3)]
+    // Material density per unit length for the rod.
+    #[clap(long, default_value_t = 1.0)]
     pub rod_density: f32,
 
     // Name: Air Density
@@ -344,7 +358,7 @@ pub struct Args {
     // Rod bending stiffness.
     // The actual force is amplified by the rod mass, which
     // includes rod density.
-    #[clap(long, default_value_t = 1e-3)]
+    #[clap(long, default_value_t = 2.0)]
     pub rod_bend: f32,
 
     // Name: Gravity Coefficient

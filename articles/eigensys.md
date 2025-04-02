@@ -3,7 +3,7 @@
 If you happen to be working with the Finite Element Method (FEM) solving for bouncy 🏈 things, we have a convenient tool 🎁 that we’d like to share.
 
 > ### 🎓 For Scholars
-> 
+>
 > The content of this section is described in the supplementary PDF.
 > Please cite our paper if you wish to mention this article; not the link to this repository.
 > Just to avoid confusion; the existence of this analysis is not even implied in the main paper, but its full contents do exist in the supplementary PDF.
@@ -14,14 +14,14 @@ Since the materials below are lengthy, we provide a summary of the final results
 
 - Any eigen-filtered force jacobian of isotropic energies expressed purely in terms of their singular values can all be computed in closed form, provided that $\frac{\partial \Psi}{\partial \sigma}$ and $\frac{\partial^2 \Psi}{\partial \sigma^2}$ are symbolically known.
 
-- If the energy is expressed in terms of invariants, eigen-filtered force jacobian can be obtained in closed form by using only $\frac{\partial \Psi}{\partial I_k}$ and $\frac{\partial^2 \Psi}{\partial I_k^2}$, where $I_k$ are the Cauchy-Green invariants or those from Smith et al. [[1]](#1).
+- If the energy is expressed in terms of invariants, eigen-filtered force jacobian can be obtained in closed form by using only $\frac{\partial \Psi}{\partial I_k}$ and $\frac{\partial^2 \Psi}{\partial I_k^2}$, where $I_k$ are the Cauchy-Green invariants or those from Smith et al. [(1)](#1).
 
-- Our analysis can be used to re-derive exactly the same system from Smith et al. [[1]](#1).
+- Our analysis can be used to re-derive exactly the same system from Smith et al. [(1)](#1).
 
 ## 📖 What's the Story?
 
 If you are solving it implicitly, you’ll probably need both the force and the force jacobian of a potential energy ⚡ with respect to 🎢 strain.
-For example, let $\Psi(F)$ denote a hyper-elasticity potential energy with respect to a strain tensor $F$. 
+For example, let $\Psi(F)$ denote a hyper-elasticity potential energy with respect to a strain tensor $F$.
 $F$ is a $3 \times 3$ matrix for solids and a $3 \times 2$ matrix for shells. It is alternatively called the deformation gradient.
 Force derivatives refer to $\frac{\partial^2 \Psi}{\partial f_i \partial f_j}$, where **$f_i$ is a single entry of matrix $F$**.
 
@@ -43,23 +43,23 @@ Symbolic math software 💥 explodes.
 ## 🤔 Why Not Just Use Past Literature?
 
 We know that there is excellent literature out there 📚 but it has ⛔ limitations.
-The most popular one [[1]](#1) heavily depends on invariants, but not all isotropic energies can be clearly expressed with them, or at least not without considerable human effort.
+The most popular one [(1)](#1) heavily depends on invariants, but not all isotropic energies can be clearly expressed with them, or at least not without considerable human effort.
 For example, how can we write a flavor of [Ogden](https://en.wikipedia.org/wiki/Ogden_hyperelastic_model) energy $\sum_k \left( \lambda_1^{0.5^k} + \lambda_2^{0.5^k} + \lambda_3^{0.5^k} - 3 \right)$ using invariants?
 
 > [!NOTE]
 > A practical example where our singular-value eigenanalysis is essential is the isotropic strain-limiting energies, which are discussed in the supplementary.
 
-Other method [[2]](#2) can handle such cases but have singularities when two stretches are the same along principal axes.
+Other method [(2)](#2) can handle such cases but have singularities when two stretches are the same along principal axes.
 This means that even a rest pose 🛟 is considered a singular case.
-Technically, our method is mathematically a variant of Zhu [[3]](#3); though, we eliminate (not all) the singularities they have and offer a more explicit solution.
-A notable difference is that ours has the ability to re-derive the eigen system revealed by Smith et al. [[1]](#1).
-This is only possible with our formulation, not with Zhu [[3]](#3).
+Technically, our method is mathematically a variant of Zhu [(3)](#3); though, we eliminate (not all) the singularities they have and offer a more explicit solution.
+A notable difference is that ours has the ability to re-derive the eigen system revealed by Smith et al. [(1)](#1).
+This is only possible with our formulation, not with Zhu [(3)](#3).
 
-<a id="1">[1]</a> Breannan Smith, Fernando De Goes, and Theodore Kim. 2019. Analytic Eigensystems for Isotropic Distortion Energies. ACM Trans. Graph. https://doi.org/10.1145/3241041
+<a id="1">[1]</a> Breannan Smith, Fernando De Goes, and Theodore Kim. 2019. Analytic Eigensystems for Isotropic Distortion Energies. ACM Trans. Graph. <https://doi.org/10.1145/3241041>
 
 <a id="2">[2]</a> Alexey Stomakhin, Russell Howes, Craig Schroeder, and Joseph M. Teran. 2012. Energetically consistent invertible elasticity. In Proceedings of the ACM SIGGRAPH/Eurographics Symposium on Computer Animation (SCA '12).
 
-<a id="3">[3]</a> Yufeng Zhu. 2021. Eigen Space of Mesh Distortion Energy Hessian. https://arxiv.org/abs/2103.08141
+<a id="3">[3]</a> Yufeng Zhu. 2021. Eigen Space of Mesh Distortion Energy Hessian. <https://arxiv.org/abs/2103.08141>
 
 ## 🎯 Our Goals
 
@@ -71,12 +71,14 @@ Without further ado, let us pin 📌 our objectives:
 
 > [!TIP]
 > Once you obtain $\frac{\partial \Psi}{\partial f_i}$ and $\frac{\partial^2 \Psi}{\partial f_i \partial f_j}$; we can apply the following chain rule
+>
 > ```math
 > \begin{align}
 >   \frac{\partial \Psi}{\partial x} = \sum_j \frac{\partial f_j }{\partial x} \frac{\partial \Psi}{\partial f_j}, \nonumber \\
 >   \frac{\partial^2 \Psi}{\partial x^2} = \sum_{i,j} \frac{\partial^2 \Psi}{\partial f_i \partial f_j} \left(\frac{\partial f_i}{\partial x}\right)\left(\frac{\partial f_j}{\partial x}\right)^T, \nonumber
 > \end{align}
 > ```
+>
 > to convert them to $\frac{\partial \Psi}{\partial x}$ and $\frac{\partial^2 \Psi}{\partial x^2}$, where $x$ is a element vertex of interest.
 > Once converted, both can be directly plugged into the Newton's method.
 > Just to be sure; the second chain rule only holds when $\frac{\partial^2 f_i}{\partial x^2} = 0$.
@@ -130,7 +132,7 @@ At the line ```solve_symm_eigen()``` we can use a closed-form solution.
 > Yes, an iterative method like the [Lanczos algorithm](https://en.wikipedia.org/wiki/Lanczos_algorithm) is expensive.
 > But for such a small matrix size, a direct solver is possible.
 > It may sound overwhelming, but aside from finding the three roots of a cubic equation, everything else is trivial.
-> I've written our own closed-form $3 \times 3$ eigen decomposition [[Code Link]](../eigsys/eig-hpp), so go ahead and use it!
+> I've written our own closed-form $3 \times 3$ eigen decomposition [(Code Link)](../eigsys/eig-hpp), so go ahead and use it!
 
 Let's get our hands dirty 👐. We’ll first write down a set of matrices and scalars.
 
@@ -197,6 +199,7 @@ Let us write down a few more things:
     \lambda_6 = \frac{1}{\sigma_2 - \sigma_3}\left(\frac{\partial \Psi_{\mathrm{3D}}}{\partial \sigma_2}-\frac{\partial \Psi_{\mathrm{3D}}}{\partial \sigma_3}\right), \nonumber 
 \end{align}
 ```
+
 ```math
 \begin{align}
     Q_7 = U_{3 \times 3} \textrm{diag}\left(w_1\right) V_{3 \times 3}^T, \nonumber \\
@@ -212,7 +215,7 @@ All right, we have everything we need.
 Make sure that we have 9 matrices $Q_{1 \cdots 9}$ and their corresponding scalars $\lambda_{1 \cdots 9}$ ready.
 
 > [!NOTE]
-> Some readers may notice that our results are consistent with [[1]](#1) in that the first six eigenmatrices are static, while the remaining three depend on the deformation. Indeed, our technique is closely related to [[1]](#1).
+> Some readers may notice that our results are consistent with [(1)](#1) in that the first six eigenmatrices are static, while the remaining three depend on the deformation. Indeed, our technique is closely related to [(1)](#1).
 > $Q_{1 \cdots 3}$ are called twist modes, $Q_{4 \cdots 6}$ are called flip modes, and $Q_{7 \cdots 9}$ are called scaling modes.
 
 Now we present results.
@@ -236,10 +239,10 @@ Finally, the eigen-filtered force jacobian are
 \end{equation}
 ```
 
-where $q_k$ is a single entry of $Q_k$ located at the same row and column as $f_k$. 
+where $q_k$ is a single entry of $Q_k$ located at the same row and column as $f_k$.
 Yes, it’s really that simple.
 You don't believe it?
-We've writen a Python code to numerically check its correctness. Check this out [[Code]](../eigsys/eigsys_3.py).
+We've writen a Python code to numerically check its correctness. Check this out [(Code)](../eigsys/eigsys_3.py).
 
 Okay, there's one more step.
 When $\sigma_i = \sigma_j$, $\lambda_{4,5,6}$ result in division by zero.
@@ -270,15 +273,18 @@ Plug and play. 🔌
 
 Picky readers 🤏 point out that singularities still exist $\sigma_i + \sigma_j = 0$, which is a bit extreme since elements need to be inverted to reach this condition, assuming you opt an inversion-aware SVD.
 Of course, this occurs frequently in graphics applications, so it should be taken seriously.
-The good news 📰 is that we can remove all the singularities in cases where the energies are expressed as a function of Cauchy-Green invariants, as shown by Stomakhin et al. [[2]](#2).
+The good news 📰 is that we can remove all the singularities in cases where the energies are expressed as a function of Cauchy-Green invariants, as shown by Stomakhin et al. [(2)](#2).
 More specifically, this means that the potential is defined as:
+
 ```math
 \begin{equation}
    \Psi_{\mathrm{3D}} = \Psi(I_1,I_2,I_3). \nonumber
  \end{equation}
  ```
+
 Here, $\Psi_{\mathrm{3D}}$ can be quite complex, even something weird like $\Psi_{\mathrm{3D}} = \frac{(I_1 + I_2 - 6)^2}{I_1} + \sqrt{\frac{I_3}{I_1} + 1} - 2$, is acceptable.
 $I_{1 \cdots 3}$ are Cauchy-Green invariants:
+
 ```math
 \begin{align}
    I_1 &= \mathrm{tr}\left(F^TF\right) = \sigma_1^2 + \sigma_2^2 + \sigma_3^3, \nonumber \\
@@ -286,7 +292,9 @@ $I_{1 \cdots 3}$ are Cauchy-Green invariants:
    I_3 &= \mathrm{det}\left(F^TF\right) = (\sigma_1 \sigma_2 \sigma_3)^2. \nonumber
 \end{align}
 ```
+
 With the above definitions, all singularies are cleanly removed such that:
+
 ```math
 \begin{equation}
   \begin{bmatrix}
@@ -322,7 +330,9 @@ And there's more: if you can describe your target energy using invariants, you c
 ```math
 H_{3 \times 3} = \sum_{i,j} \frac{\partial^2 \Psi_{\mathrm{3D}}}{\partial I_i \partial I_j} \left(\frac{\partial I_i}{\partial \sigma}\right)\left(\frac{\partial I_j}{\partial \sigma}\right)^T + \sum_k \left(\frac{\partial \Psi_{\mathrm{3D}}}{\partial I_k}\right) \left(\frac{\partial^2 I_k}{\partial \sigma^2}\right),
 ```
+
 where
+
 ```math
 \frac{\partial I_i}{\partial \sigma} = \begin{bmatrix}
   \displaystyle \frac{\partial}{\partial \sigma_1} \\
@@ -335,12 +345,15 @@ where
  \mathrm{Sym} &  & \displaystyle \frac{\partial^2}{\partial \sigma_3^2}
 \end{bmatrix} I_k.
 ```
+
 To make your life easier 😙, we'll write down explicit expressions:
+
 ```math
 \begin{align}
 \frac{\partial I_1}{\partial \sigma} = 2 \left[\begin{matrix} \sigma_{1}\\ \sigma_{2}\\ \sigma_{3}\end{matrix}\right], \hspace{3mm} \frac{\partial I_2}{\partial \sigma} = 2 \left[\begin{matrix}\sigma_{1} \sigma_{2}^{2} + \sigma_{1} \sigma_{3}^{2}\\\sigma_{1}^{2} \sigma_{2} + \sigma_{2} \sigma_{3}^{2}\\\sigma_{1}^{2} \sigma_{3} + \sigma_{2}^{2} \sigma_{3}\end{matrix}\right], \hspace{3mm} \frac{\partial I_3}{\partial \sigma} = 2 \left[\begin{matrix}\sigma_{1} \sigma_{2}^{2} \sigma_{3}^{2}\\\sigma_{1}^{2} \sigma_{2} \sigma_{3}^{2}\\\sigma_{1}^{2} \sigma_{2}^{2} \sigma_{3}\end{matrix}\right]. \nonumber
 \end{align} 
 ```
+
 ```math
 \begin{align}
 \frac{\partial^2 I_1}{\partial \sigma^2} = 2 \left[\begin{matrix}1 & 0 & 0\\0 & 1 & 0\\0 & 0 & 1\end{matrix}\right], \hspace{2mm} \frac{\partial^2 I_2}{\partial \sigma^2} = 2 \left[\begin{matrix}\sigma_{2}^{2} + \sigma_{3}^{2} & 2 \sigma_{1} \sigma_{2} & 2 \sigma_{1} \sigma_{3}\\ & \sigma_{1}^{2} + \sigma_{3}^{2} & 2 \sigma_{2} \sigma_{3}\\ \mathrm{Sym} & & \sigma_{1}^{2} + \sigma_{2}^{2}\end{matrix}\right], \nonumber \\
@@ -349,10 +362,13 @@ To make your life easier 😙, we'll write down explicit expressions:
 ```
 
 The first derivative of $\Psi_{\mathrm{3D}}$ can be **also** computed without $\frac{\partial \Psi_{\mathrm{3D}}}{\partial \sigma}$ using the chain rule:
+
 ```math
 \frac{\partial \Psi_{\mathrm{3D}}}{\partial f_k} = \sum_k \left(\frac{\partial \Psi_{\mathrm{3D}}}{\partial I_k}\right) \frac{\partial I_k}{\partial f_i},
 ```
+
 where $C = F^T F$ and
+
 ```math
 \begin{align}
   \frac{\partial I_1}{\partial F} = 2 F, \hspace{3mm}
@@ -367,7 +383,7 @@ Just to be clear, $\frac{\partial I_k}{\partial F}$ yields a $3 \times 3$ matrix
 This way, you will only need to prepare $\frac{\partial^2 \Psi_{\mathrm{3D}}}{\partial I_i \partial I_j}$ and $\frac{\partial \Psi_{\mathrm{3D}}}{\partial I_k}$ whenever you change 🔁 the target energy density.
 This approach is often more convenient than working directly with the singular values because many (not all) major energy ⚡ functions are described in terms of Cauchy-Green invariants, and it's also more succinct.
 Everything else works without changing your code 🥳.
-We wrote a Python script to verify the correctness of the materials in this section [[Code]](../eigsys/eigsys_invariants_3.py).
+We wrote a Python script to verify the correctness of the materials in this section [(Code)](../eigsys/eigsys_invariants_3.py).
 
 ### 🥼 For Shell Elasticity
 
@@ -428,12 +444,15 @@ Similar to our 3D case, two vectors $[a_1, a_2]$, $[b_1, b_2]$ and their corresp
 
 > [!NOTE]
 > When $\Psi_{\mathrm{2D}}$ is written in terms of two Green-Cauchy invariants $I_1 = \mathrm{tr}(F^TF) = \sigma_1^2 + \sigma_2^2$ and $I_2 = \mathrm{det}(F^TF) = \sigma_1^2 \sigma_2^2$ such that:
+>
 > ```math
 > \begin{equation}
 >  \Psi_{\mathrm{2D}} = \Psi(I_1,I_2), \nonumber
 > \end{equation}
 > ```
+>
 > All singularities can be removed as:
+>
 > ```math
 > \begin{equation}
 >   \begin{bmatrix}
@@ -455,8 +474,10 @@ Similar to our 3D case, two vectors $[a_1, a_2]$, $[b_1, b_2]$ and their corresp
 >   \Psi_{\mathrm{2D}}. \nonumber
 > \end{equation}
 > ```
+>
 > Similarly to the 3D case, we can leverage the chain rule to obtain $H_{2 \times 2}$ using only the derivatives of $\Psi_{2 \times 2}$ with respect to invariants.
 > Derivatives of $I_k$ with respect to singular values are:
+>
 > ```math
 > \begin{align}
 > \frac{\partial I_1}{\partial \sigma} = 2 \left[\begin{matrix}\sigma_{1}\\\sigma_{2}\end{matrix}\right],
@@ -468,16 +489,17 @@ Similar to our 3D case, two vectors $[a_1, a_2]$, $[b_1, b_2]$ and their corresp
 > \frac{\partial^2 I_2}{\partial \sigma^2} = 2 \left[\begin{matrix}\sigma_{2}^{2} + \sigma_{3}^{2} & 2 \sigma_{1} \sigma_{2}\\  \mathrm{Sym} & \sigma_{1}^{2} + \sigma_{3}^{2}\end{matrix}\right]. \nonumber
 > \end{align}
 > ```
+>
 > The first derivative $\frac{\partial \Psi_{\mathrm{2D}}}{\partial \sigma}$ can be computed similarly to the 3D case. The formula for $\frac{\partial I_k}{\partial F}$ also remains the same.
-> Interested readers are referred to our verification Python code [[Code]](../eigsys/eigsys_invariants_2.py).
+> Interested readers are referred to our verification Python code [(Code)](../eigsys/eigsys_invariants_2.py).
 
 Everything else is exactly the same as the 3D case presented above.
-We provide another Python code [[Code]](../eigsys/eigsys_2.py) to numerically verify this analysis.
+We provide another Python code [(Code)](../eigsys/eigsys_2.py) to numerically verify this analysis.
 
-## 🎓 Re-Deriving Smith et al. [[1]](#1)
+## 🎓 Re-Deriving Smith et al. [(1)](#1)
 
-Our technique can be used to arrive at the same eigen system revealed by Smith et al. [[1]](#1).
-We can confirm this by simply swapping the Cauchy-Green invariants with those of Smith et al. [[1]](#1) and substitute them into our eigenvalue expressions.
+Our technique can be used to arrive at the same eigen system revealed by Smith et al. [(1)](#1).
+We can confirm this by simply swapping the Cauchy-Green invariants with those of Smith et al. [(1)](#1) and substitute them into our eigenvalue expressions.
 This is simple enough to do manually, but I’ve written a SymPy code to help facilitate the task:
 
 ```
@@ -496,25 +518,25 @@ display(ratsimp((E.diff(c) - E.diff(a)) / (c - a)))
 display(ratsimp((E.diff(b) - E.diff(c)) / (b - c)))
 ```
 
-Now look at Equations (7.16 to 7.21) from [[B]](#B).
+Now look at Equations (7.16 to 7.21) from [(B)](#B).
 The output is identical.
 This can't be a coincidence.
 
-<a id="B">[B]</a> Theodore Kim and David Eberle. 2022. Dynamic deformables: implementation and production practicalities (now with code!). In ACM SIGGRAPH 2022 Courses (SIGGRAPH '22). https://doi.org/10.1145/3532720.3535628
+<a id="B">[B]</a> Theodore Kim and David Eberle. 2022. Dynamic deformables: implementation and production practicalities (now with code!). In ACM SIGGRAPH 2022 Courses (SIGGRAPH '22). <https://doi.org/10.1145/3532720.3535628>
 
 We have now proven the equivalence of $Q_{1 \cdots 6}$ and $\lambda_{1 \cdots 6}$.
 Looks good, but what about scaling mode eigenmatrices $Q_{7 \cdots 9}$ and $\lambda_{7 \cdots 9}$?
-Smith et al. [[1]](#1) define $Q_{7,8,9}$ using the eigenvectors and eigenvalues of an encoded matrix $A$ (see their paper for the full representation).
+Smith et al. [(1)](#1) define $Q_{7,8,9}$ using the eigenvectors and eigenvalues of an encoded matrix $A$ (see their paper for the full representation).
 The eigenvectors and eigenvalues are arranged in exactly the same way as ours.
 Therefore, to prove that our $Q_{7,8,9}$ and $\lambda_{7,8,9}$ are exactly the same, it is sufficient to show that $H_{3 \times 3} = A$.
-For this purpose, let's again use the following chain rule, but this time with $I_k$ being the invariants from Smith et al. [[1]](#1).
+For this purpose, let's again use the following chain rule, but this time with $I_k$ being the invariants from Smith et al. [(1)](#1).
 
 ```math
 H_{3 \times 3} = \sum_{i,j} \frac{\partial^2 \Psi_{\mathrm{3D}}}{\partial I_i \partial I_j} \left(\frac{\partial I_i}{\partial \sigma}\right)\left(\frac{\partial I_j}{\partial \sigma}\right)^T + \sum_k \left(\frac{\partial \Psi_{\mathrm{3D}}}{\partial I_k}\right) \left(\frac{\partial^2 I_k}{\partial \sigma^2}\right),
 ```
 
 Doing everything by hand is too much work, so let's use SymPy again.
-The following code constructs $H_{3 \times 3}$ and $A$ as defined by Smith et al. [[1]](#1) and compares the differences.
+The following code constructs $H_{3 \times 3}$ and $A$ as defined by Smith et al. [(1)](#1) and compares the differences.
 
 ```
 from sympy import *
@@ -565,10 +587,11 @@ display(simplify(H3x3-A))
 
 This prints zero! 😲 But if you tweak the way $A$ is computed a little bit, it gives non-zero expressions 🔢, so this must be correct ✅.
 This also confirms that their encoded matrix $A$ corresponds to $\frac{\partial^2 \Psi}{\partial \sigma^2}$.
-Now we have proven that our eigen analysis can re-derive the same system as Smith et al. [[1]](#1).
+Now we have proven that our eigen analysis can re-derive the same system as Smith et al. [(1)](#1).
 
 ## 🍱 Takeaway C/C++ ⚙️ and Rust 🦀 Codes
 
 If you’re feeling excited, we’d like to share full C/C++ and Rust implementations of the two analyses above under the **Apache v2.0 license**. 📜
-Here they are [[📂 Mini Project Directory]](../eigsys).
+Here they are [(📂 Mini Project Directory)](../eigsys).
 This also runs on CUDA with minor adaptation work.
+
