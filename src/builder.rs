@@ -2,7 +2,7 @@
 // Author: Ryoichi Ando (ryoichi.ando@zozo.com)
 // License: Apache v2.0
 
-use super::bvh::{self};
+use super::bvh::{self, Aabb};
 use super::cvec::*;
 use super::cvecvec::*;
 use super::data::{self, *};
@@ -82,10 +82,12 @@ pub fn build(
         tet: CVec::from(props.tet.as_ref()),
     };
 
+    let n_surface_vert = mesh.mesh.mesh.surface_vert_count;
+    let surface_vert: Matrix3xX<f32> = vertex.columns(0, n_surface_vert).into_owned();
     let bvh_set = BvhSet {
-        face: build_bvh(vertex, &mesh.mesh.mesh.face),
-        edge: build_bvh(vertex, &mesh.mesh.mesh.edge),
-        vertex: build_bvh(vertex, &mesh.mesh.mesh.vertex),
+        face: build_bvh(vertex, Some(&mesh.mesh.mesh.face)),
+        edge: build_bvh(vertex, Some(&mesh.mesh.mesh.edge)),
+        vertex: build_bvh::<1>(&surface_vert, None),
     };
     let mut inv_rest2x2 = Vec::new();
     for i in 0..mesh.mesh.mesh.shell_face_count {
@@ -380,6 +382,30 @@ pub fn make_param(args: &Args) -> data::ParamSet {
     }
 }
 
+pub fn copy_to_dataset(
+    curr_vertex: &Matrix3xX<f32>,
+    prev_vertex: &Matrix3xX<f32>,
+    dataset: &mut data::DataSet,
+) {
+    let vertex = VertexSet {
+        prev: CVec::from(
+            prev_vertex
+                .column_iter()
+                .map(|x| x.into())
+                .collect::<Vec<_>>()
+                .as_slice(),
+        ),
+        curr: CVec::from(
+            curr_vertex
+                .column_iter()
+                .map(|x| x.into())
+                .collect::<Vec<_>>()
+                .as_slice(),
+        ),
+    };
+    dataset.vertex = vertex;
+}
+
 trait ConvertToU32 {
     fn to_u32(&self) -> Vec<Vec<u32>>;
 }
@@ -395,8 +421,27 @@ impl ConvertToU32 for Vec<Vec<usize>> {
 pub type ArbitrayElement<const N: usize> =
     na::Matrix<usize, na::Const<N>, na::Dyn, na::VecStorage<usize, na::Const<N>, na::Dyn>>;
 
-pub fn build_bvh<const N: usize>(vertex: &Matrix3xX<f32>, elements: &ArbitrayElement<N>) -> Bvh {
-    let aabb = bvh::generate_aabb(vertex, elements);
+pub fn build_bvh<const N: usize>(
+    vertex: &Matrix3xX<f32>,
+    elements: Option<&ArbitrayElement<N>>,
+) -> Bvh {
+    let aabb = if let Some(elements) = elements {
+        bvh::generate_aabb(vertex, elements)
+    } else {
+        vertex
+            .column_iter()
+            .enumerate()
+            .map(|(i, x)| {
+                (
+                    Aabb {
+                        min: x.map(f64::from),
+                        max: x.map(f64::from),
+                    },
+                    i,
+                )
+            })
+            .collect::<Vec<_>>()
+    };
     if !aabb.is_empty() {
         let tree = bvh::Tree::build_tree(aabb);
         let node = tree
@@ -473,8 +518,8 @@ pub fn make_collision_mesh(vertex: &Matrix3xX<f32>, face: &Matrix3xX<usize>) -> 
                 .collect::<Vec<_>>()
                 .as_slice(),
         ),
-        face_bvh: build_bvh(vertex, &mesh.mesh.face),
-        edge_bvh: build_bvh(vertex, &mesh.mesh.edge),
+        face_bvh: build_bvh(vertex, Some(&mesh.mesh.face)),
+        edge_bvh: build_bvh(vertex, Some(&mesh.mesh.edge)),
         neighbor,
     }
 }

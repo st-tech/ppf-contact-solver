@@ -6,7 +6,6 @@
 #include "../csrmat/csrmat.hpp"
 #include "../data.hpp"
 #include "../energy/energy.hpp"
-#include "../main/cuda_utils.hpp"
 #include "../simplelog/SimpleLog.h"
 #include "../solver/solver.hpp"
 #include "../strainlimiting/strainlimiting.hpp"
@@ -37,6 +36,7 @@ unsigned active_shell_count;
 namespace main_helper {
 DataSet host_dataset, dev_dataset;
 ParamSet *param;
+bool use_thrust = false;
 
 void build_kinematic(const DataSet &host_dataset, const DataSet &dev_dataset,
                      const ParamSet &param) {
@@ -83,8 +83,7 @@ void build_kinematic(const DataSet &host_dataset, const DataSet &dev_dataset,
     [data, fake_tmp_face, kinematic_face] __device__(unsigned i) mutable {
         fake_tmp_face[i] = kinematic_face[i] ? 0 : 1;
     } DISPATCH_END;
-    tmp::active_shell_count =
-        utility::sum_integer_array(fake_tmp_face, face_count);
+    tmp::active_shell_count = utility::sum_array(fake_tmp_face, face_count);
 
     Vec<bool> kinematic_tet = tmp::kinematic.tet;
     DISPATCH_START(tet_count)
@@ -775,7 +774,7 @@ DataSet malloc_dataset(DataSet dataset, ParamSet param) {
     return dev_dataset;
 }
 
-extern "C" void initialize(DataSet *dataset, ParamSet *param) {
+extern "C" void initialize(DataSet *dataset, ParamSet *param, bool use_thrust) {
 
     int num_device;
     CUDA_HANDLE_ERROR(cudaGetDeviceCount(&num_device));
@@ -788,6 +787,8 @@ extern "C" void initialize(DataSet *dataset, ParamSet *param) {
     logging::info("cuda: allocating memory...");
     DataSet dev_dataset = malloc_dataset(*dataset, *param);
 
+    logging::info("use_thrust: %s", use_thrust ? "true" : "false");
+    main_helper::use_thrust = use_thrust;
     main_helper::initialize(*dataset, dev_dataset, param);
 }
 

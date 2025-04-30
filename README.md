@@ -54,6 +54,7 @@ involving 👚 shells, 🪵 solids and 🪢 rods. All made by ZOZO.
 
 ## 📝 Change History
 
+- (2025.05.01) Simulation states now can be saved and loaded [(Video)](https://drive.google.com/file/d/1aCEwVPbX_Am6bwj6NrwARS6K_IkT45c-/view).
 - (2025.04.02) Added 9 examples. See the [catalogue](#️-catalogue).
 - (2025.03.03) Added a [budget table on AWS](#-budget-table-on-aws).
 - (2025.02.28) Added a [reference branch and a Docker image of our TOG paper](#-technical-materials).

@@ -6,6 +6,8 @@ use super::data::Constraint;
 use super::data::StepResult;
 use super::{builder, mesh::Mesh, Args, BvhSet, DataSet, ParamSet, Scene};
 use chrono::Local;
+use log::*;
+use na::{Matrix2xX, Matrix3xX};
 use serde::{Deserialize, Serialize};
 use std::fs::OpenOptions;
 use std::io::Write;
@@ -13,19 +15,15 @@ use std::path::Path;
 use std::sync::mpsc;
 use std::time::Instant;
 
-extern crate nalgebra as na;
-
-use log::*;
-use na::{Matrix2xX, Matrix3xX};
-
 extern "C" {
     fn advance(result: *mut StepResult);
     fn fetch();
     fn update_bvh(bvhset: *const BvhSet);
     fn fetch_dyn_counts(n_value: *mut u32, n_offset: *mut u32);
     fn fetch_dyn(index: *mut u32, value: *mut f32, offset: *mut u32);
+    fn update_dyn(index: *const u32, offset: *const u32);
     fn update_constraint(constraint: *const Constraint);
-    fn initialize(data: *const DataSet, param: *const ParamSet);
+    fn initialize(data: *const DataSet, param: *const ParamSet, use_thrust: bool);
 }
 
 #[derive(Serialize, Deserialize)]
@@ -113,13 +111,74 @@ impl Backend {
         self.state.prev_dt = prev_dt;
     }
 
+    pub fn load_state(_: &Args, frame: i32, dirpath: &str) -> Self {
+        let (mesh, state) = {
+            let path_mesh = format!("{}/meshset.bin.gz", dirpath);
+            let path_state = format!("{}/state_{}.bin.gz", dirpath, frame);
+            let mesh = super::read(&super::read_gz(path_mesh.as_str()));
+            let state = super::read(&super::read_gz(path_state.as_str()));
+            (mesh, state)
+        };
+        Self {
+            state,
+            mesh,
+            bvh: Box::new(None),
+        }
+    }
+
+    fn save_state(&self, args: &Args, _scene: &Scene, dataset: &DataSet) {
+        let path_mesh = format!("{}/meshset.bin.gz", args.output);
+        let path_dataset = format!("{}/dataset.bin.gz", args.output);
+        info!(">>> saving state started...");
+        if !std::path::Path::new(&path_dataset).exists() {
+            info!("saving dataset to {}", path_dataset);
+            super::save(dataset, path_dataset.as_str());
+        }
+        if !std::path::Path::new(&path_mesh).exists() {
+            info!("saving meshset to {}", path_mesh);
+            super::save(&self.mesh, path_mesh.as_str());
+        }
+        let path_state = format!("{}/state_{}.bin.gz", args.output, self.state.curr_frame);
+        info!("saving state to {}...", path_state);
+        super::save(&self.state, path_state.as_str());
+        super::remove_old_states(args, self.state.curr_frame);
+        info!("<<< save state done.");
+    }
+
+    fn update_bvh(&mut self) {
+        log::info!("building bvh...");
+        let n_surface_vert = self.mesh.mesh.mesh.surface_vert_count;
+        let vert: Matrix3xX<f32> = self
+            .state
+            .curr_vertex
+            .columns(0, n_surface_vert)
+            .into_owned();
+        self.bvh = Box::new(Some(BvhSet {
+            face: builder::build_bvh(&vert, Some(&self.mesh.mesh.mesh.face)),
+            edge: builder::build_bvh(&vert, Some(&self.mesh.mesh.mesh.edge)),
+            vertex: builder::build_bvh::<1>(&vert, None),
+        }));
+        unsafe {
+            update_bvh(self.bvh.as_ref().as_ref().unwrap());
+        }
+    }
+
     pub fn run(&mut self, args: &Args, dataset: DataSet, mut param: ParamSet, scene: Scene) {
         let finished_path = std::path::Path::new(args.output.as_str()).join("finished.txt");
         if finished_path.exists() {
             std::fs::remove_file(finished_path.clone()).unwrap();
         }
         unsafe {
-            initialize(&dataset, &param);
+            initialize(&dataset, &param, args.use_thrust);
+        }
+        if args.load > 0 {
+            self.update_bvh();
+            unsafe {
+                update_dyn(
+                    self.state.dyn_index.as_ptr(),
+                    self.state.dyn_offset.as_ptr(),
+                );
+            }
         }
         let mut last_time = Instant::now();
         let mut constraint;
@@ -128,10 +187,10 @@ impl Backend {
         let (result_sender, result_receiver) = mpsc::channel();
 
         std::thread::spawn(move || {
-            while let Ok((vertex, face, edge, vert_elm)) = task_receiver.recv() {
-                let face = builder::build_bvh(&vertex, &face);
-                let edge = builder::build_bvh(&vertex, &edge);
-                let vertex = builder::build_bvh(&vertex, &vert_elm);
+            while let Ok((vertex, face, edge)) = task_receiver.recv() {
+                let face = builder::build_bvh(&vertex, Some(&face));
+                let edge = builder::build_bvh(&vertex, Some(&edge));
+                let vertex = builder::build_bvh::<1>(&vertex, None);
                 let _ = result_sender.send(BvhSet { face, edge, vertex });
             }
         });
@@ -139,19 +198,26 @@ impl Backend {
         let mut first_step = true;
         loop {
             constraint = scene.make_constraint(args, self.state.time, &self.mesh);
+            let mut state_saved = false;
             unsafe { update_constraint(&constraint) };
             if !first_step {
                 match result_receiver.try_recv() {
                     Ok(bvh) => {
+                        info!("bvh update...");
+                        let n_surface_vert = self.mesh.mesh.mesh.surface_vert_count;
+                        let vert: Matrix3xX<f32> = self
+                            .state
+                            .curr_vertex
+                            .columns(0, n_surface_vert)
+                            .into_owned();
                         self.bvh = Box::new(Some(bvh));
                         unsafe {
                             update_bvh(self.bvh.as_ref().as_ref().unwrap());
                         }
                         let data = (
-                            self.state.curr_vertex.clone(),
+                            vert,
                             self.mesh.mesh.mesh.face.clone(),
                             self.mesh.mesh.mesh.edge.clone(),
-                            self.mesh.mesh.mesh.vertex.clone(),
                         );
                         task_sender.send(data).unwrap();
                     }
@@ -219,15 +285,40 @@ impl Backend {
                 file.write_all(buff).unwrap();
                 file.flush().unwrap();
                 std::fs::rename(path.clone(), path.replace(".tmp", "")).unwrap();
+                if args.auto_save > 0 && new_frame > 0 && new_frame % args.auto_save == 0 {
+                    info!("auto save state...");
+                    self.save_state(args, &scene, &dataset);
+                    state_saved = true;
+                }
                 last_time = Instant::now();
-
                 if self.state.curr_frame == args.fake_crash_frame {
                     panic!("fake crash!");
                 }
             }
-            if self.state.curr_frame >= args.frames {
+
+            let save_and_quit_path =
+                std::path::Path::new(args.output.as_str()).join("save_and_quit");
+            if save_and_quit_path.exists() {
+                if !state_saved {
+                    info!("save_and_quit file found, saving state...");
+                    self.save_state(args, &scene, &dataset);
+                }
+                std::fs::remove_file(save_and_quit_path).unwrap_or_else(|err| {
+                    println!("Failed to delete 'save_and_quit' file: {}", err);
+                });
                 break;
             }
+
+            if self.state.curr_frame >= args.frames {
+                if !state_saved && args.auto_save > 0 {
+                    info!("simulation finished, saving state...");
+                    self.save_state(args, &scene, &dataset);
+                } else {
+                    info!("simulation finished, not saving state...");
+                }
+                break;
+            }
+
             scene.update_param(args, self.state.time, &mut param);
             let mut result = StepResult::default();
             unsafe { advance(&mut result) };
@@ -240,7 +331,6 @@ impl Backend {
                     self.state.curr_vertex.clone(),
                     self.mesh.mesh.mesh.face.clone(),
                     self.mesh.mesh.mesh.edge.clone(),
-                    self.mesh.mesh.mesh.vertex.clone(),
                 );
                 task_sender.send(data).unwrap();
                 first_step = false;

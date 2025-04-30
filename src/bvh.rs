@@ -73,10 +73,8 @@ pub fn generate_aabb<const N: usize>(
             let x = Matrix3xX::from_fn(N, |i, j| f64::from(vertex.column(elm[j])[i]));
             (
                 Aabb {
-                    min: Vector3::<f64>::from_fn(|k, _| x.row(k).min())
-                        - Vector3::<f64>::repeat(f64::EPSILON),
-                    max: Vector3::<f64>::from_fn(|k, _| x.row(k).max())
-                        + Vector3::<f64>::repeat(f64::EPSILON),
+                    min: Vector3::<f64>::from_fn(|k, _| x.row(k).min()),
+                    max: Vector3::<f64>::from_fn(|k, _| x.row(k).max()),
                 },
                 i,
             )

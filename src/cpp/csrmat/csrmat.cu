@@ -6,9 +6,20 @@
 #define CSR_MAT_HPP
 
 #include "../main/cuda_utils.hpp"
+#include "../simplelog/SimpleLog.h"
 #include "../utility/dispatcher.hpp"
 #include "../utility/utility.hpp"
 #include "csrmat.hpp"
+#include <thrust/device_ptr.h>
+#include <thrust/execution_policy.h>
+#include <thrust/functional.h>
+#include <thrust/logical.h>
+#include <thrust/reduce.h>
+#include <thrust/scan.h>
+
+namespace main_helper {
+extern bool use_thrust;
+}
 
 __device__ void Row::alloc() {
     head = 0;
@@ -183,35 +194,45 @@ __global__ void add_block_offsets_kernel(unsigned *d_data,
 }
 
 unsigned exclusive_scan(unsigned *d_data, unsigned n) {
-    static unsigned _n = n;
-    assert(_n == n);
-    static unsigned num_blocks = (n + BLOCK_SIZE - 1) / BLOCK_SIZE;
-    static unsigned *d_block_sums = nullptr;
-    static unsigned *h_block_sums = nullptr;
-    if (d_block_sums == nullptr) {
-        CUDA_HANDLE_ERROR(
-            cudaMalloc((void **)&d_block_sums, num_blocks * sizeof(unsigned)));
-        h_block_sums = new unsigned[num_blocks];
+    if (main_helper::use_thrust) {
+        unsigned tmp0, tmp1;
+        CUDA_HANDLE_ERROR(cudaMemcpy(&tmp0, d_data + n - 1, sizeof(unsigned),
+                                     cudaMemcpyDeviceToHost));
+        thrust::exclusive_scan(thrust::device, d_data, d_data + n, d_data, 0);
+        CUDA_HANDLE_ERROR(cudaMemcpy(&tmp1, d_data + n - 1, sizeof(unsigned),
+                                     cudaMemcpyDeviceToHost));
+        return tmp0 + tmp1;
+    } else {
+        static unsigned _n = n;
+        assert(_n == n);
+        static unsigned num_blocks = (n + BLOCK_SIZE - 1) / BLOCK_SIZE;
+        static unsigned *d_block_sums = nullptr;
+        static unsigned *h_block_sums = nullptr;
+        if (d_block_sums == nullptr) {
+            CUDA_HANDLE_ERROR(cudaMalloc((void **)&d_block_sums,
+                                         num_blocks * sizeof(unsigned)));
+            h_block_sums = new unsigned[num_blocks];
+        }
+        block_scan_kernel<<<num_blocks, BLOCK_SIZE,
+                            BLOCK_SIZE * sizeof(unsigned)>>>(d_data,
+                                                             d_block_sums, n);
+        CUDA_HANDLE_ERROR(cudaMemcpy(h_block_sums, d_block_sums,
+                                     num_blocks * sizeof(unsigned),
+                                     cudaMemcpyDeviceToHost));
+        unsigned total_sum = 0;
+        for (unsigned i = 0; i < num_blocks; i++) {
+            total_sum += h_block_sums[i];
+        }
+        for (unsigned i = 1; i < num_blocks; i++) {
+            h_block_sums[i] += h_block_sums[i - 1];
+        }
+        CUDA_HANDLE_ERROR(cudaMemcpy(d_block_sums, h_block_sums,
+                                     num_blocks * sizeof(unsigned),
+                                     cudaMemcpyHostToDevice));
+        add_block_offsets_kernel<<<num_blocks, BLOCK_SIZE>>>(d_data,
+                                                             d_block_sums, n);
+        return total_sum;
     }
-    block_scan_kernel<<<num_blocks, BLOCK_SIZE,
-                        BLOCK_SIZE * sizeof(unsigned)>>>(d_data, d_block_sums,
-                                                         n);
-    CUDA_HANDLE_ERROR(cudaMemcpy(h_block_sums, d_block_sums,
-                                 num_blocks * sizeof(unsigned),
-                                 cudaMemcpyDeviceToHost));
-    unsigned total_sum = 0;
-    for (unsigned i = 0; i < num_blocks; i++) {
-        total_sum += h_block_sums[i];
-    }
-    for (unsigned i = 1; i < num_blocks; i++) {
-        h_block_sums[i] += h_block_sums[i - 1];
-    }
-    CUDA_HANDLE_ERROR(cudaMemcpy(d_block_sums, h_block_sums,
-                                 num_blocks * sizeof(unsigned),
-                                 cudaMemcpyHostToDevice));
-    add_block_offsets_kernel<<<num_blocks, BLOCK_SIZE>>>(d_data, d_block_sums,
-                                                         n);
-    return total_sum;
 }
 
 void DynCSRMat::finish_rebuild_buffer(unsigned &max_nnz_row,
@@ -229,11 +250,17 @@ void DynCSRMat::finish_rebuild_buffer(unsigned &max_nnz_row,
     } DISPATCH_END;
 
     max_nnz_row = utility::max_array(tmp_array.data, nrow, 0u);
-    unsigned num_nnz = exclusive_scan(dyn_row_offsets.data, nrow);
-    if (num_nnz >= max_nnz) {
-        printf("finish_rebuild_buffer: num_nnz %u, max_nnz: %u\n", num_nnz,
-               max_nnz);
-        assert(false);
+
+    unsigned num_nnz = 0;
+    if (max_nnz_row) {
+        num_nnz = exclusive_scan(dyn_row_offsets.data, nrow);
+        if (num_nnz >= max_nnz) {
+            printf("finish_rebuild_buffer: num_nnz %u, max_nnz: %u\n", num_nnz,
+                   max_nnz);
+            assert(false);
+        }
+    } else {
+        dyn_row_offsets.clear(0);
     }
 
     Vec<unsigned> dyn_index_buff = this->dyn_index_buff;
@@ -299,6 +326,8 @@ void DynCSRMat::finalize() {
     assert(check());
 
     Vec<unsigned> fixed_row_offsets = this->fixed_row_offsets;
+    Vec<unsigned> fixed_index_buff = this->fixed_index_buff;
+
     DISPATCH_START(nrow)
     [fixed_row_offsets, rows] __device__(unsigned i) mutable {
         fixed_row_offsets[i] = rows[i].head;
@@ -312,6 +341,14 @@ void DynCSRMat::finalize() {
 
     CUDA_HANDLE_ERROR(cudaMemcpy(fixed_row_offsets.data + nrow, &num_fixed_nnz,
                                  sizeof(unsigned), cudaMemcpyHostToDevice));
+
+    DISPATCH_START(nrow)
+    [fixed_row_offsets, fixed_index_buff, rows] __device__(unsigned i) mutable {
+        for (int j = 0; j < rows[i].head; j++) {
+            unsigned k = fixed_row_offsets[i] + j;
+            fixed_index_buff[k] = rows[i].index[j];
+        }
+    } DISPATCH_END;
 
     Vec<unsigned> ref_index_buff = this->ref_index_buff;
     Vec<unsigned> ref_index_offsets = this->ref_row_offsets;

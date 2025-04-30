@@ -7,7 +7,6 @@ import pandas as pd
 from tqdm import tqdm
 import shutil
 import os
-import time
 import colorsys
 from scipy.sparse import csr_matrix
 from numba import njit
@@ -44,7 +43,7 @@ class SceneManager:
             Scene: The created scene.
         """
         if name == "":
-            name = time.strftime("scene-%Y-%m-%d-%H-%M-%S")
+            name = f"scene-{len(self._scene)}"
 
         if name in self._scene.keys():
             raise Exception(f"scene {name} already exists")
@@ -94,7 +93,7 @@ class Wall:
     def __init__(self):
         """Initialize the wall."""
         self._entry = []
-        self._transition = "smooth"
+        self._transition = "linear"
 
     def get_entry(self) -> list[tuple[list[float], float]]:
         """Get a list of time-dependent wall entries.
@@ -172,7 +171,7 @@ class Sphere:
         self._entry = []
         self._hemisphere = False
         self._invert = False
-        self._transition = "smooth"
+        self._transition = "linear"
 
     def hemisphere(self) -> "Sphere":
         """Turn the sphere into a hemisphere, so the half of the sphere top becomes empty, like a bowl."""
@@ -310,7 +309,7 @@ class PinData:
     keyframe: list[PinKeyframe]
     spin: list[SpinData]
     should_unpin: bool = False
-    transition: str = "smooth"
+    transition: str = "linear"
     pull_strength: float = 0.0
 
 
@@ -335,7 +334,7 @@ class PinHolder:
         """Set the transition type for the pinning.
 
         Args:
-            transition (str): The transition type. Currently supported: "smooth", "linear". Default is "smooth".
+            transition (str): The transition type. Currently supported: "smooth", "linear". Default is "linear".
 
         Returns:
             PinHolder: The pinholder with the updated transition type.
@@ -367,6 +366,28 @@ class PinHolder:
             target = self._obj.vertex(False)[self._data.index] + delta_pos
         else:
             target = self._data.keyframe[-1].position + delta_pos
+        return self.move_to(target, time)
+
+    def move_and_scale_by(self, delta_pos, scale: float, time: float) -> "PinHolder":
+        """Move the object by a positional delta and (delta-)scale it over a specified time.
+
+        Args:
+            delta_pos (list[float]): The positional delta.
+            scale (float): The scaling factor delta.
+            time (float): The time over which to move and scale the object.
+
+        Returns:
+            PinHolder: The pinholder with the updated position and scaling.
+        """
+        delta_pos = np.array(delta_pos).reshape((-1, 3))
+        if not self._data.keyframe:
+            vertex = self._obj.vertex(False)[self._data.index]
+        else:
+            vertex = self._data.keyframe[-1].position
+        mean = np.mean(vertex, axis=0)
+        vertex = vertex - mean
+        vertex = vertex * scale
+        target = vertex + mean + delta_pos
         return self.move_to(target, time)
 
     def scale(self, scale: float, time: float) -> "PinHolder":
@@ -1107,6 +1128,7 @@ class FixedScene:
         vert: Optional[np.ndarray] = None,
         options: dict = {},
         show_slider: bool = True,
+        engine: str = "threejs",
     ) -> Optional["Plot"]:
         """Preview the scene.
 
@@ -1114,6 +1136,7 @@ class FixedScene:
             vert (Optional[np.ndarray], optional): The vertices to preview. Defaults to None.
             options (dict, optional): The options for the plot. Defaults to {}.
             show_slider (bool, optional): Whether to show the time slider. Defaults to True.
+            engine (str, optional): The rendering engine. Defaults to "pythreejs".
 
         Returns:
             Optional[Plot]: The plot object if in a Jupyter notebook, otherwise None.
@@ -1137,7 +1160,7 @@ class FixedScene:
             tri = self._tri.copy()
             edge = self._rod.copy()
             pts = np.zeros(0)
-            plotter = self._plot.create()
+            plotter = self._plot.create(engine)
 
             if len(self._static_vert[1]):
                 static_vert = (
@@ -1968,6 +1991,32 @@ class Object:
             color[i] = colorsys.hsv_to_rgb(hue, 0.75, 1.0)
         return self.vert_color(color)
 
+    def cylinder_color(
+        self, center: list[float], direction: list[float], up: list[float]
+    ) -> "Object":
+        """Set the color along the cylinder direction.
+
+        Aergs:
+            center (list[float]): The center of the cylinder.
+            direction (list[float]): The direction of the cylinder.
+            up (list[float]): The up vector of the cylinder.
+
+        Returns:
+            Object: The object with the updated color.
+        """
+        ey = np.array(up)
+        ex = np.cross(np.array(direction), ey)
+
+        vertex = self.vertex(False) - np.array(center)
+        x = np.dot(vertex, ex)
+        y = np.dot(vertex, ey)
+        angle = np.arctan2(y, x)
+        angle = np.mod(angle, 2 * np.pi) / (2 * np.pi)
+        color = np.zeros((len(vertex), 3))
+        for i, z in enumerate(angle):
+            color[i] = colorsys.hsv_to_rgb(z, 0.75, 1.0)
+        return self.vert_color(color)
+
     def dyn_color(self, color: str, intensity: float = 0.75) -> "Object":
         """Set the dynamic color of the object.
 
@@ -2044,9 +2093,6 @@ class Object:
         if ind is None:
             vert: np.ndarray = self.vertex(False)
             ind = list(range(len(vert)))
-        for p in self._pin:
-            if set(p.index) & set(ind):
-                raise Exception("duplicated indices")
 
         holder = PinHolder(self, ind)
         self._pin.append(holder)

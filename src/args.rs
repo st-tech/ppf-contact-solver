@@ -15,6 +15,26 @@ pub struct Args {
     #[clap(long, default_value = "output")]
     pub output: String,
 
+    // Name: Use Thrust
+    // Description:
+    // When this flag is enabled, the simulation will use Thrust for GPU acceleration.
+    #[clap(long)]
+    pub use_thrust: bool,
+
+    // Name: Load
+    // Description:
+    // This parameter specifies the frame number at which the simulation starts.
+    // The files associated with this frame number must be present in the output directory.
+    #[clap(long, default_value_t = 0)]
+    pub load: i32,
+
+    // Name: Keep States
+    // Description:
+    // This parameter specifies the number of simulation states to keep in the output
+    // directory.
+    #[clap(long, default_value_t = 10)]
+    pub keep_states: i32,
+
     // Name: Step Size
     // Recommended Range: 1e-3 to 1e-2
     // Description:
@@ -239,6 +259,13 @@ pub struct Args {
     // This number dictates the maximal number of frames to simulate.
     #[clap(long, default_value_t = 300)]
     pub frames: i32,
+
+    // Name: Auto Save Interval
+    // Description:
+    // Interval in frames at which the simulation state is automatically saved.
+    // Set to 0 to disable auto-saving.
+    #[clap(long, default_value_t = 0)]
+    pub auto_save: i32,
 
     // Name: Constitutive Model for Shells
     // Choices: baraffwitkin, shhk (Stable Neo-Hookean), arap (As-Rigid-As-Possible), stvk (St. Venant-Kirchhoff)

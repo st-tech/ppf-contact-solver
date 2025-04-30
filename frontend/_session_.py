@@ -178,6 +178,8 @@ class Param:
                         elif isinstance(val, bool):
                             if val:
                                 f.write(f"{key} = true\n")
+                            else:
+                                f.write(f"{key} = false\n")
                         else:
                             f.write(f"{key} = {val}\n")
                     else:
@@ -300,7 +302,7 @@ class SessionManager:
             Session: The created session.
         """
         if name == "":
-            name = time.strftime("session-%Y-%m-%d-%H-%M-%S")
+            name = f"session-{len(self._sessions)}"
         if name in self._sessions.keys():
             if delete_if_exists:
                 session = self._sessions[name]
@@ -727,6 +729,21 @@ class SessionGet:
                 return sorted(frames)[-1]
         return 0
 
+    def saved(self) -> list[int]:
+        """Get the list of saved frame numbers.
+
+        Returns:
+            list[int]: The list of saved frame numbers.
+        """
+        result = []
+        output_path = os.path.join(self._session.info.path, "output")
+        if os.path.exists(output_path):
+            for file in os.listdir(output_path):
+                if file.startswith("state_") and file.endswith(".bin.gz"):
+                    frame = int(file.split("_")[1].split(".")[0])
+                    result.append(frame)
+        return result
+
     def vertex(self, n: Optional[int] = None) -> Optional[tuple[np.ndarray, int]]:
         """Get the vertex data for a specific frame.
 
@@ -804,6 +821,7 @@ class Session:
         self._export = SessionExport(self)
         self._get = SessionGet(self)
         self._output = SessionOutput(self)
+        self.param = None
         self._default_opts: dict[str, Any] = {
             "flat_shading": False,
             "wireframe": False,
@@ -864,9 +882,7 @@ class Session:
         Returns:
             Session: The initialized session.
         """
-        path = os.path.expanduser(
-            os.path.join(self._app_root, scene._name, self.info.name)
-        )
+        path = os.path.expanduser(os.path.join(self._app_root, self.info.name))
         self.info.set_path(path)
         if is_running():
             self.print("Solver is already running. Teriminate first.")
@@ -888,7 +904,6 @@ class Session:
         else:
             raise ValueError("Scene and param must be initialized")
 
-        self._save_func()
         return self
 
     def finished(self) -> bool:
@@ -904,18 +919,43 @@ class Session:
                 print(line)
         return os.path.exists(finished_path)
 
-    def start(self, param: Param, force: bool = True, blocking=False) -> "Session":
+    def resume(
+        self,
+        frame: int = -1,
+        param: Optional[Param] = None,
+        force: bool = True,
+        blocking: bool = False,
+    ) -> "Session":
+        if self.param is None:
+            print("Session is not yet started")
+            return self
+        if frame == -1:
+            saved = self.get.saved()
+            if len(saved) > 0:
+                frame = max(saved)
+            else:
+                return self
+        if frame > 0:
+            if param is not None:
+                self.param = copy.deepcopy(param)
+            self.param.set("load", frame)
+            return self.start(self.param, force, blocking)
+        else:
+            print(f"No saved state found: frame: {frame}")
+            return self
+
+    def start(self, param: Param, force: bool = False, blocking=False) -> "Session":
         """Start the session.
 
         For Jupyter Notebook, the function will return immediately and the solver
-        ill run in the background. If blocking is set to True, the function will block
+        will run in the background. If blocking is set to True, the function will block
         until the solver is finished.
         When Jupiter Notebook is not detected, the function will block until the solver
         is finished.
 
         Args:
             param (Param): The simulation parameters.
-            force (bool, optional): Whether to force start.
+            force (bool, optional): Whether to force starting the simulation.
             blocking (bool, optional): Whether to block the execution.
 
         Returns:
@@ -945,12 +985,22 @@ class Session:
                 self.print("Solver is already running. Teriminate first.")
                 display(self._terminate_button("Terminate Now"))
                 return self
-        cmd_path = self.export.shell_command(param)
+
+        frame = self.get.saved()
+        if frame and not force:
+            from IPython.display import display
+
+            self.print(f"Solver has saved states. Resuming from {max(frame)}")
+            return self.resume(max(frame), param, True, blocking)
+
+        self.param = copy.deepcopy(param)
+        self._save_func()
+        cmd_path = self.export.shell_command(self.param)
         err_path = os.path.join(self.info.path, "error.log")
         log_path = os.path.join(self.info.path, "stdout.log")
-        command = open(cmd_path, "r").read()
+        command = open(cmd_path, "r").read().split()
         process = subprocess.Popen(
-            command.split(),
+            command,
             stdout=open(log_path, "w"),
             stderr=open(err_path, "w"),
             start_new_session=True,
@@ -1033,6 +1083,32 @@ class Session:
         else:
             return None
 
+    def _save_and_quit_button(self, description: str = "Save and Quit"):
+        """Create a save-and-quit button.
+
+        Args:
+            description (str, optional): The button description.
+
+        Returns:
+            Optional[widgets.Button]: The save-and-quit button.
+        """
+        if self._in_jupyter_notebook:
+            import ipywidgets as widgets
+
+            def _save_and_quit(button):
+                button.disabled = True
+                button.description = "Requesting..."
+                request_save_and_quit(os.path.join(self.info.path, "output"))
+                while is_running():
+                    time.sleep(0.25)
+                button.description = "Done"
+
+            button = widgets.Button(description=description)
+            button.on_click(_save_and_quit)
+            return button
+        else:
+            return None
+
     def _update_options(self, options: dict) -> dict:
         options = dict(options)
         for key, value in self._default_opts.items():
@@ -1040,11 +1116,15 @@ class Session:
                 options[key] = value
         return options
 
-    def preview(self, options: dict = {}, live_update: bool = True) -> Optional["Plot"]:
+    def preview(
+        self, options: dict = {}, live_update: bool = True, engine: str = "threejs"
+    ) -> Optional["Plot"]:
         """Live view the session.
 
         Args:
+            options (dict, optional): The render options.
             live_update (bool, optional): Whether to enable live update.
+            engine (str, optional): The rendering engine. Defaults to "threejs".
 
         Returns:
             Optional[Plot]: The plot object.
@@ -1062,10 +1142,13 @@ class Session:
                     vert, curr_frame = self._fixed.vertex(True), 0
                 else:
                     vert, curr_frame = result
-                plot = self._fixed.preview(vert, options, show_slider=False)
+                plot = self._fixed.preview(
+                    vert, options, show_slider=False, engine=engine
+                )
 
             table = widgets.HTML()
-            button = self._terminate_button()
+            terminate_button = self._terminate_button()
+            save_and_quit_button = self._save_and_quit_button()
 
             def convert_integer(number) -> str:
                 if number is None:
@@ -1116,7 +1199,8 @@ class Session:
 
                 def live_preview(self):
                     nonlocal plot
-                    nonlocal button
+                    nonlocal terminate_button
+                    nonlocal save_and_quit_button
                     nonlocal table
                     nonlocal options
                     nonlocal curr_frame
@@ -1134,9 +1218,11 @@ class Session:
                         if not is_running():
                             break
                         time.sleep(self._update_preview_interval)
-                    assert button is not None
-                    button.disabled = True
-                    button.description = "Terminated"
+                    assert terminate_button is not None
+                    assert save_and_quit_button is not None
+                    terminate_button.disabled = True
+                    terminate_button.description = "Terminated"
+                    save_and_quit_button.disabled = True
                     time.sleep(self._update_preview_interval)
                     last_frame = self.get.latest_frame()
                     update_dataframe(table, last_frame)
@@ -1154,14 +1240,14 @@ class Session:
 
                 threading.Thread(target=live_preview, args=(self,)).start()
                 threading.Thread(target=live_table, args=(self,)).start()
-                display(button)
+                display(widgets.HBox((terminate_button, save_and_quit_button)))
 
             display(table)
             return plot
         else:
             return None
 
-    def animate(self, options: dict = {}) -> "Session":
+    def animate(self, options: dict = {}, engine: str = "threejs") -> "Session":
         """Show the animation.
 
         Args:
@@ -1182,6 +1268,7 @@ class Session:
                     self._fixed.vertex(True),
                     options,
                     show_slider=False,
+                    engine=engine,
                 )
                 try:
                     if self._fixed is not None:
@@ -1226,7 +1313,12 @@ class Session:
             display(log_widget)
             button = widgets.Button(description="Stop Live Stream")
             terminate_button = self._terminate_button()
-            display(widgets.HBox((button, terminate_button)))
+            save_and_quit_button = self._save_and_quit_button()
+            display(widgets.HBox((button, terminate_button, save_and_quit_button)))
+
+            assert button is not None
+            assert terminate_button is not None
+            assert save_and_quit_button is not None
 
             stop = False
             log_path = os.path.join(self.info.path, "stdout.log")
@@ -1240,7 +1332,11 @@ class Session:
                     nonlocal log_path
                     nonlocal err_path
                     nonlocal terminate_button
+                    nonlocal save_and_quit_button
+
+                    assert button is not None
                     assert terminate_button is not None
+                    assert save_and_quit_button is not None
 
                     while not stop:
                         result = subprocess.run(
@@ -1265,6 +1361,7 @@ class Session:
 
                             button.disabled = True
                             terminate_button.disabled = True
+                            save_and_quit_button.disabled = True
                             break
                         time.sleep(self._update_terminal_interval)
 
@@ -1287,6 +1384,8 @@ class Session:
                 button.on_click(toggle_stream)
             else:
                 log_widget.value = "No log file found."
+                terminate_button.disabled = True
+                save_and_quit_button.disabled = True
                 button.disabled = True
 
         return self
@@ -1316,6 +1415,11 @@ def terminate():
         ):
             pid = proc.info["pid"]
             os.kill(pid, signal.SIGTERM)
+
+
+def request_save_and_quit(watch_dir):
+    """Request to save and quit the solver."""
+    open(os.path.join(watch_dir, "save_and_quit"), "w").close()
 
 
 def display_log(lines: list[str]):
