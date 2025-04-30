@@ -13,6 +13,12 @@
 #define USE_EIGEN_SYMM_EIGSOLVE
 #include "eig-hpp/eigsolve2x2.hpp"
 #include "eig-hpp/eigsolve3x3.hpp"
+#include <thrust/device_ptr.h>
+#include <thrust/reduce.h>
+
+namespace main_helper {
+extern bool use_thrust;
+}
 
 namespace utility {
 
@@ -269,27 +275,36 @@ Y reduce(const T *d_input, Op func, Y init_val, unsigned n) {
 }
 
 template <class T> T sum_array(Vec<T> array, unsigned size) {
-    return reduce<T, T>(
-        array.data, [] __host__ __device__(T a, T b) { return a + b; }, T(),
-        size);
-}
-
-template <class T> unsigned sum_integer_array(Vec<T> array, unsigned size) {
-    return reduce<T, unsigned>(
-        array.data, [] __host__ __device__(T a, T b) { return a + b; }, 0u,
-        size);
+    if (main_helper::use_thrust) {
+        thrust::device_ptr<const T> ptr(array.data);
+        return thrust::reduce(ptr, ptr + size);
+    } else {
+        return reduce<T, T>(
+            array.data, [] __host__ __device__(T a, T b) { return a + b; }, T(),
+            size);
+    }
 }
 
 template <class T> T min_array(const T *array, unsigned size, T init_val) {
-    return reduce<T, T>(
-        array, [] __host__ __device__(T a, T b) { return a < b ? a : b; },
-        init_val, size);
+    if (main_helper::use_thrust) {
+        thrust::device_ptr<const T> ptr(array);
+        return thrust::reduce(ptr, ptr + size, init_val, thrust::minimum<T>());
+    } else {
+        return reduce<T, T>(
+            array, [] __host__ __device__(T a, T b) { return a < b ? a : b; },
+            init_val, size);
+    }
 }
 
 template <class T> T max_array(const T *array, unsigned size, T init_val) {
-    return reduce<T, T>(
-        array, [] __host__ __device__(T a, T b) { return a > b ? a : b; },
-        init_val, size);
+    if (main_helper::use_thrust) {
+        thrust::device_ptr<const T> ptr(array);
+        return thrust::reduce(ptr, ptr + size, init_val, thrust::maximum<T>());
+    } else {
+        return reduce<T, T>(
+            array, [] __host__ __device__(T a, T b) { return a > b ? a : b; },
+            init_val, size);
+    }
 }
 
 void compute_svd(DataSet data, Vec<Vec3f> curr, Vec<Svd3x2> svd,
@@ -312,14 +327,16 @@ __device__ float get_wind_weight(float time) {
     return t * (0.5f * (1.0f + sinf(angle))) + (1.0f - t);
 }
 
-void set_max_reduce_count(unsigned n) { reduce_info.init(n); }
+void set_max_reduce_count(unsigned n) {
+    if (!main_helper::use_thrust) {
+        reduce_info.init(n);
+    }
+}
 
 } // namespace utility
 
 template float utility::sum_array(Vec<float> array, unsigned size);
-template unsigned utility::sum_integer_array(Vec<unsigned> array,
-                                             unsigned size);
-template unsigned utility::sum_integer_array(Vec<char> array, unsigned size);
+template unsigned utility::sum_array(Vec<unsigned> array, unsigned size);
 template float utility::min_array(const float *array, unsigned size,
                                   float init_val);
 template float utility::max_array(const float *array, unsigned size,

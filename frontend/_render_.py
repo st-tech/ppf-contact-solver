@@ -3,7 +3,9 @@ import os
 os.environ["PYOPENGL_PLATFORM"] = "osmesa"
 
 import numpy as np
+import shutil
 import trimesh
+from typing import Optional
 from PIL import Image
 from pyrender import (
     OrthographicCamera,
@@ -51,7 +53,7 @@ class OpenGLRenderer:
         color: np.ndarray,
         seg: np.ndarray,
         face: np.ndarray,
-        output: str,
+        output: Optional[str],
     ):
         cam = OrthographicCamera(xmag=1.0, ymag=1.0)
         cam_pose = np.array(
@@ -104,4 +106,6 @@ class OpenGLRenderer:
         )
         color, _ = self._r.render(scene, flags=RenderFlags.SKIP_CULL_FACES)  # type: ignore
         image = Image.fromarray(color)
-        image.save(output)
+        if output is not None:
+            image.save(output)
+        return image

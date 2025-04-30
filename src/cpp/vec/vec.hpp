@@ -5,11 +5,18 @@
 #ifndef VEC_HPP
 #define VEC_HPP
 
-#include "../common.hpp"
 #include "../main/cuda_utils.hpp"
 #include <cassert>
 #include <cmath>
 #include <iostream>
+#include <thrust/device_vector.h>
+#include <thrust/execution_policy.h>
+#include <thrust/inner_product.h>
+#include <thrust/transform.h>
+
+namespace main_helper {
+extern bool use_thrust;
+}
 
 namespace VecDev {
 template <class T> void set(T *array, unsigned size, T init_val);
@@ -30,7 +37,7 @@ template <class T> struct VecVec {
     unsigned nnz_allocated{0};
     unsigned offset_allocated{0};
 
-    static VecVec<T> alloc(unsigned nrow, unsigned max_nnz) {
+    __host__ static VecVec<T> alloc(unsigned nrow, unsigned max_nnz) {
         VecVec<T> result;
         result.size = nrow;
         result.nnz = 0;
@@ -42,49 +49,39 @@ template <class T> struct VecVec {
             cudaMalloc(&result.data, result.nnz_allocated * sizeof(T)));
         return result;
     }
+
     __host__ __device__ T &operator()(unsigned i, unsigned j) {
-#if DEBUG_MODE
         if (i >= size) {
             printf("VecVec: operator() i = %u, size = %u\n", i, size);
-            assert(false && "T &operator");
+            assert(false);
         }
-#endif
         unsigned k = offset[i] + j;
-#if DEBUG_MODE
         if (k >= offset[i + 1]) {
             printf("VecVec: k >= offset[i + 1] failed\n");
-            assert(false && "T &operator");
+            assert(false);
         }
-#endif
         return data[k];
     }
     __host__ __device__ const T &operator()(unsigned i, unsigned j) const {
-#if DEBUG_MODE
         if (i >= size) {
             printf("VecVec: const T &operator() i = %u, size = %u\n", i, size);
             assert(false);
         }
-#endif
         unsigned k = offset[i] + j;
-#if DEBUG_MODE
         if (k >= offset[i + 1]) {
             printf("VecVec: k >= offset[i + 1] failed\n");
             assert(false);
-            assert(false && "T &operator");
         }
-#endif
         return data[k];
     }
     __host__ __device__ unsigned count(unsigned i) const {
         if (size == 0) {
             return 0;
         }
-#if DEBUG_MODE
         if (i >= size) {
             printf("VecVec: count() i = %u, size = %u\n", i, size);
-            assert(false && "count");
+            assert(false);
         }
-#endif
         return offset[i + 1] - offset[i];
     }
     __host__ __device__ unsigned count() const {
@@ -101,23 +98,18 @@ template <class T> struct Vec {
     unsigned size{0};
     unsigned allocated{0};
 
-    __device__ T &operator[](unsigned i) {
-#if DEBUG_MODE
+    __host__ __device__ T &operator[](unsigned i) {
         if (i >= size) {
             printf("Vec: operator[] i = %u, size = %u\n", i, size);
             assert(false);
-            assert(false && "T &operator[]");
         }
-#endif
         return data[i];
     }
-    __device__ const T &operator[](unsigned i) const {
-#if DEBUG_MODE
+    __host__ __device__ const T &operator[](unsigned i) const {
         if (i >= size) {
             printf("Vec: const T &operator[] i = %u, size = %u\n", i, size);
-            assert(false && "const T &operator[]");
+            assert(false);
         }
-#endif
         return data[i];
     }
     template <class A> Vec<A> flatten() {
@@ -152,36 +144,67 @@ template <class T> struct Vec {
     }
     Vec<T> clear(const T val = T()) {
         if (data && size > 0) {
-            VecDev::set(data, size, val);
+            if (main_helper::use_thrust) {
+                thrust::device_ptr<T> data_dev(data);
+                thrust::fill(data_dev, data_dev + size, val);
+            } else {
+                VecDev::set(data, size, val);
+            }
         }
         return *this;
     }
     __device__ void atomic_add(unsigned i, const T &val) {
-        if (i >= size) {
-            printf("Vec: atomic_add i = %u, size = %u, sizeof(T) = %u\n", i,
-                   size, sizeof(T));
-            assert(false && "atomic_add");
-        }
+        assert(i < size);
         if (val) {
             atomicAdd(&data[i], val);
         }
     }
     void copy(const Vec<T> &src) const {
         assert(src.size == size);
-        VecDev::copy(src.data, this->data, src.size);
+        if (main_helper::use_thrust) {
+            thrust::device_ptr<T> src_dev(src.data);
+            thrust::device_ptr<T> dst_dev(this->data);
+            thrust::copy(src_dev, src_dev + src.size, dst_dev);
+        } else {
+            VecDev::copy(src.data, this->data, src.size);
+        }
     }
     void add_scaled(Vec<T> &b, float c) const {
         assert(b.size == size);
-        VecDev::add_scaled(b.data, this->data, c, size);
+        if (main_helper::use_thrust) {
+            thrust::device_ptr<T> a_dev(this->data);
+            thrust::device_ptr<T> b_dev(b.data);
+            thrust::transform(
+                a_dev, a_dev + size, b_dev, a_dev,
+                [c] __device__(T a_val, T b_val) { return a_val + c * b_val; });
+        } else {
+            VecDev::add_scaled(b.data, this->data, c, size);
+        }
     }
     void combine(Vec<T> &a, Vec<T> &b, float c, float d) const {
         assert(a.size == size);
         assert(b.size == size);
-        VecDev::combine(a.data, b.data, this->data, c, d, size);
+        if (main_helper::use_thrust) {
+            thrust::device_ptr<T> dest_dev(this->data);
+            thrust::device_ptr<T> a_dev(a.data);
+            thrust::device_ptr<T> b_dev(b.data);
+            thrust::transform(a_dev, a_dev + size, b_dev, dest_dev,
+                              [c, d] __device__(T a_val, T b_val) {
+                                  return c * a_val + d * b_val;
+                              });
+        } else {
+            VecDev::combine(a.data, b.data, this->data, c, d, size);
+        }
     }
     float inner_product(const Vec<float> &b) const {
         assert(b.size == size);
-        return VecDev::inner_product(data, b.data, size);
+        if (main_helper::use_thrust) {
+            thrust::device_ptr<float> a_dev(data);
+            thrust::device_ptr<float> b_dev(b.data);
+            return thrust::inner_product(a_dev, a_dev + b.size, b_dev, 0.0f);
+        } else {
+            return VecDev::inner_product(data, b.data, size);
+        }
     }
 };
 

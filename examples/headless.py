@@ -4,7 +4,7 @@
 
 from frontend import App
 
-app = App.create()
+app = App.create("headless")
 
 V, F = app.mesh.square(res=64, ex=[0, 0, 1], ey=[0, 1, 0])
 app.asset.add.tri("sheet", V, F)
@@ -12,7 +12,7 @@ app.asset.add.tri("sheet", V, F)
 V, F = app.mesh.icosphere(r=0.5, subdiv_count=4)
 app.asset.add.tri("sphere", V, F)
 
-scene = app.scene.create("five-curtains")
+scene = app.scene.create()
 
 space = 0.25
 for i in range(5):

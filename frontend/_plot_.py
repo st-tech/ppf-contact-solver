@@ -9,6 +9,7 @@ from dataclasses import dataclass
 import pythreejs as p3s
 import copy
 import numpy as np
+from ._render_ import OpenGLRenderer
 
 
 class PlotManager:
@@ -19,9 +20,9 @@ class PlotManager:
         self._in_jupyter_notebook = Utils.in_jupyter_notebook()
         self.param = PlotParam()
 
-    def create(self) -> "Plot":
+    def create(self, engine: str = "threejs") -> "Plot":
         """Create a plot."""
-        return Plot(self.param)
+        return Plot(engine, self.param)
 
     def is_jupyter_notebook(self) -> bool:
         """Check if the code is running in a Jupyter notebook."""
@@ -31,14 +32,20 @@ class PlotManager:
 class Plot:
     """Plot class. Use this to create a plot."""
 
-    def __init__(self, param: "PlotParam") -> None:
+    def __init__(self, engine: str, param: "PlotParam") -> None:
         """Initialize the plot.
 
         Args:
             _darkmode (bool): True to turn on dark mode, False otherwise.
         """
         self._in_jupyter_notebook = Utils.in_jupyter_notebook()
-        self._engine = PlotEngine()
+        if engine == "threejs":
+            self._engine = ThreejsPlotEngine()
+        elif engine == "opengl":
+            self._engine = OpenGLRenderEngine()
+        else:
+            raise ValueError(f"Unknown engine: {engine}")
+
         self._vert = np.zeros(0)
         self._color = np.zeros(0)
         self.param = param
@@ -325,7 +332,7 @@ class PlotParam:
     height: int = 600
 
 
-class PlotEngine:
+class ThreejsPlotEngine:
     def __init__(self):
         self.buff = PlotBuffer()
         self.geom = PlotGeometry()
@@ -511,3 +518,61 @@ class PlotEngine:
             assert self.buff.color is not None
             self.buff.color.array = color.astype("float32")
             self.buff.color.needsUpdate = True
+
+
+class OpenGLRenderEngine:
+    def __init__(self) -> None:
+        self._handle = None
+
+    def _render(
+        self,
+        vert: np.ndarray,
+        color: np.ndarray,
+        tri: np.ndarray,
+        seg: np.ndarray,
+    ):
+        from IPython.display import display
+
+        engine = OpenGLRenderer()
+        image = engine.render(
+            vert,
+            color,
+            seg,
+            tri,
+            None,
+        )
+        if self._handle is None:
+            self._handle = display(image, display_id=True)
+        else:
+            self._handle.update(image)
+
+    def plot(
+        self,
+        vert: np.ndarray,
+        color: np.ndarray,
+        tri: np.ndarray,
+        seg: np.ndarray,
+        pts: np.ndarray,
+        param: PlotParam = PlotParam(),
+    ):
+        assert len(vert) > 0
+        if len(color) == 0:
+            color = np.tile(param.default_color, (len(vert), 1))
+        assert len(color) == len(vert)
+
+        self._vert = vert.copy()
+        self._color = color.copy()
+        self._tri = tri.copy()
+        self._seg = seg.copy()
+        self._pts = pts.copy()
+        self._param = param
+        self._render(self._vert, self._color, self._tri, self._seg)
+
+    def update(
+        self, vert: Optional[np.ndarray] = None, color: Optional[np.ndarray] = None
+    ):
+        if vert is not None:
+            self._vert = vert.copy()
+        if color is not None:
+            self._color = color.copy()
+        self._render(self._vert, self._color, self._tri, self._seg)

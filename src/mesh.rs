@@ -2,7 +2,7 @@
 // Author: Ryoichi Ando (ryoichi.ando@zozo.com)
 // License: Apache v2.0
 
-use na::{Matrix2xX, Matrix3xX, Matrix4xX, RowDVector};
+use na::{Matrix2xX, Matrix3xX, Matrix4xX};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
@@ -12,7 +12,6 @@ pub struct MeshInfo {
     pub tet: Matrix4xX<usize>,
     pub edge: Matrix2xX<usize>,
     pub hinge: Matrix4xX<usize>,
-    pub vertex: RowDVector<usize>,
     pub vertex_count: usize,
     pub surface_vert_count: usize,
     pub shell_face_count: usize,
@@ -71,13 +70,11 @@ impl Mesh {
         }
         let (hinge, hinge_face) = compute_hinge(&face);
         let (edge, edge_face) = compute_edge(&rod, &face);
-        let vertex_element = RowDVector::<usize>::from_fn(surface_vert_count, |i, _| i);
         let mesh = MeshInfo {
             face,
             tet,
             edge,
             hinge,
-            vertex: vertex_element,
             vertex_count,
             surface_vert_count,
             shell_face_count,
