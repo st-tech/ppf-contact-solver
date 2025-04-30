@@ -6,19 +6,18 @@ from ._asset_ import AssetManager
 from ._extra_ import Extra
 from ._scene_ import SceneManager
 from ._mesh_ import MeshManager
-from ._session_ import SessionManager, Param
+from ._session_ import SessionManager, Param, is_running
 from ._plot_ import PlotManager
 from ._utils_ import Utils
 import pickle
 import os
-import time
 import shutil
 from typing import Optional
 
 
 class App:
     @staticmethod
-    def create(name: str = "", cache_dir: str = "") -> "App":
+    def create(name: str, cache_dir: str = "") -> "App":
         """Start a new application.
 
         Args:
@@ -28,8 +27,6 @@ class App:
         Returns:
             App: A new instance of the App class.
         """
-        if name == "":
-            name = time.strftime("app-%Y-%m-%d-%H-%M-%S")
         return App(name, True, cache_dir)
 
     @staticmethod
@@ -62,6 +59,14 @@ class App:
             Param: The default parameters.
         """
         return Param(App.get_proj_root())
+
+    def busy(self) -> bool:
+        """Returns if the application is running.
+
+        Returns:
+            bool: True if the application is running, False otherwise.
+        """
+        return is_running()
 
     def __init__(self, name: str, renew: bool, cache_dir: str = ""):
         """Initializes the App class.

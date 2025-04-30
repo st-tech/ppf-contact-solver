@@ -5,8 +5,8 @@
 #ifndef CUDA_MEM_HPP
 #define CUDA_MEM_HPP
 
+#include "../main/cuda_utils.hpp"
 #include "../vec/vec.hpp"
-#include "cuda_utils.hpp"
 #include <cassert>
 #include <vector>
 

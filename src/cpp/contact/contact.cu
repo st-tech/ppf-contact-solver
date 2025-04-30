@@ -1268,8 +1268,8 @@ unsigned embed_contact_force_hessian(
         force[i] += contact_force[i];
     } DISPATCH_END;
 
-    return utility::sum_integer_array(num_contact_vtf, num_contact_vtf.size) +
-           utility::sum_integer_array(num_contact_ee, num_contact_ee.size);
+    return utility::sum_array(num_contact_vtf, num_contact_vtf.size) +
+           utility::sum_array(num_contact_ee, num_contact_ee.size);
 }
 
 unsigned embed_constraint_force_hessian(
@@ -1364,8 +1364,8 @@ unsigned embed_constraint_force_hessian(
         } DISPATCH_END;
     }
 
-    return utility::sum_integer_array(num_contact_vtf, num_contact_vtf.size) +
-           utility::sum_integer_array(num_contact_ee, num_contact_ee.size);
+    return utility::sum_array(num_contact_vtf, num_contact_vtf.size) +
+           utility::sum_array(num_contact_ee, num_contact_ee.size);
 }
 
 struct CollisionMeshPointFaceCCD_M2C {
@@ -2046,7 +2046,7 @@ bool check_intersection(const DataSet &data, const Kinematic &kinematic,
         }
     } DISPATCH_END;
 
-    return utility::sum_integer_array(intersection_flag, edge_count) == 0;
+    return utility::max_array(intersection_flag.data, edge_count, char(0)) == 0;
 }
 
 } // namespace contact
