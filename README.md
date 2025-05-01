@@ -174,7 +174,7 @@ Please look into the [examples](./examples/) directory for more examples.
 from frontend import App
 
 # make an app
-app = App.create()
+app = App.create("drape")
 
 # create a square mesh resolution 128 spanning the xz plane
 V, F = app.mesh.square(res=128, ex=[1, 0, 0], ey=[0, 0, 1])
@@ -188,8 +188,8 @@ V, F = app.mesh.icosphere(r=0.5, subdiv_count=5)
 # add to the asset and name it "sphere"
 app.asset.add.tri("sphere", V, F)
 
-# create a scene "five-sheets"
-scene = app.scene.create("five-sheets")
+# create a scene
+scene = app.scene.create()
 
 # gap between sheets
 gap = 0.01
