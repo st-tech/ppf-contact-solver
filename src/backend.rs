@@ -195,38 +195,11 @@ impl Backend {
             }
         });
 
-        let mut first_step = true;
+        let mut task_sent = false;
         loop {
             constraint = scene.make_constraint(args, self.state.time, &self.mesh);
             let mut state_saved = false;
             unsafe { update_constraint(&constraint) };
-            if !first_step {
-                match result_receiver.try_recv() {
-                    Ok(bvh) => {
-                        info!("bvh update...");
-                        let n_surface_vert = self.mesh.mesh.mesh.surface_vert_count;
-                        let vert: Matrix3xX<f32> = self
-                            .state
-                            .curr_vertex
-                            .columns(0, n_surface_vert)
-                            .into_owned();
-                        self.bvh = Box::new(Some(bvh));
-                        unsafe {
-                            update_bvh(self.bvh.as_ref().as_ref().unwrap());
-                        }
-                        let data = (
-                            vert,
-                            self.mesh.mesh.mesh.face.clone(),
-                            self.mesh.mesh.mesh.edge.clone(),
-                        );
-                        task_sender.send(data).unwrap();
-                    }
-                    Err(mpsc::TryRecvError::Empty) => {}
-                    Err(mpsc::TryRecvError::Disconnected) => {
-                        panic!("bvh thread disconnected");
-                    }
-                }
-            }
             let new_frame = (self.state.time * args.fps).floor() as i32;
             if new_frame != self.state.curr_frame {
                 // Name: Time Per Video Frame
@@ -253,6 +226,47 @@ impl Backend {
                 let curr_time = Instant::now();
                 let elapsed_time = curr_time - last_time;
                 self.fetch_state(&dataset, &param);
+                if task_sent {
+                    match result_receiver.try_recv() {
+                        Ok(bvh) => {
+                            info!("bvh update...");
+                            let n_surface_vert = self.mesh.mesh.mesh.surface_vert_count;
+                            let vert: Matrix3xX<f32> = self
+                                .state
+                                .curr_vertex
+                                .columns(0, n_surface_vert)
+                                .into_owned();
+                            self.bvh = Box::new(Some(bvh));
+                            unsafe {
+                                update_bvh(self.bvh.as_ref().as_ref().unwrap());
+                            }
+                            let data = (
+                                vert,
+                                self.mesh.mesh.mesh.face.clone(),
+                                self.mesh.mesh.mesh.edge.clone(),
+                            );
+                            task_sender.send(data).unwrap();
+                        }
+                        Err(mpsc::TryRecvError::Empty) => {}
+                        Err(mpsc::TryRecvError::Disconnected) => {
+                            panic!("bvh thread disconnected");
+                        }
+                    }
+                } else {
+                    let n_surface_vert = self.mesh.mesh.mesh.surface_vert_count;
+                    let vert: Matrix3xX<f32> = self
+                        .state
+                        .curr_vertex
+                        .columns(0, n_surface_vert)
+                        .into_owned();
+                    let data = (
+                        vert,
+                        self.mesh.mesh.mesh.face.clone(),
+                        self.mesh.mesh.mesh.edge.clone(),
+                    );
+                    task_sender.send(data).unwrap();
+                    task_sent = true;
+                }
                 self.state.curr_frame = new_frame;
                 writeln!(time_per_frame, "{} {}", new_frame, elapsed_time.as_millis()).unwrap();
                 writeln!(
@@ -326,15 +340,6 @@ impl Backend {
                 panic!("failed to advance");
             }
             self.state.time = result.time;
-            if first_step {
-                let data = (
-                    self.state.curr_vertex.clone(),
-                    self.mesh.mesh.mesh.face.clone(),
-                    self.mesh.mesh.mesh.edge.clone(),
-                );
-                task_sender.send(data).unwrap();
-                first_step = false;
-            }
         }
         let _ = result_receiver.try_recv();
         write_current_time_to_file(finished_path.to_str().unwrap()).unwrap();
