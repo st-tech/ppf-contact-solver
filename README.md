@@ -397,8 +397,8 @@ Please note that these artifacts will be deleted after a month.
 
 ### ⚔️ Ten Consecutive Runs
 
-We know that you can't judge the reliability of contact resolution by simply watching a success case in a single 🎥 video.
-To ensure greater transparency, we implemented GitHub Actions to run many of our examples via automated GitHub Actions ⚙️, not just once, but 10 times in a row 🔁.
+We know that you can't judge the reliability of contact resolution by simply watching a single success 🎥 video example.
+To ensure greater transparency, we implemented GitHub Actions to run many of our examples via automated GitHub Actions ⚙️, not just once, but **10 times in a row** 🔁.
 This means that **a single failure out of 10 tests is considered a failure of the entire test suite!**
 
 [![drape.ipynb](https://github.com/st-tech/ppf-contact-solver/actions/workflows/example_drape.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/example_drape.yml)

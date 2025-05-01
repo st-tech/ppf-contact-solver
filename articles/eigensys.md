@@ -2,11 +2,32 @@
 
 If you happen to be working with the Finite Element Method (FEM) solving for bouncy 🏈 things, we have a convenient tool 🎁 that we’d like to share.
 
-> ### 🎓 For Scholars
->
-> The content of this section is described in the supplementary PDF.
-> Please cite our paper if you wish to mention this article; not the link to this repository.
-> Just to avoid confusion; the existence of this analysis is not even implied in the main paper, but its full contents do exist in the supplementary PDF.
+### 🎓 For Scholars
+
+ The contents of this section are described in the supplementary PDF.
+ Please cite our paper below if you wish to mention this article; not the link to this repository.
+ Just to avoid confusion; the existence of this analysis is not even implied in the main paper, but its full contents do exist in the supplementary PDF [(Link)](https://drive.google.com/file/d/1ptjFNVufPBV4-vb5UDh1yTgz8-esjaSF/view).
+ See Section E and F.9.
+
+ ```bibtex
+ @article{ando24cubic,
+ author = {Ando, Ryoichi},
+ title = {A Cubic Barrier with Elasticity-Inclusive Dynamic Stiffness},
+ year = {2024},
+ issue_date = {December 2024},
+ publisher = {Association for Computing Machinery},
+ address = {New York, NY, USA},
+ volume = {43},
+ number = {6},
+ issn = {0730-0301},
+ url = {https://doi.org/10.1145/3687908},
+ doi = {10.1145/3687908},
+ journal = {ACM Trans. Graph.},
+ month = nov,
+ articleno = {224},
+ numpages = {13},
+ }
+```
 
 ## 🏁 The Final Results
 
