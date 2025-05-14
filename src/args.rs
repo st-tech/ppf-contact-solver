@@ -35,6 +35,13 @@ pub struct Args {
     #[clap(long, default_value_t = 10)]
     pub keep_states: i32,
 
+    // Name: Keep Vertices
+    // Description:
+    // This parameter specifies the number of vert data files to keep in
+    // the output directory. Negative value means no limit.
+    #[clap(long, default_value_t = -1)]
+    pub keep_verts: i32,
+
     // Name: Step Size
     // Recommended Range: 1e-3 to 1e-2
     // Description:
