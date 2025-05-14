@@ -78,6 +78,7 @@ def list_packages():
         "libosmesa6-dev",
         "libc++-dev",
         "libeigen3-dev",
+        "ffmpeg",
     ]
     return packages
 
@@ -88,6 +89,8 @@ def python_packages():
         "libigl",
         "plyfile",
         "requests",
+        "gdown",
+        "numba",
         "trimesh",
         "pyrender",
         "pywavefront",
@@ -132,7 +135,7 @@ def install_nvim():
     )
     run("tar -C /opt -xzf nvim-linux-x86_64.tar.gz")
     run("ln -s /opt/nvim-linux-x86_64/bin/nvim /usr/bin/nvim")
-    run("apt install -y fzf fd-find bat")
+    run("apt install -y fzf fd-find bat ripgrep")
     run("/root/.cargo/bin/rustup component add rust-analyzer")
     run("ln -s $(which fdfind) /usr/bin/fd")
     run("ln -s $(which batcat) /usr/bin/bat")
@@ -173,11 +176,6 @@ def install_oh_my_zsh():
     run(f"echo 'export PYTHONPATH={script_dir}:$PYTHONPATH' >> ~/.zshrc")
 
 
-def install_meshplot():
-    run("git clone https://github.com/skoch9/meshplot /tmp/meshplot")
-    run("pip3 install --ignore-installed /tmp/meshplot")
-
-
 def install_sdf():
     run("git clone https://github.com/fogleman/sdf.git /tmp/sdf")
     run("pip3 install /tmp/sdf")
@@ -194,7 +192,6 @@ def setup():
     run("apt install -y locales-all")
     run("DEBIAN_FRONTEND=noninteractive apt install -y " + " ".join(list_packages()))
     run("pip3 install --ignore-installed " + " ".join(python_packages()))
-    install_meshplot()
     install_sdf()
     run("curl -fsSL https://deb.nodesource.com/setup_21.x | bash -")
     run("apt install -y nodejs")
