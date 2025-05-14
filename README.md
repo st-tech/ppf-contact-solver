@@ -11,7 +11,7 @@ involving 👚 shells, 🪵 solids and 🪢 rods. All made by ZOZO.
   
 ## ✨ Highlights
 
-- **💪 Robust**: Contact resolutions are penetration-free. No snagging intersections.
+- **💪 Robust**: Contact resolutions are completely penetration-free. No snagging intersections.
 - **⏲ Scalable**: An extreme case includes beyond 150M contacts. Not just one million.
 - **🚲 Cache Efficient**: All on the GPU runs in single precision. No double precision.
 - **🥼 Inextensible**: Cloth never extends beyond very strict upper bounds, such as 1%.
@@ -35,6 +35,7 @@ involving 👚 shells, 🪵 solids and 🪢 rods. All made by ZOZO.
 - [🔍 Obtaining Logs](#-obtaining-logs)
 - [🖼️ Catalogue](#️-catalogue)
   - [💰 Budget Table on AWS](#-budget-table-on-aws)
+  - [🏗️ Large Scale Examples](#️-large-scale-examples)
 - [🚀 GitHub Actions](#-github-actions)
   - [⚔️ Ten Consecutive Runs](#️-ten-consecutive-runs)
   - [📦 Action Artifacts](#-action-artifacts)
@@ -54,19 +55,20 @@ involving 👚 shells, 🪵 solids and 🪢 rods. All made by ZOZO.
 
 ## 📝 Change History
 
+- (2025.05.14) Added one large scale example.
 - (2025.05.01) Simulation states now can be saved and loaded [(Video)](https://drive.google.com/file/d/1aCEwVPbX_Am6bwj6NrwARS6K_IkT45c-/view).
 - (2025.04.02) Added 9 examples. See the [catalogue](#️-catalogue).
 - (2025.03.03) Added a [budget table on AWS](#-budget-table-on-aws).
 - (2025.02.28) Added a [reference branch and a Docker image of our TOG paper](#-technical-materials).
 - (2025.2.26) Added Floating Point-Rounding Errors in ACCD in [hindsight](./articles/hindsight.md).
 - (2025.2.7) Updated the [trapped example](./examples/trapped.ipynb) [(Video)](https://drive.google.com/file/d/1Qek0e0qBNWPlBb1hSOZ6o_e2Cqf5rGst/view) with squishy balls.
-- (2025.1.8) Added a [domino example](./examples/domino.ipynb) [(Video)](https://drive.google.com/file/d/1N9y8eZrjSQhAUhKwiO9w8jW_T18zPnYf/view).
-- (2025.1.5) Added a [single twist example](./examples/twist.ipynb) [(Video)](https://drive.google.com/file/d/1LDFKS-iBvl2uDdPVKaazQL25tYGEEyXr/view).
 
 <details>
 
 <summary>More history records</summary>
 
+- (2025.1.8) Added a [domino example](./examples/domino.ipynb) [(Video)](https://drive.google.com/file/d/1N9y8eZrjSQhAUhKwiO9w8jW_T18zPnYf/view).
+- (2025.1.5) Added a [single twist example](./examples/twist.ipynb) [(Video)](https://drive.google.com/file/d/1LDFKS-iBvl2uDdPVKaazQL25tYGEEyXr/view).
 - (2024.12.31) Added full documentation for Python APIs, parameters, and log files [(GitHub Pages)](https://st-tech.github.io/ppf-contact-solver).
 - (2024.12.27) Line search for strain limiting is improved [(Markdown)](./articles/bug.md#new-strain-limiting-line-search)
 - (2024.12.23) Added [(Bug Fixes and Updates)](./articles/bug.md)
@@ -150,7 +152,7 @@ If you wish to build the container from scratch 🛠️, please refer to the cle
 
 ## 🐍 How To Use
 
-Our frontend is accessible through 🌐 a browser using our built-in JupyterLab 🐍 interface.
+Our frontend is all accessible through 🌐 a browser using our built-in JupyterLab 🐍 interface.
 All is set up when you open it for the first time.
 Results can be interactively viewed through the browser and exported as needed.
 
@@ -333,9 +335,6 @@ All the log files 📂 are available ✅ and can be fetched ⬇️ during the si
 |[belt](./examples/belt.ipynb) [(Video)](https://drive.google.com/file/d/1bmIlSkKlxeVrMA0r5JYKjy2T4j0Ux3Q2/view)|[fitting](./examples/fitting.ipynb) [(Video)](https://drive.google.com/file/d/1JPY9dQkY7vvUveetRQr3obeOAZk05sfI/view)|[roller](./examples/roller.ipynb) [(Video)](https://drive.google.com/file/d/15tEpF1ecLRkmvHbexj5hOhV49WZoxABs/view)|[yarn](./examples/yarn.ipynb) [(Video)](https://drive.google.com/file/d/1DfXpresnxGWhQtLS83c0X-UDnxzyv8Lz/view)|
 |![](./asset/image/catalogue/belt.mp4.webp)|![](./asset/image/catalogue/fitting.mp4.webp)|![](./asset/image/catalogue/roller.mp4.webp)|![](./asset/image/catalogue/yarn.mp4.webp)|
 
-At the moment, large-scale examples are not ready yet, but they will be added/updated one by one.
-The author is actively woriking on it.
-
 ### 💰 Budget Table on AWS
 
 Below is a table summarizing the estimated costs for running our examples on a NVIDIA L4 instance `g6.2xlarge` at Amazon Web Services US regions (`us-east-1` and `us-east-2`).
@@ -368,9 +367,25 @@ Below is a table summarizing the estimated costs for running our examples on a N
 | yarn         | $0.01 | 0.24m | 120 | 28.5K  | ```N/A```    | ```N/A```    | 28.5K   | ```N/A``` |
 | roller       | $0.03 | 2.08m | 240 | 21.4K  | 22.2K  | 61.0K  | ```N/A```     | ```N/A``` |
 
+#### 🏗️ Large Scale Examples
+
+Large scale examples are run on a [vast.ai](https://vast.ai) instance with an RTX 4090.
+At the moment, not all large scale examples are ready yet, but they will be added/updated one by one.
+The author is actively woriking on it.
+
+| | | | |
+|---|---|---|---|
+| [large-twist](./examples/large-twist.ipynb) [(Video)](https://drive.google.com/file/d/1vZ7JHza1U6zO9W8DMtSsNZidl_YQXf1e/view) | TBA | TBA | TBA |
+| ![twist](./asset/image/large-scale/twist.jpg) |  |  |  |
+
+| Example | #Vert | #Face | #Tet | #Seg | #Contact | #Frame | Time/Frame |
+|---|---|---|---|---|---|---|---|
+| large-twist | 3.2M | 6.4M | ```N/A``` | ```N/A``` | 56.7M | 2,000 | 46.4s |
+
+
 ## 🚀 GitHub Actions
 
-We implemented GitHub Actions that test all of our examples except for large-scale ones, which take from hours to days to finish.
+We implemented GitHub Actions that test all of our examples except for large scale ones, which take from hours to days to finish.
 We perform explicit intersection checks 🔍 at the end of each step, which raises an error ❌ if an intersection is detected.
 This ensures that all steps are confirmed to be penetration-free if tests are pass ✅.
 The runner types are described as follows:

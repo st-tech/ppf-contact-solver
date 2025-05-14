@@ -158,21 +158,21 @@ fn main() {
     }
 }
 
-fn remove_old_states(args: &Args, max_frame: i32) {
-    if args.keep_states > 0 {
+fn remove_old_files(dirpath: &str, prefix: &str, suffix: &str, keep_number: i32, max_frame: i32) {
+    if keep_number > 0 {
         let mut n = 0;
         for i in 0..=max_frame {
-            let path = format!("{}/state_{}.bin.gz", args.output, i);
+            let path = format!("{}/{}{}{}", dirpath, prefix, i, suffix);
             if std::path::Path::new(&path).exists() {
                 n += 1;
             }
         }
-        info!("Removing old states...");
         let mut i = 0;
-        while n > args.keep_states {
-            let path = format!("{}/state_{}.bin.gz", args.output, i);
+        while n > keep_number {
+            let filename = format!("{}{}{}", prefix, i, suffix);
+            let path = format!("{}/{}", dirpath, filename);
             if std::path::Path::new(&path).exists() {
-                info!("Removing {}...", path);
+                info!("Removing {}...", filename);
                 std::fs::remove_file(path).unwrap_or(());
                 n -= 1;
             }

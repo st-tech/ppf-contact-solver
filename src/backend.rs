@@ -141,7 +141,13 @@ impl Backend {
         let path_state = format!("{}/state_{}.bin.gz", args.output, self.state.curr_frame);
         info!("saving state to {}...", path_state);
         super::save(&self.state, path_state.as_str());
-        super::remove_old_states(args, self.state.curr_frame);
+        super::remove_old_files(
+            &args.output,
+            "state_",
+            ".bin.gz",
+            args.keep_states,
+            self.state.curr_frame,
+        );
         info!("<<< save state done.");
     }
 
@@ -299,6 +305,13 @@ impl Backend {
                 file.write_all(buff).unwrap();
                 file.flush().unwrap();
                 std::fs::rename(path.clone(), path.replace(".tmp", "")).unwrap();
+                super::remove_old_files(
+                    &args.output,
+                    "vert_",
+                    ".bin",
+                    args.keep_verts,
+                    self.state.curr_frame,
+                );
                 if args.auto_save > 0 && new_frame > 0 && new_frame % args.auto_save == 0 {
                     info!("auto save state...");
                     self.save_state(args, &scene, &dataset);
