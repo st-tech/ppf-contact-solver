@@ -16,7 +16,7 @@ env:
 jobs:
   headless:
     runs-on: ppf-contact-solver-NVIDIA # replace with your runner name
-    timeout-minutes: 15
+    timeout-minutes: 60
 
     steps:
       - name: check out repo
