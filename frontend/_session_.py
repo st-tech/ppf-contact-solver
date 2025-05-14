@@ -473,44 +473,48 @@ class SessionExport:
             options (dict, optional): Additional arguments passed to a renderer.
             clear (bool, optional): Whether to clear the existing files.
         """
-        options = self._session._update_options(options)
-        ci_name = Utils.ci_name()
-        if path == "":
-            if ci_name is not None:
-                path = os.path.join(self._session.info.path, "preview")
-            else:
-                session = self._session
-                scene = session._fixed
-                assert scene is not None
-                path = os.path.join("export", scene._name, session.info.name)
-
-        if os.path.exists(path):
-            if clear:
-                shutil.rmtree(path)
+        frames = self._session.get.frame_list()
+        if len(frames) == 0:
+            raise ValueError("No frames found")
         else:
-            os.makedirs(path)
-        for i in tqdm(range(self._session.get.latest_frame()), desc="export", ncols=70):
-            self.frame(
-                os.path.join(path, f"frame_{i}.{ext}"),
-                i,
-                include_static,
-                options,
-                delete_exist=clear,
-            )
-        if shutil.which("ffmpeg") is not None:
-            vid_name = "frame.mp4"
-            command = f"ffmpeg -hide_banner -loglevel error -y -r 60 -i frame_%d.{ext}.png -pix_fmt yuv420p -b:v 50000k {vid_name}"
-            subprocess.run(command, shell=True, cwd=path)
-            if self._session._in_jupyter_notebook:
-                from IPython.display import Video, display
+            options = self._session._update_options(options)
+            ci_name = Utils.ci_name()
+            if path == "":
+                if ci_name is not None:
+                    path = os.path.join(self._session.info.path, "preview")
+                else:
+                    session = self._session
+                    scene = session._fixed
+                    assert scene is not None
+                    path = os.path.join("export", scene._name, session.info.name)
 
-                display(Video(os.path.join(path, vid_name)))
-            if ci_name is not None:
-                for file in os.listdir(path):
-                    if file.endswith(".png"):
-                        os.remove(os.path.join(path, file))
+            if os.path.exists(path):
+                if clear:
+                    shutil.rmtree(path)
+            else:
+                os.makedirs(path)
+            for n, i in enumerate(tqdm(frames, desc="export", ncols=70)):
+                self.frame(
+                    os.path.join(path, f"frame_{n}.{ext}"),
+                    i,
+                    include_static,
+                    options,
+                    delete_exist=clear,
+                )
+            if shutil.which("ffmpeg") is not None:
+                vid_name = "frame.mp4"
+                command = f"ffmpeg -hide_banner -loglevel error -y -r 60 -i frame_%d.{ext}.png -pix_fmt yuv420p -b:v 50000k {vid_name}"
+                subprocess.run(command, shell=True, cwd=path)
+                if self._session._in_jupyter_notebook:
+                    from IPython.display import Video, display
 
-        return Zippable(path)
+                    display(Video(os.path.join(path, vid_name)))
+                if ci_name is not None:
+                    for file in os.listdir(path):
+                        if file.endswith(".png"):
+                            os.remove(os.path.join(path, file))
+
+            return Zippable(path)
 
     def frame(
         self,
@@ -711,11 +715,35 @@ class SessionGet:
                     max_frame = max(max_frame, frame)
         return max_frame
 
-    def latest_frame(self) -> int:
+    def first_frame(self) -> Optional[int]:
+        """Get the first frame number.
+
+        Returns:
+            int: The first frame number. If no frames are found, return None.
+        """
+        frames = self.frame_list()
+        if len(frames) > 0:
+            return frames[0]
+        else:
+            return None
+
+    def latest_frame(self) -> Optional[int]:
         """Get the latest frame number.
 
         Returns:
-            int: The latest frame number.
+            int: The latest frame number. If no frames are found, return None.
+        """
+        frames = self.frame_list()
+        if len(frames) > 0:
+            return frames[-1]
+        else:
+            return None
+
+    def frame_list(self) -> list[int]:
+        """Get the sorted list of frame numbers.
+
+        Returns:
+            list[int]: The list of frame numbers.
         """
         path = os.path.join(self._session.info.path, "output")
         if os.path.exists(path):
@@ -726,8 +754,8 @@ class SessionGet:
                     frame = int(file.split("_")[1].split(".")[0])
                     frames.append(frame)
             if len(frames) > 0:
-                return sorted(frames)[-1]
-        return 0
+                return sorted(frames)
+        return []
 
     def saved(self) -> list[int]:
         """Get the list of saved frame numbers.
@@ -1030,7 +1058,7 @@ class Session:
                 last_frame = 0
                 while process.poll() is None:
                     frame = self.get.latest_frame()
-                    if frame > last_frame:
+                    if frame is not None and frame > last_frame:
                         pbar.update(frame - last_frame)
                         last_frame = frame
                     time.sleep(1)
@@ -1256,45 +1284,61 @@ class Session:
         Returns:
             Session: The animated session.
         """
-        options = self._update_options(options)
+        frames = self.get.frame_list()
+        if len(frames) == 0:
+            raise ValueError("No frames found")
+        else:
+            options = self._update_options(options)
+            offset = frames[0]
 
-        if self._in_jupyter_notebook:
-            import ipywidgets as widgets
+            if self._in_jupyter_notebook:
+                import ipywidgets as widgets
+                from IPython.display import display
 
-            if self._fixed is None:
-                raise ValueError("Scene must be initialized")
-            else:
-                plot = self._fixed.preview(
-                    self._fixed.vertex(True),
-                    options,
-                    show_slider=False,
-                    engine=engine,
-                )
-                try:
-                    if self._fixed is not None:
-                        frame_count = self.get.vertex_frame_count()
-                        vert_list = []
-                        for i in tqdm(
-                            range(frame_count), desc="Loading frames", ncols=70
-                        ):
-                            result = self.get.vertex(i)
-                            if result is not None:
-                                vert, _ = result
-                                vert_list.append(vert)
+                if self._fixed is None:
+                    raise ValueError("Scene must be initialized")
+                else:
+                    try:
+                        if self._fixed is not None:
+                            verts = []
+                            for i in tqdm(frames, desc="Loading frames", ncols=70):
+                                result = self.get.vertex(i)
+                                if result is not None:
+                                    verts.append(result[0])
 
-                        def update(frame=1):
-                            nonlocal vert_list
-                            nonlocal plot
-                            assert plot is not None
-                            if self._fixed is not None:
-                                vert = vert_list[frame - 1]
-                                color = self._fixed.color(vert, options)
-                                plot.update(vert, color)
+                            plot = self._fixed.preview(
+                                verts[0],
+                                options,
+                                show_slider=False,
+                                engine=engine,
+                            )
 
-                        widgets.interact(update, frame=(1, frame_count))
-                except Exception as _:
-                    pass
-        return self
+                            def update(frame: int):
+                                nonlocal offset
+                                nonlocal verts
+                                nonlocal plot
+                                assert plot is not None
+                                if self._fixed is not None:
+                                    vert = verts[frame - offset]
+                                    color = self._fixed.color(vert, options)
+                                    plot.update(vert, color)
+
+                            slider = widgets.IntSlider(
+                                value=offset,
+                                min=offset,
+                                max=len(verts) + offset - 1,
+                                step=1,
+                                description="Frame",
+                            )
+
+                            def on_value_change(change):
+                                update(change["new"])
+
+                            slider.observe(on_value_change, names="value")
+                            display(slider)
+                    except Exception as _:
+                        pass
+            return self
 
     def stream(self, n_lines=40) -> "Session":
         """Stream the session logs.
