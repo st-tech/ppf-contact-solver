@@ -1,33 +1,31 @@
 ## 💡 Tips for Obtaining Force Jacobians
 
-If you happen to be working with the Finite Element Method (FEM) solving for bouncy 🏈 things, we have a convenient tool 🎁 that we’d like to share.
-
 ### 🎓 For Scholars
 
- The contents of this section are described in the supplementary PDF.
- Please cite our paper below if you wish to mention this article; not the link to this repository.
- Just to avoid confusion; the existence of this analysis is not even implied in the main paper, but its full contents do exist in the supplementary PDF [(Link)](https://drive.google.com/file/d/1ptjFNVufPBV4-vb5UDh1yTgz8-esjaSF/view).
- See Section E and F.9.
+**Hindsight (Aug 9 2025)**: After publication, we learned that the core insights of the eigensystem analysis presented here were previously developed by Poya et al.
+(2023) in their comprehensive work. Their paper provides an extensive theoretical foundation for closed-form tangent eigensystems in principal stretches, including the eigendecomposition techniques that form the basis of our implementation.
 
- ```bibtex
- @article{ando24cubic,
- author = {Ando, Ryoichi},
- title = {A Cubic Barrier with Elasticity-Inclusive Dynamic Stiffness},
- year = {2024},
- issue_date = {December 2024},
- publisher = {Association for Computing Machinery},
- address = {New York, NY, USA},
- volume = {43},
- number = {6},
- issn = {0730-0301},
- url = {https://doi.org/10.1145/3687908},
- doi = {10.1145/3687908},
- journal = {ACM Trans. Graph.},
- month = nov,
- articleno = {224},
- numpages = {13},
- }
+We acknowledge that many of the fundamental mathematical insights we independently arrived at using a different approach were already established in their work.
+We do not claim the underlying analysis as our contribution, but we believe this presentation remains valuable for practitioners. For instance, our treatment includes shell elements with 3×2 deformation gradients, extending beyond the 2×2 case discussed in their work. Although the conversion may be straightforward for experts, having explicit formulations readily available can benefit implementation efforts.
+
+Readers who wish to mention this article should refer to the original work:
+
+```bibtex
+@article{poya2023variational,
+  author = {Poya, Roman and Ortigosa, Rogelio and Gil, Antonio J.},
+  title = {Variational schemes and mixed finite elements for large strain isotropic elasticity in principal stretches: Closed-form tangent eigensystems, convexity conditions, and stabilised elasticity},
+  journal = {International Journal for Numerical Methods in Engineering},
+  volume = {124},
+  number = {16},
+  pages = {3436-3493},
+  keywords = {convexity conditions, large strain elasticity, mixed finite elements, principal stretches},
+  doi = {https://doi.org/10.1002/nme.7254},
+  url = {https://onlinelibrary.wiley.com/doi/abs/10.1002/nme.7254},
+  year = {2023}
+}
 ```
+
+For additional implementation details and the practical application of these techniques, readers may also refer to our supplementary materials in Section E and F.9 of [(Link)](https://drive.google.com/file/d/1ptjFNVufPBV4-vb5UDh1yTgz8-esjaSF/view).
 
 ## 🏁 The Final Results
 
