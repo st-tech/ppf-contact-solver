@@ -55,6 +55,7 @@ involving 👚 shells, 🪵 solids and 🪢 rods. All made by ZOZO.
 
 ## 📝 Change History
 
+- (2025.08.09) Added a hindsight note in [eigensystem analysis](./articles/eigensys.md) to acknowledge prior work by [Poya et al. (2023)](https://romeric.github.io/).
 - (2025.05.14) Added one large scale example.
 - (2025.05.01) Simulation states now can be saved and loaded [(Video)](https://drive.google.com/file/d/1aCEwVPbX_Am6bwj6NrwARS6K_IkT45c-/view).
 - (2025.04.02) Added 9 examples. See the [catalogue](#️-catalogue).

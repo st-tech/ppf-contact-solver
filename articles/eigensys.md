@@ -2,15 +2,8 @@
 
 ### 🎓 For Scholars
 
-**Hindsight (Aug 9 2025)**: After publication, we learned that the core insights of the eigensystem analysis presented here were previously developed by [Poya et al.
-(2023)](https://romeric.github.io/) in their comprehensive work. Their paper was published on May 7, 2023, merely 20 days before our initial SIGGRAPH submission (SIGGRAPH Asia 2023, May 25, 2023), with many of analysis here already included [(Link)](https://drive.google.com/file/d/1YuNE_66B9ApXpB8wVPnuwSjmzv2iVvYa/view). Given the timing and the different research communities involved, it was extremely difficult for us to be aware of this work.
-We understand it is ultimately our responsibility, but the existence of this paper was not pointed out during reviews.
-
-Their paper provides an extensive theoretical foundation for closed-form tangent eigensystems in principal stretches, including the eigendecomposition techniques that form the basis of our implementation.
-
-We acknowledge that many of the fundamental mathematical insights we independently arrived at using a different approach were already established in their work.
-We do not claim the underlying analysis as our contribution, but we believe this presentation remains valuable for practitioners. For instance, our treatment includes shell elements with 3×2 deformation gradients, extending beyond the 2×2 case discussed in their work. Although the conversion may be straightforward for experts, having explicit formulations readily available can benefit implementation efforts.
-
+**Hindsight (Aug 9 2025)**: After publication, we learned that the insights of the eigensystem analysis presented here were previously developed by [Poya et al.
+(2023)](https://romeric.github.io/).
 Readers who wish to mention this article should refer to the original work:
 
 ```bibtex
@@ -28,7 +21,7 @@ Readers who wish to mention this article should refer to the original work:
 }
 ```
 
-For additional implementation details and the practical application of these techniques, readers may also refer to our supplementary materials in Section E and F.9 of [(Link)](https://drive.google.com/file/d/1ptjFNVufPBV4-vb5UDh1yTgz8-esjaSF/view).
+We believe our article here remains valuable. For example, our treatment extends to shell elements with 3×2 deformation gradients. For comprehensive technical details, readers are referred to our supplementary materials in Sections E and F.9 of the [supplementary material](https://drive.google.com/file/d/1ptjFNVufPBV4-vb5UDh1yTgz8-esjaSF/view).
 
 ## 🏁 The Final Results
 
