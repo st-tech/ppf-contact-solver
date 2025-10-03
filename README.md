@@ -4,7 +4,7 @@ A contact solver for physics-based simulations
 involving 👚 shells, 🪵 solids and 🪢 rods. All made by ZOZO.
 
 [![Getting Started](https://github.com/st-tech/ppf-contact-solver/actions/workflows/getting-started.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/getting-started.yml)
-[![All Examples](https://github.com/st-tech/ppf-contact-solver/actions/workflows/vast-all.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/vast-all.yml)
+[![All Examples](https://github.com/st-tech/ppf-contact-solver/actions/workflows/run-all-once.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/run-all-once.yml)
 [![Python API Docs](https://github.com/st-tech/ppf-contact-solver/actions/workflows/make-docs.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/make-docs.yml)
 [![Docker Build](https://github.com/st-tech/ppf-contact-solver/actions/workflows/build-docker.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/build-docker.yml)
 ![solver_logo](./asset/image/teaser-image.jpg)
@@ -425,25 +425,25 @@ We know that you can't judge the reliability of contact resolution by simply wat
 To ensure greater transparency, we implemented GitHub Actions to run many of our examples via automated GitHub Actions ⚙️, not just once, but **10 times in a row** 🔁.
 This means that **a single failure out of 10 tests is considered a failure of the entire test suite!**
 
-[![drape.ipynb](https://github.com/st-tech/ppf-contact-solver/actions/workflows/example_drape.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/example_drape.yml)
-[![cards.ipynb](https://github.com/st-tech/ppf-contact-solver/actions/workflows/example_cards.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/example_cards.yml)
-[![curtain.ipynb](https://github.com/st-tech/ppf-contact-solver/actions/workflows/example_curtain.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/example_curtain.yml)
-[![friction.ipynb](https://github.com/st-tech/ppf-contact-solver/actions/workflows/example_friction.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/example_friction.yml)
-[![hang.ipynb](https://github.com/st-tech/ppf-contact-solver/actions/workflows/example_hang.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/example_hang.yml)
-[![needle.ipynb](https://github.com/st-tech/ppf-contact-solver/actions/workflows/example_needle.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/example_needle.yml)
-[![stack.ipynb](https://github.com/st-tech/ppf-contact-solver/actions/workflows/example_stack.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/example_stack.yml)
-[![trampoline.ipynb](https://github.com/st-tech/ppf-contact-solver/actions/workflows/example_trampoline.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/example_trampoline.yml)
-[![trapped.ipynb](https://github.com/st-tech/ppf-contact-solver/actions/workflows/example_trapped.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/example_trapped.yml)
-[![twist.ipynb](https://github.com/st-tech/ppf-contact-solver/actions/workflows/example_twist.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/example_twist.yml)
-[![domino.ipynb](https://github.com/st-tech/ppf-contact-solver/actions/workflows/example_domino.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/example_domino.yml)
-[![belt.ipynb](https://github.com/st-tech/ppf-contact-solver/actions/workflows/example_belt.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/example_belt.yml)
-[![codim.ipynb](https://github.com/st-tech/ppf-contact-solver/actions/workflows/example_codim.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/example_codim.yml)
-[![fishingknot.ipynb](https://github.com/st-tech/ppf-contact-solver/actions/workflows/example_fishingknot.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/example_fishingknot.yml)
-[![fitting.ipynb](https://github.com/st-tech/ppf-contact-solver/actions/workflows/example_fitting.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/example_fitting.yml)
-[![noodle.ipynb](https://github.com/st-tech/ppf-contact-solver/actions/workflows/example_noodle.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/example_noodle.yml)
-[![ribbon.ipynb](https://github.com/st-tech/ppf-contact-solver/actions/workflows/example_ribbon.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/example_ribbon.yml)
-[![woven.ipynb](https://github.com/st-tech/ppf-contact-solver/actions/workflows/example_woven.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/example_woven.yml)
-[![yarn.ipynb](https://github.com/st-tech/ppf-contact-solver/actions/workflows/example_yarn.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/example_yarn.yml)
+[![drape.ipynb](https://github.com/st-tech/ppf-contact-solver/actions/workflows/drape.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/drape.yml)
+[![cards.ipynb](https://github.com/st-tech/ppf-contact-solver/actions/workflows/cards.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/cards.yml)
+[![curtain.ipynb](https://github.com/st-tech/ppf-contact-solver/actions/workflows/curtain.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/curtain.yml)
+[![friction.ipynb](https://github.com/st-tech/ppf-contact-solver/actions/workflows/friction.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/friction.yml)
+[![hang.ipynb](https://github.com/st-tech/ppf-contact-solver/actions/workflows/hang.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/hang.yml)
+[![needle.ipynb](https://github.com/st-tech/ppf-contact-solver/actions/workflows/needle.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/needle.yml)
+[![stack.ipynb](https://github.com/st-tech/ppf-contact-solver/actions/workflows/stack.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/stack.yml)
+[![trampoline.ipynb](https://github.com/st-tech/ppf-contact-solver/actions/workflows/trampoline.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/trampoline.yml)
+[![trapped.ipynb](https://github.com/st-tech/ppf-contact-solver/actions/workflows/trapped.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/trapped.yml)
+[![twist.ipynb](https://github.com/st-tech/ppf-contact-solver/actions/workflows/twist.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/twist.yml)
+[![domino.ipynb](https://github.com/st-tech/ppf-contact-solver/actions/workflows/domino.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/domino.yml)
+[![belt.ipynb](https://github.com/st-tech/ppf-contact-solver/actions/workflows/belt.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/belt.yml)
+[![codim.ipynb](https://github.com/st-tech/ppf-contact-solver/actions/workflows/codim.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/codim.yml)
+[![fishingknot.ipynb](https://github.com/st-tech/ppf-contact-solver/actions/workflows/fishingknot.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/fishingknot.yml)
+[![fitting.ipynb](https://github.com/st-tech/ppf-contact-solver/actions/workflows/fitting.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/fitting.yml)
+[![noodle.ipynb](https://github.com/st-tech/ppf-contact-solver/actions/workflows/noodle.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/noodle.yml)
+[![ribbon.ipynb](https://github.com/st-tech/ppf-contact-solver/actions/workflows/ribbon.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/ribbon.yml)
+[![woven.ipynb](https://github.com/st-tech/ppf-contact-solver/actions/workflows/woven.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/woven.yml)
+[![yarn.ipynb](https://github.com/st-tech/ppf-contact-solver/actions/workflows/yarn.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/yarn.yml)
 
 Also, we apply small jitters to the position of objects in the scene 🔄, so at each run, the scene is slightly different.
 
