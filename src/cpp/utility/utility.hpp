@@ -18,6 +18,7 @@ __device__ void solve_symm_eigen2x2(const Mat2x2f &matrix, Vec2f &eigenvalues,
                                     Mat2x2f &eigenvectors);
 __device__ void solve_symm_eigen3x3(const Mat3x3f &matrix, Vec3f &eigenvalues,
                                     Mat3x3f &eigenvectors);
+__device__ Vec2f singular_vals_minus_one(const Mat3x2f &F);
 __device__ Svd3x2 svd3x2(const Mat3x2f &F);
 __device__ Svd3x2 svd3x2_shifted(const Mat3x2f &F);
 __device__ Svd3x3 svd3x3_rv(const Mat3x3f &F);
@@ -62,13 +63,8 @@ __device__ Mat3x3f compute_deformation_grad(const Mat3x4f &x,
                                             const Mat3x3f &inv_rest3x3);
 __device__ float compute_face_area(const Mat3x3f &vertex);
 
-template <class T> T sum_array(Vec<T> array, unsigned size);
-template <class T> T min_array(const T *array, unsigned size, T init_val);
-template <class T> T max_array(const T *array, unsigned size, T init_val);
-
 void compute_svd(DataSet data, Vec<Vec3f> curr, Vec<Svd3x2> svd,
                  ParamSet param);
-void set_max_reduce_count(unsigned n);
 __device__ float get_wind_weight(float time);
 
 } // namespace utility

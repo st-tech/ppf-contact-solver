@@ -16,7 +16,6 @@ pub struct MeshInfo {
     pub surface_vert_count: usize,
     pub shell_face_count: usize,
     pub rod_count: usize,
-    pub rod_length_factor: Option<Vec<f32>>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -52,12 +51,11 @@ pub struct Mesh {
 }
 
 impl Mesh {
-    pub fn new_with_seg_factor(
+    pub fn new(
         rod: Matrix2xX<usize>,
         face: Matrix3xX<usize>,
         tet: Matrix4xX<usize>,
         shell_face_count: usize,
-        rod_length_factor: Option<Vec<f32>>,
     ) -> Mesh {
         let rod_count = rod.ncols();
         let vertex_count = get_vertex_count(&rod, &face, &tet);
@@ -79,7 +77,6 @@ impl Mesh {
             surface_vert_count,
             shell_face_count,
             rod_count,
-            rod_length_factor,
         };
         let vertex_neighbor = VertexNeighbor {
             face: compute_vertex_neighbors::<na::U3>(vertex_count, &mesh.face),
@@ -96,14 +93,6 @@ impl Mesh {
             hinge: hinge_neighbor,
         };
         Mesh { mesh, neighbor }
-    }
-    pub fn new(
-        rod: Matrix2xX<usize>,
-        face: Matrix3xX<usize>,
-        tet: Matrix4xX<usize>,
-        shell_face_count: usize,
-    ) -> Mesh {
-        Mesh::new_with_seg_factor(rod, face, tet, shell_face_count, None)
     }
 }
 
@@ -176,6 +165,7 @@ fn compute_hinge(face: &Matrix3xX<usize>) -> (Matrix4xX<usize>, Vec<Vec<usize>>)
     assert!(!has_duplicates(&keys));
     let mut hash =
         HashMap::<usize, (usize, usize, usize, Option<usize>, usize, Option<usize>)>::new();
+    let mut excludes = Vec::new();
     for (i, f) in face.column_iter().enumerate() {
         for j in 0..3 {
             let e = (f[j], f[(j + 1) % 3], f[(j + 2) % 3]);
@@ -186,14 +176,18 @@ fn compute_hinge(face: &Matrix3xX<usize>) -> (Matrix4xX<usize>, Vec<Vec<usize>>)
             let key = idx0 + w * idx1;
             if let Some(b) = hash.get_mut(&key) {
                 if b.3.is_some() {
-                    panic!("hinge has more than 2 faces");
+                    excludes.push(key);
+                } else {
+                    b.3 = Some(e.2);
+                    b.5 = Some(i);
                 }
-                b.3 = Some(e.2);
-                b.5 = Some(i);
             } else {
                 hash.insert(key, (e.0, e.1, e.2, None, i, None));
             }
         }
+    }
+    for key in excludes {
+        hash.remove(&key);
     }
     let hinge = hash
         .iter()

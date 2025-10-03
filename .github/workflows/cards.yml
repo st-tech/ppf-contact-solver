@@ -1,0 +1,485 @@
+# File: cards.yml
+# Author: Ryoichi Ando (ryoichi.ando@zozo.com)
+# License: Apache v2.0
+
+name: cards.ipynb
+
+on:
+  workflow_dispatch:
+    inputs:
+      instance_type:
+        description: 'EC2 instance type'
+        required: true
+        default: 'g6e.2xlarge'
+        type: choice
+        options:
+          - g6.2xlarge
+          - g6e.2xlarge
+      region:
+        description: 'AWS Region'
+        required: true
+        default: 'us-east-1'
+        type: choice
+        options:
+          - us-east-1
+          - us-east-2
+
+jobs:
+  run-on-gpu:
+    name: Run on GPU Instance
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+
+    env:
+      AWS_REGION: ${{ github.event.inputs.region }}
+      INSTANCE_TYPE: ${{ github.event.inputs.instance_type }}
+      BRANCH: ${{ github.ref_name }}
+      EXAMPLE: cards
+      WORKDIR: /home/ubuntu
+      USER: ubuntu
+
+    steps:
+      - name: Show input parameters
+        run: |
+          echo "## Input Parameters"
+          echo "Branch: ${{ github.ref_name }}"
+          echo "Instance Type: ${{ github.event.inputs.instance_type }}"
+          echo "Region: ${{ github.event.inputs.region }}"
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Verify AWS authentication
+        run: |
+          echo "Testing AWS authentication..."
+          aws sts get-caller-identity
+          echo "AWS Region: $AWS_REGION"
+          echo "Instance Type: $INSTANCE_TYPE"
+          echo "Branch: $BRANCH"
+          echo "Example: $EXAMPLE"
+
+      - name: Find Deep Learning AMI
+        id: ami
+        run: |
+          echo "Finding latest Deep Learning AMI with GPU support..."
+          AMI_ID=$(aws ec2 describe-images \
+            --owners amazon \
+            --filters \
+              "Name=name,Values=Deep Learning Base OSS Nvidia Driver GPU AMI (Ubuntu 24.04)*" \
+              "Name=state,Values=available" \
+              "Name=architecture,Values=x86_64" \
+            --query 'sort_by(Images, &CreationDate)[-1].ImageId' \
+            --region "$AWS_REGION" \
+            --output text)
+
+          if [ "$AMI_ID" = "None" ] || [ -z "$AMI_ID" ]; then
+            echo "ERROR: Deep Learning AMI not found in region $AWS_REGION"
+            echo "This workflow requires the Deep Learning AMI with pre-installed NVIDIA drivers"
+            echo "Please check if the AMI is available in your selected region"
+            exit 1
+          fi
+
+          echo "AMI_ID=$AMI_ID" >> $GITHUB_OUTPUT
+          echo "Found AMI: $AMI_ID"
+
+      - name: Generate unique identifiers
+        id: ids
+        run: |
+          TIMESTAMP=$(date +%Y%m%d%H%M%S)
+          echo "TIMESTAMP=$TIMESTAMP" >> $GITHUB_OUTPUT
+
+      - name: Retrieve SSH key from Parameter Store
+        id: keypair
+        run: |
+          echo "Retrieving SSH private key from AWS Systems Manager..."
+          KEY_NAME="${{ secrets.AWS_KEY_PAIR_NAME }}"
+
+          # Retrieve the SSH private key from Parameter Store
+          aws ssm get-parameter \
+            --name "/github-actions/ec2/ssh-key" \
+            --with-decryption \
+            --query 'Parameter.Value' \
+            --region "$AWS_REGION" \
+            --output text > /tmp/github-actions-ec2.pem
+
+          chmod 600 /tmp/github-actions-ec2.pem
+          echo "SSH key retrieved successfully"
+          echo "KEY_PATH=/tmp/github-actions-ec2.pem" >> $GITHUB_OUTPUT
+
+      - name: Create user data script
+        run: |
+          cat > /tmp/user-data.sh << 'EOF'
+          #!/bin/bash
+          set -e
+
+          exec > >(tee -a /var/log/user-data.log)
+          exec 2>&1
+
+          echo "Starting user data script at $(date)"
+
+          # Install Rust (needed for cargo build)
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          source "$HOME/.cargo/env"
+
+          # Verify nvidia-smi is available
+          if command -v nvidia-smi &> /dev/null; then
+              echo "NVIDIA drivers confirmed"
+              nvidia-smi
+          else
+              echo "Warning: nvidia-smi not found"
+          fi
+
+          # Create workspace directory
+          mkdir -p ${WORKDIR}/workspace
+          chown -R ${USER}:${USER} ${WORKDIR}/workspace
+
+          nvidia-smi | tee /tmp/nvidia-smi-output.txt
+          touch /tmp/setup-complete
+          echo "Setup completed at $(date)"
+          EOF
+
+      - name: Launch EC2 instance
+        id: instance
+        run: |
+          INSTANCE_ID=$(aws ec2 run-instances \
+            --image-id "${{ steps.ami.outputs.AMI_ID }}" \
+            --instance-type "$INSTANCE_TYPE" \
+            --key-name "${{ secrets.AWS_KEY_PAIR_NAME }}" \
+            --security-group-ids "${{ secrets.AWS_SECURITY_GROUP_ID }}" \
+            --block-device-mappings "DeviceName=/dev/sda1,Ebs={VolumeSize=256,VolumeType=gp3,DeleteOnTermination=true}" \
+            --user-data file:///tmp/user-data.sh \
+            --tag-specifications \
+              "ResourceType=instance,Tags=[\
+                {Key=Name,Value=gpu-runner-${{ steps.ids.outputs.TIMESTAMP }}},\
+                {Key=ManagedBy,Value=GitHubActions},\
+                {Key=Purpose,Value=GPURunner},\
+                {Key=Workflow,Value=${{ github.workflow }}},\
+                {Key=RunId,Value=${{ github.run_id }}},\
+                {Key=Branch,Value=${{ env.BRANCH }}},\
+                {Key=Example,Value=${{ env.EXAMPLE }}}\
+              ]" \
+              "ResourceType=volume,Tags=[\
+                {Key=Name,Value=gpu-runner-${{ steps.ids.outputs.TIMESTAMP }}-volume},\
+                {Key=ManagedBy,Value=GitHubActions},\
+                {Key=Purpose,Value=GPURunner},\
+                {Key=Workflow,Value=${{ github.workflow }}},\
+                {Key=Example,Value=${{ env.EXAMPLE }}}\
+              ]" \
+            --instance-initiated-shutdown-behavior terminate \
+            --query 'Instances[0].InstanceId' \
+            --region "$AWS_REGION" \
+            --output text)
+
+          echo "INSTANCE_ID=$INSTANCE_ID" >> $GITHUB_OUTPUT
+          echo "Instance launched: $INSTANCE_ID"
+
+      - name: Wait for instance to be running
+        run: |
+          echo "Waiting for instance to be running..."
+          aws ec2 wait instance-running \
+            --instance-ids "${{ steps.instance.outputs.INSTANCE_ID }}" \
+            --region "$AWS_REGION"
+
+          PUBLIC_IP=$(aws ec2 describe-instances \
+            --instance-ids "${{ steps.instance.outputs.INSTANCE_ID }}" \
+            --query 'Reservations[0].Instances[0].PublicIpAddress' \
+            --region "$AWS_REGION" \
+            --output text)
+
+          echo "Instance is running at: $PUBLIC_IP"
+          echo "PUBLIC_IP=$PUBLIC_IP" >> $GITHUB_ENV
+
+      - name: Wait for SSH availability
+        run: |
+          echo "Waiting for SSH to be available..."
+          MAX_ATTEMPTS=30
+          ATTEMPT=0
+
+          while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
+            if ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+              -i "${{ steps.keypair.outputs.KEY_PATH }}" ${USER}@${PUBLIC_IP} "echo 'SSH ready'" 2>/dev/null; then
+              echo "SSH connection established"
+              break
+            else
+              ATTEMPT=$((ATTEMPT + 1))
+              if [ $ATTEMPT -eq $MAX_ATTEMPTS ]; then
+                echo "Failed to establish SSH connection"
+                exit 1
+              fi
+              sleep 10
+            fi
+          done
+
+      - name: Wait for instance setup
+        run: |
+          echo "Waiting for instance setup to complete..."
+          MAX_WAIT=300
+          ELAPSED=0
+
+          while [ $ELAPSED -lt $MAX_WAIT ]; do
+            if ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+              -i "${{ steps.keypair.outputs.KEY_PATH }}" ${USER}@${PUBLIC_IP} \
+              "test -f /tmp/setup-complete" 2>/dev/null; then
+              echo "Instance setup completed"
+              break
+            else
+              sleep 10
+              ELAPSED=$((ELAPSED + 10))
+              if [ $ELAPSED -ge $MAX_WAIT ]; then
+                echo "Setup timeout, continuing anyway..."
+                break
+              fi
+            fi
+          done
+
+      - name: Create archive of repository
+        run: |
+          echo "Creating repository archive..."
+          git archive --format=tar.gz --output=/tmp/repo.tar.gz HEAD
+
+      - name: Transfer repository to instance
+        run: |
+          echo "Transferring repository to instance..."
+          scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -i "${{ steps.keypair.outputs.KEY_PATH }}" \
+            /tmp/repo.tar.gz ${USER}@${PUBLIC_IP}:${WORKDIR}/
+
+          echo "Extracting repository on instance..."
+          ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -i "${{ steps.keypair.outputs.KEY_PATH }}" ${USER}@${PUBLIC_IP} \
+            "cd ${WORKDIR} && tar -xzf repo.tar.gz && rm repo.tar.gz"
+
+      - name: Setup Python environment and run warmup
+        run: |
+          echo "Setting up Python environment and running warmup.py..."
+          ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -i "${{ steps.keypair.outputs.KEY_PATH }}" ${USER}@${PUBLIC_IP} << 'ENDSSH'
+          set -e
+          cd ${WORKDIR}
+
+          # Run warmup.py
+          echo "Running warmup.py..."
+          python3 warmup.py
+
+          echo "Warmup completed"
+          ENDSSH
+
+      - name: Build Rust project
+        run: |
+          echo "Building Rust project with cargo..."
+          ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -i "${{ steps.keypair.outputs.KEY_PATH }}" ${USER}@${PUBLIC_IP} << 'ENDSSH'
+          set -e
+          cd ${WORKDIR}
+
+          # Setup Rust environment
+          source "$HOME/.cargo/env"
+
+          # Build the project
+          echo "Running cargo build --release..."
+          cargo build --release
+
+          echo "Cargo build completed"
+          ENDSSH
+
+      - name: Convert notebook to Python script
+        run: |
+          echo "Converting notebook example: ${EXAMPLE}.ipynb to Python script"
+
+          cat > /tmp/convert_notebook.sh << SCRIPT
+          #!/bin/bash
+          set -e
+          cd ${WORKDIR}
+
+          # Create CI directory structure for collecting results
+          mkdir -p /tmp/ci
+          echo "CI directory created for collecting results"
+
+          # Activate Python environment
+          source ~/.local/share/ppf-cts/venv/bin/activate
+
+          # Convert notebook to Python script
+          echo "Converting notebook examples/\${EXAMPLE}.ipynb to Python script..."
+          jupyter nbconvert --to python "examples/\${EXAMPLE}.ipynb" --output "/tmp/\${EXAMPLE}_base.py"
+
+          # Create the runnable script with proper imports
+          cat > /tmp/\${EXAMPLE}.py << 'EOF'
+          import sys
+          import os
+
+          # Add the repository root to Python path so frontend can be imported
+          sys.path.insert(0, '${WORKDIR}')
+          sys.path.insert(0, '${WORKDIR}/frontend')
+
+          # Set environment variables if needed
+          os.environ['PYTHONPATH'] = '${WORKDIR}:${WORKDIR}/frontend:' + os.environ.get('PYTHONPATH', '')
+
+          # Now run the converted notebook
+          EOF
+
+          # Append the converted notebook content
+          cat "/tmp/\${EXAMPLE}_base.py" >> /tmp/\${EXAMPLE}.py
+
+          echo "Script prepared at /tmp/\${EXAMPLE}.py"
+          SCRIPT
+
+          scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -i "${{ steps.keypair.outputs.KEY_PATH }}" \
+            /tmp/convert_notebook.sh ${USER}@${PUBLIC_IP}:/tmp/
+
+          ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -i "${{ steps.keypair.outputs.KEY_PATH }}" ${USER}@${PUBLIC_IP} \
+            "chmod +x /tmp/convert_notebook.sh && EXAMPLE='${EXAMPLE}' WORKDIR='${WORKDIR}' /tmp/convert_notebook.sh"
+
+      - name: Run 1st iteration
+        run: |
+          echo "Running 1st iteration of ${EXAMPLE}"
+          ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -i "${{ steps.keypair.outputs.KEY_PATH }}" ${USER}@${PUBLIC_IP} \
+            "set -o pipefail && echo '1st' > ${WORKDIR}/frontend/.CI && cd ${WORKDIR} && source ~/.local/share/ppf-cts/venv/bin/activate && python3 /tmp/${EXAMPLE}.py 2>&1 | tee /tmp/ci/run_1.log"
+
+      - name: Run 2nd iteration
+        run: |
+          echo "Running 2nd iteration of ${EXAMPLE}"
+          ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -i "${{ steps.keypair.outputs.KEY_PATH }}" ${USER}@${PUBLIC_IP} \
+            "set -o pipefail && echo '2nd' > ${WORKDIR}/frontend/.CI && cd ${WORKDIR} && source ~/.local/share/ppf-cts/venv/bin/activate && python3 /tmp/${EXAMPLE}.py 2>&1 | tee /tmp/ci/run_2.log"
+
+      - name: Run 3rd iteration
+        run: |
+          echo "Running 3rd iteration of ${EXAMPLE}"
+          ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -i "${{ steps.keypair.outputs.KEY_PATH }}" ${USER}@${PUBLIC_IP} \
+            "set -o pipefail && echo '3rd' > ${WORKDIR}/frontend/.CI && cd ${WORKDIR} && source ~/.local/share/ppf-cts/venv/bin/activate && python3 /tmp/${EXAMPLE}.py 2>&1 | tee /tmp/ci/run_3.log"
+
+      - name: Run 4th iteration
+        run: |
+          echo "Running 4th iteration of ${EXAMPLE}"
+          ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -i "${{ steps.keypair.outputs.KEY_PATH }}" ${USER}@${PUBLIC_IP} \
+            "set -o pipefail && echo '4th' > ${WORKDIR}/frontend/.CI && cd ${WORKDIR} && source ~/.local/share/ppf-cts/venv/bin/activate && python3 /tmp/${EXAMPLE}.py 2>&1 | tee /tmp/ci/run_4.log"
+
+      - name: Run 5th iteration
+        run: |
+          echo "Running 5th iteration of ${EXAMPLE}"
+          ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -i "${{ steps.keypair.outputs.KEY_PATH }}" ${USER}@${PUBLIC_IP} \
+            "set -o pipefail && echo '5th' > ${WORKDIR}/frontend/.CI && cd ${WORKDIR} && source ~/.local/share/ppf-cts/venv/bin/activate && python3 /tmp/${EXAMPLE}.py 2>&1 | tee /tmp/ci/run_5.log"
+
+      - name: Run 6th iteration
+        run: |
+          echo "Running 6th iteration of ${EXAMPLE}"
+          ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -i "${{ steps.keypair.outputs.KEY_PATH }}" ${USER}@${PUBLIC_IP} \
+            "set -o pipefail && echo '6th' > ${WORKDIR}/frontend/.CI && cd ${WORKDIR} && source ~/.local/share/ppf-cts/venv/bin/activate && python3 /tmp/${EXAMPLE}.py 2>&1 | tee /tmp/ci/run_6.log"
+
+      - name: Run 7th iteration
+        run: |
+          echo "Running 7th iteration of ${EXAMPLE}"
+          ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -i "${{ steps.keypair.outputs.KEY_PATH }}" ${USER}@${PUBLIC_IP} \
+            "set -o pipefail && echo '7th' > ${WORKDIR}/frontend/.CI && cd ${WORKDIR} && source ~/.local/share/ppf-cts/venv/bin/activate && python3 /tmp/${EXAMPLE}.py 2>&1 | tee /tmp/ci/run_7.log"
+
+      - name: Run 8th iteration
+        run: |
+          echo "Running 8th iteration of ${EXAMPLE}"
+          ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -i "${{ steps.keypair.outputs.KEY_PATH }}" ${USER}@${PUBLIC_IP} \
+            "set -o pipefail && echo '8th' > ${WORKDIR}/frontend/.CI && cd ${WORKDIR} && source ~/.local/share/ppf-cts/venv/bin/activate && python3 /tmp/${EXAMPLE}.py 2>&1 | tee /tmp/ci/run_8.log"
+
+      - name: Run 9th iteration
+        run: |
+          echo "Running 9th iteration of ${EXAMPLE}"
+          ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -i "${{ steps.keypair.outputs.KEY_PATH }}" ${USER}@${PUBLIC_IP} \
+            "set -o pipefail && echo '9th' > ${WORKDIR}/frontend/.CI && cd ${WORKDIR} && source ~/.local/share/ppf-cts/venv/bin/activate && python3 /tmp/${EXAMPLE}.py 2>&1 | tee /tmp/ci/run_9.log"
+
+      - name: Run 10th iteration
+        run: |
+          echo "Running 10th iteration of ${EXAMPLE}"
+          ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -i "${{ steps.keypair.outputs.KEY_PATH }}" ${USER}@${PUBLIC_IP} \
+            "set -o pipefail && echo '10th' > ${WORKDIR}/frontend/.CI && cd ${WORKDIR} && source ~/.local/share/ppf-cts/venv/bin/activate && python3 /tmp/${EXAMPLE}.py 2>&1 | tee /tmp/ci/run_10.log"
+
+      - name: Collect results
+        if: success() || failure()
+        run: |
+          echo "Collecting results from all runs..."
+          mkdir -p ci
+          rsync -avz --exclude='*.bin' -e "ssh -i ${{ steps.keypair.outputs.KEY_PATH }} -o StrictHostKeyChecking=no" \
+            ${USER}@${PUBLIC_IP}:/tmp/ci/ ./ci/
+          echo "## Collected Files:"
+          ls -la ci/
+          echo "## Run Summary:"
+          for i in {1..10}; do
+            if [ -f ci/run_${i}.log ]; then
+              echo "Run ${i}: Completed"
+            else
+              echo "Run ${i}: No log found"
+            fi
+          done
+
+      - name: Upload artifact
+        if: success() || failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-${{ env.EXAMPLE }}
+          path: ci
+          retention-days: 3
+
+      - name: GPU information
+        if: success() || failure()
+        run: |
+          echo "Getting GPU information..."
+          ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -i "${{ steps.keypair.outputs.KEY_PATH }}" ${USER}@${PUBLIC_IP} \
+            "nvidia-smi" || echo "Failed to get GPU info"
+
+      - name: Re-authenticate for cleanup
+        if: always()
+        continue-on-error: true
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Cleanup - Terminate Instance
+        if: always()
+        continue-on-error: true
+        run: |
+          if [ -n "${{ steps.instance.outputs.INSTANCE_ID }}" ]; then
+            echo "Initiating instance termination: ${{ steps.instance.outputs.INSTANCE_ID }}"
+            aws ec2 terminate-instances \
+              --instance-ids "${{ steps.instance.outputs.INSTANCE_ID }}" \
+              --region "$AWS_REGION" || true
+            echo "Termination initiated. Instance will terminate in the background."
+            echo "Note: Full termination can take up to 30 minutes."
+          fi
+
+      - name: Cleanup - Remove Local SSH Key
+        if: always()
+        continue-on-error: true
+        run: |
+          if [ -n "${{ steps.keypair.outputs.KEY_PATH }}" ] && [ -f "${{ steps.keypair.outputs.KEY_PATH }}" ]; then
+            rm -f "${{ steps.keypair.outputs.KEY_PATH }}"
+            echo "Local SSH key file removed"
+          fi
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "## Workflow Summary"
+          echo "- Region: $AWS_REGION"
+          echo "- Instance Type: $INSTANCE_TYPE"
+          echo "- Branch: $BRANCH"
+          echo "- Example: $EXAMPLE"
+          echo "- Instance ID: ${{ steps.instance.outputs.INSTANCE_ID || 'Not launched' }}"
+          echo "- Run Status: ${{ steps.run_example.outcome || 'Not run' }}"

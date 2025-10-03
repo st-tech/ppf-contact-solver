@@ -5,7 +5,6 @@ on:
   workflow_dispatch:
 
 env:
-  SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
   REGISTRY: ghcr.io
 
 jobs:
@@ -31,16 +30,3 @@ jobs:
           MODE=compiled
           IMAGE=${{ env.REGISTRY }}/${{ github.repository }}-base:latest
         tags: ${{ env.REGISTRY }}/${{ github.repository }}-compiled-sigasia-2024:latest
-
-  notify_failure:
-    runs-on: ubuntu-latest
-    needs: build-image
-    if: ${{ failure() }}
-    steps:
-
-      - name: Slack Notification Failure
-        uses: rtCamp/action-slack-notify@v2
-        env:
-          SLACK_TITLE: Deploy / Failure
-          SLACK_COLOR: danger
-          SLACK_MESSAGE: Build image (SIGA-2024) failed.

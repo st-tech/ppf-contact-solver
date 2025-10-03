@@ -18,11 +18,11 @@ __device__ Mat3x4f face_dihedral_angle_grad(const Vec3f &v2, const Vec3f &v0,
                                             const Vec3f &v1,
                                             const Vec3f &v3) {
     Mat3x4f result;
-    const Vec3f e0 = v1 - v0;
-    const Vec3f e1 = v2 - v0;
-    const Vec3f e2 = v3 - v0;
-    const Vec3f e3 = v2 - v1;
-    const Vec3f e4 = v3 - v1;
+    const Vec3f e0 = (v1 - v0);
+    const Vec3f e1 = (v2 - v0);
+    const Vec3f e2 = (v3 - v0);
+    const Vec3f e3 = (v2 - v1);
+    const Vec3f e4 = (v3 - v1);
     const Vec3f n1 = e0.cross(e1);
     const Vec3f n2 = e2.cross(e0);
     const float n1_sqnm = n1.squaredNorm();
@@ -42,11 +42,11 @@ __device__ Mat3x4f face_dihedral_angle_grad(const Vec3f &v2, const Vec3f &v0,
 
 __device__ float face_dihedral_angle(const Vec3f &v0, const Vec3f &v1,
                                      const Vec3f &v2, const Vec3f &v3) {
-    const Vec3f n1 = (v1 - v0).cross((v2 - v0));
-    const Vec3f n2 = (v2 - v3).cross((v1 - v3));
+    const Vec3f n1 = (v1 - v0).cross((v2 - v0).cast<float>());
+    const Vec3f n2 = (v2 - v3).cross((v1 - v3).cast<float>());
     float dot = n1.dot(n2) / sqrt(n1.squaredNorm() * n2.squaredNorm());
     float angle = acosf(fmaxf(-1.0f, fminf(1.0f, dot)));
-    if (n2.cross(n1).dot((v1 - v2)) < 0.0f) {
+    if (n2.cross(n1).dot((v1 - v2).cast<float>()) < 0.0f) {
         angle = -angle;
     }
     return angle;
@@ -85,8 +85,8 @@ __device__ float face_energy(const Vec3f &v0, const Vec3f &v1,
 
 __device__ float strand_energy(const Vec3f &x0, const Vec3f &x1,
                                const Vec3f &x2) {
-    Vec3f e0 = x0 - x1;
-    Vec3f e1 = x2 - x1;
+    Vec3f e0 = (x0 - x1);
+    Vec3f e1 = (x2 - x1);
     float theta = acosf(e0.dot(e1) / (e0.norm() * e1.norm()));
     float diff = theta - M_PI;
     return 0.5f * diff * diff;
@@ -105,8 +105,8 @@ __device__ Mat3x2f gradient_theta(const Vec3f &e0, const Vec3f &e1) {
 
 __device__ Mat3x3f strand_gradient(const Vec3f &x0, const Vec3f &x1,
                                    const Vec3f &x2) {
-    Vec3f e0 = x0 - x1;
-    Vec3f e1 = x2 - x1;
+    Vec3f e0 = (x0 - x1);
+    Vec3f e1 = (x2 - x1);
     float cosTheta =
         fmaxf(-1.0f, fminf(1.0f, e0.dot(e1) / (e0.norm() * e1.norm())));
     float theta = acosf(cosTheta);

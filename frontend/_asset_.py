@@ -30,7 +30,7 @@ class AssetManager:
         Returns:
             bool: True if the asset was removed, False otherwise.
         """
-        if name in self._mesh.keys():
+        if name in self._mesh:
             del self._mesh[name]
             return True
         else:
@@ -39,6 +39,11 @@ class AssetManager:
     def clear(self):
         """Clear all the assets in the manager."""
         self._mesh = {}
+
+    @property
+    def mesh(self) -> dict[str, tuple]:
+        """Get the mesh dictionary."""
+        return self._mesh
 
     @property
     def add(self) -> "AssetUploader":
@@ -76,11 +81,11 @@ class AssetUploader:
             raise Exception("V must have 3 columns")
         elif F.shape[1] != 3:
             raise Exception("F must have 3 columns")
-        if name in self._manager._mesh.keys():
+        if name in self._manager.mesh:
             raise Exception(f"name '{name}' already exists")
         else:
             self.check_bounds(V, F)
-            self._manager._mesh[name] = ("tri", V, F)
+            self._manager.mesh[name] = ("tri", V, F)
 
     def tet(self, name: str, V: np.ndarray, F: np.ndarray, T: np.ndarray):
         """Upload a tetrahedral mesh to the asset manager.
@@ -97,12 +102,12 @@ class AssetUploader:
             raise Exception("F must have 3 columns")
         elif T.shape[1] != 4:
             raise Exception("T must have 4 columns")
-        if name in self._manager._mesh.keys():
+        if name in self._manager.mesh:
             raise Exception(f"name '{name}' already exists")
         else:
             self.check_bounds(V, F)
             self.check_bounds(V, T)
-            self._manager._mesh[name] = ("tet", V, F, T)
+            self._manager.mesh[name] = ("tet", V, F, T)
 
     def rod(self, name: str, V: np.ndarray, E: np.ndarray):
         """Upload a rod mesh to the asset manager.
@@ -112,11 +117,11 @@ class AssetUploader:
             V (np.ndarray): The vertices (#x3) of the rod.
             E (np.ndarray): The edges of (#x2) the rod.
         """
-        if name in self._manager._mesh.keys():
+        if name in self._manager.mesh:
             raise Exception(f"name '{name}' already exists")
         else:
             self.check_bounds(V, E)
-            self._manager._mesh[name] = ("rod", V, E)
+            self._manager.mesh[name] = ("rod", V, E)
 
     def stitch(self, name: str, stitch: tuple[np.ndarray, np.ndarray]):
         """Upload a stitch mesh to the asset manager.
@@ -134,10 +139,10 @@ class AssetUploader:
         for w in W:
             if abs(np.sum(w) - 1) > 1e-3:
                 raise Exception("each row in W must sum to 1")
-        if name in self._manager._mesh.keys():
+        if name in self._manager.mesh:
             raise Exception(f"name '{name}' already exists")
         else:
-            self._manager._mesh[name] = ("stitch", Ind, W)
+            self._manager.mesh[name] = ("stitch", Ind, W)
 
 
 class AssetFetcher:
@@ -146,6 +151,21 @@ class AssetFetcher:
     def __init__(self, manager: AssetManager):
         """Initialize the asset fetcher."""
         self._manager = manager
+
+    def get_type(self, name: str) -> str:
+        """Get the type of the asset.
+
+        Args:
+            name (str): The name of the asset.
+
+        Returns:
+            str: The type of the asset, such as "tri", "tet", "rod", or "stitch".
+        """
+        result = self._manager.mesh.get(name, None)
+        if result is None:
+            raise Exception(f"Asset {name} does not exist")
+        else:
+            return result[0]
 
     def get(self, name: str) -> dict[str, np.ndarray]:
         """Get the asset data.
@@ -157,10 +177,10 @@ class AssetFetcher:
             dict[str, np.ndarray]: The asset data, containing the vertices and elements, such as V, F, T, E, Ind, W.
         """
         result = {}
-        if name not in self._manager._mesh.keys():
+        if name not in self._manager.mesh:
             raise Exception(f"Asset {name} does not exist")
         else:
-            mesh = self._manager._mesh[name]
+            mesh = self._manager.mesh[name]
             if mesh[0] == "tri":
                 result["V"] = mesh[1]
                 result["F"] = mesh[2]
@@ -185,12 +205,12 @@ class AssetFetcher:
         Returns:
             tuple[np.ndarray, np.ndarray]: The vertices (#x3) and elements (#x3) of the triangle mesh.
         """
-        if name not in self._manager._mesh.keys():
+        if name not in self._manager.mesh:
             raise Exception(f"Tri {name} does not exist")
-        elif self._manager._mesh[name][0] != "tri":
+        elif self._manager.mesh[name][0] != "tri":
             raise Exception(f"Tri {name} is not a valid")
         else:
-            mesh = self._manager._mesh[name]
+            mesh = self._manager.mesh[name]
             assert mesh[0] == "tri"
             return mesh[1], mesh[2]
 
@@ -204,12 +224,12 @@ class AssetFetcher:
             tuple[np.ndarray, np.ndarray, np.ndarray]: The vertices (#x3), surface
             elements (#x3), and tetrahedral (#x4) elements of the mesh.
         """
-        if name not in self._manager._mesh.keys():
+        if name not in self._manager.mesh:
             raise Exception(f"Tet {name} does not exist")
-        elif self._manager._mesh[name][0] != "tet":
+        elif self._manager.mesh[name][0] != "tet":
             raise Exception(f"Tet {name} is not a valid")
         else:
-            mesh = self._manager._mesh[name]
+            mesh = self._manager.mesh[name]
             assert mesh[0] == "tet"
             return mesh[1], mesh[2], mesh[3]
 
@@ -222,12 +242,12 @@ class AssetFetcher:
         Returns:
             tuple[np.ndarray, np.ndarray]: The vertices and edges (#x2) of the rod mesh.
         """
-        if name not in self._manager._mesh.keys():
+        if name not in self._manager.mesh:
             raise Exception(f"Rod {name} does not exist")
-        elif self._manager._mesh[name][0] != "rod":
+        elif self._manager.mesh[name][0] != "rod":
             raise Exception(f"Rod {name} is not a valid")
         else:
-            mesh = self._manager._mesh[name]
+            mesh = self._manager.mesh[name]
             assert mesh[0] == "rod"
             return mesh[1], mesh[2]
 
@@ -241,11 +261,11 @@ class AssetFetcher:
             tuple[np.ndarray, np.ndarray]: Ind (index, #x3) and W (weight, #x2) of the stitch mesh.
             The weight encodes the liner interpolation between the last two vertices.
         """
-        if name not in self._manager._mesh.keys():
+        if name not in self._manager.mesh:
             raise Exception(f"Stitch {name} does not exist")
-        elif self._manager._mesh[name][0] != "stitch":
+        elif self._manager.mesh[name][0] != "stitch":
             raise Exception(f"Stitch {name} is not a valid")
         else:
-            mesh = self._manager._mesh[name]
+            mesh = self._manager.mesh[name]
             assert mesh[0] == "stitch"
             return mesh[1], mesh[2]
