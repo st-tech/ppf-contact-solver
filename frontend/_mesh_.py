@@ -2,10 +2,14 @@
 # Author: Ryoichi Ando (ryoichi.ando@zozo.com)
 # License: Apache v2.0
 
-import numpy as np
-from typing import Optional
 import os
 import time
+
+from typing import Optional
+
+import numpy as np
+
+os.environ["OPEN3D_DISABLE_WEB_VISUALIZER"] = "true"
 
 
 class MeshManager:
@@ -95,8 +99,8 @@ class MeshManager:
         res_x: int = 32,
         width: float = 2,
         height: float = 1,
-        ex: list[float] = [1, 0, 0],
-        ey: list[float] = [0, 1, 0],
+        ex: Optional[list[float]] = None,
+        ey: Optional[list[float]] = None,
     ) -> "TriMesh":
         """Create a rectangle mesh with a given resolution, width, height, and spanned by the given vectors `ex` and `ey`.
 
@@ -110,6 +114,10 @@ class MeshManager:
         Returns:
             TriMesh: a rectangle mesh, a pair of vertices and triangles
         """
+        if ey is None:
+            ey = [0, 1, 0]
+        if ex is None:
+            ex = [1, 0, 0]
         ratio = height / width
         res_y = int(res_x * ratio)
         size_x, size_y = width, width * (res_y / res_x)
@@ -146,8 +154,8 @@ class MeshManager:
         self,
         res: int = 32,
         size: float = 2,
-        ex: list[float] = [1, 0, 0],
-        ey: list[float] = [0, 1, 0],
+        ex: Optional[list[float]] = None,
+        ey: Optional[list[float]] = None,
     ) -> "TriMesh":
         """Create a square mesh with a given resolution and size, spanned by the given vectors `ex` and `ey`.
 
@@ -160,6 +168,10 @@ class MeshManager:
         Returns:
             TriMesh: a square mesh, a pair of vertices and triangles
         """
+        if ey is None:
+            ey = [0, 1, 0]
+        if ex is None:
+            ex = [1, 0, 0]
         return self.rectangle(res, size, size, ex, ey)
 
     def circle(self, n: int = 32, r: float = 1, ntri: int = 1024) -> "TriMesh":
@@ -192,9 +204,9 @@ class MeshManager:
         """
         import gpytoolbox as gpy
 
-        V, F = gpy.icosphere(subdiv_count)
-        V *= r
-        return TriMesh.create(V, F, self._cache_dir)
+        mV, F = gpy.icosphere(subdiv_count)
+        mV *= r
+        return TriMesh.create(mV, F, self._cache_dir)
 
     def _from_o3d(self, o3d_mesh) -> "TriMesh":
         """Load a mesh from an Open3D mesh"""
@@ -588,8 +600,8 @@ class Rod(tuple[np.ndarray, np.ndarray]):
     def scale(
         self,
         scale_x: float,
-        scale_y: Optional[float] = None,
-        scale_z: Optional[float] = None,
+        scale_y: float | None = None,
+        scale_z: float | None = None,
     ) -> "Rod":
         """Scale the rod mesh
 
@@ -630,8 +642,8 @@ class TetMesh(tuple[np.ndarray, np.ndarray, np.ndarray]):
     def scale(
         self,
         scale_x: float,
-        scale_y: Optional[float] = None,
-        scale_z: Optional[float] = None,
+        scale_y: float | None = None,
+        scale_z: float | None = None,
     ) -> "TetMesh":
         """Scale the tet mesh
 
@@ -805,7 +817,8 @@ class TriMesh(tuple[np.ndarray, np.ndarray]):
         else:
             import tetgen
 
-            vert, tet = tetgen.TetGen(self[0], self[1]).tetrahedralize(*args, **kwargs)
+            result = tetgen.TetGen(self[0], self[1]).tetrahedralize(*args, **kwargs)
+            vert, tet = result[0], result[1]
             np.savez(
                 cache_path,
                 vert=vert,
@@ -867,8 +880,8 @@ class TriMesh(tuple[np.ndarray, np.ndarray]):
     def scale(
         self,
         scale_x: float,
-        scale_y: Optional[float] = None,
-        scale_z: Optional[float] = None,
+        scale_y: float | None = None,
+        scale_z: float | None = None,
     ) -> "TriMesh":
         """Scale the triangle mesh
 

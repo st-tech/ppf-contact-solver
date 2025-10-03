@@ -2,41 +2,14 @@
 // Author: Ryoichi Ando (ryoichi.ando@zozo.com)
 // License: Apache v2.0
 
-#ifndef UTIL_HPP
-#define UTIL_HPP
 
 #include "dispatcher.hpp"
 #include "utility.hpp"
 #include <limits>
 
-#define _real_ float
-#define USE_EIGEN_SYMM_EIGSOLVE
-#include "eig-hpp/eigsolve2x2.hpp"
-#include "eig-hpp/eigsolve3x3.hpp"
-#include <thrust/device_ptr.h>
-#include <thrust/reduce.h>
-
-namespace main_helper {
-extern bool use_thrust;
-}
+#include <Eigen/Eigenvalues>
 
 namespace utility {
-
-struct ReduceInfo {
-    unsigned n = 0;
-    unsigned *d_block_sums = nullptr;
-    unsigned *h_results = nullptr;
-
-    void init(unsigned n) {
-        this->n = n;
-        unsigned num_blocks = (n + BLOCK_SIZE - 1) / BLOCK_SIZE;
-        CUDA_HANDLE_ERROR(
-            cudaMalloc(&d_block_sums, num_blocks * sizeof(unsigned)));
-        h_results = new unsigned[num_blocks];
-    }
-};
-
-static ReduceInfo reduce_info;
 
 __device__ Vec3f compute_vertex_normal(const DataSet &data,
                                        const Vec<Vec3f> &vertex, unsigned i) {
@@ -48,7 +21,7 @@ __device__ Vec3f compute_vertex_normal(const DataSet &data,
             const Vec3f &z0 = vertex[face[0]];
             const Vec3f &z1 = vertex[face[1]];
             const Vec3f &z2 = vertex[face[2]];
-            normal += (z1 - z0).cross(z2 - z0);
+            normal += (z1 - z0).cross((z2 - z0).cast<float>());
         }
         if (normal.squaredNorm()) {
             normal.normalize();
@@ -59,52 +32,67 @@ __device__ Vec3f compute_vertex_normal(const DataSet &data,
 
 __device__ void solve_symm_eigen2x2(const Mat2x2f &matrix, Vec2f &eigenvalues,
                                     Mat2x2f &eigenvectors) {
-    eig_tuple_2x2 result = sym_eigsolve_2x2(matrix);
-    eigenvalues = result.lambda;
-    eigenvectors = result.eigvecs;
+    Eigen::SelfAdjointEigenSolver<Mat2x2f> eigensolver;
+    eigensolver.computeDirect(matrix);
+    eigenvalues = eigensolver.eigenvalues();
+    eigenvectors = eigensolver.eigenvectors();
 }
 
 __device__ void solve_symm_eigen3x3(const Mat3x3f &matrix, Vec3f &eigenvalues,
                                     Mat3x3f &eigenvectors) {
-    eig_tuple_3x3 result = sym_eigsolve_3x3(matrix);
-    eigenvalues = result.lambda;
-    eigenvectors = result.eigvecs;
+    Eigen::SelfAdjointEigenSolver<Mat3x3f> eigensolver;
+    eigensolver.computeDirect(matrix);
+    eigenvalues = eigensolver.eigenvalues();
+    eigenvectors = eigensolver.eigenvectors();
+}
+
+__device__ Vec2f singular_vals_minus_one(const Mat3x2f &F) {
+    Mat2x2f A = F.transpose() * F;
+    Eigen::SelfAdjointEigenSolver<Mat2x2f> eigensolver(A, 0);
+    Vec2f lmd = eigensolver.eigenvalues();
+    for (int i = 0; i < 2; ++i) {
+        lmd[i] = sqrtf(lmd[i]) - 1.0f;
+    }
+    return lmd;
 }
 
 __device__ Svd3x2 svd3x2_shifted(const Mat3x2f &F) {
     Mat2x2f A = F.transpose() * F - Mat2x2f::Identity();
-    eig_tuple_2x2 result = sym_eigsolve_2x2(A);
-    Mat2x2f V = result.eigvecs;
+    Eigen::SelfAdjointEigenSolver<Mat2x2f> eigensolver;
+    eigensolver.computeDirect(A);
+    Mat2x2f V = eigensolver.eigenvectors();
     Mat3x2f U = F * V;
-    for (int i = 0; i < U.cols(); i++) {
+    for (unsigned i = 0; i < U.cols(); i++) {
         U.col(i).normalize();
     }
     return {U, singular_vals_minus_one(F), V.transpose()};
 }
 
 __device__ Svd3x2 svd3x2(const Mat3x2f &F) {
-    eig_tuple_2x2 result = sym_eigsolve_2x2(F.transpose() * F);
-    Vec2f sigma = result.lambda;
-    Mat2x2f V = result.eigvecs;
-    for (int i = 0; i < 2; ++i) {
+    Eigen::SelfAdjointEigenSolver<Mat2x2f> eigensolver;
+    eigensolver.computeDirect(F.transpose() * F);
+    Vec2f sigma = eigensolver.eigenvalues();
+    Mat2x2f V = eigensolver.eigenvectors();
+    for (unsigned i = 0; i < 2; ++i) {
         sigma[i] = sqrtf(fmax(0.0f, sigma[i]));
     }
     Mat3x2f U = F * V;
-    for (int i = 0; i < U.cols(); i++) {
+    for (unsigned i = 0; i < U.cols(); i++) {
         U.col(i).normalize();
     }
     return {U, sigma, V.transpose()};
 }
 
 __device__ Svd3x3 svd3x3(const Mat3x3f &F) {
-    eig_tuple_3x3 result = sym_eigsolve_3x3(F.transpose() * F);
-    Vec3f sigma = result.lambda;
-    Mat3x3f V = result.eigvecs;
-    for (int i = 0; i < 3; ++i) {
+    Eigen::SelfAdjointEigenSolver<Mat3x3f> eigensolver;
+    eigensolver.computeDirect(F.transpose() * F);
+    Vec3f sigma = eigensolver.eigenvalues();
+    Mat3x3f V = eigensolver.eigenvectors();
+    for (unsigned i = 0; i < 3; ++i) {
         sigma[i] = sqrtf(fmax(0.0f, sigma[i]));
     }
     Mat3x3f U = F * V;
-    for (int i = 0; i < U.cols(); i++) {
+    for (unsigned i = 0; i < U.cols(); i++) {
         U.col(i).normalize();
     }
     return {U, sigma, V.transpose()};
@@ -128,96 +116,106 @@ __device__ Svd3x3 svd3x3_rv(const Mat3x3f &F) {
     return svd;
 }
 
-template <typename T> __device__ SMat<T, 3, 2> make_diff_mat3x2() {
-    SMat<T, 3, 2> result = SMat<T, 3, 2>::Zero();
-    result(0, 0) = T(-1.0f);
-    result(0, 1) = T(-1.0f);
-    result(1, 0) = T(1.0f);
-    result(2, 1) = T(1.0f);
-    return result;
-}
-
-template <typename T> __device__ SMat<T, 4, 3> make_diff_mat4x3() {
-    SMat<T, 4, 3> result = SMat<T, 4, 3>::Zero();
-    result(0, 0) = T(-1.0f);
-    result(0, 1) = T(-1.0f);
-    result(0, 2) = T(-1.0f);
-    result(1, 0) = T(1.0f);
-    result(2, 1) = T(1.0f);
-    result(3, 2) = T(1.0f);
-    return result;
-}
-
 __device__ Mat3x3f convert_force(const Mat3x2f &dedF,
                                  const Mat2x2f &inv_rest2x2) {
-    const Mat3x2f g = make_diff_mat3x2<float>() * inv_rest2x2;
+    Vec2f g0 = -inv_rest2x2.row(0) - inv_rest2x2.row(1);
+    Vec2f g1 = inv_rest2x2.row(0);
+    Vec2f g2 = inv_rest2x2.row(1);
+
     Mat3x3f result;
-    for (unsigned i = 0; i < 3; ++i) {
-        for (unsigned dim = 0; dim < 3; ++dim) {
-            result(dim, i) = g.row(i).dot(dedF.row(dim));
-        }
+    for (unsigned dim = 0; dim < 3; ++dim) {
+        result(dim, 0) = g0.dot(dedF.row(dim));
+        result(dim, 1) = g1.dot(dedF.row(dim));
+        result(dim, 2) = g2.dot(dedF.row(dim));
     }
     return result;
 }
 
 __device__ Mat3x4f convert_force(const Mat3x3f &dedF,
                                  const Mat3x3f &inv_rest3x3) {
-    const Mat4x3f g = make_diff_mat4x3<float>() * inv_rest3x3;
+    Vec3f g0 = -inv_rest3x3.row(0) - inv_rest3x3.row(1) - inv_rest3x3.row(2);
+    Vec3f g1 = inv_rest3x3.row(0);
+    Vec3f g2 = inv_rest3x3.row(1);
+    Vec3f g3 = inv_rest3x3.row(2);
+
     Mat3x4f result;
-    for (unsigned i = 0; i < 4; ++i) {
-        for (unsigned dim = 0; dim < 3; ++dim) {
-            result(dim, i) = g.row(i).dot(dedF.row(dim));
-        }
+    for (unsigned dim = 0; dim < 3; ++dim) {
+        result(dim, 0) = g0.dot(dedF.row(dim));
+        result(dim, 1) = g1.dot(dedF.row(dim));
+        result(dim, 2) = g2.dot(dedF.row(dim));
+        result(dim, 3) = g3.dot(dedF.row(dim));
     }
     return result;
 }
 
 __device__ Mat9x9f convert_hessian(const Mat6x6f &d2ed2f,
                                    const Mat2x2f &inv_rest2x2) {
-    const Mat3x2f g = make_diff_mat3x2<float>() * inv_rest2x2;
-    Mat6x9f dfdx;
+    Vec2f g0 = -inv_rest2x2.row(0) - inv_rest2x2.row(1);
+    Vec2f g1 = inv_rest2x2.row(0);
+    Vec2f g2 = inv_rest2x2.row(1);
+    Mat6x9f dfdx = Mat6x9f::Zero();
     for (unsigned j = 0; j < 9; ++j) {
-        Mat3x3f dx_mat = Mat3x3f::Zero();
-        Map<Vec9f>(dx_mat.data())[j] = 1.0f;
-        Mat3x2f tmp = dx_mat * g;
-        dfdx.col(j) = Map<Vec6f>(tmp.data());
+        unsigned col = j / 3;
+        unsigned row = j % 3;
+        Vec2f g_row = (col == 0) ? g0 : (col == 1) ? g1 : g2;
+        dfdx(0 * 3 + row, j) = g_row[0];
+        dfdx(1 * 3 + row, j) = g_row[1];
     }
+
     Mat9x9f result = Mat9x9f::Zero();
     for (unsigned i = 0; i < 6; ++i) {
         for (unsigned j = 0; j < 6; ++j) {
-            result += d2ed2f(i, j) * dfdx.row(i).transpose() * dfdx.row(j);
+            if (fabs(d2ed2f(i, j)) > EPSILON) {
+                result += d2ed2f(i, j) * dfdx.row(i).transpose() * dfdx.row(j);
+            }
         }
     }
-    return result; // dfdx.transpose() * d2ed2f * dfdx;
+    return result;
 }
 
 __device__ Mat12x12f convert_hessian(const Mat9x9f &d2ed2f,
                                      const Mat3x3f &inv_rest3x3) {
-    const Mat4x3f g = make_diff_mat4x3<float>() * inv_rest3x3;
-    Mat9x12f dfdx;
+    Vec3f g0 = -inv_rest3x3.row(0) - inv_rest3x3.row(1) - inv_rest3x3.row(2);
+    Vec3f g1 = inv_rest3x3.row(0);
+    Vec3f g2 = inv_rest3x3.row(1);
+    Vec3f g3 = inv_rest3x3.row(2);
+
+    Mat9x12f dfdx = Mat9x12f::Zero();
     for (unsigned j = 0; j < 12; ++j) {
-        Mat3x4f dx_mat = Mat3x4f::Zero();
-        Map<Vec12f>(dx_mat.data())[j] = 1.0f;
-        Mat3x3f tmp = dx_mat * g;
-        dfdx.col(j) = Map<Vec9f>(tmp.data());
+        unsigned col = j / 3;
+        unsigned row = j % 3;
+        Vec3f g_row = (col == 0) ? g0 : (col == 1) ? g1 : (col == 2) ? g2 : g3;
+        dfdx(0 * 3 + row, j) = g_row[0];
+        dfdx(1 * 3 + row, j) = g_row[1];
+        dfdx(2 * 3 + row, j) = g_row[2];
     }
+
     Mat12x12f result = Mat12x12f::Zero();
     for (unsigned i = 0; i < 9; ++i) {
         for (unsigned j = 0; j < 9; ++j) {
-            result += d2ed2f(i, j) * dfdx.row(i).transpose() * dfdx.row(j);
+            if (fabs(d2ed2f(i, j)) > EPSILON) {
+                result += d2ed2f(i, j) * dfdx.row(i).transpose() * dfdx.row(j);
+            }
         }
     }
-    return result; // dfdx.transpose() * d2ed2f * dfdx;
+    return result;
 }
 
 __device__ Mat3x2f compute_deformation_grad(const Mat3x3f &x,
                                             const Mat2x2f &inv_rest2x2) {
-    return (x * make_diff_mat3x2<float>()) * inv_rest2x2;
+    Mat3x2f dx;
+    dx.col(0) = x.col(1) - x.col(0);
+    dx.col(1) = x.col(2) - x.col(0);
+    return dx * inv_rest2x2;
 }
 
 __device__ Mat3x3f compute_deformation_grad(const Mat3x4f &x,
                                             const Mat3x3f &inv_rest3x3) {
-    return (x * make_diff_mat4x3<float>()) * inv_rest3x3;
+    Mat3x3f dx;
+    dx.col(0) = x.col(1) - x.col(0);
+    dx.col(1) = x.col(2) - x.col(0);
+    dx.col(2) = x.col(3) - x.col(0);
+    return dx * inv_rest3x3;
 }
 
 __device__ float compute_face_area(const Mat3x3f &vertex) {
@@ -227,97 +225,21 @@ __device__ float compute_face_area(const Mat3x3f &vertex) {
     return 0.5f * (v1 - v0).cross(v2 - v0).norm();
 }
 
-template <class T, class Y, typename Op>
-__global__ void reduce_op_kernel(const T *input, Y *output, Op func, Y init_val,
-                                 unsigned n) {
-    __shared__ Y shared_data[BLOCK_SIZE];
-    unsigned tid = threadIdx.x;
-    unsigned global_idx = blockIdx.x * blockDim.x + tid;
-    shared_data[tid] = (global_idx < n) ? input[global_idx] : init_val;
-    __syncthreads();
-    for (unsigned stride = blockDim.x / 2; stride > 0; stride /= 2) {
-        if (tid < stride) {
-            shared_data[tid] =
-                func(shared_data[tid], shared_data[tid + stride]);
-        }
-        __syncthreads();
-    }
-    if (tid == 0) {
-        output[blockIdx.x] = shared_data[0];
-    }
-}
-
-template <class T, class Y, typename Op>
-Y reduce(const T *d_input, Op func, Y init_val, unsigned n) {
-    if (n > 0) {
-        if (sizeof(Y) * n <= sizeof(unsigned) * reduce_info.n) {
-            unsigned grid_size = (n + BLOCK_SIZE - 1) / BLOCK_SIZE;
-            Y *d_output = reinterpret_cast<Y *>(reduce_info.d_block_sums);
-            Y *h_results = reinterpret_cast<Y *>(reduce_info.h_results);
-            size_t shared_mem_size = sizeof(Y) * BLOCK_SIZE;
-            reduce_op_kernel<T, Y><<<grid_size, BLOCK_SIZE, shared_mem_size>>>(
-                d_input, d_output, func, init_val, n);
-            cudaMemcpy(h_results, d_output, grid_size * sizeof(Y),
-                       cudaMemcpyDeviceToHost);
-            Y result = init_val;
-            for (unsigned i = 0; i < grid_size; i++) {
-                result = func(result, h_results[i]);
-            }
-            return result;
-        } else {
-            fprintf(stderr, "Error: reduce buffer size is too small\n");
-            fprintf(stderr, "n: %u, reduce_info.n: %u\n", n, reduce_info.n);
-            exit(1);
-        }
-    } else {
-        return init_val;
-    }
-}
-
-template <class T> T sum_array(Vec<T> array, unsigned size) {
-    if (main_helper::use_thrust) {
-        thrust::device_ptr<const T> ptr(array.data);
-        return thrust::reduce(ptr, ptr + size);
-    } else {
-        return reduce<T, T>(
-            array.data, [] __host__ __device__(T a, T b) { return a + b; }, T(),
-            size);
-    }
-}
-
-template <class T> T min_array(const T *array, unsigned size, T init_val) {
-    if (main_helper::use_thrust) {
-        thrust::device_ptr<const T> ptr(array);
-        return thrust::reduce(ptr, ptr + size, init_val, thrust::minimum<T>());
-    } else {
-        return reduce<T, T>(
-            array, [] __host__ __device__(T a, T b) { return a < b ? a : b; },
-            init_val, size);
-    }
-}
-
-template <class T> T max_array(const T *array, unsigned size, T init_val) {
-    if (main_helper::use_thrust) {
-        thrust::device_ptr<const T> ptr(array);
-        return thrust::reduce(ptr, ptr + size, init_val, thrust::maximum<T>());
-    } else {
-        return reduce<T, T>(
-            array, [] __host__ __device__(T a, T b) { return a > b ? a : b; },
-            init_val, size);
-    }
-}
-
 void compute_svd(DataSet data, Vec<Vec3f> curr, Vec<Svd3x2> svd,
                  ParamSet param) {
     unsigned shell_face_count = data.shell_face_count;
+    auto mesh_face = data.mesh.mesh.face.data;
+    auto curr_data = curr.data;
+    auto svd_data = svd.data;
+    auto inv_rest2x2 = data.inv_rest2x2.data;
     DISPATCH_START(shell_face_count)
-    [data, curr, svd, param] __device__(unsigned i) mutable {
-        Vec3u face = data.mesh.mesh.face[i];
+    [mesh_face, curr_data, svd_data, inv_rest2x2] __device__(unsigned i) mutable {
+        Vec3u face = mesh_face[i];
         Mat3x3f x;
-        x << curr[face[0]], curr[face[1]], curr[face[2]];
+        x << curr_data[face[0]], curr_data[face[1]], curr_data[face[2]];
         const Mat3x2f F =
-            utility::compute_deformation_grad(x, data.inv_rest2x2[i]);
-        svd[i] = utility::svd3x2(F);
+            utility::compute_deformation_grad(x, inv_rest2x2[i]);
+        svd_data[i] = utility::svd3x2(F);
     } DISPATCH_END;
 }
 
@@ -327,27 +249,4 @@ __device__ float get_wind_weight(float time) {
     return t * (0.5f * (1.0f + sinf(angle))) + (1.0f - t);
 }
 
-void set_max_reduce_count(unsigned n) {
-    if (!main_helper::use_thrust) {
-        reduce_info.init(n);
-    }
-}
-
 } // namespace utility
-
-template float utility::sum_array(Vec<float> array, unsigned size);
-template unsigned utility::sum_array(Vec<unsigned> array, unsigned size);
-template float utility::min_array(const float *array, unsigned size,
-                                  float init_val);
-template float utility::max_array(const float *array, unsigned size,
-                                  float init_val);
-template char utility::min_array(const char *array, unsigned size,
-                                 char init_val);
-template char utility::max_array(const char *array, unsigned size,
-                                 char init_val);
-template unsigned utility::min_array(const unsigned *array, unsigned size,
-                                     unsigned init_val);
-template unsigned utility::max_array(const unsigned *array, unsigned size,
-                                     unsigned init_val);
-
-#endif

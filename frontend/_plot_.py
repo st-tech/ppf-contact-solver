@@ -2,13 +2,18 @@
 # Author: Ryoichi Ando (ryoichi.ando@zozo.com)
 # License: Apache v2.0
 
-from frontend._utils_ import Utils
-from IPython.display import display
-from typing import Optional
-from dataclasses import dataclass
-import pythreejs as p3s
 import copy
+
+from dataclasses import dataclass, field
+from typing import Optional
+
 import numpy as np
+import pythreejs as p3s  # pyright: ignore
+
+from IPython.display import display
+
+from frontend._utils_ import Utils
+
 from ._render_ import OpenGLRenderer
 
 
@@ -17,7 +22,6 @@ class PlotManager:
 
     def __init__(self) -> None:
         """Initialize the plot manager."""
-        self._in_jupyter_notebook = Utils.in_jupyter_notebook()
         self.param = PlotParam()
 
     def create(self, engine: str = "threejs") -> "Plot":
@@ -26,7 +30,7 @@ class PlotManager:
 
     def is_jupyter_notebook(self) -> bool:
         """Check if the code is running in a Jupyter notebook."""
-        return self._in_jupyter_notebook
+        return Utils.in_jupyter_notebook()
 
 
 class Plot:
@@ -38,7 +42,6 @@ class Plot:
         Args:
             _darkmode (bool): True to turn on dark mode, False otherwise.
         """
-        self._in_jupyter_notebook = Utils.in_jupyter_notebook()
         if engine == "threejs":
             self._engine = ThreejsPlotEngine()
         elif engine == "opengl":
@@ -52,7 +55,7 @@ class Plot:
 
     def is_jupyter_notebook(self) -> bool:
         """Check if the code is running in a Jupyter notebook."""
-        return self._in_jupyter_notebook
+        return Utils.in_jupyter_notebook()
 
     def plot(
         self,
@@ -61,7 +64,7 @@ class Plot:
         tri: np.ndarray = np.zeros(0),
         seg: np.ndarray = np.zeros(0),
         pts: np.ndarray = np.zeros(0),
-        param_override: dict = {},
+        param_override: Optional[dict] = None,
     ) -> "Plot":
         """Plot a mesh.
 
@@ -76,7 +79,9 @@ class Plot:
         Returns:
             Plot: The plot object.
         """
-        if self._in_jupyter_notebook:
+        if param_override is None:
+            param_override = {}
+        if Utils.in_jupyter_notebook():
             param = copy.deepcopy(self.param)
             for key, value in param_override.items():
                 setattr(param, key, value)
@@ -85,9 +90,7 @@ class Plot:
             self._engine.plot(self._vert, self._color, tri, seg, pts, param)
         return self
 
-    def update(
-        self, vert: Optional[np.ndarray] = None, color: Optional[np.ndarray] = None
-    ):
+    def update(self, vert: np.ndarray | None = None, color: np.ndarray | None = None):
         if vert is not None:
             self._vert[0 : len(vert)] = vert
             vert = self._vert
@@ -102,7 +105,7 @@ class Plot:
         tri: np.ndarray,
         stitch: tuple[np.ndarray, np.ndarray] = (np.zeros(0), np.zeros(0)),
         color: np.ndarray = np.zeros(0),
-        param_override: dict = {},
+        param_override: Optional[dict] = None,
     ) -> "Plot":
         """Plot a triangle mesh.
 
@@ -116,7 +119,9 @@ class Plot:
         Returns:
             Plot: The plot object.
         """
-        if self._in_jupyter_notebook:
+        if param_override is None:
+            param_override = {}
+        if Utils.in_jupyter_notebook():
             if tri.shape[1] != 3:
                 raise ValueError("triangles must have 3 vertices")
             if vert.shape[1] == 2:
@@ -129,9 +134,9 @@ class Plot:
             if len(ind) and len(w):
                 edge = []
                 new_vert = []
-                for ind, w in zip(ind, w):
-                    x0, y0, y1 = vert[ind[0]], vert[ind[1]], vert[ind[2]]
-                    w0, w1 = w[0], w[1]
+                for ind_item, w_item in zip(ind, w, strict=False):
+                    x0, y0, y1 = vert[ind_item[0]], vert[ind_item[1]], vert[ind_item[2]]
+                    w0, w1 = w_item[0], w_item[1]
                     idx0 = len(new_vert) + len(vert)
                     idx1 = idx0 + 1
                     new_vert.append(x0)
@@ -150,7 +155,7 @@ class Plot:
         vert: np.ndarray,
         edge: np.ndarray,
         color: np.ndarray,
-        param_override: dict = {},
+        param_override: Optional[dict] = None,
     ) -> "Plot":
         """Add edges to the plot.
 
@@ -163,12 +168,14 @@ class Plot:
         Returns:
             Plot: The plot object.
         """
-        if self._in_jupyter_notebook:
+        if param_override is None:
+            param_override = {}
+        if Utils.in_jupyter_notebook():
             self.plot(vert, color, np.zeros(0), edge, np.zeros(0), param_override)
 
         return self
 
-    def point(self, vert: np.ndarray, param_override: dict = {}) -> "Plot":
+    def point(self, vert: np.ndarray, param_override: Optional[dict] = None) -> "Plot":
         """Add points to the plot.
 
         Args:
@@ -178,7 +185,9 @@ class Plot:
         Returns:
             Plot: The plot object.
         """
-        if self._in_jupyter_notebook:
+        if param_override is None:
+            param_override = {}
+        if Utils.in_jupyter_notebook():
             self.plot(
                 vert,
                 np.zeros(0),
@@ -195,7 +204,7 @@ class Plot:
         vert: np.ndarray,
         _edge: np.ndarray = np.zeros(0),
         color: np.ndarray = np.zeros(0),
-        param_override: dict = {},
+        param_override: Optional[dict] = None,
     ) -> "Plot":
         """Plot a curve.
 
@@ -208,7 +217,9 @@ class Plot:
         Returns:
             Plot: The plot object.
         """
-        if self._in_jupyter_notebook:
+        if param_override is None:
+            param_override = {}
+        if Utils.in_jupyter_notebook():
             if _edge.size == 0:
                 edge = np.array(
                     [[i, (i + 1) % len(vert)] for i in range(len(vert))],
@@ -233,7 +244,7 @@ class Plot:
         axis: int = 0,
         cut: float = 0.5,
         color: np.ndarray = np.zeros(0),
-        param_override: dict = {},
+        param_override: Optional[dict] = None,
     ) -> "Plot":
         """Plot a tetrahedral mesh.
 
@@ -248,9 +259,11 @@ class Plot:
         Returns:
             Plot: The plot object.
         """
+        if param_override is None:
+            param_override = {}
         if "flat_shading" not in param_override:
             param_override["flat_shading"] = True
-        if self._in_jupyter_notebook:
+        if Utils.in_jupyter_notebook():
             param = copy.deepcopy(self.param)
             for key, value in param_override.items():
                 setattr(param, key, value)
@@ -289,31 +302,31 @@ class Plot:
 
 @dataclass
 class PlotBuffer:
-    vert: Optional[p3s.BufferAttribute] = None
-    tri: Optional[p3s.BufferAttribute] = None
-    color: Optional[p3s.BufferAttribute] = None
-    pts: Optional[p3s.BufferAttribute] = None
-    seg: Optional[p3s.BufferAttribute] = None
+    vert: p3s.BufferAttribute | None = None
+    tri: p3s.BufferAttribute | None = None
+    color: p3s.BufferAttribute | None = None
+    pts: p3s.BufferAttribute | None = None
+    seg: p3s.BufferAttribute | None = None
 
 
 @dataclass
 class PlotGeometry:
-    tri: Optional[p3s.BufferGeometry] = None
-    pts: Optional[p3s.BufferGeometry] = None
-    seg: Optional[p3s.BufferGeometry] = None
+    tri: p3s.BufferGeometry | None = None
+    pts: p3s.BufferGeometry | None = None
+    seg: p3s.BufferGeometry | None = None
 
 
 @dataclass
 class PlotObject:
-    tri: Optional[p3s.Mesh] = None
-    pts: Optional[p3s.Points] = None
-    seg: Optional[p3s.LineSegments] = None
-    wireframe: Optional[p3s.Mesh] = None
-    light_0: Optional[p3s.DirectionalLight] = None
-    light_1: Optional[p3s.AmbientLight] = None
-    camera: Optional[p3s.PerspectiveCamera] = None
-    scene: Optional[p3s.Scene] = None
-    renderer: Optional[p3s.Renderer] = None
+    tri: p3s.Mesh | None = None
+    pts: p3s.Points | None = None
+    seg: p3s.LineSegments | None = None
+    wireframe: p3s.Mesh | None = None
+    light_0: p3s.DirectionalLight | None = None
+    light_1: p3s.AmbientLight | None = None
+    camera: p3s.PerspectiveCamera | None = None
+    scene: p3s.Scene | None = None
+    renderer: p3s.Renderer | None = None
 
 
 @dataclass
@@ -324,8 +337,8 @@ class PlotParam:
     flat_shading: bool = False
     pts_scale: float = 0.004
     pts_color: str = "white"
-    default_color: np.ndarray = np.array([1.0, 0.8, 0.2])
-    lookat: Optional[list[float]] = None
+    default_color: np.ndarray = field(default_factory=lambda: np.array([1.0, 0.8, 0.2]))
+    lookat: list[float] | None = None
     eyeup: float = 0.0
     fov: float = 50.0
     width: int = 600
@@ -385,30 +398,30 @@ class ThreejsPlotEngine:
 
         if self.buff.tri is not None:
             self.geom.tri = p3s.BufferGeometry(
-                attributes=dict(
-                    position=self.buff.vert,
-                    index=self.buff.tri,
-                    color=self.buff.color,
-                )
+                attributes={
+                    "position": self.buff.vert,
+                    "index": self.buff.tri,
+                    "color": self.buff.color,
+                }
             )
         else:
             self.geom.tri = None
         if self.buff.pts is not None:
             self.geom.pts = p3s.BufferGeometry(
-                attributes=dict(
-                    position=self.buff.vert,
-                    index=self.buff.pts,
-                )
+                attributes={
+                    "position": self.buff.vert,
+                    "index": self.buff.pts,
+                }
             )
         else:
             self.geom.pts = None
         if self.buff.seg is not None:
             self.geom.seg = p3s.BufferGeometry(
-                attributes=dict(
-                    position=self.buff.vert,
-                    index=self.buff.seg,
-                    color=self.buff.color,
-                )
+                attributes={
+                    "position": self.buff.vert,
+                    "index": self.buff.seg,
+                    "color": self.buff.color,
+                }
             )
         else:
             self.geom.seg = None
@@ -502,9 +515,7 @@ class ThreejsPlotEngine:
 
         display(self.obj.renderer)
 
-    def update(
-        self, vert: Optional[np.ndarray] = None, color: Optional[np.ndarray] = None
-    ):
+    def update(self, vert: np.ndarray | None = None, color: np.ndarray | None = None):
         if vert is not None:
             assert self.buff.vert is not None
             self.buff.vert.array = vert.astype("float32")
@@ -531,7 +542,9 @@ class OpenGLRenderEngine:
         tri: np.ndarray,
         seg: np.ndarray,
     ):
-        from IPython.display import display
+        from IPython.display import (
+            display,
+        )
 
         engine = OpenGLRenderer()
         image = engine.render(
@@ -568,9 +581,7 @@ class OpenGLRenderEngine:
         self._param = param
         self._render(self._vert, self._color, self._tri, self._seg)
 
-    def update(
-        self, vert: Optional[np.ndarray] = None, color: Optional[np.ndarray] = None
-    ):
+    def update(self, vert: np.ndarray | None = None, color: np.ndarray | None = None):
         if vert is not None:
             self._vert = vert.copy()
         if color is not None:

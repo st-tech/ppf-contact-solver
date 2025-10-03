@@ -1,4 +1,5 @@
 target
+requirements.txt
 .clangd
 .clang-format
 *.lock
@@ -20,6 +21,7 @@ __pycache__
 .vscode
 eigsys/eigen2
 eigsys/eigen3
+eigsys/svd_shifted
 eigsys/bench3
 examples/asset
 examples/data
@@ -29,6 +31,13 @@ examples/_*
 frontend/**/.*
 _skipped.node
 docs/_*
-docs/parameters.rst
+docs/global_parameters.rst
+docs/object_parameters.rst
 docs/logs.rst
 private/vast-dev
+private/log
+blender_addon/lib
+dev/node_modules
+*.log
+src/cpp/kernels/tests/test_exclusive_scan
+src/cpp/kernels/tests/test_reduce

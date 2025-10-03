@@ -2,10 +2,11 @@
 # Author: Ryoichi Ando (ryoichi.ando@zozo.com)
 # License: Apache v2.0
 
-import numpy as np
 import os
-import subprocess
 import shutil
+import subprocess
+
+import numpy as np
 
 
 class Extra:
@@ -28,7 +29,7 @@ class Extra:
         faces = []
         stitch_ind = []
         stitch_w = []
-        with open(path, "r") as f:
+        with open(path) as f:
             lines = f.readlines()
             for line in lines:
                 parts = line.split()

@@ -44,6 +44,18 @@ impl<T> CVecVec<T> {
             nnz: 0,
         }
     }
+
+    pub fn row_iter(&self, i: u32) -> RowIter<'_, T> {
+        assert!(i < self.size, "Row index out of bounds");
+        let start = unsafe { *self.offset.add(i as usize) as usize };
+        let end = unsafe { *self.offset.add(i as usize + 1) as usize };
+        RowIter {
+            ptr: self.data,
+            curr: start,
+            end,
+            _marker: std::marker::PhantomData,
+        }
+    }
 }
 
 impl<T> From<&[Vec<T>]> for CVecVec<T>
@@ -197,5 +209,29 @@ impl<'de, T: serde::Deserialize<'de>> serde::Deserialize<'de> for CVecVec<T> {
             nnz_allocated: inner.nnz_allocated,
             offset_allocated: inner.offset_allocated,
         })
+    }
+}
+
+// Iterator over a row of CVecVec
+pub struct RowIter<'a, T> {
+    ptr: *mut T,
+    curr: usize,
+    end: usize,
+    _marker: std::marker::PhantomData<&'a T>,
+}
+
+impl<T> Iterator for RowIter<'_, T>
+where
+    T: Copy,
+{
+    type Item = T;
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.curr < self.end {
+            let item = unsafe { *self.ptr.add(self.curr) };
+            self.curr += 1;
+            Some(item)
+        } else {
+            None
+        }
     }
 }

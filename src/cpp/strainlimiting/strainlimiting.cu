@@ -2,18 +2,12 @@
 // Author: Ryoichi Ando (ryoichi.ando@zozo.com)
 // License: Apache v2.0
 
-#ifndef STRAINLIMITING_HPP
-#define STRAINLIMITING_HPP
-
 #include "../barrier/barrier.hpp"
 #include "../eigenanalysis/eigenanalysis.hpp"
+#include "../kernels/reduce.hpp"
 #include "../utility/dispatcher.hpp"
 #include "../utility/utility.hpp"
 #include "strainlimiting.hpp"
-
-#define _real_ float
-#define USE_EIGEN_SYMM_EIGSOLVE
-#include "eig-hpp/eigsolve2x2.hpp"
 
 namespace strainlimiting {
 
@@ -47,20 +41,23 @@ __device__ float compute_stiffness(const Vec<Vec3f> &eval_x, const Vec3u &face,
     return w.dot(local_hess * w) + mass / (d * d);
 }
 
-void embed_strainlimiting_force_hessian(
-    const DataSet &data, const Vec<Vec3f> &eval_x, const Kinematic &kinematic,
-    Vec<float> &force, const FixedCSRMat &fixed_hess_in,
-    FixedCSRMat &fixed_hess_out, const ParamSet &param) {
+void embed_strainlimiting_force_hessian(const DataSet &data,
+                                        const Vec<Vec3f> &eval_x,
+                                        Vec<float> &force,
+                                        const FixedCSRMat &fixed_hess_in,
+                                        FixedCSRMat &fixed_hess_out,
+                                        const ParamSet &param) {
 
     const Vec<Vec3f> &curr = data.vertex.curr;
     unsigned shell_face_count = data.shell_face_count;
-    float tau(param.strain_limit_tau);
-    float eps(param.strain_limit_eps);
 
     DISPATCH_START(shell_face_count)
-    [data, eval_x, kinematic, curr, force, fixed_hess_in, fixed_hess_out, tau,
-     eps, param] __device__(unsigned i) mutable {
-        if (!kinematic.face[i]) {
+    [data, eval_x, curr, force, fixed_hess_in, fixed_hess_out,
+     param] __device__(unsigned i) mutable {
+        const FaceProp &prop = data.prop.face[i];
+        float tau = prop.strain_limit_tau;
+        float eps = prop.strain_limit_eps;
+        if (!prop.fixed && eps > 0.0f) {
             const Vec3u &face = data.mesh.mesh.face[i];
             Mat3x3f X;
             X << eval_x[face[0]], eval_x[face[1]], eval_x[face[2]];
@@ -90,26 +87,27 @@ void embed_strainlimiting_force_hessian(
     } DISPATCH_END;
 }
 
-float line_search(const DataSet &data, const Kinematic &kinematic,
-                  const Vec<Vec3f> &eval_x, const Vec<Vec3f> &prev,
-                  Vec<float> &tmp_face, const ParamSet &param) {
+float line_search(const DataSet &data, const Vec<Vec3f> &eval_x,
+                  const Vec<Vec3f> &prev, Vec<float> &tmp_face,
+                  const ParamSet &param) {
 
     const MeshInfo &mesh = data.mesh;
     const Vec<Mat2x2f> &inv_rest2x2 = data.inv_rest2x2;
     unsigned shell_face_count = data.shell_face_count;
     Vec<float> toi = tmp_face;
     toi.size = shell_face_count;
-    float tau(param.strain_limit_tau);
-    float eps(param.strain_limit_eps);
-    float tol(param.strain_limit_reduction * eps);
     float toi_reduction(param.toi_reduction);
-    float target = tau + eps - 2.0f * tol;
 
     DISPATCH_START(shell_face_count)
-    [inv_rest2x2, kinematic, mesh, eval_x, prev, param, toi, tau, eps, tol,
-     toi_reduction, target] __device__(unsigned i) mutable {
+    [inv_rest2x2, data, mesh, eval_x, prev, param, toi,
+     toi_reduction] __device__(unsigned i) mutable {
         float t = param.line_search_max_t;
-        if (!kinematic.face[i]) {
+        const FaceProp &prop = data.prop.face[i];
+        float tau = prop.strain_limit_tau;
+        float eps = prop.strain_limit_eps;
+        if (!prop.fixed && eps > 0.0f) {
+            float tol = param.strain_limit_reduction * eps;
+            float target = tau + eps - 2.0f * tol;
             Vec3u face = mesh.mesh.face[i];
             Mat3x3f x0, x1;
             x0 << prev[face[0]], prev[face[1]], prev[face[2]];
@@ -119,13 +117,14 @@ float line_search(const DataSet &data, const Kinematic &kinematic,
             const Mat3x2f F1 =
                 utility::compute_deformation_grad(x1, inv_rest2x2[i]);
             const Mat3x2f dF = F1 - F0;
-            if (singular_vals_minus_one(F0 + t * dF).maxCoeff() >=
+            if (utility::singular_vals_minus_one(F0 + t * dF).maxCoeff() >=
                 target + tol) {
                 float upper_t = t;
                 float lower_t = 0.0f;
                 for (unsigned k = 0; k < param.binary_search_max_iter; ++k) {
                     t = 0.5f * (upper_t + lower_t);
-                    Vec2f singular_vals = singular_vals_minus_one(F0 + t * dF);
+                    Vec2f singular_vals =
+                        utility::singular_vals_minus_one(F0 + t * dF);
                     float diff = singular_vals.maxCoeff() - target;
                     if (fabs(diff) < tol) {
                         break;
@@ -136,7 +135,7 @@ float line_search(const DataSet &data, const Kinematic &kinematic,
                     }
                 }
             }
-            if (singular_vals_minus_one(F0 + t * dF).maxCoeff() >=
+            if (utility::singular_vals_minus_one(F0 + t * dF).maxCoeff() >=
                 target + tol) {
                 t *= toi_reduction;
             }
@@ -145,10 +144,8 @@ float line_search(const DataSet &data, const Kinematic &kinematic,
     } DISPATCH_END;
 
     float result =
-        utility::min_array(toi.data, shell_face_count, param.line_search_max_t);
+        kernels::min_array(toi.data, shell_face_count, param.line_search_max_t);
     return result / param.line_search_max_t;
 }
 
 } // namespace strainlimiting
-
-#endif

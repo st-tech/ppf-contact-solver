@@ -20,19 +20,19 @@ for i in range(5):
     obj.at(i * space, 0, 0)
     obj.direction([0, 1, 0], [0, 0, 1])
     obj.pin(obj.grab([0, 1, 0]))
+    obj.param.set("strain-limit", 0.05)
 
 scene.add("sphere").at(-1, 0, 0).jitter().pin().move_by([8, 0, 0], 5)
-fixed = scene.build()
+scene = scene.build()
 
-param = (
-    app.session.param()
-    .set("friction", 0.0)
-    .set("dt", 0.01)
+session = app.session.create(scene)
+(
+    session.param.set("dt", 0.01)
     .set("min-newton-steps", 8)
     .set("frames", 60)
 )
-
-session = app.session.create(fixed).start(param, blocking=True)
+session = session.build()
+session.start(blocking=True)
 session.export.animation().zip()
 
 assert session.finished()

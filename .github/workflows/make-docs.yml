@@ -21,15 +21,15 @@ jobs:
   # Build job
   build:
     runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/st-tech/ppf-contact-solver-base:latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+      - name: Setup environment
+        run: python3 warmup.py
+      - name: Install docs dependencies
+        run: $HOME/.local/share/ppf-cts/venv/bin/python3 warmup.py docs-prepare
       - name: Build Docs
-        run: |
-          python3 warmup.py docs-prepare
-          python3 warmup.py docs-build
+        run: $HOME/.local/share/ppf-cts/venv/bin/python3 warmup.py docs-build
       - name: List Artifacts
         run: ls -al ./docs/_build/
       - name: Upload Artifact

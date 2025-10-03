@@ -13,16 +13,17 @@ mod mesh;
 mod scene;
 mod triutils;
 
-use args::Args;
+use args::{ProgramArgs, SimArgs};
 use backend::MeshSet;
 use clap::Parser;
-use data::{BvhSet, DataSet, FaceProp, ParamSet, TetProp};
+use data::{BvhSet, DataSet, ParamSet};
 use flate2::{read::GzDecoder, write::GzEncoder, Compression};
 use log::*;
 use log4rs::append::console::ConsoleAppender;
 use log4rs::config::{Appender, Config, Root};
 use log4rs::encode::pattern::PatternEncoder;
 use mesh::Mesh as SimMesh;
+use more_asserts::*;
 use scene::Scene;
 use std::ffi::CString;
 use std::fs::OpenOptions;
@@ -45,7 +46,7 @@ extern "C" fn print_rust(message: *const libc::c_char) {
 }
 
 fn main() {
-    let mut args = Args::parse();
+    let program_args = ProgramArgs::parse();
     let info = git_info::get();
     info!(
         "git branch: {}",
@@ -55,16 +56,21 @@ fn main() {
         "git hash: {}",
         info.head.last_commit_hash.unwrap_or("Unknown".to_string())
     );
-    let mut scene = Scene::new(&args);
-    scene.override_args(&mut args);
-    setup(&args);
+    info!(
+        "float range: from {} to {}",
+        f32::MIN,
+        f32::MAX
+    );
+    let mut scene = Scene::new(&program_args);
+    let sim_args = scene.args();
+    setup(&program_args);
 
-    if args.load > 0 {
-        let mut param = builder::make_param(&args);
+    if program_args.load > 0 {
+        let mut param = builder::make_param(&sim_args);
         println!("loading dataset...");
-        let mut dataset = read(&read_gz(&format!("{}/dataset.bin.gz", args.output)));
+        let mut dataset = read(&read_gz(&format!("{}/dataset.bin.gz", program_args.output)));
         println!("loading backend...");
-        let mut backend = backend::Backend::load_state(&args, args.load, &args.output);
+        let mut backend = backend::Backend::load_state(program_args.load, &program_args.output);
         param.time = backend.state.time;
         param.prev_dt = backend.state.prev_dt;
         builder::copy_to_dataset(
@@ -72,71 +78,71 @@ fn main() {
             &backend.state.prev_vertex,
             &mut dataset,
         );
-        backend.run(&args, dataset, param, scene);
+        backend.run(&program_args, &sim_args, dataset, param, scene);
     } else {
-        let mut backend = backend::Backend::new(&args, scene.make_mesh(&args));
+        let mut backend = backend::Backend::new(scene.make_mesh());
         let mesh = &backend.mesh;
         let face_area = triutils::face_areas(&mesh.vertex, &mesh.mesh.mesh.face);
         let tet_volumes = triutils::tet_volumes(&mesh.vertex, &mesh.mesh.mesh.tet);
-        let mut props = Props {
-            rod: Vec::new(),
-            face: Vec::new(),
-            tet: Vec::new(),
-        };
+        let mut props = scene.make_props(mesh, &face_area, &tet_volumes);
+
+        let time = backend.state.time;
+        let temp_constraint = scene.make_constraint(time);
+        scene.export_param_summary(&program_args, &props, &face_area, &tet_volumes);
+
         let mut total_rod_mass = 0.0;
         let mut total_area_mass = 0.0;
         let mut total_vol_mass = 0.0;
-        for i in 0..mesh.mesh.mesh.rod_count {
+
+        for prop in props.face.iter() {
+            total_area_mass += prop.mass;
+        }
+
+        let mut edge_prop = Vec::new();
+        for i in 0..mesh.mesh.mesh.edge.ncols() {
             let rod = mesh.mesh.mesh.edge.column(i);
             let x0 = mesh.vertex.column(rod[0]);
             let x1 = mesh.vertex.column(rod[1]);
-            let r = args.rod_offset;
-            let mut length = (x1 - x0).map(f32::from).norm();
-            if let Some(seg_len_factor) = mesh.mesh.mesh.rod_length_factor.as_ref() {
-                length *= seg_len_factor[i];
-            }
-            let mass = length * args.rod_density;
-            props.rod.push(data::RodProp {
-                length,
-                radius: r,
-                stiffness: args.rod_young_mod,
-                mass,
-            });
-            total_rod_mass += mass;
-        }
-        for (i, &area) in face_area.iter().enumerate() {
-            let volume = 2.0 * area * args.contact_ghat;
-            let (mu, lambda) = builder::convert_prop(args.area_young_mod, args.area_poiss_rat);
-            let mass = if args.include_face_mass || i < mesh.mesh.mesh.shell_face_count {
-                args.area_density * volume
+            if i < mesh.mesh.mesh.rod_count {
+                let prop = props.edge[i];
+                total_rod_mass += prop.mass;
+                edge_prop.push(prop);
             } else {
-                0.0
-            };
-            props.face.push(FaceProp {
-                area,
-                mass,
-                mu,
-                lambda,
-            });
-            if i < mesh.mesh.mesh.shell_face_count {
-                total_area_mass += mass;
+                let length = (x1 - x0).norm();
+                let mut ghat_sum = 0.0;
+                let mut offset_sum = 0.0;
+                let mut friction_sum = 0.0;
+                let mut area_sum = 0.0;
+                for &j in mesh.mesh.neighbor.edge.face[i].iter() {
+                    let face_prop = props.face.get(j).unwrap();
+                    let area = face_area[j];
+                    ghat_sum += area * face_prop.ghat;
+                    friction_sum += area * face_prop.friction;
+                    offset_sum += area * face_prop.offset;
+                    area_sum += area;
+                }
+                assert_gt!(area_sum, 0.0);
+                let ghat = ghat_sum / area_sum;
+                let offset = offset_sum / area_sum;
+                let friction = friction_sum / area_sum;
+                props.edge.push(data::EdgeProp {
+                    length,
+                    ghat,
+                    friction,
+                    offset,
+                    ..Default::default()
+                });
             }
         }
-        for &vol in tet_volumes.iter() {
-            let (mu, lambda) = builder::convert_prop(args.volume_young_mod, args.volume_poiss_rat);
-            let mass = vol * args.volume_density;
-            props.tet.push(TetProp {
-                mass,
-                volume: vol,
-                mu,
-                lambda,
-            });
-            total_vol_mass += mass;
+
+        for prop in props.tet.iter() {
+            total_vol_mass += prop.mass;
         }
+
         let mut mass_file = OpenOptions::new()
             .create(true)
             .append(true)
-            .open(format!("{}/data/total_mass.out", args.output).as_str())
+            .open(format!("{}/data/total_mass.out", program_args.output).as_str())
             .unwrap();
         writeln!(
             mass_file,
@@ -144,35 +150,28 @@ fn main() {
             total_rod_mass, total_area_mass, total_vol_mass
         )
         .unwrap();
-        let velocity = scene.get_initial_velocity(&args, mesh.vertex.ncols());
-        let time = backend.state.time;
-        let dataset = builder::build(
-            &args,
-            mesh,
-            &velocity,
-            &props,
-            scene.make_constraint(&args, time, mesh),
-        );
-        let param = builder::make_param(&args);
-        backend.run(&args, dataset, param, scene);
+        let velocity = scene.get_initial_velocity();
+        let dataset = builder::build(&sim_args, mesh, &velocity, &mut props, temp_constraint);
+        let param = builder::make_param(&sim_args);
+        backend.run(&program_args, &sim_args, dataset, param, scene);
     }
 }
 
-fn remove_old_files(dirpath: &str, prefix: &str, suffix: &str, keep_number: i32, max_frame: i32) {
-    if keep_number > 0 {
+fn remove_old_states(program_args: &ProgramArgs, keep_states: i32, max_frame: i32) {
+    if keep_states > 0 {
         let mut n = 0;
         for i in 0..=max_frame {
-            let path = format!("{}/{}{}{}", dirpath, prefix, i, suffix);
+            let path = format!("{}/state_{}.bin.gz", program_args.output, i);
             if std::path::Path::new(&path).exists() {
                 n += 1;
             }
         }
+        info!("Removing old states...");
         let mut i = 0;
-        while n > keep_number {
-            let filename = format!("{}{}{}", prefix, i, suffix);
-            let path = format!("{}/{}", dirpath, filename);
+        while n > keep_states {
+            let path = format!("{}/state_{}.bin.gz", program_args.output, i);
             if std::path::Path::new(&path).exists() {
-                info!("Removing {}...", filename);
+                info!("Removing {}...", path);
                 std::fs::remove_file(path).unwrap_or(());
                 n -= 1;
             }
@@ -184,17 +183,47 @@ fn remove_old_files(dirpath: &str, prefix: &str, suffix: &str, keep_number: i32,
     }
 }
 
-fn remove_files(base: &str, ext: &str, args: &Args) {
+fn remove_old_files(dirpath: &str, prefix: &str, suffix: &str, keep_number: i32, max_frame: i32) {
+    if keep_number <= 0 {
+        return;
+    }
+
+    let keep_number = keep_number.max(1); // Ensure at least 1 file is kept
+
+    let mut n = 0;
+    for i in 0..=max_frame {
+        let path = format!("{}/{}{}{}", dirpath, prefix, i, suffix);
+        if std::path::Path::new(&path).exists() {
+            n += 1;
+        }
+    }
+
+    let mut i = 0;
+    while n > keep_number {
+        let filename = format!("{}{}{}", prefix, i, suffix);
+        let path = format!("{}/{}", dirpath, filename);
+        if std::path::Path::new(&path).exists() {
+            info!("Removing {}...", filename);
+            std::fs::remove_file(path).unwrap_or(());
+            n -= 1;
+        }
+        i += 1;
+        if i > max_frame {
+            break;
+        }
+    }
+}
+
+fn remove_files(base: &str, ext: &str, args: &ProgramArgs) {
     let mut count = args.load + 1;
     loop {
         let path = format!("{}/{}_{}.{}", args.output, base, count, ext);
         if std::path::Path::new(&path).exists() {
             std::fs::remove_file(path).unwrap_or(());
-        }
-        count += 1;
-        if count > args.frames {
+        } else {
             break;
         }
+        count += 1;
     }
 }
 
@@ -212,25 +241,26 @@ fn remove_files_in_dir(path: &str) -> std::io::Result<()> {
     Ok(())
 }
 
-fn setup(args: &Args) {
-    if args.load == 0 {
-        remove_files_in_dir(&args.output).unwrap();
+fn setup(program_args: &ProgramArgs) {
+    if program_args.load == 0 {
+        remove_files_in_dir(&program_args.output).unwrap();
     } else {
-        remove_files("vert", "bin", args);
-        remove_files("state", "bin.gz", args);
+        remove_files("vert", "bin", program_args);
+        remove_files("state", "bin.gz", program_args);
     }
 
-    if !std::path::Path::new(&args.output).exists() {
-        std::fs::create_dir_all(&args.output).unwrap_or(());
+    if !std::path::Path::new(&program_args.output).exists() {
+        std::fs::create_dir_all(&program_args.output).unwrap_or(());
     }
-    let save_and_quit_path = std::path::Path::new(args.output.as_str()).join("save_and_quit");
+    let save_and_quit_path =
+        std::path::Path::new(program_args.output.as_str()).join("save_and_quit");
     if save_and_quit_path.exists() {
         std::fs::remove_file(save_and_quit_path).unwrap_or_else(|err| {
             println!("Failed to delete 'save_and_quit' file: {}", err);
         });
     }
 
-    let pattern = "{d(%Y-%m-%d %H:%M:%S)} [{t}] {m}{n}";
+    let pattern = "[{d(%Y-%m-%d %H:%M:%S)}] {m}{n}";
     let stdout = ConsoleAppender::builder()
         .encoder(Box::new(PatternEncoder::new(pattern)))
         .build();
@@ -242,7 +272,7 @@ fn setup(args: &Args) {
     log4rs::init_config(config).unwrap();
 
     info!("{}", std::env::args().collect::<Vec<_>>().join(" "));
-    let data_dir = CString::new(format!("{}/data", args.output)).unwrap();
+    let data_dir = CString::new(format!("{}/data", program_args.output)).unwrap();
     unsafe {
         set_log_path(data_dir.as_ptr());
     }

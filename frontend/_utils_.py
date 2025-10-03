@@ -1,6 +1,14 @@
+# File: _utils_.py
+# Author: Ryoichi Ando (ryoichi.ando@zozo.com)
+# License: Apache v2.0
+
 import os
+import signal
 import subprocess
-from typing import Optional
+
+import psutil  # pyright: ignore[reportMissingModuleSource]
+
+PROCESS_NAME = "ppf-contact"
 
 
 class Utils:
@@ -28,7 +36,7 @@ class Utils:
             return False
 
     @staticmethod
-    def ci_name() -> Optional[str]:
+    def ci_name() -> str | None:
         """Determine if the code is running in a CI environment.
 
         Returns:
@@ -37,7 +45,7 @@ class Utils:
         dirpath = os.path.dirname(os.path.abspath(__file__))
         path = os.path.join(dirpath, ".CI")
         if os.path.exists(path):
-            with open(path, "r") as f:
+            with open(path) as f:
                 lines = f.readlines()
                 last_line = ""
                 if len(lines) > 0:
@@ -79,7 +87,7 @@ class Utils:
             return 0
 
     @staticmethod
-    def get_driver_version() -> Optional[int]:
+    def get_driver_version() -> int | None:
         try:
             result = subprocess.run(
                 ["nvidia-smi", "--query-gpu=driver_version", "--format=csv,noheader"],
@@ -95,3 +103,29 @@ class Utils:
         except FileNotFoundError:
             print("nvidia-smi not found. Is NVIDIA driver installed?")
             return None
+
+    @staticmethod
+    def terminate():
+        """Terminate the solver."""
+        for proc in psutil.process_iter(["pid", "name", "status"]):
+            if (
+                PROCESS_NAME in proc.info["name"]
+                and proc.info["status"] != psutil.STATUS_ZOMBIE
+            ):
+                pid = proc.info["pid"]
+                os.kill(pid, signal.SIGTERM)
+
+    @staticmethod
+    def busy() -> bool:
+        """Check if the solver is running.
+
+        Returns:
+            bool: True if the solver is running, False otherwise.
+        """
+        for proc in psutil.process_iter(["pid", "name", "status"]):
+            if (
+                PROCESS_NAME in proc.info["name"]
+                and proc.info["status"] != psutil.STATUS_ZOMBIE
+            ):
+                return True
+        return False
