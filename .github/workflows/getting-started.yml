@@ -34,5 +34,25 @@ jobs:
 
       - name: run headless
         run: |
+          echo "getting-started" > frontend/.CI
           export PYTHONPATH=$PWD
           ~/.local/share/ppf-cts/venv/bin/python examples/headless.py
+
+      - name: Collect results
+        if: success() || failure()
+        run: |
+          echo "Collecting results..."
+          mkdir -p ci
+          if [ -d "/tmp/ci" ]; then
+            rsync -av --exclude='*.bin' --exclude='*.pickle' /tmp/ci/ ./ci/
+          fi
+          echo "## Collected Files:"
+          ls -la ci/ || echo "No files collected"
+
+      - name: Upload artifact
+        if: success() || failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-getting-started
+          path: ci
+          retention-days: 3
