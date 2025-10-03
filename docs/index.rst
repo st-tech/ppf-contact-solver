@@ -11,5 +11,6 @@ Python APIs
    :caption: Contents:
 
    frontend
-   parameters
+   global_parameters
+   object_parameters
    logs
