@@ -414,7 +414,7 @@ jobs:
         run: |
           echo "Collecting results from all runs..."
           mkdir -p ci
-          rsync -avz --exclude='*.bin' -e "ssh -i ${{ steps.keypair.outputs.KEY_PATH }} -o StrictHostKeyChecking=no" \
+          rsync -avz --exclude='*.bin' --exclude='*.pickle' -e "ssh -i ${{ steps.keypair.outputs.KEY_PATH }} -o StrictHostKeyChecking=no" \
             ${USER}@${PUBLIC_IP}:/tmp/ci/ ./ci/
           echo "## Collected Files:"
           ls -la ci/
