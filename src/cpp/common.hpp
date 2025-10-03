@@ -30,7 +30,19 @@
 #define FLT_MIN -1.0e8f
 #define DT_MIN 1e-5f
 #define PI 3.14159265358979323846f
-#define BLOCK_SIZE 256
+#define WARP_SIZE 32
+
+inline unsigned choose_block_size(unsigned n) {
+    if (n <= 32) {
+        return 32;
+    } else if (n <= 64) {
+        return 64;
+    } else if (n <= 128) {
+        return 128;
+    } else {
+        return 256;
+    }
+}
 
 namespace logging {
 static char buffer[2048];

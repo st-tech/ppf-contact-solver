@@ -2,10 +2,9 @@
 // Author: Ryoichi Ando (ryoichi.ando@zozo.com)
 // License: Apache v2.0
 
-#ifndef SOLVER_CUDA_H
-#define SOLVER_CUDA_H
-
 #include "../csrmat/csrmat.hpp"
+#include "../kernels/reduce.hpp"
+#include "../kernels/vec_ops.hpp"
 #include "../utility/dispatcher.hpp"
 #include "../utility/utility.hpp"
 #include "solver.hpp"
@@ -37,25 +36,27 @@ void apply(const DynCSRMat &A, const FixedCSRMat &B, const Vec<Mat3x3f> &C,
     [A, B, C, D, result, x] __device__(unsigned i) mutable {
         Vec3f sum = Vec3f::Zero();
         for (unsigned k = 0; k < A.rows[i].head; ++k) {
-            const float *m = (float *)(A.rows[i].value + k);
+            const float *m =
+                reinterpret_cast<const float *>(A.rows[i].value + k);
             unsigned j = A.rows[i].index[k];
             sum += UnrolledMat3x3f(m) * (x.data + 3 * j);
         }
         for (unsigned k = 0; k < A.rows[i].ref_head; ++k) {
-            const float *m =
-                (float *)(A.dyn_value_buff.data + A.rows[i].ref_value[k]);
+            const float *m = reinterpret_cast<const float *>(
+                A.dyn_value_buff.data + A.rows[i].ref_value[k]);
             unsigned j = A.rows[i].ref_index[k];
             sum += UnrolledMat3x3f(m) ^ (x.data + 3 * j);
         }
         for (unsigned k = B.index.offset[i]; k < B.index.offset[i + 1]; ++k) {
-            const float *m = (float *)(B.value.data + k);
+            const float *m = reinterpret_cast<const float *>(B.value.data + k);
             unsigned j = B.index.data[k];
             sum += UnrolledMat3x3f(m) * (x.data + 3 * j);
         }
         for (unsigned k = B.transpose.offset[i]; k < B.transpose.offset[i + 1];
              ++k) {
             Vec2u ref = B.transpose.data[k];
-            const float *m = (float *)(B.value.data + ref[1]);
+            const float *m =
+                reinterpret_cast<const float *>(B.value.data + ref[1]);
             sum += UnrolledMat3x3f(m) ^ (x.data + 3 * ref[0]);
         }
         sum += UnrolledMat3x3f(C[i].data()) * (x.data + 3 * i);
@@ -79,8 +80,7 @@ class DeviceOperators {
         const Vec<Mat3x3f> &C = this->C;
         solver::apply(A, B, C, 0.0f, x, result);
     }
-    void precond(const Vec<float> &x,
-                         Vec<float> &result) const {
+    void precond(const Vec<float> &x, Vec<float> &result) const {
         const Vec<Mat3x3f> &inv_diag = this->P;
         DISPATCH_START(A.nrow)
         [x, result, inv_diag] __device__(unsigned i) mutable {
@@ -93,7 +93,7 @@ class DeviceOperators {
         [r, tmp] __device__(unsigned i) mutable {
             tmp[i] = fabs(r[i]);
         } DISPATCH_END;
-        return utility::sum_array(tmp, r.size);
+        return kernels::sum_array(tmp.data, r.size);
     }
     const DynCSRMat &A;
     const FixedCSRMat &B;
@@ -128,21 +128,21 @@ __device__ static Mat3x3f invert(const Mat3x3f &m) {
 }
 
 std::tuple<bool, unsigned, float> cg(const DeviceOperators &op, Vec<float> &r,
-                                        Vec<float> &x, unsigned max_iter,
-                                        float tol) {
+                                     Vec<float> &x, unsigned max_iter,
+                                     float tol) {
     static Vec<float> tmp = Vec<float>::alloc(x.size);
     static Vec<float> z = Vec<float>::alloc(x.size);
     static Vec<float> p = Vec<float>::alloc(x.size);
     static Vec<float> r0 = Vec<float>::alloc(x.size);
 
     op.apply(x, tmp);
-    r.add_scaled(tmp, -1.0f);
-    r0.copy(r);
+    kernels::add_scaled(tmp.data, r.data, -1.0f, r.size);
+    kernels::copy(r.data, r0.data, r0.size);
     op.precond(r, z);
-    p.copy(z);
+    kernels::copy(z.data, p.data, p.size);
 
     unsigned iter = 1;
-    double rz0 = r.inner_product(z);
+    double rz0 = kernels::inner_product(r.data, z.data, r.size);
 
     double err0 = op.norm(r, tmp);
     if (!err0) {
@@ -150,20 +150,20 @@ std::tuple<bool, unsigned, float> cg(const DeviceOperators &op, Vec<float> &r,
     } else {
         while (true) {
             op.apply(p, tmp);
-            double alpha = rz0 / (double)p.inner_product(tmp);
-            x.add_scaled(p, alpha);
-            r.add_scaled(tmp, -alpha);
+            double alpha = rz0 / (double)kernels::inner_product(p.data, tmp.data, p.size);
+            kernels::add_scaled(p.data, x.data, (float)alpha, x.size);
+            kernels::add_scaled(tmp.data, r.data, (float)-alpha, r.size);
             double err = op.norm(r, tmp);
             double reresid = err / err0;
             if (reresid < tol) {
                 return {true, iter, reresid};
-            } else if (iter >= max_iter) {
+            } else if (iter >= max_iter || std::isnan(reresid)) {
                 return {false, iter, reresid};
             }
             op.precond(r, z);
-            double rz1 = r.inner_product(z);
+            double rz1 = kernels::inner_product(r.data, z.data, r.size);
             double beta = rz1 / rz0;
-            p.combine(z, p, 1.0f, beta);
+            kernels::combine(z.data, p.data, p.data, 1.0f, (float)beta, p.size);
             rz0 = rz1;
             iter++;
         }
@@ -188,5 +188,3 @@ bool solve(const DynCSRMat &A, const FixedCSRMat &B, const Vec<Mat3x3f> &C,
 }
 
 } // namespace solver
-
-#endif

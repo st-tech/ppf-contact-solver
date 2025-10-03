@@ -2,8 +2,6 @@
 // Author: Ryoichi Ando (ryoichi.ando@zozo.com)
 // License: Apache v2.0
 
-#ifndef EIGANALYSIS_HPP
-#define EIGANALYSIS_HPP
 
 #include "../utility/utility.hpp"
 #include "eigenanalysis.hpp"
@@ -152,5 +150,3 @@ __device__ Mat9x9f compute_hessian(const DiffTable3 &table, const Svd3x3 &svd,
 }
 
 } // namespace eigenanalysis
-
-#endif

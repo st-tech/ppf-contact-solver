@@ -2,8 +2,6 @@
 // Author: Ryoichi Ando (ryoichi.ando@zozo.com)
 // License: Apache v2.0
 
-#ifndef BARRIER_HPP
-#define BARRIER_HPP
 
 #include "barrier.hpp"
 #include "cubic.hpp"
@@ -136,5 +134,3 @@ __device__ float strainlimiting_energy(const Vec2f &a, float ghat,
 }
 
 } // namespace barrier
-
-#endif

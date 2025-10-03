@@ -55,8 +55,8 @@ involving 👚 shells, 🪵 solids and 🪢 rods. All made by ZOZO.
 
 ## 📝 Change History
 
+- (2025.10.03) Massive refactor of the codebase [(Markdown)](./articles/refactor_202510.md). Note that this change includes breaking changes to our Python APIs.
 - (2025.08.09) Added a hindsight note in [eigensystem analysis](./articles/eigensys.md) to acknowledge prior work by [Poya et al. (2023)](https://romeric.github.io/).
-- (2025.05.14) Added one large scale example.
 - (2025.05.01) Simulation states now can be saved and loaded [(Video)](https://drive.google.com/file/d/1aCEwVPbX_Am6bwj6NrwARS6K_IkT45c-/view).
 - (2025.04.02) Added 9 examples. See the [catalogue](#️-catalogue).
 - (2025.03.03) Added a [budget table on AWS](#-budget-table-on-aws).
@@ -67,7 +67,6 @@ involving 👚 shells, 🪵 solids and 🪢 rods. All made by ZOZO.
 <details>
 
 <summary>More history records</summary>
-
 - (2025.1.8) Added a [domino example](./examples/domino.ipynb) [(Video)](https://drive.google.com/file/d/1N9y8eZrjSQhAUhKwiO9w8jW_T18zPnYf/view).
 - (2025.1.5) Added a [single twist example](./examples/twist.ipynb) [(Video)](https://drive.google.com/file/d/1LDFKS-iBvl2uDdPVKaazQL25tYGEEyXr/view).
 - (2024.12.31) Added full documentation for Python APIs, parameters, and log files [(GitHub Pages)](https://st-tech.github.io/ppf-contact-solver).
@@ -107,7 +106,7 @@ To retain consistency with the paper, we have created a new branch ```sigasia-20
 
 ## ⚡️ Requirements
 
-- 🔥 A modern NVIDIA GPU (Turing or newer)
+- 🔥 A modern NVIDIA GPU (CUDA 12.8 or newer)
 - 🐳 A Docker environment (see [below](#-getting-started))
 
 ## 💨 Getting Started
@@ -153,12 +152,12 @@ If you wish to build the container from scratch 🛠️, please refer to the cle
 
 ## 🐍 How To Use
 
-Our frontend is all accessible through 🌐 a browser using our built-in JupyterLab 🐍 interface.
+Our frontend is accessible through 🌐 a browser using our built-in JupyterLab 🐍 interface.
 All is set up when you open it for the first time.
 Results can be interactively viewed through the browser and exported as needed.
 
 This allows you to interact with the simulator on your 💻 laptop while the actual simulation runs on a remote headless server over 🌍 the internet.
-This means that you don't have to buy ⚙️ hardware, but can rent it at [vast.ai](https://vast.ai) or [RunPod](https://www.runpod.io/) for less than 💵 $0.5 per hour.
+This means that **you don't have to own ⚙️ NVIDIA hardware**, but can rent it at [vast.ai](https://vast.ai) or [RunPod](https://www.runpod.io/) for less than 💵 $0.5 per hour.
 For example, this [(Video)](https://drive.google.com/file/d/1n068Ai_hlfgapf2xkAutOHo3PkLpJXA4/view) was recorded on a [vast.ai](https://vast.ai) instance.
 The experience is 👍 good!
 
@@ -185,8 +184,8 @@ V, F = app.mesh.square(res=128, ex=[1, 0, 0], ey=[0, 0, 1])
 # add to the asset and name it "sheet"
 app.asset.add.tri("sheet", V, F)
 
-# create an icosphere mesh radius 0.5 and 5 subdiv
-V, F = app.mesh.icosphere(r=0.5, subdiv_count=5)
+# create an icosphere mesh radius 0.5
+V, F = app.mesh.icosphere(r=0.5, subdiv_count=4)
 
 # add to the asset and name it "sphere"
 app.asset.add.tri("sphere", V, F)
@@ -194,7 +193,7 @@ app.asset.add.tri("sphere", V, F)
 # create a scene
 scene = app.scene.create()
 
-# gap between sheets
+# define gap between sheets
 gap = 0.01
 
 for i in range(5):
@@ -202,34 +201,38 @@ for i in range(5):
     # add the sheet asset to the scene
     obj = scene.add("sheet")
 
-    # pick two corners (max towards two directions)
+    # pick two corners
     corner = obj.grab([1, 0, -1]) + obj.grab([-1, 0, -1])
-    # now a variable "corner" contains a list of vertex indices
 
-    # place it with a vertical offset and pin the corner vertices
+    # place it with an vertical offset and pin the corners
     obj.at(0, gap * i, 0).pin(corner)
 
-    # set fiber directions required for Baraff-Witkin model
+    # set fiber directions required for Baraff-Witkin
     obj.direction([1, 0, 0], [0, 0, 1])
+
+    # set the strainlimiting of 5%
+    obj.param.set("strain-limit", 0.05)
 
 # add a sphere mesh at a lower position with jitter and set it static collider
 scene.add("sphere").at(0, -0.5 - gap, 0).jitter().pin()
 
 # compile the scene and report stats
-fixed = scene.build().report()
+scene = scene.build().report()
 
 # preview the initial scene
-fixed.preview()
+scene.preview()
 
-# set simulation parameter(s)
-param = app.session.param()
-param.set("dt", 0.01)
+# create a new session with the compiled scene
+session = app.session.create(scene)
 
-# create a new session with the built scene
-session = app.session.create(fixed)
+# set session params
+session.param.set("frames", 100).set("dt", 0.01)
+
+# build this session
+session = session.build()
 
 # start the simulation and live-preview the results (image right)
-session.start(param).preview()
+session.start().preview()
 
 # also show streaming logs
 session.stream()
@@ -237,8 +240,8 @@ session.stream()
 # or interactively view the animation sequences
 session.animate()
 
-# export all simulated frames and make a zip file
-session.export.animation().zip()
+# export all simulated frames
+session.export.animation()
 ```
 
 <img src="./asset/image/drape.jpg" alt="drape">
@@ -261,6 +264,7 @@ The behaviors can be changed through the settings.
 ```python
 # get a list of log names
 logs = session.get.log.names()
+print(logs)
 assert "time-per-frame" in logs
 assert "newton-steps" in logs
 
@@ -275,6 +279,11 @@ newton_steps = session.get.log.numbers("newton-steps")
 
 # compute the average of consumed newton steps
 print("avg newton steps:", sum([n for _, n in newton_steps]) / len(newton_steps))
+
+# Last 8 lines. Omit for everything.
+print("==== log stream ====")
+for line in session.get.log.stdout(n_lines=8):
+    print(line)
 ```
 
 Below are some representatives.
@@ -379,10 +388,9 @@ The author is actively woriking on it.
 | [large-twist](./examples/large-twist.ipynb) [(Video)](https://drive.google.com/file/d/1vZ7JHza1U6zO9W8DMtSsNZidl_YQXf1e/view) | TBA | TBA | TBA |
 | ![twist](./asset/image/large-scale/twist.jpg) |  |  |  |
 
-| Example | #Vert | #Face | #Tet | #Seg | #Contact | #Frame | Time/Frame |
-|---|---|---|---|---|---|---|---|
-| large-twist | 3.2M | 6.4M | ```N/A``` | ```N/A``` | 56.7M | 2,000 | 46.4s |
-
+| Example | Commit | #Vert | #Face | #Tet | #Seg | #Contact | #Frame | Time/Frame |
+|---|---|---|---|---|---|---|---|---|
+| large-twist | [cbafbd2](https://github.com/st-tech/ppf-contact-solver/tree/cbafbd2197fc7f28673386dfaf1e8d8a1be49937) | 3.2M | 6.4M | ```N/A``` | ```N/A``` | 56.7M | 2,000 | 46.4s |
 
 ## 🚀 GitHub Actions
 
@@ -439,17 +447,6 @@ This means that **a single failure out of 10 tests is considered a failure of th
 
 Also, we apply small jitters to the position of objects in the scene 🔄, so at each run, the scene is slightly different.
 
-#### ⚠️ Disclaimer
-
-Our long stress tests can fail due to following reasons:
-
-<img align="right" width="150" src="./asset/image/snag-failure.jpg">
-
-- We are constantly updating our algorithms 🔄, which may introduce bugs. This stress test is indeed designed for this purpose 🎯.
-- Failures can be also due to excessively difficult spots 🔬, which are unintended.
-An example is shown in the right inset 👉.
-- Occasionally, we experience [vast.ai](https://vast.ai) instances shutting down before simulations finish.
-
 ## 📡 Deploying on Cloud Services
 
 Our contact solver is designed for heavy use in cloud services ☁️, enabling us to:
@@ -488,7 +485,7 @@ Below, we describe how to deploy our solver on major cloud services ☁️. Thes
 
 ### 📦 Deploying on [Amazon Web Services](https://aws.amazon.com/en/)
 
-- Amazon Machine Image (AMI): `Deep Learning Base OSS Nvidia Driver GPU AMI (Ubuntu 22.04)`
+- Amazon Machine Image (AMI): `Deep Learning Base AMI with Single CUDA (Ubuntu 22.04)`
 - Instance Type: `g6.2xlarge` (Recommended)
 - This setup costs around $1 per hour.
 - *Do not skip* the Docker container creation in the installation process; it is required.
@@ -519,4 +516,3 @@ Below, we describe how to deploy our solver on major cloud services ☁️. Thes
 ## 🙏 Acknowledgements
 
 The author thanks ZOZO, Inc. for permitting the release of the code and the team members for assisting with the internal paperwork for this project.
-

@@ -2,12 +2,12 @@
 // Author: Ryoichi Ando (ryoichi.ando@zozo.com)
 // License: Apache v2.0
 
-use super::data::Constraint;
-use super::data::StepResult;
-use super::{builder, mesh::Mesh, Args, BvhSet, DataSet, ParamSet, Scene};
+use super::data::{Constraint, StepResult};
+
+use super::{builder, mesh::Mesh, BvhSet, DataSet, ParamSet, ProgramArgs, Scene, SimArgs};
 use chrono::Local;
 use log::*;
-use na::{Matrix2xX, Matrix3xX};
+use na::{Matrix2x3, Matrix3xX};
 use serde::{Deserialize, Serialize};
 use std::fs::OpenOptions;
 use std::io::Write;
@@ -23,7 +23,7 @@ extern "C" {
     fn fetch_dyn(index: *mut u32, value: *mut f32, offset: *mut u32);
     fn update_dyn(index: *const u32, offset: *const u32);
     fn update_constraint(constraint: *const Constraint);
-    fn initialize(data: *const DataSet, param: *const ParamSet, use_thrust: bool);
+    fn initialize(data: *const DataSet, param: *const ParamSet) -> bool;
 }
 
 #[derive(Serialize, Deserialize)]
@@ -36,7 +36,7 @@ pub struct Backend {
 #[derive(Serialize, Deserialize)]
 pub struct MeshSet {
     pub mesh: Mesh,
-    pub uv: Option<Matrix2xX<f32>>,
+    pub uv: Option<Vec<Matrix2x3<f32>>>,
     pub vertex: Matrix3xX<f32>,
 }
 
@@ -52,7 +52,7 @@ pub struct State {
 }
 
 impl Backend {
-    pub fn new(_: &Args, mesh: MeshSet) -> Self {
+    pub fn new(mesh: MeshSet) -> Self {
         let state = State {
             curr_vertex: mesh.vertex.clone(),
             prev_vertex: mesh.vertex.clone(),
@@ -111,7 +111,7 @@ impl Backend {
         self.state.prev_dt = prev_dt;
     }
 
-    pub fn load_state(_: &Args, frame: i32, dirpath: &str) -> Self {
+    pub fn load_state(frame: i32, dirpath: &str) -> Self {
         let (mesh, state) = {
             let path_mesh = format!("{}/meshset.bin.gz", dirpath);
             let path_state = format!("{}/state_{}.bin.gz", dirpath, frame);
@@ -126,9 +126,15 @@ impl Backend {
         }
     }
 
-    fn save_state(&self, args: &Args, _scene: &Scene, dataset: &DataSet) {
-        let path_mesh = format!("{}/meshset.bin.gz", args.output);
-        let path_dataset = format!("{}/dataset.bin.gz", args.output);
+    fn save_state(
+        &self,
+        program_args: &ProgramArgs,
+        sim_args: &SimArgs,
+        _scene: &Scene,
+        dataset: &DataSet,
+    ) {
+        let path_mesh = format!("{}/meshset.bin.gz", program_args.output);
+        let path_dataset = format!("{}/dataset.bin.gz", program_args.output);
         info!(">>> saving state started...");
         if !std::path::Path::new(&path_dataset).exists() {
             info!("saving dataset to {}", path_dataset);
@@ -138,16 +144,13 @@ impl Backend {
             info!("saving meshset to {}", path_mesh);
             super::save(&self.mesh, path_mesh.as_str());
         }
-        let path_state = format!("{}/state_{}.bin.gz", args.output, self.state.curr_frame);
+        let path_state = format!(
+            "{}/state_{}.bin.gz",
+            program_args.output, self.state.curr_frame
+        );
         info!("saving state to {}...", path_state);
         super::save(&self.state, path_state.as_str());
-        super::remove_old_files(
-            &args.output,
-            "state_",
-            ".bin.gz",
-            args.keep_states,
-            self.state.curr_frame,
-        );
+        super::remove_old_states(program_args, sim_args.keep_states, self.state.curr_frame);
         info!("<<< save state done.");
     }
 
@@ -169,15 +172,29 @@ impl Backend {
         }
     }
 
-    pub fn run(&mut self, args: &Args, dataset: DataSet, mut param: ParamSet, scene: Scene) {
-        let finished_path = std::path::Path::new(args.output.as_str()).join("finished.txt");
+    pub fn run(
+        &mut self,
+        program_args: &ProgramArgs,
+        sim_args: &SimArgs,
+        dataset: DataSet,
+        mut param: ParamSet,
+        scene: Scene,
+    ) {
+        let initialize_finish_path =
+            std::path::Path::new(program_args.output.as_str()).join("initialize_finish.txt");
+        let finished_path = std::path::Path::new(program_args.output.as_str()).join("finished.txt");
         if finished_path.exists() {
             std::fs::remove_file(finished_path.clone()).unwrap();
         }
-        unsafe {
-            initialize(&dataset, &param, args.use_thrust);
+        if initialize_finish_path.exists() {
+            std::fs::remove_file(initialize_finish_path.clone()).unwrap();
         }
-        if args.load > 0 {
+        if unsafe { initialize(&dataset, &param) } {
+            write_current_time_to_file(initialize_finish_path.to_str().unwrap()).unwrap();
+        } else {
+            panic!("failed to initialize backend");
+        }
+        if program_args.load > 0 && !sim_args.disable_contact {
             self.update_bvh();
             unsafe {
                 update_dyn(
@@ -192,21 +209,47 @@ impl Backend {
         let (task_sender, task_receiver) = mpsc::channel();
         let (result_sender, result_receiver) = mpsc::channel();
 
-        std::thread::spawn(move || {
-            while let Ok((vertex, face, edge)) = task_receiver.recv() {
-                let face = builder::build_bvh(&vertex, Some(&face));
-                let edge = builder::build_bvh(&vertex, Some(&edge));
-                let vertex = builder::build_bvh::<1>(&vertex, None);
-                let _ = result_sender.send(BvhSet { face, edge, vertex });
-            }
-        });
+        if !sim_args.disable_contact {
+            std::thread::spawn(move || {
+                while let Ok((vertex, face, edge)) = task_receiver.recv() {
+                    let face = builder::build_bvh(&vertex, Some(&face));
+                    let edge = builder::build_bvh(&vertex, Some(&edge));
+                    let vertex = builder::build_bvh::<1>(&vertex, None);
+                    let _ = result_sender.send(BvhSet { face, edge, vertex });
+                }
+            });
+        }
 
         let mut task_sent = false;
         loop {
-            constraint = scene.make_constraint(args, self.state.time, &self.mesh);
+            if let Ok(output) = std::process::Command::new("nvidia-smi")
+                .arg("--query-gpu=clocks.current.sm")
+                .arg("--format=csv,noheader,nounits")
+                .output()
+            {
+                if let Ok(clock_str) = String::from_utf8(output.stdout) {
+                    let clock = clock_str.trim();
+                    info!("GPU SM Clock: {} MHz", clock);
+
+                    // Name: SM Clock Speed
+                    // Format: list[(vid_time,clock)]
+                    // Description:
+                    // GPU SM clock speed sampled at each simulation time step.
+                    // The format is (time) -> (clock), where time is the simulation time and clock is the SM clock speed.
+                    /*== push "clock" ==*/
+                    let mut clock_log = OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(format!("{}/data/clock.out", program_args.output).as_str())
+                        .unwrap();
+                    writeln!(clock_log, "{} {}", self.state.time, clock).unwrap();
+                }
+            }
+
+            constraint = scene.make_constraint(self.state.time);
             let mut state_saved = false;
             unsafe { update_constraint(&constraint) };
-            let new_frame = (self.state.time * args.fps).floor() as i32;
+            let new_frame = (self.state.time * sim_args.fps).floor() as i32;
             if new_frame != self.state.curr_frame {
                 // Name: Time Per Video Frame
                 // Format: list[(vid_time,ms)]
@@ -216,7 +259,7 @@ impl Backend {
                 let mut time_per_frame = OpenOptions::new()
                     .create(true)
                     .append(true)
-                    .open(format!("{}/data/time_per_frame.out", args.output).as_str())
+                    .open(format!("{}/data/time_per_frame.out", program_args.output).as_str())
                     .unwrap();
                 // Name: Mapping of Video Frame to Simulation Time
                 // Format: list[(int,ms)]
@@ -227,51 +270,53 @@ impl Backend {
                 let mut frame_to_time = OpenOptions::new()
                     .create(true)
                     .append(true)
-                    .open(format!("{}/data/frame_to_time.out", args.output).as_str())
+                    .open(format!("{}/data/frame_to_time.out", program_args.output).as_str())
                     .unwrap();
                 let curr_time = Instant::now();
                 let elapsed_time = curr_time - last_time;
                 self.fetch_state(&dataset, &param);
-                if task_sent {
-                    match result_receiver.try_recv() {
-                        Ok(bvh) => {
-                            info!("bvh update...");
-                            let n_surface_vert = self.mesh.mesh.mesh.surface_vert_count;
-                            let vert: Matrix3xX<f32> = self
-                                .state
-                                .curr_vertex
-                                .columns(0, n_surface_vert)
-                                .into_owned();
-                            self.bvh = Box::new(Some(bvh));
-                            unsafe {
-                                update_bvh(self.bvh.as_ref().as_ref().unwrap());
+                if !sim_args.disable_contact {
+                    if task_sent {
+                        match result_receiver.try_recv() {
+                            Ok(bvh) => {
+                                info!("bvh update...");
+                                let n_surface_vert = self.mesh.mesh.mesh.surface_vert_count;
+                                let vert: Matrix3xX<f32> = self
+                                    .state
+                                    .curr_vertex
+                                    .columns(0, n_surface_vert)
+                                    .into_owned();
+                                self.bvh = Box::new(Some(bvh));
+                                unsafe {
+                                    update_bvh(self.bvh.as_ref().as_ref().unwrap());
+                                }
+                                let data = (
+                                    vert,
+                                    self.mesh.mesh.mesh.face.clone(),
+                                    self.mesh.mesh.mesh.edge.clone(),
+                                );
+                                task_sender.send(data).unwrap();
                             }
-                            let data = (
-                                vert,
-                                self.mesh.mesh.mesh.face.clone(),
-                                self.mesh.mesh.mesh.edge.clone(),
-                            );
-                            task_sender.send(data).unwrap();
+                            Err(mpsc::TryRecvError::Empty) => {}
+                            Err(mpsc::TryRecvError::Disconnected) => {
+                                panic!("bvh thread disconnected");
+                            }
                         }
-                        Err(mpsc::TryRecvError::Empty) => {}
-                        Err(mpsc::TryRecvError::Disconnected) => {
-                            panic!("bvh thread disconnected");
-                        }
+                    } else {
+                        let n_surface_vert = self.mesh.mesh.mesh.surface_vert_count;
+                        let vert: Matrix3xX<f32> = self
+                            .state
+                            .curr_vertex
+                            .columns(0, n_surface_vert)
+                            .into_owned();
+                        let data = (
+                            vert,
+                            self.mesh.mesh.mesh.face.clone(),
+                            self.mesh.mesh.mesh.edge.clone(),
+                        );
+                        task_sender.send(data).unwrap();
+                        task_sent = true;
                     }
-                } else {
-                    let n_surface_vert = self.mesh.mesh.mesh.surface_vert_count;
-                    let vert: Matrix3xX<f32> = self
-                        .state
-                        .curr_vertex
-                        .columns(0, n_surface_vert)
-                        .into_owned();
-                    let data = (
-                        vert,
-                        self.mesh.mesh.mesh.face.clone(),
-                        self.mesh.mesh.mesh.edge.clone(),
-                    );
-                    task_sender.send(data).unwrap();
-                    task_sent = true;
                 }
                 self.state.curr_frame = new_frame;
                 writeln!(time_per_frame, "{} {}", new_frame, elapsed_time.as_millis()).unwrap();
@@ -281,7 +326,10 @@ impl Backend {
                     self.state.curr_frame, self.state.time
                 )
                 .unwrap();
-                let path = format!("{}/vert_{}.bin.tmp", args.output, self.state.curr_frame);
+                let path = format!(
+                    "{}/vert_{}.bin.tmp",
+                    program_args.output, self.state.curr_frame
+                );
                 let mut file = OpenOptions::new()
                     .write(true)
                     .create(true)
@@ -306,29 +354,29 @@ impl Backend {
                 file.flush().unwrap();
                 std::fs::rename(path.clone(), path.replace(".tmp", "")).unwrap();
                 super::remove_old_files(
-                    &args.output,
+                    &program_args.output,
                     "vert_",
                     ".bin",
-                    args.keep_verts,
+                    sim_args.keep_verts,
                     self.state.curr_frame,
                 );
-                if args.auto_save > 0 && new_frame > 0 && new_frame % args.auto_save == 0 {
+                if sim_args.auto_save > 0 && new_frame > 0 && new_frame % sim_args.auto_save == 0 {
                     info!("auto save state...");
-                    self.save_state(args, &scene, &dataset);
+                    self.save_state(program_args, sim_args, &scene, &dataset);
                     state_saved = true;
                 }
                 last_time = Instant::now();
-                if self.state.curr_frame == args.fake_crash_frame {
+                if self.state.curr_frame == sim_args.fake_crash_frame {
                     panic!("fake crash!");
                 }
             }
 
             let save_and_quit_path =
-                std::path::Path::new(args.output.as_str()).join("save_and_quit");
+                std::path::Path::new(program_args.output.as_str()).join("save_and_quit");
             if save_and_quit_path.exists() {
                 if !state_saved {
                     info!("save_and_quit file found, saving state...");
-                    self.save_state(args, &scene, &dataset);
+                    self.save_state(program_args, sim_args, &scene, &dataset);
                 }
                 std::fs::remove_file(save_and_quit_path).unwrap_or_else(|err| {
                     println!("Failed to delete 'save_and_quit' file: {}", err);
@@ -336,17 +384,17 @@ impl Backend {
                 break;
             }
 
-            if self.state.curr_frame >= args.frames {
-                if !state_saved && args.auto_save > 0 {
+            if self.state.curr_frame >= sim_args.frames {
+                if !state_saved && sim_args.auto_save > 0 {
                     info!("simulation finished, saving state...");
-                    self.save_state(args, &scene, &dataset);
+                    self.save_state(program_args, sim_args, &scene, &dataset);
                 } else {
                     info!("simulation finished, not saving state...");
                 }
                 break;
             }
 
-            scene.update_param(args, self.state.time, &mut param);
+            scene.update_param(sim_args, self.state.time, &mut param);
             let mut result = StepResult::default();
             unsafe { advance(&mut result) };
             if !result.success() {
@@ -354,7 +402,9 @@ impl Backend {
             }
             self.state.time = result.time;
         }
-        let _ = result_receiver.try_recv();
+        if !sim_args.disable_contact {
+            let _ = result_receiver.try_recv();
+        }
         write_current_time_to_file(finished_path.to_str().unwrap()).unwrap();
     }
 }

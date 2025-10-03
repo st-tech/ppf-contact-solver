@@ -2,16 +2,74 @@
 # Author: Ryoichi Ando (ryoichi.ando@zozo.com)
 # License: Apache v2.0
 
+import os
+import shutil
 import subprocess
 import sys
-import os
 
 
-def run(command, cwd="/tmp"):
+def run(command, cwd="/tmp", use_sudo=False):
     if not os.path.exists("warmup.py"):
         print("Please run this script in the same directory as warmup.py")
         sys.exit(1)
+    if use_sudo and shutil.which("sudo"):
+        command = f"sudo {command}"
     subprocess.run(command, shell=True, cwd=cwd)
+
+
+def get_venv_path():
+    venv_dir = os.path.expanduser("~/.local/share/ppf-cts")
+    os.makedirs(venv_dir, exist_ok=True)
+    return os.path.join(venv_dir, "venv")
+
+
+def create_venv():
+    venv_path = get_venv_path()
+    if not os.path.exists(venv_path):
+        print(f"Creating virtual environment at {venv_path}")
+        result = subprocess.run([sys.executable, "-m", "venv", venv_path])
+        if result.returncode != 0:
+            print("Failed to create virtual environment")
+            # Clean up partially created venv directory if it exists
+            if os.path.exists(venv_path):
+                print(f"Cleaning up incomplete virtual environment at {venv_path}")
+                shutil.rmtree(venv_path)
+            sys.exit(1)
+
+        # Ensure pip is upgraded in the new venv
+        venv_python = os.path.join(venv_path, "bin", "python")
+        print("Upgrading pip in virtual environment...")
+        result = subprocess.run(
+            [venv_python, "-m", "pip", "install", "--upgrade", "pip"]
+        )
+        if result.returncode != 0:
+            print("Failed to upgrade pip in virtual environment")
+            # Clean up venv directory if pip upgrade fails
+            if os.path.exists(venv_path):
+                print(
+                    f"Cleaning up virtual environment at {venv_path} due to pip failure"
+                )
+                shutil.rmtree(venv_path)
+            sys.exit(1)
+    else:
+        print(f"Virtual environment already exists at {venv_path}")
+    return venv_path
+
+
+def get_venv_python():
+    venv_path = get_venv_path()
+    return os.path.join(venv_path, "bin", "python")
+
+
+def get_venv_pip():
+    venv_path = get_venv_path()
+    return os.path.join(venv_path, "bin", "pip")
+
+
+def run_in_venv(command):
+    venv_path = get_venv_path()
+    activate_cmd = f"source {venv_path}/bin/activate && {command}"
+    subprocess.run(activate_cmd, shell=True, executable="/bin/bash")
 
 
 def create_clang_config():
@@ -64,6 +122,7 @@ def list_packages():
     packages = [
         "curl",
         "python3-pip",
+        "python3-venv",
         "build-essential",
         "clang",
         "clangd",
@@ -71,7 +130,6 @@ def list_packages():
         "zip",
         "unzip",
         "cmake",
-        "python3-venv",
         "xorg-dev",
         "libgl1-mesa-dev",
         "libglu1-mesa-dev",
@@ -90,9 +148,9 @@ def python_packages():
         "plyfile",
         "requests",
         "gdown",
-        "numba",
         "trimesh",
         "pyrender",
+        "mitsuba",
         "pywavefront",
         "matplotlib",
         "tqdm",
@@ -115,8 +173,18 @@ def python_packages():
     return python_packages
 
 
+def dump_python_requirements(path):
+    python_reqs = python_packages()
+    with open(path, "w") as f:
+        f.write("\n".join(python_reqs) + "\n")
+
+
 def install_lazygit():
-    if not os.path.exists("/usr/local/bin/lazygit"):
+    home_bin = os.path.expanduser("~/.local/bin")
+    os.makedirs(home_bin, exist_ok=True)
+    lazygit_path = os.path.join(home_bin, "lazygit")
+
+    if not os.path.exists(lazygit_path):
         print("installing lazygit")
         cmd = 'curl -s "https://api.github.com/repos/jesseduffield/lazygit/releases/latest" | grep -Po \'"tag_name": "v\\K[^"]*\''
         result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
@@ -125,91 +193,293 @@ def install_lazygit():
         url = f"https://github.com/jesseduffield/lazygit/releases/latest/download/lazygit_{latest_version}_Linux_x86_64.tar.gz"
         subprocess.run(["curl", "-Lo", "lazygit.tar.gz", url], cwd="/tmp")
         subprocess.run(["tar", "xf", "lazygit.tar.gz"], cwd="/tmp")
-        subprocess.run(["install", "lazygit", "/usr/local/bin"], cwd="/tmp")
+        shutil.copy("/tmp/lazygit", lazygit_path)
+        os.chmod(lazygit_path, 0o755)
 
 
 def install_nvim():
-    print("installing nvim")
-    run(
-        "curl -LO https://github.com/neovim/neovim/releases/latest/download/nvim-linux-x86_64.tar.gz"
-    )
-    run("tar -C /opt -xzf nvim-linux-x86_64.tar.gz")
-    run("ln -s /opt/nvim-linux-x86_64/bin/nvim /usr/bin/nvim")
-    run("apt install -y fzf fd-find bat")
-    run("/root/.cargo/bin/rustup component add rust-analyzer")
-    run("ln -s $(which fdfind) /usr/bin/fd")
-    run("ln -s $(which batcat) /usr/bin/bat")
+    local_opt = os.path.expanduser("~/.local/opt")
+    local_bin = os.path.expanduser("~/.local/bin")
+    nvim_link = os.path.join(local_bin, "nvim")
+
+    # Check if nvim is already installed
+    if os.path.exists(nvim_link) or shutil.which("nvim"):
+        print("nvim is already installed, skipping...")
+    else:
+        print("installing nvim")
+        os.makedirs(local_opt, exist_ok=True)
+        os.makedirs(local_bin, exist_ok=True)
+
+        run(
+            "curl -LO https://github.com/neovim/neovim/releases/latest/download/nvim-linux-x86_64.tar.gz"
+        )
+        run(f"tar -C {local_opt} -xzf nvim-linux-x86_64.tar.gz")
+        if not os.path.exists(nvim_link):
+            os.symlink(f"{local_opt}/nvim-linux-x86_64/bin/nvim", nvim_link)
+
+    # Install neovim dependencies
+    print("Installing neovim dependencies...")
+    nvim_deps = ["fzf", "fd-find", "bat", "ripgrep"]
+    run(f"apt install -y {' '.join(nvim_deps)}", use_sudo=True)
+    run("~/.cargo/bin/rustup component add rust-analyzer")
+
+    # Create user-local symlinks if commands exist
+    if shutil.which("fdfind"):
+        fd_link = os.path.join(local_bin, "fd")
+        if not os.path.exists(fd_link):
+            fdfind = shutil.which("fdfind")
+            if fdfind:
+                os.symlink(fdfind, fd_link)
+    if shutil.which("batcat"):
+        bat_link = os.path.join(local_bin, "bat")
+        if not os.path.exists(bat_link):
+            batcat = shutil.which("batcat")
+            if batcat:
+                os.symlink(batcat, bat_link)
 
 
 def install_lazyvim():
+    nvim_config_dir = os.path.expanduser("~/.config/nvim")
+
+    # Check if nvim config already exists
+    if os.path.exists(nvim_config_dir):
+        print(
+            f"nvim config already exists at {nvim_config_dir}, skipping LazyVim installation..."
+        )
+        return
+
     print("installing lazyvim")
     run("git clone https://github.com/LazyVim/starter ~/.config/nvim")
     run("rm -rf ~/.config/nvim/.git")
 
 
 def install_fish():
-    script_dir = os.path.dirname(os.path.realpath(__file__))
-    print("installing fish")
-    run("apt-add-repository ppa:fish-shell/release-3")
-    run("apt update")
-    run("apt install -y fish")
-    run("chsh -s /usr/bin/fish")
-    run("fish -c exit")
-    run("echo 'fish_add_path $HOME/.cargo/bin' >> ~/.config/fish/config.fish")
-    run("echo 'fish_add_path /usr/local/cuda/bin' >> ~/.config/fish/config.fish")
-    run(
-        f"echo 'set -x PYTHONPATH $PYTHONPATH {script_dir}' >> ~/.config/fish/config.fish"
-    )
+    # Install fish if not present
+    if not shutil.which("fish"):
+        print("Installing Fish shell...")
+        run("apt install -y fish", use_sudo=True)
+
+    print("After installation, run: chsh -s $(which fish)")
+
+    config_dir = os.path.expanduser("~/.config/fish")
+    os.makedirs(config_dir, exist_ok=True)
+    config_file = os.path.join(config_dir, "config.fish")
+
+    # Check if fish is installed
+    if shutil.which("fish"):
+        run("fish -c exit")
+
+        # Check if config.fish is a symlink
+        if os.path.islink(config_file):
+            print(f"Warning: {config_file} is a symlink. Skipping fish configuration.")
+        else:
+            # Create config file if it doesn't exist
+            if not os.path.exists(config_file):
+                with open(config_file, "w") as f:
+                    f.write("# Fish configuration\n")
+
+            # Add paths to fish config
+            with open(config_file, "a") as f:
+                f.write("\n# Added by warmup.py\n")
+                f.write("fish_add_path $HOME/.local/bin\n")
+                f.write("fish_add_path $HOME/.cargo/bin\n")
+                f.write("fish_add_path /usr/local/cuda/bin\n")
 
 
 def install_oh_my_zsh():
     script_dir = os.path.dirname(os.path.realpath(__file__))
-    print("installing oh-my-zsh")
-    run("apt install -y zsh")
-    run(
-        'sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)"',
-        cwd=script_dir,
-    )
-    run("zsh -c exit")
-    run("echo 'export PATH=$HOME/.cargo/bin:$PATH' >> ~/.zshrc")
-    run("echo 'export PATH=/usr/local/cuda/bin:$PATH' >> ~/.zshrc")
-    run(f"echo 'export PYTHONPATH={script_dir}:$PYTHONPATH' >> ~/.zshrc")
 
+    # Install zsh if not present
+    if not shutil.which("zsh"):
+        print("Installing Zsh...")
+        run("apt install -y zsh", use_sudo=True)
 
-def install_meshplot():
-    run("git clone https://github.com/skoch9/meshplot /tmp/meshplot")
-    run("pip3 install --ignore-installed /tmp/meshplot")
+    if shutil.which("zsh"):
+        print("installing oh-my-zsh")
+        run(
+            'sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" "" --unattended',
+            cwd=script_dir,
+        )
+        run("zsh -c exit")
+
+        zshrc = os.path.expanduser("~/.zshrc")
+        with open(zshrc, "a") as f:
+            f.write("\n# Added by warmup.py\n")
+            f.write("export PATH=$HOME/.local/bin:$PATH\n")
+            f.write("export PATH=$HOME/.cargo/bin:$PATH\n")
+            f.write("export PATH=/usr/local/cuda/bin:$PATH\n")
+            f.write("export PYTHONPATH={script_dir}:$PYTHONPATH\n")
+            f.write("# Activate virtual environment\n")
+            f.write("source {venv_path}/bin/activate\n")
 
 
 def install_sdf():
+    pip_path = get_venv_pip()
     run("git clone https://github.com/fogleman/sdf.git /tmp/sdf")
-    run("pip3 install /tmp/sdf")
+    run(f"{pip_path} install /tmp/sdf")
 
 
 def reinstall_pyopengl():
-    run("pip3 uninstall -y pyopengl")
-    run("pip3 install pyopengl==3.1.5")
+    pip_path = get_venv_pip()
+    run(f"{pip_path} uninstall -y pyopengl")
+    run(f"{pip_path} install pyopengl==3.1.5")
 
 
 def setup():
     script_dir = os.path.dirname(os.path.realpath(__file__))
-    run("apt update")
-    run("apt install -y locales-all")
-    run("DEBIAN_FRONTEND=noninteractive apt install -y " + " ".join(list_packages()))
-    run("pip3 install --ignore-installed " + " ".join(python_packages()))
-    install_meshplot()
+
+    # Install system packages automatically
+    print("Installing system packages...")
+    packages = list_packages()
+    if shutil.which("apt"):
+        # Update package list
+        print("Running: apt update")
+        run("apt update", use_sudo=True)
+
+        # Install packages
+        print(f"Installing packages: {' '.join(packages)}")
+        run(f"apt install -y {' '.join(packages)}", use_sudo=True)
+        print("System packages installed successfully")
+    else:
+        print("Note: apt not found. Please install these packages manually:")
+        sys.exit(1)
+
+    print("")
+
+    # Create virtual environment first
+    venv_path = create_venv()
+
+    # Verify pip exists after venv creation
+    pip_path = get_venv_pip()
+    if not os.path.exists(pip_path):
+        print(f"Error: pip not found at {pip_path}")
+        print("Trying to bootstrap pip...")
+        venv_python = get_venv_python()
+        result = subprocess.run([venv_python, "-m", "ensurepip", "--upgrade"])
+        if result.returncode != 0 or not os.path.exists(pip_path):
+            print("Failed to install pip in virtual environment")
+            # Clean up venv directory if pip bootstrap fails
+            if os.path.exists(venv_path):
+                print(
+                    f"Cleaning up virtual environment at {venv_path} due to pip bootstrap failure"
+                )
+                shutil.rmtree(venv_path)
+            sys.exit(1)
+
+    # Check if CUDA is installed
+    if not os.path.exists("/usr/local/cuda/bin/nvcc"):
+        print("CUDA toolkit not found at /usr/local/cuda")
+        print("Installing CUDA toolkit...")
+        if shutil.which("apt"):
+            # Install CUDA toolkit
+            cuda_packages = ["nvidia-cuda-toolkit", "nvidia-cuda-dev"]
+            print(f"Installing CUDA packages: {' '.join(cuda_packages)}")
+            run(f"apt install -y {' '.join(cuda_packages)}", use_sudo=True)
+            print("CUDA packages installed successfully")
+    else:
+        print("CUDA toolkit found at /usr/local/cuda")
+
+    # Install Python packages in virtual environment
+    print("Installing Python packages in virtual environment...")
+    run(f"{pip_path} install --upgrade pip")
+    run(f"{pip_path} install " + " ".join(python_packages()))
     install_sdf()
-    run("curl -fsSL https://deb.nodesource.com/setup_21.x | bash -")
-    run("apt install -y nodejs")
-    run("curl https://www.npmjs.com/install.sh | sh")
+
+    # Node.js installation (user-level)
+    print("Installing Node.js via nvm (Node Version Manager)...")
+    run(
+        "curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.0/install.sh | bash"
+    )
+
+    # Rust installation (user-level)
+    print("Installing Rust...")
     run("curl https://sh.rustup.rs -sSf | sh -s -- -y")
-    run(f"echo 'export PYTHONPATH={script_dir}:$PYTHONPATH' >> ~/.bashrc")
+    # Note: rustup installer automatically adds . "$HOME/.cargo/env" to .bashrc
+
+    # Update .bashrc with necessary paths (but NOT .venv)
+    bashrc = os.path.expanduser("~/.bashrc")
+
+    # Read existing bashrc content
+    try:
+        with open(bashrc) as f:
+            bashrc_content = f.read()
+    except FileNotFoundError:
+        bashrc_content = ""
+
+    paths_to_add = []
+
+    # Check and add paths if not already present
+    # Check for both variations of the local bin path
+    if (
+        "$HOME/.local/bin" not in bashrc_content
+        and "~/.local/bin" not in bashrc_content
+        and "${HOME}/.local/bin" not in bashrc_content
+    ):
+        paths_to_add.append("export PATH=$HOME/.local/bin:$PATH")
+
+    # Check for PYTHONPATH
+    if (
+        f"PYTHONPATH={script_dir}" not in bashrc_content
+        and f"PYTHONPATH={script_dir}:" not in bashrc_content
+    ):
+        paths_to_add.append(f"export PYTHONPATH={script_dir}:$PYTHONPATH")
+
+    # Check for CUDA path
+    if "/usr/local/cuda/bin" not in bashrc_content:
+        paths_to_add.append("export PATH=/usr/local/cuda/bin:$PATH")
+
+    if paths_to_add:
+        with open(bashrc, "a") as f:
+            f.write("\n# Added by warmup.py\n")
+            for path in paths_to_add:
+                f.write(f"{path}\n")
+        print(f"Added {len(paths_to_add)} path(s) to .bashrc")
+    else:
+        print("All paths already present in .bashrc")
+
+    # Make paths active in current session
+    os.environ["PATH"] = (
+        os.path.expanduser("~/.cargo/bin")
+        + ":"
+        + os.path.expanduser("~/.local/bin")
+        + ":"
+        + os.environ.get("PATH", "")
+    )
+    os.environ["PYTHONPATH"] = script_dir + ":" + os.environ.get("PYTHONPATH", "")
+    print("Paths activated for current session")
+
+    # Print instructions for .venv usage
+    print("\n" + "=" * 60)
+    print("PYTHON VIRTUAL ENVIRONMENT:")
+    print("=" * 60)
+    print(f"Virtual environment created at: {venv_path}")
+    print("To use Python packages, always use explicit paths:")
+    print(f"  Python: {venv_path}/bin/python")
+    print(f"  Pip: {venv_path}/bin/pip")
+    print("Or activate manually when needed:")
+    print(f"  source {venv_path}/bin/activate")
+    print("=" * 60 + "\n")
+
     reinstall_pyopengl()
 
 
 def set_tmux():
-    print("installing tmux")
-    run("apt install -y tmux")
+    # Install tmux if not present
+    if not shutil.which("tmux"):
+        print("Installing tmux...")
+        run("apt install -y tmux", use_sudo=True)
+
+    if not shutil.which("tmux"):
+        print("tmux installation failed.")
+        return
+
+    tmux_config_file = os.path.expanduser("~/.tmux.conf")
+
+    # Check if it's a symlink
+    if os.path.islink(tmux_config_file):
+        print(f"Warning: {tmux_config_file} is a symlink. Skipping tmux configuration.")
+        return
+
     tmux_config_commands = [
         "set-option -g prefix C-t",
         "set-option -g status off",
@@ -223,13 +493,16 @@ def set_tmux():
         "bind k select-pane -U",
         "bind l select-pane -R",
     ]
-    with open(os.path.expanduser("~/.tmux.conf"), "w") as f:
+    with open(tmux_config_file, "w") as f:
         for command in tmux_config_commands:
             f.write(command + "\n")
 
 
 def set_time():
-    run("apt-get install ntp")
+    # Install NTP if not present
+    print("Installing NTP...")
+    run("apt install -y ntp", use_sudo=True)
+    print("NTP service installed and configured")
 
 
 def start_jupyter():
@@ -248,27 +521,24 @@ def start_jupyter():
             f.write("c = get_config()\n")
             f.write("c.Completer.use_jedi = False")
 
-    override_file = "/usr/local/share/jupyter/lab/settings/overrides.json"
+    # Use user-local Jupyter configuration directory instead of system-wide
+    override_file = os.path.expanduser(
+        "~/.jupyter/lab/user-settings/@jupyterlab/apputils-extension/themes.jupyterlab-settings"
+    )
     if not os.path.exists(override_file):
         os.makedirs(os.path.dirname(override_file), exist_ok=True)
         with open(override_file, "w") as f:
             lines = """{
-  "@jupyterlab/apputils-extension:themes": {
     "theme": "JupyterLab Dark"
-  }
-}
-"""
+}"""
             f.write(lines)
 
     try:
-        command = "jupyter-lab -y --no-browser --port=8080 --ip=0.0.0.0 --allow-root --NotebookApp.token='' --NotebookApp.password='' --NotebookApp.allow_origin='*'"
+        venv_python = get_venv_python()
+        command = f"{venv_python} -m jupyterlab -y --allow-root --no-browser --port=8080 --ip=0.0.0.0 --NotebookApp.token='' --NotebookApp.password='' --NotebookApp.allow_origin='*'"
         env = os.environ.copy()
         key = "PYTHONPATH"
-        if key in env:
-            if script_dir not in env[key]:
-                env[key] += f":{script_dir}"
-        else:
-            env[key] = script_dir
+        env[key] = script_dir
         subprocess.run(command, shell=True, cwd=examples_dir, env=env)
     except KeyboardInterrupt:
         print("jupyterlab shutdown")
@@ -276,60 +546,98 @@ def start_jupyter():
 
 def build_docs():
     script_dir = os.path.dirname(os.path.realpath(__file__))
-    run("sphinx-build -b html ./ ./_build", cwd=os.path.join(script_dir, "docs"))
+    sphinx_build = os.path.join(get_venv_path(), "bin", "sphinx-build")
+    run(f"{sphinx_build} -b html ./ ./_build", cwd=os.path.join(script_dir, "docs"))
 
 
 def make_docs():
     from frontend import App
+    from frontend._param_ import app_param, object_param, ParamHolder
 
-    with open(os.path.join("docs", "parameters.rst"), "w") as file:
-        file.write(export_param_sphinx(App.get_default_param()))
+    # Generate global parameters documentation
+    with open(os.path.join("docs", "global_parameters.rst"), "w") as file:
+        file.write(export_param_sphinx(App.get_default_param(), title="global parameters"))
+
+    # Generate object parameters documentation
+    with open(os.path.join("docs", "object_parameters.rst"), "w") as file:
+        file.write(export_object_param_sphinx())
+
     with open(os.path.join("docs", "logs.rst"), "w") as file:
         file.write(export_log_sphinx())
     print("Sphinx .rst files has been exported.")
 
 
-def export_param_sphinx(param):
+def export_param_sphinx(param, title="parameters"):
     rst_content = []
 
-    title = "parameters"
     rst_content.append(f"{title}\n")
     rst_content.append("=" * len(title) + "\n\n")
 
-    for name, entry in param.items():
-        doc = entry["doc"]
-        if doc["list"]:
-            rst_content.append(f"{name}\n")
-            rst_content.append("-" * len(name) + "\n\n")
+    params_dict = param._param._params
 
-            rst_content.append(".. list-table::\n\n")
-            rst_content.append("   * - Default Value\n")
+    for name, (value, short_desc, long_desc) in params_dict.items():
+        rst_content.append(f"{name}\n")
+        rst_content.append("-" * len(name) + "\n\n")
 
-            var_type = entry["type"]
-            type_dict = {
-                "bool": "bool",
-                "u8": "int",
-                "u32": "int",
-                "i32": "int",
-                "f32": "float",
-                "f64": "float",
-                "String": "str",
-            }
-            type_str = type_dict[var_type]
-            if type_str == "bool":
-                value_str = "False"
-            else:
-                value_str = entry["value"]
-                if type_str == "str":
-                    value_str = f'"{value_str}"'
-            rst_content.append(f"     - {value_str} ({type_str})\n")
+        rst_content.append(".. list-table::\n\n")
+        rst_content.append("   * - Parameter\n")
+        rst_content.append(f"     - {name}\n")
+        rst_content.append("   * - Default Value\n")
+        rst_content.append(f"     - {value}\n")
+        rst_content.append("   * - Description\n")
+        rst_content.append(f"     - {short_desc}\n")
+        if long_desc:
+            rst_content.append("   * - Details\n")
+            rst_content.append(f"     - {long_desc}\n")
 
-            for key, value in doc.items():
-                if key != "list" and value:
-                    rst_content.append(f"   * - {key}\n")
-                    rst_content.append(f"     - {value}\n")
+        rst_content.append("\n")
 
-            rst_content.append("\n")
+    return "".join(rst_content)
+
+
+def export_object_param_sphinx():
+    from frontend._param_ import object_param
+
+    rst_content = []
+
+    title = "object parameters"
+    rst_content.append(f"{title}\n")
+    rst_content.append("=" * len(title) + "\n\n")
+
+    # Collect parameters from all object types
+    obj_types = ["tri", "tet", "rod"]
+    all_params = {obj_type: object_param(obj_type) for obj_type in obj_types}
+
+    # Get unique parameter names (they should be the same across types)
+    param_names = list(all_params["tri"].keys())
+
+    for name in param_names:
+        rst_content.append(f"{name}\n")
+        rst_content.append("-" * len(name) + "\n\n")
+
+        rst_content.append(".. list-table::\n\n")
+        rst_content.append("   * - Parameter\n")
+        rst_content.append(f"     - {name}\n")
+
+        # Show default values for each type
+        rst_content.append("   * - Default Value (tri)\n")
+        rst_content.append(f"     - {all_params['tri'][name][0]}\n")
+        rst_content.append("   * - Default Value (tet)\n")
+        rst_content.append(f"     - {all_params['tet'][name][0]}\n")
+        rst_content.append("   * - Default Value (rod)\n")
+        rst_content.append(f"     - {all_params['rod'][name][0]}\n")
+
+        # Use description from tri (they should be the same)
+        short_desc = all_params["tri"][name][1]
+        long_desc = all_params["tri"][name][2]
+
+        rst_content.append("   * - Description\n")
+        rst_content.append(f"     - {short_desc}\n")
+        if long_desc:
+            rst_content.append("   * - Details\n")
+            rst_content.append(f"     - {long_desc}\n")
+
+        rst_content.append("\n")
 
     return "".join(rst_content)
 
@@ -389,10 +697,13 @@ if __name__ == "__main__":
         elif mode == "jupyter":
             start_jupyter()
         elif mode == "docs-prepare":
-            run("pip3 install sphinx sphinxawesome-theme sphinx_autobuild")
+            pip_path = get_venv_pip()
+            run(f"{pip_path} install sphinx sphinxawesome-theme sphinx_autobuild")
         elif mode == "docs-build":
             make_docs()
             build_docs()
+        elif mode == "requirements":
+            dump_python_requirements("requirements.txt")
         elif mode == "all":
             create_clang_config()
             install_nvim()
@@ -401,4 +712,5 @@ if __name__ == "__main__":
             install_lazygit()
             install_lazyvim()
     else:
+        create_venv()
         setup()

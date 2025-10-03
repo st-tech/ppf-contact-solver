@@ -67,30 +67,30 @@ impl<T: fmt::Display> fmt::Display for CVec<T> {
     }
 }
 
-pub struct CVecIterator<'a, T> {
-    data_ptr: *mut T,
-    remaining: u32,
-    _phantom: std::marker::PhantomData<&'a T>,
+pub struct CVecIter<'a, T> {
+    ptr: *const T,
+    remaining: usize,
+    _marker: std::marker::PhantomData<&'a T>,
 }
 
-impl<'a, T> CVec<T> {
-    pub fn iter(&'a self) -> CVecIterator<'a, T> {
-        CVecIterator {
-            data_ptr: self.data,
-            remaining: self.size,
-            _phantom: std::marker::PhantomData,
+impl<T> CVec<T> {
+    pub fn iter(&self) -> CVecIter<'_, T> {
+        CVecIter {
+            ptr: self.data,
+            remaining: self.size as usize,
+            _marker: std::marker::PhantomData,
         }
     }
 }
 
-impl<'a, T> Iterator for CVecIterator<'a, T> {
+impl<'a, T> Iterator for CVecIter<'a, T> {
     type Item = &'a T;
     fn next(&mut self) -> Option<Self::Item> {
         if self.remaining > 0 {
-            let next_item = unsafe { &*self.data_ptr };
-            self.data_ptr = unsafe { self.data_ptr.add(1) };
+            let item = unsafe { &*self.ptr };
+            self.ptr = unsafe { self.ptr.add(1) };
             self.remaining -= 1;
-            Some(next_item)
+            Some(item)
         } else {
             None
         }

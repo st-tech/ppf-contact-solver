@@ -6,6 +6,10 @@
 #include "../csrmat/csrmat.hpp"
 #include "../data.hpp"
 #include "../energy/energy.hpp"
+#include "../kernels/exclusive_scan.hpp"
+#include "../kernels/reduce.hpp"
+#include "../kernels/vec_ops.hpp"
+#include "../main/cuda_utils.hpp"
 #include "../simplelog/SimpleLog.h"
 #include "../solver/solver.hpp"
 #include "../strainlimiting/strainlimiting.hpp"
@@ -16,12 +20,12 @@
 #include <cassert>
 #include <limits>
 
+
 namespace tmp {
 Vec<Vec3f> eval_x;
 Vec<Vec3f> tmp_eval_x;
 Vec<Vec3f> target;
 Vec<Vec3f> velocity;
-Kinematic kinematic;
 Vec<float> tmp_scalar;
 Vec<Svd3x2> svd;
 Vec<float> force;
@@ -30,95 +34,13 @@ Vec<Mat3x3f> diag_hessian;
 FixedCSRMat fixed_hessian;
 FixedCSRMat tmp_fixed;
 DynCSRMat dyn_hess;
-unsigned active_shell_count;
 } // namespace tmp
 
 namespace main_helper {
 DataSet host_dataset, dev_dataset;
 ParamSet *param;
-bool use_thrust = false;
 
-void build_kinematic(const DataSet &host_dataset, const DataSet &dev_dataset,
-                     const ParamSet &param) {
-
-    unsigned vert_count = host_dataset.vertex.curr.size;
-    unsigned edge_count = host_dataset.mesh.mesh.edge.size;
-    unsigned face_count = host_dataset.mesh.mesh.face.size;
-    unsigned hinge_count = host_dataset.mesh.mesh.hinge.size;
-    unsigned tet_count = host_dataset.mesh.mesh.tet.size;
-    const DataSet &data = dev_dataset;
-
-    Vec<VertexKinematic> kinematic_vertex = tmp::kinematic.vertex;
-    DISPATCH_START(vert_count)
-    [data, kinematic_vertex] __device__(unsigned i) mutable {
-        kinematic_vertex[i].active = false;
-        for (unsigned j = 0; j < data.constraint.fix.size; ++j) {
-            if (i == data.constraint.fix[j].index) {
-                kinematic_vertex[i].active = true;
-                kinematic_vertex[i].kinematic =
-                    data.constraint.fix[j].kinematic;
-                kinematic_vertex[i].position = data.constraint.fix[j].position;
-            }
-        }
-        kinematic_vertex[i].rod = data.mesh.neighbor.vertex.rod.count(i) > 0;
-    } DISPATCH_END;
-
-    Vec<bool> kinematic_face = tmp::kinematic.face;
-    DISPATCH_START(face_count)
-    [data, kinematic_vertex, kinematic_face] __device__(unsigned i) mutable {
-        Vec3u face = data.mesh.mesh.face[i];
-        SVec<bool, 3> flag;
-        for (int j = 0; j < 3; ++j) {
-            flag[j] = kinematic_vertex[face[j]].active;
-        }
-        kinematic_face[i] = flag.all();
-    } DISPATCH_END;
-
-    Vec<float> tmp_face = tmp::tmp_scalar;
-    Vec<unsigned> fake_tmp_face;
-    fake_tmp_face.data = (unsigned *)tmp_face.data;
-    fake_tmp_face.size = tmp_face.size;
-    fake_tmp_face.allocated = tmp_face.allocated;
-    DISPATCH_START(face_count)
-    [data, fake_tmp_face, kinematic_face] __device__(unsigned i) mutable {
-        fake_tmp_face[i] = kinematic_face[i] ? 0 : 1;
-    } DISPATCH_END;
-    tmp::active_shell_count = utility::sum_array(fake_tmp_face, face_count);
-
-    Vec<bool> kinematic_tet = tmp::kinematic.tet;
-    DISPATCH_START(tet_count)
-    [data, kinematic_vertex, kinematic_tet] __device__(unsigned i) mutable {
-        Vec4u tet = data.mesh.mesh.tet[i];
-        SVec<bool, 3> flag;
-        for (int j = 0; j < 4; ++j) {
-            flag[j] = kinematic_vertex[tet[j]].active;
-        }
-        kinematic_tet[i] = flag.all();
-    } DISPATCH_END;
-
-    Vec<bool> kinematic_edge = tmp::kinematic.edge;
-    DISPATCH_START(edge_count)
-    [data, kinematic_vertex, kinematic_edge] __device__(unsigned i) mutable {
-        Vec2u edge = data.mesh.mesh.edge[i];
-        SVec<bool, 2> flag;
-        flag[0] = kinematic_vertex[edge[0]].active;
-        flag[1] = kinematic_vertex[edge[1]].active;
-        kinematic_edge[i] = flag.all();
-    } DISPATCH_END;
-
-    Vec<bool> kinematic_hinge = tmp::kinematic.hinge;
-    DISPATCH_START(hinge_count)
-    [data, kinematic_vertex, kinematic_hinge] __device__(unsigned i) mutable {
-        Vec4u hinge = data.mesh.mesh.hinge[i];
-        SVec<bool, 4> flag;
-        for (int j = 0; j < 4; ++j) {
-            flag[j] = kinematic_vertex[hinge[j]].active;
-        }
-        kinematic_hinge[i] = flag.all();
-    } DISPATCH_END;
-}
-
-void initialize(DataSet _host_dataset, DataSet _dev_dataset, ParamSet *_param) {
+bool initialize(DataSet _host_dataset, DataSet _dev_dataset, ParamSet *_param) {
 
     // Name: Initialization Time
     // Format: list[(int,ms)]
@@ -127,9 +49,11 @@ void initialize(DataSet _host_dataset, DataSet _dev_dataset, ParamSet *_param) {
     // Only a single record is expected.
     SimpleLog logging("initialize");
 
+    bool result = true;
     host_dataset = _host_dataset;
     dev_dataset = _dev_dataset;
     param = _param;
+
 
     unsigned vert_count = host_dataset.vertex.curr.size;
     unsigned surface_vert_count = host_dataset.surface_vert_count;
@@ -138,13 +62,8 @@ void initialize(DataSet _host_dataset, DataSet _dev_dataset, ParamSet *_param) {
     unsigned hinge_count = host_dataset.mesh.mesh.hinge.size;
     unsigned tet_count = host_dataset.mesh.mesh.tet.size;
     unsigned collision_mesh_vert_count =
-        host_dataset.constraint.mesh.active
-            ? host_dataset.constraint.mesh.vertex.size
-            : 0;
-    unsigned collision_mesh_edge_count =
-        host_dataset.constraint.mesh.active
-            ? host_dataset.constraint.mesh.edge.size
-            : 0;
+        host_dataset.constraint.mesh.vertex.size;
+    unsigned collision_mesh_edge_count = host_dataset.constraint.mesh.edge.size;
 
     unsigned shell_face_count = host_dataset.shell_face_count;
     unsigned max_n = 0;
@@ -156,16 +75,10 @@ void initialize(DataSet _host_dataset, DataSet _dev_dataset, ParamSet *_param) {
     max_n = std::max(max_n, collision_mesh_vert_count);
     max_n = std::max(max_n, collision_mesh_edge_count);
     max_n = std::max(max_n, shell_face_count);
-    utility::set_max_reduce_count(std::max(max_n, 3 * vert_count));
     tmp::tmp_scalar = Vec<float>::alloc(max_n);
     tmp::dx = Vec<float>::alloc(3 * vert_count);
     tmp::eval_x = Vec<Vec3f>::alloc(vert_count);
     tmp::tmp_eval_x = Vec<Vec3f>::alloc(vert_count);
-    tmp::kinematic.vertex = Vec<VertexKinematic>::alloc(vert_count);
-    tmp::kinematic.face = Vec<bool>::alloc(face_count);
-    tmp::kinematic.edge = Vec<bool>::alloc(edge_count);
-    tmp::kinematic.hinge = Vec<bool>::alloc(hinge_count);
-    tmp::kinematic.tet = Vec<bool>::alloc(tet_count);
     tmp::target = Vec<Vec3f>::alloc(vert_count);
     tmp::velocity = Vec<Vec3f>::alloc(vert_count);
     tmp::svd = Vec<Svd3x2>::alloc(shell_face_count);
@@ -179,27 +92,29 @@ void initialize(DataSet _host_dataset, DataSet _dev_dataset, ParamSet *_param) {
 
     contact::initialize(host_dataset, *param);
 
-    logging.push("build_kinematic");
-    build_kinematic(host_dataset, dev_dataset, *param);
-    logging.pop();
+    if (!param->disable_contact) {
+        // Name: Initial Check Intersection Time
+        // Format: list[(int,ms)]
+        // Map: initial_check_intersection
+        // Description:
+        // Time consumed to check if any intersection is detected at the
+        // beginning of the simulation.
+        // Only a single record is expected.
+        logging.push("check intersection");
+        contact::update_aabb(host_dataset, dev_dataset, dev_dataset.vertex.prev,
+                             dev_dataset.vertex.curr, *param);
+        contact::update_collision_mesh_aabb(host_dataset, dev_dataset, *param);
+        if (!contact::check_intersection(dev_dataset, dev_dataset.vertex.prev,
+                                         *param) ||
+            !contact::check_intersection(dev_dataset, dev_dataset.vertex.curr,
+                                         *param)) {
 
-    // Name: Initial Check Intersection Time
-    // Format: list[(int,ms)]
-    // Map: initial_check_intersection
-    // Description:
-    // Time consumed to check if any intersection is detected at the
-    // beginning of the simulation.
-    // Only a single record is expected.
-    logging.push("check intersection");
-    contact::update_aabb(host_dataset, dev_dataset, dev_dataset.vertex.prev,
-                         dev_dataset.vertex.curr, tmp::kinematic.vertex,
-                         *param);
-    contact::update_collision_mesh_aabb(host_dataset, dev_dataset, *param);
-    assert(contact::check_intersection(dev_dataset, tmp::kinematic,
-                                       dev_dataset.vertex.prev, *param));
-    assert(contact::check_intersection(dev_dataset, tmp::kinematic,
-                                       dev_dataset.vertex.curr, *param));
-    logging.pop();
+            logging.message("### intersection detected");
+            result = false;
+        }
+        logging.pop();
+    }
+    return result;
 }
 
 StepResult advance() {
@@ -220,7 +135,6 @@ StepResult advance() {
 
     DataSet &host_data = host_dataset;
     DataSet &data = dev_dataset;
-    Kinematic &kinematic = tmp::kinematic;
     ParamSet &prm = *param;
     Vec<float> tmp_scalar = tmp::tmp_scalar;
     Vec<Vec3f> &eval_x = tmp::eval_x;
@@ -240,20 +154,36 @@ StepResult advance() {
 
     SimpleLog::set(prm.time);
 
-    logging.push("build_kinematic");
-    build_kinematic(host_dataset, dev_dataset, *param);
-    logging.pop();
+    // Define all data array pointers once for reuse throughout the function
+    auto vertex_curr = data.vertex.curr.data;
+    auto vertex_prev = data.vertex.prev.data;
+    auto prop_vertex = data.prop.vertex.data;
+    auto prop_face = data.prop.face.data;
+    auto prop_tet = data.prop.tet.data;
+    auto constraint_fix = data.constraint.fix.data;
+    auto mesh_face = data.mesh.mesh.face.data;
+    auto tmp_scalar_data = tmp_scalar.data;
+    auto velocity_data = velocity.data;
+    auto eval_x_data = eval_x.data;
+    auto target_data = target.data;
+    auto tmp_eval_x_data = tmp_eval_x.data;
+    auto dx_data = dx.data;
+    auto svd_data = svd.data;
+    float prev_dt = prm.prev_dt;
+    Vec3f gravity = prm.gravity;
+    bool fitting = prm.fitting;
+    float fix_xz_val = prm.fix_xz;
 
     tmp_scalar.clear();
     DISPATCH_START(vertex_count)
-    [data, tmp_scalar, velocity, kinematic,
-     prm] __device__(unsigned i) mutable {
-        Vec3f u = (data.vertex.curr[i] - data.vertex.prev[i]) / prm.prev_dt;
-        velocity[i] = u;
-        tmp_scalar[i] = kinematic.vertex[i].active ? 0.0f : u.squaredNorm();
+    [vertex_curr, vertex_prev, prop_vertex, tmp_scalar_data, velocity_data, prev_dt] __device__(unsigned i) mutable {
+        Vec3f u = (vertex_curr[i] - vertex_prev[i]) / prev_dt;
+        velocity_data[i] = u;
+        tmp_scalar_data[i] =
+            prop_vertex[i].fix_index > 0 ? 0.0f : u.squaredNorm();
     } DISPATCH_END;
     float max_u =
-        sqrtf(utility::max_array(tmp_scalar.data, vertex_count, 0.0f));
+        sqrtf(kernels::max_array(tmp_scalar.data, vertex_count, 0.0f));
 
     // Name: Max Velocity
     // Format: list[(vid_time,m/s)]
@@ -265,20 +195,16 @@ StepResult advance() {
     if (shell_face_count) {
         tmp_scalar.clear();
         DISPATCH_START(shell_face_count)
-        [data, tmp_scalar, kinematic] __device__(unsigned i) mutable {
-            if (!kinematic.face[i]) {
-                tmp_scalar[i] = data.prop.face[i].mass;
-            }
+        [prop_face, tmp_scalar_data] __device__(unsigned i) mutable {
+            tmp_scalar_data[i] = prop_face[i].mass;
         } DISPATCH_END;
     }
 
     if (tet_count) {
         tmp_scalar.clear();
         DISPATCH_START(tet_count)
-        [data, tmp_scalar, kinematic] __device__(unsigned i) mutable {
-            if (!kinematic.tet[i]) {
-                tmp_scalar[i] = data.prop.tet[i].mass;
-            }
+        [prop_tet, tmp_scalar_data] __device__(unsigned i) mutable {
+            tmp_scalar_data[i] = prop_tet[i].mass;
         } DISPATCH_END;
     }
 
@@ -300,44 +226,37 @@ StepResult advance() {
         utility::compute_svd(data, data.vertex.curr, svd, prm);
         tmp_scalar.clear();
         DISPATCH_START(shell_face_count)
-        [svd, tmp_scalar, kinematic] __device__(unsigned i) mutable {
-            if (!kinematic.face[i]) {
-                tmp_scalar[i] = fmaxf(svd[i].S[0], svd[i].S[1]);
+        [prop_face, svd_data, tmp_scalar_data] __device__(unsigned i) mutable {
+            const FaceProp &prop = prop_face[i];
+            if (!prop.fixed) {
+                tmp_scalar_data[i] = fmaxf(svd_data[i].S[0], svd_data[i].S[1]) * prop.shrink;
             }
         } DISPATCH_END;
         float max_sigma =
-            utility::max_array(tmp_scalar.data, shell_face_count, 0.0f);
-        float avg_sigma = utility::sum_array(tmp_scalar, shell_face_count) /
-                          tmp::active_shell_count;
+            kernels::max_array(tmp_scalar.data, shell_face_count, 0.0f);
         // Name: Max Stretch
         // Format: list[(vid_time,float)]
         // Description:
         // Maximum stretch among all the shell elements in the scene.
         // If the maximal stretch is 2%, the recorded value is 1.02.
         logging.mark("max_sigma", max_sigma);
-
-        // Name: Average Stretch
-        // Format: list[(vid_time,float)]
-        // Description:
-        // Average stretch of all the shell elements in the scene.
-        // If the average stretch is 2%, the recorded value is 1.02.
-        logging.mark("avg_sigma", avg_sigma);
     }
 
     auto compute_target = [&](float dx) {
         DISPATCH_START(vertex_count)
-        [data, kinematic, dx, target, prm, dt] __device__(unsigned i) mutable {
-            if (kinematic.vertex[i].active) {
-                target[i] = kinematic.vertex[i].position;
+        [prop_vertex, constraint_fix, vertex_curr, vertex_prev, target_data, dx, dt, prev_dt, gravity, fitting] __device__(unsigned i) mutable {
+            if (prop_vertex[i].fix_index > 0) {
+                unsigned index = prop_vertex[i].fix_index - 1;
+                target_data[i] = constraint_fix[index].position;
             } else {
-                Vec3f &x1 = data.vertex.curr[i];
-                Vec3f &x0 = data.vertex.prev[i];
-                float tr(dt / prm.prev_dt), h2(dt * dt);
-                Vec3f y = (x1 - x0) * tr + h2 * prm.gravity;
-                if (prm.fitting) {
-                    target[i] = x1;
+                Vec3f &x1 = vertex_curr[i];
+                Vec3f &x0 = vertex_prev[i];
+                float tr(dt / prev_dt), h2(dt * dt);
+                Vec3f y = (x1 - x0) * tr + h2 * gravity;
+                if (fitting) {
+                    target_data[i] = x1;
                 } else {
-                    target[i] = x1 + y;
+                    target_data[i] = x1 + y;
                 }
             }
         } DISPATCH_END;
@@ -345,7 +264,7 @@ StepResult advance() {
 
     compute_target(dt);
 
-    eval_x.copy(data.vertex.curr);
+    kernels::copy(data.vertex.curr.data, eval_x.data, eval_x.size);
 
     double toi_advanced = 0.0f;
     unsigned step(1);
@@ -377,18 +296,17 @@ StepResult advance() {
         logging.push("matrix assembly");
 
         DISPATCH_START(vertex_count)
-        [data, eval_x, kinematic, dx, target, prm,
-         dt] __device__(unsigned i) mutable {
-            if (kinematic.vertex[i].active) {
-                Map<Vec3f>(dx.data + 3 * i) = eval_x[i] - target[i];
+        [prop_vertex, eval_x_data, target_data, dx_data] __device__(unsigned i) mutable {
+            if (prop_vertex[i].fix_index > 0) {
+                Map<Vec3f>(dx_data + 3 * i) = (eval_x_data[i] - target_data[i]);
             }
         } DISPATCH_END;
 
-        energy::embed_momentum_force_hessian(data, eval_x, kinematic, velocity,
-                                             dt, target, force, diag_hess, prm);
+        energy::embed_momentum_force_hessian(data, eval_x, velocity, dt, target,
+                                             force, diag_hess, prm);
 
-        energy::embed_elastic_force_hessian(data, eval_x, kinematic, force,
-                                            fixed_hess, dt, prm);
+        energy::embed_elastic_force_hessian(data, eval_x, force, fixed_hess, dt,
+                                            prm);
 
         if (host_data.constraint.stitch.size) {
             energy::embed_stitch_force_hessian(data, eval_x, force, fixed_hess,
@@ -397,17 +315,18 @@ StepResult advance() {
 
         tmp_fixed.copy(fixed_hess);
 
-        if (prm.strain_limit_eps && data.shell_face_count > 0) {
+        if (data.shell_face_count > 0) {
             strainlimiting::embed_strainlimiting_force_hessian(
-                data, eval_x, kinematic, force, tmp_fixed, fixed_hess, prm);
+                data, eval_x, force, tmp_fixed, fixed_hess, prm);
         }
-
         unsigned num_contact = 0;
         float dyn_consumed = 0.0f;
         unsigned max_nnz_row = 0;
-        num_contact += contact::embed_contact_force_hessian(
-            data, eval_x, kinematic, force, tmp_fixed, fixed_hess, dyn_hess,
-            max_nnz_row, dyn_consumed, dt, prm);
+        if (!param->disable_contact) {
+            num_contact += contact::embed_contact_force_hessian(
+                data, eval_x, force, tmp_fixed, fixed_hess, dyn_hess,
+                max_nnz_row, dyn_consumed, dt, prm);
+        }
 
         // Name: Consumption Ratio of Dynamic Matrix Assembly Memory
         // Format: list[(vid_time,float)]
@@ -430,7 +349,7 @@ StepResult advance() {
         logging.mark("max_nnz_row", max_nnz_row);
 
         num_contact += contact::embed_constraint_force_hessian(
-            data, eval_x, kinematic, force, tmp_fixed, fixed_hess, dt, prm);
+            data, eval_x, force, tmp_fixed, fixed_hess, dt, prm);
 
         // Name: Total Contact Count
         // Format: list[(vid_time,int)]
@@ -477,11 +396,11 @@ StepResult advance() {
 
         tmp_scalar.clear();
         DISPATCH_START(vertex_count)
-        [dx, tmp_scalar] __device__(unsigned i) mutable {
-            tmp_scalar[i] = Map<Vec3f>(dx.data + 3 * i).norm();
+        [dx_data, tmp_scalar_data] __device__(unsigned i) mutable {
+            tmp_scalar_data[i] = Map<Vec3f>(dx_data + 3 * i).norm();
         } DISPATCH_END;
 
-        float max_dx = utility::max_array(tmp_scalar.data, vertex_count, 0.0f);
+        float max_dx = kernels::max_array(tmp_scalar.data, vertex_count, 0.0f);
 
         // Name: Maximal Magnitude of Search Direction
         // Format: list[(vid_time,float)]
@@ -499,20 +418,20 @@ StepResult advance() {
         // magnitude.
         logging.mark("toi_recale", toi_recale);
 
-        tmp_eval_x.copy(eval_x);
+        kernels::copy(eval_x.data, tmp_eval_x.data, tmp_eval_x.size);
         DISPATCH_START(vertex_count)
-        [eval_x, data, toi_recale, dx] __device__(unsigned i) mutable {
-            eval_x[i] -= toi_recale * Map<Vec3f>(dx.data + 3 * i);
+        [eval_x_data, toi_recale, dx_data] __device__(unsigned i) mutable {
+            eval_x_data[i] -= toi_recale * Map<Vec3f>(dx_data + 3 * i);
         } DISPATCH_END;
 
         if (param->fix_xz) {
             DISPATCH_START(vertex_count)
-            [eval_x, data, prm] __device__(unsigned i) mutable {
-                if (eval_x[i][1] > prm.fix_xz) {
-                    float y = fmin(1.0f, eval_x[i][1] - prm.fix_xz);
-                    Vec3f z = data.vertex.prev[i];
-                    eval_x[i][0] -= y * (eval_x[i][0] - z[0]);
-                    eval_x[i][2] -= y * (eval_x[i][2] - z[2]);
+            [eval_x_data, vertex_prev, fix_xz_val] __device__(unsigned i) mutable {
+                if (eval_x_data[i][1] > fix_xz_val) {
+                    float y = fmin(1.0f, eval_x_data[i][1] - fix_xz_val);
+                    Vec3f z = vertex_prev[i];
+                    eval_x_data[i][0] -= y * (eval_x_data[i][0] - z[0]);
+                    eval_x_data[i][2] -= y * (eval_x_data[i][2] - z[2]);
                 }
             } DISPATCH_END;
         }
@@ -524,15 +443,15 @@ StepResult advance() {
         // CCD is performed to find the maximal feasible substep without
         // collision.
         logging.push("line search");
-        contact::update_aabb(host_data, data, tmp_eval_x, eval_x,
-                             tmp::kinematic.vertex, prm);
+        if (!param->disable_contact) {
+            contact::update_aabb(host_data, data, tmp_eval_x, eval_x, prm);
+        }
         float SL_toi = 1.0f;
         float toi = 1.0f;
-        toi = fmin(toi, contact::line_search(data, kinematic, tmp_eval_x,
-                                             eval_x, prm));
-        if (prm.strain_limit_eps && shell_face_count > 0) {
-            SL_toi = strainlimiting::line_search(data, kinematic, eval_x,
-                                                 tmp_eval_x, tmp_scalar, prm);
+        toi = fmin(toi, contact::line_search(data, tmp_eval_x, eval_x, prm));
+        if (shell_face_count > 0) {
+            SL_toi = strainlimiting::line_search(data, eval_x, tmp_eval_x,
+                                                 tmp_scalar, prm);
             toi = fminf(toi, SL_toi);
             // Name: Strain Limiting Time of Impact
             // Format: list[(vid_time,float)]
@@ -566,24 +485,11 @@ StepResult advance() {
         }
 
         DISPATCH_START(vertex_count)
-        [eval_x, tmp_eval_x, data, toi] __device__(unsigned i) mutable {
-            Vec3f d = toi * (eval_x[i] - tmp_eval_x[i]);
-            eval_x[i] = tmp_eval_x[i] + d;
+        [eval_x_data, tmp_eval_x_data, toi] __device__(unsigned i) mutable {
+            Vec3f d = toi * (eval_x_data[i] - tmp_eval_x_data[i]);
+            eval_x_data[i] = tmp_eval_x_data[i] + d;
         } DISPATCH_END;
 
-        // Name: Time to Check Intersection
-        // Format: list[(vid_time,ms)]
-        // Map: runtime_intersection_check
-        // Description:
-        // At the end of step, an explicit intersection check is
-        // performed. This number records the consumed time in
-        // milliseconds.
-        logging.push("check intersection");
-        if (!contact::check_intersection(data, kinematic, eval_x, prm)) {
-            logging.message("### intersection detected");
-            result.intersection_free = false;
-        }
-        logging.pop();
         if (!result.success()) {
             break;
         }
@@ -600,6 +506,22 @@ StepResult advance() {
     }
 
     if (result.success()) {
+        // Name: Time to Check Intersection
+        // Format: list[(vid_time,ms)]
+        // Map: runtime_intersection_check
+        // Description:
+        // At the end of step, an explicit intersection check is
+        // performed. This number records the consumed time in
+        // milliseconds.
+        if (!param->disable_contact) {
+            logging.push("check intersection");
+            if (!contact::check_intersection(data, eval_x, prm)) {
+                logging.message("### intersection detected");
+                result.intersection_free = false;
+            }
+            logging.pop();
+        }
+
         // Name: Advanced Fractional Step Size
         // Format: list[(vid_time,float)]
         // Description:
@@ -628,19 +550,19 @@ StepResult advance() {
         param->prev_dt = dt;
         param->time += static_cast<double>(param->prev_dt / param->playback);
 
-        dev_dataset.vertex.prev.copy(dev_dataset.vertex.curr);
-        dev_dataset.vertex.curr.copy(eval_x);
+        kernels::copy(dev_dataset.vertex.curr.data, dev_dataset.vertex.prev.data, dev_dataset.vertex.prev.size);
+        kernels::copy(eval_x.data, dev_dataset.vertex.curr.data, dev_dataset.vertex.curr.size);
 
         result.time = param->time;
     }
+
     return result;
 }
 
 void update_bvh(BVHSet bvh) {
     contact::resize_aabb(bvh);
     contact::update_aabb(host_dataset, dev_dataset, dev_dataset.vertex.curr,
-                         dev_dataset.vertex.prev, tmp::kinematic.vertex,
-                         *param);
+                         dev_dataset.vertex.prev, *param);
 }
 
 } // namespace main_helper
@@ -683,7 +605,7 @@ DataSet malloc_dataset(DataSet dataset, ParamSet param) {
          }};
 
     PropSet dev_prop_info = {mem::malloc_device(dataset.prop.vertex),
-                             mem::malloc_device(dataset.prop.rod),
+                             mem::malloc_device(dataset.prop.edge),
                              mem::malloc_device(dataset.prop.face),
                              mem::malloc_device(dataset.prop.hinge),
                              mem::malloc_device(dataset.prop.tet)};
@@ -703,23 +625,25 @@ DataSet malloc_dataset(DataSet dataset, ParamSet param) {
             mem::malloc_device(dataset.constraint.mesh.edge_bvh.node),
             mem::malloc_device(dataset.constraint.mesh.edge_bvh.level)};
 
-        VertexNeighbor dev_vertex_neighbor = {
-            mem::malloc_device(dataset.constraint.mesh.neighbor.vertex.face),
-            mem::malloc_device(dataset.constraint.mesh.neighbor.vertex.hinge),
-            mem::malloc_device(dataset.constraint.mesh.neighbor.vertex.edge),
-        };
+        tmp_collision_mesh.prop.vertex =
+            mem::malloc_device(dataset.constraint.mesh.prop.vertex);
+        tmp_collision_mesh.prop.face =
+            mem::malloc_device(dataset.constraint.mesh.prop.face);
+        tmp_collision_mesh.prop.edge =
+            mem::malloc_device(dataset.constraint.mesh.prop.edge);
 
-        HingeNeighbor dev_hinge_neighbor = {
-            mem::malloc_device(dataset.constraint.mesh.neighbor.hinge.face)};
-
-        EdgeNeighbor dev_edge_neighbor = {
-            mem::malloc_device(dataset.constraint.mesh.neighbor.edge.face)};
-
-        tmp_collision_mesh.neighbor = {
-            dev_vertex_neighbor,
-            dev_hinge_neighbor,
-            dev_edge_neighbor,
-        };
+        tmp_collision_mesh.neighbor.vertex.face =
+            mem::malloc_device(dataset.constraint.mesh.neighbor.vertex.face);
+        tmp_collision_mesh.neighbor.vertex.hinge =
+            mem::malloc_device(dataset.constraint.mesh.neighbor.vertex.hinge);
+        tmp_collision_mesh.neighbor.vertex.edge =
+            mem::malloc_device(dataset.constraint.mesh.neighbor.vertex.edge);
+        tmp_collision_mesh.neighbor.vertex.rod =
+            mem::malloc_device(dataset.constraint.mesh.neighbor.vertex.rod);
+        tmp_collision_mesh.neighbor.hinge.face =
+            mem::malloc_device(dataset.constraint.mesh.neighbor.hinge.face);
+        tmp_collision_mesh.neighbor.edge.face =
+            mem::malloc_device(dataset.constraint.mesh.neighbor.edge.face);
     }
 
     Constraint dev_constraint = {
@@ -774,7 +698,7 @@ DataSet malloc_dataset(DataSet dataset, ParamSet param) {
     return dev_dataset;
 }
 
-extern "C" void initialize(DataSet *dataset, ParamSet *param, bool use_thrust) {
+extern "C" bool initialize(DataSet *dataset, ParamSet *param) {
 
     int num_device;
     CUDA_HANDLE_ERROR(cudaGetDeviceCount(&num_device));
@@ -787,9 +711,7 @@ extern "C" void initialize(DataSet *dataset, ParamSet *param, bool use_thrust) {
     logging::info("cuda: allocating memory...");
     DataSet dev_dataset = malloc_dataset(*dataset, *param);
 
-    logging::info("use_thrust: %s", use_thrust ? "true" : "false");
-    main_helper::use_thrust = use_thrust;
-    main_helper::initialize(*dataset, dev_dataset, param);
+    return main_helper::initialize(*dataset, dev_dataset, param);
 }
 
 extern "C" void advance(StepResult *result) {

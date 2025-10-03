@@ -2,20 +2,26 @@
 # Author: Ryoichi Ando (ryoichi.ando@zozo.com)
 # License: Apache v2.0
 
+import builtins
+import colorsys
+import os
+import pickle
+import shutil
+
+from dataclasses import dataclass
+from enum import Enum
+from typing import Any, Optional
+
 import numpy as np
 import pandas as pd
-from tqdm import tqdm
-import shutil
-import os
-import colorsys
+
 from scipy.sparse import csr_matrix
-from numba import njit
-from dataclasses import dataclass
-from typing import Optional
-from enum import Enum
-from ._plot_ import PlotManager, Plot
+from tqdm import tqdm
+
 from ._asset_ import AssetManager
-from ._render_ import OpenGLRenderer
+from ._param_ import ParamHolder, object_param
+from ._plot_ import Plot, PlotManager
+from ._render_ import MitsubaRenderer, OpenGLRenderer
 from ._utils_ import Utils
 
 EPS = 1e-3
@@ -24,12 +30,11 @@ EPS = 1e-3
 class SceneManager:
     """SceneManager class. Use this to manage scenes."""
 
-    def __init__(self, plot: PlotManager, asset: AssetManager, save_func):
+    def __init__(self, plot: PlotManager | None, asset: AssetManager):
         """Initialize the scene manager."""
         self._plot = plot
         self._asset = asset
         self._scene: dict[str, Scene] = {}
-        self._save_func = save_func
 
     def create(self, name: str = "") -> "Scene":
         """Create a new scene.
@@ -43,14 +48,14 @@ class SceneManager:
             Scene: The created scene.
         """
         if name == "":
-            name = f"scene-{len(self._scene)}"
+            name = "scene"
 
-        if name in self._scene.keys():
-            raise Exception(f"scene {name} already exists")
-        else:
-            scene = Scene(name, self._plot, self._asset, self._save_func)
-            self._scene[name] = scene
-            return scene
+        if name in self._scene:
+            del self._scene[name]
+
+        scene = Scene(name, self._plot, self._asset)
+        self._scene[name] = scene
+        return scene
 
     def select(self, name: str, create: bool = True) -> "Scene":
         """Select a scene.
@@ -61,7 +66,7 @@ class SceneManager:
             name (str): The name of the scene to select.
             create (bool, optional): Whether to create a new scene if it does not exist. Defaults to True.
         """
-        if create and name not in self._scene.keys():
+        if create and name not in self._scene:
             return self.create(name)
         else:
             return self._scene[name]
@@ -72,7 +77,7 @@ class SceneManager:
         Args:
             name (str): The name of the scene to remove.
         """
-        if name in self._scene.keys():
+        if name in self._scene:
             del self._scene[name]
 
     def clear(self):
@@ -87,6 +92,32 @@ class SceneManager:
         return list(self._scene.keys())
 
 
+class WallParam:
+    """A class to hold wall parameters."""
+
+    def __init__(self):
+        self._param = {
+            "contact-gap": 1e-3,
+            "friction": 0.0,
+        }
+
+    def list(self) -> dict[str, float]:
+        """List all the parameters for the wall.
+
+        Returns:
+            dict[str, float]: A dictionary of wall parameters.
+        """
+        return self._param
+
+    def set(self, name: str, value: float) -> "WallParam":
+        """Set a parameter for the wall."""
+        if name not in self._param:
+            raise Exception(f"unknown parameter {name}")
+        else:
+            self._param[name] = value
+        return self
+
+
 class Wall:
     """An invisible wall class."""
 
@@ -94,6 +125,7 @@ class Wall:
         """Initialize the wall."""
         self._entry = []
         self._transition = "linear"
+        self._param = WallParam()
 
     def get_entry(self) -> list[tuple[list[float], float]]:
         """Get a list of time-dependent wall entries.
@@ -162,6 +194,52 @@ class Wall:
         self._transition = transition
         return self
 
+    @property
+    def normal(self) -> list[float]:
+        """Get the wall normal."""
+        return self._normal
+
+    @property
+    def entry(self) -> list[tuple[list[float], float]]:
+        """Get the wall entries."""
+        return self._entry
+
+    @property
+    def transition(self) -> str:
+        """Get the wall transition."""
+        return self._transition
+
+    @property
+    def param(self) -> WallParam:
+        """Get the wall parameters."""
+        return self._param
+
+
+class SphereParam:
+    """A class to hold wall parameters."""
+
+    def __init__(self):
+        self._param = {
+            "contact-gap": 1e-3,
+            "friction": 0.0,
+        }
+
+    def list(self) -> dict[str, float]:
+        """List all the parameters for the sphere.
+
+        Returns:
+            dict[str, float]: A dictionary of sphere parameters.
+        """
+        return self._param
+
+    def set(self, name: str, value: float) -> "SphereParam":
+        """Set a parameter for the wall."""
+        if name not in self._param:
+            raise Exception(f"unknown parameter {name}")
+        else:
+            self._param[name] = value
+        return self
+
 
 class Sphere:
     """An invisible sphere class."""
@@ -172,6 +250,7 @@ class Sphere:
         self._hemisphere = False
         self._invert = False
         self._transition = "linear"
+        self._param = SphereParam()
 
     def hemisphere(self) -> "Sphere":
         """Turn the sphere into a hemisphere, so the half of the sphere top becomes empty, like a bowl."""
@@ -216,8 +295,7 @@ class Sphere:
         """
         if time <= self._entry[-1][2]:
             raise Exception(
-                "time must be greater than the last time. last time is %f"
-                % self._entry[-1][2]
+                f"time must be greater than the last time. last time is {self._entry[-1][2]:f}"
             )
 
     def transform_to(self, pos: list[float], radius: float, time: float) -> "Sphere":
@@ -280,6 +358,31 @@ class Sphere:
         pos = self._entry[-1][0]
         self._entry.append((pos, radius, time))
         return self
+
+    @property
+    def entry(self) -> list[tuple[list[float], float, float]]:
+        """Get the sphere entries."""
+        return self._entry
+
+    @property
+    def is_hemisphere(self) -> bool:
+        """Get whether sphere is hemisphere."""
+        return self._hemisphere
+
+    @property
+    def is_inverted(self) -> bool:
+        """Get whether sphere is inverted."""
+        return self._invert
+
+    @property
+    def transition(self) -> str:
+        """Get the sphere transition."""
+        return self._transition
+
+    @property
+    def param(self) -> SphereParam:
+        """Get the sphere parameters."""
+        return self._param
 
 
 @dataclass
@@ -348,7 +451,10 @@ class PinHolder:
         Returns:
             PinHolder: The pinholder with the unpinned vertices.
         """
-        self._data.should_unpin = True
+        if self._data.pull_strength:
+            self._data.should_unpin = True
+        else:
+            raise Exception("unpin() is only available when pull is set")
         return self
 
     def move_by(self, delta_pos, time: float) -> "PinHolder":
@@ -463,19 +569,23 @@ class PinHolder:
 
     def spin(
         self,
-        center: list[float] = [0.0, 0.0, 0.0],
-        axis: list[float] = [0.0, 1.0, 0.0],
+        center: Optional[list[float]] = None,
+        axis: Optional[list[float]] = None,
         angular_velocity: float = 360.0,
         t_start: float = 0.0,
         t_end: float = float("inf"),
     ) -> "PinHolder":
+        if axis is None:
+            axis = [0.0, 1.0, 0.0]
+        if center is None:
+            center = [0.0, 0.0, 0.0]
         self._data.spin.append(
             SpinData(np.array(center), np.array(axis), angular_velocity, t_start, t_end)
         )
         return self
 
     @property
-    def data(self) -> Optional[PinData]:
+    def data(self) -> PinData | None:
         """Get the pinning data.
 
         Returns:
@@ -521,25 +631,37 @@ class EnumColor(Enum):
     AREA = 1
 
 
-@njit
-def _area(f: np.ndarray, vert: np.ndarray) -> float:
-    a, b, c = vert[f[0]], vert[f[1]], vert[f[2]]
-    area = 0.5 * float(np.linalg.norm(np.cross(b - a, c - a)))
-    return area
+def _compute_triangle_areas_vectorized(vert: np.ndarray, tri: np.ndarray) -> np.ndarray:
+    """Compute triangle areas using vectorized operations."""
+    # Get all three vertices for each triangle at once
+    v0 = vert[tri[:, 0]]  # Shape: (n_triangles, 3)
+    v1 = vert[tri[:, 1]]  # Shape: (n_triangles, 3)
+    v2 = vert[tri[:, 2]]  # Shape: (n_triangles, 3)
+
+    # Compute edge vectors for all triangles
+    e1 = v1 - v0  # Shape: (n_triangles, 3)
+    e2 = v2 - v0  # Shape: (n_triangles, 3)
+
+    # Compute cross product for all triangles at once
+    cross = np.cross(e1, e2)  # Shape: (n_triangles, 3)
+
+    # Compute magnitude (area of parallelogram) for all triangles
+    areas = 0.5 * np.linalg.norm(cross, axis=1)  # Shape: (n_triangles,)
+
+    return areas
 
 
-@njit
 def _compute_area(vert: np.ndarray, tri: np.ndarray, area: np.ndarray):
-    for i, f in enumerate(tri):
-        area[i] = _area(f, vert)
+    """Compute areas for all triangles and store in the provided array."""
+    area[:] = _compute_triangle_areas_vectorized(vert, tri)
 
 
-@njit
 def _compute_area_change(
     vert: np.ndarray, tri: np.ndarray, init_area: np.ndarray, rat: np.ndarray
 ):
-    for i, f in enumerate(tri):
-        rat[i] = _area(f, vert) / init_area[i]
+    """Compute area change ratios for all triangles."""
+    current_areas = _compute_triangle_areas_vectorized(vert, tri)
+    rat[:] = current_areas / init_area
 
 
 class FixedScene:
@@ -547,31 +669,36 @@ class FixedScene:
 
     def __init__(
         self,
-        plot: PlotManager,
+        plot: PlotManager | None,
         name: str,
+        map_by_name: dict[str, list[int]],
         displacement: np.ndarray,
         vert: tuple[np.ndarray, np.ndarray],
         color: np.ndarray,
         dyn_face_color: list[EnumColor],
         dyn_face_intensity: list[float],
         vel: np.ndarray,
-        uv: np.ndarray,
+        uv: list[np.ndarray],
         rod: np.ndarray,
-        rod_length_factor: np.ndarray,
         tri: np.ndarray,
         tet: np.ndarray,
+        rod_param: dict[str, list[Any]],
+        tri_param: dict[str, list[Any]],
+        tet_param: dict[str, list[Any]],
         wall: list[Wall],
         sphere: list[Sphere],
         rod_vert_range: tuple[int, int],
         shell_vert_range: tuple[int, int],
         rod_count: int,
         shell_count: int,
+        merge: bool,
     ):
         """Initialize the fixed scene.
 
         Args:
             plot (PlotManager): The plot manager.
             name (str): The name of the scene.
+            map (dict[str, int]): The mapping of vetex indices to their original indices.
             displacement (np.ndarray): The displacement of the vertices.
             vert (np.ndarray, np.ndarray): The vertices of the scene. The first array is the displacement map reference.
             color (np.ndarray): The colors of the vertices.
@@ -580,9 +707,11 @@ class FixedScene:
             vel (np.ndarray): The velocities of the vertices.
             uv (np.ndarray): The UV coordinates of the vertices.
             rod (np.ndarray): The rod elements.
-            rod_length_factor (np.ndarray): The rod length factors.
             tri (np.ndarray): The triangle elements.
             tet (np.ndarray): The tetrahedral elements.
+            rod_param (dict[str, list[Any]]): The parameters for the rod elements.
+            tri_param (dict[str, list[Any]]): The parameters for the triangle elements.
+            tet_param (dict[str, list[Any]]): The parameters for the tetrahedral elements.
             wall (list[Wall]): The invisible walls.
             sphere (list[Sphere]): The invisible spheres.
             rod_vert_range (tuple[int, int]): The index range of the rod vertices.
@@ -591,6 +720,7 @@ class FixedScene:
             shell_count (int): The number of shell elements.
         """
 
+        self._map_by_name = map_by_name
         self._plot = plot
         self._name = name
         self._displacement = displacement
@@ -601,16 +731,19 @@ class FixedScene:
         self._vel = vel
         self._uv = uv
         self._rod = rod
-        self._rod_length_factor = rod_length_factor
         self._tri = tri
         self._tet = tet
+        self._rod_param = rod_param
+        self._tri_param = tri_param
+        self._tet_param = tet_param
         self._pin: list[PinData] = []
         self._spin: list[SpinData] = []
         self._static_vert = (np.zeros(0, dtype=np.uint32), np.zeros(0))
-        self._static_color = np.zeros(0)
-        self._static_tri = np.zeros(0)
-        self._stitch_ind = np.zeros(0)
-        self._stitch_w = np.zeros(0)
+        self._static_color = np.zeros((0, 0))
+        self._static_tri = np.zeros((0, 0))
+        self._stitch_ind = np.zeros((0, 0))
+        self._stitch_w = np.zeros((0, 0))
+        self._static_param = {}
         self._wall = wall
         self._sphere = sphere
         self._rod_vert_range = rod_vert_range
@@ -622,6 +755,23 @@ class FixedScene:
         assert len(self._vert[0]) == len(self._color)
         assert len(self._vert[1]) == len(self._color)
         assert len(self._tri) == len(self._dyn_face_color)
+        assert len(self._uv) == shell_count
+
+        for key, value in self._rod_param.items():
+            if value:
+                assert len(value) == len(self._rod), (
+                    f"{key} has {len(value)} entries, but rod has {len(self._rod)} rods"
+                )
+        for key, value in self._tri_param.items():
+            if value:
+                assert len(value) == len(self._tri), (
+                    f"{key} has {len(value)} entries, but tri has {len(self._tri)} faces"
+                )
+        for key, value in self._tet_param.items():
+            if value:
+                assert len(value) == len(self._tet), (
+                    f"{key} has {len(value)} entries, but tet has {len(self._tet)} tets"
+                )
 
         if len(self._tri):
             self._area = np.zeros(len(self._tri))
@@ -644,6 +794,292 @@ class FixedScene:
             self._face_to_vert_mat = self._face_to_vert_mat.multiply(1.0 / sum[:, None])
         else:
             self._face_to_vert_mat = None
+
+        # Detect and merge duplicate vertices using hash-based approach
+        if merge:
+            vertex_hash_map = {}
+
+            # Compute minimal edge length from triangles and edges
+            min_edge_length = float("inf")
+
+            # Check edges from rods
+            for edge in self._rod:
+                v0 = self._vert[1][edge[0]] + self._displacement[self._vert[0][edge[0]]]
+                v1 = self._vert[1][edge[1]] + self._displacement[self._vert[0][edge[1]]]
+                edge_length = np.linalg.norm(v1 - v0)
+                if edge_length > 0:
+                    min_edge_length = min(min_edge_length, edge_length)
+
+            # Check edges from triangles
+            for tri in self._tri:
+                for i in range(3):
+                    v0 = (
+                        self._vert[1][tri[i]]
+                        + self._displacement[self._vert[0][tri[i]]]
+                    )
+                    v1 = (
+                        self._vert[1][tri[(i + 1) % 3]]
+                        + self._displacement[self._vert[0][tri[(i + 1) % 3]]]
+                    )
+                    edge_length = np.linalg.norm(v1 - v0)
+                    if edge_length > 0:
+                        min_edge_length = min(min_edge_length, edge_length)
+
+            # Set epsilon based on minimal edge length
+            if min_edge_length == float("inf"):
+                # No edges found, use default epsilon
+                epsilon = 1e-5
+                scale_factor = 1e5
+            else:
+                epsilon = float(0.1 * min_edge_length)
+                scale_factor = 1.0 / epsilon
+
+            # Build set of vertices used in tetrahedra to exclude them
+            tet_vertices = set()
+            for tet in self._tet:
+                tet_vertices.update(tet)
+
+            # Calculate actual positions and hash them (excluding tetrahedra vertices)
+            for i in range(len(self._vert[0])):
+                # Skip vertices that belong to tetrahedra
+                if i in tet_vertices:
+                    continue
+
+                actual_pos = self._vert[1][i] + self._displacement[self._vert[0][i]]
+
+                # Create hash from scaled coordinates using large prime numbers
+                hash_val = (
+                    int(actual_pos[0] * scale_factor) * 73856093
+                    + int(actual_pos[1] * scale_factor) * 19349663
+                    + int(actual_pos[2] * scale_factor) * 83492791
+                )
+
+                if hash_val not in vertex_hash_map:
+                    vertex_hash_map[hash_val] = []
+                vertex_hash_map[hash_val].append((i, actual_pos))
+
+            # Find duplicate groups (handles transitive duplicates)
+            duplicate_groups = []  # List of sets of duplicate vertex indices
+            vertex_to_group = {}  # Map vertex index to its duplicate group
+
+            for _, vertices in vertex_hash_map.items():
+                if len(vertices) > 1:
+                    # Check all pairs in this hash bucket
+                    for i in range(len(vertices)):
+                        for j in range(i + 1, len(vertices)):
+                            idx1, pos1 = vertices[i]
+                            idx2, pos2 = vertices[j]
+
+                            # Check if positions are exactly the same (within epsilon)
+                            if np.allclose(pos1, pos2, rtol=0, atol=epsilon):
+                                # Find or create groups for these vertices
+                                group1 = vertex_to_group.get(idx1)
+                                group2 = vertex_to_group.get(idx2)
+
+                                if group1 is None and group2 is None:
+                                    # Create new group
+                                    new_group = {idx1, idx2}
+                                    duplicate_groups.append(new_group)
+                                    vertex_to_group[idx1] = new_group
+                                    vertex_to_group[idx2] = new_group
+                                elif group1 is None:
+                                    # Add idx1 to group2
+                                    assert group2 is not None  # Type hint for pyright
+                                    group2.add(idx1)
+                                    vertex_to_group[idx1] = group2
+                                elif group2 is None:
+                                    # Add idx2 to group1
+                                    group1.add(idx2)
+                                    vertex_to_group[idx2] = group1
+                                elif group1 is not group2:
+                                    # Merge two groups
+                                    group1.update(group2)
+                                    duplicate_groups.remove(group2)
+                                    for v in group2:
+                                        vertex_to_group[v] = group1
+
+            # Build merge mapping and perform merging
+            if duplicate_groups:
+                print(
+                    f"Found {len(duplicate_groups)} groups of duplicate vertices to merge:"
+                )
+                total_duplicates = builtins.sum(
+                    len(group) - 1 for group in duplicate_groups
+                )
+                print(f"  Total duplicate vertices to remove: {total_duplicates}")
+
+                # Create old to new index mapping
+                old_to_new = {}
+                new_index = 0
+
+                # First pass: assign new indices to kept vertices
+                for i in range(len(self._vert[0])):
+                    group = vertex_to_group.get(i)
+                    if group is None:
+                        # Not a duplicate, keep it
+                        old_to_new[i] = new_index
+                        new_index += 1
+                    else:
+                        # Part of a duplicate group
+                        representative = min(group)
+                        if i == representative:
+                            # This is the representative, keep it
+                            old_to_new[i] = new_index
+                            new_index += 1
+
+                # Second pass: map duplicates to their representatives
+                for i in range(len(self._vert[0])):
+                    if i not in old_to_new:
+                        # This is a duplicate, find its representative
+                        group = vertex_to_group[i]
+                        representative = min(group)
+                        old_to_new[i] = old_to_new[representative]
+
+                # Create new vertex arrays
+                new_vert_dmap = []
+                new_vert = []
+                new_color = []
+                new_vel = []
+
+                for i in range(len(self._vert[0])):
+                    if vertex_to_group.get(i) is None or i == min(vertex_to_group[i]):
+                        # Keep this vertex
+                        new_vert_dmap.append(self._vert[0][i])
+                        new_vert.append(self._vert[1][i])
+                        new_color.append(self._color[i])
+                        new_vel.append(self._vel[i])
+
+                # Update map_by_name
+                for name, indices in self._map_by_name.items():
+                    self._map_by_name[name] = [old_to_new[i] for i in indices]
+
+                # Update rods
+                new_rod = []
+                new_rod_param = {key: [] for key in self._rod_param}
+                removed_rods = 0
+
+                for i, edge in enumerate(self._rod):
+                    remapped = [old_to_new[v] for v in edge]
+                    if remapped[0] != remapped[1]:  # Not degenerate
+                        new_rod.append(remapped)
+                        for key, values in self._rod_param.items():
+                            if values:
+                                new_rod_param[key].append(values[i])
+                    else:
+                        removed_rods += 1
+
+                # Update triangles
+                new_tri = []
+                new_tri_param = {key: [] for key in self._tri_param}
+                new_dyn_face_color = []
+                new_dyn_face_intensity = []
+                removed_tris = 0
+
+                for i, tri in enumerate(self._tri):
+                    remapped = [old_to_new[v] for v in tri]
+                    if len(set(remapped)) == 3:  # All vertices are different
+                        new_tri.append(remapped)
+                        for key, values in self._tri_param.items():
+                            if values:
+                                new_tri_param[key].append(values[i])
+                        new_dyn_face_color.append(self._dyn_face_color[i])
+                        new_dyn_face_intensity.append(self._dyn_face_intensity[i])
+                    else:
+                        removed_tris += 1
+
+                # Update tetrahedra
+                new_tet = []
+                new_tet_param = {key: [] for key in self._tet_param}
+                removed_tets = 0
+
+                for i, tet in enumerate(self._tet):
+                    remapped = [old_to_new[v] for v in tet]
+                    if len(set(remapped)) == 4:  # All vertices are different
+                        new_tet.append(remapped)
+                        for key, values in self._tet_param.items():
+                            if values:
+                                new_tet_param[key].append(values[i])
+                    else:
+                        removed_tets += 1
+
+                # Update pin data
+                for pin in self._pin:
+                    pin.index = list({old_to_new[i] for i in pin.index})
+
+                # Update stitch data
+                new_stitch_ind = []
+                new_stitch_w = []
+                for ind, w in zip(self._stitch_ind, self._stitch_w, strict=False):
+                    remapped = [old_to_new[v] for v in ind]
+                    if len(set(remapped)) == len(remapped):
+                        new_stitch_ind.append(remapped)
+                        new_stitch_w.append(w)
+
+                # Replace data with merged versions
+                self._vert = (
+                    np.array(new_vert_dmap, dtype=np.uint32),
+                    np.array(new_vert),
+                )
+                self._color = np.array(new_color)
+                self._vel = np.array(new_vel)
+                self._rod = (
+                    np.array(new_rod) if new_rod else np.zeros((0, 2), dtype=np.uint64)
+                )
+                self._tri = (
+                    np.array(new_tri) if new_tri else np.zeros((0, 3), dtype=np.uint64)
+                )
+                self._tet = (
+                    np.array(new_tet) if new_tet else np.zeros((0, 4), dtype=np.uint64)
+                )
+                self._rod_param = new_rod_param
+                self._tri_param = new_tri_param
+                self._tet_param = new_tet_param
+                self._dyn_face_color = new_dyn_face_color
+                self._dyn_face_intensity = new_dyn_face_intensity
+                self._stitch_ind = (
+                    np.array(new_stitch_ind) if new_stitch_ind else self._stitch_ind
+                )
+                self._stitch_w = (
+                    np.array(new_stitch_w) if new_stitch_w else self._stitch_w
+                )
+
+                # Report results
+                print("Vertex merge complete:")
+                print(
+                    f"  Vertices: {len(old_to_new)} -> {len(new_vert)} (removed {total_duplicates})"
+                )
+                if removed_rods > 0:
+                    print(f"  Removed {removed_rods} degenerate edges")
+                if removed_tris > 0:
+                    print(f"  Removed {removed_tris} degenerate triangles")
+                if removed_tets > 0:
+                    print(f"  Removed {removed_tets} degenerate tetrahedra")
+
+                # Re-compute face areas and face-to-vertex matrix
+                if len(self._tri):
+                    self._area = np.zeros(len(self._tri))
+                    _compute_area(self._vert[1], self._tri, self._area)
+
+                    if self._has_dyn_color:
+                        sum = np.zeros(len(self._vert[0])) + 0.0001
+                        rows, cols, vals = [], [], []
+                        for i, f in enumerate(self._tri):
+                            for j in f:
+                                rows.append(j)
+                                cols.append(i)
+                                vals.append(1.0)
+                                sum[j] += 1
+                        self._face_to_vert_mat = csr_matrix(
+                            (vals, (rows, cols)), shape=(len(sum), len(self._tri))
+                        )
+                        self._face_to_vert_mat = self._face_to_vert_mat.multiply(
+                            1.0 / sum[:, None]
+                        )
+
+    @property
+    def tri_param(self) -> dict[str, list[Any]]:
+        """Get the triangle parameters."""
+        return self._tri_param
 
     def report(self) -> "FixedScene":
         """Print a summary of the scene."""
@@ -670,9 +1106,9 @@ class FixedScene:
             else:
                 data[key] = [str(value)]
 
-        from IPython.display import display, HTML
+        from IPython.display import HTML, display
 
-        if self._plot.is_jupyter_notebook():
+        if self._plot is not None and self._plot.is_jupyter_notebook():
             df = pd.DataFrame(data)
             html = df.to_html(classes="table", index=False)
             display(HTML(html))
@@ -680,7 +1116,7 @@ class FixedScene:
             print(data)
         return self
 
-    def color(self, vert: np.ndarray, hint: dict = {}) -> np.ndarray:
+    def color(self, vert: np.ndarray, hint: Optional[dict] = None) -> np.ndarray:
         """Compute the color of the scene given the vertex array.
 
         Args:
@@ -690,6 +1126,8 @@ class FixedScene:
         Returns:
             color (np.ndarray): The vertex color of the scene.
         """
+        if hint is None:
+            hint = {}
         if self._has_dyn_color:
             assert self._face_to_vert_mat is not None
             assert self._area is not None
@@ -738,7 +1176,7 @@ class FixedScene:
         color: np.ndarray,
         path: str,
         include_static: bool = True,
-        args: dict = {},
+        args: Optional[dict] = None,
         delete_exist: bool = False,
     ) -> "FixedScene":
         """Export the scene to a mesh file.
@@ -757,6 +1195,8 @@ class FixedScene:
             FixedScene: The fixed scene.
         """
 
+        if args is None:
+            args = {}
         image_path = path + ".png"
         if delete_exist:
             if os.path.exists(path):
@@ -793,7 +1233,17 @@ class FixedScene:
             if Utils.ci_name() is not None:
                 args["width"] = 320
                 args["height"] = 240
-            renderer = OpenGLRenderer(args)
+            if "renderer" in args:
+                if args["renderer"] == "mitsuba":
+                    assert shutil.which("mitsuba") is not None
+                    renderer = MitsubaRenderer(args)
+                elif args["renderer"] == "opengl":
+                    renderer = OpenGLRenderer(args)
+                else:
+                    raise Exception("unsupported renderer")
+            else:
+                renderer = OpenGLRenderer(args)
+
             assert tri is not None
             assert color is not None
             renderer.render(vert, color, seg, tri, image_path)
@@ -801,7 +1251,7 @@ class FixedScene:
         return self
 
     def export_fixed(self, path: str, delete_exist: bool) -> "FixedScene":
-        """Export the fixed scene as a simulatio-readible format.
+        """Export the fixed scene into a set of data files that are read by the simulator.
 
         Args:
             path (str): The path to the output directory.
@@ -810,6 +1260,10 @@ class FixedScene:
         Returns:
             FixedScene: The fixed scene.
         """
+
+        steps = 14
+        pbar = tqdm(total=steps, desc="build session", ncols=70)
+
         if os.path.exists(path):
             if delete_exist:
                 for item in os.listdir(path):
@@ -822,6 +1276,13 @@ class FixedScene:
                 raise Exception(f"file {path} already exists")
         else:
             os.makedirs(path)
+        pbar.update(1)
+
+        map_path = os.path.join(path, "map.pickle")
+        with open(map_path, "wb") as f:
+            pickle.dump(self._map_by_name, f)
+        pbar.update(1)
+
         info_path = os.path.join(path, "info.toml")
         with open(info_path, "w") as f:
             f.write("[count]\n")
@@ -853,25 +1314,52 @@ class FixedScene:
                 f.write(f'transition = "{pin.transition}"\n')
 
             for i, wall in enumerate(self._wall):
-                normal = wall._normal
+                normal = wall.normal
                 f.write(f"[wall-{i}]\n")
-                f.write(f"keyframe = {len(wall._entry)}\n")
+                f.write(f"keyframe = {len(wall.entry)}\n")
                 f.write(f"nx = {float(normal[0])}\n")
                 f.write(f"ny = {float(normal[1])}\n")
                 f.write(f"nz = {float(normal[2])}\n")
-                f.write(f'transition = "{wall._transition}"\n')
+                f.write(f'transition = "{wall.transition}"\n')
+                for key, value in wall.param.list().items():
+                    f.write(f"{key} = {value}\n")
                 f.write("\n")
 
             for i, sphere in enumerate(self._sphere):
                 f.write(f"[sphere-{i}]\n")
-                f.write(f"keyframe = {len(sphere._entry)}\n")
-                f.write(f"hemisphere = {'true' if sphere._hemisphere else 'false'}\n")
-                f.write(f"invert = {'true' if sphere._invert else 'false'}\n")
-                f.write(f'transition = "{sphere._transition}"\n')
+                f.write(f"keyframe = {len(sphere.entry)}\n")
+                f.write(f"hemisphere = {'true' if sphere.is_hemisphere else 'false'}\n")
+                f.write(f"invert = {'true' if sphere.is_inverted else 'false'}\n")
+                f.write(f'transition = "{sphere.transition}"\n')
+                for key, value in sphere.param.list().items():
+                    f.write(f"{key} = {value}\n")
                 f.write("\n")
+        pbar.update(1)
 
         bin_path = os.path.join(path, "bin")
         os.makedirs(bin_path)
+        param_path = os.path.join(bin_path, "param")
+        os.makedirs(param_path)
+        pbar.update(1)
+
+        def export_param(param: dict[str, list[Any]], basepath: str, name: str):
+            """Export parameters to a binary file."""
+            for key, value in param.items():
+                if value:
+                    filepath = os.path.join(basepath, f"{name}-{key}.bin")
+                    if key == "model":
+                        model_map = {
+                            "arap": 0,
+                            "stvk": 1,
+                            "baraff-witkin": 2,
+                            "snhk": 3,
+                        }
+                        assert all(name in model_map for name in value)
+                        np.array(
+                            [model_map[name] for name in value], dtype=np.uint8
+                        ).tofile(filepath)
+                    else:
+                        np.array(value, dtype=np.float32).tofile(filepath)
 
         self._displacement.astype(np.float64).tofile(
             os.path.join(bin_path, "displacement.bin")
@@ -880,20 +1368,30 @@ class FixedScene:
         self._vert[1].astype(np.float64).tofile(os.path.join(bin_path, "vert.bin"))
         self._color.astype(np.float32).tofile(os.path.join(bin_path, "color.bin"))
         self._vel.astype(np.float32).tofile(os.path.join(bin_path, "vel.bin"))
-        if np.linalg.norm(self._uv) > 0:
-            self._uv.astype(np.float32).tofile(os.path.join(bin_path, "uv.bin"))
+        pbar.update(1)
+
+        if self._uv:
+            with open(os.path.join(bin_path, "uv.bin"), "wb") as f:
+                for uv in self._uv:
+                    uv.astype(np.float32).tofile(f)
+        pbar.update(1)
 
         if len(self._rod):
             self._rod.astype(np.uint64).tofile(os.path.join(bin_path, "rod.bin"))
-        if len(self._rod_length_factor):
-            self._rod_length_factor.astype(np.float32).tofile(
-                os.path.join(bin_path, "rod_length_factor.bin")
-            )
+            export_param(self._rod_param, param_path, "rod")
+        pbar.update(1)
+
         if len(self._tri):
             self._tri.astype(np.uint64).tofile(os.path.join(bin_path, "tri.bin"))
+            export_param(self._tri_param, param_path, "tri")
+        pbar.update(1)
+
         if len(self._tet):
             self._tet.astype(np.uint64).tofile(os.path.join(bin_path, "tet.bin"))
-        if len(self._static_vert):
+            export_param(self._tet_param, param_path, "tet")
+        pbar.update(1)
+
+        if len(self._static_vert[0]):
             self._static_vert[0].astype(np.uint32).tofile(
                 os.path.join(bin_path, "static_vert_dmap.bin")
             )
@@ -906,6 +1404,9 @@ class FixedScene:
             self._static_color.astype(np.float32).tofile(
                 os.path.join(bin_path, "static_color.bin")
             )
+            export_param(self._static_param, param_path, "static")
+        pbar.update(1)
+
         if len(self._stitch_ind) and len(self._stitch_w):
             self._stitch_ind.astype(np.uint64).tofile(
                 os.path.join(bin_path, "stitch_ind.bin")
@@ -913,6 +1414,8 @@ class FixedScene:
             self._stitch_w.astype(np.float32).tofile(
                 os.path.join(bin_path, "stitch_w.bin")
             )
+        pbar.update(1)
+
         for i, pin in enumerate(self._pin):
             with open(os.path.join(bin_path, f"pin-ind-{i}.bin"), "wb") as f:
                 np.array(pin.index, dtype=np.uint64).tofile(f)
@@ -940,30 +1443,33 @@ class FixedScene:
                         f.write(f"angular_velocity = {float(spin.angular_velocity)}\n")
                         f.write(f"t_start = {float(spin.t_start)}\n")
                         f.write(f"t_end = {float(spin.t_end)}\n")
+        pbar.update(1)
 
         for i, wall in enumerate(self._wall):
             with open(os.path.join(bin_path, f"wall-pos-{i}.bin"), "wb") as f:
                 pos = np.array(
-                    [p for pos, _ in wall._entry for p in pos], dtype=np.float64
+                    [p for pos, _ in wall.entry for p in pos], dtype=np.float64
                 )
                 pos.tofile(f)
             with open(os.path.join(bin_path, f"wall-timing-{i}.bin"), "wb") as f:
-                timing = np.array([t for _, t in wall._entry], dtype=np.float64)
+                timing = np.array([t for _, t in wall.entry], dtype=np.float64)
                 timing.tofile(f)
+        pbar.update(1)
 
         for i, sphere in enumerate(self._sphere):
             with open(os.path.join(bin_path, f"sphere-pos-{i}.bin"), "wb") as f:
                 pos = np.array(
-                    [p for pos, _, _ in sphere._entry for p in pos], dtype=np.float64
+                    [p for pos, _, _ in sphere.entry for p in pos], dtype=np.float64
                 )
                 pos.tofile(f)
             with open(os.path.join(bin_path, f"sphere-radius-{i}.bin"), "wb") as f:
-                radius = np.array([r for _, r, _ in sphere._entry], dtype=np.float32)
+                radius = np.array([r for _, r, _ in sphere.entry], dtype=np.float32)
                 radius.tofile(f)
             with open(os.path.join(bin_path, f"sphere-timing-{i}.bin"), "wb") as f:
-                timing = np.array([t for _, _, t in sphere._entry], dtype=np.float64)
+                timing = np.array([t for _, _, t in sphere.entry], dtype=np.float64)
                 timing.tofile(f)
-
+        pbar.update(1)
+        pbar.close()
         return self
 
     def bbox(self) -> tuple[np.ndarray, np.ndarray]:
@@ -987,7 +1493,7 @@ class FixedScene:
         area_sum = 0
         for f in tri:
             a, b, c = vert[f[0]], vert[f[1]], vert[f[2]]
-            area = _area(f, self._vert[1])
+            area = 0.5 * np.linalg.norm(np.cross(b - a, c - a))
             center += area * (a + b + c) / 3.0
             area_sum += area
         if area_sum == 0:
@@ -1023,7 +1529,11 @@ class FixedScene:
         self._spin = spin
 
     def set_static(
-        self, vert: tuple[np.ndarray, np.ndarray], tri: np.ndarray, color: np.ndarray
+        self,
+        vert: tuple[np.ndarray, np.ndarray],
+        tri: np.ndarray,
+        color: np.ndarray,
+        param: dict[str, list[Any]],
     ):
         """Set the static mesh data.
 
@@ -1035,6 +1545,7 @@ class FixedScene:
         self._static_vert = vert
         self._static_tri = tri
         self._static_color = color
+        self._static_param = param
 
     def set_stitch(self, ind: np.ndarray, w: np.ndarray):
         """Set the stitch data.
@@ -1125,8 +1636,8 @@ class FixedScene:
 
     def preview(
         self,
-        vert: Optional[np.ndarray] = None,
-        options: dict = {},
+        vert: np.ndarray | None = None,
+        options: Optional[dict] = None,
         show_slider: bool = True,
         engine: str = "threejs",
     ) -> Optional["Plot"]:
@@ -1141,6 +1652,8 @@ class FixedScene:
         Returns:
             Optional[Plot]: The plot object if in a Jupyter notebook, otherwise None.
         """
+        if options is None:
+            options = {}
         default_opts = {
             "flat_shading": False,
             "wireframe": True,
@@ -1152,7 +1665,7 @@ class FixedScene:
             if key not in options:
                 options[key] = value
 
-        if self._plot.is_jupyter_notebook():
+        if self._plot is not None and self._plot.is_jupyter_notebook():
             if vert is None:
                 vert = self.vertex()
             color = self.color(vert, options)
@@ -1178,7 +1691,7 @@ class FixedScene:
 
             if options["stitch"] and len(self._stitch_ind) and len(self._stitch_w):
                 stitch_vert, stitch_edge = [], []
-                for ind, w in zip(self._stitch_ind, self._stitch_w):
+                for ind, w in zip(self._stitch_ind, self._stitch_w, strict=False):
                     x0, y0, y1 = vert[ind[0]], vert[ind[1]], vert[ind[2]]
                     w0, w1 = w[0], w[1]
                     idx0 = len(stitch_vert) + len(vert)
@@ -1190,10 +1703,7 @@ class FixedScene:
                 stitch_edge = np.array(stitch_edge)
                 stitch_color = np.tile(np.array([1.0, 1.0, 1.0]), (len(stitch_vert), 1))
                 vert = np.vstack([vert, stitch_vert])
-                if edge:
-                    edge = np.vstack([edge, stitch_edge])
-                else:
-                    edge = stitch_edge
+                edge = np.vstack([edge, stitch_edge]) if len(edge) else stitch_edge
                 color = np.vstack([color, stitch_color])
 
             if options["pin"] and self._pin:
@@ -1258,7 +1768,7 @@ class InvisibleAdder:
             Sphere: The invisible sphere.
         """
         sphere = Sphere().add(position, radius)
-        self._scene._sphere.append(sphere)
+        self._scene.sphere_list.append(sphere)
         return sphere
 
     def wall(self, position: list[float], normal: list[float]) -> Wall:
@@ -1271,7 +1781,7 @@ class InvisibleAdder:
             Wall: The invisible wall.
         """
         wall = Wall().add(position, normal)
-        self._scene._wall.append(wall)
+        self._scene.wall_list.append(wall)
         return wall
 
 
@@ -1295,28 +1805,27 @@ class ObjectAdder:
         if ref_name == "":
             ref_name = mesh_name
             count = 0
-            while ref_name in self._scene._object.keys():
+            while ref_name in self._scene.object_dict:
                 count += 1
                 ref_name = f"{mesh_name}_{count}"
-        mesh_list = self._scene._asset.list()
+        mesh_list = self._scene.asset_manager.list()
         if mesh_name not in mesh_list:
             raise Exception(f"mesh_name '{mesh_name}' does not exist")
-        elif ref_name in self._scene._object.keys():
+        elif ref_name in self._scene.object_dict:
             raise Exception(f"ref_name '{ref_name}' already exists")
         else:
-            obj = Object(self._scene._asset, mesh_name)
-            self._scene._object[ref_name] = obj
+            obj = Object(self._scene.asset_manager, mesh_name)
+            self._scene.object_dict[ref_name] = obj
             return obj
 
 
 class Scene:
     """A scene class."""
 
-    def __init__(self, name: str, plot: PlotManager, asset: AssetManager, save_func):
+    def __init__(self, name: str, plot: PlotManager | None, asset: AssetManager):
         self._name = name
         self._plot = plot
         self._asset = asset
-        self._save_func = save_func
         self._object: dict[str, Object] = {}
         self._sphere: list[Sphere] = []
         self._wall: list[Wall] = []
@@ -1332,8 +1841,13 @@ class Scene:
         self._object.clear()
         return self
 
-    def pick(self, name: str) -> "Object":
-        if name not in self._object.keys():
+    def select(self, name: str) -> "Object":
+        """Select an object from the scene by its name.
+
+        Returns:
+            Object: The selected object.
+        """
+        if name not in self._object:
             raise Exception(f"object {name} does not exist")
         else:
             return self._object[name]
@@ -1372,13 +1886,36 @@ class Scene:
                 result = max(result, np.max(vert[:, _axis[axis]]))
         return result
 
-    def build(self) -> FixedScene:
+    @property
+    def sphere_list(self) -> list[Sphere]:
+        """Get the list of spheres."""
+        return self._sphere
+
+    @property
+    def wall_list(self) -> list[Wall]:
+        """Get the list of walls."""
+        return self._wall
+
+    @property
+    def object_dict(self) -> dict[str, "Object"]:
+        """Get the object dictionary."""
+        return self._object
+
+    @property
+    def asset_manager(self) -> AssetManager:
+        """Get the asset manager."""
+        return self._asset
+
+    def build(self, merge: bool = False) -> FixedScene:
         """Build the fixed scene from the current scene.
+
+        Args:
+            merge (bool, optional): Whether to merge duplicate vertices. Defaults to False.
 
         Returns:
             FixedScene: The built fixed scene.
         """
-        pbar = tqdm(total=10, desc="build", ncols=70)
+        pbar = tqdm(total=11, desc="build scene", ncols=70)
         for _, obj in self._object.items():
             obj.update_static()
 
@@ -1389,7 +1926,7 @@ class Scene:
         n = len(dyn_objects)
         for i, (_, obj) in enumerate(dyn_objects):
             r, g, b = colorsys.hsv_to_rgb(i / n, 0.75, 1.0)
-            if obj._color is None:
+            if obj.object_color is None:
                 obj.default_color(r, g, b)
 
         def add_entry(
@@ -1403,16 +1940,16 @@ class Scene:
                         map[vi] = concat_count
                         concat_count += 1
 
-        tag = {}
+        map_by_name = {}
         for name, obj in dyn_objects:
             vert = obj.get("V")
             if vert is not None:
-                tag[name] = [-1] * len(vert)
+                map_by_name[name] = [-1] * len(vert)
 
         pbar.update(1)
         for name, obj in dyn_objects:
             if obj.get("T") is None:
-                map = tag[name]
+                map = map_by_name[name]
                 edge = obj.get("E")
                 if edge is not None:
                     add_entry(
@@ -1423,7 +1960,7 @@ class Scene:
 
         for name, obj in dyn_objects:
             if obj.get("T") is None:
-                map, tri = tag[name], obj.get("F")
+                map, tri = map_by_name[name], obj.get("F")
                 if tri is not None:
                     add_entry(
                         map,
@@ -1433,7 +1970,7 @@ class Scene:
 
         pbar.update(1)
         for name, obj in dyn_objects:
-            map, tri = tag[name], obj.get("F")
+            map, tri = map_by_name[name], obj.get("F")
             if tri is not None:
                 add_entry(
                     map,
@@ -1444,7 +1981,7 @@ class Scene:
         for name, obj in dyn_objects:
             vert = obj.get("V")
             if vert is not None:
-                map = tag[name]
+                map = map_by_name[name]
                 for i in range(len(vert)):
                     if map[i] == -1:
                         map[i] = concat_count
@@ -1458,10 +1995,9 @@ class Scene:
         concat_dyn_tri_color = []
         concat_dyn_tri_intensity = []
         concat_vel = np.zeros((concat_count, 3))
-        concat_uv = np.zeros((concat_count, 2))
+        concat_uv = []
         concat_pin = []
         concat_rod = []
-        concat_rod_length_factor = []
         concat_tri = []
         concat_tet = []
         concat_static_vert_dmap = []
@@ -1470,6 +2006,10 @@ class Scene:
         concat_static_color = []
         concat_stitch_ind = []
         concat_stitch_w = []
+        concat_rod_param = {}
+        concat_tri_param = {}
+        concat_tet_param = {}
+        concat_static_param = {}
 
         def vec_map(map, elm):
             result = elm.copy()
@@ -1477,63 +2017,93 @@ class Scene:
                 result[i] = [map[vi] for vi in elm[i]]
             return result
 
+        def extend_param(
+            param: ParamHolder,
+            concat_param: dict[str, list],
+            count: int,
+        ):
+            if len(concat_param.keys()):
+                assert param.key_list() == list(concat_param.keys()), (
+                    f"param keys mismatch: {param.key_list()} vs {list(concat_param.keys())}"
+                )
+            for key, value in param.items():
+                if key not in concat_param:
+                    concat_param[key] = []
+                concat_param[key].extend([value] * count)
+
         for name, obj in self._object.items():
             dmap[name] = len(concat_displacement)
-            concat_displacement.append(obj._at)
+            concat_displacement.append(obj.position)
         concat_displacement = np.array(concat_displacement)
 
         pbar.update(1)
         for name, obj in dyn_objects:
-            map = tag[name]
-            vert, uv = obj.vertex(False), obj._uv
+            map = map_by_name[name]
+            vert = obj.vertex(False)
             if vert is not None:
                 concat_vert[map] = vert
                 concat_vert_dmap[map] = [dmap[name]] * len(map)
-                concat_vel[map] = obj._velocity
+                concat_vel[map] = obj.object_velocity
                 concat_color[map] = obj.get("color")
-            if uv is not None:
-                concat_uv[map] = uv
 
         pbar.update(1)
         for name, obj in dyn_objects:
-            map = tag[name]
-            edge = obj.get("E")
-            if edge is not None and obj.get("T") is None:
-                concat_rod.extend(vec_map(map, edge))
-                concat_rod_length_factor.extend([obj._rod_length_factor] * len(edge))
+            map = map_by_name[name]
+            if obj.obj_type == "rod":
+                edge = obj.get("E")
+                t = vec_map(map, edge)
+                concat_rod.extend(t)
+                extend_param(obj.param, concat_rod_param, len(t))
         rod_count = len(concat_rod)
 
         pbar.update(1)
         for name, obj in dyn_objects:
-            map = tag[name]
-            tri = obj.get("F")
-            if tri is not None and obj.get("T") is None:
+            map = map_by_name[name]
+            tet, tri = obj.get("T"), obj.get("F")
+            if tri is not None and tet is None:
                 t = vec_map(map, tri)
                 concat_tri.extend(t)
-                concat_dyn_tri_color.extend([obj._dyn_color] * len(t))
-                concat_dyn_tri_intensity.extend([obj._dyn_intensity] * len(t))
+                if obj.uv_coords is not None:
+                    concat_uv.extend(obj.uv_coords)
+                else:
+                    concat_uv.extend([np.zeros((2, 3), dtype=np.float32)] * len(t))
+                concat_dyn_tri_color.extend([obj.dynamic_color] * len(t))
+                concat_dyn_tri_intensity.extend([obj.dynamic_intensity] * len(t))
+                extend_param(obj.param, concat_tri_param, len(t))
         shell_count = len(concat_tri)
 
         pbar.update(1)
         for name, obj in dyn_objects:
-            map = tag[name]
+            map = map_by_name[name]
             tet, tri = obj.get("T"), obj.get("F")
             if tet is not None and tri is not None:
                 t = vec_map(map, tri)
                 concat_tri.extend(t)
-                concat_dyn_tri_color.extend([obj._dyn_color] * len(t))
-                concat_dyn_tri_intensity.extend([obj._dyn_intensity] * len(t))
-
-        for name, obj in dyn_objects:
-            map = tag[name]
-            tet = obj.get("T")
-            if tet is not None:
-                concat_tet.extend(vec_map(map, tet))
+                concat_dyn_tri_color.extend([obj.dynamic_color] * len(t))
+                concat_dyn_tri_intensity.extend([obj.dynamic_intensity] * len(t))
+                extend_param(
+                    obj.param,
+                    concat_tri_param,
+                    len(t),
+                )
 
         pbar.update(1)
         for name, obj in dyn_objects:
-            map = tag[name]
-            for p in obj._pin:
+            map = map_by_name[name]
+            tet = obj.get("T")
+            if tet is not None:
+                t = vec_map(map, tet)
+                concat_tet.extend(t)
+                extend_param(
+                    obj.param,
+                    concat_tet_param,
+                    len(t),
+                )
+
+        pbar.update(1)
+        for name, obj in dyn_objects:
+            map = map_by_name[name]
+            for p in obj.pin_list:
                 concat_pin.append(
                     PinData(
                         index=[map[vi] for vi in p.index],
@@ -1556,19 +2126,45 @@ class Scene:
                 color = obj.get("color")
                 offset = len(concat_static_vert)
                 tri, vert = obj.get("F"), obj.get("V")
-                if tri is not None:
+                if tri is not None and vert is not None:
                     concat_static_tri.extend(tri + offset)
-                if vert is not None:
                     concat_static_vert.extend(obj.apply_transform(vert, False))
                     concat_static_color.extend([color] * len(vert))
                     concat_static_vert_dmap.extend([dmap[name]] * len(vert))
-
-        self._save_func()
+                    extend_param(
+                        obj.param,
+                        concat_static_param,
+                        len(tri),
+                    )
         pbar.update(1)
+
+        for key in ["model"]:
+            concat_rod_param[key] = []
+            concat_static_param[key] = []
+
+        for key in ["poiss-rat"]:
+            concat_rod_param[key] = []
+
+        for key in ["strain-limit", "shrink"]:
+            concat_rod_param[key] = []
+            concat_tet_param[key] = []
+            concat_static_param[key] = []
+
+        for key in ["friction", "contact-gap", "contact-offset", "bend"]:
+            concat_tet_param[key] = []
+
+        for key in ["young-mod", "poiss-rat", "bend", "density"]:
+            concat_static_param[key] = []
+
+        for key in ["length-factor"]:
+            concat_tri_param[key] = []
+            concat_tet_param[key] = []
+            concat_static_param[key] = []
 
         fixed = FixedScene(
             self._plot,
             self.info.name,
+            map_by_name,
             concat_displacement,
             (concat_vert_dmap, concat_vert),
             concat_color,
@@ -1577,15 +2173,18 @@ class Scene:
             concat_vel,
             concat_uv,
             np.array(concat_rod),
-            np.array(concat_rod_length_factor),
             np.array(concat_tri),
             np.array(concat_tet),
+            concat_rod_param,
+            concat_tri_param,
+            concat_tet_param,
             self._wall,
             self._sphere,
             (rod_vert_start, rod_vert_end),
             (shell_vert_start, shell_vert_end),
             rod_count,
             shell_count,
+            merge,
         )
 
         if len(concat_pin):
@@ -1596,6 +2195,7 @@ class Scene:
                 (np.array(concat_static_vert_dmap), np.array(concat_static_vert)),
                 np.array(concat_static_tri),
                 np.array(concat_static_color),
+                concat_static_param,
             )
 
         if len(concat_stitch_ind) and len(concat_stitch_w):
@@ -1604,6 +2204,7 @@ class Scene:
                 np.array(concat_stitch_w),
             )
 
+        pbar.close()
         return fixed
 
 
@@ -1614,6 +2215,7 @@ class Object:
         self._asset = asset
         self._name = name
         self._static = False
+        self._param = ParamHolder(object_param(self.obj_type))
         self.clear()
 
     @property
@@ -1626,11 +2228,67 @@ class Object:
         """Get whether the object is static."""
         return self._static
 
+    @property
+    def param(self) -> ParamHolder:
+        """Get the material parameters of the object.
+
+        Returns:
+            ObjectParam: The material parameters of the object.
+        """
+        return self._param
+
+    @property
+    def obj_type(self) -> str:
+        """Get the type of the object.
+
+        Returns:
+            str: The type of the object, either "rod", "tri", or "tet".
+        """
+        return self._asset.fetch.get_type(self._name)
+
+    @property
+    def object_color(self) -> Optional[list[float]]:
+        """Get the object color."""
+        if self._color is None:
+            return None
+        elif isinstance(self._color, np.ndarray):
+            return self._color.tolist()
+        else:
+            return self._color
+
+    @property
+    def position(self) -> list[float]:
+        """Get the object position."""
+        return self._at
+
+    @property
+    def object_velocity(self) -> list[float] | np.ndarray:
+        """Get the object velocity."""
+        return self._velocity
+
+    @property
+    def uv_coords(self) -> Optional[list[np.ndarray]]:
+        """Get the UV coordinates."""
+        return self._uv
+
+    @property
+    def dynamic_color(self) -> EnumColor:
+        """Get the dynamic color type."""
+        return self._dyn_color
+
+    @property
+    def dynamic_intensity(self) -> float:
+        """Get the dynamic color intensity."""
+        return self._dyn_intensity
+
+    @property
+    def pin_list(self) -> list[PinHolder]:
+        """Get the list of pin holders."""
+        return self._pin
+
     def clear(self):
         """Clear the object data."""
-        self._param = {}
         self._at = [0.0, 0.0, 0.0]
-        self._rod_length_factor = 1.0
         self._scale = 1.0
         self._rotation = np.eye(3)
         self._color = None
@@ -1638,7 +2296,7 @@ class Object:
         self._dyn_intensity = 1.0
         self._static_color = [0.75, 0.75, 0.75]
         self._default_color = [1.0, 0.85, 0.0]
-        self._velocity = [0, 0, 0]
+        self._velocity = [0.0, 0.0, 0.0]
         self._pin: list[PinHolder] = []
         self._normalize = False
         self._stitch = None
@@ -1698,7 +2356,7 @@ class Object:
             self._normalize = True
             return self
 
-    def get(self, key: str) -> Optional[np.ndarray]:
+    def get(self, key: str) -> np.ndarray | None:
         """Get an associated value of the object with respect to the key.
 
         Args:
@@ -1726,7 +2384,7 @@ class Object:
                 return None
         else:
             result = self._asset.fetch.get(self._name)
-            if key in result.keys():
+            if key in result:
                 return result[key]
             else:
                 return None
@@ -1759,19 +2417,6 @@ class Object:
         vert = self.vertex(False)
         val = np.max(np.dot(vert, np.array(direction)))
         return np.where(np.dot(vert, direction) > val - eps)[0].tolist()
-
-    def set(self, key: str, value) -> "Object":
-        """Set a parameter of the object.
-
-        Args:
-            key (str): The parameter key.
-            value: The parameter value.
-
-        Returns:
-            Object: The object with the updated parameter.
-        """
-        self._param[key] = value
-        return self
 
     def at(self, x: float, y: float, z: float) -> "Object":
         """Set the position of the object.
@@ -1856,18 +2501,6 @@ class Object:
             )
         else:
             raise Exception("invalid axis")
-        return self
-
-    def length_factor(self, factor: float) -> "Object":
-        """Set the rod length factor of the object.
-
-        Args:
-            factor (float): The rod length factor.
-
-        Returns:
-            Object: The object with the updated rod length factor.
-        """
-        self._rod_length_factor = factor
         return self
 
     def max(self, dim: str) -> float:
@@ -2080,7 +2713,7 @@ class Object:
                 vert_flag[i] = 1
         self._static = np.sum(vert_flag) == len(vert)
 
-    def pin(self, ind: Optional[list[int]] = None) -> PinHolder:
+    def pin(self, ind: list[int] | None = None) -> PinHolder:
         """Set specified vertices as pinned.
 
         Args:
@@ -2111,13 +2744,28 @@ class Object:
             raise Exception("object is static")
         else:
             stitch = self._asset.fetch.get(name)
-            if "Ind" not in stitch.keys():
+            if "Ind" not in stitch:
                 raise Exception("Ind not found in stitch")
-            elif "W" not in stitch.keys():
+            elif "W" not in stitch:
                 raise Exception("W not found in stitch")
             else:
                 self._stitch = (stitch["Ind"], stitch["W"])
                 return self
+
+    def set_uv(self, uv: list[np.ndarray]) -> "Object":
+        """Set the UV coordinates of the object.
+
+        Args:
+            uv (list[np.ndarray]): The UV coordinates for each face.
+
+        Returns:
+            Object: The object with the updated UV coordinates.
+        """
+        if self.obj_type != "tri":
+            raise Exception("UV coordinates are only applicable to triangular meshes")
+        else:
+            self._uv = uv
+            return self
 
     def direction(self, _ex: list[float], _ey: list[float]) -> "Object":
         """Set two orthogonal directions of a shell required for Baraff-Witkin model.
@@ -2141,6 +2789,7 @@ class Object:
         elif tri is None:
             raise Exception("face does not exist")
         else:
+            uv = []
             for t in tri:
                 a, b, c = vert[t]
                 n = np.cross(b - a, c - a)
@@ -2153,8 +2802,14 @@ class Object:
                     raise Exception(
                         f"ey must be orthogonal to the face normal. normal: {n}"
                     )
-            self._uv = np.zeros((len(vert), 2))
-            for i, x in enumerate(vert):
-                u, v = x.dot(ex), x.dot(ey)
-                self._uv[i] = [u, v]
+                uv.append(
+                    np.array(
+                        [
+                            [a.dot(ex), a.dot(ey)],
+                            [b.dot(ex), b.dot(ey)],
+                            [c.dot(ex), c.dot(ey)],
+                        ]
+                    )
+                )
+            self._uv = uv
         return self

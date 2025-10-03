@@ -6,27 +6,10 @@
 #define VEC_HPP
 
 #include "../main/cuda_utils.hpp"
+#include "../kernels/vec_ops.hpp"
 #include <cassert>
 #include <cmath>
 #include <iostream>
-#include <thrust/device_vector.h>
-#include <thrust/execution_policy.h>
-#include <thrust/inner_product.h>
-#include <thrust/transform.h>
-
-namespace main_helper {
-extern bool use_thrust;
-}
-
-namespace VecDev {
-template <class T> void set(T *array, unsigned size, T init_val);
-template <class T> void copy(const T *src, T *dst, unsigned size);
-template <class T>
-void add_scaled(const T *src, T *dst, T scale, unsigned size);
-template <class T>
-void combine(const T *src_A, const T *src_B, T *dst, T a, T b, unsigned size);
-template <class T> T inner_product(const T *a, const T *b, unsigned size);
-} // namespace VecDev
 
 template <class T> struct VecVec {
 
@@ -144,12 +127,7 @@ template <class T> struct Vec {
     }
     Vec<T> clear(const T val = T()) {
         if (data && size > 0) {
-            if (main_helper::use_thrust) {
-                thrust::device_ptr<T> data_dev(data);
-                thrust::fill(data_dev, data_dev + size, val);
-            } else {
-                VecDev::set(data, size, val);
-            }
+            kernels::set(data, size, val);
         }
         return *this;
     }
@@ -157,53 +135,6 @@ template <class T> struct Vec {
         assert(i < size);
         if (val) {
             atomicAdd(&data[i], val);
-        }
-    }
-    void copy(const Vec<T> &src) const {
-        assert(src.size == size);
-        if (main_helper::use_thrust) {
-            thrust::device_ptr<T> src_dev(src.data);
-            thrust::device_ptr<T> dst_dev(this->data);
-            thrust::copy(src_dev, src_dev + src.size, dst_dev);
-        } else {
-            VecDev::copy(src.data, this->data, src.size);
-        }
-    }
-    void add_scaled(Vec<T> &b, float c) const {
-        assert(b.size == size);
-        if (main_helper::use_thrust) {
-            thrust::device_ptr<T> a_dev(this->data);
-            thrust::device_ptr<T> b_dev(b.data);
-            thrust::transform(
-                a_dev, a_dev + size, b_dev, a_dev,
-                [c] __device__(T a_val, T b_val) { return a_val + c * b_val; });
-        } else {
-            VecDev::add_scaled(b.data, this->data, c, size);
-        }
-    }
-    void combine(Vec<T> &a, Vec<T> &b, float c, float d) const {
-        assert(a.size == size);
-        assert(b.size == size);
-        if (main_helper::use_thrust) {
-            thrust::device_ptr<T> dest_dev(this->data);
-            thrust::device_ptr<T> a_dev(a.data);
-            thrust::device_ptr<T> b_dev(b.data);
-            thrust::transform(a_dev, a_dev + size, b_dev, dest_dev,
-                              [c, d] __device__(T a_val, T b_val) {
-                                  return c * a_val + d * b_val;
-                              });
-        } else {
-            VecDev::combine(a.data, b.data, this->data, c, d, size);
-        }
-    }
-    float inner_product(const Vec<float> &b) const {
-        assert(b.size == size);
-        if (main_helper::use_thrust) {
-            thrust::device_ptr<float> a_dev(data);
-            thrust::device_ptr<float> b_dev(b.data);
-            return thrust::inner_product(a_dev, a_dev + b.size, b_dev, 0.0f);
-        } else {
-            return VecDev::inner_product(data, b.data, size);
         }
     }
 };

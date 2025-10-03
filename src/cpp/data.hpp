@@ -34,6 +34,7 @@ using Vec2u = Vec2<unsigned>;
 using Vec3u = Vec3<unsigned>;
 using Vec4u = Vec4<unsigned>;
 
+
 template <class T, unsigned R, unsigned C>
 using SMat = Eigen::Matrix<T, R, C, Eigen::ColMajor>;
 template <unsigned R, unsigned C>
@@ -70,6 +71,10 @@ using Mat6x9f = Mat6x9<float>;
 using Mat9x9f = Mat9x9<float>;
 using Mat9x12f = Mat9x12<float>;
 using Mat12x12f = Mat12x12<float>;
+
+
+enum class Model { ARAP, StVK, BaraffWitkin, SNHk };
+enum class Barrier { Cubic, Quad, Log };
 
 struct VertexNeighbor {
     VecVec<unsigned> face;
@@ -109,28 +114,51 @@ struct VertexProp {
     float area;
     float volume;
     float mass;
+    float ghat;
+    float offset;
+    float friction;
+    unsigned fix_index;
+    unsigned pull_index;
 };
 
-struct RodProp {
+struct EdgeProp {
+    bool fixed;
     float length;
-    float radius;
     float mass;
     float stiffness;
+    float bend;
+    float ghat;
+    float offset;
+    float friction;
 };
 
 struct FaceProp {
+    bool fixed;
     float area;
     float mass;
+    Model model;
     float mu;
     float lambda;
+    float friction;
+    float ghat;
+    float offset;
+    float strainlimit;
+    float bend;
+    float shrink;
 };
 
 struct HingeProp {
+    bool fixed;
     float length;
+    float bend;
+    float ghat;
+    float offset;
 };
 
 struct TetProp {
+    bool fixed;
     float mass;
+    Model model;
     float volume;
     float mu;
     float lambda;
@@ -138,7 +166,7 @@ struct TetProp {
 
 struct PropSet {
     Vec<VertexProp> vertex;
-    Vec<RodProp> rod;
+    Vec<EdgeProp> edge;
     Vec<FaceProp> face;
     Vec<HingeProp> hinge;
     Vec<TetProp> tet;
@@ -172,11 +200,9 @@ template <unsigned N> struct DiffTable {
 using DiffTable2 = DiffTable<2>;
 using DiffTable3 = DiffTable<3>;
 
-enum class Model { ARAP, StVK, BaraffWitkin, SNHk };
-enum class Barrier { Cubic, Quad, Log };
-
 struct FixPair {
     Vec3f position;
+    float ghat;
     unsigned index;
     bool kinematic;
 };
@@ -190,11 +216,12 @@ struct PullPair {
 struct Stitch {
     Vec3u index;
     float weight;
-    bool active;
 };
 
 struct Sphere {
     Vec3f center;
+    float ghat;
+    float friction;
     float radius;
     bool bowl;
     bool reverse;
@@ -203,17 +230,23 @@ struct Sphere {
 
 struct Floor {
     Vec3f ground;
+    float ghat;
+    float friction;
     Vec3f up;
     bool kinematic;
 };
 
 struct CollisionMesh {
-    bool active;
     Vec<Vec3f> vertex;
     Vec<Vec3u> face;
     Vec<Vec2u> edge;
     BVH face_bvh;
     BVH edge_bvh;
+    struct {
+        Vec<VertexProp> vertex;
+        Vec<FaceProp> face;
+        Vec<EdgeProp> edge;
+    } prop;
     struct {
         VertexNeighbor vertex;
         HingeNeighbor hinge;
@@ -232,39 +265,29 @@ struct Constraint {
 
 struct ParamSet {
     double time;
+    bool disable_contact;
     bool fitting;
     float air_friction;
     float air_density;
-    float strain_limit_eps;
-    float contact_ghat;
-    float contact_offset;
-    float static_mesh_offset;
-    float rod_offset;
-    float constraint_ghat;
     float constraint_tol;
     float prev_dt;
     float dt;
     float playback;
     unsigned min_newton_steps;
     float target_toi;
-    float bend;
-    float rod_bend;
     float stitch_stiffness;
     unsigned cg_max_iter;
     float cg_tol;
     float line_search_max_t;
-    float ccd_tol;
+    float ccd_eps;
     float ccd_reduction;
     unsigned ccd_max_iter;
     float max_dx;
     float eiganalysis_eps;
-    float friction;
     float friction_eps;
     float isotropic_air_friction;
     Vec3f gravity;
     Vec3f wind;
-    Model model_shell;
-    Model model_tet;
     Barrier barrier;
     unsigned csrmat_max_nnz;
     unsigned bvh_alloc_factor;
@@ -306,21 +329,6 @@ struct DataSet {
 struct AABB {
     Vec3f min;
     Vec3f max;
-};
-
-struct VertexKinematic {
-    Vec3f position;
-    bool kinematic;
-    bool active;
-    bool rod;
-};
-
-struct Kinematic {
-    Vec<VertexKinematic> vertex;
-    Vec<bool> face;
-    Vec<bool> edge;
-    Vec<bool> hinge;
-    Vec<bool> tet;
 };
 
 template <unsigned N> struct Proximity {

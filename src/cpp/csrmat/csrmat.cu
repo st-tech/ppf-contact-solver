@@ -2,24 +2,14 @@
 // Author: Ryoichi Ando (ryoichi.ando@zozo.com)
 // License: Apache v2.0
 
-#ifndef CSR_MAT_HPP
-#define CSR_MAT_HPP
-
+#include "../kernels/exclusive_scan.hpp"
+#include "../kernels/reduce.hpp"
+#include "../kernels/vec_ops.hpp"
 #include "../main/cuda_utils.hpp"
 #include "../simplelog/SimpleLog.h"
 #include "../utility/dispatcher.hpp"
 #include "../utility/utility.hpp"
 #include "csrmat.hpp"
-#include <thrust/device_ptr.h>
-#include <thrust/execution_policy.h>
-#include <thrust/functional.h>
-#include <thrust/logical.h>
-#include <thrust/reduce.h>
-#include <thrust/scan.h>
-
-namespace main_helper {
-extern bool use_thrust;
-}
 
 __device__ void Row::alloc() {
     head = 0;
@@ -148,93 +138,6 @@ void DynCSRMat::start_rebuild_buffer() {
     } DISPATCH_END;
 }
 
-__global__ void block_scan_kernel(unsigned *d_data, unsigned *d_block_sums,
-                                  unsigned n) {
-    __shared__ unsigned temp[BLOCK_SIZE];
-    unsigned tid = threadIdx.x;
-    unsigned idx = blockIdx.x * blockDim.x + threadIdx.x;
-    unsigned val = (idx < n) ? d_data[idx] : 0;
-    temp[tid] = val;
-    __syncthreads();
-    for (int offset = 1; offset < blockDim.x; offset *= 2) {
-        int index = (tid + 1) * offset * 2 - 1;
-        if (index < blockDim.x) {
-            temp[index] += temp[index - offset];
-        }
-        __syncthreads();
-    }
-    if (tid == blockDim.x - 1) {
-        temp[tid] = 0;
-    }
-    __syncthreads();
-    for (int offset = blockDim.x / 2; offset > 0; offset /= 2) {
-        int index = (tid + 1) * offset * 2 - 1;
-        if (index < blockDim.x) {
-            unsigned temp_val = temp[index - offset];
-            temp[index - offset] = temp[index];
-            temp[index] += temp_val;
-        }
-        __syncthreads();
-    }
-    unsigned new_val = temp[tid];
-    if (idx < n) {
-        d_data[idx] = new_val;
-    }
-    if (tid == blockDim.x - 1 && d_block_sums != nullptr) {
-        d_block_sums[blockIdx.x] = new_val + val;
-    }
-}
-
-__global__ void add_block_offsets_kernel(unsigned *d_data,
-                                         unsigned *d_block_sums, unsigned n) {
-    unsigned idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (blockIdx.x > 0 && idx < n) {
-        d_data[idx] += d_block_sums[blockIdx.x - 1];
-    }
-}
-
-unsigned exclusive_scan(unsigned *d_data, unsigned n) {
-    if (main_helper::use_thrust) {
-        unsigned tmp0, tmp1;
-        CUDA_HANDLE_ERROR(cudaMemcpy(&tmp0, d_data + n - 1, sizeof(unsigned),
-                                     cudaMemcpyDeviceToHost));
-        thrust::exclusive_scan(thrust::device, d_data, d_data + n, d_data, 0);
-        CUDA_HANDLE_ERROR(cudaMemcpy(&tmp1, d_data + n - 1, sizeof(unsigned),
-                                     cudaMemcpyDeviceToHost));
-        return tmp0 + tmp1;
-    } else {
-        static unsigned _n = n;
-        assert(_n == n);
-        static unsigned num_blocks = (n + BLOCK_SIZE - 1) / BLOCK_SIZE;
-        static unsigned *d_block_sums = nullptr;
-        static unsigned *h_block_sums = nullptr;
-        if (d_block_sums == nullptr) {
-            CUDA_HANDLE_ERROR(cudaMalloc((void **)&d_block_sums,
-                                         num_blocks * sizeof(unsigned)));
-            h_block_sums = new unsigned[num_blocks];
-        }
-        block_scan_kernel<<<num_blocks, BLOCK_SIZE,
-                            BLOCK_SIZE * sizeof(unsigned)>>>(d_data,
-                                                             d_block_sums, n);
-        CUDA_HANDLE_ERROR(cudaMemcpy(h_block_sums, d_block_sums,
-                                     num_blocks * sizeof(unsigned),
-                                     cudaMemcpyDeviceToHost));
-        unsigned total_sum = 0;
-        for (unsigned i = 0; i < num_blocks; i++) {
-            total_sum += h_block_sums[i];
-        }
-        for (unsigned i = 1; i < num_blocks; i++) {
-            h_block_sums[i] += h_block_sums[i - 1];
-        }
-        CUDA_HANDLE_ERROR(cudaMemcpy(d_block_sums, h_block_sums,
-                                     num_blocks * sizeof(unsigned),
-                                     cudaMemcpyHostToDevice));
-        add_block_offsets_kernel<<<num_blocks, BLOCK_SIZE>>>(d_data,
-                                                             d_block_sums, n);
-        return total_sum;
-    }
-}
-
 void DynCSRMat::finish_rebuild_buffer(unsigned &max_nnz_row,
                                       float &consumed_rat) {
     Vec<unsigned> fixed_row_offsets = this->fixed_row_offsets;
@@ -249,11 +152,11 @@ void DynCSRMat::finish_rebuild_buffer(unsigned &max_nnz_row,
         tmp_array[i] = rows[i].max_dyn_rows + rows[i].fixed_nnz;
     } DISPATCH_END;
 
-    max_nnz_row = utility::max_array(tmp_array.data, nrow, 0u);
+    max_nnz_row = kernels::max_array(tmp_array.data, nrow, 0u);
 
     unsigned num_nnz = 0;
     if (max_nnz_row) {
-        num_nnz = exclusive_scan(dyn_row_offsets.data, nrow);
+        num_nnz = kernels::exclusive_scan(dyn_row_offsets.data, nrow);
         if (num_nnz >= max_nnz) {
             printf("finish_rebuild_buffer: num_nnz %u, max_nnz: %u\n", num_nnz,
                    max_nnz);
@@ -333,7 +236,8 @@ void DynCSRMat::finalize() {
         fixed_row_offsets[i] = rows[i].head;
     } DISPATCH_END;
 
-    unsigned num_fixed_nnz = exclusive_scan(fixed_row_offsets.data, nrow);
+    unsigned num_fixed_nnz =
+        kernels::exclusive_scan(fixed_row_offsets.data, nrow);
     if (num_fixed_nnz > max_nnz) {
         printf("num_fixed_nnz: %u, max_nnz: %u\n", num_fixed_nnz, max_nnz);
         assert(false);
@@ -365,7 +269,7 @@ void DynCSRMat::finalize() {
         }
     } DISPATCH_END;
 
-    unsigned num_nnz = exclusive_scan(ref_index_offsets.data, nrow);
+    unsigned num_nnz = kernels::exclusive_scan(ref_index_offsets.data, nrow);
     if (num_nnz >= max_nnz) {
         printf("transpose num_nnz %u, max_nnz: %u\n", num_nnz, max_nnz);
         assert(false);
@@ -535,9 +439,7 @@ bool FixedCSRMat::check() {
 }
 
 void FixedCSRMat::copy(const FixedCSRMat &other) {
-    this->value.copy(other.value);
+    kernels::copy(other.value.data, this->value.data, this->value.size);
 }
 
 bool FixedCSRMat::finalize() { return check(); }
-
-#endif

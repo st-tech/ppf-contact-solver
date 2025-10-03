@@ -7,82 +7,32 @@ name: Getting Started
 on:
   workflow_dispatch:
 
-env:
-  SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
-  DOCKER_IMAGE: nvidia/cuda:11.8.0-devel-ubuntu22.04
-  TMP_CONTAINER_NAME: tmp-ppf-dev
-  TMP_ROOT: /root/ppf-contact-solver
-
 jobs:
   headless:
-    runs-on: ppf-contact-solver-NVIDIA # replace with your runner name
+    runs-on: ppf-contact-solver-NVIDIA
     timeout-minutes: 60
 
     steps:
       - name: check out repo
         uses: actions/checkout@v3
-      
-      - name: print info
-        run: bash .github/workflows/print-info.sh
 
-      - name: prepare env
+      - name: install NVIDIA driver and CUDA toolkit
         run: |
-          echo "EXEC=docker exec ${{env.TMP_CONTAINER_NAME}}" >> $GITHUB_ENV
-          echo "EXEC_W=docker exec -w ${{env.TMP_ROOT}} ${{env.TMP_CONTAINER_NAME}}" >> $GITHUB_ENV
+          curl -fSsL -O https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2004/x86_64/cuda-keyring_1.1-1_all.deb
+          sudo dpkg -i cuda-keyring_1.1-1_all.deb
+          sudo apt-get update
+          sudo apt-get -y install cuda-toolkit-12-8
 
-      - name: check env
-        run: |
-          echo "DOCKER_IMAGE: $DOCKER_IMAGE"
-          echo "TMP_CONTAINER_NAME: $TMP_CONTAINER_NAME"
-          echo "TMP_ROOT: $TMP_ROOT"
-          echo "EXEC: $EXEC"
-          echo "EXEC_W: $EXEC_W"
-
-      - name: install NVIDIA container toolkit
-        run: |
-            curl -fSsL -O https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2004/x86_64/cuda-keyring_1.1-1_all.deb
-            sudo dpkg -i cuda-keyring_1.1-1_all.deb
-            sudo apt-get update
-            sudo apt-get -y install cuda-toolkit-12-6
-            curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg && curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
-            sudo chmod 644 /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
-            sudo apt update
-            sudo apt install -y nvidia-container-toolkit nvidia-container-runtime
-            sudo service docker restart
-
-      - name: setup container
-        run: |
-          docker pull $DOCKER_IMAGE
-          docker run -d -t --gpus all -e TERM -e LANG=en_US.UTF-8 --hostname ppf-dev --name $TMP_CONTAINER_NAME -e NVIDIA_DRIVER_CAPABILITIES=graphics,compute,utility $DOCKER_IMAGE
-          $EXEC nvidia-smi
-          $EXEC apt update
-          $EXEC apt install -y git python3
-          docker cp . $TMP_CONTAINER_NAME:$TMP_ROOT
+      - name: check GPU
+        run: nvidia-smi
 
       - name: warmup
-        run: $EXEC_W python3 warmup.py
+        run: python3 warmup.py
 
       - name: build
-        run: $EXEC_W /root/.cargo/bin/cargo build --release
+        run: ~/.cargo/bin/cargo build --release
 
       - name: run headless
-        run: $EXEC_W bash -c "PYTHONPATH=$TMP_ROOT python3 examples/headless.py"
-
-      - name: remove container
-        if: always()
         run: |
-          docker stop $TMP_CONTAINER_NAME
-          docker rm $TMP_CONTAINER_NAME
-
-  notify_failure:
-    runs-on: ubuntu-latest
-    needs: headless
-    if: ${{ failure() }}
-    steps:
-
-      - name: Slack Notification Failure
-        uses: rtCamp/action-slack-notify@v2
-        env:
-          SLACK_TITLE: Deploy / Failure
-          SLACK_COLOR: danger
-          SLACK_MESSAGE: One or more tests failed.
+          export PYTHONPATH=$PWD
+          ~/.local/share/ppf-cts/venv/bin/python examples/headless.py
