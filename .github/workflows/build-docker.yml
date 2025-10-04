@@ -16,7 +16,7 @@ env:
 
 jobs:
   build-image:
-    runs-on: ubuntu-latest
+    runs-on: ppf-contact-solver-NVIDIA
     permissions:
       contents: read
       packages: write
