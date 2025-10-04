@@ -496,7 +496,7 @@ Below, we describe how to deploy our solver on major cloud services ☁️. Thes
 - Select `GPUs`. We recommend the GPU type `NVIDIA L4` because it's affordable and accessible, as it does not require a high quota. You may select `T4` instead for testing purposes.
 - Do **not** check `Enable Virtual Workstation (NVIDIA GRID)`.
 - We recommend the machine type `g2-standard-8`.
-- Choose the OS type `Deep Learning VM with CUDA 11.8 M126` and set the disk size to `50GB`.
+- Choose the OS type `Deep Learning VM with CUDA 12.4 M129` and set the disk size to `50GB`.
 - As of late 2024, this configuration costs approximately $0.86 per hour in `us-central1 (Iowa)` and $1.00 per hour in `asia-east1 (Taiwan)`.
 - Port number `8080` is reserved by the OS image. Set `$MY_WEB_PORT` to `8888`. When connecting via `gcloud`, use the following format:  `gcloud compute ssh --zone "xxxx" "instance-name" -- -L 8080:localhost:8888`.
 - *Do not skip* the Docker container creation in the installation process; it is required.
