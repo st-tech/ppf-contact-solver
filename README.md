@@ -406,7 +406,8 @@ This is not a self-hosted runner, meaning that each time the runner launches, al
 
 ### [![All Examples](https://github.com/st-tech/ppf-contact-solver/actions/workflows/run-all-once.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/run-all-once.yml)
 
-We use the GitHub-hosted runner 🖥️, but the actual simulation runs on a provisioned [vast.ai](https://vast.ai) instance 🌐. We do this for performance ⚡ and budget 💰 reasons. We choose an RTX 4090 🎮, which typically costs less than $0.50 per hour 💵. Since we start with a fresh 🌱 instance, the environment is clean 🧹 every time.
+We use the GitHub-hosted runner 🖥️, but the actual simulation runs on a `g6e.2xlarge` AWS instance 🌐.
+Since we start with a fresh 🌱 instance, the environment is clean 🧹 every time.
 We take advantage of the ability to deploy on the cloud; this action is performed in parallel, which reduces the total action time.
 
 ### 📦 Action Artifacts
@@ -457,7 +458,7 @@ Our contact solver is designed for heavy use in cloud services ☁️, enabling 
 - **🐛 Easier Bug Tracking**: Users and developers can easily share the same hardware, kernel, and driver environment, making it easier to track and fix bugs.
 - **🛠️ Free Maintenance Cost**: No need to maintain hardware for everyday operations or introduce redundancy for malfunctions.
 
-This is all made possible with our purely web-based frontends 🌐 and scalable capability 🧩.
+This is made possible with our purely web-based frontends 🌐 and scalable capability 🧩.
 Our main target is the NVIDIA L4 🖱️, a data-center-targeted GPU 🖥️ that offers reasonable pricing 💲, delivering both practical performance 💪 and scalability 📊 without investing in expensive hardware 💻.
 
 Below, we describe how to deploy our solver on major cloud services ☁️. These instructions are up to date as of late 2024 📅 and are subject to change 🔄.

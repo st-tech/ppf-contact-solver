@@ -36,7 +36,7 @@ docker run -it `
     --hostname ppf-dev `
     --name $MY_CONTAINER_NAME `
     -e NVIDIA_DRIVER_CAPABILITIES="graphics,compute,utility" `
-    nvidia/cuda:11.8.0-devel-ubuntu22.04
+    nvidia/cuda:12.8.0-devel-ubuntu24.04
 ```
 
 ### 🐧 Linux
@@ -56,7 +56,7 @@ docker run -it \
     --hostname ppf-dev \
     --name $MY_CONTAINER_NAME -e \
     NVIDIA_DRIVER_CAPABILITIES=graphics,compute,utility \
-    nvidia/cuda:11.8.0-devel-ubuntu22.04
+    nvidia/cuda:12.8.0-devel-ubuntu24.04
 ```
 
 ### 🪟🐧 Both Systems
@@ -145,7 +145,7 @@ docker rm $MY_CONTAINER_NAME
 > If you wish to completely wipe what we’ve done here, you may also need to purge the Docker image by:
 >
 > ```
-> docker rmi $(docker images | grep 'nvidia/cuda' | grep '11.8.0-devel-ubuntu22.04' | awk '{print $3}')
+> docker rmi $(docker images | grep 'nvidia/cuda' | grep '12.8.0-devel-ubuntu24.04' | awk '{print $3}')
 > ```
 >
 > but don't do this if you still need it.
