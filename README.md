@@ -252,7 +252,7 @@ session.export.animation()
 We have also included [`jupyter-lsp`](https://github.com/jupyter-lsp/jupyterlab-lsp) to provide interactive linting assistance 🛠️ and display docstrings as you type. See this video [(Video)](https://drive.google.com/file/d/1vCM7kNgXdqQRBjVaoEb6KwIdRR21V7sV/view) for an example.
 The behaviors can be changed through the settings.
 
-- A list of parameters used in `param.set(key,value)` is documented here [(GitHub Pages)](https://st-tech.github.io/ppf-contact-solver/parameters.html).
+- A list of parameters used in `param.set(key,value)` is documented here: [(Global Parameters)](https://st-tech.github.io/ppf-contact-solver/global_parameters.html) [(Object Parameters)](https://st-tech.github.io/ppf-contact-solver/object_parameters.html).
 
 > [!NOTE]
 > ⚠️ Please note that our Python APIs are subject to breaking changes as this repository undergoes frequent iterations. 🚧
