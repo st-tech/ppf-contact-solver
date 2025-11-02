@@ -529,7 +529,7 @@ Below, we describe how to deploy our solver on major cloud services. These instr
 
 This repository is owned by [ZOZO, Inc.](https://corp.zozo.com/en/)
 We appreciate your interest in opening pull requests, but we are not ready to accept external contributions because doing so involves resolving copyright and licensing matters with [ZOZO, Inc.](https://corp.zozo.com/en/)
-For the time being, please open issues for bug reports or feature requests.
+For the time being, please open issues for bug reports.
 If you wish to extend the codebase, please fork the repository and work on your forked version.
 Thank you!
 
