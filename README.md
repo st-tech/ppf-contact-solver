@@ -14,8 +14,8 @@ involving 👚 shells, 🪵 solids and 🪢 rods. All made by ZOZO.
 - **💪 Robust**: Contact resolutions are completely penetration-free. No snagging intersections.
 - **⏲ Scalable**: An extreme case includes beyond 150M contacts. Not just one million.
 - **🚲 Cache Efficient**: All on the GPU runs in single precision. No double precision.
-- **🥼 Inextensible**: Cloth never extends beyond very strict upper bounds, such as 1%.
-- **📐 Physically Accurate**: Our deformable solver is driven by the Finite Element Method.
+- **🥼 Bounded Inextensibility**: Cloth never extends beyond strict upper bounds, such as 1%.
+- **📐 Better Physical Accuracy**: Our deformable solver is driven by the Finite Element Method.
 - **⚔️ Highly Stressed**: We run GitHub Actions to run stress tests [10 times in a row](#️-ten-consecutive-runs).
 - **🚀 Massively Parallel**: Both contact and elasticity solvers are run on the GPU.
 - **🐳 Docker Sealed**: Everything is designed to work out of the box.
@@ -23,6 +23,12 @@ involving 👚 shells, 🪵 solids and 🪢 rods. All made by ZOZO.
 - **🐍 Documented Python APIs**: Our Python code is fully [docstringed](https://st-tech.github.io/ppf-contact-solver/frontend.html) and lintable [(Video)](https://drive.google.com/file/d/1vCM7kNgXdqQRBjVaoEb6KwIdRR21V7sV/view).
 - **☁️ Cloud-Ready**: Our solver can be seamlessly deployed on major cloud platforms.
 - **✨ Stay Clean**: You can remove all traces after use.
+
+## 🤔 Disclaimer
+
+- 🕒 Built for offline uses; **not real time.** Some examples may run at an interactive rate.
+- 🐳 Targeted only for Docker-based deployments; **local setups are discouraged.**
+- ☁️ Best engineered for cloud platforms; **desktop uses are not rigorously tested.**
 
 ## 🔖 Table of Contents
 
@@ -46,11 +52,13 @@ involving 👚 shells, 🪵 solids and 🪢 rods. All made by ZOZO.
   - [📦 Deploying on Amazon Web Services](#-deploying-on-amazon-web-services)
   - [📦 Deploying on Google Compute Engine](#-deploying-on-google-compute-engine)
 - [✒️ Citation](#️-citation)
+- [📬 Contributing](#-contributing)
+- [👥 How This Was Coded](#-how-this-was-coded)
 - [🙏 Acknowledgements](#-acknowledgements)
 
 ### 📚 Advanced Contents
 
-- 🧑 💻 Setting Up Your Development Environment [(Markdown)](./articles/develop.md#-setting-up-your-development-environment)
+- 🧑 Setting Up Your Development Environment [(Markdown)](./articles/develop.md#-setting-up-your-development-environment)
 - 🐞 Bug Fixes and Updates [(Markdown)](./articles/bug.md)
 
 ## 📝 Change History
@@ -61,8 +69,8 @@ involving 👚 shells, 🪵 solids and 🪢 rods. All made by ZOZO.
 - (2025.04.02) Added 9 examples. See the [catalogue](#️-catalogue).
 - (2025.03.03) Added a [budget table on AWS](#-budget-table-on-aws).
 - (2025.02.28) Added a [reference branch and a Docker image of our TOG paper](#-technical-materials).
-- (2025.2.26) Added Floating Point-Rounding Errors in ACCD in [hindsight](./articles/hindsight.md).
-- (2025.2.7) Updated the [trapped example](./examples/trapped.ipynb) [(Video)](https://drive.google.com/file/d/1Qek0e0qBNWPlBb1hSOZ6o_e2Cqf5rGst/view) with squishy balls.
+- (2025.02.26) Added Floating Point-Rounding Errors in ACCD in [hindsight](./articles/hindsight.md).
+- (2025.02.07) Updated the [trapped example](./examples/trapped.ipynb) [(Video)](https://drive.google.com/file/d/1Qek0e0qBNWPlBb1hSOZ6o_e2Cqf5rGst/view) with squishy balls.
 
 <details>
 
@@ -94,7 +102,7 @@ involving 👚 shells, 🪵 solids and 🪢 rods. All made by ZOZO.
 
 ##### 📌 Reference Implementation
 
-The main branch is undergoing frequent updates and will deviate from the paper 🚧.
+The main branch is undergoing frequent updates and will deviate from the paper.
 To retain consistency with the paper, we have created a new branch ```sigasia-2024```.
 
 - 🛠️ Only maintenance updates are planned for this branch.
@@ -111,13 +119,15 @@ To retain consistency with the paper, we have created a new branch ```sigasia-20
 
 ## 💨 Getting Started
 
-Install a 🎮 NVIDIA driver [(Link)](https://www.nvidia.com/en-us/drivers/) on your 💻 host system and follow the 📝 instructions below specific to the 🖥️ operating system to get a 🐳 Docker running:
+> ⚠️ Please follow our Docker-based installation. **Do not try to install locally.** If you do, you are very likely to hit failures and find it difficult to cleanup.
+
+Install a NVIDIA driver [(Link)](https://www.nvidia.com/en-us/drivers/) on your host system and follow the instructions below specific to the operating system to get a Docker running:
 
 🐧 Linux | 🪟 Windows
 ----|----
 Install the Docker engine from here [(Link)](https://docs.docker.com/engine/install/). Also, install the NVIDIA Container Toolkit [(Link)](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html). Just to make sure that the Container Toolkit is loaded, run `sudo service docker restart`. | Install the Docker Desktop [(Link)](https://docs.docker.com/desktop/setup/install/windows-install/). You may need to log out or reboot after the installation. After logging back in, launch Docker Desktop to ensure that Docker is running.
 
-Next, run the following command to start the 📦 container:
+Next, run the following command to start the container:
 
 #### 🪟 Windows (PowerShell)
 
@@ -135,36 +145,36 @@ IMAGE_NAME=ghcr.io/st-tech/ppf-contact-solver-compiled:latest
 docker run --rm --gpus all -p ${MY_WEB_PORT}:8080 $IMAGE_NAME
 ```
 
-⏳ Wait for a while until the container becomes a steady state.
-Next, open your 🌐 browser and navigate to <http://localhost:8080>, where `8080` is the port number specified in the `MY_WEB_PORT` variable.
+Wait for a while until the container becomes a steady state.
+Next, open your browser and navigate to <http://localhost:8080>, where `8080` is the port number specified in the `MY_WEB_PORT` variable.
 Keep your terminal window open.
 
-🎉 Now you are ready to go! 🚀
+Now you are ready to go! 🎉
 
 ### 🛑 Shutting Down
 
 To shut down the container, just press `Ctrl+C` in the terminal.
-The container will be removed and all traces will be 🧹 cleaned up.
+The container will be removed and all traces will be cleaned up. 🧹
 
 ### 🔧 Advanced Installation
 
-If you wish to build the container from scratch 🛠️, please refer to the cleaner installation guide [(Markdown)](./articles/install.md) 📝.
+If you wish to build the container from scratch, please refer to the cleaner installation guide [(Markdown)](./articles/install.md).
 
 ## 🐍 How To Use
 
-Our frontend is accessible through 🌐 a browser using our built-in JupyterLab 🐍 interface.
+Our frontend is accessible through a browser using our built-in JupyterLab interface.
 All is set up when you open it for the first time.
 Results can be interactively viewed through the browser and exported as needed.
 
-This allows you to interact with the simulator on your 💻 laptop while the actual simulation runs on a remote headless server over 🌍 the internet.
-This means that **you don't have to own ⚙️ NVIDIA hardware**, but can rent it at [vast.ai](https://vast.ai) or [RunPod](https://www.runpod.io/) for less than 💵 $0.5 per hour.
+This allows you to interact with the simulator on your laptop while the actual simulation runs on a remote headless server over the internet.
+This means that **you don't have to own NVIDIA hardware**, but can rent it at [vast.ai](https://vast.ai) or [RunPod](https://www.runpod.io/) for less than $0.5 per hour.
 For example, this [(Video)](https://drive.google.com/file/d/1n068Ai_hlfgapf2xkAutOHo3PkLpJXA4/view) was recorded on a [vast.ai](https://vast.ai) instance.
-The experience is 👍 good!
+The experience is good! 👍
 
 Our Python interface is designed with the following principles in mind:
 
-- **🛠️ Dynamic Tri/Tet Creation**: Relying on non-integrated third-party tools for triangulation, tetrahedralization, and loading can make it difficult to dynamically adjust resolutions. Our built-in tri/tet creation tools eliminate this limitation.
-- **🚫 No Mesh Data**: Preparing mesh data using external tools can be cumbersome. Our frontend minimizes this effort by allowing meshes to be created on the fly or downloaded when needed.
+- **🛠️ In-Pipeline Tri/Tet Creation**: Depending on external 3D/CAD softwares for triangulation or tetrahedralization makes dynamic resolution changes cumbersome. We provide handy `.triangulate()` and `.tetrahedralize()` calls to keep everything in-pipeline, allowing users to skip explicit mesh exports to 3D/CAD software.
+- **🚫 No Mesh Data Included**: Preparing mesh data using external tools can be cumbersome. Our frontend minimizes this effort by allowing meshes to be created on the fly or downloaded when needed.
 - **🔗 Method Chaining**: We adopt the method chaining style from JavaScript, making the API intuitive and easy to understand.
 - **📦 Single Import for Everything**: All frontend features are accessible by simply importing with `from frontend import App`.
 
@@ -248,18 +258,18 @@ session.export.animation()
 
 ## 📚 Python APIs and Parameters
 
-- Full API documentation 📖 is available on our [GitHub Pages](https://st-tech.github.io/ppf-contact-solver/frontend.html). The major APIs are documented using docstrings ✍️ and compiled with [Sphinx](https://www.sphinx-doc.org/en/master/) ⚙️.
-We have also included [`jupyter-lsp`](https://github.com/jupyter-lsp/jupyterlab-lsp) to provide interactive linting assistance 🛠️ and display docstrings as you type. See this video [(Video)](https://drive.google.com/file/d/1vCM7kNgXdqQRBjVaoEb6KwIdRR21V7sV/view) for an example.
+- Full API documentation is available on our [GitHub Pages](https://st-tech.github.io/ppf-contact-solver/frontend.html). The major APIs are documented using docstrings and compiled with [Sphinx](https://www.sphinx-doc.org/en/master/)
+We have also included [`jupyter-lsp`](https://github.com/jupyter-lsp/jupyterlab-lsp) to provide interactive linting assistance and display docstrings as you type. See this video [(Video)](https://drive.google.com/file/d/1vCM7kNgXdqQRBjVaoEb6KwIdRR21V7sV/view) for an example.
 The behaviors can be changed through the settings.
 
 - A list of parameters used in `param.set(key,value)` is documented here: [(Global Parameters)](https://st-tech.github.io/ppf-contact-solver/global_parameters.html) [(Object Parameters)](https://st-tech.github.io/ppf-contact-solver/object_parameters.html).
 
 > [!NOTE]
-> ⚠️ Please note that our Python APIs are subject to breaking changes as this repository undergoes frequent iterations. 🚧
+> ⚠️ Please note that our Python APIs are subject to breaking changes as this repository undergoes frequent iterations.
 
 ## 🔍 Obtaining Logs
 
-📊 Logs for the simulation can also be queried through the Python APIs 🐍. Here's an example of how to get a list of recorded logs 📝, fetch them 📥, and compute the average 🧮.
+Logs for the simulation can also be queried through the Python APIs. Here's an example of how to get a list of recorded logs, fetch them, and compute the average.
 
 ```python
 # get a list of log names
@@ -304,7 +314,7 @@ Below are some representatives.
 
 The full list of log names and their descriptions is documented here: [(GitHub Pages)](https://st-tech.github.io/ppf-contact-solver/logs.html).
 
-Note that some entries have multiple records at the same video time ⏱️. This occurs because the same operation is executed multiple times 🔄 within a single step during the inner Newton's iterations 🧮. For example, the linear system solve is performed at each Newton's step, so if multiple Newton's steps are 🔁 executed, multiple linear system solve times appear in the record at the same 📊 video time.
+Note that some entries have multiple records at the same video time. This occurs because the same operation is executed multiple times within a single step during the inner Newton's iterations. For example, the linear system solve is performed at each Newton's step, so if multiple Newton's steps are executed, multiple linear system solve times appear in the record at the same video time.
 
 If you would like to retrieve the raw log stream, you can do so by
 
@@ -328,8 +338,8 @@ This will output something like:
 ```
 
 If you would like to read `stderr`, you can do so using `session.get.stderr()` (if it exists). They return `list[str]`.
-All the log files 📂 are available ✅ and can be fetched ⬇️ during the simulation 💻.
-  
+All the log files are available and can be fetched during the simulation.
+
 ## 🖼️ Catalogue
 
 |||||
@@ -338,7 +348,7 @@ All the log files 📂 are available ✅ and can be fetched ⬇️ during the si
 |![](./asset/image/catalogue/woven.mp4.webp)|![](./asset/image/catalogue/stack.mp4.webp)|![](./asset/image/catalogue/trampoline.mp4.webp)|![](./asset/image/catalogue/needle.mp4.webp)|
 |[cards](./examples/cards.ipynb) [(Video)](https://drive.google.com/file/d/1PMdDnlyCsjinbvICKph_0UcXUfUvvUmZ/view)|[codim](./examples/codim.ipynb) [(Video)](https://drive.google.com/file/d/19wohf_8Us5Hz3PUe6f9Wp7bfq292-mGK/view)|[hang](./examples/hang.ipynb) [(Video)](https://drive.google.com/file/d/1gIjwaRrEifH0FQnZ8HO8Q9-f9FF5ZivG/view)|[trapped](./examples/trapped.ipynb) [(Video)](https://drive.google.com/file/d/1Qek0e0qBNWPlBb1hSOZ6o_e2Cqf5rGst/view)|
 |![](./asset/image/catalogue/cards.mp4.webp)|![](./asset/image/catalogue/codim.mp4.webp)|![](./asset/image/catalogue/hang.mp4.webp)|![](./asset/image/catalogue/trapped.mp4.webp)|
-|[domino](./examples/domino.ipynb) [(Video)](https://drive.google.com/file/d/1N9y8eZrjSQhAUhKwiO9w8jW_T18zPnYf/view)|[noodle](./examples/noodle.ipynb) [(Video)](https://drive.google.com/file/d/1HI1qpsWUSMsswJjPIm9BAVJHMPzUelrH/view)|[drape](./examples/drape.ipynb) [(Video)](https://drive.google.com/file/d/1PGL3tbA451VhHOViSJJNNdQvmUpg7bQd/view)|[twist](./examples/twist.ipynb) [(Video)](https://drive.google.com/file/d/1LDFKS-iBvl2uDdPVKaazQL25tYGEEyXr/view)|
+|[domino](./examples/domino.ipynb) [(Video)](https://drive.google.com/file/d/1N9y8eZrjSQhAUhKwiO9w8jW_T18zPnYf/view)|[noodle](./examples/noodle.ipynb) [(Video)](https://drive.google.com/file/d/1HI1qpsWUSMsswJjPIm9BAVJHMPzUelrH/view)|[drape](./examples/drape.pynb) [(Video)](https://drive.google.com/file/d/1PGL3tbA451VhHOViSJJNNdQvmUpg7bQd/view)|[twist](./examples/twist.ipynb) [(Video)](https://drive.google.com/file/d/1LDFKS-iBvl2uDdPVKaazQL25tYGEEyXr/view)|
 |![](./asset/image/catalogue/domino.mp4.webp)|![](./asset/image/catalogue/noodle.mp4.webp)|![](./asset/image/catalogue/drape.mp4.webp)|![](./asset/image/catalogue/quintupletwist.mp4.webp)|
 |[ribbon](./examples/ribbon.ipynb) [(Video)](https://drive.google.com/file/d/17ymVyPJauSPJH_GwAvBHM5eNg97eq6SD/view)|[curtain](./examples/curtain.ipynb) [(Video)](https://drive.google.com/file/d/1c9W3YAFAS5r9m9i7sZHsFu8h98C8yy1T/view)|[fishingknot](./examples/fishingknot.ipynb) [(Video)](https://drive.google.com/file/d/1RznNGDvP5ZfKm6nwNiTVtFXBsextOeya/view)|[friction](./examples/friction.ipynb) [(Video)](https://drive.google.com/file/d/12WGdfDTFIwCT0UFGEZzfmQreM6WSSHet/view)|
 |![](./asset/image/catalogue/ribbon.mp4.webp)|![](./asset/image/catalogue/curtain.mp4.webp)|![](./asset/image/catalogue/fishingknot.mp4.webp)|![](./asset/image/catalogue/friction.mp4.webp)|
@@ -395,24 +405,24 @@ The author is actively woriking on it.
 ## 🚀 GitHub Actions
 
 We implemented GitHub Actions that test all of our examples except for large scale ones, which take from hours to days to finish.
-We perform explicit intersection checks 🔍 at the end of each step, which raises an error ❌ if an intersection is detected.
-This ensures that all steps are confirmed to be penetration-free if tests are pass ✅.
+We perform explicit intersection checks at the end of each step, which raises an error if an intersection is detected.
+This ensures that all steps are confirmed to be penetration-free if tests are pass.
 The runner types are described as follows:
 
 ### [![Getting Started](https://github.com/st-tech/ppf-contact-solver/actions/workflows/getting-started.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/getting-started.yml)
 
-The tested 🚀 runner of this action is the Ubuntu NVIDIA GPU-Optimized Image for AI and HPC with an NVIDIA Tesla T4 (16 GB VRAM) with Driver version 570.133.20.
-This is not a self-hosted runner, meaning that each time the runner launches, all environments are 🌱 fresh.
+The tested runner of this action is the Ubuntu NVIDIA GPU-Optimized Image for AI and HPC with an NVIDIA Tesla T4 (16 GB VRAM) with Driver version 570.133.20.
+This is not a self-hosted runner, meaning that each time the runner launches, all environments are fresh. 🌱
 
 ### [![All Examples](https://github.com/st-tech/ppf-contact-solver/actions/workflows/run-all-once.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/run-all-once.yml)
 
-We use the GitHub-hosted runner 🖥️, but the actual simulation runs on a `g6e.2xlarge` AWS instance 🌐.
-Since we start with a fresh 🌱 instance, the environment is clean 🧹 every time.
+We use the GitHub-hosted runner, but the actual simulation runs on a `g6e.2xlarge` AWS instance.
+Since we start with a fresh instance, the environment is clean every time.
 We take advantage of the ability to deploy on the cloud; this action is performed in parallel, which reduces the total action time.
 
 ### 📦 Action Artifacts
 
-We generate zipped action artifacts 📦 for each run. These artifacts include:
+We generate zipped action artifacts for each run. These artifacts include:
 
 - **📝 Logs**: Detailed logs of the simulation runs.
 - **📊 Metrics**: Performance metrics and statistics.
@@ -422,8 +432,8 @@ Please note that these artifacts will be deleted after a month.
 
 ### ⚔️ Ten Consecutive Runs
 
-We know that you can't judge the reliability of contact resolution by simply watching a single success 🎥 video example.
-To ensure greater transparency, we implemented GitHub Actions to run many of our examples via automated GitHub Actions ⚙️, not just once, but **10 times in a row** 🔁.
+We know that you can't judge the reliability of contact resolution by simply watching a single success video example.
+To ensure greater transparency, we implemented GitHub Actions to run many of our examples via automated GitHub Actions, not just once, but **10 times in a row**.
 This means that **a single failure out of 10 tests is considered a failure of the entire test suite!**
 
 [![drape.ipynb](https://github.com/st-tech/ppf-contact-solver/actions/workflows/drape.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/drape.yml)
@@ -447,24 +457,24 @@ This means that **a single failure out of 10 tests is considered a failure of th
 [![yarn.ipynb](https://github.com/st-tech/ppf-contact-solver/actions/workflows/yarn.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/yarn.yml)
 [![roller.ipynb](https://github.com/st-tech/ppf-contact-solver/actions/workflows/roller.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/roller.yml)
 
-Also, we apply small jitters to the position of objects in the scene 🔄, so at each run, the scene is slightly different.
+Also, we apply small jitters to the position of objects in the scene, so at each run, the scene is slightly different.
 
 ## 📡 Deploying on Cloud Services
 
-Our contact solver is designed for heavy use in cloud services ☁️, enabling:
+Our contact solver is designed for heavy use in cloud services, enabling:
 
-- **💰 Cost-Effective Development**: Quickly deploy testing environments 🚀 and delete 🗑️ them when not in use, saving costs.
-- **📈 Flexible Scalability**: Scale as needed based on demand 📈. For example, you can launch multiple instances before a specific deadline ⏰.
-- **🌍 High Accessibility**: Allow anyone with an internet connection 🌍 to try our solver, even on a smartphone 📱 or tablet 🖥️.
+- **💰 Cost-Effective Development**: Quickly deploy testing environments and delete them when not in use, saving costs.
+- **📈 Flexible Scalability**: Scale as needed based on demand. For example, you can launch multiple instances before a specific deadline.
+- **🌍 High Accessibility**: Allow anyone with an internet connection to try our solver, even on a smartphone 📱 or tablet.
 - **🐛 Easier Bug Tracking**: Users and developers can easily share the same hardware, kernel, and driver environment, making it easier to track and fix bugs.
 - **🛠️ Free Maintenance Cost**: No need to maintain hardware for everyday operations or introduce redundancy for malfunctions.
 
-This is made possible with our purely web-based frontends 🌐 and scalable capability 🧩.
-Our main target is the NVIDIA L4 🖱️, a data-center-targeted GPU 🖥️ that offers reasonable pricing 💲, delivering both practical performance 💪 and scalability 📊 without investing in expensive hardware 💻.
+This is made possible with our purely web-based frontends.
+Our main target is the NVIDIA L4, a data-center-targeted GPU that offers reasonable pricing, delivering both practical performance and scalability without investing in expensive hardware.
 
-Below, we describe how to deploy our solver on major cloud services ☁️. These instructions are up to date as of late 2024 📅 and are subject to change 🔄.
+Below, we describe how to deploy our solver on major cloud services. These instructions are up to date as of late 2024 and are subject to change.
 
-**Important**: For all the services below, don't forget to ❌ delete the instance after use, or you’ll be 💸 charged for nothing.
+**Important**: For all the services below, don't forget to delete the instance after use, or you’ll be charged for nothing. 💸
 
 ### 📦 Deploying on [vast.ai](https://vast.ai)
 
@@ -515,6 +525,18 @@ Below, we describe how to deploy our solver on major cloud services ☁️. Thes
 }
 ```
 
+## 📬 Contributing
+
+This repository is owned by [ZOZO, Inc.](https://corp.zozo.com/en/)
+We appreciate your interest in opening pull requests, but we are not ready to accept external contributions because doing so involves resolving copyright and licensing matters with [ZOZO, Inc.](https://corp.zozo.com/en/)
+For the time being, please open issues for bug reports or feature requests.
+If you wish to extend the codebase, please fork the repository and work on your forked version.
+Thank you!
+
+## 👥 How This Was Coded
+
+A large portion of this codebase was written by Ryoichi Ando (<ryoichi.ando@zozo.com>) with GitHub Copilot in the early stages, and nearly all subsequent coding has been carried out through vibe coding with Claude Code and Codex since they became available. All of the code has been carefully human-reviewed by the author before being made public.
+
 ## 🙏 Acknowledgements
 
-The author thanks ZOZO, Inc. for permitting the release of the code and the team members for assisting with the internal paperwork for this project.
+The author thanks [ZOZO, Inc.](https://corp.zozo.com/en/) for permitting the release of the code and the team members for assisting with the internal paperwork for this project.
