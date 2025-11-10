@@ -337,7 +337,8 @@ This will output something like:
    > fillin_pass...0 msec
 ```
 
-If you would like to read `stderr`, you can do so using `session.get.stderr()` (if it exists). They return `list[str]`.
+If you would like to read `stderr`, you can do so using `session.get.stderr()` (if it exists).
+This returns `list[str]`.
 All the log files are available and can be fetched during the simulation.
 
 ## 🖼️ Catalogue
@@ -393,14 +394,15 @@ Large scale examples are run on a [vast.ai](https://vast.ai) instance with an RT
 At the moment, not all large scale examples are ready yet, but they will be added/updated one by one.
 The author is actively woriking on it.
 
-| | | | |
-|---|---|---|---|
-| [large-twist](./examples/large-twist.ipynb) [(Video)](https://drive.google.com/file/d/1vZ7JHza1U6zO9W8DMtSsNZidl_YQXf1e/view) | TBA | TBA | TBA |
-| ![twist](./asset/image/large-scale/twist.jpg) |  |  |  |
+| | | |
+|---|---|---|
+| [large-twist](./examples/large-twist.ipynb) [(Video)](https://drive.google.com/file/d/1vZ7JHza1U6zO9W8DMtSsNZidl_YQXf1e/view) | large-five-twist (Video) | TBA |
+| ![twist](./asset/image/large-scale/twist.jpg) | ![five-twist](./asset/image/large-scale/five-twist.jpg) |  |
 
-| Example | Commit | #Vert | #Face | #Tet | #Seg | #Contact | #Frame | Time/Frame |
-|---|---|---|---|---|---|---|---|---|
-| large-twist | [cbafbd2](https://github.com/st-tech/ppf-contact-solver/tree/cbafbd2197fc7f28673386dfaf1e8d8a1be49937) | 3.2M | 6.4M | ```N/A``` | ```N/A``` | 56.7M | 2,000 | 46.4s |
+| Example | Commit | #Vert | #Face | #Rod | #Contact | #Frame | Time/Frame |
+|---|---|---|---|---|---|---|---|
+| large-twist | [cbafbd2](https://github.com/st-tech/ppf-contact-solver/tree/cbafbd2197fc7f28673386dfaf1e8d8a1be49937) | 3.2M | 6.4M | ```N/A``` | 56.7M | 2,000 | 46.4s |
+| large-five-twist | TBA | 8.2M | 16.4M | ```N/A``` | 184.1M | 2,413 | 144.5s |
 
 ## 🚀 GitHub Actions
 
