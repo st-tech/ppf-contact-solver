@@ -1,5 +1,6 @@
 // File: exclusive_scan.hpp
-// Author: Ryoichi Ando (ryoichi.ando@zozo.com)
+// Code: Claude Code and Codex
+// Review: Ryoichi Ando (ryoichi.ando@zozo.com)
 // License: Apache v2.0
 
 #ifndef EXCLUSIVE_SCAN_HPP
@@ -29,7 +30,6 @@ __global__ void add_block_base_offsets_kernel(unsigned *d_data,
                                               unsigned n);
 
 unsigned exclusive_scan(unsigned *d_data, unsigned n);
-void cleanup_scan_memory();
 
 } // namespace kernels
 

@@ -1,5 +1,6 @@
 // File: barrier.hpp
-// Author: Ryoichi Ando (ryoichi.ando@zozo.com)
+// Code: Claude Code and Codex
+// Review: Ryoichi Ando (ryoichi.ando@zozo.com)
 // License: Apache v2.0
 
 #ifndef BARRIER_DEF_HPP
@@ -25,7 +26,7 @@ __device__ Mat3x3f compute_edge_hessian(const Vec3f &e, float eps, float offset,
 __device__ DiffTable2 compute_strainlimiting_diff_table(const Vec2f &a,
                                                         float tau, float eps,
                                                         Barrier barrier);
-__device__ float strainlimiting_energy(const Vec2f &a, float tau, float eps,
+__device__ float strainlimiting_energy(const Vec2f &a, float eps,
                                        Barrier barrier);
 
 } // namespace barrier

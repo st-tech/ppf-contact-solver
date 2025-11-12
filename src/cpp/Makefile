@@ -1,5 +1,6 @@
 # File: Makefile
-# Author: Ryoichi Ando (ryoichi.ando@zozo.com)
+# Code: Claude Code and Codex
+# Review: Ryoichi Ando (ryoichi.ando@zozo.com)
 # License: Apache v2.0
 
 CC=clang
@@ -13,7 +14,7 @@ CUDA_FLAGS += $(foreach warn,$(SUPPRESS_WARNINGS),--diag-suppress=$(warn))
 CPP_FLAGS=-O3 -std=c++1z -Wall -Wno-unused-function -Wno-unused-function -Wno-strict-aliasing -Wno-uninitialized -Wno-deprecated-declarations -Wno-unused-lambda-capture -fPIC -MMD -MP
 EIGEN_PATH=/usr/include/eigen3
 
-BASE_DIRS=main utility csrmat contact energy eigenanalysis barrier strainlimiting solver
+BASE_DIRS=buffer main utility csrmat contact energy eigenanalysis barrier strainlimiting solver
 KERNEL_FILES=kernels/reduce.cu kernels/exclusive_scan.cu kernels/vec_ops.cu
 CUDA_FILES=$(foreach dir,$(BASE_DIRS),$(dir)/$(dir).cu) $(KERNEL_FILES)
 CPP_FILES=$(foreach dir,$(BASE_DIRS),$(dir)/$(dir).cpp)

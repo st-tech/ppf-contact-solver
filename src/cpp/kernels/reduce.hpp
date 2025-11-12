@@ -1,5 +1,6 @@
 // File: reduce.hpp
-// Author: Ryoichi Ando (ryoichi.ando@zozo.com)
+// Code: Claude Code and Codex
+// Review: Ryoichi Ando (ryoichi.ando@zozo.com)
 // License: Apache v2.0
 
 #ifndef REDUCE_HPP
@@ -8,26 +9,6 @@
 #include "../main/cuda_utils.hpp"
 
 namespace kernels {
-
-struct ReduceInfo {
-    char *d_buffer = nullptr;
-    size_t buffer_bytes = 0;
-
-    void alloc(size_t required_bytes);
-    ~ReduceInfo();
-
-    template <typename T> T *get_block_sums(unsigned max_blocks) {
-        return reinterpret_cast<T *>(d_buffer);
-    }
-    template <typename T> T *get_temp(unsigned max_blocks) {
-        return reinterpret_cast<T *>(d_buffer + max_blocks * sizeof(T));
-    }
-    template <typename T> T *get_final_result(unsigned max_blocks) {
-        return reinterpret_cast<T *>(d_buffer + 2 * max_blocks * sizeof(T));
-    }
-};
-
-extern ReduceInfo reduce_info;
 
 template <typename T, typename Op> __device__ T warp_reduce(T val, Op func);
 

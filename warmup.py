@@ -1,5 +1,6 @@
 # File: warmup.py
-# Author: Ryoichi Ando (ryoichi.ando@zozo.com)
+# Code: Claude Code and Codex
+# Review: Ryoichi Ando (ryoichi.ando@zozo.com)
 # License: Apache v2.0
 
 import os
@@ -674,8 +675,15 @@ def export_log_sphinx():
 if __name__ == "__main__":
     if not os.path.exists(os.path.expanduser("~/.config")):
         os.makedirs(os.path.expanduser("~/.config"))
-    if len(sys.argv) > 1:
-        mode = sys.argv[1]
+
+    args = sys.argv[1:]
+    skip_confirmation = False
+    while "--skip-confirmation" in args:
+        args.remove("--skip-confirmation")
+        skip_confirmation = True
+
+    if args:
+        mode = args[0]
         if mode == "nvim":
             install_nvim()
         elif mode == "lazyvim":
@@ -712,5 +720,14 @@ if __name__ == "__main__":
             install_lazygit()
             install_lazyvim()
     else:
+        if not skip_confirmation:
+            # Require confirmation before running the full environment setup.
+            confirmation = input(
+                "Are you running this in a disposable Docker container or a virtual server? [y/N] "
+            ).strip().lower()
+            if confirmation not in ("y", "yes"):
+                print("Exiting without making changes.")
+                sys.exit(1)
+
         create_venv()
         setup()

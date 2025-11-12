@@ -1,5 +1,6 @@
 // File: strainlimiting.cu
-// Author: Ryoichi Ando (ryoichi.ando@zozo.com)
+// Code: Claude Code and Codex
+// Review: Ryoichi Ando (ryoichi.ando@zozo.com)
 // License: Apache v2.0
 
 #include "../barrier/barrier.hpp"
@@ -50,13 +51,15 @@ void embed_strainlimiting_force_hessian(const DataSet &data,
 
     const Vec<Vec3f> &curr = data.vertex.curr;
     unsigned shell_face_count = data.shell_face_count;
+    Vec<FaceParam> face_params = data.param_arrays.face;
 
     DISPATCH_START(shell_face_count)
-    [data, eval_x, curr, force, fixed_hess_in, fixed_hess_out,
+    [data, eval_x, curr, force, fixed_hess_in, fixed_hess_out, face_params,
      param] __device__(unsigned i) mutable {
         const FaceProp &prop = data.prop.face[i];
-        float tau = prop.strain_limit_tau;
-        float eps = prop.strain_limit_eps;
+        const FaceParam &fparam = face_params[prop.param_index];
+        float tau = fparam.strain_limit_tau;
+        float eps = fparam.strain_limit_eps;
         if (!prop.fixed && eps > 0.0f) {
             const Vec3u &face = data.mesh.mesh.face[i];
             Mat3x3f X;
@@ -96,15 +99,16 @@ float line_search(const DataSet &data, const Vec<Vec3f> &eval_x,
     unsigned shell_face_count = data.shell_face_count;
     Vec<float> toi = tmp_face;
     toi.size = shell_face_count;
-    float toi_reduction(param.toi_reduction);
+    Vec<FaceParam> face_params = data.param_arrays.face;
 
     DISPATCH_START(shell_face_count)
-    [inv_rest2x2, data, mesh, eval_x, prev, param, toi,
-     toi_reduction] __device__(unsigned i) mutable {
+    [data, inv_rest2x2, mesh, eval_x, prev, param, toi,
+     face_params] __device__(unsigned i) mutable {
         float t = param.line_search_max_t;
         const FaceProp &prop = data.prop.face[i];
-        float tau = prop.strain_limit_tau;
-        float eps = prop.strain_limit_eps;
+        const FaceParam &fparam = face_params[prop.param_index];
+        float tau = fparam.strain_limit_tau;
+        float eps = fparam.strain_limit_eps;
         if (!prop.fixed && eps > 0.0f) {
             float tol = param.strain_limit_reduction * eps;
             float target = tau + eps - 2.0f * tol;
@@ -137,7 +141,7 @@ float line_search(const DataSet &data, const Vec<Vec3f> &eval_x,
             }
             if (utility::singular_vals_minus_one(F0 + t * dF).maxCoeff() >=
                 target + tol) {
-                t *= toi_reduction;
+                t *= param.toi_reduction;
             }
         }
         toi[i] = t;

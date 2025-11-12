@@ -1,5 +1,6 @@
 // File: contact.hpp
-// Author: Ryoichi Ando (ryoichi.ando@zozo.com)
+// Code: Claude Code and Codex
+// Review: Ryoichi Ando (ryoichi.ando@zozo.com)
 // License: Apache v2.0
 
 #ifndef CONTACT_DEF_HPP
@@ -19,12 +20,13 @@ void update_aabb(const DataSet &host_data, const DataSet &dev_data,
 void update_collision_mesh_aabb(const DataSet &host_data,
                                 const DataSet &dev_data, const ParamSet &param);
 
-unsigned
-embed_contact_force_hessian(const DataSet &data, const Vec<Vec3f> &eval_x,
-                            Vec<float> force, const FixedCSRMat &fixed_hess_in,
-                            FixedCSRMat &fixed_out, DynCSRMat &hess_out,
-                            unsigned &max_nnz_row, float &dyn_consumed,
-                            float dt, const ParamSet &param);
+unsigned embed_contact_force_hessian(const DataSet &data,
+                                     const Vec<Vec3f> &eval_x, Vec<float> force,
+                                     const FixedCSRMat &fixed_hess_in,
+                                     FixedCSRMat &fixed_out,
+                                     DynCSRMat &hess_out, unsigned &max_nnz_row,
+                                     float &dyn_consumed, float dt,
+                                     const ParamSet &param);
 
 unsigned embed_constraint_force_hessian(const DataSet &data,
                                         const Vec<Vec3f> &eval_x,
