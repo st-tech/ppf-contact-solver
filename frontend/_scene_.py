@@ -1,5 +1,6 @@
 # File: _scene_.py
-# Author: Ryoichi Ando (ryoichi.ando@zozo.com)
+# Code: Claude Code and Codex
+# Review: Ryoichi Ando (ryoichi.ando@zozo.com)
 # License: Apache v2.0
 
 import builtins
@@ -160,8 +161,23 @@ class Wall:
         if time <= self._entry[-1][1]:
             raise Exception("time must be greater than the last time")
 
+    def move_by(self, delta: list[float], time: float) -> "Wall":
+        """Move the wall by a positional delta at a specific time.
+
+        Args:
+            delta (list[float]): The positional delta to move the wall.
+            time (float): The absolute time to move the wall.
+
+        Returns:
+            Wall: The invisible wall.
+        """
+        self._check_time(time)
+        pos = self._entry[-1][0] + delta
+        self._entry.append((pos, time))
+        return self
+
     def move_to(self, pos: list[float], time: float) -> "Wall":
-        """Move the wall to a new position at a specific time.
+        """Move the wall to an absolute position at a specific time.
 
         Args:
             pos (list[float]): The target position of the wall.
@@ -171,21 +187,6 @@ class Wall:
             Wall: The invisible wall.
         """
         self._check_time(time)
-        self._entry.append((pos, time))
-        return self
-
-    def move_by(self, delta: list[float], time: float) -> "Wall":
-        """Move the wall by a positional delta at a specific time.
-
-        Args:
-            delta (list[float]): The positional delta to move the wall.
-            time (float): The absolute time to move the wall.
-
-        Returns
-            Wall: The invisible wall.
-        """
-        self._check_time(time)
-        pos = self._entry[-1][0] + delta
         self._entry.append((pos, time))
         return self
 
@@ -313,21 +314,6 @@ class Sphere:
         self._entry.append((pos, radius, time))
         return self
 
-    def move_to(self, pos: list[float], time: float) -> "Sphere":
-        """Move the sphere to a new position at a specific time.
-
-        Args:
-            pos list[float]: The target position of the sphere.
-            time (float): The absolute time to move the sphere.
-
-        Returns:
-            Sphere: The sphere.
-        """
-        self._check_time(time)
-        radius = self._entry[-1][1]
-        self._entry.append((pos, radius, time))
-        return self
-
     def move_by(self, delta: list[float], time: float) -> "Sphere":
         """Move the sphere by a positional delta at a specific time.
 
@@ -340,6 +326,21 @@ class Sphere:
         """
         self._check_time(time)
         pos = self._entry[-1][0] + delta
+        radius = self._entry[-1][1]
+        self._entry.append((pos, radius, time))
+        return self
+
+    def move_to(self, pos: list[float], time: float) -> "Sphere":
+        """Move the sphere to an absolute position at a specific time.
+
+        Args:
+            pos (list[float]): The target position of the sphere.
+            time (float): The absolute time to move the sphere.
+
+        Returns:
+            Sphere: The sphere.
+        """
+        self._check_time(time)
         radius = self._entry[-1][1]
         self._entry.append((pos, radius, time))
         return self
@@ -404,14 +405,157 @@ class PinKeyframe:
     time: float
 
 
+class Operation:
+    """Base class for pin operations that can be applied in sequence."""
+
+    def apply(self, vertex: np.ndarray, time: float) -> np.ndarray:
+        """Apply the operation to vertices at a given time.
+
+        Args:
+            vertex: Current vertex positions (may be transformed by previous operations).
+            time: Current simulation time.
+
+        Returns:
+            Transformed vertex positions.
+        """
+        raise NotImplementedError("Subclasses must implement apply()")
+
+    def get_time_range(self) -> tuple[float, float]:
+        """Get the time range this operation is active.
+
+        Returns:
+            (t_start, t_end) tuple.
+        """
+        raise NotImplementedError("Subclasses must implement get_time_range()")
+
+
+@dataclass
+class MoveByOperation(Operation):
+    """Move operation with position delta and time range."""
+
+    delta: np.ndarray
+    t_start: float
+    t_end: float
+    transition: str = "linear"
+
+    def apply(self, vertex: np.ndarray, time: float) -> np.ndarray:
+        """Apply position delta to current vertex position over time range."""
+        if time < self.t_start:
+            return vertex
+        elif time >= self.t_end:
+            return vertex + self.delta
+        else:
+            # Interpolate delta and add to current position
+            progress = (time - self.t_start) / (self.t_end - self.t_start)
+            if self.transition == "smooth":
+                progress = progress * progress * (3.0 - 2.0 * progress)
+            return vertex + self.delta * progress
+
+    def get_time_range(self) -> tuple[float, float]:
+        return (self.t_start, self.t_end)
+
+
+@dataclass
+class MoveToOperation(Operation):
+    """Move operation with absolute target positions and time range."""
+
+    target: np.ndarray
+    t_start: float
+    t_end: float
+    transition: str = "linear"
+
+    def apply(self, vertex: np.ndarray, time: float) -> np.ndarray:
+        """Overwrite vertex positions with target over time range."""
+        if time < self.t_start:
+            return vertex
+        elif time >= self.t_end:
+            return self.target.copy()
+        else:
+            # Interpolate from current position to target
+            progress = (time - self.t_start) / (self.t_end - self.t_start)
+            if self.transition == "smooth":
+                progress = progress * progress * (3.0 - 2.0 * progress)
+            return vertex * (1 - progress) + self.target * progress
+
+    def get_time_range(self) -> tuple[float, float]:
+        return (self.t_start, self.t_end)
+
+
+@dataclass
+class SpinOperation(Operation):
+    """Spin operation with rotation parameters."""
+
+    center: np.ndarray
+    axis: np.ndarray
+    angular_velocity: float
+    t_start: float
+    t_end: float
+
+    def apply(self, vertex: np.ndarray, time: float) -> np.ndarray:
+        """Apply Rodrigues rotation if within time range."""
+        t = min(time, self.t_end) - self.t_start
+        if t <= 0:
+            return vertex
+
+        radian_velocity = self.angular_velocity / 180.0 * np.pi
+        angle = radian_velocity * t
+        axis = self.axis / np.linalg.norm(self.axis)
+
+        # Rodrigues rotation formula
+        cos_theta = np.cos(angle)
+        sin_theta = np.sin(angle)
+        points = vertex - self.center
+        rotated = (
+            points * cos_theta
+            + np.cross(axis, points) * sin_theta
+            + np.outer(np.dot(points, axis), axis) * (1.0 - cos_theta)
+        )
+        return rotated + self.center
+
+    def get_time_range(self) -> tuple[float, float]:
+        return (self.t_start, self.t_end)
+
+
+@dataclass
+class ScaleOperation(Operation):
+    """Scale operation around a center point."""
+
+    center: np.ndarray
+    factor: float
+    t_start: float
+    t_end: float
+    transition: str = "linear"
+
+    def apply(self, vertex: np.ndarray, time: float) -> np.ndarray:
+        """Apply scaling interpolating from 1.0 to target factor over time range."""
+        if time < self.t_start:
+            return vertex
+
+        if time >= self.t_end:
+            # Apply full scale
+            points = vertex - self.center
+            return points * self.factor + self.center
+        else:
+            # Interpolate scale factor from 1.0 to target
+            progress = (time - self.t_start) / (self.t_end - self.t_start)
+            if self.transition == "smooth":
+                progress = progress * progress * (3.0 - 2.0 * progress)
+
+            current_factor = 1.0 + (self.factor - 1.0) * progress
+            points = vertex - self.center
+            return points * current_factor + self.center
+
+    def get_time_range(self) -> tuple[float, float]:
+        return (self.t_start, self.t_end)
+
+
 @dataclass
 class PinData:
     """Represents pinning data for a set of vertices."""
 
     index: list[int]
-    keyframe: list[PinKeyframe]
-    spin: list[SpinData]
-    should_unpin: bool = False
+    operations: list[Operation]
+    unpin_time: Optional[float] = None
     transition: str = "linear"
     pull_strength: float = 0.0
 
@@ -429,8 +573,7 @@ class PinHolder:
         self._obj = obj
         self._data = PinData(
             index=indices,
-            spin=[],
-            keyframe=[],
+            operations=[],
         )
 
     def interp(self, transition: str) -> "PinHolder":
@@ -445,84 +588,121 @@ class PinHolder:
         self._data.transition = transition
         return self
 
-    def unpin(self) -> "PinHolder":
-        """Unpin the object.
-
-        Returns:
-            PinHolder: The pinholder with the unpinned vertices.
-        """
-        if self._data.pull_strength:
-            self._data.should_unpin = True
-        else:
-            raise Exception("unpin() is only available when pull is set")
-        return self
-
-    def move_by(self, delta_pos, time: float) -> "PinHolder":
-        """Move the object by a positional delta over a specified time.
+    def unpin(self, time: float) -> "PinHolder":
+        """Unpin the object at a specified time.
 
         Args:
-            delta_pos (list[float]): The positional delta.
-            time (float): The time over which to move the object.
+            time (float): The time at which to unpin the vertices.
+
+        Returns:
+            PinHolder: The pinholder with the unpin time set.
+        """
+        if time < 0.0:
+            raise Exception("unpin time must be non-negative")
+        self._data.unpin_time = time
+        return self
+
+    def move_by(
+        self, delta_pos, t_start: float = 0.0, t_end: float = 1.0
+    ) -> "PinHolder":
+        """Move the object by a positional delta over a specified time range.
+
+        Args:
+            delta_pos (list[float]): The positional delta to apply.
+            t_start (float): The start time. Defaults to 0.0.
+            t_end (float): The end time. Defaults to 1.0.
 
         Returns:
             PinHolder: The pinholder with the updated position.
         """
         delta_pos = np.array(delta_pos).reshape((-1, 3))
-        if not self._data.keyframe:
-            target = self._obj.vertex(False)[self._data.index] + delta_pos
-        else:
-            target = self._data.keyframe[-1].position + delta_pos
-        return self.move_to(target, time)
 
-    def move_and_scale_by(self, delta_pos, scale: float, time: float) -> "PinHolder":
-        """Move the object by a positional delta and (delta-)scale it over a specified time.
+        if len(delta_pos) == 1 and len(self.index) > 1:
+            delta_pos = np.tile(delta_pos, (len(self.index), 1))
+        elif len(delta_pos) != len(self.index):
+            raise Exception("delta_pos must have the same length as pin")
+
+        if t_end <= t_start:
+            raise Exception("t_end must be greater than t_start")
+
+        self._data.operations.append(
+            MoveByOperation(
+                delta=delta_pos,
+                t_start=t_start,
+                t_end=t_end,
+                transition=self._data.transition,
+            )
+        )
+        return self
+
+    def move_to(
+        self, target_pos, t_start: float = 0.0, t_end: float = 1.0
+    ) -> "PinHolder":
+        """Move the object to absolute target positions over a specified time range.
 
         Args:
-            delta_pos (list[float]): The positional delta.
-            scale (float): The scaling factor delta.
-            time (float): The time over which to move and scale the object.
+            target_pos (list[float]): The target positions (absolute).
+            t_start (float): The start time. Defaults to 0.0.
+            t_end (float): The end time. Defaults to 1.0.
 
         Returns:
-            PinHolder: The pinholder with the updated position and scaling.
+            PinHolder: The pinholder with the updated position.
         """
-        delta_pos = np.array(delta_pos).reshape((-1, 3))
-        if not self._data.keyframe:
-            vertex = self._obj.vertex(False)[self._data.index]
-        else:
-            vertex = self._data.keyframe[-1].position
-        mean = np.mean(vertex, axis=0)
-        vertex = vertex - mean
-        vertex = vertex * scale
-        target = vertex + mean + delta_pos
-        return self.move_to(target, time)
+        target_pos = np.array(target_pos).reshape((-1, 3))
 
-    def scale(self, scale: float, time: float) -> "PinHolder":
-        """Scale the object by a specified factor at a specific time.
+        if len(target_pos) == 1:
+            initial_vertices = self._obj.vertex(False)[self._data.index]
+            current_center = np.array(self._obj.position)
+            delta = target_pos[0] - current_center
+            target_pos = initial_vertices + delta
+        elif len(target_pos) != len(self.index):
+            raise Exception("target_pos must have the same length as pin")
+
+        if t_end <= t_start:
+            raise Exception("t_end must be greater than t_start")
+
+        self._data.operations.append(
+            MoveToOperation(
+                target=target_pos,
+                t_start=t_start,
+                t_end=t_end,
+                transition=self._data.transition,
+            )
+        )
+        return self
+
+    def scale(
+        self,
+        scale: float,
+        t_start: float = 0.0,
+        t_end: float = 1.0,
+        center: Optional[list[float]] = None,
+    ) -> "PinHolder":
+        """Scale the object by a specified factor over a time range.
+
+        Interpolates the scale factor from 1.0 to the target scale over [t_start, t_end].
 
         Args:
-            scale (float): The scaling factor.
-            time (float): The absolute time to scale the object.
+            scale (float): The target scaling factor.
+            t_start (float): The start time of the scaling. Defaults to 0.0.
+            t_end (float): The end time of the scaling. Defaults to 1.0.
+            center (Optional[list[float]]): The center point for scaling. If not provided, uses the origin (0, 0, 0).
 
         Returns:
             PinHolder: The pinholder with the updated scaling.
         """
-        vertex = self._obj.vertex(False)[self._data.index]
-        mean = np.mean(vertex, axis=0)
-        vertex = vertex - mean
-        vertex = vertex * scale
-        vertex = vertex + mean
-        return self.move_to(vertex, time)
+        center_point = np.array(center) if center is not None else np.zeros(3)
 
-    def hold(self, time: float) -> "PinHolder":
-        """Hold the object in its current position for a specified time.
-
-        Args:
-            time (float): The time to hold the object.
-
-        Returns:
-            PinHolder: The pinholder with the held position.
-        """
-        return self.move_by([0, 0, 0], time)
+        self._data.operations.append(
+            ScaleOperation(
+                center=center_point,
+                factor=scale,
+                t_start=t_start,
+                t_end=t_end,
+                transition=self._data.transition,
+            )
+        )
+        return self
 
     def pull(self, strength: float = 1.0) -> "PinHolder":
         """Pull the object at specified vertices.
@@ -536,37 +716,6 @@ class PinHolder:
         self._data.pull_strength = strength
         return self
 
-    def move_to(
-        self,
-        target: np.ndarray,
-        time: float,
-    ) -> "PinHolder":
-        """Move the object to a target position at a specified time.
-
-        Args:
-            target (np.ndarray): The target position.
-            time (float): The absolute time over which to move the object.
-
-        Returns:
-            PinHolder: The pinholder with the updated position.
-        """
-        if len(target) != len(self.index):
-            raise Exception("target must have the same length as pin")
-        elif time == 0:
-            raise Exception("time must be greater than zero")
-
-        if not self.keyframe:
-            self._add_movement(self._obj.vertex(False)[self.index], 0)
-
-        self._add_movement(target, time)
-        return self
-
-    def _add_movement(self, target_pos: np.ndarray, time: float):
-        final_time = self._data.keyframe[-1].time if self._data.keyframe else None
-        if final_time is not None and time <= final_time:
-            raise Exception("time must be greater than the last time")
-        self._data.keyframe.append(PinKeyframe(target_pos, time))
-
     def spin(
         self,
         center: Optional[list[float]] = None,
@@ -575,12 +724,31 @@ class PinHolder:
         t_start: float = 0.0,
         t_end: float = float("inf"),
     ) -> "PinHolder":
+        """Add a spin operation to the pin.
+
+        Args:
+            center: Center of rotation. Defaults to [0, 0, 0].
+            axis: Rotation axis. Defaults to [0, 1, 0].
+            angular_velocity: Rotation speed in degrees/second.
+            t_start: Start time of spin.
+            t_end: End time of spin.
+
+        Returns:
+            PinHolder: The pinholder with the spin operation added.
+        """
         if axis is None:
             axis = [0.0, 1.0, 0.0]
         if center is None:
             center = [0.0, 0.0, 0.0]
-        self._data.spin.append(
-            SpinData(np.array(center), np.array(axis), angular_velocity, t_start, t_end)
+
+        self._data.operations.append(
+            SpinOperation(
+                center=np.array(center),
+                axis=np.array(axis),
+                angular_velocity=angular_velocity,
+                t_start=t_start,
+                t_end=t_end,
+            )
         )
         return self
 
@@ -599,19 +767,14 @@ class PinHolder:
         return self._data.index
 
     @property
-    def spinner(self) -> list[SpinData]:
-        """Get list of spins."""
-        return self._data.spin
+    def operations(self) -> list[Operation]:
+        """Get list of operations."""
+        return self._data.operations
 
     @property
-    def keyframe(self) -> list[PinKeyframe]:
-        """Get list of movement keyframes."""
-        return self._data.keyframe
-
-    @property
-    def should_unpin(self) -> bool:
-        """Check if vertices should unpin after movement."""
-        return self._data.should_unpin
+    def unpin_time(self) -> Optional[float]:
+        """Get the time at which vertices should unpin."""
+        return self._data.unpin_time
 
     @property
     def pull_strength(self) -> float:
@@ -633,21 +796,13 @@ class EnumColor(Enum):
 
 def _compute_triangle_areas_vectorized(vert: np.ndarray, tri: np.ndarray) -> np.ndarray:
     """Compute triangle areas using vectorized operations."""
-    # Get all three vertices for each triangle at once
-    v0 = vert[tri[:, 0]]  # Shape: (n_triangles, 3)
-    v1 = vert[tri[:, 1]]  # Shape: (n_triangles, 3)
-    v2 = vert[tri[:, 2]]  # Shape: (n_triangles, 3)
-
-    # Compute edge vectors for all triangles
-    e1 = v1 - v0  # Shape: (n_triangles, 3)
-    e2 = v2 - v0  # Shape: (n_triangles, 3)
-
-    # Compute cross product for all triangles at once
-    cross = np.cross(e1, e2)  # Shape: (n_triangles, 3)
-
-    # Compute magnitude (area of parallelogram) for all triangles
-    areas = 0.5 * np.linalg.norm(cross, axis=1)  # Shape: (n_triangles,)
-
+    v0 = vert[tri[:, 0]]
+    v1 = vert[tri[:, 1]]
+    v2 = vert[tri[:, 2]]
+    e1 = v1 - v0
+    e2 = v2 - v0
+    cross = np.cross(e1, e2)
+    areas = 0.5 * np.linalg.norm(cross, axis=1)
     return areas
 
 
@@ -1306,12 +1461,47 @@ class FixedScene:
 
             for i, pin in enumerate(self._pin):
                 f.write(f"[pin-{i}]\n")
-                f.write(f"keyframe = {len(pin.keyframe)}\n")
-                f.write(f"spin = {len(pin.spin)}\n")
+                f.write(f"operation_count = {len(pin.operations)}\n")
                 f.write(f"pin = {len(pin.index)}\n")
                 f.write(f"pull = {float(pin.pull_strength)}\n")
-                f.write(f"unpin = {'true' if pin.should_unpin else 'false'}\n")
-                f.write(f'transition = "{pin.transition}"\n')
+                if pin.unpin_time is not None:
+                    f.write(f"unpin_time = {float(pin.unpin_time)}\n")
+                f.write("\n")
+
+                # Write operation metadata
+                for j, op in enumerate(pin.operations):
+                    f.write(f"[pin-{i}-op-{j}]\n")
+                    if isinstance(op, MoveByOperation):
+                        f.write('type = "move_by"\n')
+                        f.write(f"t_start = {float(op.t_start)}\n")
+                        f.write(f"t_end = {float(op.t_end)}\n")
+                        f.write(f'transition = "{op.transition}"\n')
+                    elif isinstance(op, MoveToOperation):
+                        f.write('type = "move_to"\n')
+                        f.write(f"t_start = {float(op.t_start)}\n")
+                        f.write(f"t_end = {float(op.t_end)}\n")
+                        f.write(f'transition = "{op.transition}"\n')
+                    elif isinstance(op, SpinOperation):
+                        f.write('type = "spin"\n')
+                        f.write(f"center_x = {float(op.center[0])}\n")
+                        f.write(f"center_y = {float(op.center[1])}\n")
+                        f.write(f"center_z = {float(op.center[2])}\n")
+                        f.write(f"axis_x = {float(op.axis[0])}\n")
+                        f.write(f"axis_y = {float(op.axis[1])}\n")
+                        f.write(f"axis_z = {float(op.axis[2])}\n")
+                        f.write(f"angular_velocity = {float(op.angular_velocity)}\n")
+                        f.write(f"t_start = {float(op.t_start)}\n")
+                        f.write(f"t_end = {float(op.t_end)}\n")
+                    elif isinstance(op, ScaleOperation):
+                        f.write('type = "scale"\n')
+                        f.write(f"center_x = {float(op.center[0])}\n")
+                        f.write(f"center_y = {float(op.center[1])}\n")
+                        f.write(f"center_z = {float(op.center[2])}\n")
+                        f.write(f"factor = {float(op.factor)}\n")
+                        f.write(f"t_start = {float(op.t_start)}\n")
+                        f.write(f"t_end = {float(op.t_end)}\n")
+                        f.write(f'transition = "{op.transition}"\n')
+                    f.write("\n")
 
             for i, wall in enumerate(self._wall):
                 normal = wall.normal
@@ -1417,32 +1607,23 @@ class FixedScene:
         pbar.update(1)
 
         for i, pin in enumerate(self._pin):
+            # Write pin indices
             with open(os.path.join(bin_path, f"pin-ind-{i}.bin"), "wb") as f:
                 np.array(pin.index, dtype=np.uint64).tofile(f)
-            if len(pin.keyframe):
-                target_dir = os.path.join(bin_path, f"pin-{i}")
-                os.makedirs(target_dir)
-                with open(os.path.join(bin_path, f"pin-timing-{i}.bin"), "wb") as f:
-                    time_array = [entry.time for entry in pin.keyframe]
-                    np.array(time_array, dtype=np.float64).tofile(f)
-                for j, entry in enumerate(pin.keyframe):
-                    with open(os.path.join(target_dir, f"{j}.bin"), "wb") as f:
-                        np.array(entry.position, dtype=np.float64).tofile(f)
-            if len(pin.spin):
-                spin_dir = os.path.join(path, "spin")
-                os.makedirs(spin_dir, exist_ok=True)
-                with open(os.path.join(spin_dir, f"spin-{i}.toml"), "w") as f:
-                    for j, spin in enumerate(pin.spin):
-                        f.write(f"[spin-{j}]\n")
-                        f.write(f"center_x = {float(spin.center[0])}\n")
-                        f.write(f"center_y = {float(spin.center[1])}\n")
-                        f.write(f"center_z = {float(spin.center[2])}\n")
-                        f.write(f"axis_x = {float(spin.axis[0])}\n")
-                        f.write(f"axis_y = {float(spin.axis[1])}\n")
-                        f.write(f"axis_z = {float(spin.axis[2])}\n")
-                        f.write(f"angular_velocity = {float(spin.angular_velocity)}\n")
-                        f.write(f"t_start = {float(spin.t_start)}\n")
-                        f.write(f"t_end = {float(spin.t_end)}\n")
+
+            # Write operation data
+            for j, op in enumerate(pin.operations):
+                if isinstance(op, MoveByOperation):
+                    # MoveBy operations need to write position delta to binary file
+                    op_path = os.path.join(bin_path, f"pin-{i}-op-{j}.bin")
+                    with open(op_path, "wb") as f:
+                        np.array(op.delta, dtype=np.float64).tofile(f)
+                elif isinstance(op, MoveToOperation):
+                    # MoveTo operations need to write target positions to binary file
+                    op_path = os.path.join(bin_path, f"pin-{i}-op-{j}.bin")
+                    with open(op_path, "wb") as f:
+                        np.array(op.target, dtype=np.float64).tofile(f)
+                # Spin and Scale operations have all data in info.toml
         pbar.update(1)
 
         for i, wall in enumerate(self._wall):
@@ -1567,42 +1748,11 @@ class FixedScene:
             np.ndarray: The vertex positions at the specified time.
         """
         vert = self._vert[1].copy()
-        for pin in self._pin:
-            last_time = pin.keyframe[-1].time if len(pin.keyframe) else 0.0
-            last_position = (
-                pin.keyframe[-1].position if len(pin.keyframe) else vert[pin.index]
-            )
-            for i, entry in enumerate(pin.keyframe):
-                next_entry = pin.keyframe[i + 1] if i + 1 < len(pin.keyframe) else None
-                if entry.time >= last_time:
-                    vert[pin.index] = last_position
-                    break
-                elif next_entry is not None:
-                    if time >= entry.time and time < next_entry.time:
-                        t1, t2 = entry.time, next_entry.time
-                        q1, q2 = entry.position, next_entry.position
-                        r = (time - t1) / (t2 - t1)
-                        if pin.transition == "smooth":
-                            r = r * r * (3.0 - 2.0 * r)
-                        vert[pin.index] = q1 * (1 - r) + q2 * r
-                        break
-            for p in pin.spin:
-                t = min(time, p.t_end) - p.t_start
-                if t > 0:
-                    radian_velocity = p.angular_velocity / 180.0 * np.pi
-                    angle = radian_velocity * t
-                    axis = p.axis / np.linalg.norm(p.axis)
 
-                    # Rodrigues rotation formula
-                    cos_theta = np.cos(angle)
-                    sin_theta = np.sin(angle)
-                    points = vert[pin.index] - p.center
-                    rotated = (
-                        points * cos_theta
-                        + np.cross(axis, points) * sin_theta
-                        + np.outer(np.dot(points, axis), axis) * (1.0 - cos_theta)
-                    )
-                    vert[pin.index] = rotated + p.center
+        for pin in self._pin:
+            # Apply all operations in strict order
+            for op in pin.operations:
+                vert[pin.index] = op.apply(vert[pin.index], time)
 
         vert += time * self._vel
         vert += self._displacement[self._vert[0]]
@@ -1636,7 +1786,7 @@ class FixedScene:
 
     def preview(
         self,
-        vert: np.ndarray | None = None,
+        vert: Optional[np.ndarray] = None,
         options: Optional[dict] = None,
         show_slider: bool = True,
         engine: str = "threejs",
@@ -1668,6 +1818,7 @@ class FixedScene:
         if self._plot is not None and self._plot.is_jupyter_notebook():
             if vert is None:
                 vert = self.vertex()
+            assert vert is not None
             color = self.color(vert, options)
             assert len(color) == len(vert)
             tri = self._tri.copy()
@@ -1719,24 +1870,23 @@ class FixedScene:
             if show_slider and (self._pin or has_vel):
                 max_time = 0
                 if self._pin:
-                    max_time = max(
-                        [
-                            pin.keyframe[-1].time if len(pin.keyframe) else 0
-                            for pin in self._pin
-                        ]
-                    )
-                    for p in self._pin:
-                        for spin in p.spin:
-                            if spin.t_end == float("inf"):
-                                max_time = max(max_time, 1.0)
-                            else:
-                                max_time = max(max_time, spin.t_end)
+                    # Find max time across all operations
+                    for pin in self._pin:
+                        for op in pin.operations:
+                            if isinstance(op, (MoveByOperation, MoveToOperation)):
+                                max_time = max(max_time, op.t_end)
+                            elif isinstance(op, SpinOperation):
+                                if op.t_end == float("inf"):
+                                    max_time = max(max_time, 1.0)
+                                else:
+                                    max_time = max(max_time, op.t_end)
+                            elif isinstance(op, ScaleOperation):
+                                max_time = max(max_time, op.t_end)
                 if has_vel:
                     max_time = max(max_time, 1.0)
                 if max_time > 0:
 
                     def update(time=0):
-                        nonlocal p
                         vert = self.time(time)
                         plotter.update(vert)
 
@@ -2107,9 +2257,8 @@ class Scene:
                 concat_pin.append(
                     PinData(
                         index=[map[vi] for vi in p.index],
-                        keyframe=p.keyframe,
-                        spin=p.spinner,
-                        should_unpin=p.should_unpin,
+                        operations=p.operations,
+                        unpin_time=p.unpin_time,
                         pull_strength=p.pull_strength,
                         transition=p.transition,
                     )
@@ -2356,7 +2505,7 @@ class Object:
             self._normalize = True
             return self
 
-    def get(self, key: str) -> np.ndarray | None:
+    def get(self, key: str) -> Optional[np.ndarray]:
         """Get an associated value of the object with respect to the key.
 
         Args:
@@ -2697,9 +2846,7 @@ class Object:
             return
 
         for p in self._pin:
-            if len(p.keyframe) > 0 or p.pull_strength:
-                return False
-            if len(p.spinner) > 0:
+            if len(p.operations) > 0 or p.pull_strength:
                 return False
 
         vert = self.get("V")

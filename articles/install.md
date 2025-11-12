@@ -103,10 +103,6 @@ cd ppf-contact-solver
 python3 warmup.py
 ```
 
-> [!NOTE]
-> If you encounter issues in ```warmup.py```, you can try our pre-build Docker image ```ghcr.io/st-tech/ppf-contact-solver-base:latest```, which does not need to run ```warmup.py```.
-> See ``Dockerfile`` to learn how this image is built.
-
 Now we're set. Let's kick in the compilation!🏃
 
 ```

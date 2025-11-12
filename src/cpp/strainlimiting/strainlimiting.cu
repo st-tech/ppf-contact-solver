@@ -1,7 +1,7 @@
 // File: strainlimiting.cu
-// Author: Ryoichi Ando (ryoichi.ando@zozo.com)
+// Code: Claude Code and Codex
+// Review: Ryoichi Ando (ryoichi.ando@zozo.com)
 // License: Apache v2.0
-
 
 #include "../barrier/barrier.hpp"
 #include "../eigenanalysis/eigenanalysis.hpp"
@@ -51,13 +51,15 @@ void embed_strainlimiting_force_hessian(const DataSet &data,
 
     const Vec<Vec3f> &curr = data.vertex.curr;
     unsigned shell_face_count = data.shell_face_count;
+    Vec<FaceParam> face_params = data.param_arrays.face;
 
     DISPATCH_START(shell_face_count)
-    [data, eval_x, curr, force, fixed_hess_in, fixed_hess_out,
+    [data, eval_x, curr, force, fixed_hess_in, fixed_hess_out, face_params,
      param] __device__(unsigned i) mutable {
         const FaceProp &prop = data.prop.face[i];
-        if (!prop.fixed && prop.strainlimit > 0.0f) {
-            float limit = (prop.strainlimit + 1.0f) / prop.shrink - 1.0f;
+        const FaceParam &fparam = face_params[prop.param_index];
+        if (!prop.fixed && fparam.strainlimit > 0.0f) {
+            float limit = (fparam.strainlimit + 1.0f) / fparam.shrink - 1.0f;
             const Vec3u &face = data.mesh.mesh.face[i];
             Mat3x3f X;
             X << eval_x[face[0]], eval_x[face[1]], eval_x[face[2]];
@@ -69,7 +71,7 @@ void embed_strainlimiting_force_hessian(const DataSet &data,
                 Mat3x3f dedx = Mat3x3f::Zero();
                 Mat9x9f d2edx2 = Mat9x9f::Zero();
                 DiffTable2 table = barrier::compute_strainlimiting_diff_table(
-                    svd.S, prop.strainlimit, param.barrier);
+                    svd.S, fparam.strainlimit, param.barrier);
                 float mass = data.prop.face[i].mass;
                 float stiffness = compute_stiffness(
                     data.vertex.curr, face, fixed_hess_in, mass, svd, limit);
@@ -96,14 +98,16 @@ float line_search(const DataSet &data, const Vec<Vec3f> &eval_x,
     unsigned shell_face_count = data.shell_face_count;
     Vec<float> toi = tmp_face;
     toi.size = shell_face_count;
+    Vec<FaceParam> face_params = data.param_arrays.face;
 
     DISPATCH_START(shell_face_count)
-    [data, inv_rest2x2, mesh, eval_x, prev, param,
-     toi] __device__(unsigned i) mutable {
+    [data, inv_rest2x2, mesh, eval_x, prev, param, toi,
+     face_params] __device__(unsigned i) mutable {
         float t = param.line_search_max_t;
         const FaceProp &prop = data.prop.face[i];
-        if (!prop.fixed && prop.strainlimit > 0.0f) {
-            float limit = (prop.strainlimit + 1.0f) / prop.shrink - 1.0f;
+        const FaceParam &fparam = face_params[prop.param_index];
+        if (!prop.fixed && fparam.strainlimit > 0.0f) {
+            float limit = (fparam.strainlimit + 1.0f) / fparam.shrink - 1.0f;
             Vec3u face = mesh.mesh.face[i];
             Mat3x3f x0, x1;
             x0 << prev[face[0]], prev[face[1]], prev[face[2]];
@@ -113,13 +117,15 @@ float line_search(const DataSet &data, const Vec<Vec3f> &eval_x,
             const Mat3x2f F1 =
                 utility::compute_deformation_grad(x1, inv_rest2x2[i]);
             const Mat3x2f dF = F1 - F0;
-            if (utility::singular_vals_minus_one(F0 + t * dF).maxCoeff() >= limit) {
+            if (utility::singular_vals_minus_one(F0 + t * dF).maxCoeff() >=
+                limit) {
                 float upper_t = t;
                 float lower_t = 0.0f;
                 float window = upper_t - lower_t;
                 while (true) {
                     t = 0.5f * (upper_t + lower_t);
-                    Vec2f singular_vals = utility::singular_vals_minus_one(F0 + t * dF);
+                    Vec2f singular_vals =
+                        utility::singular_vals_minus_one(F0 + t * dF);
                     float diff = singular_vals.maxCoeff() - limit;
                     if (diff < 0.0f) {
                         lower_t = t;

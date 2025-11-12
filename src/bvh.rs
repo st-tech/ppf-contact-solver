@@ -1,7 +1,7 @@
 // File: bvh.rs
-// Author: Ryoichi Ando (ryoichi.ando@zozo.com)
+// Code: Claude Code and Codex
+// Review: Ryoichi Ando (ryoichi.ando@zozo.com)
 // License: Apache v2.0
-
 
 use more_asserts::*;
 use na::{vector, Matrix3xX, Vector3};

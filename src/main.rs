@@ -1,5 +1,6 @@
 // File: main.rs
-// Author: Ryoichi Ando (ryoichi.ando@zozo.com)
+// Code: Claude Code and Codex
+// Review: Ryoichi Ando (ryoichi.ando@zozo.com)
 // License: Apache v2.0
 
 mod args;
@@ -16,7 +17,7 @@ mod triutils;
 use args::{ProgramArgs, SimArgs};
 use backend::MeshSet;
 use clap::Parser;
-use data::{BvhSet, DataSet, ParamSet};
+use data::{BvhSet, DataSet, EdgeParam, EdgeProp, ParamSet};
 use flate2::{read::GzDecoder, write::GzEncoder, Compression};
 use log::*;
 use log4rs::append::console::ConsoleAppender;
@@ -25,6 +26,7 @@ use log4rs::encode::pattern::PatternEncoder;
 use mesh::Mesh as SimMesh;
 use more_asserts::*;
 use scene::Scene;
+use std::collections::HashMap;
 use std::ffi::CString;
 use std::fs::OpenOptions;
 use std::io::{Read, Write};
@@ -56,21 +58,18 @@ fn main() {
         "git hash: {}",
         info.head.last_commit_hash.unwrap_or("Unknown".to_string())
     );
-    info!(
-        "float range: from {} to {}",
-        f32::MIN,
-        f32::MAX
-    );
+    info!("float range: from {} to {}", f32::MIN, f32::MAX);
     let mut scene = Scene::new(&program_args);
     let sim_args = scene.args();
     setup(&program_args);
 
     if program_args.load > 0 {
         let mut param = builder::make_param(&sim_args);
-        println!("loading dataset...");
+        info!("Loading dataset...");
         let mut dataset = read(&read_gz(&format!("{}/dataset.bin.gz", program_args.output)));
-        println!("loading backend...");
+        info!("Loading backend state...");
         let mut backend = backend::Backend::load_state(program_args.load, &program_args.output);
+        info!("Data loaded successfully");
         param.time = backend.state.time;
         param.prev_dt = backend.state.prev_dt;
         builder::copy_to_dataset(
@@ -80,12 +79,16 @@ fn main() {
         );
         backend.run(&program_args, &sim_args, dataset, param, scene);
     } else {
+        info!("Initializing mesh...");
         let mut backend = backend::Backend::new(scene.make_mesh());
         let mesh = &backend.mesh;
         let face_area = triutils::face_areas(&mesh.vertex, &mesh.mesh.mesh.face);
         let tet_volumes = triutils::tet_volumes(&mesh.vertex, &mesh.mesh.mesh.tet);
+
+        info!("Building material properties...");
         let mut props = scene.make_props(mesh, &face_area, &tet_volumes);
 
+        info!("Computing constraints and parameters...");
         let time = backend.state.time;
         let temp_constraint = scene.make_constraint(time);
         scene.export_param_summary(&program_args, &props, &face_area, &tet_volumes);
@@ -98,6 +101,14 @@ fn main() {
             total_area_mass += prop.mass;
         }
 
+        info!("Building edge parameter map...");
+        // Build edge param map for deduplication
+        let mut edge_param_map: HashMap<EdgeParam, u32> = HashMap::new();
+        for (i, param) in props.edge_params.iter().enumerate() {
+            edge_param_map.insert(*param, i as u32);
+        }
+
+        info!("Processing edge properties...");
         let mut edge_prop = Vec::new();
         for i in 0..mesh.mesh.mesh.edge.ncols() {
             let rod = mesh.mesh.mesh.edge.column(i);
@@ -115,22 +126,37 @@ fn main() {
                 let mut area_sum = 0.0;
                 for &j in mesh.mesh.neighbor.edge.face[i].iter() {
                     let face_prop = props.face.get(j).unwrap();
+                    let face_param = &props.face_params[face_prop.param_index as usize];
                     let area = face_area[j];
-                    ghat_sum += area * face_prop.ghat;
-                    friction_sum += area * face_prop.friction;
-                    offset_sum += area * face_prop.offset;
+                    ghat_sum += area * face_param.ghat;
+                    friction_sum += area * face_param.friction;
+                    offset_sum += area * face_param.offset;
                     area_sum += area;
                 }
                 assert_gt!(area_sum, 0.0);
                 let ghat = ghat_sum / area_sum;
                 let offset = offset_sum / area_sum;
                 let friction = friction_sum / area_sum;
-                props.edge.push(data::EdgeProp {
-                    length,
+
+                // Create edge param and deduplicate
+                let param = EdgeParam {
+                    stiffness: 0.0,
+                    bend: 0.0,
                     ghat,
-                    friction,
                     offset,
-                    ..Default::default()
+                    friction,
+                };
+                let param_idx = *edge_param_map.entry(param).or_insert_with(|| {
+                    let new_idx = props.edge_params.len() as u32;
+                    props.edge_params.push(param);
+                    new_idx
+                });
+
+                props.edge.push(EdgeProp {
+                    length,
+                    mass: 0.0,
+                    fixed: false,
+                    param_index: param_idx,
                 });
             }
         }
@@ -151,7 +177,11 @@ fn main() {
         )
         .unwrap();
         let velocity = scene.get_initial_velocity();
+
+        info!("Building dataset (this may take a while)...");
         let dataset = builder::build(&sim_args, mesh, &velocity, &mut props, temp_constraint);
+        info!("Dataset built successfully");
+
         let param = builder::make_param(&sim_args);
         backend.run(&program_args, &sim_args, dataset, param, scene);
     }

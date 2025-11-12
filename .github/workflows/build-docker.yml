@@ -1,29 +1,19 @@
 name: Docker Build
-run-name: Docker Build (${{ github.event.inputs.target }})
+run-name: Docker Build
 
 on:
   workflow_dispatch:
-    inputs:
-      target:
-        type: choice
-        description: Build Target
-        options:
-        - compiled
-        - base
 
 env:
   REGISTRY: ghcr.io
 
 jobs:
   build-image:
-    runs-on: ppf-contact-solver-NVIDIA
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
     steps:
-    - name: Print Mode
-      run: |
-        echo "Mode: ${{ github.event.inputs.target }}" >> $GITHUB_STEP_SUMMARY
     - name: Checkout
       uses: actions/checkout@v3
     - name: Docker Login
@@ -32,21 +22,8 @@ jobs:
         registry: ${{ env.REGISTRY }}
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
-    - name: Build Base Image
-      if: github.event.inputs.target == 'base'
+    - name: Build and Push Compiled Image
       uses: docker/build-push-action@v5
       with:
         push: true
-        build-args: |
-          MODE=base
-          IMAGE=nvidia/cuda:12.8.0-devel-ubuntu24.04
-        tags: ${{ env.REGISTRY }}/${{ github.repository }}-base:latest
-    - name: Build Compiled Image
-      if: github.event.inputs.target == 'compiled'
-      uses: docker/build-push-action@v5
-      with:
-        push: true
-        build-args: |
-          MODE=compiled
-          IMAGE=${{ env.REGISTRY }}/${{ github.repository }}-base:latest
         tags: ${{ env.REGISTRY }}/${{ github.repository }}-compiled:latest
