@@ -18,7 +18,7 @@ involving 👚 shells, 🪵 solids and 🪢 rods. All made by ZOZO.
 - **📐 Better Physical Accuracy**: Our deformable solver is driven by the Finite Element Method.
 - **⚔️ Highly Stressed**: We run GitHub Actions to run stress tests [10 times in a row](#️-ten-consecutive-runs).
 - **🚀 Massively Parallel**: Both contact and elasticity solvers are run on the GPU.
-- **🐳 Docker Sealed**: Everything is designed to work out of the box.
+- **🐳 Docker Sealed**: Everything is compiled to work out of the box. The image is ~3.5GB.
 - **🌐 JupyterLab Included**: Open your browser and run examples right away [(Video)](https://drive.google.com/file/d/1n068Ai_hlfgapf2xkAutOHo3PkLpJXA4/view).
 - **🐍 Documented Python APIs**: Our Python code is fully [docstringed](https://st-tech.github.io/ppf-contact-solver/frontend.html) and lintable [(Video)](https://drive.google.com/file/d/1vCM7kNgXdqQRBjVaoEb6KwIdRR21V7sV/view).
 - **☁️ Cloud-Ready**: Our solver can be seamlessly deployed on major cloud platforms.
@@ -26,9 +26,9 @@ involving 👚 shells, 🪵 solids and 🪢 rods. All made by ZOZO.
 
 ## 🤔 Disclaimer
 
-- 🕒 Built for offline uses; **not real time.** Some examples may run at an interactive rate.
-- 🐳 Targeted only for Docker-based deployments; **local setups are discouraged.**
 - ☁️ Best engineered for cloud platforms; **desktop uses are not rigorously tested.**
+- 🐳 Targeted only for Docker-based deployments; **local setups are discouraged.**
+- 🕒 Built for offline uses; **not real time.** Some examples may run at an interactive rate.
 
 ## 🔖 Table of Contents
 
@@ -63,6 +63,7 @@ involving 👚 shells, 🪵 solids and 🪢 rods. All made by ZOZO.
 
 ## 📝 Change History
 
+- (2025.11.12) Added [five-twist.ipynb](./examples/five-twist.ipynb) [(Video)](https://drive.google.com/file/d/1EjHLqtAUjYh7KEQ_EQ9Jx6hh262BUze1/view) and [large-five-twist.ipynb](./examples/large-five-twist.ipynb) [(Video)](https://drive.google.com/file/d/1STOfH1Y-F-ycnV6sGNut7GNWnpoSo11f/view) showcasing over 180M count. See [large scale examples](#️-large-scale-examples).
 - (2025.10.03) Massive refactor of the codebase [(Markdown)](./articles/refactor_202510.md). Note that this change includes breaking changes to our Python APIs.
 - (2025.08.09) Added a hindsight note in [eigensystem analysis](./articles/eigensys.md) to acknowledge prior work by [Poya et al. (2023)](https://romeric.github.io/).
 - (2025.05.01) Simulation states now can be saved and loaded [(Video)](https://drive.google.com/file/d/1aCEwVPbX_Am6bwj6NrwARS6K_IkT45c-/view).
@@ -133,7 +134,7 @@ Next, run the following command to start the container:
 
 ```bash
 $MY_WEB_PORT = 8080  # Web port number for web interface
-$IMAGE_NAME = "ghcr.io/st-tech/ppf-contact-solver-compiled:latest"
+$IMAGE_NAME = "ghcr.io/st-tech/ppf-contact-solver-compiled:latest" # Approx 3.5GB
 docker run --rm --gpus all -p ${MY_WEB_PORT}:8080 $IMAGE_NAME
 ```
 
@@ -141,7 +142,7 @@ docker run --rm --gpus all -p ${MY_WEB_PORT}:8080 $IMAGE_NAME
 
 ```bash
 MY_WEB_PORT=8080  # Web port number for web interface
-IMAGE_NAME=ghcr.io/st-tech/ppf-contact-solver-compiled:latest
+IMAGE_NAME=ghcr.io/st-tech/ppf-contact-solver-compiled:latest # Approx 3.5GB
 docker run --rm --gpus all -p ${MY_WEB_PORT}:8080 $IMAGE_NAME
 ```
 
@@ -158,7 +159,7 @@ The container will be removed and all traces will be cleaned up. 🧹
 
 ### 🔧 Advanced Installation
 
-If you wish to build the container from scratch, please refer to the cleaner installation guide [(Markdown)](./articles/install.md).
+If you wish to build the docker image from scratch, please refer to the cleaner installation guide [(Markdown)](./articles/install.md).
 
 ## 🐍 How To Use
 
@@ -179,7 +180,7 @@ Our Python interface is designed with the following principles in mind:
 - **📦 Single Import for Everything**: All frontend features are accessible by simply importing with `from frontend import App`.
 
 Here's an example of draping five sheets over a sphere with two corners pinned.
-Please look into the [examples](./examples/) directory for more examples.
+We have more examples in the [examples](./examples/) directory. Please take a look! 👀
 
 ```python
 # import our frontend
@@ -349,7 +350,7 @@ All the log files are available and can be fetched during the simulation.
 |![](./asset/image/catalogue/woven.mp4.webp)|![](./asset/image/catalogue/stack.mp4.webp)|![](./asset/image/catalogue/trampoline.mp4.webp)|![](./asset/image/catalogue/needle.mp4.webp)|
 |[cards](./examples/cards.ipynb) [(Video)](https://drive.google.com/file/d/1PMdDnlyCsjinbvICKph_0UcXUfUvvUmZ/view)|[codim](./examples/codim.ipynb) [(Video)](https://drive.google.com/file/d/19wohf_8Us5Hz3PUe6f9Wp7bfq292-mGK/view)|[hang](./examples/hang.ipynb) [(Video)](https://drive.google.com/file/d/1gIjwaRrEifH0FQnZ8HO8Q9-f9FF5ZivG/view)|[trapped](./examples/trapped.ipynb) [(Video)](https://drive.google.com/file/d/1Qek0e0qBNWPlBb1hSOZ6o_e2Cqf5rGst/view)|
 |![](./asset/image/catalogue/cards.mp4.webp)|![](./asset/image/catalogue/codim.mp4.webp)|![](./asset/image/catalogue/hang.mp4.webp)|![](./asset/image/catalogue/trapped.mp4.webp)|
-|[domino](./examples/domino.ipynb) [(Video)](https://drive.google.com/file/d/1N9y8eZrjSQhAUhKwiO9w8jW_T18zPnYf/view)|[noodle](./examples/noodle.ipynb) [(Video)](https://drive.google.com/file/d/1HI1qpsWUSMsswJjPIm9BAVJHMPzUelrH/view)|[drape](./examples/drape.pynb) [(Video)](https://drive.google.com/file/d/1PGL3tbA451VhHOViSJJNNdQvmUpg7bQd/view)|[twist](./examples/twist.ipynb) [(Video)](https://drive.google.com/file/d/1LDFKS-iBvl2uDdPVKaazQL25tYGEEyXr/view)|
+|[domino](./examples/domino.ipynb) [(Video)](https://drive.google.com/file/d/1N9y8eZrjSQhAUhKwiO9w8jW_T18zPnYf/view)|[noodle](./examples/noodle.ipynb) [(Video)](https://drive.google.com/file/d/1HI1qpsWUSMsswJjPIm9BAVJHMPzUelrH/view)|[drape](./examples/drape.pynb) [(Video)](https://drive.google.com/file/d/1PGL3tbA451VhHOViSJJNNdQvmUpg7bQd/view)|[five-twist](./examples/five-twist.ipynb) [(Video)](https://drive.google.com/file/d/1EjHLqtAUjYh7KEQ_EQ9Jx6hh262BUze1/view)|
 |![](./asset/image/catalogue/domino.mp4.webp)|![](./asset/image/catalogue/noodle.mp4.webp)|![](./asset/image/catalogue/drape.mp4.webp)|![](./asset/image/catalogue/quintupletwist.mp4.webp)|
 |[ribbon](./examples/ribbon.ipynb) [(Video)](https://drive.google.com/file/d/17ymVyPJauSPJH_GwAvBHM5eNg97eq6SD/view)|[curtain](./examples/curtain.ipynb) [(Video)](https://drive.google.com/file/d/1c9W3YAFAS5r9m9i7sZHsFu8h98C8yy1T/view)|[fishingknot](./examples/fishingknot.ipynb) [(Video)](https://drive.google.com/file/d/1RznNGDvP5ZfKm6nwNiTVtFXBsextOeya/view)|[friction](./examples/friction.ipynb) [(Video)](https://drive.google.com/file/d/12WGdfDTFIwCT0UFGEZzfmQreM6WSSHet/view)|
 |![](./asset/image/catalogue/ribbon.mp4.webp)|![](./asset/image/catalogue/curtain.mp4.webp)|![](./asset/image/catalogue/fishingknot.mp4.webp)|![](./asset/image/catalogue/friction.mp4.webp)|
@@ -365,7 +366,7 @@ Below is a table summarizing the estimated costs for running our examples on a N
 - 🎮 The NVIDIA L4 delivers [30.3 TFLOPS for FP32](https://www.nvidia.com/en-us/data-center/l4/), offering approximately 36% of the [performance of an RTX 4090](https://www.nvidia.com/en-us/geforce/graphics-cards/40-series/rtx-4090/).
 - 🎥 Video frame rate is 60fps.
 
-| **Example** | **Cost** | **Time** | **#Frame** | **#Vert** | **#Face** | **#Tet** | **#Seg** | **Max Strain** |
+| **Example** | **Cost** | **Time** | **#Frame** | **#Vert** | **#Face** | **#Tet** | **#Rod** | **Max Strain** |
 |--------------|-------|-------|-----|--------|--------|--------|---------|-----|
 | trapped      | $0.37 | 22.6m | 300 | 263K   | 299K   | 885K   | ```N/A```     | ```N/A``` |
 | twist        | $0.91 | 55m   | 500 | 203K   | 406K   | ```N/A```    | ```N/A```     | ```N/A``` |
@@ -394,26 +395,28 @@ Large scale examples are run on a [vast.ai](https://vast.ai) instance with an RT
 At the moment, not all large scale examples are ready yet, but they will be added/updated one by one.
 The author is actively woriking on it.
 
+
 | | | |
 |---|---|---|
-| [large-twist](./examples/large-twist.ipynb) [(Video)](https://drive.google.com/file/d/1vZ7JHza1U6zO9W8DMtSsNZidl_YQXf1e/view) | large-five-twist (Video) | TBA |
+| [large-twist](./examples/large-twist.ipynb) [(Video)](https://drive.google.com/file/d/1vZ7JHza1U6zO9W8DMtSsNZidl_YQXf1e/view) | [large-five-twist](./examples/large-five-twist.ipynb) [(Video)](https://drive.google.com/file/d/1STOfH1Y-F-ycnV6sGNut7GNWnpoSo11f/view) | TBA |
 | ![twist](./asset/image/large-scale/twist.jpg) | ![five-twist](./asset/image/large-scale/five-twist.jpg) |  |
 
 | Example | Commit | #Vert | #Face | #Rod | #Contact | #Frame | Time/Frame |
 |---|---|---|---|---|---|---|---|
 | large-twist | [cbafbd2](https://github.com/st-tech/ppf-contact-solver/tree/cbafbd2197fc7f28673386dfaf1e8d8a1be49937) | 3.2M | 6.4M | ```N/A``` | 56.7M | 2,000 | 46.4s |
-| large-five-twist | TBA | 8.2M | 16.4M | ```N/A``` | 184.1M | 2,413 | 144.5s |
+| large-five-twist | [600e080](https://github.com/st-tech/ppf-contact-solver/commit/600e080bb39d204c9c411402dcc6bc684ae441f3) | 8.2M | 16.4M | ```N/A``` | 184.1M | 2,413 | 144.5s |
+
 
 ## 🚀 GitHub Actions
 
 We implemented GitHub Actions that test all of our examples except for large scale ones, which take from hours to days to finish.
 We perform explicit intersection checks at the end of each step, which raises an error if an intersection is detected.
-This ensures that all steps are confirmed to be penetration-free if tests are pass.
+**This ensures that all steps are confirmed to be penetration-free if tests are pass.**
 The runner types are described as follows:
 
 ### [![Getting Started](https://github.com/st-tech/ppf-contact-solver/actions/workflows/getting-started.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/getting-started.yml)
 
-The tested runner of this action is the Ubuntu NVIDIA GPU-Optimized Image for AI and HPC with an NVIDIA Tesla T4 (16 GB VRAM) with Driver version 570.133.20.
+The tested runner of this action is the Ubuntu NVIDIA GPU-Optimized Image for AI and HPC with an NVIDIA Tesla T4 (16 GB VRAM) with Driver version ``570.133.20``.
 This is not a self-hosted runner, meaning that each time the runner launches, all environments are fresh. 🌱
 
 ### [![All Examples](https://github.com/st-tech/ppf-contact-solver/actions/workflows/run-all-once.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/run-all-once.yml)
@@ -437,6 +440,7 @@ Please note that these artifacts will be deleted after a month.
 We know that you can't judge the reliability of contact resolution by simply watching a single success video example.
 To ensure greater transparency, we implemented GitHub Actions to run many of our examples via automated GitHub Actions, not just once, but **10 times in a row**.
 This means that **a single failure out of 10 tests is considered a failure of the entire test suite!**
+Also, we apply small jitters to the position of objects in the scene, so **at each run, the scene is slightly different.**
 
 [![drape.ipynb](https://github.com/st-tech/ppf-contact-solver/actions/workflows/drape.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/drape.yml)
 [![cards.ipynb](https://github.com/st-tech/ppf-contact-solver/actions/workflows/cards.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/cards.yml)
@@ -448,6 +452,7 @@ This means that **a single failure out of 10 tests is considered a failure of th
 [![trampoline.ipynb](https://github.com/st-tech/ppf-contact-solver/actions/workflows/trampoline.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/trampoline.yml)
 [![trapped.ipynb](https://github.com/st-tech/ppf-contact-solver/actions/workflows/trapped.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/trapped.yml)
 [![twist.ipynb](https://github.com/st-tech/ppf-contact-solver/actions/workflows/twist.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/twist.yml)
+[![five-twist.ipynb](https://github.com/st-tech/ppf-contact-solver/actions/workflows/five-twist.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/five-twist.yml)
 [![domino.ipynb](https://github.com/st-tech/ppf-contact-solver/actions/workflows/domino.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/domino.yml)
 [![belt.ipynb](https://github.com/st-tech/ppf-contact-solver/actions/workflows/belt.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/belt.yml)
 [![codim.ipynb](https://github.com/st-tech/ppf-contact-solver/actions/workflows/codim.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/codim.yml)
@@ -459,24 +464,21 @@ This means that **a single failure out of 10 tests is considered a failure of th
 [![yarn.ipynb](https://github.com/st-tech/ppf-contact-solver/actions/workflows/yarn.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/yarn.yml)
 [![roller.ipynb](https://github.com/st-tech/ppf-contact-solver/actions/workflows/roller.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/roller.yml)
 
-Also, we apply small jitters to the position of objects in the scene, so at each run, the scene is slightly different.
-
 ## 📡 Deploying on Cloud Services
 
 Our contact solver is designed for heavy use in cloud services, enabling:
 
 - **💰 Cost-Effective Development**: Quickly deploy testing environments and delete them when not in use, saving costs.
-- **📈 Flexible Scalability**: Scale as needed based on demand. For example, you can launch multiple instances before a specific deadline.
-- **🌍 High Accessibility**: Allow anyone with an internet connection to try our solver, even on a smartphone 📱 or tablet.
-- **🐛 Easier Bug Tracking**: Users and developers can easily share the same hardware, kernel, and driver environment, making it easier to track and fix bugs.
-- **🛠️ Free Maintenance Cost**: No need to maintain hardware for everyday operations or introduce redundancy for malfunctions.
-
-This is made possible with our purely web-based frontends.
-Our main target is the NVIDIA L4, a data-center-targeted GPU that offers reasonable pricing, delivering both practical performance and scalability without investing in expensive hardware.
+- **📈 Flexible Scalability**: Scale as needed. For example, you can launch multiple instances for short-term spiky demands.
+- **🤝 Work Together**: Share the link with remote collaborators to work together.
+- **🔒 Strong Security**: Benefit from the security features provided by cloud providers.
+- **🐛 Fast Bug Tracking**: Users and developers can easily share the same hardware, kernel, and driver environment, making it easier to track and fix bugs.
+- **🛠️ Zero Hardware Maintenance**: No need to maintain hardware for everyday operations or introduce redundancy for malfunctions.
 
 Below, we describe how to deploy our solver on major cloud services. These instructions are up to date as of late 2024 and are subject to change.
 
-**Important**: For all the services below, don't forget to delete the instance after use, or you’ll be charged for nothing. 💸
+> [!NOTE]
+> ⚠️ For all the services below, don't forget to delete the instance after use, or you'll be charged for nothing. 💸
 
 ### 📦 Deploying on [vast.ai](https://vast.ai)
 
