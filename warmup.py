@@ -122,6 +122,7 @@ def create_vscode_ext_recommend():
 def list_packages():
     packages = [
         "curl",
+        "git",
         "python3-pip",
         "python3-venv",
         "build-essential",
@@ -151,7 +152,6 @@ def python_packages():
         "gdown",
         "trimesh",
         "pyrender",
-        "mitsuba",
         "pywavefront",
         "matplotlib",
         "tqdm",
@@ -557,7 +557,9 @@ def make_docs():
 
     # Generate global parameters documentation
     with open(os.path.join("docs", "global_parameters.rst"), "w") as file:
-        file.write(export_param_sphinx(App.get_default_param(), title="global parameters"))
+        file.write(
+            export_param_sphinx(App.get_default_param(), title="global parameters")
+        )
 
     # Generate object parameters documentation
     with open(os.path.join("docs", "object_parameters.rst"), "w") as file:
@@ -722,9 +724,13 @@ if __name__ == "__main__":
     else:
         if not skip_confirmation:
             # Require confirmation before running the full environment setup.
-            confirmation = input(
-                "Are you running this in a disposable Docker container or a virtual server? [y/N] "
-            ).strip().lower()
+            confirmation = (
+                input(
+                    "Are you running this in a disposable Docker container or a virtual server? [y/N] "
+                )
+                .strip()
+                .lower()
+            )
             if confirmation not in ("y", "yes"):
                 print("Exiting without making changes.")
                 sys.exit(1)
