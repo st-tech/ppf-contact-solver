@@ -12,7 +12,7 @@ involving 👚 shells, 🪵 solids and 🪢 rods. All made by ZOZO.
 ## ✨ Highlights
 
 - **💪 Robust**: Contact resolutions are completely penetration-free. No snagging intersections.
-- **⏲ Scalable**: An extreme case includes beyond 150M contacts. Not just one million.
+- **⏲ Scalable**: An extreme case includes beyond 180M contacts. Not just one million.
 - **🚲 Cache Efficient**: All on the GPU runs in single precision. No double precision.
 - **🥼 Bounded Inextensibility**: Cloth never extends beyond strict upper bounds, such as 1%.
 - **📐 Better Physical Accuracy**: Our deformable solver is driven by the Finite Element Method.
