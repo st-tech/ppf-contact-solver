@@ -1,32 +1,16 @@
 // File: reduce.cu
-// Author: Ryoichi Ando (ryoichi.ando@zozo.com)
+// Code: Claude Code and Codex
+// Review: Ryoichi Ando (ryoichi.ando@zozo.com)
 // License: Apache v2.0
 
 #include "../common.hpp"
+#include "../buffer/buffer.hpp"
 #include "reduce.hpp"
 
 namespace kernels {
 
-ReduceInfo reduce_info;
-
 __host__ __device__ inline unsigned umin(unsigned a, unsigned b) {
     return (a < b) ? a : b;
-}
-
-void ReduceInfo::alloc(size_t required_bytes) {
-    if (required_bytes > buffer_bytes) {
-        if (d_buffer) {
-            cudaFree(d_buffer);
-        }
-        buffer_bytes = required_bytes * 2;
-        CUDA_HANDLE_ERROR(cudaMalloc(&d_buffer, buffer_bytes));
-    }
-}
-
-ReduceInfo::~ReduceInfo() {
-    if (d_buffer) {
-        cudaFree(d_buffer);
-    }
 }
 
 template <typename T, typename Op> __device__ T warp_reduce(T val, Op func) {
@@ -207,11 +191,12 @@ Y reduce(const Y *d_input1, const Y *d_input2, Op1 func1, Op2 func2, Y init_val,
     }
 
     const unsigned max_blocks = 1024;
-    size_t required_bytes = max_blocks * sizeof(Y) + // block_sums
-                            max_blocks * sizeof(Y) + // temp
-                            sizeof(Y);               // final_result
 
-    reduce_info.alloc(required_bytes);
+    // Allocate buffers from pool
+    buffer::MemoryPool &pool = buffer::get();
+    auto block_sums = pool.get<Y>(max_blocks);
+    auto temp = pool.get<Y>(max_blocks);
+    auto final_result = pool.get<Y>(1);
 
     Y result;
 
@@ -219,7 +204,7 @@ Y reduce(const Y *d_input1, const Y *d_input2, Op1 func1, Op2 func2, Y init_val,
     const unsigned blocks_needed = (n + block_size - 1) / block_size;
     unsigned grid_size = umin(blocks_needed, max_blocks);
 
-    Y *d_output = reduce_info.get_block_sums<Y>(max_blocks);
+    Y *d_output = block_sums.data;
 
     if (d_input2) {
         reduce_op_kernel_2<Y><<<grid_size, block_size>>>(
@@ -235,7 +220,7 @@ Y reduce(const Y *d_input1, const Y *d_input2, Op1 func1, Op2 func2, Y init_val,
     }
 
     if (grid_size <= block_size) {
-        Y *d_final_result = reduce_info.get_final_result<Y>(max_blocks);
+        Y *d_final_result = final_result.data;
         unsigned final_block_size = choose_block_size(grid_size);
         final_reduce_kernel<Y><<<1, final_block_size>>>(
             d_output, d_final_result, func1,
@@ -243,7 +228,7 @@ Y reduce(const Y *d_input1, const Y *d_input2, Op1 func1, Op2 func2, Y init_val,
 
         cudaMemcpy(&result, d_final_result, sizeof(Y), cudaMemcpyDeviceToHost);
     } else {
-        Y *d_temp = reduce_info.get_temp<Y>(max_blocks);
+        Y *d_temp = temp.data;
         cudaMemcpy(d_temp, d_output, grid_size * sizeof(Y),
                    cudaMemcpyDeviceToDevice);
 
@@ -292,8 +277,13 @@ T inner_product(const T *array1, const T *array2, unsigned size) {
     unsigned max_blocks = 1024;
     unsigned grid_size = umin((size + block_size - 1) / block_size, max_blocks);
 
-    reduce_info.alloc(grid_size * sizeof(T) * 3);
-    T *d_output = reduce_info.get_block_sums<T>(max_blocks);
+    // Allocate buffers from pool
+    buffer::MemoryPool &pool = buffer::get();
+    auto block_sums = pool.get<T>(max_blocks);
+    auto temp = pool.get<T>(max_blocks);
+    auto final_result = pool.get<T>(1);
+
+    T *d_output = block_sums.data;
 
     inner_product_kernel_optimized<T><<<grid_size, block_size>>>(
         array1, array2, d_output, size);
@@ -304,7 +294,7 @@ T inner_product(const T *array1, const T *array2, unsigned size) {
         return result;
     }
 
-    T *d_final_result = reduce_info.get_final_result<T>(max_blocks);
+    T *d_final_result = final_result.data;
     if (grid_size <= block_size) {
         unsigned final_block_size = choose_block_size(grid_size);
         auto add_func = [] __device__(T a, T b) { return a + b; };
@@ -312,7 +302,7 @@ T inner_product(const T *array1, const T *array2, unsigned size) {
             d_output, d_final_result, add_func, T(), grid_size);
         cudaMemcpy(&result, d_final_result, sizeof(T), cudaMemcpyDeviceToHost);
     } else {
-        T *d_temp = reduce_info.get_temp<T>(max_blocks);
+        T *d_temp = temp.data;
         cudaMemcpy(d_temp, d_output, grid_size * sizeof(T), cudaMemcpyDeviceToDevice);
 
         while (grid_size > 1) {

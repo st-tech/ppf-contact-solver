@@ -1,0 +1,17 @@
+# File: blender_manifest.toml
+# Code: Claude Code and Codex
+# Review: Ryoichi Ando (ryoichi.ando@zozo.com)
+# License: Apache v2.0
+
+schema_version = "1.0.0"
+id = "ppf_contact_solver"
+version = "1.0.0"
+name = "ZOZO's Contact Solver"
+tagline = "A contact solver for physics-based simulations"
+maintainer = "Ryoichi Ando <ryoichi.ando@zozo.com>"
+type = "add-on"
+website = "https://github.com/st-tech/ppf-contact-solver"
+blender_version_min = "4.2.0"
+license = [
+  "Apache-2.0",
+]

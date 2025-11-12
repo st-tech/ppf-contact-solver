@@ -1,7 +1,9 @@
 // File: solver.cu
-// Author: Ryoichi Ando (ryoichi.ando@zozo.com)
+// Code: Claude Code and Codex
+// Review: Ryoichi Ando (ryoichi.ando@zozo.com)
 // License: Apache v2.0
 
+#include "../buffer/buffer.hpp"
 #include "../csrmat/csrmat.hpp"
 #include "../kernels/reduce.hpp"
 #include "../kernels/vec_ops.hpp"
@@ -130,10 +132,12 @@ __device__ static Mat3x3f invert(const Mat3x3f &m) {
 std::tuple<bool, unsigned, float> cg(const DeviceOperators &op, Vec<float> &r,
                                      Vec<float> &x, unsigned max_iter,
                                      float tol) {
-    static Vec<float> tmp = Vec<float>::alloc(x.size);
-    static Vec<float> z = Vec<float>::alloc(x.size);
-    static Vec<float> p = Vec<float>::alloc(x.size);
-    static Vec<float> r0 = Vec<float>::alloc(x.size);
+    unsigned vertex_count = op.A.nrow;
+    buffer::MemoryPool &pool = buffer::get();
+    auto tmp = pool.get<float>(3 * vertex_count);
+    auto z = pool.get<float>(3 * vertex_count);
+    auto p = pool.get<float>(3 * vertex_count);
+    auto r0 = pool.get<float>(3 * vertex_count);
 
     op.apply(x, tmp);
     kernels::add_scaled(tmp.data, r.data, -1.0f, r.size);
@@ -168,22 +172,28 @@ std::tuple<bool, unsigned, float> cg(const DeviceOperators &op, Vec<float> &r,
             iter++;
         }
     }
+    // PooledVec buffers auto-release when exiting function
 }
 
 bool solve(const DynCSRMat &A, const FixedCSRMat &B, const Vec<Mat3x3f> &C,
            Vec<float> b, float tol, unsigned max_iter, Vec<float> x,
            unsigned &iter, float &resid) {
 
-    static Vec<Mat3x3f> _inv_diag = Vec<Mat3x3f>::alloc(A.nrow);
-    Vec<Mat3x3f> inv_diag = _inv_diag;
+    unsigned vertex_count = A.nrow;
+    buffer::MemoryPool &pool = buffer::get();
+    auto inv_diag = pool.get<Mat3x3f>(vertex_count);
+
+    Vec<Mat3x3f> inv_diag_vec = inv_diag.as_vec();
     DISPATCH_START(A.nrow)
-    [A, B, C, inv_diag] __device__(unsigned i) mutable {
-        inv_diag[i] = invert(A(i, i) + B(i, i) + C[i]);
+    [A, B, C, inv_diag_vec] __device__(unsigned i) mutable {
+        inv_diag_vec[i] = invert(A(i, i) + B(i, i) + C[i]);
     } DISPATCH_END;
 
-    DeviceOperators ops(A, B, C, inv_diag);
+    DeviceOperators ops(A, B, C, inv_diag_vec);
     bool success;
     std::tie(success, iter, resid) = cg(ops, b, x, max_iter, tol);
+
+    // PooledVec auto-releases when exiting function
     return success;
 }
 

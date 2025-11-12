@@ -1,5 +1,6 @@
 // File: data.hpp
-// Author: Ryoichi Ando (ryoichi.ando@zozo.com)
+// Code: Claude Code and Codex
+// Review: Ryoichi Ando (ryoichi.ando@zozo.com)
 // License: Apache v2.0
 
 #ifndef DATA_HPP
@@ -33,7 +34,6 @@ using Vec1u = Vec1<unsigned>;
 using Vec2u = Vec2<unsigned>;
 using Vec3u = Vec3<unsigned>;
 using Vec4u = Vec4<unsigned>;
-
 
 template <class T, unsigned R, unsigned C>
 using SMat = Eigen::Matrix<T, R, C, Eigen::ColMajor>;
@@ -72,7 +72,6 @@ using Mat9x9f = Mat9x9<float>;
 using Mat9x12f = Mat9x12<float>;
 using Mat12x12f = Mat12x12<float>;
 
-
 enum class Model { ARAP, StVK, BaraffWitkin, SNHk };
 enum class Barrier { Cubic, Quad, Log };
 
@@ -110,21 +109,13 @@ struct MeshInfo {
     } type;
 };
 
-struct VertexProp {
-    float area;
-    float volume;
-    float mass;
+struct VertexParam {
     float ghat;
     float offset;
     float friction;
-    unsigned fix_index;
-    unsigned pull_index;
 };
 
-struct EdgeProp {
-    bool fixed;
-    float length;
-    float mass;
+struct EdgeParam {
     float stiffness;
     float bend;
     float ghat;
@@ -132,10 +123,7 @@ struct EdgeProp {
     float friction;
 };
 
-struct FaceProp {
-    bool fixed;
-    float area;
-    float mass;
+struct FaceParam {
     Model model;
     float mu;
     float lambda;
@@ -143,26 +131,57 @@ struct FaceProp {
     float ghat;
     float offset;
     float bend;
-    float shrink;
     float strain_limit_tau;
     float strain_limit_eps;
+    float shrink;
 };
 
-struct HingeProp {
-    bool fixed;
-    float length;
+struct HingeParam {
     float bend;
     float ghat;
     float offset;
 };
 
-struct TetProp {
-    bool fixed;
-    float mass;
+struct TetParam {
     Model model;
-    float volume;
     float mu;
     float lambda;
+};
+
+struct VertexProp {
+    float area;
+    float volume;
+    float mass;
+    unsigned fix_index;
+    unsigned pull_index;
+    unsigned param_index;
+};
+
+struct EdgeProp {
+    float length;
+    float mass;
+    bool fixed;
+    unsigned param_index;
+};
+
+struct FaceProp {
+    float area;
+    float mass;
+    bool fixed;
+    unsigned param_index;
+};
+
+struct HingeProp {
+    float length;
+    bool fixed;
+    unsigned param_index;
+};
+
+struct TetProp {
+    float mass;
+    float volume;
+    bool fixed;
+    unsigned param_index;
 };
 
 struct PropSet {
@@ -171,6 +190,14 @@ struct PropSet {
     Vec<FaceProp> face;
     Vec<HingeProp> hinge;
     Vec<TetProp> tet;
+};
+
+struct ParamArrays {
+    Vec<VertexParam> vertex;
+    Vec<EdgeParam> edge;
+    Vec<FaceParam> face;
+    Vec<HingeParam> hinge;
+    Vec<TetParam> tet;
 };
 
 struct BVH {
@@ -249,6 +276,11 @@ struct CollisionMesh {
         Vec<EdgeProp> edge;
     } prop;
     struct {
+        Vec<VertexParam> vertex;
+        Vec<FaceParam> face;
+        Vec<EdgeParam> edge;
+    } param_arrays;
+    struct {
         VertexNeighbor vertex;
         HingeNeighbor hinge;
         EdgeNeighbor edge;
@@ -317,6 +349,7 @@ struct DataSet {
     VertexSet vertex;
     MeshInfo mesh;
     PropSet prop;
+    ParamArrays param_arrays;
     Vec<Mat2x2f> inv_rest2x2;
     Vec<Mat3x3f> inv_rest3x3;
     Constraint constraint;

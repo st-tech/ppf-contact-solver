@@ -1,5 +1,6 @@
 // File: mesh.rs
-// Author: Ryoichi Ando (ryoichi.ando@zozo.com)
+// Code: Claude Code and Codex
+// Review: Ryoichi Ando (ryoichi.ando@zozo.com)
 // License: Apache v2.0
 
 use na::{Matrix2xX, Matrix3xX, Matrix4xX};

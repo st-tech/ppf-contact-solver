@@ -1,4 +1,7 @@
-// SimpleLog.h
+// File: SimpleLog.hpp
+// Code: Claude Code and Codex
+// Review: Ryoichi Ando (ryoichi.ando@zozo.com)
+// License: Apache v2.0
 
 #ifndef SIMPLELOG_H
 #define SIMPLELOG_H

@@ -1,5 +1,6 @@
 // File: eigsys_3.rs
-// Author: Ryoichi Ando (ryoichi.ando@zozo.com)
+// Code: Claude Code and Codex
+// Review: Ryoichi Ando (ryoichi.ando@zozo.com)
 // License: Apache v2.0
 
 use super::eigsolve3x3::sym_eigsolve_3x3;

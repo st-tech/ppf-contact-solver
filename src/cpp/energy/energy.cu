@@ -1,7 +1,7 @@
 // File: energy.cu
-// Author: Ryoichi Ando (ryoichi.ando@zozo.com)
+// Code: Claude Code and Codex
+// Review: Ryoichi Ando (ryoichi.ando@zozo.com)
 // License: Apache v2.0
-
 
 #include "../eigenanalysis/eigenanalysis.hpp"
 #include "../utility/dispatcher.hpp"
@@ -17,10 +17,11 @@
 
 namespace energy {
 
-__device__ void embed_vertex_force_hessian(
-    const DataSet &data, const Vec<Vec3f> &eval_x, const Vec<Vec3f> &velocity,
-    const Vec<Vec3f> &target, Vec<float> &force, Vec<Mat3x3f> &diag_hess,
-    float dt, const ParamSet &param, unsigned i) {
+__device__ void
+embed_vertex_force_hessian(const DataSet &data, const Vec<Vec3f> &eval_x,
+                           const Vec<Vec3f> &velocity, const Vec<Vec3f> &target,
+                           Vec<float> &force, Vec<Mat3x3f> &diag_hess, float dt,
+                           const ParamSet &param, unsigned i) {
 
     float mass = data.prop.vertex[i].mass;
     float area = data.prop.vertex[i].area;
@@ -86,11 +87,13 @@ __device__ void embed_rod_force_hessian(const DataSet &data,
     const Vec3f &x0 = eval_x[edge[0]];
     const Vec3f &x1 = eval_x[edge[1]];
 
-    float l0 = data.prop.edge[i].length;
-    Vec3f t = (x1 - x0);
+    const EdgeProp &prop = data.prop.edge[i];
+    const EdgeParam &edge_param = data.param_arrays.edge[prop.param_index];
+    float l0 = prop.length;
+    Vec3f t = x1 - x0;
     float l = t.norm();
-    float mass = data.prop.edge[i].mass;
-    float stiffness = data.prop.edge[i].stiffness;
+    float mass = prop.mass;
+    float stiffness = edge_param.stiffness;
     if (stiffness > 0.0f) {
         Mat3x2f dedx;
         Mat6x6f d2edx2;
@@ -107,24 +110,25 @@ __device__ void embed_face_force_hessian(const DataSet &data,
                                          unsigned i) {
     const Vec3u &face = data.mesh.mesh.face[i];
     const FaceProp &prop = data.prop.face[i];
+    const FaceParam &face_param = data.param_arrays.face[prop.param_index];
     const Vec3f &x0 = eval_x[face[0]];
     const Vec3f &x1 = eval_x[face[1]];
     const Vec3f &x2 = eval_x[face[2]];
     Mat3x3f dedx = Mat3x3f::Zero();
     Mat9x9f d2edx2 = Mat9x9f::Zero();
-    float mass = data.prop.face[i].mass;
-    float mu = data.prop.face[i].mu;
+    float mass = prop.mass;
+    float mu = face_param.mu;
     if (mu > 0.0f) {
         Mat3x2f F;
         Mat3x3f X;
         X << x0, x1, x2;
         F = utility::compute_deformation_grad(X, data.inv_rest2x2[i]);
         const Svd3x2 svd = utility::svd3x2(F);
-        if (prop.model == Model::BaraffWitkin) {
+        if (face_param.model == Model::BaraffWitkin) {
             Mat3x2f de0dF = BaraffWitkin::stretch_gradient(F, mu);
-            Mat3x2f de1dF = BaraffWitkin::shear_gradient(F, prop.lambda);
+            Mat3x2f de1dF = BaraffWitkin::shear_gradient(F, face_param.lambda);
             Mat6x6f d2e0dF2 = BaraffWitkin::stretch_hessian(F, mu);
-            Mat6x6f d2e1dF2 = BaraffWitkin::shear_hessian(F, prop.lambda);
+            Mat6x6f d2e1dF2 = BaraffWitkin::shear_hessian(F, face_param.lambda);
             Mat3x2f dedF = de0dF + de1dF;
             Mat6x6f d2edF2 = d2e0dF2 + d2e1dF2;
             dedx += mass * utility::convert_force(dedF, data.inv_rest2x2[i]);
@@ -134,12 +138,12 @@ __device__ void embed_face_force_hessian(const DataSet &data,
             DiffTable2 table;
             Mat3x2f dedF;
             Mat6x6f d2edF2;
-            if (prop.model == Model::ARAP) {
-                table = ARAP::make_diff_table2(svd.S, mu, prop.lambda);
-            } else if (prop.model == Model::StVK) {
-                table = StVK::make_diff_table2(svd.S, mu, prop.lambda);
-            } else if (prop.model == Model::SNHk) {
-                table = SNHk::make_diff_table2(svd.S, mu, prop.lambda);
+            if (face_param.model == Model::ARAP) {
+                table = ARAP::make_diff_table2(svd.S, mu, face_param.lambda);
+            } else if (face_param.model == Model::StVK) {
+                table = StVK::make_diff_table2(svd.S, mu, face_param.lambda);
+            } else if (face_param.model == Model::SNHk) {
+                table = SNHk::make_diff_table2(svd.S, mu, face_param.lambda);
             } else {
                 assert(false);
             }
@@ -162,10 +166,11 @@ __device__ void embed_tet_force_hessian(const DataSet &data,
                                         unsigned i) {
     const Vec4u &tet = data.mesh.mesh.tet[i];
     const TetProp &prop = data.prop.tet[i];
+    const TetParam &tet_param = data.param_arrays.tet[prop.param_index];
     const float mass = prop.mass;
-    const float mu = prop.mu;
+    const float mu = tet_param.mu;
     if (mu > 0.0f) {
-        const float lambda = prop.lambda;
+        const float lambda = tet_param.lambda;
         const Vec3f &x0 = eval_x[tet[0]];
         const Vec3f &x1 = eval_x[tet[1]];
         const Vec3f &x2 = eval_x[tet[2]];
@@ -179,11 +184,11 @@ __device__ void embed_tet_force_hessian(const DataSet &data,
         Mat9x9f d2edF2;
         Mat3x4f dedx = Mat3x4f::Zero();
         Mat12x12f d2edx2 = Mat12x12f::Zero();
-        if (prop.model == Model::ARAP) {
+        if (tet_param.model == Model::ARAP) {
             table = ARAP::make_diff_table3(svd.S, mu, lambda);
-        } else if (prop.model == Model::StVK) {
+        } else if (tet_param.model == Model::StVK) {
             table = StVK::make_diff_table3(svd.S, mu, lambda);
-        } else if (prop.model == Model::SNHk) {
+        } else if (tet_param.model == Model::SNHk) {
             table = SNHk::make_diff_table3(svd.S, mu, lambda);
         } else {
             assert(false);
@@ -203,9 +208,10 @@ __device__ void embed_hinge_force_hessian(const DataSet &data,
                                           Vec<float> &force, FixedCSRMat &hess,
                                           const ParamSet &param, unsigned i) {
     const HingeProp &prop = data.prop.hinge[i];
+    const HingeParam &hinge_param = data.param_arrays.hinge[prop.param_index];
     float length = prop.length;
-    float bend = prop.bend;
-    float ghat = prop.ghat;
+    float bend = hinge_param.bend;
+    float ghat = hinge_param.ghat;
     float stiff_k = 2.0f * bend * length * ghat;
     if (stiff_k > 0.0f) {
         Vec4u hinge = data.mesh.mesh.hinge[i];
@@ -225,8 +231,12 @@ embed_rod_bend_force_hessian(const DataSet &data, const Vec<Vec3f> &eval_x,
         data.mesh.neighbor.vertex.face.count(i) == 0) {
         unsigned edge_idx_0 = data.mesh.neighbor.vertex.edge(i, 0);
         unsigned edge_idx_1 = data.mesh.neighbor.vertex.edge(i, 1);
-        float bend_0 = data.prop.edge[edge_idx_0].bend;
-        float bend_1 = data.prop.edge[edge_idx_1].bend;
+        const EdgeParam &edge_param_0 =
+            data.param_arrays.edge[data.prop.edge[edge_idx_0].param_index];
+        const EdgeParam &edge_param_1 =
+            data.param_arrays.edge[data.prop.edge[edge_idx_1].param_index];
+        float bend_0 = edge_param_0.bend;
+        float bend_1 = edge_param_1.bend;
         float bend = 0.5f * (bend_0 + bend_1);
         float mass = data.prop.vertex[i].mass;
         float stiff_k = bend * mass;
@@ -248,8 +258,7 @@ embed_rod_bend_force_hessian(const DataSet &data, const Vec<Vec3f> &eval_x,
     }
 }
 
-void embed_momentum_force_hessian(const DataSet &data,
-                                  const Vec<Vec3f> &eval_x,
+void embed_momentum_force_hessian(const DataSet &data, const Vec<Vec3f> &eval_x,
                                   const Vec<Vec3f> &velocity, float dt,
                                   const Vec<Vec3f> &target, Vec<float> &force,
                                   Vec<Mat3x3f> &diag_hess,
@@ -340,16 +349,21 @@ void embed_stitch_force_hessian(const DataSet &data, const Vec<Vec3f> &eval_x,
             const Vec3f &x0 = eval_x[index[0]];
             const Vec3f &x1 = eval_x[index[1]];
             const Vec3f &x2 = eval_x[index[2]];
-            float ghat_0 = data.prop.vertex[index[0]].ghat;
-            float ghat_1 = data.prop.vertex[index[1]].ghat;
-            float ghat_2 = data.prop.vertex[index[2]].ghat;
+            float ghat_0 =
+                data.param_arrays.vertex[data.prop.vertex[index[0]].param_index]
+                    .ghat;
+            float ghat_1 =
+                data.param_arrays.vertex[data.prop.vertex[index[1]].param_index]
+                    .ghat;
+            float ghat_2 =
+                data.param_arrays.vertex[data.prop.vertex[index[2]].param_index]
+                    .ghat;
             float w[] = {1.0f, 1.0f - stitch.weight, stitch.weight};
             float l0 = (w[0] * ghat_0 + w[1] * ghat_1 + w[2] * ghat_2) / 2.0f;
             float s(1.0f / 3.0f);
             const Vec3f cog = s * x0 + s * x1 + s * x2;
             Vec3f z0 = w[0] * (x0 - cog);
-            Vec3f z1 = w[1] * (x1 - cog) +
-                       w[2] * (x2 - cog);
+            Vec3f z1 = w[1] * (x1 - cog) + w[2] * (x2 - cog);
             Vec3f t = z0 - z1;
             float l = fmin(0.01f, t.norm());
             Vec3f n = t / l;

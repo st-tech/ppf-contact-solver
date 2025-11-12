@@ -1,5 +1,6 @@
 # File: headless.py
-# Author: Ryoichi Ando (ryoichi.ando@zozo.com)
+# Code: Claude Code and Codex
+# Review: Ryoichi Ando (ryoichi.ando@zozo.com)
 # License: Apache v2.0
 
 from frontend import App
@@ -22,7 +23,7 @@ for i in range(5):
     obj.pin(obj.grab([0, 1, 0]))
     obj.param.set("strain-limit", 0.05)
 
-scene.add("sphere").at(-1, 0, 0).jitter().pin().move_by([8, 0, 0], 5)
+scene.add("sphere").at(-1, 0, 0).jitter().pin().move_by([8, 0, 0], t_start=0.0, t_end=5)
 scene = scene.build()
 
 session = app.session.create(scene)
