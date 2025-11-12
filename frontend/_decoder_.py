@@ -1,11 +1,10 @@
 # File: _decoder_.py
-# Author: Ryoichi Ando (ryoichi.ando@zozo.com)
+# Code: Claude Code and Codex
+# Review: Ryoichi Ando (ryoichi.ando@zozo.com)
 # License: Apache v2.0
 
 import os
 import pickle
-
-import numpy as np
 
 from ._asset_ import AssetManager
 from ._mesh_ import MeshManager
@@ -25,22 +24,50 @@ class BlenderApp:
         """
         self._verbose = verbose
         self._name = name
-        
+
         # Get current git branch name for directory structure
         import subprocess
+
+        # First try to read from .git/branch_name.txt
+        git_branch = "unknown"
         try:
-            git_branch = subprocess.check_output(
-                ["git", "branch", "--show-current"], 
-                cwd=os.path.dirname(os.path.abspath(__file__)),
-                text=True
-            ).strip()
-            if not git_branch:
-                git_branch = "unknown"
+            branch_file = os.path.join(
+                os.path.dirname(os.path.abspath(__file__)),
+                "..",
+                ".git",
+                "branch_name.txt"
+            )
+            if os.path.exists(branch_file):
+                with open(branch_file, "r") as f:
+                    git_branch = f.read().strip()
+                    if not git_branch:
+                        git_branch = "unknown"
         except:
-            git_branch = "unknown"
-        
+            pass
+
+        # Fallback to git command if branch_name.txt not found or empty
+        if git_branch == "unknown":
+            try:
+                git_branch = subprocess.check_output(
+                    ["git", "branch", "--show-current"],
+                    cwd=os.path.dirname(os.path.abspath(__file__)),
+                    text=True,
+                ).strip()
+                if not git_branch:
+                    git_branch = "unknown"
+            except Exception as _:
+                git_branch = "unknown"
+
+        self._data_dirpath = os.path.join(
+            os.path.expanduser("~"),
+            ".local",
+            "share",
+            "ppf-cts",
+            f"git-{git_branch}",
+        )
         self._root = os.path.join(
-            os.path.expanduser("~"), ".local", "share", "ppf-cts", f"git-{git_branch}", self._name
+            self._data_dirpath,
+            self._name,
         )
         cache_root = os.path.join(self._root, ".cash")
         os.makedirs(cache_root, exist_ok=True)
@@ -77,7 +104,7 @@ class BlenderApp:
             self._name,
             self._root,
             os.path.dirname(os.path.dirname(__file__)),
-            None,
+            self._data_dirpath,
             "session",
         ).init(self._fixed_scene)
         param_decoder.apply_to_session(self._session, verbose=self._verbose)
@@ -222,11 +249,15 @@ class SceneDecoder:
                     pin = scene.add(name).pin()
                     animation = obj.get("animation", None)
                     if animation:
+                        import numpy as np
+
                         time = animation.get("time", [])
                         position = animation.get("position", [])
+                        prev_t = 0.0
                         for t, pos in zip(time, position, strict=False):
-                            if t > 0:
-                                pin.move_to(pos, t)
+                            if t > prev_t:
+                                pin.move_to(np.array(pos), t_start=prev_t, t_end=t)
+                                prev_t = t
                     _obj = None
                 elif group_type == "SOLID":
                     V, F, T = self._mesh.create.tri(vert, face).tetrahedralize()
@@ -253,15 +284,21 @@ class SceneDecoder:
                             f"      > pin: {len(pin_index)}, animation: {'YES' if pin_anim else 'NO'}"
                         )
                     if pin_anim:
+                        import numpy as np
+
                         pins = [_obj.pin([i]) for i in pin_index]
                         for i, _pin in enumerate(pins):
                             keyframe = pin_anim.get(pin_index[i], None)
                             if keyframe:
+                                prev_t = 0.0
                                 for t, pos in zip(
                                     keyframe["time"], keyframe["position"], strict=False
                                 ):
-                                    if t > 0:
-                                        pins[i].move_to(np.array([pos]), t)
+                                    if t > prev_t:
+                                        pins[i].move_to(
+                                            np.array([pos]), t_start=prev_t, t_end=t
+                                        )
+                                        prev_t = t
                     else:
                         _obj.pin(pin_index)
 

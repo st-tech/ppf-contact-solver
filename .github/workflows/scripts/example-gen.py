@@ -11,6 +11,13 @@ import sys
 from pathlib import Path
 
 
+def read_examples(examples_file):
+    """Read examples from the examples.txt file."""
+    with open(examples_file) as f:
+        examples = [line.strip() for line in f if line.strip()]
+    return examples
+
+
 def generate_workflow(template_path, notebook_name, output_path):
     """Generate a workflow file from template for a specific notebook."""
     with open(template_path) as f:
@@ -35,6 +42,7 @@ def main():
     template_path = (
         repo_root / ".github" / "workflows" / "template" / "aws-template.yml"
     )
+    examples_file = script_dir / "examples.txt"
     examples_dir = repo_root / "examples"
     workflows_dir = repo_root / ".github" / "workflows"
 
@@ -43,33 +51,51 @@ def main():
         print(f"Error: Template not found at {template_path}")
         sys.exit(1)
 
+    # Check if examples.txt exists
+    if not examples_file.exists():
+        print(f"Error: examples.txt not found at {examples_file}")
+        sys.exit(1)
+
     # Check if examples directory exists
     if not examples_dir.exists():
         print(f"Error: Examples directory not found at {examples_dir}")
         sys.exit(1)
 
-    # Find all .ipynb files in examples directory
-    notebooks = list(examples_dir.glob("*.ipynb"))
+    # Read examples from examples.txt
+    examples = read_examples(examples_file)
 
-    if not notebooks:
-        print(f"No .ipynb files found in {examples_dir}")
+    if not examples:
+        print(f"No examples found in {examples_file}")
         return
 
-    print(f"Found {len(notebooks)} notebook(s) in {examples_dir}")
+    print(f"Found {len(examples)} example(s) in {examples_file}")
     print(f"Using template: {template_path}")
     print(f"Output directory: {workflows_dir}")
     print("-" * 50)
 
-    # Generate workflow for each notebook
-    for notebook_path in notebooks:
-        notebook_name = notebook_path.stem  # Get filename without extension
-        workflow_filename = f"{notebook_name}.yml"
+    # Generate workflow for each example
+    generated_count = 0
+    skipped_count = 0
+
+    for example_name in examples:
+        notebook_path = examples_dir / f"{example_name}.ipynb"
+
+        # Check if the notebook file exists
+        if not notebook_path.exists():
+            print(f"Warning: Skipping '{example_name}' - notebook not found at {notebook_path}")
+            skipped_count += 1
+            continue
+
+        workflow_filename = f"{example_name}.yml"
         output_path = workflows_dir / workflow_filename
 
-        generate_workflow(template_path, notebook_name, output_path)
+        generate_workflow(template_path, example_name, output_path)
+        generated_count += 1
 
     print("-" * 50)
-    print(f"Successfully generated {len(notebooks)} workflow file(s)")
+    print(f"Successfully generated {generated_count} workflow file(s)")
+    if skipped_count > 0:
+        print(f"Skipped {skipped_count} example(s) (notebook files not found)")
 
 
 if __name__ == "__main__":

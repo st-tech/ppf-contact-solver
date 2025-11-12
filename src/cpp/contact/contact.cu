@@ -1,8 +1,10 @@
 // File: contact.cu
-// Author: Ryoichi Ando (ryoichi.ando@zozo.com)
+// Code: Claude Code and Codex
+// Review: Ryoichi Ando (ryoichi.ando@zozo.com)
 // License: Apache v2.0
 
 #include "../barrier/barrier.hpp"
+#include "../buffer/buffer.hpp"
 #include "../csrmat/csrmat.hpp"
 #include "../data.hpp"
 #include "../energy/model/fix.hpp"
@@ -18,29 +20,22 @@
 #include "accd.hpp"
 #include "contact.hpp"
 #include "distance.hpp"
+#include <cassert>
 
 namespace contact {
 
 namespace storage {
-Vec<char> intersection_flag;
-Vec<unsigned> num_contact_vertex_face;
-Vec<unsigned> num_contact_edge_edge;
 Vec<AABB> face_aabb, edge_aabb, vertex_aabb;
 Vec<AABB> collision_mesh_face_aabb, collision_mesh_edge_aabb;
-Vec<float> edge_edge_toi;
-Vec<float> vertex_face_toi;
-Vec<float> contact_force;
 } // namespace storage
 
 static unsigned max_of_two(unsigned a, unsigned b) { return a > b ? a : b; }
 __device__ inline float sqr(float x) { return x * x; }
 
 void initialize(const DataSet &data, const ParamSet &param) {
-    unsigned surface_vert_count = data.surface_vert_count;
-    unsigned colllision_mesh_vert_count = data.constraint.mesh.vertex.size;
-    unsigned edge_count = data.mesh.mesh.edge.size;
     BVHSet bvhset = data.bvh;
-    storage::intersection_flag = Vec<char>::alloc(edge_count).clear(0);
+
+    // Initialize AABB buffers (kept in storage namespace)
     storage::face_aabb =
         Vec<AABB>::alloc(bvhset.face.node.size, param.bvh_alloc_factor);
     storage::edge_aabb =
@@ -51,13 +46,8 @@ void initialize(const DataSet &data, const ParamSet &param) {
         Vec<AABB>::alloc(data.constraint.mesh.face_bvh.node.size);
     storage::collision_mesh_edge_aabb =
         Vec<AABB>::alloc(data.constraint.mesh.edge_bvh.node.size);
-    storage::contact_force = Vec<float>::alloc(3 * surface_vert_count);
-    storage::num_contact_vertex_face = Vec<unsigned>::alloc(
-        max_of_two(surface_vert_count, colllision_mesh_vert_count));
-    storage::num_contact_edge_edge = Vec<unsigned>::alloc(edge_count);
-    storage::vertex_face_toi = Vec<float>::alloc(
-        max_of_two(surface_vert_count, colllision_mesh_vert_count));
-    storage::edge_edge_toi = Vec<float>::alloc(edge_count);
+
+    // Temporary buffers are now allocated on demand from the buffer pool
 }
 
 void resize_aabb(const BVHSet &bvh) {
@@ -68,14 +58,16 @@ void resize_aabb(const BVHSet &bvh) {
 __device__ void update_face_aabb(const Vec<Vec3f> &x0, const Vec<Vec3f> &x1,
                                  const BVH &bvh, Vec<AABB> &aabb,
                                  const Vec<Vec3u> &face,
-                                 const Vec<FaceProp> &prop, unsigned level,
-                                 const ParamSet &param, float extrapolate,
-                                 unsigned i) {
+                                 const Vec<FaceProp> &prop,
+                                 const Vec<FaceParam> &face_params,
+                                 unsigned level, const ParamSet &param,
+                                 float extrapolate, unsigned i) {
     unsigned index = bvh.level(level, i);
     Vec2u node = bvh.node[index];
     if (node[1] == 0) {
         unsigned leaf = node[0] - 1;
-        float ext_eps = 0.5f * prop[leaf].ghat + prop[leaf].offset;
+        const FaceParam &fparam = face_params[prop[leaf].param_index];
+        float ext_eps = 0.5f * fparam.ghat + fparam.offset;
         Vec3f y00 = x0[face[leaf][0]];
         Vec3f y01 = x0[face[leaf][1]];
         Vec3f y02 = x0[face[leaf][2]];
@@ -97,9 +89,10 @@ __device__ void update_face_aabb(const Vec<Vec3f> &x0, const Vec<Vec3f> &x1,
 __device__ void update_edge_aabb(const Vec<Vec3f> &x0, const Vec<Vec3f> &x1,
                                  const BVH &bvh, Vec<AABB> aabb,
                                  const Vec<Vec2u> &edge,
-                                 const Vec<EdgeProp> prop, unsigned level,
-                                 const ParamSet &param, float extrapolate,
-                                 unsigned i) {
+                                 const Vec<EdgeProp> prop,
+                                 const Vec<EdgeParam> &edge_params,
+                                 unsigned level, const ParamSet &param,
+                                 float extrapolate, unsigned i) {
     unsigned index = bvh.level(level, i);
     Vec2u node = bvh.node[index];
     if (node[1] == 0) {
@@ -112,7 +105,8 @@ __device__ void update_edge_aabb(const Vec<Vec3f> &x0, const Vec<Vec3f> &x1,
         Vec3f y11 = x1[i1];
         Vec3f z10 = extrapolate * (y10 - y00) + y00;
         Vec3f z11 = extrapolate * (y11 - y01) + y01;
-        float ext_eps = 0.5f * prop[leaf].ghat + prop[leaf].offset;
+        const EdgeParam &eparam = edge_params[prop[leaf].param_index];
+        float ext_eps = 0.5f * eparam.ghat + eparam.offset;
         aabb[index] = aabb::join(aabb::make(y00, y01, ext_eps),
                                  aabb::make(z10, z11, ext_eps));
     } else {
@@ -124,14 +118,16 @@ __device__ void update_edge_aabb(const Vec<Vec3f> &x0, const Vec<Vec3f> &x1,
 
 __device__ void update_vertex_aabb(const Vec<Vec3f> &x0, const Vec<Vec3f> &x1,
                                    const BVH &bvh, Vec<AABB> aabb,
-                                   const Vec<VertexProp> &prop, unsigned level,
-                                   const ParamSet &param, float extrapolate,
-                                   unsigned i) {
+                                   const Vec<VertexProp> &prop,
+                                   const Vec<VertexParam> &vertex_params,
+                                   unsigned level, const ParamSet &param,
+                                   float extrapolate, unsigned i) {
     unsigned index = bvh.level(level, i);
     Vec2u node = bvh.node[index];
     if (node[1] == 0) {
         unsigned leaf = node[0] - 1;
-        float ext_eps = 0.5f * prop[leaf].ghat + prop[leaf].offset;
+        const VertexParam &vparam = vertex_params[prop[leaf].param_index];
+        float ext_eps = 0.5f * vparam.ghat + vparam.offset;
         Vec3f y0 = x0[leaf];
         Vec3f y1 = x1[leaf];
         Vec3f z1 = extrapolate * (y1 - y0) + y0;
@@ -154,13 +150,18 @@ void update_aabb(const DataSet &host_data, const DataSet &dev_data,
     const BVH &face_bvh = bvhset.face;
     Vec<AABB> face_aabb = storage::face_aabb;
     Vec<FaceProp> face_prop = dev_data.prop.face;
+    Vec<FaceParam> face_params = dev_data.param_arrays.face;
+    Vec<EdgeParam> edge_params = dev_data.param_arrays.edge;
+    Vec<VertexParam> vertex_params = dev_data.param_arrays.vertex;
+
     for (unsigned level = 0; level < bvhset.face.level.size; ++level) {
         unsigned count = host_data.bvh.face.level.count(level);
         DISPATCH_START(count)
-        [mesh, face_prop, param, x0, x1, face_bvh, level, extrapolate,
-         face_aabb] __device__(unsigned i) mutable {
+        [mesh, face_prop, face_params, param, x0, x1, face_bvh, level,
+         extrapolate, face_aabb] __device__(unsigned i) mutable {
             update_face_aabb(x0, x1, face_bvh, face_aabb, mesh.mesh.face,
-                             face_prop, level, param, extrapolate, i);
+                             face_prop, face_params, level, param, extrapolate,
+                             i);
         } DISPATCH_END;
     }
     const BVH &edge_bvh = bvhset.edge;
@@ -169,10 +170,11 @@ void update_aabb(const DataSet &host_data, const DataSet &dev_data,
     for (unsigned level = 0; level < bvhset.edge.level.size; ++level) {
         unsigned count = host_data.bvh.edge.level.count(level);
         DISPATCH_START(count)
-        [mesh, edge_prop, param, x0, x1, edge_bvh, level, extrapolate,
-         edge_aabb] __device__(unsigned i) mutable {
+        [mesh, edge_prop, edge_params, param, x0, x1, edge_bvh, level,
+         extrapolate, edge_aabb] __device__(unsigned i) mutable {
             update_edge_aabb(x0, x1, edge_bvh, edge_aabb, mesh.mesh.edge,
-                             edge_prop, level, param, extrapolate, i);
+                             edge_prop, edge_params, level, param, extrapolate,
+                             i);
         } DISPATCH_END;
     }
     const BVH &vertex_bvh = bvhset.vertex;
@@ -181,10 +183,10 @@ void update_aabb(const DataSet &host_data, const DataSet &dev_data,
     for (unsigned level = 0; level < bvhset.vertex.level.size; ++level) {
         unsigned count = host_data.bvh.vertex.level.count(level);
         DISPATCH_START(count)
-        [mesh, vertex_prop, param, x0, x1, vertex_bvh, level, extrapolate,
-         vertex_aabb] __device__(unsigned i) mutable {
+        [mesh, vertex_prop, vertex_params, param, x0, x1, vertex_bvh, level,
+         extrapolate, vertex_aabb] __device__(unsigned i) mutable {
             update_vertex_aabb(x0, x1, vertex_bvh, vertex_aabb, vertex_prop,
-                               level, param, extrapolate, i);
+                               vertex_params, level, param, extrapolate, i);
         } DISPATCH_END;
     }
 }
@@ -197,14 +199,16 @@ void update_collision_mesh_aabb(const DataSet &host_data,
     Vec<AABB> face_aabb = storage::collision_mesh_face_aabb;
     Vec<FaceProp> face_prop = dev_data.constraint.mesh.prop.face;
     Vec<EdgeProp> edge_prop = dev_data.constraint.mesh.prop.edge;
+    Vec<FaceParam> face_params = dev_data.constraint.mesh.param_arrays.face;
+    Vec<EdgeParam> edge_params = dev_data.constraint.mesh.param_arrays.edge;
     const Vec<Vec3u> &face = dev_data.constraint.mesh.face;
     for (unsigned level = 0; level < face_bvh.level.size; ++level) {
         unsigned count = host_data.constraint.mesh.face_bvh.level.count(level);
         DISPATCH_START(count)
-        [vertex, face_bvh, face_prop, param, level, face_aabb,
+        [vertex, face_bvh, face_prop, face_params, param, level, face_aabb,
          face] __device__(unsigned i) mutable {
             update_face_aabb(vertex, vertex, face_bvh, face_aabb, face,
-                             face_prop, level, param, 0.0f, i);
+                             face_prop, face_params, level, param, 0.0f, i);
         } DISPATCH_END;
     }
     const BVH &edge_bvh = dev_data.constraint.mesh.edge_bvh;
@@ -213,10 +217,10 @@ void update_collision_mesh_aabb(const DataSet &host_data,
     for (unsigned level = 0; level < edge_bvh.level.size; ++level) {
         unsigned count = host_data.constraint.mesh.edge_bvh.level.count(level);
         DISPATCH_START(count)
-        [vertex, edge_bvh, edge_prop, param, level, edge_aabb,
+        [vertex, edge_bvh, edge_prop, edge_params, param, level, edge_aabb,
          edge] __device__(unsigned i) mutable {
             update_edge_aabb(vertex, vertex, edge_bvh, edge_aabb, edge,
-                             edge_prop, level, param, 0.0f, i);
+                             edge_prop, edge_params, level, param, 0.0f, i);
         } DISPATCH_END;
     }
 }
@@ -327,7 +331,6 @@ __device__ void embed_contact_force_hess(
     assert(ex.squaredNorm() > sqr(offset));
 
     Vec3f dx = ex - ex0;
-    Vec3f du = dx / dt;
     if (wsum) {
         area /= wsum;
     }
@@ -344,8 +347,7 @@ __device__ void embed_contact_force_hess(
             stiff_k * barrier::compute_edge_hessian(ex, ghat, offset, barrier);
 
         if (include_friction) {
-            Friction _friction(f, ex - ex0, normal, friction,
-                               param.friction_eps);
+            Friction _friction(f, dx, normal, friction, param.friction_eps);
             f += _friction.gradient();
             H += _friction.hessian();
         }
@@ -375,6 +377,7 @@ struct PointPointContactForceHessEmbed {
     FixedCSRMat &fixed_out;
     DynCSRMat &dyn_out;
     const Vec<VertexProp> &prop;
+    const Vec<VertexParam> &vertex_params;
     int stage;
     float dt;
     const ParamSet &param;
@@ -385,11 +388,15 @@ struct PointPointContactForceHessEmbed {
         if (index < vertex_index && either_dyn) {
             const Vec3f &x = eval_x[vertex_index];
             const Vec3f &y = eval_x[index];
-            Vec3f e = (x - y);
-            float offset = prop[vertex_index].offset + prop[index].offset;
+            Vec3f e = x - y;
+            const VertexParam &vparam_vertex =
+                vertex_params[prop[vertex_index].param_index];
+            const VertexParam &vparam_index =
+                vertex_params[prop[index].param_index];
+            float offset = vparam_vertex.offset + vparam_index.offset;
             float friction =
-                std::max(prop[vertex_index].friction, prop[index].friction);
-            float ghat = 0.5f * (prop[vertex_index].ghat + prop[index].ghat);
+                std::max(vparam_vertex.friction, vparam_index.friction);
+            float ghat = 0.5f * (vparam_vertex.ghat + vparam_index.ghat);
             if (e.squaredNorm() < sqr(ghat + offset)) {
                 unsigned count = 0;
                 bool include_friction = true;
@@ -469,6 +476,8 @@ struct PointEdgeContactForceHessEmbed {
     DynCSRMat &dyn_out;
     const Vec<VertexProp> &vert_prop;
     const Vec<EdgeProp> &edge_prop;
+    const Vec<VertexParam> &vertex_params;
+    const Vec<EdgeParam> &edge_params;
     int stage;
     float dt;
     const ParamSet &param;
@@ -485,12 +494,13 @@ struct PointEdgeContactForceHessEmbed {
                 distance::point_edge_distance_coeff<float, float>(p, t0, t1);
             if (c.maxCoeff() < 1.0f && c.minCoeff() > 0.0f) {
                 Vec3f e = c[0] * (p - t0) + c[1] * (p - t1);
-                float offset =
-                    vert_prop[vertex_index].offset + edge_prop[index].offset;
-                float ghat = 0.5f * (vert_prop[vertex_index].ghat +
-                                      edge_prop[index].ghat);
-                float friction = std::max(vert_prop[vertex_index].friction,
-                                          edge_prop[index].friction);
+                const VertexParam &vparam =
+                    vertex_params[vert_prop[vertex_index].param_index];
+                const EdgeParam &eparam =
+                    edge_params[edge_prop[index].param_index];
+                float offset = vparam.offset + eparam.offset;
+                float ghat = 0.5f * (vparam.ghat + eparam.ghat);
+                float friction = std::max(vparam.friction, eparam.friction);
                 if (e.squaredNorm() < sqr(ghat + offset)) {
                     unsigned count = 0;
                     bool include_friction = true;
@@ -551,6 +561,8 @@ struct PointFaceContactForceHessEmbed {
     DynCSRMat &dyn_out;
     const Vec<VertexProp> &vert_prop;
     const Vec<FaceProp> &face_prop;
+    const Vec<VertexParam> &vertex_params;
+    const Vec<FaceParam> &face_params;
     int stage;
     float dt;
     const ParamSet &param;
@@ -569,12 +581,13 @@ struct PointFaceContactForceHessEmbed {
                 p, t0, t1, t2);
             if (c.maxCoeff() < 1.0f && c.minCoeff() > 0.0f) {
                 Vec3f e = c[0] * (p - t0) + c[1] * (p - t1) + c[2] * (p - t2);
-                float offset =
-                    vert_prop[vertex_index].offset + face_prop[index].offset;
-                float ghat = 0.5f * (vert_prop[vertex_index].ghat +
-                                      face_prop[index].ghat);
-                float friction = std::max(vert_prop[vertex_index].friction,
-                                          face_prop[index].friction);
+                const VertexParam &vparam =
+                    vertex_params[vert_prop[vertex_index].param_index];
+                const FaceParam &fparam =
+                    face_params[face_prop[index].param_index];
+                float offset = vparam.offset + fparam.offset;
+                float ghat = 0.5f * (vparam.ghat + fparam.ghat);
+                float friction = std::max(vparam.friction, fparam.friction);
                 if (e.squaredNorm() < sqr(ghat + offset)) {
                     assert(e.squaredNorm() > sqr(offset));
                     Proximity<4> prox;
@@ -606,6 +619,7 @@ struct EdgeEdgeContactForceHessEmbed {
     DynCSRMat &dyn_out;
     const Vec<VertexProp> &vert_prop;
     const Vec<EdgeProp> &edge_prop;
+    const Vec<EdgeParam> &edge_params;
     int stage;
     float dt;
     const ParamSet &param;
@@ -624,15 +638,17 @@ struct EdgeEdgeContactForceHessEmbed {
             Vec4f c = distance::edge_edge_distance_coeff<float, float>(p0, p1,
                                                                        q0, q1);
             if (c.maxCoeff() < 1.0f && c.minCoeff() > 0.0f) {
-                Vec3f x0 = float(c[0]) * p0 + float(c[1]) * p1;
-                Vec3f x1 = float(c[2]) * q0 + float(c[3]) * q1;
-                Vec3f e = (x0 - x1);
-                float offset =
-                    edge_prop[edge_index].offset + edge_prop[index].offset;
-                float ghat =
-                    0.5f * (edge_prop[edge_index].ghat + edge_prop[index].ghat);
-                float friction = std::max(edge_prop[edge_index].friction,
-                                          edge_prop[index].friction);
+                Vec3f x0 = c[0] * p0 + c[1] * p1;
+                Vec3f x1 = c[2] * q0 + c[3] * q1;
+                Vec3f e = x0 - x1;
+                const EdgeParam &eparam_edge =
+                    edge_params[edge_prop[edge_index].param_index];
+                const EdgeParam &eparam_index =
+                    edge_params[edge_prop[index].param_index];
+                float offset = eparam_edge.offset + eparam_index.offset;
+                float ghat = 0.5f * (eparam_edge.ghat + eparam_index.ghat);
+                float friction =
+                    std::max(eparam_edge.friction, eparam_index.friction);
                 if (e.squaredNorm() < sqr(ghat + offset)) {
                     assert(e.squaredNorm() > sqr(offset));
                     Proximity<4> prox;
@@ -673,6 +689,8 @@ struct CollisionMeshVertexFaceContactForceHessEmbed_M2C {
     const Vec<Vec3f> &eval_x;
     const Vec<VertexProp> &dyn_vert_prop;
     const Vec<FaceProp> &static_face_prop;
+    const Vec<VertexParam> &dyn_vert_params;
+    const Vec<FaceParam> &static_face_params;
     float dt;
     const ParamSet &param;
 
@@ -680,21 +698,23 @@ struct CollisionMeshVertexFaceContactForceHessEmbed_M2C {
         if (dyn_vert_prop[vertex_index].fix_index == 0) {
             const Vec3u &f = collision_mesh_face[index];
             Vec3f p = eval_x[vertex_index];
-            Vec3f q = (vertex[vertex_index] - p);
-            Vec3f t0 = (collision_mesh_vertex[f[0]] - p);
-            Vec3f t1 = (collision_mesh_vertex[f[1]] - p);
-            Vec3f t2 = (collision_mesh_vertex[f[2]] - p);
+            Vec3f q = vertex[vertex_index] - p;
+            Vec3f t0 = collision_mesh_vertex[f[0]] - p;
+            Vec3f t1 = collision_mesh_vertex[f[1]] - p;
+            Vec3f t2 = collision_mesh_vertex[f[2]] - p;
             Vec3f zero = Vec3f::Zero();
             Vec3f c = distance::point_triangle_distance_coeff_unclassified<
                 float, float>(zero, t0, t1, t2);
             Vec3f y = c[0] * t0 + c[1] * t1 + c[2] * t2;
             Vec3f e = -y;
-            float offset = dyn_vert_prop[vertex_index].offset +
-                           static_face_prop[index].offset;
-            float ghat = 0.5f * (dyn_vert_prop[vertex_index].ghat +
-                                  static_face_prop[index].ghat);
-            float friction = std::max(dyn_vert_prop[vertex_index].friction,
-                                      static_face_prop[index].friction);
+            const VertexParam &dyn_vparam =
+                dyn_vert_params[dyn_vert_prop[vertex_index].param_index];
+            const FaceParam &static_fparam =
+                static_face_params[static_face_prop[index].param_index];
+            float offset = dyn_vparam.offset + static_fparam.offset;
+            float ghat = 0.5f * (dyn_vparam.ghat + static_fparam.ghat);
+            float friction =
+                std::max(dyn_vparam.friction, static_fparam.friction);
             if (e.squaredNorm() < sqr(offset + ghat)) {
                 assert(e.squaredNorm() > sqr(offset));
                 Vec3f normal = e.normalized();
@@ -731,6 +751,8 @@ struct CollisionMeshVertexFaceContactForceHessEmbed_C2M {
     const Vec<VertexProp> &dyn_vert_prop;
     const Vec<FaceProp> &dyn_face_prop;
     const Vec<VertexProp> &static_vert_prop;
+    const Vec<FaceParam> &dyn_face_params;
+    const Vec<VertexParam> &static_vert_params;
     float dt;
     const ParamSet &param;
 
@@ -738,12 +760,12 @@ struct CollisionMeshVertexFaceContactForceHessEmbed_C2M {
         if (!dyn_face_prop[index].fixed) {
             const Vec3u &fc = data.mesh.mesh.face[index];
             const Vec3f &y = data.constraint.mesh.vertex[vertex_index];
-            const Vec3f t0 = (eval_x[fc[0]] - y);
-            const Vec3f t1 = (eval_x[fc[1]] - y);
-            const Vec3f t2 = (eval_x[fc[2]] - y);
-            const Vec3f s0 = (vertex[fc[0]] - y);
-            const Vec3f s1 = (vertex[fc[1]] - y);
-            const Vec3f s2 = (vertex[fc[2]] - y);
+            const Vec3f t0 = eval_x[fc[0]] - y;
+            const Vec3f t1 = eval_x[fc[1]] - y;
+            const Vec3f t2 = eval_x[fc[2]] - y;
+            const Vec3f s0 = vertex[fc[0]] - y;
+            const Vec3f s1 = vertex[fc[1]] - y;
+            const Vec3f s2 = vertex[fc[2]] - y;
             const Vec3f zero = Vec3f::Zero();
             const Vec3f c =
                 distance::point_triangle_distance_coeff_unclassified<float,
@@ -753,12 +775,14 @@ struct CollisionMeshVertexFaceContactForceHessEmbed_C2M {
             Vec3f q = c[0] * s0 + c[1] * s1 + c[2] * s2;
             const Vec3f &e = p;
             Vec3f dx = p - q;
-            float offset = dyn_face_prop[index].offset +
-                           static_vert_prop[vertex_index].offset;
-            float ghat = 0.5f * (dyn_face_prop[index].ghat +
-                                  static_vert_prop[vertex_index].ghat);
-            float friction = std::max(dyn_face_prop[index].friction,
-                                      static_vert_prop[vertex_index].friction);
+            const FaceParam &dyn_fparam =
+                dyn_face_params[dyn_face_prop[index].param_index];
+            const VertexParam &static_vparam =
+                static_vert_params[static_vert_prop[vertex_index].param_index];
+            float offset = dyn_fparam.offset + static_vparam.offset;
+            float ghat = 0.5f * (dyn_fparam.ghat + static_vparam.ghat);
+            float friction =
+                std::max(dyn_fparam.friction, static_vparam.friction);
             if (e.squaredNorm() < sqr(offset + ghat)) {
                 assert(e.squaredNorm() > sqr(offset));
                 Vec3f normal = e.normalized();
@@ -823,6 +847,8 @@ struct CollisionMeshEdgeEdgeContactForceHessEmbed {
     const Vec<VertexProp> &dyn_vert_prop;
     const Vec<EdgeProp> &dyn_edge_prop;
     const Vec<EdgeProp> &static_edge_prop;
+    const Vec<EdgeParam> &dyn_edge_params;
+    const Vec<EdgeParam> &static_edge_params;
     float dt;
     const ParamSet &param;
 
@@ -844,12 +870,14 @@ struct CollisionMeshEdgeEdgeContactForceHessEmbed {
             Vec3f z = c[0] * b0 + c[1] * b1;
             Vec3f e = x - y;
             Vec3f dx = x - z;
-            float offset =
-                dyn_edge_prop[i].offset + static_edge_prop[index].offset;
-            float ghat =
-                0.5f * (dyn_edge_prop[i].ghat + static_edge_prop[index].ghat);
-            float friction = std::max(dyn_edge_prop[i].friction,
-                                      static_edge_prop[index].friction);
+            const EdgeParam &dyn_eparam =
+                dyn_edge_params[dyn_edge_prop[i].param_index];
+            const EdgeParam &static_eparam =
+                static_edge_params[static_edge_prop[index].param_index];
+            float offset = dyn_eparam.offset + static_eparam.offset;
+            float ghat = 0.5f * (dyn_eparam.ghat + static_eparam.ghat);
+            float friction =
+                std::max(dyn_eparam.friction, static_eparam.friction);
             if (e.squaredNorm() < sqr(offset + ghat)) {
                 assert(e.squaredNorm() > sqr(offset));
                 Vec3f normal = e.normalized();
@@ -904,7 +932,7 @@ __device__ unsigned embed_vertex_constraint_force_hessian(
     const ParamSet &param, unsigned i) {
 
     const VertexProp &prop = data.prop.vertex[i];
-    float area = prop.area;
+    const VertexParam &vparam = data.param_arrays.vertex[prop.param_index];
     float mass = prop.mass;
     unsigned num_contact = 0;
 
@@ -912,12 +940,12 @@ __device__ unsigned embed_vertex_constraint_force_hessian(
     Mat3x3f H = Mat3x3f::Zero();
     Vec3f f = Vec3f::Zero();
     const Vec3f &x = eval_x[i];
-    const Vec3f &dx = (x - data.vertex.curr[i]);
+    const Vec3f &dx = x - data.vertex.curr[i];
 
     if (prop.fix_index > 0) {
         const FixPair &fix = data.constraint.fix[prop.fix_index - 1];
         const Vec3f &y = fix.position;
-        Vec3f w = (x - y);
+        Vec3f w = x - y;
         float d = w.norm();
         float gap = fix.ghat - d;
         if (fix.kinematic) {
@@ -934,7 +962,7 @@ __device__ unsigned embed_vertex_constraint_force_hessian(
         for (unsigned j = 0; j < data.constraint.sphere.size; ++j) {
             const Sphere &sphere = data.constraint.sphere[j];
             float ghat = sphere.ghat;
-            float friction = std::max(sphere.friction, prop.friction);
+            float friction = std::max(sphere.friction, vparam.friction);
             bool bowl = sphere.bowl;
             bool reverse = sphere.reverse;
             float radius = sphere.radius;
@@ -1003,12 +1031,11 @@ __device__ unsigned embed_vertex_constraint_force_hessian(
         for (unsigned j = 0; j < data.constraint.floor.size; ++j) {
             const Floor &floor = data.constraint.floor[j];
             float ghat = floor.ghat;
-            float friction = std::max(floor.friction, prop.friction);
+            float friction = std::max(floor.friction, vparam.friction);
             const Vec3f &up = floor.up;
-            Vec3f ground =
-                floor.ground + float(floor.kinematic ? 0.0f : ghat) * up;
+            Vec3f ground = floor.ground + (floor.kinematic ? 0.0f : ghat) * up;
 
-            Vec3f e = (x - ground);
+            Vec3f e = x - ground;
             if (e.dot(up) < 0.0f) {
                 num_contact += 1;
                 Vec3f projected_x = -e.dot(up) * up;
@@ -1047,19 +1074,33 @@ unsigned embed_contact_force_hessian(const DataSet &data,
     unsigned surface_vert_count = data.surface_vert_count;
     unsigned rod_count = data.rod_count;
     unsigned edge_count = data.mesh.mesh.edge.size;
+    unsigned collision_mesh_vert_count = data.constraint.mesh.vertex.size;
+    unsigned max_contact_vert = (surface_vert_count > collision_mesh_vert_count)
+                                    ? surface_vert_count
+                                    : collision_mesh_vert_count;
     const BVH face_bvh = data.bvh.face;
     const BVH edge_bvh = data.bvh.edge;
     const BVH vertex_bvh = data.bvh.vertex;
     const Vec<AABB> face_aabb = storage::face_aabb;
     const Vec<AABB> edge_aabb = storage::edge_aabb;
     const Vec<AABB> vertex_aabb = storage::vertex_aabb;
-    Vec<float> contact_force = storage::contact_force;
-    Vec<unsigned> num_contact_vtf = storage::num_contact_vertex_face;
-    Vec<unsigned> num_contact_ee = storage::num_contact_edge_edge;
+
+    Vec<VertexParam> vertex_params = data.param_arrays.vertex;
+    Vec<EdgeParam> edge_params = data.param_arrays.edge;
+    Vec<FaceParam> face_params = data.param_arrays.face;
+
+    buffer::MemoryPool &pool = buffer::get();
+    auto contact_force = pool.get<float>(3 * surface_vert_count);
+    auto num_contact_vtf = pool.get<unsigned>(max_contact_vert);
+    auto num_contact_ee = pool.get<unsigned>(edge_count);
 
     num_contact_vtf.clear(0);
     num_contact_ee.clear(0);
     contact_force.clear(0.0f);
+
+    Vec<float> contact_force_vec = contact_force.as_vec();
+    Vec<unsigned> num_contact_vtf_vec = num_contact_vtf.as_vec();
+    Vec<unsigned> num_contact_ee_vec = num_contact_ee.as_vec();
 
     for (int stage = 0; stage < 2; ++stage) {
         if (stage == 0) {
@@ -1067,25 +1108,30 @@ unsigned embed_contact_force_hessian(const DataSet &data,
         }
 
         DISPATCH_START(surface_vert_count)
-        [data, eval_x, rod_count, contact_force, force, fixed_hess_in,
+        [data, eval_x, rod_count, contact_force_vec, force, fixed_hess_in,
          fixed_out, dyn_out, face_bvh, face_aabb, edge_bvh, edge_aabb,
-         vertex_bvh, vertex_aabb, num_contact_vtf, stage, dt,
+         vertex_bvh, vertex_aabb, num_contact_vtf_vec, vertex_params,
+         edge_params, face_params, stage, dt,
          param] __device__(unsigned i) mutable {
             unsigned count(0);
-            float ext_eps = 0.5f * data.prop.vertex[i].ghat + data.prop.vertex[i].offset;
+            const VertexParam &vparam =
+                vertex_params[data.prop.vertex[i].param_index];
+            float ext_eps = 0.5f * vparam.ghat + vparam.offset;
             AABB pt_aabb = aabb::make(eval_x[i], ext_eps);
 
             PointFaceContactForceHessEmbed embed_0 = {i,
                                                       data.mesh.mesh.face,
                                                       data.vertex.curr,
                                                       eval_x,
-                                                      contact_force,
+                                                      contact_force_vec,
                                                       force,
                                                       fixed_hess_in,
                                                       fixed_out,
                                                       dyn_out,
                                                       data.prop.vertex,
                                                       data.prop.face,
+                                                      vertex_params,
+                                                      face_params,
                                                       stage,
                                                       dt,
                                                       param};
@@ -1099,13 +1145,15 @@ unsigned embed_contact_force_hessian(const DataSet &data,
                                                       data.mesh.neighbor.edge,
                                                       data.vertex.curr,
                                                       eval_x,
-                                                      contact_force,
+                                                      contact_force_vec,
                                                       force,
                                                       fixed_hess_in,
                                                       fixed_out,
                                                       dyn_out,
                                                       data.prop.vertex,
                                                       data.prop.edge,
+                                                      vertex_params,
+                                                      edge_params,
                                                       stage,
                                                       dt,
                                                       param};
@@ -1121,47 +1169,51 @@ unsigned embed_contact_force_hessian(const DataSet &data,
                 data.mesh.neighbor.vertex,
                 data.vertex.curr,
                 eval_x,
-                contact_force,
+                contact_force_vec,
                 force,
                 fixed_hess_in,
                 fixed_out,
                 dyn_out,
                 data.prop.vertex,
+                vertex_params,
                 stage,
                 dt,
                 param};
             AABB_AABB_Tester<PointPointContactForceHessEmbed> op_2(embed_2);
             count += aabb::query(vertex_bvh, vertex_aabb, op_2, pt_aabb);
             if (stage == 0) {
-                num_contact_vtf[i] += count;
+                num_contact_vtf_vec[i] += count;
             }
         } DISPATCH_END;
 
         DISPATCH_START(edge_count)
-        [data, eval_x, contact_force, force, fixed_hess_in, fixed_out, dyn_out,
-         edge_bvh, edge_aabb, num_contact_ee, stage, dt,
-         param] __device__(unsigned i) mutable {
+        [data, eval_x, contact_force_vec, force, fixed_hess_in, fixed_out,
+         dyn_out, edge_bvh, edge_aabb, num_contact_ee_vec, edge_params, stage,
+         dt, param] __device__(unsigned i) mutable {
             Vec2u edge = data.mesh.mesh.edge[i];
-            float ext_eps = 0.5f * data.prop.edge[i].ghat + data.prop.edge[i].offset;
+            const EdgeParam &eparam =
+                edge_params[data.prop.edge[i].param_index];
+            float ext_eps = 0.5f * eparam.ghat + eparam.offset;
             AABB aabb = aabb::make(eval_x[edge[0]], eval_x[edge[1]], ext_eps);
             EdgeEdgeContactForceHessEmbed embed = {i,
                                                    data.mesh.mesh.edge,
                                                    data.vertex.curr,
                                                    eval_x,
-                                                   contact_force,
+                                                   contact_force_vec,
                                                    force,
                                                    fixed_hess_in,
                                                    fixed_out,
                                                    dyn_out,
                                                    data.prop.vertex,
                                                    data.prop.edge,
+                                                   edge_params,
                                                    stage,
                                                    dt,
                                                    param};
             AABB_AABB_Tester<EdgeEdgeContactForceHessEmbed> op(embed);
             unsigned count = aabb::query(edge_bvh, edge_aabb, op, aabb);
             if (stage == 0) {
-                num_contact_ee[i] += count;
+                num_contact_ee_vec[i] += count;
             }
         } DISPATCH_END;
 
@@ -1188,13 +1240,15 @@ unsigned embed_contact_force_hessian(const DataSet &data,
     }
 
     DISPATCH_START(3 * surface_vert_count)
-    [force, contact_force] __device__(unsigned i) mutable {
-        force[i] += contact_force[i];
+    [force, contact_force_vec] __device__(unsigned i) mutable {
+        force[i] += contact_force_vec[i];
     } DISPATCH_END;
 
     unsigned n_contact =
         kernels::sum_array(num_contact_vtf.data, num_contact_vtf.size) +
         kernels::sum_array(num_contact_ee.data, num_contact_ee.size);
+
+    // PooledVec buffers auto-release when exiting function
     return n_contact;
 }
 
@@ -1207,18 +1261,38 @@ unsigned embed_constraint_force_hessian(const DataSet &data,
 
     unsigned surface_vert_count = data.surface_vert_count;
     unsigned edge_count = data.mesh.mesh.edge.size;
+    unsigned collision_mesh_vert_count = data.constraint.mesh.vertex.size;
+    unsigned max_contact_vert = (surface_vert_count > collision_mesh_vert_count)
+                                    ? surface_vert_count
+                                    : collision_mesh_vert_count;
 
     const BVH &face_bvh = data.bvh.face;
     const Vec<AABB> face_aabb = storage::face_aabb;
-    Vec<unsigned> num_contact_vtf = storage::num_contact_vertex_face;
-    Vec<unsigned> num_contact_ee = storage::num_contact_edge_edge;
+
+    Vec<VertexParam> vertex_params = data.param_arrays.vertex;
+    Vec<EdgeParam> edge_params = data.param_arrays.edge;
+    Vec<FaceParam> face_params = data.param_arrays.face;
+    Vec<VertexParam> collision_vertex_params =
+        data.constraint.mesh.param_arrays.vertex;
+    Vec<EdgeParam> collision_edge_params =
+        data.constraint.mesh.param_arrays.edge;
+    Vec<FaceParam> collision_face_params =
+        data.constraint.mesh.param_arrays.face;
+
+    buffer::MemoryPool &pool = buffer::get();
+    auto num_contact_vtf = pool.get<unsigned>(max_contact_vert);
+    auto num_contact_ee = pool.get<unsigned>(edge_count);
+
     num_contact_vtf.clear(0);
     num_contact_ee.clear(0);
 
+    Vec<unsigned> num_contact_vtf_vec = num_contact_vtf.as_vec();
+    Vec<unsigned> num_contact_ee_vec = num_contact_ee.as_vec();
+
     DISPATCH_START(surface_vert_count)
-    [data, eval_x, force, fixed_hess_in, fixed_out, dt, num_contact_vtf,
+    [data, eval_x, force, fixed_hess_in, fixed_out, dt, num_contact_vtf_vec,
      param] __device__(unsigned i) mutable {
-        num_contact_vtf[i] += embed_vertex_constraint_force_hessian(
+        num_contact_vtf_vec[i] += embed_vertex_constraint_force_hessian(
             data, eval_x, force, fixed_hess_in, fixed_out, dt, param, i);
     } DISPATCH_END;
 
@@ -1231,10 +1305,11 @@ unsigned embed_constraint_force_hessian(const DataSet &data,
 
         DISPATCH_START(surface_vert_count)
         [data, eval_x, force, fixed_hess_in, fixed_out, args, dt,
-         num_contact_vtf, param] __device__(unsigned i) mutable {
+         num_contact_vtf_vec, vertex_params, collision_face_params,
+         param] __device__(unsigned i) mutable {
             Mat3x3f local_hess = fixed_hess_in(i, i);
             const VertexProp &prop = data.prop.vertex[i];
-            unsigned num_contact = 0;
+            const VertexParam &vparam = vertex_params[prop.param_index];
             CollisionMeshVertexFaceContactForceHessEmbed_M2C embed = {
                 i,
                 force,
@@ -1246,22 +1321,27 @@ unsigned embed_constraint_force_hessian(const DataSet &data,
                 eval_x,
                 data.prop.vertex,
                 data.constraint.mesh.prop.face,
+                vertex_params,
+                collision_face_params,
                 dt,
                 param};
-            float ext_eps = 0.5f * prop.ghat + prop.offset;
+            float ext_eps = 0.5f * vparam.ghat + vparam.offset;
             AABB pt_aabb = aabb::make(eval_x[i], ext_eps);
             AABB_AABB_Tester<CollisionMeshVertexFaceContactForceHessEmbed_M2C>
                 op(embed);
-            num_contact_vtf[i] +=
+            num_contact_vtf_vec[i] +=
                 aabb::query(args.collision_mesh_face_bvh,
                             args.collision_mesh_face_aabb, op, pt_aabb);
         } DISPATCH_END;
 
         DISPATCH_START(data.constraint.mesh.vertex.size)
-        [data, eval_x, force, fixed_hess_in, fixed_out, args, num_contact_vtf,
-         face_bvh, face_aabb, dt, param] __device__(unsigned i) mutable {
+        [data, eval_x, force, fixed_hess_in, fixed_out, args,
+         num_contact_vtf_vec, face_bvh, face_aabb, face_params,
+         collision_vertex_params, dt, param] __device__(unsigned i) mutable {
             const VertexProp &prop = data.constraint.mesh.prop.vertex[i];
-            float ext_eps = 0.5f * prop.ghat + prop.offset;
+            const VertexParam &vparam =
+                collision_vertex_params[prop.param_index];
+            float ext_eps = 0.5f * vparam.ghat + vparam.offset;
             CollisionMeshVertexFaceContactForceHessEmbed_C2M embed = {
                 data,
                 i,
@@ -1273,20 +1353,25 @@ unsigned embed_constraint_force_hessian(const DataSet &data,
                 data.prop.vertex,
                 data.prop.face,
                 data.constraint.mesh.prop.vertex,
+                face_params,
+                collision_vertex_params,
                 dt,
                 param};
             AABB_AABB_Tester<CollisionMeshVertexFaceContactForceHessEmbed_C2M>
                 op(embed);
-            num_contact_vtf[i] += aabb::query(
+            num_contact_vtf_vec[i] += aabb::query(
                 face_bvh, face_aabb, op,
                 aabb::make(data.constraint.mesh.vertex[i], ext_eps));
         } DISPATCH_END;
 
         DISPATCH_START(edge_count)
-        [data, eval_x, force, fixed_hess_in, fixed_out, args, num_contact_ee,
-         dt, param] __device__(unsigned i) mutable {
+        [data, eval_x, force, fixed_hess_in, fixed_out, args,
+         num_contact_ee_vec, edge_params, collision_edge_params, dt,
+         param] __device__(unsigned i) mutable {
             const Vec2u &edge = data.mesh.mesh.edge[i];
-            float ext_eps = 0.5f * data.prop.edge[i].ghat + data.prop.edge[i].offset;
+            const EdgeParam &eparam =
+                edge_params[data.prop.edge[i].param_index];
+            float ext_eps = 0.5f * eparam.ghat + eparam.offset;
             Mat6x6f local_hess = Mat6x6f::Zero();
             for (unsigned ii = 0; ii < 2; ++ii) {
                 for (unsigned jj = 0; jj < 2; ++jj) {
@@ -1307,19 +1392,24 @@ unsigned embed_constraint_force_hessian(const DataSet &data,
                 data.prop.vertex,
                 data.prop.edge,
                 data.constraint.mesh.prop.edge,
+                edge_params,
+                collision_edge_params,
                 dt,
                 param};
             AABB aabb = aabb::make(eval_x[edge[0]], eval_x[edge[1]], ext_eps);
             AABB_AABB_Tester<CollisionMeshEdgeEdgeContactForceHessEmbed> op(
                 embed);
-            num_contact_ee[i] +=
+            num_contact_ee_vec[i] +=
                 aabb::query(args.collision_mesh_edge_bvh,
                             args.collision_mesh_edge_aabb, op, aabb);
         } DISPATCH_END;
     }
 
-    return kernels::sum_array(num_contact_vtf.data, num_contact_vtf.size) +
-           kernels::sum_array(num_contact_ee.data, num_contact_ee.size);
+    unsigned n_contact =
+        kernels::sum_array(num_contact_vtf_vec.data, num_contact_vtf_vec.size) +
+        kernels::sum_array(num_contact_ee_vec.data, num_contact_ee_vec.size);
+
+    return n_contact;
 }
 
 struct CollisionMeshPointFaceCCD_M2C {
@@ -1330,6 +1420,8 @@ struct CollisionMeshPointFaceCCD_M2C {
     const Vec<Vec3f> &collision_mesh_vertex;
     const Vec<VertexProp> &dyn_vert_prop;
     const Vec<FaceProp> &static_face_prop;
+    const Vec<VertexParam> &dyn_vert_params;
+    const Vec<FaceParam> &static_face_params;
     unsigned vertex_index;
     float &toi;
     const ParamSet &param;
@@ -1340,8 +1432,11 @@ struct CollisionMeshPointFaceCCD_M2C {
         const Vec3f &t2 = collision_mesh_vertex[f[2]];
         const Vec3f &p0 = x0[vertex_index];
         const Vec3f &p1 = x1[vertex_index];
-        float offset =
-            dyn_vert_prop[vertex_index].offset + static_face_prop[index].offset;
+        const VertexParam &dyn_vparam =
+            dyn_vert_params[dyn_vert_prop[vertex_index].param_index];
+        const FaceParam &static_fparam =
+            static_face_params[static_face_prop[index].param_index];
+        float offset = dyn_vparam.offset + static_fparam.offset;
         float result = accd::point_triangle_ccd(p0, p1, t0, t1, t2, t0, t1, t2,
                                                 offset, param);
         if (result < param.line_search_max_t) {
@@ -1360,6 +1455,8 @@ struct CollisionMeshPointFaceCCD_C2M {
     const Vec<Vec3f> &collision_mesh_vertex;
     const Vec<FaceProp> &dyn_face_prop;
     const Vec<VertexProp> &static_vert_prop;
+    const Vec<FaceParam> &dyn_face_params;
+    const Vec<VertexParam> &static_vert_params;
     unsigned vertex_index;
     float &toi;
     const ParamSet &param;
@@ -1373,8 +1470,11 @@ struct CollisionMeshPointFaceCCD_C2M {
             const Vec3f &t11 = x1[f[1]];
             const Vec3f &t12 = x1[f[2]];
             const Vec3f &p = collision_mesh_vertex[vertex_index];
-            float offset = dyn_face_prop[index].offset +
-                           static_vert_prop[vertex_index].offset;
+            const FaceParam &dyn_fparam =
+                dyn_face_params[dyn_face_prop[index].param_index];
+            const VertexParam &static_vparam =
+                static_vert_params[static_vert_prop[vertex_index].param_index];
+            float offset = dyn_fparam.offset + static_vparam.offset;
             float result = accd::point_triangle_ccd(p, p, t00, t01, t02, t10,
                                                     t11, t12, offset, param);
             if (result < param.line_search_max_t) {
@@ -1395,6 +1495,8 @@ struct CollisionMeshEdgeEdgeCCD {
     const Vec<Vec3f> &collision_mesh_vertex;
     const Vec<EdgeProp> &dyn_edge_prop;
     const Vec<EdgeProp> &static_edge_prop;
+    const Vec<EdgeParam> &dyn_edge_params;
+    const Vec<EdgeParam> &static_edge_params;
     unsigned edge_index;
     float &toi;
     const ParamSet &param;
@@ -1408,8 +1510,11 @@ struct CollisionMeshEdgeEdgeCCD {
             const Vec3f &p11 = x1[e0[1]];
             const Vec3f &q0 = collision_mesh_vertex[e1[0]];
             const Vec3f &q1 = collision_mesh_vertex[e1[1]];
-            float offset = dyn_edge_prop[edge_index].offset +
-                           static_edge_prop[index].offset;
+            const EdgeParam &dyn_eparam =
+                dyn_edge_params[dyn_edge_prop[edge_index].param_index];
+            const EdgeParam &static_eparam =
+                static_edge_params[static_edge_prop[index].param_index];
+            float offset = dyn_eparam.offset + static_eparam.offset;
             float result = accd::edge_edge_ccd(p00, p01, q0, q1, p10, p11, q0,
                                                q1, offset, param);
             if (result < param.line_search_max_t) {
@@ -1428,6 +1533,8 @@ struct PointFaceCCD {
     const Vec<Vec3u> &face;
     const Vec<VertexProp> &vertex_prop;
     const Vec<FaceProp> &face_prop;
+    const Vec<VertexParam> &vertex_params;
+    const Vec<FaceParam> &face_params;
     unsigned vertex_index;
     float &toi;
     const ParamSet &param;
@@ -1445,8 +1552,11 @@ struct PointFaceCCD {
             }
             float result = param.line_search_max_t;
             if (dup_i == -1) {
-                float offset =
-                    vertex_prop[vertex_index].offset + face_prop[index].offset;
+                const VertexParam &vparam =
+                    vertex_params[vertex_prop[vertex_index].param_index];
+                const FaceParam &fparam =
+                    face_params[face_prop[index].param_index];
+                float offset = vparam.offset + fparam.offset;
                 const Vec3f &p0 = x0[vertex_index];
                 const Vec3f &p1 = x1[vertex_index];
                 const Vec3f &t00 = x0[f[0]];
@@ -1458,7 +1568,9 @@ struct PointFaceCCD {
                 result = accd::point_triangle_ccd(p0, p1, t00, t01, t02, t10,
                                                   t11, t12, offset, param);
             } else {
-                float offset = 2.0f * vertex_prop[vertex_index].offset;
+                const VertexParam &vparam =
+                    vertex_params[vertex_prop[vertex_index].param_index];
+                float offset = 2.0f * vparam.offset;
                 unsigned i = dup_i;
                 unsigned j = (i + 1) % 3;
                 unsigned k = (i + 2) % 3;
@@ -1486,6 +1598,7 @@ struct EdgeEdgeCCD {
     const Vec<Vec3f> &x1;
     const Vec<Vec2u> &edge;
     const Vec<EdgeProp> &edge_prop;
+    const Vec<EdgeParam> &edge_params;
     unsigned edge_index;
     float &toi;
     const ParamSet &param;
@@ -1496,8 +1609,11 @@ struct EdgeEdgeCCD {
             const Vec2u &e0 = edge[edge_index];
             const Vec2u &e1 = edge[index];
             float result = param.line_search_max_t;
-            float offset =
-                edge_prop[edge_index].offset + edge_prop[index].offset;
+            const EdgeParam &eparam_edge =
+                edge_params[edge_prop[edge_index].param_index];
+            const EdgeParam &eparam_index =
+                edge_params[edge_prop[index].param_index];
+            float offset = eparam_edge.offset + eparam_index.offset;
             if (!edge_has_shared_vert(e0, e1)) {
                 const Vec3f &p00 = x0[e0[0]];
                 const Vec3f &p01 = x0[e0[1]];
@@ -1549,7 +1665,7 @@ __device__ void vertex_constraint_line_search(const DataSet &data,
                                               const Vec<Vec3f> &y1,
                                               Vec<float> toi_vert,
                                               ParamSet param, unsigned i) {
-    const Vec3f x1 = float(param.line_search_max_t) * (y1[i] - y0[i]) + y0[i];
+    const Vec3f x1 = param.line_search_max_t * (y1[i] - y0[i]) + y0[i];
     const Vec3f &x0 = y0[i];
     const VertexProp &prop = data.prop.vertex[i];
     if (prop.fix_index > 0) {
@@ -1558,8 +1674,8 @@ __device__ void vertex_constraint_line_search(const DataSet &data,
             const Vec3f &position = fix.position;
             float r0 = (x0 - position).norm();
             float r1 = (x1 - position).norm();
-            assert(r0 < prop.ghat);
-            float r = prop.ghat;
+            assert(r0 < fix.ghat);
+            float r = fix.ghat;
             if (r1 > r) {
                 // (1.0f - t) r0 + t r1 = r
                 // r0 - t r0 + t r1 = r
@@ -1614,8 +1730,8 @@ __device__ void vertex_constraint_line_search(const DataSet &data,
             if (!floor.kinematic) {
                 const Vec3f &up = floor.up;
                 const Vec3f &ground = floor.ground;
-                float h0 = up.dot((x0 - ground));
-                float h1 = up.dot((x1 - ground));
+                float h0 = up.dot(x0 - ground);
+                float h1 = up.dot(x1 - ground);
                 assert(h0 >= 0.0f);
                 if (h1 < 0.0f) {
                     // (1.0f - t) h0 + t h1 = 0
@@ -1640,6 +1756,10 @@ float line_search(const DataSet &data, const Vec<Vec3f> &x0,
 
     unsigned surface_vert_count = data.surface_vert_count;
     unsigned edge_count = mesh.mesh.edge.size;
+    unsigned collision_mesh_vert_count = data.constraint.mesh.vertex.size;
+    unsigned max_contact_vert = (surface_vert_count > collision_mesh_vert_count)
+                                    ? surface_vert_count
+                                    : collision_mesh_vert_count;
 
     const BVH &face_bvh = bvhset.face;
     const BVH &edge_bvh = bvhset.edge;
@@ -1648,47 +1768,75 @@ float line_search(const DataSet &data, const Vec<Vec3f> &x0,
     const Vec<Vec2u> &collision_mesh_edge = data.constraint.mesh.edge;
     const Vec<Vec3u> &collision_mesh_face = data.constraint.mesh.face;
     const Vec<Vec3f> &collision_mesh_vertex = data.constraint.mesh.vertex;
-
     const Vec<AABB> face_aabb = storage::face_aabb;
     const Vec<AABB> edge_aabb = storage::edge_aabb;
     const Vec<AABB> collision_mesh_face_aabb =
         storage::collision_mesh_face_aabb;
     const Vec<AABB> collision_mesh_edge_aabb =
         storage::collision_mesh_edge_aabb;
-    Vec<char> intersection_flag = storage::intersection_flag;
-    Vec<float> toi_vtf = storage::vertex_face_toi;
-    Vec<float> toi_ee = storage::edge_edge_toi;
+
+    buffer::MemoryPool &pool = buffer::get();
+    auto intersection_flag = pool.get<char>(edge_count);
+    auto toi_vtf = pool.get<float>(max_contact_vert);
+    auto toi_ee = pool.get<float>(edge_count);
+
     intersection_flag.clear(0);
     toi_vtf.clear(param.line_search_max_t);
     toi_ee.clear(param.line_search_max_t);
 
+    Vec<char> intersection_flag_vec = intersection_flag.as_vec();
+    Vec<float> toi_vtf_vec = toi_vtf.as_vec();
+    Vec<float> toi_ee_vec = toi_ee.as_vec();
+
+    Vec<VertexParam> vertex_params = data.param_arrays.vertex;
+    Vec<EdgeParam> edge_params = data.param_arrays.edge;
+    Vec<FaceParam> face_params = data.param_arrays.face;
+    Vec<VertexParam> collision_vertex_params =
+        data.constraint.mesh.param_arrays.vertex;
+    Vec<EdgeParam> collision_edge_params =
+        data.constraint.mesh.param_arrays.edge;
+    Vec<FaceParam> collision_face_params =
+        data.constraint.mesh.param_arrays.face;
+
     DISPATCH_START(surface_vert_count)
-    [data, x0, x1, toi_vtf, param] __device__(unsigned i) mutable {
-        vertex_constraint_line_search(data, x0, x1, toi_vtf, param, i);
+    [data, x0, x1, toi_vtf_vec, param] __device__(unsigned i) mutable {
+        vertex_constraint_line_search(data, x0, x1, toi_vtf_vec, param, i);
     } DISPATCH_END;
 
     if (!param.disable_contact) {
         DISPATCH_START(surface_vert_count)
-        [data, mesh, x0, x1, face_bvh, face_aabb, toi_vtf,
-         param] __device__(unsigned i) mutable {
-            float ext_eps = 0.5f * data.prop.vertex[i].ghat + data.prop.vertex[i].offset;
+        [data, mesh, x0, x1, face_bvh, face_aabb, toi_vtf_vec, vertex_params,
+         face_params, param] __device__(unsigned i) mutable {
+            const VertexParam &vparam =
+                vertex_params[data.prop.vertex[i].param_index];
+            float ext_eps = 0.5f * vparam.ghat + vparam.offset;
             float toi = param.line_search_max_t;
-            PointFaceCCD ccd = {
-                x0, x1,  mesh.mesh.face, data.prop.vertex, data.prop.face,
-                i,  toi, param};
+            PointFaceCCD ccd = {x0,
+                                x1,
+                                mesh.mesh.face,
+                                data.prop.vertex,
+                                data.prop.face,
+                                vertex_params,
+                                face_params,
+                                i,
+                                toi,
+                                param};
             AABB_AABB_Tester<PointFaceCCD> op(ccd);
             AABB aabb =
                 aabb::make(x0[i], toi * (x1[i] - x0[i]) + x0[i], ext_eps);
             aabb::query(face_bvh, face_aabb, op, aabb);
-            toi_vtf[i] = fmin(toi_vtf[i], toi);
+            toi_vtf_vec[i] = fmin(toi_vtf_vec[i], toi);
         } DISPATCH_END;
 
         DISPATCH_START(surface_vert_count)
         [data, mesh, x0, x1, collision_mesh_face, collision_mesh_face_bvh,
-         collision_mesh_face_aabb, collision_mesh_vertex, toi_vtf,
+         collision_mesh_face_aabb, collision_mesh_vertex, toi_vtf_vec,
+         vertex_params, collision_face_params,
          param] __device__(unsigned i) mutable {
             if (data.prop.vertex[i].fix_index == 0) {
-                float ext_eps = 0.5f * data.prop.vertex[i].ghat + data.prop.vertex[i].offset;
+                const VertexParam &vparam =
+                    vertex_params[data.prop.vertex[i].param_index];
+                float ext_eps = 0.5f * vparam.ghat + vparam.offset;
                 float toi = param.line_search_max_t;
                 CollisionMeshPointFaceCCD_M2C ccd = {
                     x0,
@@ -1698,6 +1846,8 @@ float line_search(const DataSet &data, const Vec<Vec3f> &x0,
                     collision_mesh_vertex,
                     data.prop.vertex,
                     data.constraint.mesh.prop.face,
+                    vertex_params,
+                    collision_face_params,
                     i,
                     toi,
                     param};
@@ -1706,14 +1856,15 @@ float line_search(const DataSet &data, const Vec<Vec3f> &x0,
                     aabb::make(x0[i], toi * (x1[i] - x0[i]) + x0[i], ext_eps);
                 aabb::query(collision_mesh_face_bvh, collision_mesh_face_aabb,
                             op, aabb);
-                toi_vtf[i] = fmin(toi_vtf[i], toi);
+                toi_vtf_vec[i] = fmin(toi_vtf_vec[i], toi);
             }
         } DISPATCH_END;
 
         unsigned collision_mesh_vert_count = data.constraint.mesh.vertex.size;
         DISPATCH_START(collision_mesh_vert_count)
         [data, mesh, x0, x1, collision_mesh_face, collision_mesh_vertex,
-         toi_vtf, face_bvh, face_aabb, param] __device__(unsigned i) mutable {
+         toi_vtf_vec, face_bvh, face_aabb, face_params, collision_vertex_params,
+         param] __device__(unsigned i) mutable {
             float toi = param.line_search_max_t;
             CollisionMeshPointFaceCCD_C2M ccd = {
                 x0,
@@ -1722,41 +1873,52 @@ float line_search(const DataSet &data, const Vec<Vec3f> &x0,
                 collision_mesh_vertex,
                 data.prop.face,
                 data.constraint.mesh.prop.vertex,
+                face_params,
+                collision_vertex_params,
                 i,
                 toi,
                 param};
             AABB_AABB_Tester<CollisionMeshPointFaceCCD_C2M> op(ccd);
             Vec3f q = collision_mesh_vertex[i];
-            float ext_eps = 0.5f * data.constraint.mesh.prop.vertex[i].ghat + data.constraint.mesh.prop.vertex[i].offset;
+            const VertexParam &vparam =
+                collision_vertex_params[data.constraint.mesh.prop.vertex[i]
+                                            .param_index];
+            float ext_eps = 0.5f * vparam.ghat + vparam.offset;
             aabb::query(face_bvh, face_aabb, op, aabb::make(q, ext_eps));
-            toi_vtf[i] = fmin(toi_vtf[i], toi);
+            toi_vtf_vec[i] = fmin(toi_vtf_vec[i], toi);
         } DISPATCH_END;
 
         DISPATCH_START(edge_count)
-        [data, mesh, x0, x1, edge_bvh, edge_aabb, toi_ee,
+        [data, mesh, x0, x1, edge_bvh, edge_aabb, toi_ee_vec, edge_params,
          param] __device__(unsigned i) mutable {
             Vec2u edge = mesh.mesh.edge[i];
             float toi = param.line_search_max_t;
-            float ext_eps = 0.5f * data.prop.edge[i].ghat + data.prop.edge[i].offset;
+            const EdgeParam &eparam =
+                edge_params[data.prop.edge[i].param_index];
+            float ext_eps = 0.5f * eparam.ghat + eparam.offset;
             AABB aabb0 = aabb::make(x0[edge[0]], x0[edge[1]], ext_eps);
             AABB aabb1 = aabb::make(
                 toi * (x1[edge[0]] - x0[edge[0]]) + x0[edge[0]],
                 toi * (x1[edge[1]] - x0[edge[1]]) + x0[edge[1]], ext_eps);
             AABB aabb = aabb::join(aabb0, aabb1);
-            EdgeEdgeCCD ccd = {x0, x1,  mesh.mesh.edge, data.prop.edge,
-                               i,  toi, param};
+            EdgeEdgeCCD ccd = {
+                x0, x1,  mesh.mesh.edge, data.prop.edge, edge_params,
+                i,  toi, param};
             AABB_AABB_Tester<EdgeEdgeCCD> op(ccd);
             aabb::query(edge_bvh, edge_aabb, op, aabb);
-            toi_ee[i] = fmin(toi, toi_ee[i]);
+            toi_ee_vec[i] = fmin(toi, toi_ee_vec[i]);
         } DISPATCH_END;
 
         DISPATCH_START(edge_count)
         [data, mesh, x0, x1, collision_mesh_edge_bvh, collision_mesh_edge,
-         collision_mesh_vertex, collision_mesh_edge_aabb, toi_ee,
+         collision_mesh_vertex, collision_mesh_edge_aabb, toi_ee_vec,
+         edge_params, collision_edge_params,
          param] __device__(unsigned i) mutable {
             Vec2u edge = mesh.mesh.edge[i];
             float toi = param.line_search_max_t;
-            float ext_eps = 0.5f * data.prop.edge[i].ghat + data.prop.edge[i].offset;
+            const EdgeParam &eparam =
+                edge_params[data.prop.edge[i].param_index];
+            float ext_eps = 0.5f * eparam.ghat + eparam.offset;
             AABB aabb0 = aabb::make(x0[edge[0]], x0[edge[1]], ext_eps);
             AABB aabb1 = aabb::make(
                 toi * (x1[edge[0]] - x0[edge[0]]) + x0[edge[0]],
@@ -1769,6 +1931,8 @@ float line_search(const DataSet &data, const Vec<Vec3f> &x0,
                                             collision_mesh_vertex,
                                             data.prop.edge,
                                             data.constraint.mesh.prop.edge,
+                                            edge_params,
+                                            collision_edge_params,
                                             i,
                                             toi,
                                             param};
@@ -1776,13 +1940,15 @@ float line_search(const DataSet &data, const Vec<Vec3f> &x0,
             AABB_AABB_Tester<CollisionMeshEdgeEdgeCCD> op(ccd);
             aabb::query(collision_mesh_edge_bvh, collision_mesh_edge_aabb, op,
                         aabb);
-            toi_ee[i] = fmin(toi, toi_ee[i]);
+            toi_ee_vec[i] = fmin(toi, toi_ee_vec[i]);
         } DISPATCH_END;
     }
 
-    float toi = fminf(
-        kernels::min_array(toi_vtf.data, toi_vtf.size, param.line_search_max_t),
-        kernels::min_array(toi_ee.data, toi_ee.size, param.line_search_max_t));
+    float toi = fminf(kernels::min_array(toi_vtf_vec.data, toi_vtf_vec.size,
+                                         param.line_search_max_t),
+                      kernels::min_array(toi_ee_vec.data, toi_ee_vec.size,
+                                         param.line_search_max_t));
+
     return toi / param.line_search_max_t;
 }
 
@@ -1827,11 +1993,12 @@ __device__ bool edge_triangle_intersect(const Vec3f &_e0, const Vec3f &_e1,
 class EdgeEdgeIntersectTester {
   public:
     __device__
-    EdgeEdgeIntersectTester(const Vec<EdgeProp> &prop, const Vec<Vec3f> &vertex,
-                            const Vec<Vec2u> &edge, const ParamSet &param,
-                            unsigned edge_index)
-        : prop(prop), vertex(vertex), edge(edge), param(param),
-          edge_index(edge_index) {}
+    EdgeEdgeIntersectTester(const Vec<EdgeProp> &prop,
+                            const Vec<EdgeParam> &edge_params,
+                            const Vec<Vec3f> &vertex, const Vec<Vec2u> &edge,
+                            const ParamSet &param, unsigned edge_index)
+        : prop(prop), edge_params(edge_params), vertex(vertex), edge(edge),
+          param(param), edge_index(edge_index) {}
     __device__ bool operator()(unsigned index) {
         if (index < edge_index) {
             const Vec2u &e0 = edge[edge_index];
@@ -1839,7 +2006,11 @@ class EdgeEdgeIntersectTester {
             bool either_dyn =
                 prop[edge_index].fixed == false || prop[index].fixed == false;
             if (either_dyn) {
-                float offset = prop[edge_index].offset + prop[index].offset;
+                const EdgeParam &eparam_edge =
+                    edge_params[prop[edge_index].param_index];
+                const EdgeParam &eparam_index =
+                    edge_params[prop[index].param_index];
+                float offset = eparam_edge.offset + eparam_index.offset;
                 if (!edge_has_shared_vert(e0, e1)) {
                     Vec3f p0 = vertex[e0[0]];
                     Vec3f p1 = vertex[e0[1]];
@@ -1849,7 +2020,7 @@ class EdgeEdgeIntersectTester {
                         float, float>(p0, p1, q0, q1);
                     Vec3f x0 = c[0] * p0 + c[1] * p1;
                     Vec3f x1 = c[2] * q0 + c[3] * q1;
-                    Vec3f e = (x0 - x1);
+                    Vec3f e = x0 - x1;
                     if (e.dot(e) < offset * offset) {
                         return true;
                     }
@@ -1874,8 +2045,8 @@ class EdgeEdgeIntersectTester {
                                 point_edge_distance_coeff_unclassified<float,
                                                                        float>(
                                     q2, q0, q1);
-                            Vec3f e_0 = ((c_0[0] * q0 + c_0[1] * q2) - q1);
-                            Vec3f e_1 = ((c_1[0] * q0 + c_1[1] * q1) - q2);
+                            Vec3f e_0 = (c_0[0] * q0 + c_0[1] * q2) - q1;
+                            Vec3f e_1 = (c_1[0] * q0 + c_1[1] * q1) - q2;
                             float sqr_d0 = e_0.dot(e_0);
                             float sqr_d1 = e_1.dot(e_1);
                             if (std::min(sqr_d0, sqr_d1) < offset * offset) {
@@ -1889,6 +2060,7 @@ class EdgeEdgeIntersectTester {
         return false;
     }
     const Vec<EdgeProp> &prop;
+    const Vec<EdgeParam> &edge_params;
     const Vec<Vec3f> &vertex;
     const Vec<Vec2u> &edge;
     const ParamSet &param;
@@ -1964,58 +2136,52 @@ bool check_intersection(const DataSet &data, const Vec<Vec3f> &vertex,
     const BVH &collision_mesh_face_bvh = data.constraint.mesh.face_bvh;
     const MeshInfo &mesh = data.mesh;
     const Vec<Vec3u> &collision_mesh_face = data.constraint.mesh.face;
-    const Vec<AABB> &face_aabb = storage::face_aabb;
-    const Vec<AABB> &edge_aabb = storage::edge_aabb;
-    const Vec<AABB> &collision_mesh_face_aabb =
+    const Vec<AABB> face_aabb = storage::face_aabb;
+    const Vec<AABB> edge_aabb = storage::edge_aabb;
+    const Vec<AABB> collision_mesh_face_aabb =
         storage::collision_mesh_face_aabb;
-    Vec<char> &intersection_flag = storage::intersection_flag;
+
+    buffer::MemoryPool &pool = buffer::get();
+    auto intersection_flag = pool.get<char>(edge_count);
     intersection_flag.clear(0);
     const Vec<Vec3f> &collision_mesh_vertex = data.constraint.mesh.vertex;
 
-    // Create local copies for device lambda capture
-    auto intersection_flag_data = intersection_flag.data;
-    Vec<FaceProp> prop_face_vec = data.prop.face;
-    Vec<EdgeProp> prop_edge_vec = data.prop.edge;
-    Vec<Vec3f> vertex_vec = vertex;
-    Vec<Vec3u> mesh_face_vec = mesh.mesh.face;
-    Vec<Vec2u> mesh_edge_vec = mesh.mesh.edge;
-    Vec<Vec3f> collision_mesh_vertex_vec = collision_mesh_vertex;
-    Vec<Vec3u> collision_mesh_face_vec = collision_mesh_face;
-    Vec<AABB> face_aabb_vec = face_aabb;
-    Vec<AABB> edge_aabb_vec = edge_aabb;
-    Vec<AABB> collision_mesh_face_aabb_vec = collision_mesh_face_aabb;
+    Vec<char> intersection_flag_vec = intersection_flag.as_vec();
+    Vec<EdgeParam> edge_params = data.param_arrays.edge;
 
     DISPATCH_START(edge_count)
-    [face_bvh, edge_bvh, collision_mesh_face_bvh, face_aabb_vec, edge_aabb_vec,
-     collision_mesh_face_aabb_vec, intersection_flag_data, vertex_vec,
-     collision_mesh_vertex_vec, collision_mesh_face_vec, mesh_edge_vec, mesh_face_vec,
-     prop_face_vec, prop_edge_vec, param] __device__(unsigned i) mutable {
-        const Vec2u &edge = mesh_edge_vec[i];
-        Vec3f y0 = vertex_vec[edge[0]];
-        Vec3f y1 = vertex_vec[edge[1]];
+    [data, mesh, vertex, collision_mesh_vertex, face_bvh, face_aabb, edge_bvh,
+     edge_aabb, collision_mesh_face_bvh, collision_mesh_face_aabb,
+     collision_mesh_face, intersection_flag_vec, edge_params,
+     param] __device__(unsigned i) mutable {
+        const Vec2u &edge = mesh.mesh.edge[i];
+        Vec3f y0 = vertex[edge[0]];
+        Vec3f y1 = vertex[edge[1]];
         AABB aabb = aabb::make(y0, y1, 0.0f);
-        FaceEdgeIntersectTester tester_0(prop_face_vec, prop_edge_vec, vertex_vec,
-                                         mesh_face_vec, mesh_edge_vec, i);
+        FaceEdgeIntersectTester tester_0(data.prop.face, data.prop.edge, vertex,
+                                         mesh.mesh.face, mesh.mesh.edge, i);
         AABB_AABB_Tester<FaceEdgeIntersectTester> op_0(tester_0);
-        if (aabb::query(face_bvh, face_aabb_vec, op_0, aabb)) {
-            intersection_flag_data[i] = 1;
+        if (aabb::query(face_bvh, face_aabb, op_0, aabb)) {
+            intersection_flag_vec[i] = 1;
         }
-        EdgeEdgeIntersectTester tester_1(prop_edge_vec, vertex_vec, mesh_edge_vec,
-                                         param, i);
+        EdgeEdgeIntersectTester tester_1(data.prop.edge, edge_params, vertex,
+                                         mesh.mesh.edge, param, i);
         AABB_AABB_Tester<EdgeEdgeIntersectTester> op_1(tester_1);
-        if (aabb::query(edge_bvh, edge_aabb_vec, op_1, aabb)) {
-            intersection_flag_data[i] = 1;
+        if (aabb::query(edge_bvh, edge_aabb, op_1, aabb)) {
+            intersection_flag_vec[i] = 1;
         }
         CollisionMeshFaceEdgeIntersectTester tester_2(
-            collision_mesh_vertex_vec, collision_mesh_face_vec, y0, y1);
+            collision_mesh_vertex, collision_mesh_face, y0, y1);
         AABB_AABB_Tester<CollisionMeshFaceEdgeIntersectTester> op_2(tester_2);
-        if (aabb::query(collision_mesh_face_bvh, collision_mesh_face_aabb_vec, op_2,
+        if (aabb::query(collision_mesh_face_bvh, collision_mesh_face_aabb, op_2,
                         aabb)) {
-            intersection_flag_data[i] = 1;
+            intersection_flag_vec[i] = 1;
         }
     } DISPATCH_END;
 
-    return kernels::max_array(intersection_flag.data, edge_count, char(0)) == 0;
+    bool result = kernels::max_array(intersection_flag_vec.data, edge_count,
+                                     char(0)) == 0;
+    return result;
 }
 
 } // namespace contact

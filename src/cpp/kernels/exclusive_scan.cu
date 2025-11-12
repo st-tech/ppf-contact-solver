@@ -1,8 +1,11 @@
 // File: exclusive_scan.cu
-// Author: Ryoichi Ando (ryoichi.ando@zozo.com)
+// Code: Claude Code and Codex
+// Review: Ryoichi Ando (ryoichi.ando@zozo.com)
 // License: Apache v2.0
 
 #include "../utility/dispatcher.hpp"
+#include "../vec/vec.hpp"
+#include "../buffer/buffer.hpp"
 #include "exclusive_scan.hpp"
 #include <cassert>
 
@@ -165,44 +168,50 @@ unsigned exclusive_scan(unsigned *d_data, unsigned n) {
         return 0;
     }
 
-    static unsigned _n = 0;
-    static unsigned G = SCAN_BLOCK_SIZE;
-    static size_t shmem = (SCAN_BLOCK_SIZE / WARP_SIZE) * sizeof(unsigned);
+    const unsigned G = SCAN_BLOCK_SIZE;
+    const size_t shmem = G * sizeof(unsigned);
+    const unsigned MAX_LEVELS = 32;
 
-    static const unsigned MAX_LEVELS = 32;
-    static unsigned levels = 0;
-    static unsigned level_n[MAX_LEVELS] = {};
-    static unsigned *level_ptr[MAX_LEVELS] = {};
-    static unsigned *d_total = nullptr;
-    static unsigned num_blocks_lvl0 = 0;
-
-    if (_n == 0) {
-        _n = n;
-        G = SCAN_BLOCK_SIZE;
-        shmem = G * sizeof(unsigned);
-
-        levels = 0;
-        unsigned curr_n = n;
-        while (true) {
-            unsigned m = (curr_n + G - 1) / G;
-            level_n[levels] = m;
-            CUDA_HANDLE_ERROR(
-                cudaMalloc((void **)&level_ptr[levels], m * sizeof(unsigned)));
-            ++levels;
-            if (m == 1) {
-                break;
-            }
-            curr_n = m;
-            if (levels >= MAX_LEVELS) {
-                assert(false && "MAX_LEVELS too small for this n/SCAN_BLOCK_SIZE");
-            }
+    // Calculate levels and sizes
+    unsigned levels = 0;
+    unsigned level_n[MAX_LEVELS] = {};
+    unsigned curr_n = n;
+    while (true) {
+        unsigned m = (curr_n + G - 1) / G;
+        level_n[levels] = m;
+        ++levels;
+        if (m == 1) {
+            break;
         }
-
-        num_blocks_lvl0 = (n + G - 1) / G;
-        CUDA_HANDLE_ERROR(cudaMalloc((void **)&d_total, sizeof(unsigned)));
-    } else {
-        assert(n == _n);
+        curr_n = m;
+        if (levels >= MAX_LEVELS) {
+            assert(false && "MAX_LEVELS too small for this n/SCAN_BLOCK_SIZE");
+        }
     }
+
+    // Allocate buffers from pool
+    buffer::MemoryPool &pool = buffer::get();
+
+    // Calculate total buffer size needed
+    size_t total_size = 0;
+    for (unsigned i = 0; i < levels; ++i) {
+        total_size += level_n[i];
+    }
+    total_size += 1; // for d_total
+
+    // Allocate one large buffer and partition it
+    auto combined_buffer = pool.get<unsigned>(total_size);
+
+    // Partition the buffer into level pointers
+    unsigned *level_ptr[MAX_LEVELS];
+    size_t offset = 0;
+    for (unsigned i = 0; i < levels; ++i) {
+        level_ptr[i] = combined_buffer.data + offset;
+        offset += level_n[i];
+    }
+    unsigned *d_total = combined_buffer.data + offset;
+
+    unsigned num_blocks_lvl0 = (n + G - 1) / G;
 
     block_scan_kernel<<<level_n[0], G, shmem>>>(d_data, level_ptr[0], n);
     CUDA_HANDLE_ERROR(cudaGetLastError());

@@ -1,5 +1,6 @@
 // File: data.rs
-// Author: Ryoichi Ando (ryoichi.ando@zozo.com)
+// Code: Claude Code and Codex
+// Review: Ryoichi Ando (ryoichi.ando@zozo.com)
 // License: Apache v2.0
 
 use serde::{Deserialize, Serialize};
@@ -109,23 +110,33 @@ pub struct Type {
 
 #[repr(C)]
 #[derive(Serialize, Deserialize, Clone, Copy, Default)]
-pub struct VertexProp {
-    pub area: f32,
-    pub volume: f32,
-    pub mass: f32,
+pub struct VertexParam {
     pub ghat: f32,
     pub offset: f32,
     pub friction: f32,
-    pub fix_index: u32,
-    pub pull_index: u32,
 }
+
+impl std::hash::Hash for VertexParam {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.ghat.to_bits().hash(state);
+        self.offset.to_bits().hash(state);
+        self.friction.to_bits().hash(state);
+    }
+}
+
+impl PartialEq for VertexParam {
+    fn eq(&self, other: &Self) -> bool {
+        self.ghat.to_bits() == other.ghat.to_bits()
+            && self.offset.to_bits() == other.offset.to_bits()
+            && self.friction.to_bits() == other.friction.to_bits()
+    }
+}
+
+impl Eq for VertexParam {}
 
 #[repr(C)]
 #[derive(Serialize, Deserialize, Clone, Copy, Default)]
-pub struct EdgeProp {
-    pub fixed: bool,
-    pub length: f32,
-    pub mass: f32,
+pub struct EdgeParam {
     pub stiffness: f32,
     pub bend: f32,
     pub ghat: f32,
@@ -133,42 +144,168 @@ pub struct EdgeProp {
     pub friction: f32,
 }
 
+impl std::hash::Hash for EdgeParam {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.stiffness.to_bits().hash(state);
+        self.bend.to_bits().hash(state);
+        self.ghat.to_bits().hash(state);
+        self.offset.to_bits().hash(state);
+        self.friction.to_bits().hash(state);
+    }
+}
+
+impl PartialEq for EdgeParam {
+    fn eq(&self, other: &Self) -> bool {
+        self.stiffness.to_bits() == other.stiffness.to_bits()
+            && self.bend.to_bits() == other.bend.to_bits()
+            && self.ghat.to_bits() == other.ghat.to_bits()
+            && self.offset.to_bits() == other.offset.to_bits()
+            && self.friction.to_bits() == other.friction.to_bits()
+    }
+}
+
+impl Eq for EdgeParam {}
+
 #[repr(C)]
 #[derive(Serialize, Deserialize, Clone, Copy, Default)]
-pub struct FaceProp {
-    pub fixed: bool,
-    pub area: f32,
-    pub mass: f32,
+pub struct FaceParam {
     pub model: Model,
     pub mu: f32,
     pub lambda: f32,
     pub friction: f32,
     pub ghat: f32,
     pub offset: f32,
-    pub strainlimit: f32,
     pub bend: f32,
+    pub strainlimit: f32,
     pub shrink: f32,
 }
 
+impl std::hash::Hash for FaceParam {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.model.hash(state);
+        self.mu.to_bits().hash(state);
+        self.lambda.to_bits().hash(state);
+        self.friction.to_bits().hash(state);
+        self.ghat.to_bits().hash(state);
+        self.offset.to_bits().hash(state);
+        self.bend.to_bits().hash(state);
+        self.strainlimit.to_bits().hash(state);
+        self.shrink.to_bits().hash(state);
+    }
+}
+
+impl PartialEq for FaceParam {
+    fn eq(&self, other: &Self) -> bool {
+        self.model == other.model
+            && self.mu.to_bits() == other.mu.to_bits()
+            && self.lambda.to_bits() == other.lambda.to_bits()
+            && self.friction.to_bits() == other.friction.to_bits()
+            && self.ghat.to_bits() == other.ghat.to_bits()
+            && self.offset.to_bits() == other.offset.to_bits()
+            && self.bend.to_bits() == other.bend.to_bits()
+            && self.strainlimit.to_bits() == other.strainlimit.to_bits()
+            && self.shrink.to_bits() == other.shrink.to_bits()
+    }
+}
+
+impl Eq for FaceParam {}
+
 #[repr(C)]
-#[derive(Serialize, Deserialize, Clone, Copy)]
-pub struct HingeProp {
-    pub fixed: bool,
-    pub length: f32,
+#[derive(Serialize, Deserialize, Clone, Copy, Default)]
+pub struct HingeParam {
     pub bend: f32,
     pub ghat: f32,
     pub offset: f32,
 }
 
+impl std::hash::Hash for HingeParam {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.bend.to_bits().hash(state);
+        self.ghat.to_bits().hash(state);
+        self.offset.to_bits().hash(state);
+    }
+}
+
+impl PartialEq for HingeParam {
+    fn eq(&self, other: &Self) -> bool {
+        self.bend.to_bits() == other.bend.to_bits()
+            && self.ghat.to_bits() == other.ghat.to_bits()
+            && self.offset.to_bits() == other.offset.to_bits()
+    }
+}
+
+impl Eq for HingeParam {}
+
+#[repr(C)]
+#[derive(Serialize, Deserialize, Clone, Copy, Default)]
+pub struct TetParam {
+    pub model: Model,
+    pub mu: f32,
+    pub lambda: f32,
+}
+
+impl std::hash::Hash for TetParam {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.model.hash(state);
+        self.mu.to_bits().hash(state);
+        self.lambda.to_bits().hash(state);
+    }
+}
+
+impl PartialEq for TetParam {
+    fn eq(&self, other: &Self) -> bool {
+        self.model == other.model
+            && self.mu.to_bits() == other.mu.to_bits()
+            && self.lambda.to_bits() == other.lambda.to_bits()
+    }
+}
+
+impl Eq for TetParam {}
+
+#[repr(C)]
+#[derive(Serialize, Deserialize, Clone, Copy, Default)]
+pub struct VertexProp {
+    pub area: f32,
+    pub volume: f32,
+    pub mass: f32,
+    pub fix_index: u32,
+    pub pull_index: u32,
+    pub param_index: u32,
+}
+
+#[repr(C)]
+#[derive(Serialize, Deserialize, Clone, Copy, Default)]
+pub struct EdgeProp {
+    pub length: f32,
+    pub mass: f32,
+    pub fixed: bool,
+    pub param_index: u32,
+}
+
+#[repr(C)]
+#[derive(Serialize, Deserialize, Clone, Copy, Default)]
+pub struct FaceProp {
+    pub area: f32,
+    pub mass: f32,
+    pub fixed: bool,
+    pub param_index: u32,
+}
+
+#[repr(C)]
+#[derive(Serialize, Deserialize, Clone, Copy, Default)]
+pub struct HingeProp {
+    pub length: f32,
+    pub fixed: bool,
+    pub param_index: u32,
+}
+
 #[repr(C)]
 #[derive(Serialize, Deserialize, Clone, Copy, Default)]
 pub struct TetProp {
-    pub fixed: bool,
     pub mass: f32,
-    pub model: Model,
     pub volume: f32,
-    pub mu: f32,
-    pub lambda: f32,
+    pub fixed: bool,
+    pub param_index: u32,
 }
 
 #[repr(C)]
@@ -179,6 +316,16 @@ pub struct PropSet {
     pub face: CVec<FaceProp>,
     pub hinge: CVec<HingeProp>,
     pub tet: CVec<TetProp>,
+}
+
+#[repr(C)]
+#[derive(Serialize, Deserialize)]
+pub struct ParamArrays {
+    pub vertex: CVec<VertexParam>,
+    pub edge: CVec<EdgeParam>,
+    pub face: CVec<FaceParam>,
+    pub hinge: CVec<HingeParam>,
+    pub tet: CVec<TetParam>,
 }
 
 #[repr(C)]
@@ -206,7 +353,7 @@ pub struct BvhSet {
 }
 
 #[repr(C)]
-#[derive(Debug, Serialize, Deserialize, Copy, Clone, Default)]
+#[derive(Debug, Serialize, Deserialize, Copy, Clone, Default, Hash, PartialEq, Eq)]
 pub enum Model {
     #[default]
     Arap,
@@ -269,6 +416,7 @@ pub struct Floor {
     pub kinematic: bool,
 }
 
+
 #[repr(C)]
 #[derive(Serialize, Deserialize)]
 pub struct CollisionMeshPropSet {
@@ -289,6 +437,24 @@ impl CollisionMeshPropSet {
 
 #[repr(C)]
 #[derive(Serialize, Deserialize)]
+pub struct CollisionMeshParamArrays {
+    pub vertex: CVec<VertexParam>,
+    pub face: CVec<FaceParam>,
+    pub edge: CVec<EdgeParam>,
+}
+
+impl CollisionMeshParamArrays {
+    pub fn new() -> Self {
+        Self {
+            vertex: CVec::new(),
+            face: CVec::new(),
+            edge: CVec::new(),
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Serialize, Deserialize)]
 pub struct CollisionMesh {
     pub vertex: CVec<Vec3fp>,
     pub face: CVec<Vec3u>,
@@ -296,6 +462,7 @@ pub struct CollisionMesh {
     pub face_bvh: Bvh,
     pub edge_bvh: Bvh,
     pub prop: CollisionMeshPropSet,
+    pub param_arrays: CollisionMeshParamArrays,
     pub neighbor: Neighbor,
 }
 
@@ -308,6 +475,7 @@ impl CollisionMesh {
             face_bvh: Bvh::new(),
             edge_bvh: Bvh::new(),
             prop: CollisionMeshPropSet::new(),
+            param_arrays: CollisionMeshParamArrays::new(),
             neighbor: Neighbor::new(),
         }
     }
@@ -328,8 +496,6 @@ pub struct Constraint {
 #[derive(Serialize, Deserialize)]
 pub struct ParamSet {
     pub time: f64,
-    pub disable_contact: bool,
-    pub fitting: bool,
     pub air_friction: f32,
     pub air_density: f32,
     pub constraint_tol: f32,
@@ -355,6 +521,8 @@ pub struct ParamSet {
     pub csrmat_max_nnz: u32,
     pub bvh_alloc_factor: u32,
     pub fix_xz: f32,
+    pub disable_contact: bool,
+    pub fitting: bool,
 }
 
 #[repr(C)]
@@ -385,6 +553,7 @@ pub struct DataSet {
     pub vertex: VertexSet,
     pub mesh: MeshInfo,
     pub prop: PropSet,
+    pub param_arrays: ParamArrays,
     pub inv_rest2x2: CVec<Mat2x2f>,
     pub inv_rest3x3: CVec<Mat3x3f>,
     pub constraint: Constraint,

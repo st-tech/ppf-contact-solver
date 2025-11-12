@@ -1,5 +1,6 @@
 // File: scene.rs
-// Author: Ryoichi Ando (ryoichi.ando@zozo.com)
+// Code: Claude Code and Codex
+// Review: Ryoichi Ando (ryoichi.ando@zozo.com)
 // License: Apache v2.0
 
 use super::builder::{convert_prop, make_collision_mesh};
@@ -9,8 +10,8 @@ use bytemuck::{cast_slice, Pod};
 use more_asserts::*;
 use na::{Const, Matrix, Matrix2x3, Matrix2xX, Matrix3xX, Matrix4xX, VecStorage, Vector3};
 use serde::Deserialize;
-use std::fs::{self, File};
 use std::collections::HashMap;
+use std::fs::{self, File};
 use std::io::{self, BufRead, Read, Write};
 use toml::Value;
 
@@ -45,21 +46,39 @@ enum ParamValueList {
     Value(Vec<f32>),
 }
 
-struct Spin {
-    center: Vector3<f32>,
-    axis: Vector3<f32>,
-    angular_velocity: f32,
-    t_start: f64,
-    t_end: f64,
+enum PinOperation {
+    MoveBy {
+        delta: Matrix3xX<f32>,
+        t_start: f64,
+        t_end: f64,
+        transition: String,
+    },
+    MoveTo {
+        target: Matrix3xX<f32>,
+        t_start: f64,
+        t_end: f64,
+        transition: String,
+    },
+    Spin {
+        center: Vector3<f32>,
+        axis: Vector3<f32>,
+        angular_velocity: f32,
+        t_start: f64,
+        t_end: f64,
+    },
+    Scale {
+        center: Vector3<f32>,
+        factor: f32,
+        t_start: f64,
+        t_end: f64,
+        transition: String,
+    },
 }
 
 struct Pin {
     index: Vec<usize>,
-    timing: Vec<f64>,
-    target: Vec<Matrix3xX<f32>>,
-    spin: Vec<Spin>,
-    unpin: bool,
-    transition: String,
+    operations: Vec<PinOperation>,
+    unpin_time: Option<f64>,
     pull_w: f32,
 }
 
@@ -99,14 +118,14 @@ where
     let mut file = File::open(path)?;
     let mut buff = Vec::new();
     file.read_to_end(&mut buff)?;
-    if buff.len() % std::mem::size_of::<T>() != 0 {
+    if !buff.len().is_multiple_of(std::mem::size_of::<T>()) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             "Data length is not a multiple of the element size",
         ));
     }
     let data: &[T] = cast_slice(&buff);
-    if data.len() % C != 0 {
+    if !data.len().is_multiple_of(C) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             format!("Data length is not a multiple of {}", C),
@@ -129,18 +148,6 @@ where
     let mut file = File::open(path)?;
     file.read_to_end(&mut buff)?;
     Ok(cast_slice(&buff).to_vec())
-}
-
-fn read_f64_mat_as_f32<const C: usize>(path: &str) -> MatReadResult<f32, C> {
-    let mat_f64 = read_mat_from_file::<f64, C>(path)?;
-    let data: Vec<f32> = mat_f64.iter().map(|&x| x as f32).collect();
-    let n_column = mat_f64.ncols();
-    let n_row = na::Const::<C>;
-    Ok(unsafe {
-        Matrix::<f32, na::Const<C>, na::Dyn, VecStorage<f32, na::Const<C>, na::Dyn>>::from_data_statically_unchecked(
-            VecStorage::new(n_row, na::Dyn(n_column), data),
-        )
-    })
 }
 
 fn read_dyn_param(path: &str) -> io::Result<DynParamTable> {
@@ -245,10 +252,13 @@ impl Scene {
         let stitch_ind_path = format!("{}/bin/stitch_ind.bin", args.path);
         let stitch_w_path = format!("{}/bin/stitch_w.bin", args.path);
 
-        let displacement_mat =
-            read_f64_mat_as_f32::<3>(&displacement_path).expect("Failed to read displacement");
+        let displacement_mat = read_mat_from_file::<f64, 3>(&displacement_path)
+            .expect("Failed to read displacement")
+            .map(|x| x as f32);
         let vert_dmap_mat = read_vec::<u32>(&vert_dmap_path).expect("Failed to read vert_dmap");
-        let vert_mat = read_f64_mat_as_f32::<3>(&vert_path).expect("Failed to read vert");
+        let vert_mat = read_mat_from_file::<f64, 3>(&vert_path)
+            .expect("Failed to read vert")
+            .map(|x| x as f32);
         let vel_mat = read_mat_from_file::<f32, 3>(&vel_path).expect("Failed to read velocity");
         let uv_mat = if std::path::Path::new(&uv_path).exists() {
             let data = read_vec::<f32>(&uv_path).expect("Failed to read uv");
@@ -283,7 +293,9 @@ impl Scene {
         let (static_vert_dmap_mat, static_vert_mat) = if n_static_vert > 0 {
             (
                 read_vec::<u32>(&static_vert_dmap_path).expect("Failed to read static_vert_dmap"),
-                read_f64_mat_as_f32::<3>(&static_vert_path).expect("Failed to read static_vert"),
+                read_mat_from_file::<f64, 3>(&static_vert_path)
+                    .expect("Failed to read static_vert")
+                    .map(|x| x as f32),
             )
         } else {
             (Vec::new(), Matrix3xX::<f32>::zeros(0))
@@ -310,67 +322,101 @@ impl Scene {
                 .get(&title)
                 .unwrap_or_else(|| panic!("Failed to read pin {}", i));
             let n_pin = read_usize(count, "pin");
-            let n_keyframe = read_usize(count, "keyframe");
-            let unpin = read_bool(count, "unpin");
+            let operation_count = read_usize(count, "operation_count");
+            let unpin_time = count.get("unpin_time").and_then(|v| v.as_float());
             let pull_w = read_f32(count, "pull");
-            let transition = read_string(count, "transition");
             let pin_ind_path = format!("{}/bin/pin-ind-{}.bin", args.path, i);
-            let pin_dir = format!("{}/bin/pin-{}", args.path, i);
 
-            let mut target = Vec::new();
-            if n_keyframe > 0 {
-                assert!(std::path::Path::new(&pin_dir).exists());
-                for j in 0..n_keyframe {
-                    let target_path = format!("{}/{}.bin", pin_dir, j);
-                    target.push(
-                        read_f64_mat_as_f32::<3>(&target_path).expect("Failed to read target"),
-                    );
-                }
-            }
             let pin_ind = read_vec::<usize>(&pin_ind_path).expect("Failed to read pin index");
-            let pin_timing =
-                read_vec::<f64>(format!("{}/bin/pin-timing-{}.bin", args.path, i).as_str())
-                    .unwrap_or_else(|_| Vec::new());
             assert_eq!(pin_ind.len(), n_pin as usize);
-            assert_eq!(pin_timing.len(), target.len());
 
-            let n_spin = read_usize(count, "spin");
-            let mut spin = Vec::new();
-            if n_spin > 0 {
-                let spin_path = format!("{}/spin/spin-{}.toml", args.path, i);
-                let content = fs::read_to_string(spin_path).expect("Failed to read spin");
-                let parsed: Value = content.parse::<Value>().expect("Failed to parse spin");
-                for j in 0..n_spin {
-                    let spin_title = format!("spin-{}", j);
-                    let entry = parsed.get(&spin_title).expect("Failed to read spin");
-                    let center_x = read_f32(entry, "center_x");
-                    let center_y = read_f32(entry, "center_y");
-                    let center_z = read_f32(entry, "center_z");
-                    let axis_x = read_f32(entry, "axis_x");
-                    let axis_y = read_f32(entry, "axis_y");
-                    let axis_z = read_f32(entry, "axis_z");
-                    let angular_velocity = read_f32(entry, "angular_velocity");
-                    let t_start = read_f64(entry, "t_start");
-                    let t_end = read_f64(entry, "t_end");
-                    let center = Vector3::new(center_x, center_y, center_z);
-                    let axis = Vector3::new(axis_x, axis_y, axis_z);
-                    spin.push(Spin {
-                        center,
-                        axis,
-                        angular_velocity,
-                        t_start,
-                        t_end,
-                    });
+            // Read operations in order
+            let mut operations = Vec::new();
+            for j in 0..operation_count {
+                let op_title = format!("pin-{}-op-{}", i, j);
+                let op_entry = parsed
+                    .get(&op_title)
+                    .unwrap_or_else(|| panic!("Failed to read operation {} for pin {}", j, i));
+
+                let op_type = read_string(op_entry, "type");
+
+                match op_type.as_str() {
+                    "move_by" => {
+                        let t_start = read_f64(op_entry, "t_start");
+                        let t_end = read_f64(op_entry, "t_end");
+                        let transition = read_string(op_entry, "transition");
+                        let delta_path = format!("{}/bin/pin-{}-op-{}.bin", args.path, i, j);
+                        let delta = read_mat_from_file::<f64, 3>(&delta_path)
+                            .expect("Failed to read move_by delta")
+                            .map(|x| x as f32);
+                        operations.push(PinOperation::MoveBy {
+                            delta,
+                            t_start,
+                            t_end,
+                            transition,
+                        });
+                    }
+                    "move_to" => {
+                        let t_start = read_f64(op_entry, "t_start");
+                        let t_end = read_f64(op_entry, "t_end");
+                        let transition = read_string(op_entry, "transition");
+                        let target_path = format!("{}/bin/pin-{}-op-{}.bin", args.path, i, j);
+                        let target = read_mat_from_file::<f64, 3>(&target_path)
+                            .expect("Failed to read move_to target")
+                            .map(|x| x as f32);
+                        operations.push(PinOperation::MoveTo {
+                            target,
+                            t_start,
+                            t_end,
+                            transition,
+                        });
+                    }
+                    "spin" => {
+                        let center_x = read_f32(op_entry, "center_x");
+                        let center_y = read_f32(op_entry, "center_y");
+                        let center_z = read_f32(op_entry, "center_z");
+                        let axis_x = read_f32(op_entry, "axis_x");
+                        let axis_y = read_f32(op_entry, "axis_y");
+                        let axis_z = read_f32(op_entry, "axis_z");
+                        let angular_velocity = read_f32(op_entry, "angular_velocity");
+                        let t_start = read_f64(op_entry, "t_start");
+                        let t_end = read_f64(op_entry, "t_end");
+                        let center = Vector3::new(center_x, center_y, center_z);
+                        let axis = Vector3::new(axis_x, axis_y, axis_z);
+                        operations.push(PinOperation::Spin {
+                            center,
+                            axis,
+                            angular_velocity,
+                            t_start,
+                            t_end,
+                        });
+                    }
+                    "scale" => {
+                        let center_x = read_f32(op_entry, "center_x");
+                        let center_y = read_f32(op_entry, "center_y");
+                        let center_z = read_f32(op_entry, "center_z");
+                        let center = Vector3::new(center_x, center_y, center_z);
+                        let factor = read_f32(op_entry, "factor");
+                        let t_start = read_f64(op_entry, "t_start");
+                        let t_end = read_f64(op_entry, "t_end");
+                        let transition = read_string(op_entry, "transition");
+                        operations.push(PinOperation::Scale {
+                            center,
+                            factor,
+                            t_start,
+                            t_end,
+                            transition,
+                        });
+                    }
+                    _ => panic!("Unknown operation type: {}", op_type),
                 }
             }
+
             pin.push(Pin {
                 index: pin_ind,
-                timing: pin_timing,
-                target,
-                unpin,
-                transition,
+                operations,
+                unpin_time,
                 pull_w,
-                spin,
             });
         }
 
@@ -389,8 +435,9 @@ impl Scene {
                 let mut normal = Vector3::new(nx, ny, nz);
                 normal.normalize_mut();
                 let position =
-                    read_f64_mat_as_f32::<3>(&format!("{}/bin/wall-pos-{}.bin", args.path, i))
-                        .expect("Failed to read pos_path");
+                    read_mat_from_file::<f64, 3>(&format!("{}/bin/wall-pos-{}.bin", args.path, i))
+                        .expect("Failed to read pos_path")
+                        .map(|x| x as f32);
                 let wall_timing =
                     read_vec::<f64>(&format!("{}/bin/wall-timing-{}.bin", args.path, i))
                         .expect("Failed to read wall timing");
@@ -420,9 +467,12 @@ impl Scene {
             let transition = read_string(count, "transition");
             let n_keyframe = read_usize(count, "keyframe");
             if n_keyframe > 0 {
-                let center =
-                    read_f64_mat_as_f32::<3>(&format!("{}/bin/sphere-pos-{}.bin", args.path, i))
-                        .expect("Failed to read sphere pos_path");
+                let center = read_mat_from_file::<f64, 3>(&format!(
+                    "{}/bin/sphere-pos-{}.bin",
+                    args.path, i
+                ))
+                .expect("Failed to read sphere pos_path")
+                .map(|x| x as f32);
                 let radius = read_vec::<f32>(&format!("{}/bin/sphere-radius-{}.bin", args.path, i))
                     .expect("Failed to read sphere radius");
                 let timing = read_vec::<f64>(&format!("{}/bin/sphere-timing-{}.bin", args.path, i))
@@ -557,7 +607,6 @@ impl Scene {
         face_area: &[f32],
         tet_volume: &[f32],
     ) {
-        // Write the summary next to param.toml in the session directory
         let summary_path = format!("{}/param_summary.txt", args.path);
         let mut file = match File::create(&summary_path) {
             Ok(f) => f,
@@ -569,7 +618,6 @@ impl Scene {
 
         let mut content = String::new();
 
-        // Write Shell/Triangle parameters summary
         if self.tri.ncols() > 0 {
             content.push_str(&format!(
                 "=== Shells ({} elements) ===\n\n",
@@ -577,7 +625,6 @@ impl Scene {
             ));
             self.write_param_stats(&mut content, &self.tri_param, self.tri.ncols());
 
-            // Add mass and area statistics for shells
             if !props.face.is_empty() && !face_area.is_empty() {
                 let masses: Vec<f32> = props.face.iter().map(|p| p.mass).collect();
                 if !masses.is_empty() {
@@ -608,7 +655,6 @@ impl Scene {
             content.push('\n');
         }
 
-        // Write Solid/Tetrahedral parameters summary
         if self.tet.ncols() > 0 {
             content.push_str(&format!(
                 "=== Solids ({} elements) ===\n\n",
@@ -616,7 +662,6 @@ impl Scene {
             ));
             self.write_param_stats(&mut content, &self.tet_param, self.tet.ncols());
 
-            // Add mass and volume statistics for solids
             if !props.tet.is_empty() {
                 let masses: Vec<f32> = props.tet.iter().map(|p| p.mass).collect();
                 let min_mass = masses.iter().cloned().fold(f32::INFINITY, f32::min);
@@ -641,12 +686,10 @@ impl Scene {
             content.push('\n');
         }
 
-        // Write Rod parameters summary
         if self.rod.ncols() > 0 {
             content.push_str(&format!("=== Rods ({} elements) ===\n\n", self.rod.ncols()));
             self.write_param_stats(&mut content, &self.rod_param, self.rod.ncols());
 
-            // Add mass statistics for rods (only for actual rod elements, not shell edges)
             let rod_count = self.rod.ncols().min(props.edge.len());
             if rod_count > 0 {
                 let rod_props = &props.edge[0..rod_count];
@@ -666,7 +709,6 @@ impl Scene {
             content.push('\n');
         }
 
-        // Write Static object parameters summary
         if self.static_tri.ncols() > 0 {
             content.push_str(&format!(
                 "=== Static Objects ({} elements) ===\n\n",
@@ -692,7 +734,6 @@ impl Scene {
         for (name, values) in params {
             match values {
                 ParamValueList::Model(models) => {
-                    // Count occurrences of each model type
                     let mut model_counts = HashMap::new();
                     for model in models {
                         *model_counts.entry(format!("{:?}", model)).or_insert(0) += 1;
@@ -720,8 +761,6 @@ impl Scene {
 
                     let min = vals.iter().cloned().fold(f32::INFINITY, f32::min);
                     let max = vals.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
-
-                    // Use double precision for accurate mean calculation
                     let sum: f64 = vals.iter().map(|&v| v as f64).sum();
                     let mean = (sum / vals.len() as f64) as f32;
 
@@ -739,6 +778,8 @@ impl Scene {
     }
 
     pub fn make_props(&self, mesh: &MeshSet, face_area: &[f32], tet_volume: &[f32]) -> Props {
+        let mut edge_param_map: HashMap<EdgeParam, u32> = HashMap::new();
+        let mut edge_params = Vec::new();
         let edge = (0..self.rod.ncols())
             .map(|i| {
                 let mut ghat = None;
@@ -807,19 +848,31 @@ impl Scene {
                 assert_gt!(ghat, 0.0, "Contact gap must be non-negative");
                 let mass = density * length;
                 length *= length_factor;
-                EdgeProp {
-                    length,
-                    mass,
+
+                let param = EdgeParam {
+                    stiffness,
+                    bend,
                     ghat,
                     offset,
                     friction,
-                    stiffness,
-                    bend,
-                    ..Default::default()
+                };
+                let param_idx = *edge_param_map.entry(param).or_insert_with(|| {
+                    let new_idx = edge_params.len() as u32;
+                    edge_params.push(param);
+                    new_idx
+                });
+
+                EdgeProp {
+                    length,
+                    mass,
+                    fixed: false,
+                    param_index: param_idx,
                 }
             })
             .collect::<Vec<_>>();
 
+        let mut face_param_map: HashMap<FaceParam, u32> = HashMap::new();
+        let mut face_params = Vec::new();
         let face = (0..mesh.mesh.mesh.face.ncols())
             .map(|i| {
                 let area = face_area[i];
@@ -913,23 +966,35 @@ impl Scene {
                 assert_lt!(poiss_rat, 0.5, "Poisson's ratio must be less than 0.5");
                 let (mu, lambda) = convert_prop(young_mod, poiss_rat);
                 let mass = density * area;
-                FaceProp {
+
+                let param = FaceParam {
                     model,
-                    mass,
                     mu,
                     lambda,
-                    bend,
-                    shrink,
-                    strainlimit,
-                    area,
+                    friction,
                     ghat,
                     offset,
-                    friction,
-                    ..Default::default()
+                    bend,
+                    strainlimit,
+                    shrink,
+                };
+                let param_idx = *face_param_map.entry(param).or_insert_with(|| {
+                    let new_idx = face_params.len() as u32;
+                    face_params.push(param);
+                    new_idx
+                });
+
+                FaceProp {
+                    area,
+                    mass,
+                    fixed: false,
+                    param_index: param_idx,
                 }
             })
             .collect::<Vec<_>>();
 
+        let mut tet_param_map: HashMap<TetParam, u32> = HashMap::new();
+        let mut tet_params = Vec::new();
         let tet = (0..self.tet.ncols())
             .map(|i| {
                 let mut model = None;
@@ -973,17 +1038,31 @@ impl Scene {
                 assert_gt!(volume, 0.0, "Volume must be positive");
                 let (mu, lambda) = convert_prop(young_mod, poiss_rat);
                 let mass = density * volume;
+
+                let param = TetParam { model, mu, lambda };
+                let param_idx = *tet_param_map.entry(param).or_insert_with(|| {
+                    let new_idx = tet_params.len() as u32;
+                    tet_params.push(param);
+                    new_idx
+                });
+
                 TetProp {
-                    model,
-                    mu,
-                    lambda,
                     mass,
                     volume,
-                    ..Default::default()
+                    fixed: false,
+                    param_index: param_idx,
                 }
             })
             .collect::<Vec<_>>();
-        Props { edge, face, tet }
+
+        Props {
+            edge,
+            face,
+            tet,
+            edge_params,
+            face_params,
+            tet_params,
+        }
     }
 
     pub fn get_initial_velocity(&self) -> Matrix3xX<f32> {
@@ -996,7 +1075,10 @@ impl Scene {
             for (i, mut x) in vert.column_iter_mut().enumerate() {
                 x += self.displacement.column(self.static_vert_dmap[i] as usize);
             }
-            let face_prop = (0..self.static_tri.ncols())
+
+            let mut face_param_map: HashMap<FaceParam, u32> = HashMap::new();
+            let mut face_params = Vec::new();
+            let face_props = (0..self.static_tri.ncols())
                 .map(|i| {
                     let mut contact_gap = None;
                     let mut contact_offset = None;
@@ -1030,16 +1112,33 @@ impl Scene {
                     let friction = friction.unwrap();
                     assert_gt!(area, 0.0, "Area of static triangle {} is zero", i);
                     assert_gt!(ghat, 0.0, "Contact gap must be non-negative");
-                    FaceProp {
-                        area,
+
+                    let param = FaceParam {
+                        model: Model::default(),
+                        mu: 0.0,
+                        lambda: 0.0,
+                        friction,
                         ghat,
                         offset,
-                        friction,
-                        ..Default::default()
+                        bend: 0.0,
+                        strainlimit: 0.0,
+                        shrink: 1.0,
+                    };
+                    let param_idx = *face_param_map.entry(param).or_insert_with(|| {
+                        let new_idx = face_params.len() as u32;
+                        face_params.push(param);
+                        new_idx
+                    });
+
+                    FaceProp {
+                        area,
+                        mass: 0.0,
+                        fixed: false,
+                        param_index: param_idx,
                     }
                 })
                 .collect::<Vec<_>>();
-            make_collision_mesh(&vert, &self.static_tri, &face_prop)
+            make_collision_mesh(&vert, &self.static_tri, &face_props, &face_params)
         } else {
             CollisionMesh::new()
         };
@@ -1070,45 +1169,121 @@ impl Scene {
         let mut fix = Vec::new();
         let mut pull = Vec::new();
         for pin in self.pin.iter() {
+            if let Some(unpin_t) = pin.unpin_time {
+                if time >= unpin_t {
+                    continue; // Skip this pin, it's been unpinned
+                }
+            }
+
             for (i, &ind) in pin.index.iter().enumerate() {
                 let dx = self.displacement.column(self.vert_dmap[ind] as usize);
-                let (mut kinematic, mut position) = {
-                    if pin.timing.len() <= 1 {
-                        let position = Some(self.vert.column(ind).into());
-                        (false, position)
-                    } else {
-                        assert_eq!(pin.timing.len(), pin.target.len());
-                        let last_time = pin.timing[pin.timing.len() - 1];
-                        if time > last_time && pin.unpin {
-                            (true, None)
-                        } else {
-                            let coeff = calc_coefficient(time, &pin.timing, &pin.transition);
-                            let (j, k) = (coeff.0[0], coeff.0[1]);
-                            let w = coeff.1;
-                            let p0: Vector3<f32> = pin.target[j].column(i).into();
-                            let p1: Vector3<f32> = pin.target[k].column(i).into();
-                            (true, Some(p0 * (1.0 - w) + p1 * w))
+
+                let mut kinematic = false;
+                let mut position: Option<Vector3<f32>> = Some(self.vert.column(ind).into());
+
+                for op in pin.operations.iter() {
+                    match op {
+                        PinOperation::MoveBy {
+                            delta,
+                            t_start,
+                            t_end,
+                            transition,
+                        } => {
+                            if time < *t_start {
+                                // Before start time, no change
+                            } else if time >= *t_end {
+                                let p = position.unwrap_or_else(|| self.vert.column(ind).into());
+                                let delta_vec: Vector3<f32> = delta.column(i).into();
+                                position = Some(p + delta_vec);
+                                kinematic = true;
+                            } else {
+                                let mut progress = (time - t_start) / (t_end - t_start);
+                                if transition == "smooth" {
+                                    progress = progress * progress * (3.0 - 2.0 * progress);
+                                }
+                                let p = position.unwrap_or_else(|| self.vert.column(ind).into());
+                                let delta_vec: Vector3<f32> = delta.column(i).into();
+                                position = Some(p + delta_vec * progress as f32);
+                                kinematic = true;
+                            }
+                        }
+                        PinOperation::MoveTo {
+                            target,
+                            t_start,
+                            t_end,
+                            transition,
+                        } => {
+                            if time < *t_start {
+                                // Before start time, no change
+                            } else if time >= *t_end {
+                                position = Some(target.column(i).into());
+                                kinematic = true;
+                            } else {
+                                let mut progress = (time - t_start) / (t_end - t_start);
+                                if transition == "smooth" {
+                                    progress = progress * progress * (3.0 - 2.0 * progress);
+                                }
+                                let p = position.unwrap_or_else(|| self.vert.column(ind).into());
+                                let target_pos: Vector3<f32> = target.column(i).into();
+                                position = Some(
+                                    p * (1.0 - progress) as f32 + target_pos * progress as f32,
+                                );
+                                kinematic = true;
+                            }
+                        }
+                        PinOperation::Spin {
+                            center,
+                            axis,
+                            angular_velocity,
+                            t_start,
+                            t_end,
+                        } => {
+                            let t = time.min(*t_end);
+                            if t > *t_start {
+                                let angle = *angular_velocity as f64 / 180.0
+                                    * std::f64::consts::PI
+                                    * (t - t_start);
+                                let axis_norm = axis / axis.norm();
+                                let cos_theta = angle.cos() as f32;
+                                let sin_theta = angle.sin() as f32;
+                                let p = position.unwrap_or_else(|| self.vert.column(ind).into());
+                                let p = p - center;
+                                let rotated = p * cos_theta
+                                    + axis_norm.cross(&p) * sin_theta
+                                    + axis_norm * axis_norm.dot(&p) * (1.0 - cos_theta);
+                                position = Some(rotated + center);
+                                kinematic = true;
+                            }
+                        }
+                        PinOperation::Scale {
+                            center,
+                            factor,
+                            t_start,
+                            t_end,
+                            transition,
+                        } => {
+                            if time < *t_start {
+                                // Before start time, no scaling
+                            } else if time >= *t_end {
+                                let p = position.unwrap_or_else(|| self.vert.column(ind).into());
+                                let p = p - center;
+                                position = Some(p * (*factor) + center);
+                                kinematic = true;
+                            } else {
+                                let mut progress = (time - t_start) / (t_end - t_start);
+                                if transition == "smooth" {
+                                    progress = progress * progress * (3.0 - 2.0 * progress);
+                                }
+                                let current_factor = 1.0 + (*factor - 1.0) * progress as f32;
+                                let p = position.unwrap_or_else(|| self.vert.column(ind).into());
+                                let p = p - center;
+                                position = Some(p * current_factor + center);
+                                kinematic = true;
+                            }
                         }
                     }
-                };
-                for spin in pin.spin.iter() {
-                    let time = time.min(spin.t_end);
-                    if time > spin.t_start {
-                        let angle = spin.angular_velocity as f64 / 180.0
-                            * std::f64::consts::PI
-                            * (time - spin.t_start);
-                        let axis = spin.axis / spin.axis.norm();
-                        let cos_theta = angle.cos();
-                        let sin_theta = angle.sin();
-                        let p = position.unwrap_or_else(|| self.vert.column(ind).into());
-                        let p = p - spin.center;
-                        let rotated = p * (cos_theta as f32)
-                            + axis.cross(&p) * (sin_theta as f32)
-                            + axis * axis.dot(&p) * (1.0 - cos_theta as f32);
-                        position = Some(rotated + spin.center);
-                        kinematic = true;
-                    }
                 }
+
                 if let Some(position) = position {
                     if pin.pull_w > 0.0 {
                         pull.push(PullPair {

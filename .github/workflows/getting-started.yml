@@ -1,5 +1,6 @@
 # File: getting-started.yml
-# Author: Ryoichi Ando (ryoichi.ando@zozo.com)
+# Code: Claude Code and Codex
+# Review: Ryoichi Ando (ryoichi.ando@zozo.com)
 # License: Apache v2.0
 
 name: Getting Started
@@ -27,7 +28,7 @@ jobs:
         run: nvidia-smi
 
       - name: warmup
-        run: python3 warmup.py
+        run: python3 warmup.py --skip-confirmation
 
       - name: build
         run: ~/.cargo/bin/cargo build --release

@@ -1,5 +1,6 @@
 # File: _app_.py
-# Author: Ryoichi Ando (ryoichi.ando@zozo.com)
+# Code: Claude Code and Codex
+# Review: Ryoichi Ando (ryoichi.ando@zozo.com)
 # License: Apache v2.0
 
 import os
@@ -109,6 +110,25 @@ class App:
     def get_data_dirpath():
         import subprocess
 
+        # First try to read from .git/branch_name.txt
+        try:
+            branch_file = os.path.join(
+                os.path.dirname(os.path.abspath(__file__)),
+                "..",
+                ".git",
+                "branch_name.txt"
+            )
+            if os.path.exists(branch_file):
+                with open(branch_file, "r") as f:
+                    git_branch = f.read().strip()
+                    if git_branch:
+                        return os.path.expanduser(
+                            os.path.join("~", ".local", "share", "ppf-cts", f"git-{git_branch}")
+                        )
+        except:
+            pass
+
+        # Fallback to git command
         try:
             git_branch = subprocess.check_output(
                 ["git", "branch", "--show-current"],

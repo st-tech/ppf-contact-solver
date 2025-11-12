@@ -1,5 +1,6 @@
 // File: builder.rs
-// Author: Ryoichi Ando (ryoichi.ando@zozo.com)
+// Code: Claude Code and Codex
+// Review: Ryoichi Ando (ryoichi.ando@zozo.com)
 // License: Apache v2.0
 
 use super::bvh::{self, Aabb};
@@ -10,11 +11,15 @@ use super::data::{self, *};
 use super::{mesh::Mesh, MeshSet, SimArgs};
 use more_asserts::*;
 use na::{vector, Matrix2, Matrix2xX, Matrix3, Matrix3x2, Matrix3xX};
+use std::collections::HashMap;
 
 pub struct Props {
     pub edge: Vec<EdgeProp>,
     pub face: Vec<FaceProp>,
     pub tet: Vec<TetProp>,
+    pub edge_params: Vec<EdgeParam>,
+    pub face_params: Vec<FaceParam>,
+    pub tet_params: Vec<TetParam>,
 }
 
 pub fn build(
@@ -43,32 +48,18 @@ pub fn build(
         },
     };
 
-    let mut vertex_prop = vec![VertexProp::default(); n_vert];
-    for (i, pair) in constraint.fix.iter().enumerate() {
-        vertex_prop[pair.index as usize].fix_index = (i + 1) as u32;
-    }
-    for (i, pair) in constraint.pull.iter().enumerate() {
-        vertex_prop[pair.index as usize].pull_index = (i + 1) as u32;
-    }
+    // Update fixed flags based on vertex fix_index
     for (i, prop) in props.face.iter_mut().enumerate() {
-        if mesh
-            .mesh
-            .mesh
-            .face
-            .column(i)
-            .iter()
-            .all(|&j| vertex_prop[j].fix_index > 0)
-        {
-            prop.fixed = true;
-        }
-        for &j in mesh.mesh.mesh.face.column(i).iter() {
-            if i < n_shells || sim_args.include_face_mass {
-                vertex_prop[j].mass += prop.mass / 3.0;
-                vertex_prop[j].area += prop.area / 3.0;
+        if mesh.mesh.mesh.face.column(i).iter().all(|&j| {
+            let mut vp = VertexProp::default();
+            for (fi, pair) in constraint.fix.iter().enumerate() {
+                if pair.index as usize == j {
+                    vp.fix_index = (fi + 1) as u32;
+                }
             }
-            vertex_prop[j].ghat = prop.ghat;
-            vertex_prop[j].offset = prop.offset;
-            vertex_prop[j].friction = prop.friction;
+            vp.fix_index > 0
+        }) {
+            prop.fixed = true;
         }
     }
     for (i, prop) in props.edge.iter_mut().enumerate() {
@@ -78,17 +69,9 @@ pub fn build(
             .edge
             .column(i)
             .iter()
-            .all(|&j| vertex_prop[j].fix_index > 0)
+            .all(|&j| constraint.fix.iter().any(|pair| pair.index as usize == j))
         {
             prop.fixed = true;
-        }
-        if i < mesh.mesh.mesh.rod_count {
-            for &j in mesh.mesh.mesh.edge.column(i).iter() {
-                vertex_prop[j].mass += prop.mass / 2.0;
-                vertex_prop[j].ghat = prop.ghat;
-                vertex_prop[j].offset = prop.offset;
-                vertex_prop[j].friction = vertex_prop[j].friction.max(prop.friction);
-            }
         }
     }
     for (i, prop) in props.tet.iter_mut().enumerate() {
@@ -98,16 +81,105 @@ pub fn build(
             .tet
             .column(i)
             .iter()
-            .all(|&j| vertex_prop[j].fix_index > 0)
+            .all(|&j| constraint.fix.iter().any(|pair| pair.index as usize == j))
         {
             prop.fixed = true;
         }
-        for &j in mesh.mesh.mesh.tet.column(i).iter() {
-            vertex_prop[j].mass += prop.mass / 4.0;
-            vertex_prop[j].volume += prop.volume / 4.0;
+    }
+
+    // Props now contains final props and params directly
+    let edge_props = &props.edge;
+    let face_props = &props.face;
+    let tet_props = &props.tet;
+    let edge_params = &props.edge_params;
+    let face_params = &props.face_params;
+    let tet_params = &props.tet_params;
+
+    // Build vertex props and params
+    let mut vertex_prop = vec![VertexProp::default(); n_vert];
+    let mut temp_vertex_params = Vec::new();
+    for (i, pair) in constraint.fix.iter().enumerate() {
+        vertex_prop[pair.index as usize].fix_index = (i + 1) as u32;
+    }
+    for (i, pair) in constraint.pull.iter().enumerate() {
+        vertex_prop[pair.index as usize].pull_index = (i + 1) as u32;
+    }
+
+    // Aggregate vertex params from faces and edges
+    for (i, face_prop) in face_props.iter().enumerate() {
+        for &j in mesh.mesh.mesh.face.column(i).iter() {
+            if i < n_shells || sim_args.include_face_mass {
+                vertex_prop[j].mass += face_prop.mass / 3.0;
+                vertex_prop[j].area += face_prop.area / 3.0;
+            }
         }
     }
-    let mut hinge_prop = Vec::new();
+    for (i, edge_prop) in edge_props.iter().enumerate() {
+        if i < mesh.mesh.mesh.rod_count {
+            for &j in mesh.mesh.mesh.edge.column(i).iter() {
+                vertex_prop[j].mass += edge_prop.mass / 2.0;
+            }
+        }
+    }
+    for (i, tet_prop) in tet_props.iter().enumerate() {
+        for &j in mesh.mesh.mesh.tet.column(i).iter() {
+            vertex_prop[j].mass += tet_prop.mass / 4.0;
+            vertex_prop[j].volume += tet_prop.volume / 4.0;
+        }
+    }
+
+    // Build vertex params by aggregating from face/edge params
+    let mut vertex_param_map: HashMap<VertexParam, u32> = HashMap::new();
+    for (j, vp) in vertex_prop.iter_mut().enumerate() {
+        let mut ghat = 0.0f32;
+        let mut offset = 0.0f32;
+        let mut friction = 0.0f32;
+        let mut found = false;
+
+        // Aggregate from faces
+        for &fi in mesh.mesh.neighbor.vertex.face[j].iter() {
+            if fi < face_props.len() {
+                let face_prop = &face_props[fi];
+                let face_param = &face_params[face_prop.param_index as usize];
+                ghat = face_param.ghat;
+                offset = face_param.offset;
+                friction = friction.max(face_param.friction);
+                found = true;
+            }
+        }
+
+        // Aggregate from edges (for rods)
+        for &ei in mesh.mesh.neighbor.vertex.edge[j].iter() {
+            if ei < mesh.mesh.mesh.rod_count && ei < edge_props.len() {
+                let edge_prop = &edge_props[ei];
+                let edge_param = &edge_params[edge_prop.param_index as usize];
+                ghat = edge_param.ghat;
+                offset = edge_param.offset;
+                friction = friction.max(edge_param.friction);
+                found = true;
+            }
+        }
+
+        if found {
+            let vparam = VertexParam {
+                ghat,
+                offset,
+                friction,
+            };
+            let param_idx = *vertex_param_map.entry(vparam).or_insert_with(|| {
+                let new_idx = temp_vertex_params.len() as u32;
+                temp_vertex_params.push(vparam);
+                new_idx
+            });
+            vp.param_index = param_idx;
+        }
+    }
+
+    // Build hinge props and params
+    let mut temp_hinge_props = Vec::new();
+    let mut temp_hinge_params = Vec::new();
+    let mut hinge_param_map: HashMap<HingeParam, u32> = HashMap::new();
+
     for (i, hinge) in mesh.mesh.mesh.hinge.column_iter().enumerate() {
         let x = vertex.column(hinge[0]) - vertex.column(hinge[1]);
         let length = x.norm();
@@ -117,31 +189,46 @@ pub fn build(
         let mut area_sum = 0.0;
         let mut all_fixed = true;
         for &j in mesh.mesh.neighbor.hinge.face[i].iter() {
-            let face_prop = props.face[j];
+            let face_prop = &face_props[j];
+            let face_param = &face_params[face_prop.param_index as usize];
             all_fixed = all_fixed && face_prop.fixed;
-            offset_sum += face_prop.area * face_prop.offset;
-            ghat_sum += face_prop.area * face_prop.ghat;
-            bend_sum += face_prop.area * face_prop.bend;
+            offset_sum += face_prop.area * face_param.offset;
+            ghat_sum += face_prop.area * face_param.ghat;
+            bend_sum += face_prop.area * face_param.bend;
             area_sum += face_prop.area;
         }
         assert_gt!(area_sum, 0.0);
-        let offset = offset_sum / area_sum;
-        let ghat = ghat_sum / area_sum;
-        let bend = if all_fixed { 0.0 } else { bend_sum / area_sum };
-        hinge_prop.push(HingeProp {
+        let hparam = HingeParam {
+            bend: if all_fixed { 0.0 } else { bend_sum / area_sum },
+            ghat: ghat_sum / area_sum,
+            offset: offset_sum / area_sum,
+        };
+        let param_idx = *hinge_param_map.entry(hparam).or_insert_with(|| {
+            let new_idx = temp_hinge_params.len() as u32;
+            temp_hinge_params.push(hparam);
+            new_idx
+        });
+        temp_hinge_props.push(HingeProp {
             fixed: all_fixed,
             length,
-            bend,
-            ghat,
-            offset,
+            param_index: param_idx,
         });
     }
+
     let prop_set = PropSet {
         vertex: CVec::from(vertex_prop.as_ref()),
-        edge: CVec::from(props.edge.as_ref()),
-        face: CVec::from(props.face.as_ref()),
-        hinge: CVec::from(hinge_prop.as_ref()),
-        tet: CVec::from(props.tet.as_ref()),
+        edge: CVec::from(edge_props.as_ref()),
+        face: CVec::from(face_props.as_ref()),
+        hinge: CVec::from(temp_hinge_props.as_ref()),
+        tet: CVec::from(tet_props.as_ref()),
+    };
+
+    let param_arrays = ParamArrays {
+        vertex: CVec::from(temp_vertex_params.as_slice()),
+        edge: CVec::from(edge_params.as_slice()),
+        face: CVec::from(face_params.as_slice()),
+        hinge: CVec::from(temp_hinge_params.as_slice()),
+        tet: CVec::from(tet_params.as_slice()),
     };
 
     let n_surface_vert = mesh.mesh.mesh.surface_vert_count;
@@ -162,15 +249,10 @@ pub fn build(
                 vertex.column(f[1]),
                 vertex.column(f[2]),
             );
-            let (lx0, lx1) = (
-                (x1 - x0).norm(),
-                (x2 - x0).norm(),
-            );
-            let (ly0, ly1) = (
-                (y1 - y0).norm(),
-                (y2 - y0).norm(),
-            );
-            let shrink_factor = props.face[i].shrink;
+            let (lx0, lx1) = ((x1 - x0).norm(), (x2 - x0).norm());
+            let (ly0, ly1) = ((y1 - y0).norm(), (y2 - y0).norm());
+            let face_param = &face_params[face_props[i].param_index as usize];
+            let shrink_factor = face_param.shrink;
             let d_mat = Matrix2::<f32>::from_columns(&[
                 shrink_factor * ly0 * (x1 - x0) / lx0,
                 shrink_factor * ly1 * (x2 - x0) / lx1,
@@ -187,10 +269,7 @@ pub fn build(
                 vertex.column(f[1]),
                 vertex.column(f[2]),
             );
-            let d_mat = Matrix3x2::<f32>::from_columns(&[
-                (x1 - x0),
-                (x2 - x0),
-            ]);
+            let d_mat = Matrix3x2::<f32>::from_columns(&[(x1 - x0), (x2 - x0)]);
             let e1 = d_mat.column(0).cross(&d_mat.column(1));
             let e2 = e1.cross(&d_mat.column(0)).normalize();
             let proj_mat =
@@ -208,11 +287,7 @@ pub fn build(
             vertex.column(tet[2]),
             vertex.column(tet[3]),
         );
-        let mat = Matrix3::<f32>::from_columns(&[
-            (x1 - x0),
-            (x2 - x0),
-            (x3 - x0),
-        ]);
+        let mat = Matrix3::<f32>::from_columns(&[(x1 - x0), (x2 - x0), (x3 - x0)]);
         if let Some(inv_mat) = mat.try_inverse() {
             inv_rest3x3.push(inv_mat);
         } else {
@@ -385,10 +460,11 @@ pub fn build(
     data::DataSet {
         vertex,
         mesh: mesh_info,
+        prop: prop_set,
+        param_arrays,
         inv_rest2x2,
         inv_rest3x3,
         constraint,
-        prop: prop_set,
         bvh: bvh_set,
         fixed_index_table: CVecVec::from(&fixed_index_table[..]),
         transpose_table: CVecVec::from(&transpose_table[..]),
@@ -536,7 +612,8 @@ pub fn convert_prop(young_mod: f32, poiss_rat: f32) -> (f32, f32) {
 pub fn make_collision_mesh(
     vertex: &Matrix3xX<f32>,
     face: &Matrix3xX<usize>,
-    face_prop: &[FaceProp],
+    face_props: &[FaceProp],
+    face_params: &[FaceParam],
 ) -> CollisionMesh {
     let mesh = Mesh::new(
         Matrix2xX::<usize>::zeros(0),
@@ -561,54 +638,84 @@ pub fn make_collision_mesh(
     let n_vert = vertex.ncols();
     let n_edge = mesh.mesh.edge.ncols();
     let n_face = face.ncols();
-    assert_eq!(n_face, face_prop.len());
+    assert_eq!(n_face, face_props.len());
 
-    let mut vertex_prop = vec![
-        VertexProp {
-            ..Default::default()
-        };
-        n_vert
-    ];
-    let mut edge_prop = vec![
-        EdgeProp {
-            ..Default::default()
-        };
-        n_edge
-    ];
-    for (i, prop) in edge_prop.iter_mut().enumerate() {
+    // Build edge props and params
+    let mut edge_param_map: HashMap<EdgeParam, u32> = HashMap::new();
+    let mut unique_edge_params = Vec::new();
+    let mut collision_edge_props = Vec::new();
+
+    for i in 0..n_edge {
         let mut ghat_sum = 0.0;
         let mut offset_sum = 0.0;
         let mut friction_sum = 0.0;
         let mut area_sum = 0.0;
         for &j in mesh.neighbor.edge.face[i].iter() {
-            let face_prop = &face_prop[j];
-            ghat_sum += face_prop.ghat * face_prop.area;
-            offset_sum += face_prop.offset * face_prop.area;
-            friction_sum += face_prop.friction * face_prop.area;
+            let face_prop = &face_props[j];
+            let face_param = &face_params[face_prop.param_index as usize];
+            ghat_sum += face_param.ghat * face_prop.area;
+            offset_sum += face_param.offset * face_prop.area;
+            friction_sum += face_param.friction * face_prop.area;
             area_sum += face_prop.area;
         }
         assert_gt!(area_sum, 0.0);
-        prop.ghat = ghat_sum / area_sum;
-        prop.offset = offset_sum / area_sum;
-        prop.friction = friction_sum / area_sum;
+        let param = EdgeParam {
+            stiffness: 0.0,
+            bend: 0.0,
+            ghat: ghat_sum / area_sum,
+            offset: offset_sum / area_sum,
+            friction: friction_sum / area_sum,
+        };
+        let param_idx = *edge_param_map.entry(param).or_insert_with(|| {
+            let new_idx = unique_edge_params.len() as u32;
+            unique_edge_params.push(param);
+            new_idx
+        });
+        collision_edge_props.push(EdgeProp {
+            length: 0.0,
+            mass: 0.0,
+            fixed: false,
+            param_index: param_idx,
+        });
     }
 
-    for (i, prop) in vertex_prop.iter_mut().enumerate() {
+    // Build vertex props and params
+    let mut vertex_param_map: HashMap<VertexParam, u32> = HashMap::new();
+    let mut unique_vertex_params = Vec::new();
+    let mut collision_vertex_props = Vec::new();
+
+    for i in 0..n_vert {
         let mut ghat_sum = 0.0;
         let mut offset_sum = 0.0;
         let mut friction_sum = 0.0;
         let mut area_sum = 0.0;
         for &j in mesh.neighbor.vertex.face[i].iter() {
-            let face_prop = &face_prop[j];
-            ghat_sum += face_prop.ghat * face_prop.area;
-            offset_sum += face_prop.offset * face_prop.area;
-            friction_sum += face_prop.friction * face_prop.area;
+            let face_prop = &face_props[j];
+            let face_param = &face_params[face_prop.param_index as usize];
+            ghat_sum += face_param.ghat * face_prop.area;
+            offset_sum += face_param.offset * face_prop.area;
+            friction_sum += face_param.friction * face_prop.area;
             area_sum += face_prop.area;
         }
         assert_gt!(area_sum, 0.0);
-        prop.ghat = ghat_sum / area_sum;
-        prop.offset = offset_sum / area_sum;
-        prop.friction = friction_sum / area_sum;
+        let param = VertexParam {
+            ghat: ghat_sum / area_sum,
+            offset: offset_sum / area_sum,
+            friction: friction_sum / area_sum,
+        };
+        let param_idx = *vertex_param_map.entry(param).or_insert_with(|| {
+            let new_idx = unique_vertex_params.len() as u32;
+            unique_vertex_params.push(param);
+            new_idx
+        });
+        collision_vertex_props.push(VertexProp {
+            area: 0.0,
+            volume: 0.0,
+            mass: 0.0,
+            fix_index: 0,
+            pull_index: 0,
+            param_index: param_idx,
+        });
     }
 
     CollisionMesh {
@@ -638,9 +745,14 @@ pub fn make_collision_mesh(
         face_bvh: build_bvh(vertex, Some(&mesh.mesh.face)),
         edge_bvh: build_bvh(vertex, Some(&mesh.mesh.edge)),
         prop: CollisionMeshPropSet {
-            vertex: CVec::from(vertex_prop.as_slice()),
-            edge: CVec::from(edge_prop.as_slice()),
-            face: CVec::from(face_prop),
+            vertex: CVec::from(collision_vertex_props.as_slice()),
+            edge: CVec::from(collision_edge_props.as_slice()),
+            face: CVec::from(face_props),
+        },
+        param_arrays: CollisionMeshParamArrays {
+            vertex: CVec::from(unique_vertex_params.as_slice()),
+            face: CVec::from(face_params),
+            edge: CVec::from(unique_edge_params.as_slice()),
         },
         neighbor,
     }
