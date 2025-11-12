@@ -1,9 +1,9 @@
-# File: ribbon.yml
+# File: five-twist.yml
 # Code: Claude Code and Codex
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
 # License: Apache v2.0
 
-name: ribbon.ipynb
+name: five-twist.ipynb
 
 on:
   workflow_dispatch:
@@ -37,7 +37,7 @@ jobs:
       AWS_REGION: ${{ github.event.inputs.region }}
       INSTANCE_TYPE: ${{ github.event.inputs.instance_type }}
       BRANCH: ${{ github.ref_name }}
-      EXAMPLE: ribbon
+      EXAMPLE: five-twist
       WORKDIR: /home/ubuntu
       USER: ubuntu
 
