@@ -285,7 +285,6 @@ The behaviors can be changed through the settings.
 
 - A list of parameters used in `param.set(key,value)` is documented here: [(Global Parameters)](https://st-tech.github.io/ppf-contact-solver/global_parameters.html) [(Object Parameters)](https://st-tech.github.io/ppf-contact-solver/object_parameters.html).
 
-> [!NOTE]
 > ⚠️ Please note that our Python APIs are subject to breaking changes as this repository undergoes frequent iterations.
 
 ## 🔍 Obtaining Logs
@@ -504,14 +503,14 @@ Below, we describe how to deploy our solver on major cloud services. These instr
 - Select our template [(Link)](https://cloud.vast.ai/?creator_id=85288&name=ppf-contact-solver).
 - Create an instance and click `Open` button.
 
-> ⚠️ Note: `Open` button URL is public (not secure); only for testing purposes and should not be used for production use. For better security, duplicate the template and close the port, then use SSH port forwarding instead.
+> ⚠️ `Open` button URL is public (not secure); only for testing purposes and should not be used for production use. For better security, duplicate the template and close the port, then use SSH port forwarding instead.
 
 ### 📦 Deploying on [RunPod](https://runpod.io)
 
 - Follow this link [(Link)](https://runpod.io/console/deploy?template=we8ta2hy86&ref=bhy3csxy) and deploy an instance using our template.
 - Click `Connect` button and open the `HTTP Services` link.
 
-> ⚠️ Note: `HTTP Services` URL is public (not secure); only for testing purposes and should not be used for production use. For better security, duplicate the template and close the port, then use SSH port forwarding instead.
+> ⚠️ `HTTP Services` URL is public (not secure); only for testing purposes and should not be used for production use. For better security, duplicate the template and close the port, then use SSH port forwarding instead.
 
 ### 📦 Deploying on [Scaleway](https://www.scaleway.com/en/)
 
