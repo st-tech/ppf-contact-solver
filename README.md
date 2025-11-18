@@ -275,7 +275,7 @@ session.animate()
 session.export.animation()
 ```
 
-<img src="./asset/image/drape.jpg" alt="drape">
+<img src="./asset/image/drape-preview.webp" alt="drape">
 
 ## 📚 Python APIs and Parameters
 
