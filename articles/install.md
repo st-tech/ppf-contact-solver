@@ -29,7 +29,8 @@ $MY_CONTAINER_NAME = "ppf-contact-solver"  # Container name
 
 docker run -it `
     --gpus all `
-    -p ${MY_WEB_PORT}:8080 `
+    -p ${MY_WEB_PORT}:${MY_WEB_PORT} `
+    -e WEB_PORT=${MY_WEB_PORT} `
     -e TERM `
     -e TZ=$MY_TIME_ZONE `
     -e LANG=en_US.UTF-8 `
@@ -50,7 +51,8 @@ MY_CONTAINER_NAME=ppf-contact-solver  # Container name
 
 docker run -it \
     --gpus all \
-    -p $MY_WEB_PORT:8080 \
+    -p $MY_WEB_PORT:$MY_WEB_PORT \
+    -e WEB_PORT=$MY_WEB_PORT \
     -e TERM -e TZ=$MY_TIME_ZONE \
     -e LANG=en_US.UTF-8 \
     --hostname ppf-dev \
