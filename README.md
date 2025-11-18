@@ -1,24 +1,23 @@
 # ZOZO's Contact Solver 🫶
 
 A contact solver for physics-based simulations
-involving 👚 shells, 🪵 solids and 🪢 rods. All made by ZOZO.
+involving 👚 shells, 🪵 solids and 🪢 rods. All made by [ZOZO, Inc.](https://corp.zozo.com/en/)
 
 [![Getting Started](https://github.com/st-tech/ppf-contact-solver/actions/workflows/getting-started.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/getting-started.yml)
 [![All Examples](https://github.com/st-tech/ppf-contact-solver/actions/workflows/run-all-once.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/run-all-once.yml)
 [![Python API Docs](https://github.com/st-tech/ppf-contact-solver/actions/workflows/make-docs.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/make-docs.yml)
 [![Docker Build](https://github.com/st-tech/ppf-contact-solver/actions/workflows/build-docker.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/build-docker.yml)
 ![solver_logo](./asset/image/teaser-image.jpg)
-  
 ## ✨ Highlights
 
-- **💪 Robust**: Contact resolutions are completely penetration-free. No snagging intersections.
+- **💪 Robust**: Contact resolutions are penetration-free. No snagging intersections.
 - **⏲ Scalable**: An extreme case includes beyond 180M contacts. Not just one million.
 - **🚲 Cache Efficient**: All on the GPU runs in single precision. No double precision.
-- **🥼 Bounded Inextensibility**: Cloth never extends beyond strict upper bounds, such as 1%.
-- **📐 Better Physical Accuracy**: Our deformable solver is driven by the Finite Element Method.
+- **🥼 Not Rubbery**: Triangles never extends beyond strict upper bounds (e.g., 1%).
+- **📐 Finite Element Method**: We use FEM for deformables and symbolic force jacobians.
 - **⚔️ Highly Stressed**: We run GitHub Actions to run stress tests [10 times in a row](#️-ten-consecutive-runs).
 - **🚀 Massively Parallel**: Both contact and elasticity solvers are run on the GPU.
-- **🐳 Docker Sealed**: Everything is compiled to work out of the box. The image is ~3.5GB.
+- **🐳 Docker Sealed**: All is pre-compiled and works out of the box. The image is ~3.5GB.
 - **🌐 JupyterLab Included**: Open your browser and run examples right away [(Video)](https://drive.google.com/file/d/1n068Ai_hlfgapf2xkAutOHo3PkLpJXA4/view).
 - **🐍 Documented Python APIs**: Our Python code is fully [docstringed](https://st-tech.github.io/ppf-contact-solver/frontend.html) and lintable [(Video)](https://drive.google.com/file/d/1vCM7kNgXdqQRBjVaoEb6KwIdRR21V7sV/view).
 - **☁️ Cloud-Ready**: Our solver can be seamlessly deployed on major cloud platforms.
@@ -67,15 +66,18 @@ involving 👚 shells, 🪵 solids and 🪢 rods. All made by ZOZO.
 - (2025.10.03) Massive refactor of the codebase [(Markdown)](./articles/refactor_202510.md). Note that this change includes breaking changes to our Python APIs.
 - (2025.08.09) Added a hindsight note in [eigensystem analysis](./articles/eigensys.md) to acknowledge prior work by [Poya et al. (2023)](https://romeric.github.io/).
 - (2025.05.01) Simulation states now can be saved and loaded [(Video)](https://drive.google.com/file/d/1aCEwVPbX_Am6bwj6NrwARS6K_IkT45c-/view).
+
+<details>
+<summary>More history records</summary>
 - (2025.04.02) Added 9 examples. See the [catalogue](#️-catalogue).
 - (2025.03.03) Added a [budget table on AWS](#-budget-table-on-aws).
 - (2025.02.28) Added a [reference branch and a Docker image of our TOG paper](#-technical-materials).
 - (2025.02.26) Added Floating Point-Rounding Errors in ACCD in [hindsight](./articles/hindsight.md).
 - (2025.02.07) Updated the [trapped example](./examples/trapped.ipynb) [(Video)](https://drive.google.com/file/d/1Qek0e0qBNWPlBb1hSOZ6o_e2Cqf5rGst/view) with squishy balls.
-
-<details>
-
-<summary>More history records</summary>
+- (2025.03.03) Added a [budget table on AWS](#-budget-table-on-aws).
+- (2025.02.28) Added a [reference branch and a Docker image of our TOG paper](#-technical-materials).
+- (2025.02.26) Added Floating Point-Rounding Errors in ACCD in [hindsight](./articles/hindsight.md).
+- (2025.02.07) Updated the [trapped example](./examples/trapped.ipynb) [(Video)](https://drive.google.com/file/d/1Qek0e0qBNWPlBb1hSOZ6o_e2Cqf5rGst/view) with squishy balls.
 - (2025.1.8) Added a [domino example](./examples/domino.ipynb) [(Video)](https://drive.google.com/file/d/1N9y8eZrjSQhAUhKwiO9w8jW_T18zPnYf/view).
 - (2025.1.5) Added a [single twist example](./examples/twist.ipynb) [(Video)](https://drive.google.com/file/d/1LDFKS-iBvl2uDdPVKaazQL25tYGEEyXr/view).
 - (2024.12.31) Added full documentation for Python APIs, parameters, and log files [(GitHub Pages)](https://st-tech.github.io/ppf-contact-solver).
@@ -85,7 +87,6 @@ involving 👚 shells, 🪵 solids and 🪢 rods. All made by ZOZO.
 - (2024.12.18) Added a [frictional contact example](./examples/friction.ipynb): armadillo sliding on the slope [(Video)](https://drive.google.com/file/d/12WGdfDTFIwCT0UFGEZzfmQreM6WSSHet/view)
 - (2024.12.18) Added a [hindsight](./articles/hindsight.md) noting that the tilt angle was not $30^\circ$, but rather $26.57^\circ$
 - (2024.12.16) Removed thrust dependencies to fix runtime errors for the driver version `560.94` [(Issue Link)](https://github.com/st-tech/ppf-contact-solver/issues/1)
-
 </details>
 
 ## 🎓 Technical Materials
@@ -133,17 +134,25 @@ Next, run the following command to start the container:
 #### 🪟 Windows (PowerShell)
 
 ```bash
-$MY_WEB_PORT = 8080  # Web port number for web interface
-$IMAGE_NAME = "ghcr.io/st-tech/ppf-contact-solver-compiled:latest" # Approx 3.5GB
-docker run --rm --gpus all -p ${MY_WEB_PORT}:8080 $IMAGE_NAME
+$MY_WEB_PORT = 8080  # Web port on your side
+$IMAGE_NAME = "ghcr.io/st-tech/ppf-contact-solver-compiled:latest"
+docker run --rm -it `
+  --gpus all `
+  -p ${MY_WEB_PORT}:${MY_WEB_PORT} `
+  -e WEB_PORT=${MY_WEB_PORT} `
+  $IMAGE_NAME # Image size ~3.5GB
 ```
 
 #### 🐧 Linux (Bash/Zsh)
 
 ```bash
-MY_WEB_PORT=8080  # Web port number for web interface
-IMAGE_NAME=ghcr.io/st-tech/ppf-contact-solver-compiled:latest # Approx 3.5GB
-docker run --rm --gpus all -p ${MY_WEB_PORT}:8080 $IMAGE_NAME
+MY_WEB_PORT=8080  # Web port on your side
+IMAGE_NAME=ghcr.io/st-tech/ppf-contact-solver-compiled:latest
+docker run --rm -it \
+  --gpus all \
+  -p ${MY_WEB_PORT}:${MY_WEB_PORT} \
+  -e WEB_PORT=${MY_WEB_PORT} \
+  $IMAGE_NAME # Image size ~3.5GB
 ```
 
 Wait for a while until the container becomes a steady state.
@@ -164,19 +173,19 @@ If you wish to build the docker image from scratch, please refer to the cleaner 
 ## 🐍 How To Use
 
 Our frontend is accessible through a browser using our built-in JupyterLab interface.
-All is set up when you open it for the first time.
+All is set up when you open it for the first time. **No complilation is needed.**
 Results can be interactively viewed through the browser and exported as needed.
 
 This allows you to interact with the simulator on your laptop while the actual simulation runs on a remote headless server over the internet.
 This means that **you don't have to own NVIDIA hardware**, but can rent it at [vast.ai](https://vast.ai) or [RunPod](https://www.runpod.io/) for less than $0.5 per hour.
-For example, this [(Video)](https://drive.google.com/file/d/1n068Ai_hlfgapf2xkAutOHo3PkLpJXA4/view) was recorded on a [vast.ai](https://vast.ai) instance.
+Actually, this [(Video)](https://drive.google.com/file/d/1n068Ai_hlfgapf2xkAutOHo3PkLpJXA4/view) was recorded on a [vast.ai](https://vast.ai) instance.
 The experience is good! 👍
 
 Our Python interface is designed with the following principles in mind:
 
 - **🛠️ In-Pipeline Tri/Tet Creation**: Depending on external 3D/CAD softwares for triangulation or tetrahedralization makes dynamic resolution changes cumbersome. We provide handy `.triangulate()` and `.tetrahedralize()` calls to keep everything in-pipeline, allowing users to skip explicit mesh exports to 3D/CAD software.
 - **🚫 No Mesh Data Included**: Preparing mesh data using external tools can be cumbersome. Our frontend minimizes this effort by allowing meshes to be created on the fly or downloaded when needed.
-- **🔗 Method Chaining**: We adopt the method chaining style from JavaScript, making the API intuitive and easy to understand.
+- **🔗 Method Chaining**: We adopt the method chaining style from JavaScript, making the API intuitive to understand and read smoothly.
 - **📦 Single Import for Everything**: All frontend features are accessible by simply importing with `from frontend import App`.
 
 Here's an example of draping five sheets over a sphere with two corners pinned.
@@ -221,7 +230,7 @@ for i in range(5):
     # set fiber directions required for Baraff-Witkin
     obj.direction([1, 0, 0], [0, 0, 1])
 
-    # set the strainlimiting of 5%
+    # set the strict limit on maximum strain to 5% per triangle
     obj.param.set("strain-limit", 0.05)
 
 # add a sphere mesh at a lower position with jitter and set it static collider
@@ -230,7 +239,7 @@ scene.add("sphere").at(0, -0.5 - gap, 0).jitter().pin()
 # compile the scene and report stats
 scene = scene.build().report()
 
-# preview the initial scene
+# preview the initial scene, shows image left
 scene.preview()
 
 # create a new session with the compiled scene
@@ -242,7 +251,7 @@ session.param.set("frames", 100).set("dt", 0.01)
 # build this session
 session = session.build()
 
-# start the simulation and live-preview the results (image right)
+# start the simulation and live-preview the results, shows image right
 session.start().preview()
 
 # also show streaming logs
@@ -251,7 +260,7 @@ session.stream()
 # or interactively view the animation sequences
 session.animate()
 
-# export all simulated frames
+# export all simulated frames in (sequences of ply meshes + a video)
 session.export.animation()
 ```
 
@@ -340,7 +349,7 @@ This will output something like:
 
 If you would like to read `stderr`, you can do so using `session.get.stderr()` (if it exists).
 This returns `list[str]`.
-All the log files are available and can be fetched during the simulation.
+All the log files are updated in real-time and can be fetched right after the simulation starts; you don't have to wait until it finishes.
 
 ## 🖼️ Catalogue
 
@@ -477,7 +486,6 @@ Our contact solver is designed for heavy use in cloud services, enabling:
 
 Below, we describe how to deploy our solver on major cloud services. These instructions are up to date as of late 2024 and are subject to change.
 
-> [!NOTE]
 > ⚠️ For all the services below, don't forget to delete the instance after use, or you'll be charged for nothing. 💸
 
 ### 📦 Deploying on [vast.ai](https://vast.ai)
@@ -485,10 +493,14 @@ Below, we describe how to deploy our solver on major cloud services. These instr
 - Select our template [(Link)](https://cloud.vast.ai/?creator_id=85288&name=ppf-contact-solver).
 - Create an instance and click `Open` button.
 
+> ⚠️ Note: `Open` button URL is public (not secure); only for testing purposes and should not be used for production use. For better security, duplicate the template and close the port, then use SSH port forwarding instead.
+
 ### 📦 Deploying on [RunPod](https://runpod.io)
 
 - Follow this link [(Link)](https://runpod.io/console/deploy?template=we8ta2hy86&ref=bhy3csxy) and deploy an instance using our template.
 - Click `Connect` button and open the `HTTP Services` link.
+
+> ⚠️ Note: `HTTP Services` URL is public (not secure); only for testing purposes and should not be used for production use. For better security, duplicate the template and close the port, then use SSH port forwarding instead.
 
 ### 📦 Deploying on [Scaleway](https://www.scaleway.com/en/)
 
@@ -531,10 +543,9 @@ Below, we describe how to deploy our solver on major cloud services. These instr
 
 ## 📬 Contributing
 
-This repository is owned by [ZOZO, Inc.](https://corp.zozo.com/en/)
 We appreciate your interest in opening pull requests, but we are not ready to accept external contributions because doing so involves resolving copyright and licensing matters with [ZOZO, Inc.](https://corp.zozo.com/en/)
 For the time being, please open issues for bug reports.
-If you wish to extend the codebase, please fork the repository and work on your forked version.
+If you wish to extend the codebase, please fork the repository and work on it.
 Thank you!
 
 ## 👥 How This Was Coded
@@ -544,3 +555,4 @@ A large portion of this codebase was written by Ryoichi Ando (<ryoichi.ando@zozo
 ## 🙏 Acknowledgements
 
 The author thanks [ZOZO, Inc.](https://corp.zozo.com/en/) for permitting the release of the code and the team members for assisting with the internal paperwork for this project.
+This repository is owned by [ZOZO, Inc.](https://corp.zozo.com/en/)

@@ -4,18 +4,20 @@
 # License: Apache v2.0
 
 import os
+import platform
 import shutil
 import subprocess
 import sys
 
 
-def run(command, cwd="/tmp", use_sudo=False):
+def run(command, cwd="/tmp", use_sudo=False, check=True):
     if not os.path.exists("warmup.py"):
         print("Please run this script in the same directory as warmup.py")
         sys.exit(1)
     if use_sudo and shutil.which("sudo"):
         command = f"sudo {command}"
-    subprocess.run(command, shell=True, cwd=cwd)
+    result = subprocess.run(command, shell=True, cwd=cwd, check=check)
+    return result
 
 
 def get_venv_path():
@@ -70,7 +72,7 @@ def get_venv_pip():
 def run_in_venv(command):
     venv_path = get_venv_path()
     activate_cmd = f"source {venv_path}/bin/activate && {command}"
-    subprocess.run(activate_cmd, shell=True, executable="/bin/bash")
+    return subprocess.run(activate_cmd, shell=True, executable="/bin/bash")
 
 
 def create_clang_config():
@@ -144,7 +146,7 @@ def list_packages():
 
 
 def python_packages():
-    python_packages = [
+    return [
         "numpy",
         "libigl",
         "plyfile",
@@ -171,7 +173,6 @@ def python_packages():
         "python-lsp-ruff",
         "jupyterlab-code-formatter",
     ]
-    return python_packages
 
 
 def dump_python_requirements(path):
@@ -304,14 +305,15 @@ def install_oh_my_zsh():
         run("zsh -c exit")
 
         zshrc = os.path.expanduser("~/.zshrc")
+        venv_path = get_venv_path()
         with open(zshrc, "a") as f:
             f.write("\n# Added by warmup.py\n")
             f.write("export PATH=$HOME/.local/bin:$PATH\n")
             f.write("export PATH=$HOME/.cargo/bin:$PATH\n")
             f.write("export PATH=/usr/local/cuda/bin:$PATH\n")
-            f.write("export PYTHONPATH={script_dir}:$PYTHONPATH\n")
+            f.write(f"export PYTHONPATH={script_dir}:$PYTHONPATH\n")
             f.write("# Activate virtual environment\n")
-            f.write("source {venv_path}/bin/activate\n")
+            f.write(f"source {venv_path}/bin/activate\n")
 
 
 def install_sdf():
@@ -382,8 +384,14 @@ def setup():
 
     # Install Python packages in virtual environment
     print("Installing Python packages in virtual environment...")
-    run(f"{pip_path} install --upgrade pip")
-    run(f"{pip_path} install " + " ".join(python_packages()))
+    subprocess.run([pip_path, "install", "--upgrade", "pip"], check=True)
+
+    packages = python_packages()
+    print(f"Installing {len(packages)} Python packages...")
+    result = subprocess.run([pip_path, "install"] + packages, check=True)
+    if result.returncode == 0:
+        print(f"Successfully installed {len(packages)} packages")
+
     install_sdf()
 
     # Node.js installation (user-level)
@@ -507,7 +515,10 @@ def set_time():
 
 
 def start_jupyter():
-    run("pkill jupyter-lab")
+    import signal
+    import time
+
+    run("pkill jupyter-lab", check=False)
     script_dir = os.path.dirname(os.path.realpath(__file__))
     examples_dir = os.path.join(script_dir, "examples")
 
@@ -534,15 +545,110 @@ def start_jupyter():
 }"""
             f.write(lines)
 
-    try:
-        venv_python = get_venv_python()
-        command = f"{venv_python} -m jupyterlab -y --allow-root --no-browser --port=8080 --ip=0.0.0.0 --NotebookApp.token='' --NotebookApp.password='' --NotebookApp.allow_origin='*'"
-        env = os.environ.copy()
-        key = "PYTHONPATH"
-        env[key] = script_dir
-        subprocess.run(command, shell=True, cwd=examples_dir, env=env)
-    except KeyboardInterrupt:
-        print("jupyterlab shutdown")
+    # Get port from environment or default to 8080
+    web_port = os.environ.get("WEB_PORT", "8080")
+
+    # Setup log file
+    log_file = "/tmp/jupyter.log"
+
+    # Start JupyterLab in background
+    venv_python = get_venv_python()
+    command = f"{venv_python} -m jupyterlab -y --allow-root --no-browser --port={web_port} --ip=0.0.0.0 --NotebookApp.token='' --NotebookApp.password='' --NotebookApp.allow_origin='*'"
+    env = os.environ.copy()
+    env["PYTHONPATH"] = script_dir
+    env["PYTHONUNBUFFERED"] = "1"
+
+    # Open log file (keep it open for the subprocess, unbuffered)
+    with open(log_file, "w", buffering=1) as log_f:
+        process = subprocess.Popen(
+            command,
+            shell=True,
+            cwd=examples_dir,
+            env=env,
+            stdout=log_f,
+            stderr=subprocess.STDOUT,
+            bufsize=1,
+        )
+
+        # Signal handler for Ctrl-C
+        def signal_handler(sig, frame):
+            print("\n\nShutting down JupyterLab...")
+            process.terminate()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+            print("JupyterLab shutdown complete")
+            sys.exit(0)
+
+        signal.signal(signal.SIGINT, signal_handler)
+
+        # Monitor log and check for readiness
+        jupyter_ready = False
+        last_log_size = 0
+
+        print("Starting JupyterLab...")
+        sys.stdout.flush()
+
+        try:
+            while True:
+                # Check if process is still running
+                if process.poll() is not None:
+                    print("\nJupyterLab process exited unexpectedly")
+                    # Show the log file contents for debugging
+                    if os.path.exists(log_file):
+                        print("\nLog file contents:")
+                        print("=" * 60)
+                        with open(log_file) as f:
+                            print(f.read())
+                        print("=" * 60)
+                    break
+
+                # Check if jupyter is ready (only if not already confirmed)
+                if not jupyter_ready:
+                    # Read and display new log lines
+                    if os.path.exists(log_file):
+                        with open(log_file) as f:
+                            f.seek(last_log_size)
+                            new_lines = f.read()
+                            if new_lines:
+                                # Print new log output
+                                print(new_lines, end="")
+                                sys.stdout.flush()
+                                last_log_size = f.tell()
+
+                    try:
+                        import urllib.request
+
+                        urllib.request.urlopen(
+                            f"http://localhost:{web_port}", timeout=1
+                        )
+                        jupyter_ready = True
+                        # Show final message
+                        print()
+                        url = f"http://localhost:{web_port}"
+                        title = "==== JupyterLab Launched! 🚀 ===="
+                        shutdown = "Press Ctrl+C to shutdown"
+                        separator = "=" * 32
+
+                        # Calculate spacing to align all lines
+                        max_len = max(
+                            len(title), len(url), len(shutdown), len(separator)
+                        )
+                        print(" " * ((max_len - len(title)) // 2) + title)
+                        print(" " * ((max_len - len(url)) // 2) + url)
+                        print(" " * ((max_len - len(shutdown)) // 2) + shutdown)
+                        print(separator)
+                        sys.stdout.flush()
+                    except (OSError, Exception):
+                        pass  # Not ready yet, will try again next iteration
+
+                time.sleep(1)
+
+        except Exception as e:
+            print(f"\nError: {e}")
+            process.terminate()
+            process.wait()
 
 
 def build_docs():
@@ -553,7 +659,6 @@ def build_docs():
 
 def make_docs():
     from frontend import App
-    from frontend._param_ import app_param, object_param, ParamHolder
 
     # Generate global parameters documentation
     with open(os.path.join("docs", "global_parameters.rst"), "w") as file:
@@ -675,6 +780,13 @@ def export_log_sphinx():
 
 
 if __name__ == "__main__":
+    # Check architecture - only x86_64 is supported
+    machine = platform.machine().lower()
+    if machine not in ("x86_64", "amd64", "x64"):
+        print(f"Error: Architecture '{machine}' is not supported.")
+        print("This script only supports x86_64 architecture.")
+        sys.exit(1)
+
     if not os.path.exists(os.path.expanduser("~/.config")):
         os.makedirs(os.path.expanduser("~/.config"))
 
