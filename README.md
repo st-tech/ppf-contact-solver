@@ -8,6 +8,17 @@ involving 👚 shells, 🪵 solids and 🪢 rods. All made by [ZOZO, Inc.](https
 [![Python API Docs](https://github.com/st-tech/ppf-contact-solver/actions/workflows/make-docs.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/make-docs.yml)
 [![Docker Build](https://github.com/st-tech/ppf-contact-solver/actions/workflows/build-docker.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/build-docker.yml)
 ![solver_logo](./asset/image/teaser-image.jpg)
+
+## 👀 Quick Look
+
+🚀 Run a Docker command to get it running
+
+![glance-terminal](./asset/image/glance-terminal.webp)
+
+🌐 Click the URL and explore our examples
+
+![glance-jupyter](./asset/image/glance-jupyter.webp)
+
 ## ✨ Highlights
 
 - **💪 Robust**: Contact resolutions are penetration-free. No snagging intersections.
