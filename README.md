@@ -24,7 +24,7 @@ involving 👚 shells, 🪵 solids and 🪢 rods. All made by [ZOZO, Inc.](https
 - **💪 Robust**: Contact resolutions are penetration-free. No snagging intersections.
 - **⏲ Scalable**: An extreme case includes beyond 180M contacts. Not just one million.
 - **🚲 Cache Efficient**: All on the GPU runs in single precision. No double precision.
-- **🥼 Not Rubbery**: Triangles never extends beyond strict upper bounds (e.g., 1%).
+- **🥼 Not Rubbery**: Triangles never extend beyond strict upper bounds (e.g., 1%).
 - **📐 Finite Element Method**: We use FEM for deformables and symbolic force jacobians.
 - **⚔️ Highly Stressed**: We run GitHub Actions to run stress tests [10 times in a row](#️-ten-consecutive-runs).
 - **🚀 Massively Parallel**: Both contact and elasticity solvers are run on the GPU.
