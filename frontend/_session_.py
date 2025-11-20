@@ -467,15 +467,43 @@ fi
                     self._fixed_session.info.name,
                 )
 
-        print(f"Exporting animation to {path}")
+        # Check if frames are available
+        latest_frame = self._fixed_session.get.latest_frame()
+        if latest_frame == 0:
+            if Utils.busy():
+                print(
+                    "No frames available yet. Waiting for simulation to generate frames..."
+                )
+                # Wait for frames to become available
+                while Utils.busy() and self._fixed_session.get.latest_frame() == 0:
+                    time.sleep(1)
+                latest_frame = self._fixed_session.get.latest_frame()
+                if latest_frame == 0:
+                    print("Simulation finished but no frames were generated.")
+                    print(
+                        "Please ensure the simulation ran successfully and generated output frames."
+                    )
+                    return Zippable(
+                        path if os.path.exists(path) else self._fixed_session.info.path
+                    )
+            else:
+                print("No animation frames available to export.")
+                print(
+                    "Please run the simulation first using session.start() to generate frames."
+                )
+                return Zippable(
+                    path if os.path.exists(path) else self._fixed_session.info.path
+                )
+
+        # Only print export message in CI mode
+        if ci_name is not None:
+            print(f"Exporting animation to {path}")
         if os.path.exists(path):
             if clear:
                 shutil.rmtree(path)
         else:
             os.makedirs(path)
-        for i in tqdm(
-            range(self._fixed_session.get.latest_frame()), desc="export", ncols=70
-        ):
+        for i in tqdm(range(latest_frame), desc="export", ncols=70):
             self.frame(
                 os.path.join(path, f"frame_{i}.{ext}"),
                 i,
@@ -490,7 +518,8 @@ fi
             if Utils.in_jupyter_notebook():
                 from IPython.display import Video, display
 
-                display(Video(os.path.join(path, vid_name)))
+                display(Video(os.path.join(path, vid_name), embed=True))
+
             if ci_name is not None:
                 for file in os.listdir(path):
                     if file.endswith(".png"):
@@ -1117,6 +1146,15 @@ class FixedSession:
             return self.resume(max(frame), True, blocking)
 
         if self._cmd_path:
+            if load == 0:
+                export_path = os.path.join(
+                    "export",
+                    self._session.app_name,
+                    self.info.name,
+                )
+                if os.path.exists(export_path):
+                    shutil.rmtree(export_path)
+
             err_path = os.path.join(self.info.path, "error.log")
             log_path = os.path.join(self.info.path, "stdout.log")
             command = f"bash {self._cmd_path} --load {load}"
@@ -1431,6 +1469,8 @@ class FixedSession:
         if Utils.in_jupyter_notebook():
             import ipywidgets as widgets
 
+            from IPython.display import display
+
             fixed_scene = self.fixed_scene
             if fixed_scene is None:
                 raise ValueError("Scene must be initialized")
@@ -1443,7 +1483,22 @@ class FixedSession:
                 )
                 try:
                     if fixed_scene is not None:
+                        # Wait for at least one frame to be ready
                         frame_count = self.get.vertex_frame_count()
+                        if frame_count == 0:
+                            print(
+                                "Waiting for simulation to generate at least one frame..."
+                            )
+                            while self.get.vertex_frame_count() == 0:
+                                if not Utils.busy():
+                                    print(
+                                        "Simulation finished but no frames were generated."
+                                    )
+                                    return self
+                                time.sleep(0.5)
+                            frame_count = self.get.vertex_frame_count()
+                            print(f"Found {frame_count} frame(s). Loading animation...")
+
                         vert_list = []
                         for i in tqdm(
                             range(frame_count), desc="Loading frames", ncols=70
@@ -1453,16 +1508,75 @@ class FixedSession:
                                 vert, _ = result
                                 vert_list.append(vert)
 
+                        # Create status label and reload button
+                        status_label = widgets.Label(
+                            value=f"Loaded {len(vert_list)} frames"
+                        )
+                        reload_button = widgets.Button(description="Reload")
+                        display(widgets.HBox([reload_button, status_label]))
+
                         def update(frame=1):
                             nonlocal vert_list
                             nonlocal plot
                             assert plot is not None
-                            if fixed_scene is not None:
+                            if fixed_scene is not None and frame - 1 < len(vert_list):
                                 vert = vert_list[frame - 1]
                                 color = fixed_scene.color(vert, options)
                                 plot.update(vert, color)
 
-                        widgets.interact(update, frame=(1, frame_count))
+                        # Create the interactive slider
+                        slider = widgets.IntSlider(
+                            min=1, max=frame_count, step=1, value=1, description="frame"
+                        )
+                        output = widgets.interactive_output(update, {"frame": slider})
+
+                        def _reload(button):
+                            nonlocal vert_list
+                            nonlocal slider
+                            nonlocal status_label
+                            button.disabled = True
+                            button.description = "Reloading..."
+                            try:
+                                # Reload frames from disk
+                                new_frame_count = self.get.vertex_frame_count()
+                                if new_frame_count > len(vert_list):
+                                    print(
+                                        f"Loading {new_frame_count - len(vert_list)} new frames..."
+                                    )
+                                    for i in tqdm(
+                                        range(len(vert_list), new_frame_count),
+                                        desc="Loading new frames",
+                                        ncols=70,
+                                    ):
+                                        result = self.get.vertex(i)
+                                        if result is not None:
+                                            vert, _ = result
+                                            vert_list.append(vert)
+
+                                    # Update the slider range
+                                    slider.max = new_frame_count
+
+                                    # Update status label
+                                    status_label.value = (
+                                        f"Loaded {len(vert_list)} frames"
+                                    )
+                                    print(f"Loaded {len(vert_list)} frames total.")
+                                    button.description = "Reload"
+                                else:
+                                    print(
+                                        f"No new frames. Total: {len(vert_list)} frames."
+                                    )
+                                    button.description = "Reload"
+                            except Exception as e:
+                                print(f"Reload failed: {e}")
+                                button.description = "Reload"
+                            finally:
+                                button.disabled = False
+
+                        reload_button.on_click(_reload)
+
+                        # Display slider and output
+                        display(slider, output)
                 except Exception as _:
                     pass
         return self
