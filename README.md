@@ -426,9 +426,36 @@ The author is actively woriking on it.
 | large-five-twist | [6ab6984](https://github.com/st-tech/ppf-contact-solver/commit/6ab6984d95f67673f1ebfdc996b0320123d88bed) | 8.2M | 16.4M | ```N/A``` | 184.1M | 2,413 | 144.5s |
 
 
+📝 Large scale examples take a very long time, and it's easy to lose connection or close the browser. The frontend lets you close and reopen it at your convenience. Just recover your session after you reconnect.
+Here's an example cell how to recover:
+
+```python
+# In case you shutdown the server (or kernel) and still want
+# to restart, do this.
+# Do not run other cells used to create this scene.
+# You can also recover this way if you closed the browser.
+# Just directly run this in a new cell or in a new notebook.
+
+from frontend import App
+
+# recover the session
+session = App.recover("app-name")
+
+# resume if not currently running
+if not App.busy():
+    session.resume()
+
+# preview the current state
+session.preview()
+
+# stream the logs
+session.stream()
+```
+
+
 ## 🚀 GitHub Actions
 
-We implemented GitHub Actions that test all of our examples except for large scale ones, which take from hours to days to finish.
+We implemented GitHub Actions that test all of our examples except for large scale ones, which take from days to weeks to finish.
 We perform explicit intersection checks at the end of each step, which raises an error if an intersection is detected.
 **This ensures that all steps are confirmed to be penetration-free if tests are pass.**
 The runner types are described as follows:
