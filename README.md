@@ -140,7 +140,7 @@ Install a NVIDIA driver [(Link)](https://www.nvidia.com/en-us/drivers/) on your 
 ----|----
 Install the Docker engine from here [(Link)](https://docs.docker.com/engine/install/). Also, install the NVIDIA Container Toolkit [(Link)](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html). Just to make sure that the Container Toolkit is loaded, run `sudo service docker restart`. | Install the Docker Desktop [(Link)](https://docs.docker.com/desktop/setup/install/windows-install/). You may need to log out or reboot after the installation. After logging back in, launch Docker Desktop to ensure that Docker is running.
 
-Next, run the following command to start the container:
+Next, run the following command to start the container. If no edits are needed, just copy and paste:
 
 #### 🪟 Windows (PowerShell)
 
@@ -148,6 +148,7 @@ Next, run the following command to start the container:
 $MY_WEB_PORT = 8080  # Web port on your side
 $IMAGE_NAME = "ghcr.io/st-tech/ppf-contact-solver-compiled:latest"
 docker run --rm -it `
+  --name ppf-contact-solver `
   --gpus all `
   -p ${MY_WEB_PORT}:${MY_WEB_PORT} `
   -e WEB_PORT=${MY_WEB_PORT} `
@@ -160,22 +161,35 @@ docker run --rm -it `
 MY_WEB_PORT=8080  # Web port on your side
 IMAGE_NAME=ghcr.io/st-tech/ppf-contact-solver-compiled:latest
 docker run --rm -it \
+  --name ppf-contact-solver \
   --gpus all \
   -p ${MY_WEB_PORT}:${MY_WEB_PORT} \
   -e WEB_PORT=${MY_WEB_PORT} \
   $IMAGE_NAME # Image size ~3.5GB
 ```
 
-Wait for a while until the container becomes a steady state.
-Next, open your browser and navigate to <http://localhost:8080>, where `8080` is the port number specified in the `MY_WEB_PORT` variable.
-Keep your terminal window open.
+The image download shall be started.
+Our image is hosted on [GitHub Container Registry](https://github.com/st-tech/ppf-contact-solver/pkgs/container/ppf-contact-solver-compiled) (~3.5GB).
+JupyterLab will then auto-start.
+Eventually you should be seeing:
 
+```
+==== JupyterLab Launched! 🚀 ====
+     http://localhost:8080
+    Press Ctrl+C to shutdown
+================================
+```
+
+Next, open your browser and navigate to <http://localhost:8080>. The port `8080` can change if you change the `MY_WEB_PORT` variable.
+Keep your terminal window open.
 Now you are ready to go! 🎉
 
 ### 🛑 Shutting Down
 
 To shut down the container, just press `Ctrl+C` in the terminal.
 The container will be removed and all traces will be cleaned up. 🧹
+
+> ℹ️ If you wish to keep the container running in the background, replace `--rm` with `-d`. To shutdown the container and remove it, run `docker stop ppf-contact-solver && docker rm ppf-contact-solver`.
 
 ### 🔧 Advanced Installation
 
@@ -201,6 +215,8 @@ Our Python interface is designed with the following principles in mind:
 
 Here's an example of draping five sheets over a sphere with two corners pinned.
 We have more examples in the [examples](./examples/) directory. Please take a look! 👀
+
+> ⚠️ Do not run all cells at once; run step-by-step sequentially manually, as some cells run in non-blocking mode, leaving next cells not ready.
 
 ```python
 # import our frontend
@@ -516,10 +532,10 @@ Our contact solver is designed for heavy use in cloud services, enabling:
 
 - **💰 Cost-Effective Development**: Quickly deploy testing environments and delete them when not in use, saving costs.
 - **📈 Flexible Scalability**: Scale as needed. For example, you can launch multiple instances for short-term spiky demands.
-- **🤝 Work Together**: Share the link with remote collaborators to work together.
+- **🤝 Work Together**: Share the JupyterLab link with remote collaborators to work together.
 - **🔒 Strong Security**: Benefit from the security features provided by cloud providers.
-- **🐛 Fast Bug Tracking**: Users and developers can easily share the same hardware, kernel, and driver environment, making it easier to track and fix bugs.
-- **🛠️ Zero Hardware Maintenance**: No need to maintain hardware for everyday operations or introduce redundancy for malfunctions.
+- **🐛 Fast Bug Tracking**: Users and developers can easily share the same hardware, kernel, and driver environment, making it easier to reproduce and fix bugs.
+- **🛠️ Zero Hardware Maintenance**: No need to maintain hardware or introduce redundancy for malfunctions.
 
 Below, we describe how to deploy our solver on major cloud services. These instructions are up to date as of late 2024 and are subject to change.
 
