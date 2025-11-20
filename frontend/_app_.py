@@ -110,25 +110,25 @@ class App:
     def get_data_dirpath():
         import subprocess
 
-        # First try to read from .git/branch_name.txt
         try:
             branch_file = os.path.join(
                 os.path.dirname(os.path.abspath(__file__)),
                 "..",
                 ".git",
-                "branch_name.txt"
+                "branch_name.txt",
             )
             if os.path.exists(branch_file):
-                with open(branch_file, "r") as f:
+                with open(branch_file) as f:
                     git_branch = f.read().strip()
                     if git_branch:
                         return os.path.expanduser(
-                            os.path.join("~", ".local", "share", "ppf-cts", f"git-{git_branch}")
+                            os.path.join(
+                                "~", ".local", "share", "ppf-cts", f"git-{git_branch}"
+                            )
                         )
-        except:
+        except Exception as _:
             pass
 
-        # Fallback to git command
         try:
             git_branch = subprocess.check_output(
                 ["git", "branch", "--show-current"],
