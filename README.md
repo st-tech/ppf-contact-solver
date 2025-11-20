@@ -189,7 +189,7 @@ Now you are ready to go! 🎉
 To shut down the container, just press `Ctrl+C` in the terminal.
 The container will be removed and all traces will be cleaned up. 🧹
 
-> ℹ️ If you wish to keep the container running in the background, replace `--rm` with `-d`. To shutdown the container and remove it, run `docker stop ppf-contact-solver && docker rm ppf-contact-solver`.
+> If you wish to keep the container running in the background, replace `--rm` with `-d`. To shutdown the container and remove it, run `docker stop ppf-contact-solver && docker rm ppf-contact-solver`.
 
 ### 🔧 Advanced Installation
 
@@ -215,8 +215,6 @@ Our Python interface is designed with the following principles in mind:
 
 Here's an example of draping five sheets over a sphere with two corners pinned.
 We have more examples in the [examples](./examples/) directory. Please take a look! 👀
-
-> ⚠️ Do not run all cells at once; run step-by-step sequentially manually, as some cells run in non-blocking mode, leaving next cells not ready.
 
 ```python
 # import our frontend
@@ -305,7 +303,7 @@ The behaviors can be changed through the settings.
 
 ## 🔍 Obtaining Logs
 
-Logs for the simulation can also be queried through the Python APIs. Here's an example of how to get a list of recorded logs, fetch them, and compute the average.
+Logs for the simulation can also be queried through our Python APIs. Here's an example of how to get a list of recorded logs, fetch them, and compute the average.
 
 ```python
 # get a list of log names
@@ -442,7 +440,8 @@ The author is actively woriking on it.
 | large-five-twist | [6ab6984](https://github.com/st-tech/ppf-contact-solver/commit/6ab6984d95f67673f1ebfdc996b0320123d88bed) | 8.2M | 16.4M | ```N/A``` | 184.1M | 2,413 | 144.5s |
 
 
-📝 Large scale examples take a very long time, and it's easy to lose connection or close the browser. The frontend lets you close and reopen it at your convenience. Just recover your session after you reconnect.
+📝 Large scale examples take a very long time, and it's easy to lose connection or close the browser.
+Our frontend lets you close and reopen it at your convenience. Just recover your session after you reconnect.
 Here's an example cell how to recover:
 
 ```python
