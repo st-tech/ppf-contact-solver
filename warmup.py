@@ -33,11 +33,24 @@ def create_venv():
         result = subprocess.run([sys.executable, "-m", "venv", venv_path])
         if result.returncode != 0:
             print("Failed to create virtual environment")
-            # Clean up partially created venv directory if it exists
-            if os.path.exists(venv_path):
-                print(f"Cleaning up incomplete virtual environment at {venv_path}")
-                shutil.rmtree(venv_path)
-            sys.exit(1)
+            print("Installing python3-venv...")
+            install_result = run("apt install -y python3-venv", use_sudo=True, check=False)
+            if install_result.returncode == 0:
+                print("Retrying virtual environment creation...")
+                result = subprocess.run([sys.executable, "-m", "venv", venv_path])
+                if result.returncode != 0:
+                    print("Failed to create virtual environment after installing python3-venv")
+                    if os.path.exists(venv_path):
+                        print(f"Cleaning up incomplete virtual environment at {venv_path}")
+                        shutil.rmtree(venv_path)
+                    sys.exit(1)
+            else:
+                print("Failed to install python3-venv")
+                # Clean up partially created venv directory if it exists
+                if os.path.exists(venv_path):
+                    print(f"Cleaning up incomplete virtual environment at {venv_path}")
+                    shutil.rmtree(venv_path)
+                sys.exit(1)
 
         # Ensure pip is upgraded in the new venv
         venv_python = os.path.join(venv_path, "bin", "python")
@@ -318,14 +331,13 @@ def install_oh_my_zsh():
 
 def install_sdf():
     pip_path = get_venv_pip()
-    run("git clone https://github.com/fogleman/sdf.git /tmp/sdf")
-    run(f"{pip_path} install /tmp/sdf")
+    run(f"{pip_path} install git+https://github.com/fogleman/sdf.git")
 
 
 def reinstall_pyopengl():
     pip_path = get_venv_pip()
     run(f"{pip_path} uninstall -y pyopengl")
-    run(f"{pip_path} install pyopengl==3.1.5")
+    run(f"{pip_path} install --force-reinstall --no-deps pyopengl==3.1.5")
 
 
 def setup():
