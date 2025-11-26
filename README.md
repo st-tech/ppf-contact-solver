@@ -426,8 +426,7 @@ Below is a table summarizing the estimated costs for running our examples on a N
 #### 🏗️ Large Scale Examples
 
 Large scale examples are run on a [vast.ai](https://vast.ai) instance with an RTX 4090.
-At the moment, not all large scale examples are ready yet, but they will be added/updated one by one.
-The author is actively woriking on it.
+These examples are not included in GitHub Action tests since they can take days to finish.
 
 
 | | | |
