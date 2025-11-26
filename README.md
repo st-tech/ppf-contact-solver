@@ -73,6 +73,7 @@ involving 👚 shells, 🪵 solids and 🪢 rods. All made by [ZOZO, Inc.](https
 
 ## 📝 Change History
 
+- (2025.11.26) Added [large-woven.ipynb](./examples/large-woven.ipynb) to [large scale examples](#️-large-scale-examples).
 - (2025.11.12) Added [five-twist.ipynb](./examples/five-twist.ipynb) [(Video)](https://drive.google.com/file/d/1EjHLqtAUjYh7KEQ_EQ9Jx6hh262BUze1/view) and [large-five-twist.ipynb](./examples/large-five-twist.ipynb) [(Video)](https://drive.google.com/file/d/1STOfH1Y-F-ycnV6sGNut7GNWnpoSo11f/view) showcasing over 180M count. See [large scale examples](#️-large-scale-examples).
 - (2025.10.03) Massive refactor of the codebase [(Markdown)](./articles/refactor_202510.md). Note that this change includes breaking changes to our Python APIs.
 - (2025.08.09) Added a hindsight note in [eigensystem analysis](./articles/eigensys.md) to acknowledge prior work by [Poya et al. (2023)](https://romeric.github.io/).
@@ -431,13 +432,14 @@ The author is actively woriking on it.
 
 | | | |
 |---|---|---|
-| [large-twist](./examples/large-twist.ipynb) [(Video)](https://drive.google.com/file/d/1vZ7JHza1U6zO9W8DMtSsNZidl_YQXf1e/view) | [large-five-twist](./examples/large-five-twist.ipynb) [(Video)](https://drive.google.com/file/d/1STOfH1Y-F-ycnV6sGNut7GNWnpoSo11f/view) | TBA |
-| ![twist](./asset/image/large-scale/twist.jpg) | ![five-twist](./asset/image/large-scale/five-twist.jpg) |  |
+| [large-twist](./examples/large-twist.ipynb) [(Video)](https://drive.google.com/file/d/1vZ7JHza1U6zO9W8DMtSsNZidl_YQXf1e/view) | [large-five-twist](./examples/large-five-twist.ipynb) [(Video)](https://drive.google.com/file/d/1STOfH1Y-F-ycnV6sGNut7GNWnpoSo11f/view) | [large-woven](./examples/large-woven.ipynb) [(Video)](https://drive.google.com/file/d/16Pb_pwSVoQ6YD9zb-HhUKCbyf3qUzyKx/view) |
+| ![twist](./asset/image/large-scale/twist.jpg) | ![five-twist](./asset/image/large-scale/five-twist.jpg) | ![woven](./asset/image/large-scale/woven.jpg) |
 
 | Example | Commit | #Vert | #Face | #Rod | #Contact | #Frame | Time/Frame |
 |---|---|---|---|---|---|---|---|
 | large-twist | [cbafbd2](https://github.com/st-tech/ppf-contact-solver/tree/cbafbd2197fc7f28673386dfaf1e8d8a1be49937) | 3.2M | 6.4M | ```N/A``` | 56.7M | 2,000 | 46.4s |
 | large-five-twist | [6ab6984](https://github.com/st-tech/ppf-contact-solver/commit/6ab6984d95f67673f1ebfdc996b0320123d88bed) | 8.2M | 16.4M | ```N/A``` | 184.1M | 2,413 | 144.5s |
+| large-woven | TBA | 2.7M | ```N/A``` | 2.7M | 8.9M | 946 | 436.8s |
 
 
 📝 Large scale examples take a very long time, and it's easy to lose connection or close the browser.
