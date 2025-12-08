@@ -87,7 +87,7 @@ class CppRustDocStringParser:
                 par_name = ""
                 if filename != "args.rs" and filename.endswith((".cu", ".rs")):
                     path = os.path.join(dirpath, filename)
-                    with open(path) as f:
+                    with open(path, encoding="utf-8") as f:
                         lines = f.readlines()
                     for line in lines:
                         line = line.strip()
