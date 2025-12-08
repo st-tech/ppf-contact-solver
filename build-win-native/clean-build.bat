@@ -21,7 +21,16 @@ if exist "%SRC%\target" rmdir /S /Q "%SRC%\target"
 echo Removing distribution folder...
 if exist "%BUILD_WIN%\dist" rmdir /S /Q "%BUILD_WIN%\dist"
 
+echo Removing build log...
+if exist "%BUILD_WIN%\build.log" del /Q "%BUILD_WIN%\build.log"
+
+echo Removing launcher scripts...
+if exist "%BUILD_WIN%\start.bat" del /Q "%BUILD_WIN%\start.bat"
+if exist "%BUILD_WIN%\start-jupyterlab.pyw" del /Q "%BUILD_WIN%\start-jupyterlab.pyw"
+
 echo.
 echo === Clean complete ===
 
 endlocal
+echo Press any key to exit...
+pause >nul

@@ -23,7 +23,13 @@ if exist "%BUILD_WIN%\downloads" rmdir /S /Q "%BUILD_WIN%\downloads"
 echo Removing simulation data...
 if exist "%BUILD_WIN%\ppf-cts" rmdir /S /Q "%BUILD_WIN%\ppf-cts"
 
+echo Removing log files...
+if exist "%BUILD_WIN%\warmup.log" del /Q "%BUILD_WIN%\warmup.log"
+if exist "%BUILD_WIN%\build.log" del /Q "%BUILD_WIN%\build.log"
+
 echo.
 echo === Clean complete ===
 
 endlocal
+echo Press any key to exit...
+pause >nul

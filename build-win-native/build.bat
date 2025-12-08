@@ -1,15 +1,24 @@
 @echo off
 setlocal enabledelayedexpansion
 
-echo ============================================================
-echo   ZOZO's Contact Solver - Windows Build Script
-echo ============================================================
-echo.
-
 REM Get the directory where this script is located
 set BUILD_WIN=%~dp0
 REM Remove trailing backslash
 set BUILD_WIN=%BUILD_WIN:~0,-1%
+set LOGFILE=%BUILD_WIN%\build.log
+
+REM If not already being logged, restart with logging
+if "%BUILD_LOGGING%"=="" (
+    set BUILD_LOGGING=1
+    echo Logging to %LOGFILE%
+    powershell -Command "& { cmd /c 'set BUILD_LOGGING=1 && \"%~f0\" %*' 2>&1 | Tee-Object -FilePath '%LOGFILE%' }"
+    exit /b %ERRORLEVEL%
+)
+
+echo ============================================================
+echo   ZOZO's Contact Solver - Windows Build Script
+echo ============================================================
+echo.
 REM Get parent directory (SRC_DIR)
 for %%I in ("%BUILD_WIN%\..") do set SRC_DIR=%%~fI
 
@@ -189,3 +198,5 @@ echo To start JupyterLab, run: %BUILD_WIN%\start.bat
 echo.
 
 endlocal
+echo Press any key to exit...
+pause >nul
