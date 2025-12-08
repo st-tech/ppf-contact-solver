@@ -4,8 +4,8 @@
 # License: Apache v2.0
 
 import os
-import signal
 import subprocess
+import tempfile
 
 import psutil  # pyright: ignore[reportMissingModuleSource]
 
@@ -63,7 +63,7 @@ class Utils:
     @staticmethod
     def get_ci_root() -> str:
         """Get the path to the CI directory."""
-        return os.path.join("/", "tmp", "ci")
+        return os.path.join(tempfile.gettempdir(), "ci")
 
     @staticmethod
     def get_ci_dir() -> str:
@@ -113,8 +113,11 @@ class Utils:
                 PROCESS_NAME in proc.info["name"]
                 and proc.info["status"] != psutil.STATUS_ZOMBIE
             ):
-                pid = proc.info["pid"]
-                os.kill(pid, signal.SIGTERM)
+                try:
+                    # Use psutil's terminate method which works cross-platform
+                    proc.terminate()
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    pass
 
     @staticmethod
     def busy() -> bool:

@@ -10,6 +10,11 @@
 #include "../data.hpp"
 #include "../vec/vec.hpp"
 
+// Windows defines OVERFLOW as a macro - undefine it
+#ifdef OVERFLOW
+#undef OVERFLOW
+#endif
+
 struct Row {
     enum State { SUCCESS, OVERFLOW, COUNTING };
     __device__ void alloc();

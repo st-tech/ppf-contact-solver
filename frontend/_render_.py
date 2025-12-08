@@ -4,8 +4,11 @@
 # License: Apache v2.0
 
 import os
+import tempfile
 
-os.environ["PYOPENGL_PLATFORM"] = "osmesa"
+# Only use osmesa on Linux (headless rendering)
+if os.name != 'nt':
+    os.environ["PYOPENGL_PLATFORM"] = "osmesa"
 
 import shutil
 
@@ -49,6 +52,13 @@ if not OPENGL_READY:
         def add(*__args__, **__kwargs__):
             pass
 
+        def render(*__args__, **__kwargs__):
+            raise RuntimeError(
+                "OpenGL rendering is not available. "
+                "On Windows, this may be due to running in a headless/RDP session. "
+                "Try running with a local display or use session.export.animation() on Linux."
+            )
+
         @staticmethod
         def from_trimesh(*__args__, **__kwargs__):
             return DummyClass()
@@ -71,7 +81,7 @@ default_args = {
     "camera": None,
     "up": [0, 1, 0],
     "sample_count": 64,
-    "tmp_path": os.path.join("/tmp", "tmp_mesh.ply"),
+    "tmp_path": os.path.join(tempfile.gettempdir(), "tmp_mesh.ply"),
 }
 
 

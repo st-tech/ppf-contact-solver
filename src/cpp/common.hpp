@@ -13,6 +13,10 @@
 #undef EPSILON
 #endif
 
+#ifdef OVERFLOW
+#undef OVERFLOW
+#endif
+
 #ifdef FLT_MAX
 #undef FLT_MAX
 #endif
@@ -31,6 +35,9 @@
 #define FLT_MIN -1.0e8f
 #define DT_MIN 1e-5f
 #define PI 3.14159265358979323846f
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
 #define WARP_SIZE 32
 
 inline unsigned choose_block_size(unsigned n) {

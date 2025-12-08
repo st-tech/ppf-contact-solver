@@ -412,12 +412,32 @@ class SessionExport:
             str: The shell command.
         """
         param.export(self._fixed_session.info.path)
-        program_path = os.path.join(
-            self._session.proj_root, "target", "release", "ppf-contact-solver"
-        )
 
-        # Generate shell script that checks for solver existence at runtime
-        command = f"""#!/bin/bash
+        # Platform-specific solver path and script generation
+        if os.name == 'nt':  # Windows
+            program_path = os.path.join(
+                self._session.proj_root, "target", "release", "ppf-contact-solver.exe"
+            )
+            # Generate batch file
+            command = f"""@echo off
+set SOLVER_PATH={program_path}
+
+if not exist "%SOLVER_PATH%" (
+    echo Error: Solver does not exist at %SOLVER_PATH% >&2
+    exit /b 1
+)
+
+"%SOLVER_PATH%" --path {self._fixed_session.info.path} --output {self._fixed_session.output.path} %*
+"""
+            path = os.path.join(self._fixed_session.info.path, "command.bat")
+            with open(path, "w") as f:
+                f.write(command)
+        else:  # Linux/Mac
+            program_path = os.path.join(
+                self._session.proj_root, "target", "release", "ppf-contact-solver"
+            )
+            # Generate shell script that checks for solver existence at runtime
+            command = f"""#!/bin/bash
 SOLVER_PATH="{program_path}"
 
 if [ ! -f "$SOLVER_PATH" ]; then
@@ -427,11 +447,11 @@ fi
 
 "$SOLVER_PATH" --path {self._fixed_session.info.path} --output {self._fixed_session.output.path} "$@"
 """
-
-        path = os.path.join(self._fixed_session.info.path, "command.sh")
-        with open(path, "w") as f:
-            f.write(command)
-        os.chmod(path, 0o755)
+            path = os.path.join(self._fixed_session.info.path, "command.sh")
+            with open(path, "w") as f:
+                f.write(command)
+            if os.name != 'nt':  # chmod not needed on Windows
+                os.chmod(path, 0o755)
         return path
 
     def animation(
@@ -670,6 +690,8 @@ class SessionLog:
             else:
                 return var
 
+        if name not in self._log:
+            return None
         filename = self._log[name]["filename"]
         path = os.path.join(self._fixed_session.info.path, "output", "data", filename)
         entries = []
@@ -838,7 +860,10 @@ class SessionGet:
         Returns:
             Optional[str]: The path to the command.sh file if it exists, None otherwise.
         """
-        command_path = os.path.join(self._fixed_session.info.path, "command.sh")
+        if os.name == 'nt':  # Windows
+            command_path = os.path.join(self._fixed_session.info.path, "command.bat")
+        else:
+            command_path = os.path.join(self._fixed_session.info.path, "command.sh")
         if os.path.exists(command_path):
             return command_path
         return None
@@ -1157,18 +1182,37 @@ class FixedSession:
 
             err_path = os.path.join(self.info.path, "error.log")
             log_path = os.path.join(self.info.path, "stdout.log")
-            command = f"bash {self._cmd_path} --load {load}"
+            if os.name == 'nt':  # Windows
+                command = f'"{self._cmd_path}" --load {load}'
+            else:
+                command = f"bash {self._cmd_path} --load {load}"
             with open(log_path, "w") as stdout_file, open(err_path, "w") as stderr_file:
-                process = subprocess.Popen(
-                    command,
-                    shell=True,
-                    stdout=stdout_file,
-                    stderr=stderr_file,
-                    start_new_session=True,
-                    cwd=self._session.proj_root,
-                )
+                if os.name == 'nt':  # Windows
+                    process = subprocess.Popen(
+                        command,
+                        shell=True,
+                        stdout=stdout_file,
+                        stderr=stderr_file,
+                        creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
+                        cwd=self._session.proj_root,
+                    )
+                else:
+                    process = subprocess.Popen(
+                        command,
+                        shell=True,
+                        stdout=stdout_file,
+                        stderr=stderr_file,
+                        start_new_session=True,
+                        cwd=self._session.proj_root,
+                    )
             if blocking is None:
                 blocking = not Utils.in_jupyter_notebook()
+            if not blocking:
+                # Wait for process to start (needed for Utils.busy() to detect it)
+                for _ in range(10):  # Wait up to 1 second
+                    if Utils.busy():
+                        break
+                    time.sleep(0.1)
             if blocking:
                 while not os.path.exists(log_path) and not os.path.exists(err_path):
                     time.sleep(1)
@@ -1406,41 +1450,47 @@ class FixedSession:
                     nonlocal table
                     nonlocal options
                     nonlocal curr_frame
-                    assert plot is not None
-                    while True:
-                        last_frame = self.get.latest_frame()
-                        if curr_frame != last_frame:
-                            curr_frame = last_frame
-                            result = self.get.vertex(curr_frame)
-                            if result is not None:
-                                vert, _ = result
-                                color = self.fixed_scene.color(vert, options)
-                                update_dataframe(table, curr_frame)
-                                plot.update(vert, color)
-                        if not Utils.busy():
-                            break
+                    try:
+                        assert plot is not None
+                        while True:
+                            last_frame = self.get.latest_frame()
+                            if curr_frame != last_frame:
+                                curr_frame = last_frame
+                                result = self.get.vertex(curr_frame)
+                                if result is not None:
+                                    vert, _ = result
+                                    color = self.fixed_scene.color(vert, options)
+                                    update_dataframe(table, curr_frame)
+                                    plot.update(vert, color)
+                            if not Utils.busy():
+                                break
+                            time.sleep(self._update_preview_interval)
+                        assert terminate_button is not None
+                        assert save_and_quit_button is not None
+                        terminate_button.disabled = True
+                        terminate_button.description = "Terminated"
+                        save_and_quit_button.disabled = True
                         time.sleep(self._update_preview_interval)
-                    assert terminate_button is not None
-                    assert save_and_quit_button is not None
-                    terminate_button.disabled = True
-                    terminate_button.description = "Terminated"
-                    save_and_quit_button.disabled = True
-                    time.sleep(self._update_preview_interval)
-                    last_frame = self.get.latest_frame()
-                    update_dataframe(table, last_frame)
-                    vertex_data = self.get.vertex(last_frame)
-                    if vertex_data is not None:
-                        vert, _ = vertex_data
-                        color = self.fixed_scene.color(vert, options)
-                        plot.update(vert, color)
+                        last_frame = self.get.latest_frame()
+                        update_dataframe(table, last_frame)
+                        vertex_data = self.get.vertex(last_frame)
+                        if vertex_data is not None:
+                            vert, _ = vertex_data
+                            color = self.fixed_scene.color(vert, options)
+                            plot.update(vert, color)
+                    except Exception as e:
+                        print(f"live_preview error: {e}")
 
                 def live_table(self):
                     nonlocal table
-                    while True:
-                        update_dataframe(table, curr_frame)
-                        if not Utils.busy():
-                            break
-                        time.sleep(self._update_table_interval)
+                    try:
+                        while True:
+                            update_dataframe(table, curr_frame)
+                            if not Utils.busy():
+                                break
+                            time.sleep(self._update_table_interval)
+                    except Exception as e:
+                        print(f"live_table error: {e}")
 
                 threading.Thread(target=live_preview, args=(self,)).start()
                 threading.Thread(target=live_table, args=(self,)).start()
@@ -1625,14 +1675,17 @@ class FixedSession:
                     assert save_and_quit_button is not None
 
                     while not stop:
-                        result = subprocess.run(
-                            ["tail", f"-n{n_lines}", log_path],
-                            capture_output=True,
-                            text=True,
-                        )
+                        # Read last n_lines from log file (cross-platform)
+                        if os.path.exists(log_path):
+                            with open(log_path) as f:
+                                lines = f.readlines()
+                                tail_lines = lines[-n_lines:] if len(lines) > n_lines else lines
+                                tail_output = ''.join(tail_lines).strip()
+                        else:
+                            tail_output = ''
                         log_widget.value = (
                             CONSOLE_STYLE
-                            + f"<pre style='no-scroll'>{result.stdout.strip()}</pre>"
+                            + f"<pre style='no-scroll'>{tail_output}</pre>"
                         )
                         if not Utils.busy():
                             log_widget.value += "<p style='color: red;'>Terminated.</p>"
@@ -1807,7 +1860,13 @@ class Session:
             elif os.path.exists(symlink_path):
                 os.remove(symlink_path)
 
-            os.symlink(fixed_session.info.path, symlink_path)
+            try:
+                os.symlink(fixed_session.info.path, symlink_path)
+            except OSError:
+                # On Windows, symlinks may require elevated privileges
+                # Fall back to writing a text file with the path
+                with open(symlink_path + ".txt", "w") as f:
+                    f.write(fixed_session.info.path)
 
 
 def display_log(lines: list[str]):

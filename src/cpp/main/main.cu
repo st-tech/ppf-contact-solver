@@ -3,6 +3,13 @@
 // Review: Ryoichi Ando (ryoichi.ando@zozo.com)
 // License: Apache v2.0
 
+// Windows DLL export macro
+#ifdef _WIN32
+#define DLL_EXPORT __declspec(dllexport)
+#else
+#define DLL_EXPORT
+#endif
+
 #include "../buffer/buffer.hpp"
 #include "../contact/contact.hpp"
 #include "../csrmat/csrmat.hpp"
@@ -571,7 +578,7 @@ void update_bvh(BVHSet bvh) {
 
 } // namespace main_helper
 
-extern "C" void set_log_path(const char *data_dir) {
+extern "C" DLL_EXPORT void set_log_path(const char *data_dir) {
     SimpleLog::setPath(data_dir);
 }
 
@@ -635,6 +642,13 @@ DataSet malloc_dataset(DataSet dataset, ParamSet param) {
             mem::malloc_device(dataset.constraint.mesh.prop.face);
         tmp_collision_mesh.prop.edge =
             mem::malloc_device(dataset.constraint.mesh.prop.edge);
+
+        tmp_collision_mesh.param_arrays.vertex =
+            mem::malloc_device(dataset.constraint.mesh.param_arrays.vertex);
+        tmp_collision_mesh.param_arrays.face =
+            mem::malloc_device(dataset.constraint.mesh.param_arrays.face);
+        tmp_collision_mesh.param_arrays.edge =
+            mem::malloc_device(dataset.constraint.mesh.param_arrays.edge);
 
         tmp_collision_mesh.neighbor.vertex.face =
             mem::malloc_device(dataset.constraint.mesh.neighbor.vertex.face);
@@ -711,7 +725,7 @@ DataSet malloc_dataset(DataSet dataset, ParamSet param) {
     return dev_dataset;
 }
 
-extern "C" bool initialize(DataSet *dataset, ParamSet *param) {
+extern "C" DLL_EXPORT bool initialize(DataSet *dataset, ParamSet *param) {
 
     int num_device;
     CUDA_HANDLE_ERROR(cudaGetDeviceCount(&num_device));
@@ -727,11 +741,11 @@ extern "C" bool initialize(DataSet *dataset, ParamSet *param) {
     return main_helper::initialize(*dataset, dev_dataset, param);
 }
 
-extern "C" void advance(StepResult *result) {
+extern "C" DLL_EXPORT void advance(StepResult *result) {
     *result = main_helper::advance();
 }
 
-extern "C" void fetch() {
+extern "C" DLL_EXPORT void fetch() {
     mem::copy_from_device_to_host(main_helper::dev_dataset.vertex.curr.data,
                                   main_helper::host_dataset.vertex.curr.data,
                                   main_helper::host_dataset.vertex.curr.size);
@@ -740,7 +754,7 @@ extern "C" void fetch() {
                                   main_helper::host_dataset.vertex.prev.size);
 }
 
-extern "C" void update_bvh(const BVHSet *bvh) {
+extern "C" DLL_EXPORT void update_bvh(const BVHSet *bvh) {
     main_helper::host_dataset.bvh = *bvh;
     if (bvh->face.node.size) {
         mem::copy_to_device(bvh->face.node,
@@ -763,7 +777,7 @@ extern "C" void update_bvh(const BVHSet *bvh) {
     main_helper::update_bvh(main_helper::host_dataset.bvh);
 }
 
-extern "C" void fetch_dyn_counts(unsigned *n_value, unsigned *n_offset) {
+extern "C" DLL_EXPORT void fetch_dyn_counts(unsigned *n_value, unsigned *n_offset) {
     unsigned nrow = tmp::dyn_hess.nrow;
     *n_offset = nrow + 1;
     CUDA_HANDLE_ERROR(cudaMemcpy(n_value,
@@ -771,15 +785,15 @@ extern "C" void fetch_dyn_counts(unsigned *n_value, unsigned *n_offset) {
                                  sizeof(unsigned), cudaMemcpyDeviceToHost));
 }
 
-extern "C" void fetch_dyn(unsigned *index, Mat3x3f *value, unsigned *offset) {
+extern "C" DLL_EXPORT void fetch_dyn(unsigned *index, Mat3x3f *value, unsigned *offset) {
     tmp::dyn_hess.fetch(index, value, offset);
 }
 
-extern "C" void update_dyn(unsigned *index, unsigned *offset) {
+extern "C" DLL_EXPORT void update_dyn(unsigned *index, unsigned *offset) {
     tmp::dyn_hess.update(index, offset);
 }
 
-extern "C" void update_constraint(const Constraint *constraint) {
+extern "C" DLL_EXPORT void update_constraint(const Constraint *constraint) {
     main_helper::host_dataset.constraint = *constraint;
     mem::copy_to_device(constraint->fix,
                         main_helper::dev_dataset.constraint.fix);
