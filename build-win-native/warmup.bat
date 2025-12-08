@@ -24,6 +24,8 @@ if not "%LONGPATH_VALUE%"=="1" (
     echo Please run enable_long_path.bat as Administrator to enable it,
     echo then REBOOT your system before running this script.
     echo.
+    echo Press any key to exit...
+    pause >nul
     exit /b 1
 )
 
