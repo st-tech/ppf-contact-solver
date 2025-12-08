@@ -8,7 +8,14 @@
 #include <cassert>
 #include <cmath>
 #include <stdarg.h>
+
+#ifdef _WIN32
+#include <direct.h>
+#define MKDIR(path) _mkdir(path)
+#else
 #include <sys/stat.h>
+#define MKDIR(path) mkdir(path, S_IRWXU | S_IRWXG | S_IROTH | S_IXOTH)
+#endif
 
 #define MAX_BUFFER_SIZE 4096
 #define SMALL_BUFFER_SIZE 256
@@ -45,7 +52,7 @@ static const char *tstr(uint64_t msec) {
 void SimpleLog::setPath(std::string data_directory_path) {
     g_data_directory_path = data_directory_path;
     message("* data_directory_path path = %s", data_directory_path.c_str());
-    mkdir(data_directory_path.c_str(), S_IRWXU | S_IRWXG | S_IROTH | S_IXOTH);
+    MKDIR(data_directory_path.c_str());
 }
 
 void SimpleLog::set(double time) {

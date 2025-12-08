@@ -161,6 +161,7 @@ def list_packages():
 def python_packages():
     return [
         "numpy",
+        "pandas",
         "libigl",
         "plyfile",
         "requests",

@@ -2294,7 +2294,7 @@ class Scene:
         for key in ["poiss-rat"]:
             concat_rod_param[key] = []
 
-        for key in ["strain-limit-eps", "strain-limit-tau", "shrink"]:
+        for key in ["strain-limit", "shrink"]:
             concat_rod_param[key] = []
             concat_tet_param[key] = []
             concat_static_param[key] = []

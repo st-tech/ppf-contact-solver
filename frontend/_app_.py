@@ -88,8 +88,16 @@ class App:
             FixedSession: The fixed session of the last run application.
         """
         symlink_path = os.path.join(App.get_data_dirpath(), "symlinks", name)
+        session_dir = None
+
         if os.path.islink(symlink_path):
             session_dir = os.readlink(symlink_path)
+        elif os.path.exists(symlink_path + ".txt"):
+            # Windows fallback: read path from text file
+            with open(symlink_path + ".txt") as f:
+                session_dir = f.read().strip()
+
+        if session_dir:
             pickle_path = os.path.join(session_dir, RECOVERABLE_FIXED_SESSION_NAME)
             if os.path.exists(pickle_path):
                 return pickle.load(open(pickle_path, "rb"))
@@ -110,9 +118,11 @@ class App:
     def get_data_dirpath():
         import subprocess
 
+        proj_root = os.path.dirname(os.path.abspath(__file__))
+
         try:
             branch_file = os.path.join(
-                os.path.dirname(os.path.abspath(__file__)),
+                proj_root,
                 "..",
                 ".git",
                 "branch_name.txt",
@@ -121,18 +131,23 @@ class App:
                 with open(branch_file) as f:
                     git_branch = f.read().strip()
                     if git_branch:
-                        return os.path.expanduser(
-                            os.path.join(
-                                "~", ".local", "share", "ppf-cts", f"git-{git_branch}"
+                        if os.name == 'nt':  # Windows
+                            return os.path.join(
+                                proj_root, "..", "build-win-native", "ppf-cts", f"git-{git_branch}"
                             )
-                        )
+                        else:
+                            return os.path.expanduser(
+                                os.path.join(
+                                    "~", ".local", "share", "ppf-cts", f"git-{git_branch}"
+                                )
+                            )
         except Exception as _:
             pass
 
         try:
             git_branch = subprocess.check_output(
                 ["git", "branch", "--show-current"],
-                cwd=os.path.dirname(os.path.abspath(__file__)),
+                cwd=proj_root,
                 text=True,
             ).strip()
             if not git_branch:
@@ -140,9 +155,14 @@ class App:
         except (subprocess.CalledProcessError, FileNotFoundError):
             git_branch = "unknown"
 
-        return os.path.expanduser(
-            os.path.join("~", ".local", "share", "ppf-cts", f"git-{git_branch}")
-        )
+        if os.name == 'nt':  # Windows
+            return os.path.join(
+                proj_root, "..", "build-win-native", "ppf-cts", f"git-{git_branch}"
+            )
+        else:
+            return os.path.expanduser(
+                os.path.join("~", ".local", "share", "ppf-cts", f"git-{git_branch}")
+            )
 
     def __init__(self, name: str, renew: bool, cache_dir: str = ""):
         """Initializes the App class.

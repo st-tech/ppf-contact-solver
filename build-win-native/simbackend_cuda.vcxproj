@@ -1,0 +1,99 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}</ProjectGuid>
+    <RootNamespace>simbackend_cuda</RootNamespace>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+    <CudaToolkitCustomDir>$(CUDA_PATH)\</CudaToolkitCustomDir>
+  </PropertyGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
+    <ConfigurationType>DynamicLibrary</ConfigurationType>
+    <PlatformToolset>v143</PlatformToolset>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <CharacterSet>Unicode</CharacterSet>
+    <WholeProgramOptimization>true</WholeProgramOptimization>
+  </PropertyGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="ExtensionSettings">
+    <Import Project="$(CUDA_PATH)\extras\visual_studio_integration\MSBuildExtensions\CUDA 12.8.props" Condition="exists('$(CUDA_PATH)\extras\visual_studio_integration\MSBuildExtensions\CUDA 12.8.props')" />
+    <Import Project="$(CUDA_PATH)\extras\visual_studio_integration\MSBuildExtensions\CUDA 12.6.props" Condition="exists('$(CUDA_PATH)\extras\visual_studio_integration\MSBuildExtensions\CUDA 12.6.props') and !exists('$(CUDA_PATH)\extras\visual_studio_integration\MSBuildExtensions\CUDA 12.8.props')" />
+  </ImportGroup>
+
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <OutDir>$(SolutionDir)..\src\cpp\build\lib\</OutDir>
+    <IntDir>$(SolutionDir)..\src\cpp\build\obj\</IntDir>
+    <TargetName>libsimbackend_cuda</TargetName>
+    <TargetExt>.dll</TargetExt>
+  </PropertyGroup>
+
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <ClCompile>
+      <Optimization>MaxSpeed</Optimization>
+      <PreprocessorDefinitions>WIN32;NDEBUG;_WINDOWS;_USRDLL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>$(SolutionDir)deps\eigen-3.4.0;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+      <ExceptionHandling>Sync</ExceptionHandling>
+    </ClCompile>
+    <CudaCompile>
+      <TargetMachinePlatform>64</TargetMachinePlatform>
+      <AdditionalOptions>-std=c++17 --expt-relaxed-constexpr --extended-lambda -Xcompiler "/EHsc /W0 /MD" --diag-suppress=1222,2527,2529,2651,2653,2668,2669,2670,2671,2735,2737,2739,20012,20011,20014,177,940,1394 %(AdditionalOptions)</AdditionalOptions>
+      <Defines>__NVCC__;EIGEN_WARNINGS_DISABLED;THRUST_IGNORE_DEPRECATED_CPP_DIALECT;CUB_IGNORE_DEPRECATED_CPP_DIALECT</Defines>
+      <Include>$(SolutionDir)deps\eigen-3.4.0</Include>
+      <Runtime>MD</Runtime>
+      <Optimization>O3</Optimization>
+      <GenerateRelocatableDeviceCode>true</GenerateRelocatableDeviceCode>
+    </CudaCompile>
+    <CudaLink>
+      <PerformDeviceLink>true</PerformDeviceLink>
+      <AdditionalLibraryDirectories>$(CUDA_PATH)\lib\x64</AdditionalLibraryDirectories>
+    </CudaLink>
+    <Link>
+      <GenerateDebugInformation>false</GenerateDebugInformation>
+      <AdditionalLibraryDirectories>$(CUDA_PATH)\lib\x64;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>cublas.lib;cusparse.lib;cudart.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+  </ItemDefinitionGroup>
+
+  <!-- C++ Source Files -->
+  <ItemGroup>
+    <ClCompile Include="..\src\cpp\simplelog\SimpleLog.cpp" />
+    <ClCompile Include="..\src\cpp\stub.cpp" />
+  </ItemGroup>
+
+  <!-- CUDA Source Files -->
+  <ItemGroup>
+    <CudaCompile Include="..\src\cpp\buffer\buffer.cu" />
+    <CudaCompile Include="..\src\cpp\main\main.cu" />
+    <CudaCompile Include="..\src\cpp\utility\utility.cu" />
+    <CudaCompile Include="..\src\cpp\utility\dispatcher.cu" />
+    <CudaCompile Include="..\src\cpp\csrmat\csrmat.cu" />
+    <CudaCompile Include="..\src\cpp\contact\contact.cu" />
+    <CudaCompile Include="..\src\cpp\energy\energy.cu" />
+    <CudaCompile Include="..\src\cpp\eigenanalysis\eigenanalysis.cu" />
+    <CudaCompile Include="..\src\cpp\barrier\barrier.cu" />
+    <CudaCompile Include="..\src\cpp\strainlimiting\strainlimiting.cu" />
+    <CudaCompile Include="..\src\cpp\solver\solver.cu" />
+    <CudaCompile Include="..\src\cpp\kernels\reduce.cu" />
+    <CudaCompile Include="..\src\cpp\kernels\exclusive_scan.cu" />
+    <CudaCompile Include="..\src\cpp\kernels\vec_ops.cu" />
+  </ItemGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <ImportGroup Label="ExtensionTargets">
+    <Import Project="$(CUDA_PATH)\extras\visual_studio_integration\MSBuildExtensions\CUDA 12.8.targets" Condition="exists('$(CUDA_PATH)\extras\visual_studio_integration\MSBuildExtensions\CUDA 12.8.targets')" />
+    <Import Project="$(CUDA_PATH)\extras\visual_studio_integration\MSBuildExtensions\CUDA 12.6.targets" Condition="exists('$(CUDA_PATH)\extras\visual_studio_integration\MSBuildExtensions\CUDA 12.6.targets') and !exists('$(CUDA_PATH)\extras\visual_studio_integration\MSBuildExtensions\CUDA 12.8.targets')" />
+  </ImportGroup>
+</Project>
