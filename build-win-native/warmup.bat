@@ -1,11 +1,32 @@
 @echo off
 setlocal enabledelayedexpansion
 
-echo === ZOZO's Contact Solver Native Windows Environment Setup ===
-
 REM Get the directory where this script is located
 set BUILD_WIN=%~dp0
 set BUILD_WIN=%BUILD_WIN:~0,-1%
+set LOGFILE=%BUILD_WIN%\warmup.log
+
+REM If not already being logged, restart with logging
+if "%WARMUP_LOGGING%"=="" (
+    set WARMUP_LOGGING=1
+    echo Logging to %LOGFILE%
+    powershell -Command "& { cmd /c 'set WARMUP_LOGGING=1 && \"%~f0\" %*' 2>&1 | Tee-Object -FilePath '%LOGFILE%' }"
+    exit /b %ERRORLEVEL%
+)
+
+echo === ZOZO's Contact Solver Native Windows Environment Setup ===
+
+REM Check if Long Path support is enabled
+for /f %%i in ('powershell -Command "Get-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem' -Name LongPathsEnabled 2>$null | Select-Object -ExpandProperty LongPathsEnabled"') do set LONGPATH_VALUE=%%i
+if not "%LONGPATH_VALUE%"=="1" (
+    echo ERROR: Windows Long Path support is not enabled.
+    echo.
+    echo Please run enable_long_path.bat as Administrator to enable it,
+    echo then REBOOT your system before running this script.
+    echo.
+    exit /b 1
+)
+
 for %%I in ("%BUILD_WIN%\..") do set SRC=%%~fI
 
 set PYTHON_DIR=%BUILD_WIN%\python
@@ -18,6 +39,7 @@ echo.
 echo Build directory: %BUILD_WIN%
 echo Source directory: %SRC%
 echo Python: %PYTHON%
+echo Log file: %LOGFILE%
 echo.
 
 REM Create directories if needed
@@ -136,10 +158,12 @@ if not exist "%PYTHON%" (
     )
 
     REM Enable pip by modifying python311._pth
-    echo Enabling pip support...
+    REM Also add source directory so 'frontend' module can be imported
+    echo Enabling pip support and adding source path...
     echo python311.zip> "%PYTHON_DIR%\python311._pth"
     echo .>> "%PYTHON_DIR%\python311._pth"
     echo Lib\site-packages>> "%PYTHON_DIR%\python311._pth"
+    echo %SRC%>> "%PYTHON_DIR%\python311._pth"
     echo import site>> "%PYTHON_DIR%\python311._pth"
 
     REM Download and install pip
@@ -243,3 +267,5 @@ echo.
 echo Next step: Run build.bat to build the solver.
 
 endlocal
+echo Press any key to exit...
+pause >nul
