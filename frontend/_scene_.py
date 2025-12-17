@@ -1376,7 +1376,12 @@ class FixedScene:
 
         if tri is not None and len(tri) == 0:
             tri = np.array([[0, 0, 0]])
-        if not os.path.exists(path) and Utils.ci_name() is None:
+
+        # Check if rendering should be skipped (e.g., on Windows headless)
+        skip_render = args.get("skip_render", False)
+
+        # Export mesh file (also in CI mode when skip_render is set)
+        if not os.path.exists(path) and (Utils.ci_name() is None or skip_render):
             import trimesh
 
             mesh = trimesh.Trimesh(
@@ -1384,7 +1389,8 @@ class FixedScene:
             )
             mesh.export(path)
 
-        if not os.path.exists(image_path):
+        # Skip rendering on Windows (pyrender doesn't work in headless mode)
+        if not skip_render and not os.path.exists(image_path):
             if Utils.ci_name() is not None:
                 args["width"] = 320
                 args["height"] = 240

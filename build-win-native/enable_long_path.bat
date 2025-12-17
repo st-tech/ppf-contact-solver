@@ -1,4 +1,9 @@
 @echo off
+REM File: enable_long_path.bat
+REM Code: Claude Code
+REM Review: Ryoichi Ando (ryoichi.ando@zozo.com)
+REM License: Apache v2.0
+
 echo === Enabling Windows Long Path Support ===
 echo.
 
@@ -26,10 +31,18 @@ if "%LONGPATH_VALUE%"=="1" (
     echo IMPORTANT: You must REBOOT your system for this change to take effect.
 ) else (
     echo ERROR: Failed to enable Long Path support.
-    echo Press any key to exit...
-    pause >nul
+    REM Skip pause if /nopause argument is provided (for automation)
+    echo %* | find /i "/nopause" >nul
+    if errorlevel 1 (
+        echo Press any key to exit...
+        pause >nul
+    )
     exit /b 1
 )
 
-echo Press any key to exit...
-pause >nul
+REM Skip pause if /nopause argument is provided (for automation)
+echo %* | find /i "/nopause" >nul
+if errorlevel 1 (
+    echo Press any key to exit...
+    pause >nul
+)

@@ -50,9 +50,10 @@ class App:
         """Find the root directory of the project.
 
         Returns:
-            str: Path to the root directory of the project.
+            str: Path to the root directory of the project (parent of frontend).
         """
-        return os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        frontend_dir = os.path.dirname(os.path.abspath(__file__))
+        return os.path.dirname(frontend_dir)
 
     @staticmethod
     def get_default_param() -> ParamManager:
@@ -118,22 +119,18 @@ class App:
     def get_data_dirpath():
         import subprocess
 
-        proj_root = os.path.dirname(os.path.abspath(__file__))
+        frontend_dir = os.path.dirname(os.path.abspath(__file__))
+        base_dir = os.path.dirname(frontend_dir)
 
         try:
-            branch_file = os.path.join(
-                proj_root,
-                "..",
-                ".git",
-                "branch_name.txt",
-            )
+            branch_file = os.path.join(base_dir, ".git", "branch_name.txt")
             if os.path.exists(branch_file):
                 with open(branch_file) as f:
                     git_branch = f.read().strip()
                     if git_branch:
                         if os.name == 'nt':  # Windows
                             return os.path.join(
-                                proj_root, "..", "build-win-native", "ppf-cts", f"git-{git_branch}"
+                                base_dir, "local", "share", "ppf-cts", f"git-{git_branch}"
                             )
                         else:
                             return os.path.expanduser(
@@ -147,7 +144,7 @@ class App:
         try:
             git_branch = subprocess.check_output(
                 ["git", "branch", "--show-current"],
-                cwd=proj_root,
+                cwd=base_dir,
                 text=True,
             ).strip()
             if not git_branch:
@@ -157,7 +154,7 @@ class App:
 
         if os.name == 'nt':  # Windows
             return os.path.join(
-                proj_root, "..", "build-win-native", "ppf-cts", f"git-{git_branch}"
+                base_dir, "local", "share", "ppf-cts", f"git-{git_branch}"
             )
         else:
             return os.path.expanduser(

@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# File: example-list.py
+# Code: Claude Code
+# Review: Ryoichi Ando (ryoichi.ando@zozo.com)
+# License: Apache v2.0
 
 from pathlib import Path
 

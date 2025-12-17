@@ -36,4 +36,5 @@ session = session.build()
 session.start(blocking=True)
 session.export.animation().zip()
 
-assert session.finished()
+if app.ci:
+    assert session.finished()

@@ -1,5 +1,18 @@
 @echo off
+REM File: warmup.bat
+REM Code: Claude Code
+REM Review: Ryoichi Ando (ryoichi.ando@zozo.com)
+REM License: Apache v2.0
+
 setlocal enabledelayedexpansion
+
+REM Check for /nopause argument early (before re-launch)
+REM Only check if NOPAUSE is not already set (from re-launch environment)
+if not defined NOPAUSE (
+    set NOPAUSE=0
+    echo %* | find /i "/nopause" >nul
+    if not errorlevel 1 set NOPAUSE=1
+)
 
 REM Get the directory where this script is located
 set BUILD_WIN=%~dp0
@@ -10,7 +23,7 @@ REM If not already being logged, restart with logging
 if "%WARMUP_LOGGING%"=="" (
     set WARMUP_LOGGING=1
     echo Logging to %LOGFILE%
-    powershell -Command "& { cmd /c 'set WARMUP_LOGGING=1 && \"%~f0\" %*' 2>&1 | Tee-Object -FilePath '%LOGFILE%' }"
+    powershell -Command "& { cmd /c 'set WARMUP_LOGGING=1&& set NOPAUSE=!NOPAUSE!&& \"%~f0\"' 2>&1 | Tee-Object -FilePath '%LOGFILE%' }"
     exit /b %ERRORLEVEL%
 )
 
@@ -59,8 +72,6 @@ if errorlevel 1 (
         exit /b 1
     )
     echo Chocolatey installed successfully!
-    REM Refresh PATH
-    call refreshenv
 ) else (
     echo Chocolatey already installed
 )
@@ -71,13 +82,14 @@ REM ============================================================
 where git >nul 2>&1
 if errorlevel 1 (
     echo === Installing Git ===
-    choco install git -y
+    C:\ProgramData\chocolatey\bin\choco.exe install git -y
     if errorlevel 1 (
         echo ERROR: Failed to install Git
         exit /b 1
     )
     echo Git installed successfully!
-    call refreshenv
+    REM Add Git to PATH for current session
+    set "PATH=C:\Program Files\Git\cmd;%PATH%"
 ) else (
     echo Git already installed
 )
@@ -88,7 +100,7 @@ REM ============================================================
 if not exist "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvarsall.bat" (
     echo === Installing Visual Studio 2022 Build Tools ===
     echo This may take a while...
-    choco install visualstudio2022buildtools --package-parameters "--add Microsoft.VisualStudio.Workload.VCTools --includeRecommended" -y
+    C:\ProgramData\chocolatey\bin\choco.exe install visualstudio2022buildtools --package-parameters "--add Microsoft.VisualStudio.Workload.VCTools --includeRecommended" -y
     if errorlevel 1 (
         echo ERROR: Failed to install Visual Studio 2022 Build Tools
         exit /b 1
@@ -268,6 +280,10 @@ echo === Setup complete! ===
 echo.
 echo Next step: Run build.bat to build the solver.
 
+REM Skip pause if /nopause argument is provided (for automation)
+if "%NOPAUSE%"=="0" (
+    echo Press any key to exit...
+    pause >nul
+)
+
 endlocal
-echo Press any key to exit...
-pause >nul

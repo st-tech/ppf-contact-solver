@@ -73,20 +73,11 @@ jobs:
         id: runner-ip
         run: |
           echo "Fetching GitHub Actions runner public IP..."
-
-          RUNNER_IP=""
-          RUNNER_IP=$(curl -s --max-time 5 https://api.ipify.org 2>/dev/null || echo "")
+          RUNNER_IP=$(curl -s --max-time 10 https://checkip.amazonaws.com | tr -d '\n')
           if [ -z "$RUNNER_IP" ]; then
-            RUNNER_IP=$(curl -s --max-time 5 https://ifconfig.me 2>/dev/null || echo "")
-          fi
-          if [ -z "$RUNNER_IP" ]; then
-            RUNNER_IP=$(curl -s --max-time 5 https://icanhazip.com 2>/dev/null || echo "")
-          fi
-          if [ -z "$RUNNER_IP" ] || ! echo "$RUNNER_IP" | grep -qE '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$'; then
-            echo "ERROR: Failed to determine or validate runner IP address"
+            echo "ERROR: Failed to get IP from checkip.amazonaws.com"
             exit 1
           fi
-
           echo "::add-mask::$RUNNER_IP"
           echo "RUNNER_IP=$RUNNER_IP" >> $GITHUB_OUTPUT
           echo "GitHub Actions Runner IP: $RUNNER_IP"
@@ -789,20 +780,11 @@ jobs:
         id: runner-ip
         run: |
           echo "Fetching GitHub Actions runner public IP..."
-
-          RUNNER_IP=""
-          RUNNER_IP=$(curl -s --max-time 5 https://api.ipify.org 2>/dev/null || echo "")
+          RUNNER_IP=$(curl -s --max-time 10 https://checkip.amazonaws.com | tr -d '\n')
           if [ -z "$RUNNER_IP" ]; then
-            RUNNER_IP=$(curl -s --max-time 5 https://ifconfig.me 2>/dev/null || echo "")
-          fi
-          if [ -z "$RUNNER_IP" ]; then
-            RUNNER_IP=$(curl -s --max-time 5 https://icanhazip.com 2>/dev/null || echo "")
-          fi
-          if [ -z "$RUNNER_IP" ] || ! echo "$RUNNER_IP" | grep -qE '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$'; then
-            echo "ERROR: Failed to determine or validate runner IP address"
+            echo "ERROR: Failed to get IP from checkip.amazonaws.com"
             exit 1
           fi
-
           echo "::add-mask::$RUNNER_IP"
           echo "RUNNER_IP=$RUNNER_IP" >> $GITHUB_OUTPUT
           echo "GitHub Actions Runner IP: $RUNNER_IP"
@@ -1470,20 +1452,11 @@ jobs:
         id: runner-ip
         run: |
           echo "Fetching GitHub Actions runner public IP..."
-
-          RUNNER_IP=""
-          RUNNER_IP=$(curl -s --max-time 5 https://api.ipify.org 2>/dev/null || echo "")
+          RUNNER_IP=$(curl -s --max-time 10 https://checkip.amazonaws.com | tr -d '\n')
           if [ -z "$RUNNER_IP" ]; then
-            RUNNER_IP=$(curl -s --max-time 5 https://ifconfig.me 2>/dev/null || echo "")
-          fi
-          if [ -z "$RUNNER_IP" ]; then
-            RUNNER_IP=$(curl -s --max-time 5 https://icanhazip.com 2>/dev/null || echo "")
-          fi
-          if [ -z "$RUNNER_IP" ] || ! echo "$RUNNER_IP" | grep -qE '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$'; then
-            echo "ERROR: Failed to determine or validate runner IP address"
+            echo "ERROR: Failed to get IP from checkip.amazonaws.com"
             exit 1
           fi
-
           echo "::add-mask::$RUNNER_IP"
           echo "RUNNER_IP=$RUNNER_IP" >> $GITHUB_OUTPUT
           echo "GitHub Actions Runner IP: $RUNNER_IP"
@@ -2151,20 +2124,11 @@ jobs:
         id: runner-ip
         run: |
           echo "Fetching GitHub Actions runner public IP..."
-
-          RUNNER_IP=""
-          RUNNER_IP=$(curl -s --max-time 5 https://api.ipify.org 2>/dev/null || echo "")
+          RUNNER_IP=$(curl -s --max-time 10 https://checkip.amazonaws.com | tr -d '\n')
           if [ -z "$RUNNER_IP" ]; then
-            RUNNER_IP=$(curl -s --max-time 5 https://ifconfig.me 2>/dev/null || echo "")
-          fi
-          if [ -z "$RUNNER_IP" ]; then
-            RUNNER_IP=$(curl -s --max-time 5 https://icanhazip.com 2>/dev/null || echo "")
-          fi
-          if [ -z "$RUNNER_IP" ] || ! echo "$RUNNER_IP" | grep -qE '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$'; then
-            echo "ERROR: Failed to determine or validate runner IP address"
+            echo "ERROR: Failed to get IP from checkip.amazonaws.com"
             exit 1
           fi
-
           echo "::add-mask::$RUNNER_IP"
           echo "RUNNER_IP=$RUNNER_IP" >> $GITHUB_OUTPUT
           echo "GitHub Actions Runner IP: $RUNNER_IP"
@@ -2832,20 +2796,11 @@ jobs:
         id: runner-ip
         run: |
           echo "Fetching GitHub Actions runner public IP..."
-
-          RUNNER_IP=""
-          RUNNER_IP=$(curl -s --max-time 5 https://api.ipify.org 2>/dev/null || echo "")
+          RUNNER_IP=$(curl -s --max-time 10 https://checkip.amazonaws.com | tr -d '\n')
           if [ -z "$RUNNER_IP" ]; then
-            RUNNER_IP=$(curl -s --max-time 5 https://ifconfig.me 2>/dev/null || echo "")
-          fi
-          if [ -z "$RUNNER_IP" ]; then
-            RUNNER_IP=$(curl -s --max-time 5 https://icanhazip.com 2>/dev/null || echo "")
-          fi
-          if [ -z "$RUNNER_IP" ] || ! echo "$RUNNER_IP" | grep -qE '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$'; then
-            echo "ERROR: Failed to determine or validate runner IP address"
+            echo "ERROR: Failed to get IP from checkip.amazonaws.com"
             exit 1
           fi
-
           echo "::add-mask::$RUNNER_IP"
           echo "RUNNER_IP=$RUNNER_IP" >> $GITHUB_OUTPUT
           echo "GitHub Actions Runner IP: $RUNNER_IP"

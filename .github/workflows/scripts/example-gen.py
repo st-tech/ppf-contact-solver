@@ -1,4 +1,9 @@
 #!/usr/bin/env python3
+# File: example-gen.py
+# Code: Claude Code
+# Review: Ryoichi Ando (ryoichi.ando@zozo.com)
+# License: Apache v2.0
+
 """
 Generate GitHub workflow files for each Jupyter notebook example.
 

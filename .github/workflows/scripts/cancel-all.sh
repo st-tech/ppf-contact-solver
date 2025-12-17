@@ -1,4 +1,8 @@
 #!/bin/bash
+# File: cancel-all.sh
+# Code: Claude Code
+# Review: Ryoichi Ando (ryoichi.ando@zozo.com)
+# License: Apache v2.0
 
 gh run list --json status,workflowName,databaseId --jq '.[] | select(.status=="in_progress" or .status=="queued")' |
 	while read -r run; do

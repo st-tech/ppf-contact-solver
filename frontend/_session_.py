@@ -8,6 +8,7 @@ import os
 import pickle
 import shutil
 import subprocess
+import sys
 import threading
 import time
 
@@ -523,6 +524,12 @@ fi
                 shutil.rmtree(path)
         else:
             os.makedirs(path)
+
+        # On Windows, skip rendering (pyrender doesn't work in headless mode)
+        is_windows = sys.platform == "win32"
+        if is_windows:
+            options["skip_render"] = True
+
         for i in tqdm(range(latest_frame), desc="export", ncols=70):
             self.frame(
                 os.path.join(path, f"frame_{i}.{ext}"),
@@ -531,6 +538,7 @@ fi
                 options,
                 delete_exist=clear,
             )
+
         if shutil.which("ffmpeg") is not None:
             vid_name = "frame.mp4"
             command = f"ffmpeg -hide_banner -loglevel error -y -r 60 -i frame_%d.{ext}.png -pix_fmt yuv420p -b:v 50000k {vid_name}"

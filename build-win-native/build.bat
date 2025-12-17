@@ -1,5 +1,18 @@
 @echo off
+REM File: build.bat
+REM Code: Claude Code
+REM Review: Ryoichi Ando (ryoichi.ando@zozo.com)
+REM License: Apache v2.0
+
 setlocal enabledelayedexpansion
+
+REM Check for /nopause argument early (before re-launch)
+REM Only check if NOPAUSE is not already set (from re-launch environment)
+if not defined NOPAUSE (
+    set NOPAUSE=0
+    echo %* | find /i "/nopause" >nul
+    if not errorlevel 1 set NOPAUSE=1
+)
 
 REM Get the directory where this script is located
 set BUILD_WIN=%~dp0
@@ -11,7 +24,7 @@ REM If not already being logged, restart with logging
 if "%BUILD_LOGGING%"=="" (
     set BUILD_LOGGING=1
     echo Logging to %LOGFILE%
-    powershell -Command "& { cmd /c 'set BUILD_LOGGING=1 && \"%~f0\" %*' 2>&1 | Tee-Object -FilePath '%LOGFILE%' }"
+    powershell -Command "& { cmd /c 'set BUILD_LOGGING=1&& set NOPAUSE=!NOPAUSE!&& \"%~f0\"' 2>&1 | Tee-Object -FilePath '%LOGFILE%' }"
     exit /b %ERRORLEVEL%
 )
 
@@ -197,6 +210,10 @@ echo.
 echo To start JupyterLab, run: %BUILD_WIN%\start.bat
 echo.
 
+REM Skip pause if /nopause argument is provided (for automation)
+if "%NOPAUSE%"=="0" (
+    echo Press any key to exit...
+    pause >nul
+)
+
 endlocal
-echo Press any key to exit...
-pause >nul

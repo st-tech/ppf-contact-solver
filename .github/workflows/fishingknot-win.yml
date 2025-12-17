@@ -1,0 +1,541 @@
+# File: fishingknot-win.yml
+# Code: Claude Code
+# Review: Ryoichi Ando (ryoichi.ando@zozo.com)
+# License: Apache v2.0
+
+name: fishingknot.ipynb (Windows Native)
+
+on:
+  workflow_dispatch:
+    inputs:
+      instance_type:
+        description: 'EC2 instance type'
+        required: true
+        default: 'g6e.2xlarge'
+        type: choice
+        options:
+          - g6.2xlarge
+          - g6e.2xlarge
+      region:
+        description: 'AWS Region'
+        required: true
+        default: 'us-east-1'
+        type: choice
+        options:
+          - us-east-1
+          - us-east-2
+
+jobs:
+  run-example:
+    name: Run fishingknot (Windows)
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+
+    env:
+      AWS_REGION: ${{ github.event.inputs.region }}
+      INSTANCE_TYPE: ${{ github.event.inputs.instance_type }}
+      BRANCH: ${{ github.ref_name }}
+      EXAMPLE: fishingknot
+      WORKDIR: C:\ppf-contact-solver
+      USER: Administrator
+
+    steps:
+      - name: Show input parameters
+        run: |
+          echo "## Input Parameters"
+          echo "Example: fishingknot"
+          echo "Branch: ${{ github.ref_name }}"
+          echo "Instance Type: ${{ github.event.inputs.instance_type }}"
+          echo "Region: ${{ github.event.inputs.region }}"
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Verify AWS authentication
+        run: |
+          echo "Testing AWS authentication..."
+          aws sts get-caller-identity
+          echo "AWS Region: $AWS_REGION"
+          echo "Instance Type: $INSTANCE_TYPE"
+          echo "Branch: $BRANCH"
+          echo "Example: $EXAMPLE"
+
+      - name: Get GitHub Actions runner public IP
+        id: runner-ip
+        run: |
+          echo "Fetching GitHub Actions runner public IP..."
+          RUNNER_IP=$(curl -s --max-time 10 https://checkip.amazonaws.com | tr -d '\n')
+          if [ -z "$RUNNER_IP" ]; then
+            echo "ERROR: Failed to get IP from checkip.amazonaws.com"
+            exit 1
+          fi
+          echo "::add-mask::$RUNNER_IP"
+          echo "RUNNER_IP=$RUNNER_IP" >> $GITHUB_OUTPUT
+          echo "GitHub Actions Runner IP: $RUNNER_IP"
+
+      - name: Find Windows Server 2025 AMI
+        id: ami
+        run: |
+          echo "Finding latest Windows Server 2025 AMI..."
+          AMI_ID=$(aws ec2 describe-images \
+            --owners amazon \
+            --filters \
+              "Name=name,Values=Windows_Server-2025-English-Full-Base-*" \
+              "Name=state,Values=available" \
+            --query 'sort_by(Images, &CreationDate)[-1].ImageId' \
+            --region "$AWS_REGION" \
+            --output text)
+          if [ "$AMI_ID" = "None" ] || [ -z "$AMI_ID" ]; then
+            echo "ERROR: Windows Server 2025 AMI not found in region $AWS_REGION"
+            exit 1
+          fi
+          echo "AMI_ID=$AMI_ID" >> $GITHUB_OUTPUT
+          echo "Found AMI: $AMI_ID"
+
+      - name: Get default VPC ID
+        id: vpc
+        run: |
+          echo "Getting default VPC ID..."
+          VPC_ID=$(aws ec2 describe-vpcs \
+            --filters "Name=isDefault,Values=true" \
+            --query 'Vpcs[0].VpcId' \
+            --region "$AWS_REGION" \
+            --output text)
+          if [ "$VPC_ID" = "None" ] || [ -z "$VPC_ID" ]; then
+            echo "ERROR: Default VPC not found in region $AWS_REGION"
+            exit 1
+          fi
+          echo "VPC_ID=$VPC_ID" >> $GITHUB_OUTPUT
+          echo "Default VPC: $VPC_ID"
+
+      - name: Generate unique identifiers
+        id: ids
+        run: |
+          TIMESTAMP=$(date +%Y%m%d%H%M%S)
+          RANDOM_SUFFIX=$(head /dev/urandom | tr -dc a-z0-9 | head -c 6)
+          TEMP_INSTANCE_ID="temp-${TIMESTAMP}-${RANDOM_SUFFIX}"
+          SSH_PORT=$((10001 + RANDOM % 55535))
+          echo "::add-mask::$SSH_PORT"
+          echo "TIMESTAMP=$TIMESTAMP" >> $GITHUB_OUTPUT
+          echo "TEMP_INSTANCE_ID=$TEMP_INSTANCE_ID" >> $GITHUB_OUTPUT
+          echo "SSH_PORT=$SSH_PORT" >> $GITHUB_OUTPUT
+          echo "Temporary Instance ID: $TEMP_INSTANCE_ID"
+          echo "SSH Port: $SSH_PORT"
+
+      - name: Setup persistent security group
+        id: security-group
+        run: |
+          echo "Setting up persistent security group 'github-actions-windows-persistent'..."
+          SG_NAME="github-actions-windows-persistent"
+          SG_DESCRIPTION="Persistent security group for GitHub Actions Windows builds with dynamic rules"
+          SG_ID=$(aws ec2 describe-security-groups \
+            --filters "Name=group-name,Values=$SG_NAME" \
+            --query 'SecurityGroups[0].GroupId' \
+            --region "$AWS_REGION" \
+            --output text || echo "")
+          if [ "$SG_ID" = "None" ] || [ -z "$SG_ID" ]; then
+            echo "Security group does not exist. Creating new one..."
+            SG_ID=$(aws ec2 create-security-group \
+              --group-name "$SG_NAME" \
+              --description "$SG_DESCRIPTION" \
+              --vpc-id "${{ steps.vpc.outputs.VPC_ID }}" \
+              --query 'GroupId' \
+              --region "$AWS_REGION" \
+              --output text)
+            echo "Security Group created: $SG_ID"
+            aws ec2 create-tags \
+              --resources "$SG_ID" \
+              --tags \
+                "Key=Name,Value=$SG_NAME" \
+                "Key=ManagedBy,Value=GitHubActions" \
+                "Key=Purpose,Value=WindowsBuildPersistentDynamicRules" \
+                "Key=CreatedAt,Value=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+              --region "$AWS_REGION"
+            echo "Security Group tagged successfully"
+          else
+            echo "Using existing security group: $SG_ID"
+          fi
+          echo "SG_ID=$SG_ID" >> $GITHUB_OUTPUT
+          echo "Adding ingress rule for runner IP on port ${{ steps.ids.outputs.SSH_PORT }}"
+          aws ec2 authorize-security-group-ingress \
+            --group-id "$SG_ID" \
+            --ip-permissions \
+              "IpProtocol=tcp,FromPort=${{ steps.ids.outputs.SSH_PORT }},ToPort=${{ steps.ids.outputs.SSH_PORT }},IpRanges=[{CidrIp=${{ steps.runner-ip.outputs.RUNNER_IP }}/32,Description='GHA Run ${{ github.run_id }} Port ${{ steps.ids.outputs.SSH_PORT }}'}]" \
+            --region "$AWS_REGION" 2>&1 || echo "Note: Rule may already exist"
+          echo "RUNNER_IP_CIDR=${{ steps.runner-ip.outputs.RUNNER_IP }}/32" >> $GITHUB_OUTPUT
+          echo "SSH_PORT=${{ steps.ids.outputs.SSH_PORT }}" >> $GITHUB_OUTPUT
+          echo "SSH ingress rule added successfully"
+
+      - name: Retrieve SSH key from Parameter Store
+        id: keypair
+        run: |
+          echo "Retrieving SSH private key from AWS Systems Manager..."
+          aws ssm get-parameter \
+            --name "/github-actions/ec2/ssh-key" \
+            --with-decryption \
+            --query 'Parameter.Value' \
+            --region "$AWS_REGION" \
+            --output text > /tmp/github-actions-ec2.pem
+          chmod 600 /tmp/github-actions-ec2.pem
+          echo "SSH key retrieved successfully"
+          echo "KEY_PATH=/tmp/github-actions-ec2.pem" >> $GITHUB_OUTPUT
+
+      - name: Create Windows user data script
+        run: |
+          SSH_PORT="${{ steps.ids.outputs.SSH_PORT }}"
+          sed "s/SSH_PORT_PLACEHOLDER/$SSH_PORT/g" .github/workflows/scripts/win/user-data.ps1 > /tmp/user-data.ps1
+          echo "User data script created with SSH port $SSH_PORT"
+
+      - name: Launch EC2 instance
+        id: instance
+        run: |
+          echo "Launching Windows EC2 instance..."
+          INSTANCE_ID=$(aws ec2 run-instances \
+            --image-id "${{ steps.ami.outputs.AMI_ID }}" \
+            --instance-type "$INSTANCE_TYPE" \
+            --key-name "${{ secrets.AWS_KEY_PAIR_NAME }}" \
+            --security-group-ids "${{ steps.security-group.outputs.SG_ID }}" \
+            --user-data file:///tmp/user-data.ps1 \
+            --block-device-mappings "DeviceName=/dev/sda1,Ebs={VolumeSize=100,VolumeType=gp3,DeleteOnTermination=true}" \
+            --tag-specifications \
+              "ResourceType=instance,Tags=[{Key=Name,Value=gpu-runner-win-fishingknot-${{ steps.ids.outputs.TIMESTAMP }}},{Key=ManagedBy,Value=GitHubActions},{Key=Purpose,Value=WindowsGPURunner},{Key=Workflow,Value=${{ github.workflow }}},{Key=RunId,Value=${{ github.run_id }}},{Key=Branch,Value=${{ env.BRANCH }}},{Key=Example,Value=fishingknot},{Key=SSHPort,Value=${{ steps.ids.outputs.SSH_PORT }}}]" \
+              "ResourceType=volume,Tags=[{Key=Name,Value=gpu-runner-win-fishingknot-${{ steps.ids.outputs.TIMESTAMP }}-volume},{Key=ManagedBy,Value=GitHubActions},{Key=Purpose,Value=WindowsGPURunner}]" \
+            --instance-initiated-shutdown-behavior terminate \
+            --query 'Instances[0].InstanceId' \
+            --region "$AWS_REGION" \
+            --output text)
+          echo "INSTANCE_ID=$INSTANCE_ID" >> $GITHUB_OUTPUT
+          echo "Instance launched: $INSTANCE_ID"
+
+      - name: Wait for instance to be running
+        run: |
+          echo "Waiting for instance to be running..."
+          aws ec2 wait instance-running \
+            --instance-ids "${{ steps.instance.outputs.INSTANCE_ID }}" \
+            --region "$AWS_REGION"
+          PUBLIC_IP=$(aws ec2 describe-instances \
+            --instance-ids "${{ steps.instance.outputs.INSTANCE_ID }}" \
+            --query 'Reservations[0].Instances[0].PublicIpAddress' \
+            --region "$AWS_REGION" \
+            --output text)
+          echo "::add-mask::$PUBLIC_IP"
+          echo "PUBLIC_IP=$PUBLIC_IP" >> $GITHUB_ENV
+          echo "Instance is running at: $PUBLIC_IP"
+
+      - name: Wait for SSH
+        run: |
+          echo "Waiting for SSH to be ready..."
+          KEY_PATH="${{ steps.keypair.outputs.KEY_PATH }}"
+          SSH_PORT="${{ steps.ids.outputs.SSH_PORT }}"
+          echo "Waiting for SSH on port $SSH_PORT..."
+          MAX_SSH_ATTEMPTS=60
+          ATTEMPT=0
+          while [ $ATTEMPT -lt $MAX_SSH_ATTEMPTS ]; do
+            if ssh -p $SSH_PORT -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+              -o BatchMode=yes -i "$KEY_PATH" Administrator@$PUBLIC_IP "echo SSH_READY" 2>/dev/null | grep -q SSH_READY; then
+              echo "SSH connection established!"
+              break
+            fi
+            ATTEMPT=$((ATTEMPT + 1))
+            if [ $ATTEMPT -eq $MAX_SSH_ATTEMPTS ]; then
+              echo "Failed to establish SSH connection"
+              exit 1
+            fi
+            echo "SSH not ready (attempt $ATTEMPT/$MAX_SSH_ATTEMPTS), waiting 30s..."
+            sleep 30
+          done
+          echo "Waiting for SSH setup completion..."
+          MAX_SETUP_ATTEMPTS=30
+          ATTEMPT=0
+          while [ $ATTEMPT -lt $MAX_SETUP_ATTEMPTS ]; do
+            if ssh -p $SSH_PORT -o ConnectTimeout=10 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+              -i "$KEY_PATH" Administrator@$PUBLIC_IP \
+              "if (Test-Path C:\\ssh_ready.txt) { echo READY } else { echo NOT_READY }" 2>/dev/null | grep -q READY; then
+              echo "SSH setup complete!"
+              break
+            fi
+            ATTEMPT=$((ATTEMPT + 1))
+            if [ $ATTEMPT -eq $MAX_SETUP_ATTEMPTS ]; then
+              echo "SSH setup timed out, continuing anyway..."
+              break
+            fi
+            echo "SSH setup not complete (attempt $ATTEMPT/$MAX_SETUP_ATTEMPTS), waiting 30s..."
+            sleep 30
+          done
+
+      - name: Install CUDA 12.8
+        run: |
+          echo "Installing CUDA 12.8 (this will take 10-20 minutes)..."
+          SSH_PORT="${{ steps.ids.outputs.SSH_PORT }}"
+          KEY_PATH="${{ steps.keypair.outputs.KEY_PATH }}"
+          scp -P $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -i "$KEY_PATH" .github/workflows/scripts/win/install-cuda.ps1 Administrator@$PUBLIC_IP:C:/install_cuda.ps1
+          ssh -p $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -i "$KEY_PATH" Administrator@$PUBLIC_IP \
+            "powershell -ExecutionPolicy Bypass -File C:/install_cuda.ps1"
+
+      - name: Create archive of repository
+        run: |
+          echo "Creating repository archive..."
+          git archive --format=zip --output=/tmp/repo.zip HEAD
+
+      - name: Transfer repository to instance
+        run: |
+          echo "Transferring repository to instance..."
+          SSH_PORT="${{ steps.ids.outputs.SSH_PORT }}"
+          KEY_PATH="${{ steps.keypair.outputs.KEY_PATH }}"
+          scp -P $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -i "$KEY_PATH" /tmp/repo.zip Administrator@$PUBLIC_IP:C:/source.zip
+          ssh -p $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -i "$KEY_PATH" Administrator@$PUBLIC_IP \
+            "powershell -Command \"if (Test-Path 'C:\\ppf-contact-solver') { Remove-Item -Recurse -Force 'C:\\ppf-contact-solver' }; New-Item -ItemType Directory -Path 'C:\\ppf-contact-solver' -Force; Expand-Archive -Path 'C:\\source.zip' -DestinationPath 'C:\\ppf-contact-solver' -Force; Remove-Item 'C:\\source.zip'\""
+
+      - name: Run warmup.bat
+        run: |
+          echo "Running warmup.bat..."
+          SSH_PORT="${{ steps.ids.outputs.SSH_PORT }}"
+          KEY_PATH="${{ steps.keypair.outputs.KEY_PATH }}"
+          ssh -p $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -i "$KEY_PATH" Administrator@$PUBLIC_IP \
+            "cmd /c 'cd C:\\ppf-contact-solver\\build-win-native && warmup.bat /nopause'"
+
+      - name: Run build.bat
+        run: |
+          echo "Running build.bat..."
+          SSH_PORT="${{ steps.ids.outputs.SSH_PORT }}"
+          KEY_PATH="${{ steps.keypair.outputs.KEY_PATH }}"
+          ssh -p $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -i "$KEY_PATH" Administrator@$PUBLIC_IP \
+            "cmd /c 'cd C:\\ppf-contact-solver\\build-win-native && build.bat /nopause'"
+
+      - name: Convert notebook to Python script
+        run: |
+          echo "Converting fishingknot.ipynb to Python script..."
+          SSH_PORT="${{ steps.ids.outputs.SSH_PORT }}"
+          KEY_PATH="${{ steps.keypair.outputs.KEY_PATH }}"
+          sed "s/EXAMPLE_PLACEHOLDER/fishingknot/g" .github/workflows/scripts/win/convert-notebook.ps1 > /tmp/convert_notebook.ps1
+          scp -P $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -i "$KEY_PATH" /tmp/convert_notebook.ps1 Administrator@$PUBLIC_IP:C:/convert_notebook.ps1
+          ssh -p $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -i "$KEY_PATH" Administrator@$PUBLIC_IP \
+            "powershell -ExecutionPolicy Bypass -File C:/convert_notebook.ps1"
+
+      - name: Run 1st iteration
+        run: |
+          echo "Running 1st iteration of fishingknot"
+          SSH_PORT="${{ steps.ids.outputs.SSH_PORT }}"
+          KEY_PATH="${{ steps.keypair.outputs.KEY_PATH }}"
+          sed -e "s/EXAMPLE_PLACEHOLDER/fishingknot/g" -e "s/ITERATION_PLACEHOLDER/1st/g" -e "s/ITERATION_NUM_PLACEHOLDER/1/g" \
+            .github/workflows/scripts/win/run-iteration.ps1 > /tmp/run_iteration.ps1
+          scp -P $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -i "$KEY_PATH" /tmp/run_iteration.ps1 Administrator@$PUBLIC_IP:C:/run_iteration.ps1
+          ssh -p $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -i "$KEY_PATH" Administrator@$PUBLIC_IP \
+            "powershell -ExecutionPolicy Bypass -File C:/run_iteration.ps1"
+
+      - name: Run 2nd iteration
+        run: |
+          echo "Running 2nd iteration of fishingknot"
+          SSH_PORT="${{ steps.ids.outputs.SSH_PORT }}"
+          KEY_PATH="${{ steps.keypair.outputs.KEY_PATH }}"
+          sed -e "s/EXAMPLE_PLACEHOLDER/fishingknot/g" -e "s/ITERATION_PLACEHOLDER/2nd/g" -e "s/ITERATION_NUM_PLACEHOLDER/2/g" \
+            .github/workflows/scripts/win/run-iteration.ps1 > /tmp/run_iteration.ps1
+          scp -P $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -i "$KEY_PATH" /tmp/run_iteration.ps1 Administrator@$PUBLIC_IP:C:/run_iteration.ps1
+          ssh -p $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -i "$KEY_PATH" Administrator@$PUBLIC_IP \
+            "powershell -ExecutionPolicy Bypass -File C:/run_iteration.ps1"
+
+      - name: Run 3rd iteration
+        run: |
+          echo "Running 3rd iteration of fishingknot"
+          SSH_PORT="${{ steps.ids.outputs.SSH_PORT }}"
+          KEY_PATH="${{ steps.keypair.outputs.KEY_PATH }}"
+          sed -e "s/EXAMPLE_PLACEHOLDER/fishingknot/g" -e "s/ITERATION_PLACEHOLDER/3rd/g" -e "s/ITERATION_NUM_PLACEHOLDER/3/g" \
+            .github/workflows/scripts/win/run-iteration.ps1 > /tmp/run_iteration.ps1
+          scp -P $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -i "$KEY_PATH" /tmp/run_iteration.ps1 Administrator@$PUBLIC_IP:C:/run_iteration.ps1
+          ssh -p $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -i "$KEY_PATH" Administrator@$PUBLIC_IP \
+            "powershell -ExecutionPolicy Bypass -File C:/run_iteration.ps1"
+
+      - name: Run 4th iteration
+        run: |
+          echo "Running 4th iteration of fishingknot"
+          SSH_PORT="${{ steps.ids.outputs.SSH_PORT }}"
+          KEY_PATH="${{ steps.keypair.outputs.KEY_PATH }}"
+          sed -e "s/EXAMPLE_PLACEHOLDER/fishingknot/g" -e "s/ITERATION_PLACEHOLDER/4th/g" -e "s/ITERATION_NUM_PLACEHOLDER/4/g" \
+            .github/workflows/scripts/win/run-iteration.ps1 > /tmp/run_iteration.ps1
+          scp -P $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -i "$KEY_PATH" /tmp/run_iteration.ps1 Administrator@$PUBLIC_IP:C:/run_iteration.ps1
+          ssh -p $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -i "$KEY_PATH" Administrator@$PUBLIC_IP \
+            "powershell -ExecutionPolicy Bypass -File C:/run_iteration.ps1"
+
+      - name: Run 5th iteration
+        run: |
+          echo "Running 5th iteration of fishingknot"
+          SSH_PORT="${{ steps.ids.outputs.SSH_PORT }}"
+          KEY_PATH="${{ steps.keypair.outputs.KEY_PATH }}"
+          sed -e "s/EXAMPLE_PLACEHOLDER/fishingknot/g" -e "s/ITERATION_PLACEHOLDER/5th/g" -e "s/ITERATION_NUM_PLACEHOLDER/5/g" \
+            .github/workflows/scripts/win/run-iteration.ps1 > /tmp/run_iteration.ps1
+          scp -P $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -i "$KEY_PATH" /tmp/run_iteration.ps1 Administrator@$PUBLIC_IP:C:/run_iteration.ps1
+          ssh -p $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -i "$KEY_PATH" Administrator@$PUBLIC_IP \
+            "powershell -ExecutionPolicy Bypass -File C:/run_iteration.ps1"
+
+      - name: Run 6th iteration
+        run: |
+          echo "Running 6th iteration of fishingknot"
+          SSH_PORT="${{ steps.ids.outputs.SSH_PORT }}"
+          KEY_PATH="${{ steps.keypair.outputs.KEY_PATH }}"
+          sed -e "s/EXAMPLE_PLACEHOLDER/fishingknot/g" -e "s/ITERATION_PLACEHOLDER/6th/g" -e "s/ITERATION_NUM_PLACEHOLDER/6/g" \
+            .github/workflows/scripts/win/run-iteration.ps1 > /tmp/run_iteration.ps1
+          scp -P $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -i "$KEY_PATH" /tmp/run_iteration.ps1 Administrator@$PUBLIC_IP:C:/run_iteration.ps1
+          ssh -p $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -i "$KEY_PATH" Administrator@$PUBLIC_IP \
+            "powershell -ExecutionPolicy Bypass -File C:/run_iteration.ps1"
+
+      - name: Run 7th iteration
+        run: |
+          echo "Running 7th iteration of fishingknot"
+          SSH_PORT="${{ steps.ids.outputs.SSH_PORT }}"
+          KEY_PATH="${{ steps.keypair.outputs.KEY_PATH }}"
+          sed -e "s/EXAMPLE_PLACEHOLDER/fishingknot/g" -e "s/ITERATION_PLACEHOLDER/7th/g" -e "s/ITERATION_NUM_PLACEHOLDER/7/g" \
+            .github/workflows/scripts/win/run-iteration.ps1 > /tmp/run_iteration.ps1
+          scp -P $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -i "$KEY_PATH" /tmp/run_iteration.ps1 Administrator@$PUBLIC_IP:C:/run_iteration.ps1
+          ssh -p $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -i "$KEY_PATH" Administrator@$PUBLIC_IP \
+            "powershell -ExecutionPolicy Bypass -File C:/run_iteration.ps1"
+
+      - name: Run 8th iteration
+        run: |
+          echo "Running 8th iteration of fishingknot"
+          SSH_PORT="${{ steps.ids.outputs.SSH_PORT }}"
+          KEY_PATH="${{ steps.keypair.outputs.KEY_PATH }}"
+          sed -e "s/EXAMPLE_PLACEHOLDER/fishingknot/g" -e "s/ITERATION_PLACEHOLDER/8th/g" -e "s/ITERATION_NUM_PLACEHOLDER/8/g" \
+            .github/workflows/scripts/win/run-iteration.ps1 > /tmp/run_iteration.ps1
+          scp -P $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -i "$KEY_PATH" /tmp/run_iteration.ps1 Administrator@$PUBLIC_IP:C:/run_iteration.ps1
+          ssh -p $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -i "$KEY_PATH" Administrator@$PUBLIC_IP \
+            "powershell -ExecutionPolicy Bypass -File C:/run_iteration.ps1"
+
+      - name: Run 9th iteration
+        run: |
+          echo "Running 9th iteration of fishingknot"
+          SSH_PORT="${{ steps.ids.outputs.SSH_PORT }}"
+          KEY_PATH="${{ steps.keypair.outputs.KEY_PATH }}"
+          sed -e "s/EXAMPLE_PLACEHOLDER/fishingknot/g" -e "s/ITERATION_PLACEHOLDER/9th/g" -e "s/ITERATION_NUM_PLACEHOLDER/9/g" \
+            .github/workflows/scripts/win/run-iteration.ps1 > /tmp/run_iteration.ps1
+          scp -P $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -i "$KEY_PATH" /tmp/run_iteration.ps1 Administrator@$PUBLIC_IP:C:/run_iteration.ps1
+          ssh -p $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -i "$KEY_PATH" Administrator@$PUBLIC_IP \
+            "powershell -ExecutionPolicy Bypass -File C:/run_iteration.ps1"
+
+      - name: Run 10th iteration
+        run: |
+          echo "Running 10th iteration of fishingknot"
+          SSH_PORT="${{ steps.ids.outputs.SSH_PORT }}"
+          KEY_PATH="${{ steps.keypair.outputs.KEY_PATH }}"
+          sed -e "s/EXAMPLE_PLACEHOLDER/fishingknot/g" -e "s/ITERATION_PLACEHOLDER/10th/g" -e "s/ITERATION_NUM_PLACEHOLDER/10/g" \
+            .github/workflows/scripts/win/run-iteration.ps1 > /tmp/run_iteration.ps1
+          scp -P $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -i "$KEY_PATH" /tmp/run_iteration.ps1 Administrator@$PUBLIC_IP:C:/run_iteration.ps1
+          ssh -p $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -i "$KEY_PATH" Administrator@$PUBLIC_IP \
+            "powershell -ExecutionPolicy Bypass -File C:/run_iteration.ps1"
+
+      - name: Collect results
+        if: success() || failure()
+        run: |
+          echo "Collecting results..."
+          SSH_PORT="${{ steps.ids.outputs.SSH_PORT }}"
+          KEY_PATH="${{ steps.keypair.outputs.KEY_PATH }}"
+          mkdir -p ci
+          # Delete large binary files on remote before copying to save bandwidth
+          # CI output is in Windows temp directory
+          ssh -p $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -i "$KEY_PATH" Administrator@$PUBLIC_IP \
+            "powershell -Command \"Get-ChildItem -Path \$env:TEMP\\ci -Recurse -Include '*.bin','*.pickle','*.ply','*.gz' | Remove-Item -Force\"" || true
+          # Copy entire ci directory from Windows temp directory
+          scp -P $SSH_PORT -r -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -i "$KEY_PATH" "Administrator@$PUBLIC_IP:C:/Users/Administrator/AppData/Local/Temp/ci/*" ./ci/ || echo "No files found"
+          echo "## Collected Files:"
+          ls -laR ci/ || echo "No files collected"
+
+      - name: Upload artifact
+        if: success() || failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-win-fishingknot
+          path: ci
+          retention-days: 3
+
+      - name: GPU information
+        if: success() || failure()
+        run: |
+          SSH_PORT="${{ steps.ids.outputs.SSH_PORT }}"
+          KEY_PATH="${{ steps.keypair.outputs.KEY_PATH }}"
+          ssh -p $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -i "$KEY_PATH" Administrator@$PUBLIC_IP "nvidia-smi" || echo "Failed to get GPU info"
+
+      - name: Re-authenticate for cleanup
+        if: always()
+        continue-on-error: true
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Cleanup - Terminate Instance
+        if: always()
+        continue-on-error: true
+        run: |
+          if [ -n "${{ steps.instance.outputs.INSTANCE_ID }}" ]; then
+            echo "Terminating instance: ${{ steps.instance.outputs.INSTANCE_ID }}"
+            aws ec2 terminate-instances \
+              --instance-ids "${{ steps.instance.outputs.INSTANCE_ID }}" \
+              --region "$AWS_REGION" || true
+          fi
+
+      - name: Cleanup - Remove Ingress Rules
+        if: always()
+        continue-on-error: true
+        run: |
+          if [ -n "${{ steps.security-group.outputs.SG_ID }}" ] && [ -n "${{ steps.security-group.outputs.RUNNER_IP_CIDR }}" ]; then
+            echo "Removing ingress rules..."
+            aws ec2 revoke-security-group-ingress \
+              --group-id "${{ steps.security-group.outputs.SG_ID }}" \
+              --ip-permissions \
+                "IpProtocol=tcp,FromPort=${{ steps.security-group.outputs.SSH_PORT }},ToPort=${{ steps.security-group.outputs.SSH_PORT }},IpRanges=[{CidrIp=${{ steps.security-group.outputs.RUNNER_IP_CIDR }}}]" \
+              --region "$AWS_REGION" 2>&1 || echo "Rule may have been removed"
+          fi
+
+      - name: Cleanup - Remove Local SSH Key
+        if: always()
+        continue-on-error: true
+        run: |
+          rm -f "${{ steps.keypair.outputs.KEY_PATH }}"
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "## Workflow Summary"
+          echo "- Example: fishingknot"
+          echo "- Region: $AWS_REGION"
+          echo "- Instance Type: $INSTANCE_TYPE"
+          echo "- Branch: $BRANCH"
+          echo "- Instance ID: ${{ steps.instance.outputs.INSTANCE_ID || 'Not launched' }}"

@@ -1,4 +1,9 @@
 @echo off
+REM File: clean-env.bat
+REM Code: Claude Code
+REM Review: Ryoichi Ando (ryoichi.ando@zozo.com)
+REM License: Apache v2.0
+
 setlocal
 
 echo === Cleaning environment files ===
@@ -31,5 +36,10 @@ echo.
 echo === Clean complete ===
 
 endlocal
-echo Press any key to exit...
-pause >nul
+
+REM Skip pause if /nopause argument is provided (for automation)
+echo %* | find /i "/nopause" >nul
+if errorlevel 1 (
+    echo Press any key to exit...
+    pause >nul
+)
