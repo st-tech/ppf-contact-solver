@@ -154,7 +154,6 @@ We try to maximize transparency; **we never build locally and upload.**
 3. Double click `start.bat`
 
 JupyterLab frontend will auto-start. You should be able to access it at <http://localhost:8080>.
-To clean up, just delete the unzipped folder.
 
 #### 🐳 Docker (Linux and Windows)
 
