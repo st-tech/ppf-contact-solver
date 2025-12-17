@@ -114,7 +114,6 @@ class Utils:
                 and proc.info["status"] != psutil.STATUS_ZOMBIE
             ):
                 try:
-                    # Use psutil's terminate method which works cross-platform
                     proc.terminate()
                 except (psutil.NoSuchProcess, psutil.AccessDenied):
                     pass

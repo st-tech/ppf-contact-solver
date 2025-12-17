@@ -415,7 +415,7 @@ class SessionExport:
         param.export(self._fixed_session.info.path)
 
         # Platform-specific solver path and script generation
-        if os.name == 'nt':  # Windows
+        if os.name == "nt":  # Windows
             program_path = os.path.join(
                 self._session.proj_root, "target", "release", "ppf-contact-solver.exe"
             )
@@ -451,7 +451,7 @@ fi
             path = os.path.join(self._fixed_session.info.path, "command.sh")
             with open(path, "w") as f:
                 f.write(command)
-            if os.name != 'nt':  # chmod not needed on Windows
+            if os.name != "nt":  # chmod not needed on Windows
                 os.chmod(path, 0o755)
         return path
 
@@ -868,7 +868,7 @@ class SessionGet:
         Returns:
             Optional[str]: The path to the command.sh file if it exists, None otherwise.
         """
-        if os.name == 'nt':  # Windows
+        if os.name == "nt":  # Windows
             command_path = os.path.join(self._fixed_session.info.path, "command.bat")
         else:
             command_path = os.path.join(self._fixed_session.info.path, "command.sh")
@@ -926,8 +926,8 @@ class FixedSession:
             session (Session): The session object.
         """
         self._session = session
-        self._update_preview_interval = 1.0 / 60.0
-        self._update_terminal_interval = 1.0 / 30.0
+        self._update_preview_interval = 0.5
+        self._update_terminal_interval = 0.25
         self._update_table_interval = 0.25
         self._info = SessionInfo(session.name).set_path(
             os.path.join(session.app_root, session.name)
@@ -1190,12 +1190,12 @@ class FixedSession:
 
             err_path = os.path.join(self.info.path, "error.log")
             log_path = os.path.join(self.info.path, "stdout.log")
-            if os.name == 'nt':  # Windows
+            if os.name == "nt":  # Windows
                 command = f'"{self._cmd_path}" --load {load}'
             else:
                 command = f"bash {self._cmd_path} --load {load}"
             with open(log_path, "w") as stdout_file, open(err_path, "w") as stderr_file:
-                if os.name == 'nt':  # Windows
+                if os.name == "nt":  # Windows
                     process = subprocess.Popen(
                         command,
                         shell=True,
@@ -1687,10 +1687,12 @@ class FixedSession:
                         if os.path.exists(log_path):
                             with open(log_path) as f:
                                 lines = f.readlines()
-                                tail_lines = lines[-n_lines:] if len(lines) > n_lines else lines
-                                tail_output = ''.join(tail_lines).strip()
+                                tail_lines = (
+                                    lines[-n_lines:] if len(lines) > n_lines else lines
+                                )
+                                tail_output = "".join(tail_lines).strip()
                         else:
-                            tail_output = ''
+                            tail_output = ""
                         log_widget.value = (
                             CONSOLE_STYLE
                             + f"<pre style='no-scroll'>{tail_output}</pre>"
