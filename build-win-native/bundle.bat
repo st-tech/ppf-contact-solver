@@ -209,12 +209,15 @@ echo REM Get the directory where this script is located
 echo set DIST=%%~dp0
 echo set DIST=%%DIST:~0,-1%%
 echo.
+echo REM Load configuration
+echo call "%%DIST%%\config.bat"
+echo.
 echo REM Set PATH to include bundled binaries
 echo set PATH=%%DIST%%\bin;%%PATH%%
 echo set PYTHONPATH=%%DIST%%;%%PYTHONPATH%%
 echo.
-echo REM Start JupyterLab
-echo "%%DIST%%\python\python.exe" -m jupyterlab --no-browser --port=8080 --ServerApp.token="" --notebook-dir="%%DIST%%\examples"
+echo REM Start JupyterLab - auto-increments port if taken
+echo "%%DIST%%\python\python.exe" -m jupyterlab --no-browser --port=%%PORT%% --ServerApp.port_retries=50 --ServerApp.token="" --notebook-dir="%%DIST%%\examples"
 echo.
 echo REM Kill any remaining ppf-contact-solver processes when JupyterLab exits
 echo taskkill /F /IM ppf-contact-solver.exe 2^>nul
@@ -342,6 +345,16 @@ echo 2. Open your browser to http://localhost:8080
 echo 3. Navigate to the examples folder and run a notebook
 echo.
 echo.
+echo CONFIGURATION
+echo -------------
+echo Edit "config.bat" to change the default port:
+echo.
+echo   set PORT=8080
+echo.
+echo If the port is already in use, JupyterLab will automatically
+echo try the next available port.
+echo.
+echo.
 echo HEADLESS MODE
 echo -------------
 echo Run the headless example without JupyterLab:
@@ -361,6 +374,7 @@ echo --------
 echo bin/           - Solver binaries and CUDA libraries
 echo python/        - Embedded Python environment
 echo examples/      - Example Jupyter notebooks
+echo config.bat     - Port configuration
 echo start.bat      - JupyterLab launcher
 echo start-jupyterlab.pyw - GUI launcher
 echo headless.bat   - Run examples without JupyterLab
@@ -372,6 +386,10 @@ echo See THIRD_PARTY_LICENSES.txt for license information.
 echo.
 )
 echo   Created README.txt
+
+REM Copy config.bat configuration file
+copy "%BUILD_WIN%\config.bat" "%DIST_DIR%\config.bat" >nul
+echo   Copied config.bat
 
 REM ============================================================
 REM Summary
@@ -395,6 +413,7 @@ echo   examples/
 echo   start.bat
 echo   start-jupyterlab.pyw
 echo   headless.bat
+echo   config.bat
 echo   THIRD_PARTY_LICENSES.txt
 echo   README.txt
 echo.

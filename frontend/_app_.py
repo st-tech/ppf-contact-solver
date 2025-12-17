@@ -6,6 +6,7 @@
 import os
 import pickle
 import shutil
+import sys
 
 from ._asset_ import AssetManager
 from ._extra_ import Extra
@@ -16,6 +17,38 @@ from ._session_ import FixedSession, ParamManager, SessionManager
 from ._utils_ import Utils
 
 RECOVERABLE_FIXED_SESSION_NAME = "fixed_session.pickle"
+
+
+def _suppress_stale_widget_errors():
+    """Suppress TraitErrors caused by stale widget state in saved notebooks.
+
+    When a notebook with saved widget state is loaded, IPY_MODEL_* references
+    may point to non-existent widget models, causing TraitErrors. This function
+    patches ipywidgets to silently ignore these specific errors.
+    """
+    try:
+        import ipywidgets.widgets.widget as widget_module
+        from traitlets import TraitError
+
+        original_set_state = widget_module.Widget.set_state
+
+        def patched_set_state(self, sync_data):
+            try:
+                original_set_state(self, sync_data)
+            except TraitError as e:
+                # Suppress errors about stale IPY_MODEL references
+                if "IPY_MODEL_" in str(e):
+                    pass  # Silently ignore stale widget state errors
+                else:
+                    raise
+
+        widget_module.Widget.set_state = patched_set_state
+    except ImportError:
+        pass  # ipywidgets not available
+
+
+# Apply the patch when this module is imported
+_suppress_stale_widget_errors()
 
 
 class App:

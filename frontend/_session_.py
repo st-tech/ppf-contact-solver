@@ -3,6 +3,7 @@
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
 # License: Apache v2.0
 
+import asyncio
 import copy
 import os
 import pickle
@@ -926,9 +927,9 @@ class FixedSession:
             session (Session): The session object.
         """
         self._session = session
-        self._update_preview_interval = 0.5
-        self._update_terminal_interval = 0.25
-        self._update_table_interval = 0.25
+        self._update_preview_interval = 0.1
+        self._update_terminal_interval = 0.1
+        self._update_table_interval = 0.1
         self._info = SessionInfo(session.name).set_path(
             os.path.join(session.app_root, session.name)
         )
@@ -1451,7 +1452,12 @@ class FixedSession:
                         classes="table table-striped", border=0, index=False
                     )
 
-                def live_preview(self):
+                async def live_preview_async():
+                    """Async coroutine for live preview updates.
+
+                    Using async instead of threading allows the event loop to process
+                    button events between updates, preventing UI unresponsiveness.
+                    """
                     nonlocal plot
                     nonlocal terminate_button
                     nonlocal save_and_quit_button
@@ -1472,13 +1478,13 @@ class FixedSession:
                                     plot.update(vert, color)
                             if not Utils.busy():
                                 break
-                            time.sleep(self._update_preview_interval)
+                            await asyncio.sleep(self._update_preview_interval)
                         assert terminate_button is not None
                         assert save_and_quit_button is not None
                         terminate_button.disabled = True
                         terminate_button.description = "Terminated"
                         save_and_quit_button.disabled = True
-                        time.sleep(self._update_preview_interval)
+                        await asyncio.sleep(self._update_preview_interval)
                         last_frame = self.get.latest_frame()
                         update_dataframe(table, last_frame)
                         vertex_data = self.get.vertex(last_frame)
@@ -1489,19 +1495,22 @@ class FixedSession:
                     except Exception as e:
                         print(f"live_preview error: {e}")
 
-                def live_table(self):
+                async def live_table_async():
+                    """Async coroutine for table updates."""
                     nonlocal table
                     try:
                         while True:
                             update_dataframe(table, curr_frame)
                             if not Utils.busy():
                                 break
-                            time.sleep(self._update_table_interval)
+                            await asyncio.sleep(self._update_table_interval)
                     except Exception as e:
                         print(f"live_table error: {e}")
 
-                threading.Thread(target=live_preview, args=(self,)).start()
-                threading.Thread(target=live_table, args=(self,)).start()
+                # Use async coroutines instead of threads to allow event loop
+                # to process button events between updates
+                asyncio.ensure_future(live_preview_async())
+                asyncio.ensure_future(live_table_async())
                 display(widgets.HBox((terminate_button, save_and_quit_button)))
 
             display(table)
@@ -1580,7 +1589,8 @@ class FixedSession:
                             if fixed_scene is not None and frame - 1 < len(vert_list):
                                 vert = vert_list[frame - 1]
                                 color = fixed_scene.color(vert, options)
-                                plot.update(vert, color)
+                                # Always recompute normals for correct lighting
+                                plot.update(vert, color, recompute_normals=True)
 
                         # Create the interactive slider
                         slider = widgets.IntSlider(
@@ -1598,14 +1608,7 @@ class FixedSession:
                                 # Reload frames from disk
                                 new_frame_count = self.get.vertex_frame_count()
                                 if new_frame_count > len(vert_list):
-                                    print(
-                                        f"Loading {new_frame_count - len(vert_list)} new frames..."
-                                    )
-                                    for i in tqdm(
-                                        range(len(vert_list), new_frame_count),
-                                        desc="Loading new frames",
-                                        ncols=70,
-                                    ):
+                                    for i in range(len(vert_list), new_frame_count):
                                         result = self.get.vertex(i)
                                         if result is not None:
                                             vert, _ = result
@@ -1618,15 +1621,8 @@ class FixedSession:
                                     status_label.value = (
                                         f"Loaded {len(vert_list)} frames"
                                     )
-                                    print(f"Loaded {len(vert_list)} frames total.")
-                                    button.description = "Reload"
-                                else:
-                                    print(
-                                        f"No new frames. Total: {len(vert_list)} frames."
-                                    )
-                                    button.description = "Reload"
+                                button.description = "Reload"
                             except Exception as e:
-                                print(f"Reload failed: {e}")
                                 button.description = "Reload"
                             finally:
                                 button.disabled = False
