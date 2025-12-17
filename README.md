@@ -5,13 +5,15 @@ involving 👚 shells, 🪵 solids and 🪢 rods. All made by [ZOZO, Inc.](https
 
 [![Getting Started](https://github.com/st-tech/ppf-contact-solver/actions/workflows/getting-started.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/getting-started.yml)
 [![All Examples](https://github.com/st-tech/ppf-contact-solver/actions/workflows/run-all-once.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/run-all-once.yml)
+[![All Examples (Windows Native)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/run-all-once-win.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/run-all-once-win.yml)
 [![Python API Docs](https://github.com/st-tech/ppf-contact-solver/actions/workflows/make-docs.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/make-docs.yml)
 [![Docker Build](https://github.com/st-tech/ppf-contact-solver/actions/workflows/build-docker.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/build-docker.yml)
+[![Build Windows](https://github.com/st-tech/ppf-contact-solver/actions/workflows/release-win.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/release-win.yml)
 ![solver_logo](./asset/image/teaser-image.jpg)
 
 ## 👀 Quick Look
 
-🚀 Run a Docker command to get it running
+🚀 Double click `start.bat` (Windows) or run a Docker command (Linux/Windows) to get it running
 
 ![glance-terminal](./asset/image/glance-terminal.webp)
 
@@ -28,17 +30,16 @@ involving 👚 shells, 🪵 solids and 🪢 rods. All made by [ZOZO, Inc.](https
 - **📐 Finite Element Method**: We use FEM for deformables and symbolic force jacobians.
 - **⚔️ Highly Stressed**: We run GitHub Actions to run stress tests [10 times in a row](#️-ten-consecutive-runs).
 - **🚀 Massively Parallel**: Both contact and elasticity solvers are run on the GPU.
-- **🐳 Docker Sealed**: All is pre-compiled and works out of the box. The image is ~3.5GB.
+- **🪟 Windows Executable**: No installation wizard shown. Just unzip and run [(Video)](https://drive.google.com/file/d/1PAj_x6uO8egGpuZL7RvZI7g4k2941edB/view).
+- **🐳 Docker Sealed**: All can be deployed fast. The image is ~3.5GB.
 - **🌐 JupyterLab Included**: Open your browser and run examples right away [(Video)](https://drive.google.com/file/d/1n068Ai_hlfgapf2xkAutOHo3PkLpJXA4/view).
 - **🐍 Documented Python APIs**: Our Python code is fully [docstringed](https://st-tech.github.io/ppf-contact-solver/frontend.html) and lintable [(Video)](https://drive.google.com/file/d/1vCM7kNgXdqQRBjVaoEb6KwIdRR21V7sV/view).
 - **☁️ Cloud-Ready**: Our solver can be seamlessly deployed on major cloud platforms.
+- **🎨 Blender Addon**: Simulate remotely and fetch results locally, even on macOS.
+- **🤖 MCP Support**: Let a LLM run simulations for you using natural language.
 - **✨ Stay Clean**: You can remove all traces after use.
 
-## 🤔 Disclaimer
-
-- ☁️ Best engineered for cloud platforms; **desktop uses are not rigorously tested.**
-- 🐳 Targeted only for Docker-based deployments; **local setups are discouraged.**
-- 🕒 Built for offline uses; **not real time.** Some examples may run at an interactive rate.
+> ⚠️ Built for offline uses; not real time. Some examples may run at an interactive rate.
 
 ## 🔖 Table of Contents
 
@@ -46,6 +47,8 @@ involving 👚 shells, 🪵 solids and 🪢 rods. All made by [ZOZO, Inc.](https
 - [🎓 Technical Materials](#-technical-materials)
 - [⚡️ Requirements](#️-requirements)
 - [💨 Getting Started](#-getting-started)
+  - [🪟 Windows Native Executable](#-windows-native-executable)
+  - [🐳 Docker (Linux and Windows)](#-docker-linux-and-windows)
 - [🐍 How To Use](#-how-to-use)
 - [📚 Python APIs and Parameters](#-python-apis-and-parameters)
 - [🔍 Obtaining Logs](#-obtaining-logs)
@@ -73,6 +76,7 @@ involving 👚 shells, 🪵 solids and 🪢 rods. All made by [ZOZO, Inc.](https
 
 ## 📝 Change History
 
+- (2025.12.18) Added native Windows standalone executable build support [(Video)](https://drive.google.com/file/d/1PAj_x6uO8egGpuZL7RvZI7g4k2941edB/view).
 - (2025.11.26) Added [large-woven.ipynb](./examples/large-woven.ipynb) [(Video)](https://drive.google.com/file/d/16Pb_pwSVoQ6YD9zb-HhUKCbyf3qUzyKx/view) to [large scale examples](#️-large-scale-examples).
 - (2025.11.12) Added [five-twist.ipynb](./examples/five-twist.ipynb) [(Video)](https://drive.google.com/file/d/1EjHLqtAUjYh7KEQ_EQ9Jx6hh262BUze1/view) and [large-five-twist.ipynb](./examples/large-five-twist.ipynb) [(Video)](https://drive.google.com/file/d/1STOfH1Y-F-ycnV6sGNut7GNWnpoSo11f/view) showcasing over 180M count. See [large scale examples](#️-large-scale-examples).
 - (2025.10.03) Massive refactor of the codebase [(Markdown)](./articles/refactor_202510.md). Note that this change includes breaking changes to our Python APIs.
@@ -129,11 +133,30 @@ To retain consistency with the paper, we have created a new branch ```sigasia-20
 ## ⚡️ Requirements
 
 - 🔥 A modern NVIDIA GPU (CUDA 12.8 or newer)
-- 🐳 A Docker environment (see [below](#-getting-started))
+- 💻 x86 architecture (arm64 is not supported)
+- 🐳 A Docker environment (see [below](#-docker)) or 🪟 Windows 10/11 for native executable
 
 ## 💨 Getting Started
 
-> ⚠️ Please follow our Docker-based installation. **Do not try to install locally.** If you do, you are very likely to hit failures and find it difficult to cleanup.
+> ⚠️ Do not run `warmup.py` locally. If you do, you are very likely to hit failures and find it difficult to cleanup.
+
+#### 🪟 Windows Native Executable
+
+For Windows 10/11 users, a self-contained executable (~400MB) is available.
+No Python or Docker installation is needed.
+All should simply work out of the box [(Video)](https://drive.google.com/file/d/1PAj_x6uO8egGpuZL7RvZI7g4k2941edB/view).
+
+> 🤔 If you are cautious, you can review the [build workflow](https://github.com/st-tech/ppf-contact-solver/actions/workflows/release-win.yml) to verify safety yourself.
+We try to maximize transparency; **we never build locally and upload.**
+
+1. Install the latest NVIDIA driver [(Link)](https://www.nvidia.com/en-us/drivers/)
+2. Download the latest release from [GitHub Releases](https://github.com/st-tech/ppf-contact-solver/releases) and unzip
+3. Double click `start.bat`
+
+JupyterLab frontend will auto-start. You should be able to access it at <http://localhost:8080>.
+To clean up, just delete the unzipped folder.
+
+#### 🐳 Docker (Linux and Windows)
 
 Install a NVIDIA driver [(Link)](https://www.nvidia.com/en-us/drivers/) on your host system and follow the instructions below specific to the operating system to get a Docker running:
 
@@ -143,7 +166,7 @@ Install the Docker engine from here [(Link)](https://docs.docker.com/engine/inst
 
 Next, run the following command to start the container. If no edits are needed, just copy and paste:
 
-#### 🪟 Windows (PowerShell)
+##### 🪟 Windows (PowerShell)
 
 ```bash
 $MY_WEB_PORT = 8080  # Web port on your side
@@ -156,7 +179,7 @@ docker run --rm -it `
   $IMAGE_NAME # Image size ~3.5GB
 ```
 
-#### 🐧 Linux (Bash/Zsh)
+##### 🐧 Linux (Bash/Zsh)
 
 ```bash
 MY_WEB_PORT=8080  # Web port on your side
@@ -185,14 +208,14 @@ Next, open your browser and navigate to <http://localhost:8080>. The port `8080`
 Keep your terminal window open.
 Now you are ready to go! 🎉
 
-### 🛑 Shutting Down
+#### 🛑 Shutting Down
 
 To shut down the container, just press `Ctrl+C` in the terminal.
 The container will be removed and all traces will be cleaned up. 🧹
 
 > If you wish to keep the container running in the background, replace `--rm` with `-d`. To shutdown the container and remove it, run `docker stop ppf-contact-solver && docker rm ppf-contact-solver`.
 
-### 🔧 Advanced Installation
+#### 🔧 Advanced Installation
 
 If you wish to build the docker image from scratch, please refer to the cleaner installation guide [(Markdown)](./articles/install.md).
 
@@ -300,7 +323,7 @@ The behaviors can be changed through the settings.
 
 - A list of parameters used in `param.set(key,value)` is documented here: [(Global Parameters)](https://st-tech.github.io/ppf-contact-solver/global_parameters.html) [(Object Parameters)](https://st-tech.github.io/ppf-contact-solver/object_parameters.html).
 
-> ⚠️ Please note that our Python APIs are subject to breaking changes as this repository undergoes frequent iterations.
+> ⚠️ Please note that our Python APIs are subject to breaking changes as this repository undergoes frequent iterations. If you need APIs to be fixed, please fork.
 
 ## 🔍 Obtaining Logs
 
@@ -500,9 +523,35 @@ Please note that these artifacts will be deleted after a month.
 ### ⚔️ Ten Consecutive Runs
 
 We know that you can't judge the reliability of contact resolution by simply watching a single success video example.
-To ensure greater transparency, we implemented GitHub Actions to run many of our examples via automated GitHub Actions, not just once, but **10 times in a row**.
+To ensure greater transparency, we implemented GitHub Actions to run many of our examples via automated GitHub Actions, not just once, but **10 times in a row** for both Docker and Windows.
 This means that **a single failure out of 10 tests is considered a failure of the entire test suite!**
 Also, we apply small jitters to the position of objects in the scene, so **at each run, the scene is slightly different.**
+
+##### 🪟 Windows Native
+
+[![drape.ipynb (Windows Native)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/drape-win.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/drape-win.yml)
+[![cards.ipynb (Windows Native)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/cards-win.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/cards-win.yml)
+[![curtain.ipynb (Windows Native)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/curtain-win.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/curtain-win.yml)
+[![friction.ipynb (Windows Native)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/friction-win.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/friction-win.yml)
+[![hang.ipynb (Windows Native)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/hang-win.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/hang-win.yml)
+[![needle.ipynb (Windows Native)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/needle-win.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/needle-win.yml)
+[![stack.ipynb (Windows Native)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/stack-win.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/stack-win.yml)
+[![trampoline.ipynb (Windows Native)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/trampoline-win.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/trampoline-win.yml)
+[![trapped.ipynb (Windows Native)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/trapped-win.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/trapped-win.yml)
+[![twist.ipynb (Windows Native)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/twist-win.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/twist-win.yml)
+[![five-twist.ipynb (Windows Native)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/five-twist-win.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/five-twist-win.yml)
+[![domino.ipynb (Windows Native)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/domino-win.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/domino-win.yml)
+[![belt.ipynb (Windows Native)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/belt-win.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/belt-win.yml)
+[![codim.ipynb (Windows Native)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/codim-win.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/codim-win.yml)
+[![fishingknot.ipynb (Windows Native)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/fishingknot-win.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/fishingknot-win.yml)
+[![fitting.ipynb (Windows Native)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/fitting-win.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/fitting-win.yml)
+[![noodle.ipynb (Windows Native)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/noodle-win.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/noodle-win.yml)
+[![ribbon.ipynb (Windows Native)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/ribbon-win.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/ribbon-win.yml)
+[![woven.ipynb (Windows Native)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/woven-win.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/woven-win.yml)
+[![yarn.ipynb (Windows Native)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/yarn-win.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/yarn-win.yml)
+[![roller.ipynb (Windows Native)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/roller-win.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/roller-win.yml)
+
+##### 🐧 Linux
 
 [![drape.ipynb](https://github.com/st-tech/ppf-contact-solver/actions/workflows/drape.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/drape.yml)
 [![cards.ipynb](https://github.com/st-tech/ppf-contact-solver/actions/workflows/cards.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/cards.yml)
@@ -603,7 +652,7 @@ Thank you!
 
 ## 👥 How This Was Coded
 
-A large portion of this codebase was written by Ryoichi Ando (<ryoichi.ando@zozo.com>) with GitHub Copilot in the early stages, and nearly all subsequent coding has been carried out through vibe coding with Claude Code and Codex since they became available. All of the code has been carefully human-reviewed by the author before being made public.
+A large portion of this codebase was written by the author with GitHub Copilot in the early stages, and nearly all subsequent coding has been carried out through vibe coding with Claude Code and Codex since they became available. All of the code has been carefully human-reviewed by the author before being made public.
 
 ## 🙏 Acknowledgements
 
