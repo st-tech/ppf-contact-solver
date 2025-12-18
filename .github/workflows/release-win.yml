@@ -353,6 +353,200 @@ jobs:
             -i "$KEY_PATH" "Administrator@$PUBLIC_IP:C:/ppf-contact-solver-${VERSION}-win64.zip" ./
           ls -lh "ppf-contact-solver-${VERSION}-win64.zip"
 
+      # ============================================================
+      # PHASE 2: Clean Environment Verification
+      # Launch a second Windows instance with only NVIDIA driver
+      # to verify the bundle has no external DLL dependencies
+      # ============================================================
+
+      - name: Terminate build instance
+        run: |
+          echo "Terminating build instance: ${{ steps.instance.outputs.INSTANCE_ID }}"
+          aws ec2 terminate-instances \
+            --instance-ids "${{ steps.instance.outputs.INSTANCE_ID }}" \
+            --region "$AWS_REGION"
+          echo "Build instance termination requested"
+
+      - name: Remove build instance ingress rule
+        run: |
+          echo "Removing build instance ingress rule..."
+          aws ec2 revoke-security-group-ingress \
+            --group-id "${{ steps.security-group.outputs.SG_ID }}" \
+            --ip-permissions \
+              "IpProtocol=tcp,FromPort=${{ steps.security-group.outputs.SSH_PORT }},ToPort=${{ steps.security-group.outputs.SSH_PORT }},IpRanges=[{CidrIp=${{ steps.security-group.outputs.RUNNER_IP_CIDR }}}]" \
+            --region "$AWS_REGION" 2>&1 || echo "Rule may have been removed"
+
+      - name: Generate verification instance identifiers
+        id: verify-ids
+        run: |
+          TIMESTAMP=$(date +%Y%m%d%H%M%S)
+          RANDOM_SUFFIX=$(head /dev/urandom | tr -dc a-z0-9 | head -c 6)
+          VERIFY_INSTANCE_ID="verify-${TIMESTAMP}-${RANDOM_SUFFIX}"
+          VERIFY_SSH_PORT=$((10001 + RANDOM % 55535))
+          echo "::add-mask::$VERIFY_SSH_PORT"
+          echo "TIMESTAMP=$TIMESTAMP" >> $GITHUB_OUTPUT
+          echo "VERIFY_INSTANCE_ID=$VERIFY_INSTANCE_ID" >> $GITHUB_OUTPUT
+          echo "SSH_PORT=$VERIFY_SSH_PORT" >> $GITHUB_OUTPUT
+          echo "Verification Instance ID: $VERIFY_INSTANCE_ID"
+          echo "Verification SSH Port: $VERIFY_SSH_PORT"
+
+      - name: Add verification instance security group rule
+        id: verify-security-group
+        run: |
+          echo "Adding ingress rule for verification instance on port ${{ steps.verify-ids.outputs.SSH_PORT }}"
+          aws ec2 authorize-security-group-ingress \
+            --group-id "${{ steps.security-group.outputs.SG_ID }}" \
+            --ip-permissions \
+              "IpProtocol=tcp,FromPort=${{ steps.verify-ids.outputs.SSH_PORT }},ToPort=${{ steps.verify-ids.outputs.SSH_PORT }},IpRanges=[{CidrIp=${{ steps.runner-ip.outputs.RUNNER_IP }}/32,Description='GHA Run ${{ github.run_id }} Verify Port ${{ steps.verify-ids.outputs.SSH_PORT }}'}]" \
+            --region "$AWS_REGION" 2>&1 || echo "Note: Rule may already exist"
+          echo "SSH_PORT=${{ steps.verify-ids.outputs.SSH_PORT }}" >> $GITHUB_OUTPUT
+          echo "RUNNER_IP_CIDR=${{ steps.runner-ip.outputs.RUNNER_IP }}/32" >> $GITHUB_OUTPUT
+
+      - name: Create verification instance user data script
+        run: |
+          SSH_PORT="${{ steps.verify-ids.outputs.SSH_PORT }}"
+          sed "s/SSH_PORT_PLACEHOLDER/$SSH_PORT/g" .github/workflows/scripts/win/user-data.ps1 > /tmp/verify-user-data.ps1
+          echo "Verification user data script created with SSH port $SSH_PORT"
+
+      - name: Launch verification instance
+        id: verify-instance
+        run: |
+          echo "Launching verification Windows instance (minimal setup - driver only)..."
+          INSTANCE_ID=$(aws ec2 run-instances \
+            --image-id "${{ steps.ami.outputs.AMI_ID }}" \
+            --instance-type "$INSTANCE_TYPE" \
+            --key-name "${{ secrets.AWS_KEY_PAIR_NAME }}" \
+            --security-group-ids "${{ steps.security-group.outputs.SG_ID }}" \
+            --user-data file:///tmp/verify-user-data.ps1 \
+            --block-device-mappings "DeviceName=/dev/sda1,Ebs={VolumeSize=100,VolumeType=gp3,DeleteOnTermination=true}" \
+            --tag-specifications \
+              "ResourceType=instance,Tags=[{Key=Name,Value=gpu-runner-win-verify-${{ steps.version.outputs.VERSION }}-${{ steps.verify-ids.outputs.TIMESTAMP }}},{Key=ManagedBy,Value=GitHubActions},{Key=Purpose,Value=WindowsBundleVerification},{Key=Workflow,Value=${{ github.workflow }}},{Key=RunId,Value=${{ github.run_id }}},{Key=Version,Value=${{ steps.version.outputs.VERSION }}},{Key=SSHPort,Value=${{ steps.verify-ids.outputs.SSH_PORT }}}]" \
+              "ResourceType=volume,Tags=[{Key=Name,Value=gpu-runner-win-verify-${{ steps.version.outputs.VERSION }}-${{ steps.verify-ids.outputs.TIMESTAMP }}-volume},{Key=ManagedBy,Value=GitHubActions},{Key=Purpose,Value=WindowsBundleVerification}]" \
+            --instance-initiated-shutdown-behavior terminate \
+            --query 'Instances[0].InstanceId' \
+            --region "$AWS_REGION" \
+            --output text)
+          echo "INSTANCE_ID=$INSTANCE_ID" >> $GITHUB_OUTPUT
+          echo "Verification instance launched: $INSTANCE_ID"
+
+      - name: Wait for verification instance to be running
+        run: |
+          echo "Waiting for verification instance to be running..."
+          aws ec2 wait instance-running \
+            --instance-ids "${{ steps.verify-instance.outputs.INSTANCE_ID }}" \
+            --region "$AWS_REGION"
+          VERIFY_PUBLIC_IP=$(aws ec2 describe-instances \
+            --instance-ids "${{ steps.verify-instance.outputs.INSTANCE_ID }}" \
+            --query 'Reservations[0].Instances[0].PublicIpAddress' \
+            --region "$AWS_REGION" \
+            --output text)
+          echo "::add-mask::$VERIFY_PUBLIC_IP"
+          echo "VERIFY_PUBLIC_IP=$VERIFY_PUBLIC_IP" >> $GITHUB_ENV
+          echo "Verification instance is running at: $VERIFY_PUBLIC_IP"
+
+      - name: Wait for verification instance SSH
+        run: |
+          echo "Waiting for SSH to be ready on verification instance..."
+          KEY_PATH="${{ steps.keypair.outputs.KEY_PATH }}"
+          SSH_PORT="${{ steps.verify-ids.outputs.SSH_PORT }}"
+          echo "Waiting for SSH on port $SSH_PORT..."
+          MAX_SSH_ATTEMPTS=60
+          ATTEMPT=0
+          while [ $ATTEMPT -lt $MAX_SSH_ATTEMPTS ]; do
+            if ssh -p $SSH_PORT -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+              -o BatchMode=yes -i "$KEY_PATH" Administrator@$VERIFY_PUBLIC_IP "echo SSH_READY" 2>/dev/null | grep -q SSH_READY; then
+              echo "SSH connection established!"
+              break
+            fi
+            ATTEMPT=$((ATTEMPT + 1))
+            if [ $ATTEMPT -eq $MAX_SSH_ATTEMPTS ]; then
+              echo "Failed to establish SSH connection"
+              exit 1
+            fi
+            echo "SSH not ready (attempt $ATTEMPT/$MAX_SSH_ATTEMPTS), waiting 30s..."
+            sleep 30
+          done
+          echo "Waiting for SSH setup completion..."
+          MAX_SETUP_ATTEMPTS=30
+          ATTEMPT=0
+          while [ $ATTEMPT -lt $MAX_SETUP_ATTEMPTS ]; do
+            if ssh -p $SSH_PORT -o ConnectTimeout=10 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+              -i "$KEY_PATH" Administrator@$VERIFY_PUBLIC_IP \
+              "if (Test-Path C:\\ssh_ready.txt) { echo READY } else { echo NOT_READY }" 2>/dev/null | grep -q READY; then
+              echo "SSH setup complete!"
+              break
+            fi
+            ATTEMPT=$((ATTEMPT + 1))
+            if [ $ATTEMPT -eq $MAX_SETUP_ATTEMPTS ]; then
+              echo "SSH setup timed out, continuing anyway..."
+              break
+            fi
+            echo "SSH setup not complete (attempt $ATTEMPT/$MAX_SETUP_ATTEMPTS), waiting 30s..."
+            sleep 30
+          done
+
+      - name: Install NVIDIA driver only (no CUDA toolkit)
+        run: |
+          echo "Installing NVIDIA driver only (this will take a few minutes)..."
+          SSH_PORT="${{ steps.verify-ids.outputs.SSH_PORT }}"
+          KEY_PATH="${{ steps.keypair.outputs.KEY_PATH }}"
+          scp -P $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -i "$KEY_PATH" .github/workflows/scripts/win/install-nvidia-driver.ps1 Administrator@$VERIFY_PUBLIC_IP:C:/install_driver.ps1
+          ssh -p $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -i "$KEY_PATH" Administrator@$VERIFY_PUBLIC_IP \
+            "powershell -ExecutionPolicy Bypass -File C:/install_driver.ps1"
+
+      - name: Transfer bundle to verification instance
+        run: |
+          echo "Transferring bundle to verification instance..."
+          SSH_PORT="${{ steps.verify-ids.outputs.SSH_PORT }}"
+          KEY_PATH="${{ steps.keypair.outputs.KEY_PATH }}"
+          VERSION="${{ steps.version.outputs.VERSION }}"
+          scp -P $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -i "$KEY_PATH" "ppf-contact-solver-${VERSION}-win64.zip" Administrator@$VERIFY_PUBLIC_IP:C:/bundle.zip
+          echo "Bundle transferred successfully"
+
+      - name: Extract and verify bundle
+        run: |
+          echo "Extracting bundle on verification instance..."
+          SSH_PORT="${{ steps.verify-ids.outputs.SSH_PORT }}"
+          KEY_PATH="${{ steps.keypair.outputs.KEY_PATH }}"
+          ssh -p $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -i "$KEY_PATH" Administrator@$VERIFY_PUBLIC_IP \
+            "powershell -Command \"if (Test-Path 'C:\\bundle') { Remove-Item -Recurse -Force 'C:\\bundle' }; New-Item -ItemType Directory -Path 'C:\\bundle' -Force; Expand-Archive -Path 'C:\\bundle.zip' -DestinationPath 'C:\\bundle' -Force\""
+          echo "Bundle extracted successfully"
+
+      - name: Run headless.bat on clean environment
+        run: |
+          echo "Running headless.bat on clean environment (no CUDA toolkit, no build tools)..."
+          SSH_PORT="${{ steps.verify-ids.outputs.SSH_PORT }}"
+          KEY_PATH="${{ steps.keypair.outputs.KEY_PATH }}"
+          ssh -p $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -i "$KEY_PATH" Administrator@$VERIFY_PUBLIC_IP \
+            "cmd /c 'cd C:\\bundle && headless.bat /nopause'"
+          echo "Bundle verification PASSED - no external DLL dependencies detected"
+
+      - name: Terminate verification instance
+        run: |
+          echo "Terminating verification instance: ${{ steps.verify-instance.outputs.INSTANCE_ID }}"
+          aws ec2 terminate-instances \
+            --instance-ids "${{ steps.verify-instance.outputs.INSTANCE_ID }}" \
+            --region "$AWS_REGION"
+          echo "Verification instance termination initiated"
+
+      - name: Remove verification instance ingress rule
+        run: |
+          echo "Removing verification instance ingress rule..."
+          aws ec2 revoke-security-group-ingress \
+            --group-id "${{ steps.security-group.outputs.SG_ID }}" \
+            --ip-permissions \
+              "IpProtocol=tcp,FromPort=${{ steps.verify-security-group.outputs.SSH_PORT }},ToPort=${{ steps.verify-security-group.outputs.SSH_PORT }},IpRanges=[{CidrIp=${{ steps.verify-security-group.outputs.RUNNER_IP_CIDR }}}]" \
+            --region "$AWS_REGION" 2>&1 || echo "Rule may have been removed"
+
+      # ============================================================
+      # PHASE 3: Release (if not dry run)
+      # ============================================================
+
       - name: Create version tag
         if: steps.version.outputs.DRY_RUN != 'true'
         run: |
@@ -414,7 +608,11 @@ jobs:
         run: |
           VERSION="${{ steps.version.outputs.VERSION }}"
           echo "## DRY RUN COMPLETE"
-          echo "Build succeeded. No release was created."
+          echo "Build and verification succeeded. No release was created."
+          echo ""
+          echo "Verification: Bundle tested on clean Windows instance with only NVIDIA driver"
+          echo "              (no CUDA toolkit, no build tools, no Chocolatey, no Git)"
+          echo ""
           echo "Archive uploaded as artifact: ppf-contact-solver-${VERSION}-win64"
           ls -lh "ppf-contact-solver-${VERSION}-win64.zip"
 
@@ -426,27 +624,63 @@ jobs:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Cleanup - Terminate Instance
+      - name: Cleanup - Terminate Instances
         if: always()
         continue-on-error: true
         run: |
+          # Terminate build instance if known
           if [ -n "${{ steps.instance.outputs.INSTANCE_ID }}" ]; then
-            echo "Terminating instance: ${{ steps.instance.outputs.INSTANCE_ID }}"
+            echo "Terminating build instance: ${{ steps.instance.outputs.INSTANCE_ID }}"
             aws ec2 terminate-instances \
               --instance-ids "${{ steps.instance.outputs.INSTANCE_ID }}" \
               --region "$AWS_REGION" || true
+          fi
+          # Terminate verification instance if known
+          if [ -n "${{ steps.verify-instance.outputs.INSTANCE_ID }}" ]; then
+            echo "Terminating verification instance: ${{ steps.verify-instance.outputs.INSTANCE_ID }}"
+            aws ec2 terminate-instances \
+              --instance-ids "${{ steps.verify-instance.outputs.INSTANCE_ID }}" \
+              --region "$AWS_REGION" || true
+          fi
+          # Fallback: Find and terminate any instances tagged with this run ID
+          # This catches instances launched but not captured in step outputs (e.g., on cancellation)
+          echo "Searching for any orphaned instances from this run..."
+          ORPHANED_INSTANCES=$(aws ec2 describe-instances \
+            --filters \
+              "Name=tag:RunId,Values=${{ github.run_id }}" \
+              "Name=instance-state-name,Values=pending,running,stopping,stopped" \
+            --query 'Reservations[].Instances[].InstanceId' \
+            --region "$AWS_REGION" \
+            --output text || echo "")
+          if [ -n "$ORPHANED_INSTANCES" ]; then
+            echo "Found orphaned instances: $ORPHANED_INSTANCES"
+            aws ec2 terminate-instances \
+              --instance-ids $ORPHANED_INSTANCES \
+              --region "$AWS_REGION" || true
+          else
+            echo "No orphaned instances found"
           fi
 
       - name: Cleanup - Remove Ingress Rules
         if: always()
         continue-on-error: true
         run: |
+          # Remove build instance ingress rule
           if [ -n "${{ steps.security-group.outputs.SG_ID }}" ] && [ -n "${{ steps.security-group.outputs.RUNNER_IP_CIDR }}" ]; then
-            echo "Removing ingress rules..."
+            echo "Removing build instance ingress rules..."
             aws ec2 revoke-security-group-ingress \
               --group-id "${{ steps.security-group.outputs.SG_ID }}" \
               --ip-permissions \
                 "IpProtocol=tcp,FromPort=${{ steps.security-group.outputs.SSH_PORT }},ToPort=${{ steps.security-group.outputs.SSH_PORT }},IpRanges=[{CidrIp=${{ steps.security-group.outputs.RUNNER_IP_CIDR }}}]" \
+              --region "$AWS_REGION" 2>&1 || echo "Rule may have been removed"
+          fi
+          # Remove verification instance ingress rule
+          if [ -n "${{ steps.security-group.outputs.SG_ID }}" ] && [ -n "${{ steps.verify-security-group.outputs.RUNNER_IP_CIDR }}" ]; then
+            echo "Removing verification instance ingress rules..."
+            aws ec2 revoke-security-group-ingress \
+              --group-id "${{ steps.security-group.outputs.SG_ID }}" \
+              --ip-permissions \
+                "IpProtocol=tcp,FromPort=${{ steps.verify-security-group.outputs.SSH_PORT }},ToPort=${{ steps.verify-security-group.outputs.SSH_PORT }},IpRanges=[{CidrIp=${{ steps.verify-security-group.outputs.RUNNER_IP_CIDR }}}]" \
               --region "$AWS_REGION" 2>&1 || echo "Rule may have been removed"
           fi
 
@@ -463,4 +697,10 @@ jobs:
           echo "- Version: ${{ steps.version.outputs.VERSION }}"
           echo "- Region: $AWS_REGION"
           echo "- Instance Type: $INSTANCE_TYPE"
-          echo "- Instance ID: ${{ steps.instance.outputs.INSTANCE_ID || 'Not launched' }}"
+          echo "- Build Instance ID: ${{ steps.instance.outputs.INSTANCE_ID || 'Not launched' }}"
+          echo "- Verification Instance ID: ${{ steps.verify-instance.outputs.INSTANCE_ID || 'Not launched' }}"
+          echo ""
+          echo "## Workflow Phases"
+          echo "1. Build Phase: Compiled on instance with CUDA 12.8 and build tools"
+          echo "2. Verification Phase: Tested on clean instance with only NVIDIA driver"
+          echo "3. Release Phase: Created GitHub release (if not dry run)"
