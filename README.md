@@ -35,8 +35,6 @@ involving 👚 shells, 🪵 solids and 🪢 rods. All made by [ZOZO, Inc.](https
 - **🌐 JupyterLab Included**: Open your browser and run examples right away [(Video)](https://drive.google.com/file/d/1n068Ai_hlfgapf2xkAutOHo3PkLpJXA4/view).
 - **🐍 Documented Python APIs**: Our Python code is fully [docstringed](https://st-tech.github.io/ppf-contact-solver/frontend.html) and lintable [(Video)](https://drive.google.com/file/d/1vCM7kNgXdqQRBjVaoEb6KwIdRR21V7sV/view).
 - **☁️ Cloud-Ready**: Our solver can be seamlessly deployed on major cloud platforms.
-- **🎨 Blender Addon**: Simulate remotely and fetch results locally, even on macOS.
-- **🤖 MCP Support**: Let a LLM run simulations for you using natural language.
 - **✨ Stay Clean**: You can remove all traces after use.
 
 > ⚠️ Built for offline uses; not real time. Some examples may run at an interactive rate.
