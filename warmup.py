@@ -331,8 +331,21 @@ def install_oh_my_zsh():
 
 
 def install_sdf():
+    import time
+
     pip_path = get_venv_pip()
-    run(f"{pip_path} install git+https://github.com/fogleman/sdf.git")
+    max_retries = 3
+    for attempt in range(max_retries):
+        result = run(
+            f"{pip_path} install git+https://github.com/fogleman/sdf.git", check=False
+        )
+        if result.returncode == 0:
+            return
+        if attempt < max_retries - 1:
+            wait_time = 10 * (attempt + 1)
+            print(f"Install sdf failed, retrying in {wait_time} seconds...")
+            time.sleep(wait_time)
+    raise RuntimeError("Failed to install sdf package after multiple retries")
 
 
 def reinstall_pyopengl():
