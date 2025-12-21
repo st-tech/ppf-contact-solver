@@ -67,11 +67,12 @@ on:
       region:
         description: 'AWS Region'
         required: true
-        default: 'us-east-1'
+        default: 'us-east-2'
         type: choice
         options:
           - us-east-1
           - us-east-2
+          - ap-northeast-1
 
 jobs:
 """
@@ -414,6 +415,7 @@ jobs:
 
           while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
             if ssh -p ${{{{ steps.ids.outputs.SSH_PORT }}}} -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \\
+              -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \\
               -i "${{{{ steps.keypair.outputs.KEY_PATH }}}}" ${{{{ env.USER }}}}@${{{{ env.PUBLIC_IP }}}} "echo 'SSH ready on custom port'" 2>/dev/null; then
               echo "SSH connection established on port ${{{{ steps.ids.outputs.SSH_PORT }}}}"
               break
@@ -441,6 +443,7 @@ jobs:
 
           while [ $ELAPSED -lt $MAX_WAIT ]; do
             if ssh -p ${{{{ steps.ids.outputs.SSH_PORT }}}} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \\
+              -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \\
               -i "${{{{ steps.keypair.outputs.KEY_PATH }}}}" ${{{{ env.USER }}}}@${{{{ env.PUBLIC_IP }}}} \\
               "test -f /tmp/setup-complete" 2>/dev/null; then
               echo "Instance setup completed"
@@ -464,11 +467,13 @@ jobs:
         run: |
           echo "Transferring repository to instance..."
           scp -P ${{{{ steps.ids.outputs.SSH_PORT }}}} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \\
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \\
             -i "${{{{ steps.keypair.outputs.KEY_PATH }}}}" \\
             /tmp/repo.tar.gz ${{{{ env.USER }}}}@${{{{ env.PUBLIC_IP }}}}:${{{{ env.WORKDIR }}}}/
 
           echo "Extracting repository on instance..."
           ssh -p ${{{{ steps.ids.outputs.SSH_PORT }}}} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \\
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \\
             -i "${{{{ steps.keypair.outputs.KEY_PATH }}}}" ${{{{ env.USER }}}}@${{{{ env.PUBLIC_IP }}}} \\
             "cd ${{{{ env.WORKDIR }}}} && tar -xzf repo.tar.gz && rm repo.tar.gz"
 
@@ -476,6 +481,7 @@ jobs:
         run: |
           echo "Setting up Python environment and running warmup.py..."
           ssh -p ${{{{ steps.ids.outputs.SSH_PORT }}}} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \\
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \\
             -i "${{{{ steps.keypair.outputs.KEY_PATH }}}}" ${{{{ env.USER }}}}@${{{{ env.PUBLIC_IP }}}} << 'ENDSSH'
           set -e
           cd ${{{{ env.WORKDIR }}}}
@@ -491,6 +497,7 @@ jobs:
         run: |
           echo "Building Rust project with cargo..."
           ssh -p ${{{{ steps.ids.outputs.SSH_PORT }}}} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \\
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \\
             -i "${{{{ steps.keypair.outputs.KEY_PATH }}}}" ${{{{ env.USER }}}}@${{{{ env.PUBLIC_IP }}}} << 'ENDSSH'
           set -e
           cd ${{{{ env.WORKDIR }}}}
@@ -509,6 +516,7 @@ jobs:
         run: |
           echo "Setting up CI directory..."
           ssh -p ${{{{ steps.ids.outputs.SSH_PORT }}}} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \\
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \\
             -i "${{{{ steps.keypair.outputs.KEY_PATH }}}}" ${{{{ env.USER }}}}@${{{{ env.PUBLIC_IP }}}} \\
             "mkdir -p /tmp/ci"
 
@@ -520,6 +528,7 @@ jobs:
         run: |
           echo "Running {example}..."
           ssh -p ${{{{ steps.ids.outputs.SSH_PORT }}}} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \\
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \\
             -i "${{{{ steps.keypair.outputs.KEY_PATH }}}}" ${{{{ env.USER }}}}@${{{{ env.PUBLIC_IP }}}} << 'ENDSSH'
           set -e
           cd ${{{{ env.WORKDIR }}}}
@@ -546,9 +555,12 @@ jobs:
           # Append the converted notebook content
           cat "/tmp/{example}_base.py" >> /tmp/{example}.py
 
+          # Create output directory for this example
+          mkdir -p /tmp/ci/{example}
+
           # Run the example
           echo "{example}" > frontend/.CI
-          python3 /tmp/{example}.py 2>&1 | tee /tmp/ci/{example}.log
+          python3 /tmp/{example}.py 2>&1 | tee /tmp/ci/{example}/{example}.log
           ENDSSH
 
 """
@@ -560,12 +572,22 @@ jobs:
         run: |
           echo "Collecting results from all runs..."
           mkdir -p ci
-          rsync -avz --exclude='*.bin' --exclude='*.pickle' -e "ssh -p ${{{{ steps.ids.outputs.SSH_PORT }}}} -i ${{{{ steps.keypair.outputs.KEY_PATH }}}} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" \\
-            ${{{{ env.USER }}}}@${{{{ env.PUBLIC_IP }}}}:/tmp/ci/ ./ci/
+          # Delete large binary files on remote before copying to save bandwidth
+          # CI output is in ppf-cts cache directory: ~/.cache/ppf-cts/ci
+          ssh -p ${{{{ steps.ids.outputs.SSH_PORT }}}} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \\
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \\
+            -i "${{{{ steps.keypair.outputs.KEY_PATH }}}}" ${{{{ env.USER }}}}@${{{{ env.PUBLIC_IP }}}} \\
+            "find ~/.cache/ppf-cts/ci -type f \\( -name '*.bin' -o -name '*.pickle' -o -name '*.ply' -o -name '*.gz' \\) -delete 2>/dev/null" || true
+          # Copy CI output from ppf-cts cache directory (session data, previews, etc.)
+          rsync -avz -e "ssh -p ${{{{ steps.ids.outputs.SSH_PORT }}}} -i ${{{{ steps.keypair.outputs.KEY_PATH }}}} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=60 -o ServerAliveCountMax=10" \\
+            ${{{{ env.USER }}}}@${{{{ env.PUBLIC_IP }}}}:~/.cache/ppf-cts/ci/ ./ci/ || echo "No ppf-cts CI files found"
+          # Also copy logs from /tmp/ci
+          rsync -avz -e "ssh -p ${{{{ steps.ids.outputs.SSH_PORT }}}} -i ${{{{ steps.keypair.outputs.KEY_PATH }}}} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=60 -o ServerAliveCountMax=10" \\
+            ${{{{ env.USER }}}}@${{{{ env.PUBLIC_IP }}}}:/tmp/ci/ ./ci/ || echo "No log files found"
           echo "## Collected Files:"
-          ls -la ci/
+          ls -laR ci/ | head -100
           echo "## Run Summary:"
-          for log in ci/*.log; do
+          for log in ci/*.log ci/*/*.log; do
             if [ -f "$log" ]; then
               echo "Found: $log"
             fi
@@ -584,6 +606,7 @@ jobs:
         run: |
           echo "Getting GPU information..."
           ssh -p ${{{{ steps.ids.outputs.SSH_PORT }}}} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \\
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \\
             -i "${{{{ steps.keypair.outputs.KEY_PATH }}}}" ${{{{ env.USER }}}}@${{{{ env.PUBLIC_IP }}}} \\
             "nvidia-smi" || echo "Failed to get GPU info"
 

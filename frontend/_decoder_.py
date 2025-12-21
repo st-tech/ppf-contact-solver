@@ -52,6 +52,7 @@ class BlenderApp:
                     ["git", "branch", "--show-current"],
                     cwd=os.path.dirname(os.path.abspath(__file__)),
                     text=True,
+                    stderr=subprocess.DEVNULL,
                 ).strip()
                 if not git_branch:
                     git_branch = "unknown"

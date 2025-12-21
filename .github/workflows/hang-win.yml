@@ -19,11 +19,12 @@ on:
       region:
         description: 'AWS Region'
         required: true
-        default: 'us-east-1'
+        default: 'us-east-2'
         type: choice
         options:
           - us-east-1
           - us-east-2
+          - ap-northeast-1
 
 jobs:
   run-example:
@@ -240,6 +241,7 @@ jobs:
           ATTEMPT=0
           while [ $ATTEMPT -lt $MAX_SSH_ATTEMPTS ]; do
             if ssh -p $SSH_PORT -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
               -o BatchMode=yes -i "$KEY_PATH" Administrator@$PUBLIC_IP "echo SSH_READY" 2>/dev/null | grep -q SSH_READY; then
               echo "SSH connection established!"
               break
@@ -257,6 +259,7 @@ jobs:
           ATTEMPT=0
           while [ $ATTEMPT -lt $MAX_SETUP_ATTEMPTS ]; do
             if ssh -p $SSH_PORT -o ConnectTimeout=10 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
               -i "$KEY_PATH" Administrator@$PUBLIC_IP \
               "if (Test-Path C:\\ssh_ready.txt) { echo READY } else { echo NOT_READY }" 2>/dev/null | grep -q READY; then
               echo "SSH setup complete!"
@@ -277,8 +280,10 @@ jobs:
           SSH_PORT="${{ steps.ids.outputs.SSH_PORT }}"
           KEY_PATH="${{ steps.keypair.outputs.KEY_PATH }}"
           scp -P $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
             -i "$KEY_PATH" .github/workflows/scripts/win/install-cuda.ps1 Administrator@$PUBLIC_IP:C:/install_cuda.ps1
           ssh -p $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
             -o ServerAliveInterval=60 -i "$KEY_PATH" Administrator@$PUBLIC_IP \
             "powershell -ExecutionPolicy Bypass -File C:/install_cuda.ps1"
 
@@ -293,8 +298,10 @@ jobs:
           SSH_PORT="${{ steps.ids.outputs.SSH_PORT }}"
           KEY_PATH="${{ steps.keypair.outputs.KEY_PATH }}"
           scp -P $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
             -i "$KEY_PATH" /tmp/repo.zip Administrator@$PUBLIC_IP:C:/source.zip
           ssh -p $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
             -i "$KEY_PATH" Administrator@$PUBLIC_IP \
             "powershell -Command \"if (Test-Path 'C:\\ppf-contact-solver') { Remove-Item -Recurse -Force 'C:\\ppf-contact-solver' }; New-Item -ItemType Directory -Path 'C:\\ppf-contact-solver' -Force; Expand-Archive -Path 'C:\\source.zip' -DestinationPath 'C:\\ppf-contact-solver' -Force; Remove-Item 'C:\\source.zip'\""
 
@@ -304,6 +311,7 @@ jobs:
           SSH_PORT="${{ steps.ids.outputs.SSH_PORT }}"
           KEY_PATH="${{ steps.keypair.outputs.KEY_PATH }}"
           ssh -p $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
             -o ServerAliveInterval=60 -i "$KEY_PATH" Administrator@$PUBLIC_IP \
             "cmd /c 'cd C:\\ppf-contact-solver\\build-win-native && warmup.bat /nopause'"
 
@@ -313,6 +321,7 @@ jobs:
           SSH_PORT="${{ steps.ids.outputs.SSH_PORT }}"
           KEY_PATH="${{ steps.keypair.outputs.KEY_PATH }}"
           ssh -p $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
             -o ServerAliveInterval=60 -i "$KEY_PATH" Administrator@$PUBLIC_IP \
             "cmd /c 'cd C:\\ppf-contact-solver\\build-win-native && build.bat /nopause'"
 
@@ -323,8 +332,10 @@ jobs:
           KEY_PATH="${{ steps.keypair.outputs.KEY_PATH }}"
           sed "s/EXAMPLE_PLACEHOLDER/hang/g" .github/workflows/scripts/win/convert-notebook.ps1 > /tmp/convert_notebook.ps1
           scp -P $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
             -i "$KEY_PATH" /tmp/convert_notebook.ps1 Administrator@$PUBLIC_IP:C:/convert_notebook.ps1
           ssh -p $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
             -o ServerAliveInterval=60 -i "$KEY_PATH" Administrator@$PUBLIC_IP \
             "powershell -ExecutionPolicy Bypass -File C:/convert_notebook.ps1"
 
@@ -336,8 +347,10 @@ jobs:
           sed -e "s/EXAMPLE_PLACEHOLDER/hang/g" -e "s/ITERATION_PLACEHOLDER/1st/g" -e "s/ITERATION_NUM_PLACEHOLDER/1/g" \
             .github/workflows/scripts/win/run-iteration.ps1 > /tmp/run_iteration.ps1
           scp -P $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
             -i "$KEY_PATH" /tmp/run_iteration.ps1 Administrator@$PUBLIC_IP:C:/run_iteration.ps1
           ssh -p $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
             -o ServerAliveInterval=60 -i "$KEY_PATH" Administrator@$PUBLIC_IP \
             "powershell -ExecutionPolicy Bypass -File C:/run_iteration.ps1"
 
@@ -349,8 +362,10 @@ jobs:
           sed -e "s/EXAMPLE_PLACEHOLDER/hang/g" -e "s/ITERATION_PLACEHOLDER/2nd/g" -e "s/ITERATION_NUM_PLACEHOLDER/2/g" \
             .github/workflows/scripts/win/run-iteration.ps1 > /tmp/run_iteration.ps1
           scp -P $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
             -i "$KEY_PATH" /tmp/run_iteration.ps1 Administrator@$PUBLIC_IP:C:/run_iteration.ps1
           ssh -p $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
             -o ServerAliveInterval=60 -i "$KEY_PATH" Administrator@$PUBLIC_IP \
             "powershell -ExecutionPolicy Bypass -File C:/run_iteration.ps1"
 
@@ -362,8 +377,10 @@ jobs:
           sed -e "s/EXAMPLE_PLACEHOLDER/hang/g" -e "s/ITERATION_PLACEHOLDER/3rd/g" -e "s/ITERATION_NUM_PLACEHOLDER/3/g" \
             .github/workflows/scripts/win/run-iteration.ps1 > /tmp/run_iteration.ps1
           scp -P $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
             -i "$KEY_PATH" /tmp/run_iteration.ps1 Administrator@$PUBLIC_IP:C:/run_iteration.ps1
           ssh -p $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
             -o ServerAliveInterval=60 -i "$KEY_PATH" Administrator@$PUBLIC_IP \
             "powershell -ExecutionPolicy Bypass -File C:/run_iteration.ps1"
 
@@ -375,8 +392,10 @@ jobs:
           sed -e "s/EXAMPLE_PLACEHOLDER/hang/g" -e "s/ITERATION_PLACEHOLDER/4th/g" -e "s/ITERATION_NUM_PLACEHOLDER/4/g" \
             .github/workflows/scripts/win/run-iteration.ps1 > /tmp/run_iteration.ps1
           scp -P $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
             -i "$KEY_PATH" /tmp/run_iteration.ps1 Administrator@$PUBLIC_IP:C:/run_iteration.ps1
           ssh -p $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
             -o ServerAliveInterval=60 -i "$KEY_PATH" Administrator@$PUBLIC_IP \
             "powershell -ExecutionPolicy Bypass -File C:/run_iteration.ps1"
 
@@ -388,8 +407,10 @@ jobs:
           sed -e "s/EXAMPLE_PLACEHOLDER/hang/g" -e "s/ITERATION_PLACEHOLDER/5th/g" -e "s/ITERATION_NUM_PLACEHOLDER/5/g" \
             .github/workflows/scripts/win/run-iteration.ps1 > /tmp/run_iteration.ps1
           scp -P $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
             -i "$KEY_PATH" /tmp/run_iteration.ps1 Administrator@$PUBLIC_IP:C:/run_iteration.ps1
           ssh -p $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
             -o ServerAliveInterval=60 -i "$KEY_PATH" Administrator@$PUBLIC_IP \
             "powershell -ExecutionPolicy Bypass -File C:/run_iteration.ps1"
 
@@ -401,8 +422,10 @@ jobs:
           sed -e "s/EXAMPLE_PLACEHOLDER/hang/g" -e "s/ITERATION_PLACEHOLDER/6th/g" -e "s/ITERATION_NUM_PLACEHOLDER/6/g" \
             .github/workflows/scripts/win/run-iteration.ps1 > /tmp/run_iteration.ps1
           scp -P $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
             -i "$KEY_PATH" /tmp/run_iteration.ps1 Administrator@$PUBLIC_IP:C:/run_iteration.ps1
           ssh -p $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
             -o ServerAliveInterval=60 -i "$KEY_PATH" Administrator@$PUBLIC_IP \
             "powershell -ExecutionPolicy Bypass -File C:/run_iteration.ps1"
 
@@ -414,8 +437,10 @@ jobs:
           sed -e "s/EXAMPLE_PLACEHOLDER/hang/g" -e "s/ITERATION_PLACEHOLDER/7th/g" -e "s/ITERATION_NUM_PLACEHOLDER/7/g" \
             .github/workflows/scripts/win/run-iteration.ps1 > /tmp/run_iteration.ps1
           scp -P $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
             -i "$KEY_PATH" /tmp/run_iteration.ps1 Administrator@$PUBLIC_IP:C:/run_iteration.ps1
           ssh -p $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
             -o ServerAliveInterval=60 -i "$KEY_PATH" Administrator@$PUBLIC_IP \
             "powershell -ExecutionPolicy Bypass -File C:/run_iteration.ps1"
 
@@ -427,8 +452,10 @@ jobs:
           sed -e "s/EXAMPLE_PLACEHOLDER/hang/g" -e "s/ITERATION_PLACEHOLDER/8th/g" -e "s/ITERATION_NUM_PLACEHOLDER/8/g" \
             .github/workflows/scripts/win/run-iteration.ps1 > /tmp/run_iteration.ps1
           scp -P $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
             -i "$KEY_PATH" /tmp/run_iteration.ps1 Administrator@$PUBLIC_IP:C:/run_iteration.ps1
           ssh -p $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
             -o ServerAliveInterval=60 -i "$KEY_PATH" Administrator@$PUBLIC_IP \
             "powershell -ExecutionPolicy Bypass -File C:/run_iteration.ps1"
 
@@ -440,8 +467,10 @@ jobs:
           sed -e "s/EXAMPLE_PLACEHOLDER/hang/g" -e "s/ITERATION_PLACEHOLDER/9th/g" -e "s/ITERATION_NUM_PLACEHOLDER/9/g" \
             .github/workflows/scripts/win/run-iteration.ps1 > /tmp/run_iteration.ps1
           scp -P $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
             -i "$KEY_PATH" /tmp/run_iteration.ps1 Administrator@$PUBLIC_IP:C:/run_iteration.ps1
           ssh -p $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
             -o ServerAliveInterval=60 -i "$KEY_PATH" Administrator@$PUBLIC_IP \
             "powershell -ExecutionPolicy Bypass -File C:/run_iteration.ps1"
 
@@ -453,8 +482,10 @@ jobs:
           sed -e "s/EXAMPLE_PLACEHOLDER/hang/g" -e "s/ITERATION_PLACEHOLDER/10th/g" -e "s/ITERATION_NUM_PLACEHOLDER/10/g" \
             .github/workflows/scripts/win/run-iteration.ps1 > /tmp/run_iteration.ps1
           scp -P $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
             -i "$KEY_PATH" /tmp/run_iteration.ps1 Administrator@$PUBLIC_IP:C:/run_iteration.ps1
           ssh -p $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
             -o ServerAliveInterval=60 -i "$KEY_PATH" Administrator@$PUBLIC_IP \
             "powershell -ExecutionPolicy Bypass -File C:/run_iteration.ps1"
 
@@ -466,13 +497,19 @@ jobs:
           KEY_PATH="${{ steps.keypair.outputs.KEY_PATH }}"
           mkdir -p ci
           # Delete large binary files on remote before copying to save bandwidth
-          # CI output is in Windows temp directory
+          # CI output is in project-relative cache: C:\ppf-contact-solver\cache\ppf-cts\ci
           ssh -p $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
             -i "$KEY_PATH" Administrator@$PUBLIC_IP \
-            "powershell -Command \"Get-ChildItem -Path \$env:TEMP\\ci -Recurse -Include '*.bin','*.pickle','*.ply','*.gz' | Remove-Item -Force\"" || true
-          # Copy entire ci directory from Windows temp directory
+            "powershell -Command \"Get-ChildItem -Path C:\\ppf-contact-solver\\cache\\ppf-cts\\ci -Recurse -Include '*.bin','*.pickle','*.ply','*.gz' -ErrorAction SilentlyContinue | Remove-Item -Force\"" || true
+          # Copy CI output from ppf-cts cache directory
           scp -P $SSH_PORT -r -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-            -i "$KEY_PATH" "Administrator@$PUBLIC_IP:C:/Users/Administrator/AppData/Local/Temp/ci/*" ./ci/ || echo "No files found"
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
+            -i "$KEY_PATH" "Administrator@$PUBLIC_IP:C:/ppf-contact-solver/cache/ppf-cts/ci/*" ./ci/ || echo "No ppf-cts CI files found"
+          # Also copy logs and scripts from C:\ci
+          scp -P $SSH_PORT -r -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
+            -i "$KEY_PATH" "Administrator@$PUBLIC_IP:C:/ci/*" ./ci/ || echo "No script/log files found"
           echo "## Collected Files:"
           ls -laR ci/ || echo "No files collected"
 
@@ -490,6 +527,7 @@ jobs:
           SSH_PORT="${{ steps.ids.outputs.SSH_PORT }}"
           KEY_PATH="${{ steps.keypair.outputs.KEY_PATH }}"
           ssh -p $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
             -i "$KEY_PATH" Administrator@$PUBLIC_IP "nvidia-smi" || echo "Failed to get GPU info"
 
       - name: Re-authenticate for cleanup

@@ -63,7 +63,17 @@ class Extra:
             dest (str): The destination directory to clone the repository.
             paths (list[str]): The list of paths to fetch.
             delete_exist (bool): If True, delete the existing repository.
+
+        Raises:
+            FileNotFoundError: If git is not installed on the system.
         """
+        # Check if git is available
+        if shutil.which("git") is None:
+            raise FileNotFoundError(
+                "git is not found in PATH. The bundled distribution includes MinGit, "
+                "but it may not be in PATH. Please ensure you're running from start.bat "
+                "or add mingit/cmd to your PATH. For manual installation: choco install git"
+            )
         if delete_exist and os.path.exists(dest):
             shutil.rmtree(dest)
         if not os.path.exists(dest):

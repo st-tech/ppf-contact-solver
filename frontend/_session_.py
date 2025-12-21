@@ -16,7 +16,6 @@ import time
 from typing import TYPE_CHECKING, Any, Optional
 
 import numpy as np
-import pandas as pd
 
 from tqdm import tqdm
 
@@ -161,6 +160,10 @@ class ParamManager:
         Args:
             path (str): The path to the export directory.
         """
+        # Force frames=1 in fast check mode
+        if Utils.is_fast_check():
+            self._param.set("frames", 1)
+
         if len(self._param.key_list()):
             with open(os.path.join(path, "param.toml"), "w") as f:
                 f.write("[param]\n")
@@ -420,9 +423,16 @@ class SessionExport:
             program_path = os.path.join(
                 self._session.proj_root, "target", "release", "ppf-contact-solver.exe"
             )
-            # Generate batch file
+            lib_path = os.path.join(
+                self._session.proj_root, "src", "cpp", "build", "lib"
+            )
+            # Generate batch file with PATH set for DLLs
             command = f"""@echo off
 set SOLVER_PATH={program_path}
+set LIB_PATH={lib_path}
+
+if not defined CUDA_PATH set CUDA_PATH=C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v12.8
+set PATH=%LIB_PATH%;%CUDA_PATH%\\bin;%PATH%
 
 if not exist "%SOLVER_PATH%" (
     echo Error: Solver does not exist at %SOLVER_PATH% >&2
@@ -540,7 +550,9 @@ fi
                 delete_exist=clear,
             )
 
-        if shutil.which("ffmpeg") is not None:
+        # Check if any PNG images were rendered before attempting video creation
+        png_files = [f for f in os.listdir(path) if f.endswith(".png")]
+        if shutil.which("ffmpeg") is not None and png_files:
             vid_name = "frame.mp4"
             command = f"ffmpeg -hide_banner -loglevel error -y -r 60 -i frame_%d.{ext}.png -pix_fmt yuv420p -b:v 50000k {vid_name}"
             subprocess.run(command, shell=True, cwd=path)
@@ -550,9 +562,8 @@ fi
                 display(Video(os.path.join(path, vid_name), embed=True))
 
             if ci_name is not None:
-                for file in os.listdir(path):
-                    if file.endswith(".png"):
-                        os.remove(os.path.join(path, file))
+                for file in png_files:
+                    os.remove(os.path.join(path, file))
 
         return Zippable(path)
 
@@ -1447,9 +1458,10 @@ class FixedSession:
                     }
                     if max_stretch is not None:
                         data["Max Stretch"] = [max_stretch]
-                    df = pd.DataFrame(data)
-                    table.value = df.to_html(
-                        classes="table table-striped", border=0, index=False
+                    from ._utils_ import dict_to_html_table
+
+                    table.value = dict_to_html_table(
+                        data, classes="table table-striped"
                     )
 
                 async def live_preview_async():

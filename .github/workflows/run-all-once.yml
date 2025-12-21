@@ -20,11 +20,12 @@ on:
       region:
         description: 'AWS Region'
         required: true
-        default: 'us-east-1'
+        default: 'us-east-2'
         type: choice
         options:
           - us-east-1
           - us-east-2
+          - ap-northeast-1
 
 jobs:
   run-batch-1:
@@ -362,6 +363,7 @@ jobs:
 
           while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
             if ssh -p ${{ steps.ids.outputs.SSH_PORT }} -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+              -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
               -i "${{ steps.keypair.outputs.KEY_PATH }}" ${{ env.USER }}@${{ env.PUBLIC_IP }} "echo 'SSH ready on custom port'" 2>/dev/null; then
               echo "SSH connection established on port ${{ steps.ids.outputs.SSH_PORT }}"
               break
@@ -389,6 +391,7 @@ jobs:
 
           while [ $ELAPSED -lt $MAX_WAIT ]; do
             if ssh -p ${{ steps.ids.outputs.SSH_PORT }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+              -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
               -i "${{ steps.keypair.outputs.KEY_PATH }}" ${{ env.USER }}@${{ env.PUBLIC_IP }} \
               "test -f /tmp/setup-complete" 2>/dev/null; then
               echo "Instance setup completed"
@@ -412,11 +415,13 @@ jobs:
         run: |
           echo "Transferring repository to instance..."
           scp -P ${{ steps.ids.outputs.SSH_PORT }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
             -i "${{ steps.keypair.outputs.KEY_PATH }}" \
             /tmp/repo.tar.gz ${{ env.USER }}@${{ env.PUBLIC_IP }}:${{ env.WORKDIR }}/
 
           echo "Extracting repository on instance..."
           ssh -p ${{ steps.ids.outputs.SSH_PORT }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
             -i "${{ steps.keypair.outputs.KEY_PATH }}" ${{ env.USER }}@${{ env.PUBLIC_IP }} \
             "cd ${{ env.WORKDIR }} && tar -xzf repo.tar.gz && rm repo.tar.gz"
 
@@ -424,6 +429,7 @@ jobs:
         run: |
           echo "Setting up Python environment and running warmup.py..."
           ssh -p ${{ steps.ids.outputs.SSH_PORT }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
             -i "${{ steps.keypair.outputs.KEY_PATH }}" ${{ env.USER }}@${{ env.PUBLIC_IP }} << 'ENDSSH'
           set -e
           cd ${{ env.WORKDIR }}
@@ -439,6 +445,7 @@ jobs:
         run: |
           echo "Building Rust project with cargo..."
           ssh -p ${{ steps.ids.outputs.SSH_PORT }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
             -i "${{ steps.keypair.outputs.KEY_PATH }}" ${{ env.USER }}@${{ env.PUBLIC_IP }} << 'ENDSSH'
           set -e
           cd ${{ env.WORKDIR }}
@@ -457,6 +464,7 @@ jobs:
         run: |
           echo "Setting up CI directory..."
           ssh -p ${{ steps.ids.outputs.SSH_PORT }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
             -i "${{ steps.keypair.outputs.KEY_PATH }}" ${{ env.USER }}@${{ env.PUBLIC_IP }} \
             "mkdir -p /tmp/ci"
 
@@ -464,6 +472,7 @@ jobs:
         run: |
           echo "Running belt..."
           ssh -p ${{ steps.ids.outputs.SSH_PORT }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
             -i "${{ steps.keypair.outputs.KEY_PATH }}" ${{ env.USER }}@${{ env.PUBLIC_IP }} << 'ENDSSH'
           set -e
           cd ${{ env.WORKDIR }}
@@ -490,15 +499,19 @@ jobs:
           # Append the converted notebook content
           cat "/tmp/belt_base.py" >> /tmp/belt.py
 
+          # Create output directory for this example
+          mkdir -p /tmp/ci/belt
+
           # Run the example
           echo "belt" > frontend/.CI
-          python3 /tmp/belt.py 2>&1 | tee /tmp/ci/belt.log
+          python3 /tmp/belt.py 2>&1 | tee /tmp/ci/belt/belt.log
           ENDSSH
 
       - name: Run cards
         run: |
           echo "Running cards..."
           ssh -p ${{ steps.ids.outputs.SSH_PORT }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
             -i "${{ steps.keypair.outputs.KEY_PATH }}" ${{ env.USER }}@${{ env.PUBLIC_IP }} << 'ENDSSH'
           set -e
           cd ${{ env.WORKDIR }}
@@ -525,15 +538,19 @@ jobs:
           # Append the converted notebook content
           cat "/tmp/cards_base.py" >> /tmp/cards.py
 
+          # Create output directory for this example
+          mkdir -p /tmp/ci/cards
+
           # Run the example
           echo "cards" > frontend/.CI
-          python3 /tmp/cards.py 2>&1 | tee /tmp/ci/cards.log
+          python3 /tmp/cards.py 2>&1 | tee /tmp/ci/cards/cards.log
           ENDSSH
 
       - name: Run codim
         run: |
           echo "Running codim..."
           ssh -p ${{ steps.ids.outputs.SSH_PORT }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
             -i "${{ steps.keypair.outputs.KEY_PATH }}" ${{ env.USER }}@${{ env.PUBLIC_IP }} << 'ENDSSH'
           set -e
           cd ${{ env.WORKDIR }}
@@ -560,15 +577,19 @@ jobs:
           # Append the converted notebook content
           cat "/tmp/codim_base.py" >> /tmp/codim.py
 
+          # Create output directory for this example
+          mkdir -p /tmp/ci/codim
+
           # Run the example
           echo "codim" > frontend/.CI
-          python3 /tmp/codim.py 2>&1 | tee /tmp/ci/codim.log
+          python3 /tmp/codim.py 2>&1 | tee /tmp/ci/codim/codim.log
           ENDSSH
 
       - name: Run curtain
         run: |
           echo "Running curtain..."
           ssh -p ${{ steps.ids.outputs.SSH_PORT }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
             -i "${{ steps.keypair.outputs.KEY_PATH }}" ${{ env.USER }}@${{ env.PUBLIC_IP }} << 'ENDSSH'
           set -e
           cd ${{ env.WORKDIR }}
@@ -595,15 +616,19 @@ jobs:
           # Append the converted notebook content
           cat "/tmp/curtain_base.py" >> /tmp/curtain.py
 
+          # Create output directory for this example
+          mkdir -p /tmp/ci/curtain
+
           # Run the example
           echo "curtain" > frontend/.CI
-          python3 /tmp/curtain.py 2>&1 | tee /tmp/ci/curtain.log
+          python3 /tmp/curtain.py 2>&1 | tee /tmp/ci/curtain/curtain.log
           ENDSSH
 
       - name: Run domino
         run: |
           echo "Running domino..."
           ssh -p ${{ steps.ids.outputs.SSH_PORT }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
             -i "${{ steps.keypair.outputs.KEY_PATH }}" ${{ env.USER }}@${{ env.PUBLIC_IP }} << 'ENDSSH'
           set -e
           cd ${{ env.WORKDIR }}
@@ -630,9 +655,12 @@ jobs:
           # Append the converted notebook content
           cat "/tmp/domino_base.py" >> /tmp/domino.py
 
+          # Create output directory for this example
+          mkdir -p /tmp/ci/domino
+
           # Run the example
           echo "domino" > frontend/.CI
-          python3 /tmp/domino.py 2>&1 | tee /tmp/ci/domino.log
+          python3 /tmp/domino.py 2>&1 | tee /tmp/ci/domino/domino.log
           ENDSSH
 
 
@@ -642,12 +670,22 @@ jobs:
         run: |
           echo "Collecting results from all runs..."
           mkdir -p ci
-          rsync -avz --exclude='*.bin' --exclude='*.pickle' -e "ssh -p ${{ steps.ids.outputs.SSH_PORT }} -i ${{ steps.keypair.outputs.KEY_PATH }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" \
-            ${{ env.USER }}@${{ env.PUBLIC_IP }}:/tmp/ci/ ./ci/
+          # Delete large binary files on remote before copying to save bandwidth
+          # CI output is in ppf-cts cache directory: ~/.cache/ppf-cts/ci
+          ssh -p ${{ steps.ids.outputs.SSH_PORT }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
+            -i "${{ steps.keypair.outputs.KEY_PATH }}" ${{ env.USER }}@${{ env.PUBLIC_IP }} \
+            "find ~/.cache/ppf-cts/ci -type f \( -name '*.bin' -o -name '*.pickle' -o -name '*.ply' -o -name '*.gz' \) -delete 2>/dev/null" || true
+          # Copy CI output from ppf-cts cache directory (session data, previews, etc.)
+          rsync -avz -e "ssh -p ${{ steps.ids.outputs.SSH_PORT }} -i ${{ steps.keypair.outputs.KEY_PATH }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=60 -o ServerAliveCountMax=10" \
+            ${{ env.USER }}@${{ env.PUBLIC_IP }}:~/.cache/ppf-cts/ci/ ./ci/ || echo "No ppf-cts CI files found"
+          # Also copy logs from /tmp/ci
+          rsync -avz -e "ssh -p ${{ steps.ids.outputs.SSH_PORT }} -i ${{ steps.keypair.outputs.KEY_PATH }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=60 -o ServerAliveCountMax=10" \
+            ${{ env.USER }}@${{ env.PUBLIC_IP }}:/tmp/ci/ ./ci/ || echo "No log files found"
           echo "## Collected Files:"
-          ls -la ci/
+          ls -laR ci/ | head -100
           echo "## Run Summary:"
-          for log in ci/*.log; do
+          for log in ci/*.log ci/*/*.log; do
             if [ -f "$log" ]; then
               echo "Found: $log"
             fi
@@ -666,6 +704,7 @@ jobs:
         run: |
           echo "Getting GPU information..."
           ssh -p ${{ steps.ids.outputs.SSH_PORT }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
             -i "${{ steps.keypair.outputs.KEY_PATH }}" ${{ env.USER }}@${{ env.PUBLIC_IP }} \
             "nvidia-smi" || echo "Failed to get GPU info"
 
@@ -1069,6 +1108,7 @@ jobs:
 
           while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
             if ssh -p ${{ steps.ids.outputs.SSH_PORT }} -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+              -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
               -i "${{ steps.keypair.outputs.KEY_PATH }}" ${{ env.USER }}@${{ env.PUBLIC_IP }} "echo 'SSH ready on custom port'" 2>/dev/null; then
               echo "SSH connection established on port ${{ steps.ids.outputs.SSH_PORT }}"
               break
@@ -1096,6 +1136,7 @@ jobs:
 
           while [ $ELAPSED -lt $MAX_WAIT ]; do
             if ssh -p ${{ steps.ids.outputs.SSH_PORT }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+              -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
               -i "${{ steps.keypair.outputs.KEY_PATH }}" ${{ env.USER }}@${{ env.PUBLIC_IP }} \
               "test -f /tmp/setup-complete" 2>/dev/null; then
               echo "Instance setup completed"
@@ -1119,11 +1160,13 @@ jobs:
         run: |
           echo "Transferring repository to instance..."
           scp -P ${{ steps.ids.outputs.SSH_PORT }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
             -i "${{ steps.keypair.outputs.KEY_PATH }}" \
             /tmp/repo.tar.gz ${{ env.USER }}@${{ env.PUBLIC_IP }}:${{ env.WORKDIR }}/
 
           echo "Extracting repository on instance..."
           ssh -p ${{ steps.ids.outputs.SSH_PORT }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
             -i "${{ steps.keypair.outputs.KEY_PATH }}" ${{ env.USER }}@${{ env.PUBLIC_IP }} \
             "cd ${{ env.WORKDIR }} && tar -xzf repo.tar.gz && rm repo.tar.gz"
 
@@ -1131,6 +1174,7 @@ jobs:
         run: |
           echo "Setting up Python environment and running warmup.py..."
           ssh -p ${{ steps.ids.outputs.SSH_PORT }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
             -i "${{ steps.keypair.outputs.KEY_PATH }}" ${{ env.USER }}@${{ env.PUBLIC_IP }} << 'ENDSSH'
           set -e
           cd ${{ env.WORKDIR }}
@@ -1146,6 +1190,7 @@ jobs:
         run: |
           echo "Building Rust project with cargo..."
           ssh -p ${{ steps.ids.outputs.SSH_PORT }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
             -i "${{ steps.keypair.outputs.KEY_PATH }}" ${{ env.USER }}@${{ env.PUBLIC_IP }} << 'ENDSSH'
           set -e
           cd ${{ env.WORKDIR }}
@@ -1164,6 +1209,7 @@ jobs:
         run: |
           echo "Setting up CI directory..."
           ssh -p ${{ steps.ids.outputs.SSH_PORT }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
             -i "${{ steps.keypair.outputs.KEY_PATH }}" ${{ env.USER }}@${{ env.PUBLIC_IP }} \
             "mkdir -p /tmp/ci"
 
@@ -1171,6 +1217,7 @@ jobs:
         run: |
           echo "Running drape..."
           ssh -p ${{ steps.ids.outputs.SSH_PORT }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
             -i "${{ steps.keypair.outputs.KEY_PATH }}" ${{ env.USER }}@${{ env.PUBLIC_IP }} << 'ENDSSH'
           set -e
           cd ${{ env.WORKDIR }}
@@ -1197,15 +1244,19 @@ jobs:
           # Append the converted notebook content
           cat "/tmp/drape_base.py" >> /tmp/drape.py
 
+          # Create output directory for this example
+          mkdir -p /tmp/ci/drape
+
           # Run the example
           echo "drape" > frontend/.CI
-          python3 /tmp/drape.py 2>&1 | tee /tmp/ci/drape.log
+          python3 /tmp/drape.py 2>&1 | tee /tmp/ci/drape/drape.log
           ENDSSH
 
       - name: Run fishingknot
         run: |
           echo "Running fishingknot..."
           ssh -p ${{ steps.ids.outputs.SSH_PORT }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
             -i "${{ steps.keypair.outputs.KEY_PATH }}" ${{ env.USER }}@${{ env.PUBLIC_IP }} << 'ENDSSH'
           set -e
           cd ${{ env.WORKDIR }}
@@ -1232,15 +1283,19 @@ jobs:
           # Append the converted notebook content
           cat "/tmp/fishingknot_base.py" >> /tmp/fishingknot.py
 
+          # Create output directory for this example
+          mkdir -p /tmp/ci/fishingknot
+
           # Run the example
           echo "fishingknot" > frontend/.CI
-          python3 /tmp/fishingknot.py 2>&1 | tee /tmp/ci/fishingknot.log
+          python3 /tmp/fishingknot.py 2>&1 | tee /tmp/ci/fishingknot/fishingknot.log
           ENDSSH
 
       - name: Run fitting
         run: |
           echo "Running fitting..."
           ssh -p ${{ steps.ids.outputs.SSH_PORT }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
             -i "${{ steps.keypair.outputs.KEY_PATH }}" ${{ env.USER }}@${{ env.PUBLIC_IP }} << 'ENDSSH'
           set -e
           cd ${{ env.WORKDIR }}
@@ -1267,15 +1322,19 @@ jobs:
           # Append the converted notebook content
           cat "/tmp/fitting_base.py" >> /tmp/fitting.py
 
+          # Create output directory for this example
+          mkdir -p /tmp/ci/fitting
+
           # Run the example
           echo "fitting" > frontend/.CI
-          python3 /tmp/fitting.py 2>&1 | tee /tmp/ci/fitting.log
+          python3 /tmp/fitting.py 2>&1 | tee /tmp/ci/fitting/fitting.log
           ENDSSH
 
       - name: Run friction
         run: |
           echo "Running friction..."
           ssh -p ${{ steps.ids.outputs.SSH_PORT }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
             -i "${{ steps.keypair.outputs.KEY_PATH }}" ${{ env.USER }}@${{ env.PUBLIC_IP }} << 'ENDSSH'
           set -e
           cd ${{ env.WORKDIR }}
@@ -1302,9 +1361,12 @@ jobs:
           # Append the converted notebook content
           cat "/tmp/friction_base.py" >> /tmp/friction.py
 
+          # Create output directory for this example
+          mkdir -p /tmp/ci/friction
+
           # Run the example
           echo "friction" > frontend/.CI
-          python3 /tmp/friction.py 2>&1 | tee /tmp/ci/friction.log
+          python3 /tmp/friction.py 2>&1 | tee /tmp/ci/friction/friction.log
           ENDSSH
 
 
@@ -1314,12 +1376,22 @@ jobs:
         run: |
           echo "Collecting results from all runs..."
           mkdir -p ci
-          rsync -avz --exclude='*.bin' --exclude='*.pickle' -e "ssh -p ${{ steps.ids.outputs.SSH_PORT }} -i ${{ steps.keypair.outputs.KEY_PATH }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" \
-            ${{ env.USER }}@${{ env.PUBLIC_IP }}:/tmp/ci/ ./ci/
+          # Delete large binary files on remote before copying to save bandwidth
+          # CI output is in ppf-cts cache directory: ~/.cache/ppf-cts/ci
+          ssh -p ${{ steps.ids.outputs.SSH_PORT }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
+            -i "${{ steps.keypair.outputs.KEY_PATH }}" ${{ env.USER }}@${{ env.PUBLIC_IP }} \
+            "find ~/.cache/ppf-cts/ci -type f \( -name '*.bin' -o -name '*.pickle' -o -name '*.ply' -o -name '*.gz' \) -delete 2>/dev/null" || true
+          # Copy CI output from ppf-cts cache directory (session data, previews, etc.)
+          rsync -avz -e "ssh -p ${{ steps.ids.outputs.SSH_PORT }} -i ${{ steps.keypair.outputs.KEY_PATH }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=60 -o ServerAliveCountMax=10" \
+            ${{ env.USER }}@${{ env.PUBLIC_IP }}:~/.cache/ppf-cts/ci/ ./ci/ || echo "No ppf-cts CI files found"
+          # Also copy logs from /tmp/ci
+          rsync -avz -e "ssh -p ${{ steps.ids.outputs.SSH_PORT }} -i ${{ steps.keypair.outputs.KEY_PATH }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=60 -o ServerAliveCountMax=10" \
+            ${{ env.USER }}@${{ env.PUBLIC_IP }}:/tmp/ci/ ./ci/ || echo "No log files found"
           echo "## Collected Files:"
-          ls -la ci/
+          ls -laR ci/ | head -100
           echo "## Run Summary:"
-          for log in ci/*.log; do
+          for log in ci/*.log ci/*/*.log; do
             if [ -f "$log" ]; then
               echo "Found: $log"
             fi
@@ -1338,6 +1410,7 @@ jobs:
         run: |
           echo "Getting GPU information..."
           ssh -p ${{ steps.ids.outputs.SSH_PORT }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
             -i "${{ steps.keypair.outputs.KEY_PATH }}" ${{ env.USER }}@${{ env.PUBLIC_IP }} \
             "nvidia-smi" || echo "Failed to get GPU info"
 
@@ -1741,6 +1814,7 @@ jobs:
 
           while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
             if ssh -p ${{ steps.ids.outputs.SSH_PORT }} -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+              -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
               -i "${{ steps.keypair.outputs.KEY_PATH }}" ${{ env.USER }}@${{ env.PUBLIC_IP }} "echo 'SSH ready on custom port'" 2>/dev/null; then
               echo "SSH connection established on port ${{ steps.ids.outputs.SSH_PORT }}"
               break
@@ -1768,6 +1842,7 @@ jobs:
 
           while [ $ELAPSED -lt $MAX_WAIT ]; do
             if ssh -p ${{ steps.ids.outputs.SSH_PORT }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+              -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
               -i "${{ steps.keypair.outputs.KEY_PATH }}" ${{ env.USER }}@${{ env.PUBLIC_IP }} \
               "test -f /tmp/setup-complete" 2>/dev/null; then
               echo "Instance setup completed"
@@ -1791,11 +1866,13 @@ jobs:
         run: |
           echo "Transferring repository to instance..."
           scp -P ${{ steps.ids.outputs.SSH_PORT }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
             -i "${{ steps.keypair.outputs.KEY_PATH }}" \
             /tmp/repo.tar.gz ${{ env.USER }}@${{ env.PUBLIC_IP }}:${{ env.WORKDIR }}/
 
           echo "Extracting repository on instance..."
           ssh -p ${{ steps.ids.outputs.SSH_PORT }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
             -i "${{ steps.keypair.outputs.KEY_PATH }}" ${{ env.USER }}@${{ env.PUBLIC_IP }} \
             "cd ${{ env.WORKDIR }} && tar -xzf repo.tar.gz && rm repo.tar.gz"
 
@@ -1803,6 +1880,7 @@ jobs:
         run: |
           echo "Setting up Python environment and running warmup.py..."
           ssh -p ${{ steps.ids.outputs.SSH_PORT }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
             -i "${{ steps.keypair.outputs.KEY_PATH }}" ${{ env.USER }}@${{ env.PUBLIC_IP }} << 'ENDSSH'
           set -e
           cd ${{ env.WORKDIR }}
@@ -1818,6 +1896,7 @@ jobs:
         run: |
           echo "Building Rust project with cargo..."
           ssh -p ${{ steps.ids.outputs.SSH_PORT }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
             -i "${{ steps.keypair.outputs.KEY_PATH }}" ${{ env.USER }}@${{ env.PUBLIC_IP }} << 'ENDSSH'
           set -e
           cd ${{ env.WORKDIR }}
@@ -1836,6 +1915,7 @@ jobs:
         run: |
           echo "Setting up CI directory..."
           ssh -p ${{ steps.ids.outputs.SSH_PORT }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
             -i "${{ steps.keypair.outputs.KEY_PATH }}" ${{ env.USER }}@${{ env.PUBLIC_IP }} \
             "mkdir -p /tmp/ci"
 
@@ -1843,6 +1923,7 @@ jobs:
         run: |
           echo "Running hang..."
           ssh -p ${{ steps.ids.outputs.SSH_PORT }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
             -i "${{ steps.keypair.outputs.KEY_PATH }}" ${{ env.USER }}@${{ env.PUBLIC_IP }} << 'ENDSSH'
           set -e
           cd ${{ env.WORKDIR }}
@@ -1869,15 +1950,19 @@ jobs:
           # Append the converted notebook content
           cat "/tmp/hang_base.py" >> /tmp/hang.py
 
+          # Create output directory for this example
+          mkdir -p /tmp/ci/hang
+
           # Run the example
           echo "hang" > frontend/.CI
-          python3 /tmp/hang.py 2>&1 | tee /tmp/ci/hang.log
+          python3 /tmp/hang.py 2>&1 | tee /tmp/ci/hang/hang.log
           ENDSSH
 
       - name: Run needle
         run: |
           echo "Running needle..."
           ssh -p ${{ steps.ids.outputs.SSH_PORT }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
             -i "${{ steps.keypair.outputs.KEY_PATH }}" ${{ env.USER }}@${{ env.PUBLIC_IP }} << 'ENDSSH'
           set -e
           cd ${{ env.WORKDIR }}
@@ -1904,15 +1989,19 @@ jobs:
           # Append the converted notebook content
           cat "/tmp/needle_base.py" >> /tmp/needle.py
 
+          # Create output directory for this example
+          mkdir -p /tmp/ci/needle
+
           # Run the example
           echo "needle" > frontend/.CI
-          python3 /tmp/needle.py 2>&1 | tee /tmp/ci/needle.log
+          python3 /tmp/needle.py 2>&1 | tee /tmp/ci/needle/needle.log
           ENDSSH
 
       - name: Run noodle
         run: |
           echo "Running noodle..."
           ssh -p ${{ steps.ids.outputs.SSH_PORT }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
             -i "${{ steps.keypair.outputs.KEY_PATH }}" ${{ env.USER }}@${{ env.PUBLIC_IP }} << 'ENDSSH'
           set -e
           cd ${{ env.WORKDIR }}
@@ -1939,15 +2028,19 @@ jobs:
           # Append the converted notebook content
           cat "/tmp/noodle_base.py" >> /tmp/noodle.py
 
+          # Create output directory for this example
+          mkdir -p /tmp/ci/noodle
+
           # Run the example
           echo "noodle" > frontend/.CI
-          python3 /tmp/noodle.py 2>&1 | tee /tmp/ci/noodle.log
+          python3 /tmp/noodle.py 2>&1 | tee /tmp/ci/noodle/noodle.log
           ENDSSH
 
       - name: Run ribbon
         run: |
           echo "Running ribbon..."
           ssh -p ${{ steps.ids.outputs.SSH_PORT }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
             -i "${{ steps.keypair.outputs.KEY_PATH }}" ${{ env.USER }}@${{ env.PUBLIC_IP }} << 'ENDSSH'
           set -e
           cd ${{ env.WORKDIR }}
@@ -1974,9 +2067,12 @@ jobs:
           # Append the converted notebook content
           cat "/tmp/ribbon_base.py" >> /tmp/ribbon.py
 
+          # Create output directory for this example
+          mkdir -p /tmp/ci/ribbon
+
           # Run the example
           echo "ribbon" > frontend/.CI
-          python3 /tmp/ribbon.py 2>&1 | tee /tmp/ci/ribbon.log
+          python3 /tmp/ribbon.py 2>&1 | tee /tmp/ci/ribbon/ribbon.log
           ENDSSH
 
 
@@ -1986,12 +2082,22 @@ jobs:
         run: |
           echo "Collecting results from all runs..."
           mkdir -p ci
-          rsync -avz --exclude='*.bin' --exclude='*.pickle' -e "ssh -p ${{ steps.ids.outputs.SSH_PORT }} -i ${{ steps.keypair.outputs.KEY_PATH }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" \
-            ${{ env.USER }}@${{ env.PUBLIC_IP }}:/tmp/ci/ ./ci/
+          # Delete large binary files on remote before copying to save bandwidth
+          # CI output is in ppf-cts cache directory: ~/.cache/ppf-cts/ci
+          ssh -p ${{ steps.ids.outputs.SSH_PORT }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
+            -i "${{ steps.keypair.outputs.KEY_PATH }}" ${{ env.USER }}@${{ env.PUBLIC_IP }} \
+            "find ~/.cache/ppf-cts/ci -type f \( -name '*.bin' -o -name '*.pickle' -o -name '*.ply' -o -name '*.gz' \) -delete 2>/dev/null" || true
+          # Copy CI output from ppf-cts cache directory (session data, previews, etc.)
+          rsync -avz -e "ssh -p ${{ steps.ids.outputs.SSH_PORT }} -i ${{ steps.keypair.outputs.KEY_PATH }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=60 -o ServerAliveCountMax=10" \
+            ${{ env.USER }}@${{ env.PUBLIC_IP }}:~/.cache/ppf-cts/ci/ ./ci/ || echo "No ppf-cts CI files found"
+          # Also copy logs from /tmp/ci
+          rsync -avz -e "ssh -p ${{ steps.ids.outputs.SSH_PORT }} -i ${{ steps.keypair.outputs.KEY_PATH }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=60 -o ServerAliveCountMax=10" \
+            ${{ env.USER }}@${{ env.PUBLIC_IP }}:/tmp/ci/ ./ci/ || echo "No log files found"
           echo "## Collected Files:"
-          ls -la ci/
+          ls -laR ci/ | head -100
           echo "## Run Summary:"
-          for log in ci/*.log; do
+          for log in ci/*.log ci/*/*.log; do
             if [ -f "$log" ]; then
               echo "Found: $log"
             fi
@@ -2010,6 +2116,7 @@ jobs:
         run: |
           echo "Getting GPU information..."
           ssh -p ${{ steps.ids.outputs.SSH_PORT }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
             -i "${{ steps.keypair.outputs.KEY_PATH }}" ${{ env.USER }}@${{ env.PUBLIC_IP }} \
             "nvidia-smi" || echo "Failed to get GPU info"
 
@@ -2413,6 +2520,7 @@ jobs:
 
           while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
             if ssh -p ${{ steps.ids.outputs.SSH_PORT }} -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+              -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
               -i "${{ steps.keypair.outputs.KEY_PATH }}" ${{ env.USER }}@${{ env.PUBLIC_IP }} "echo 'SSH ready on custom port'" 2>/dev/null; then
               echo "SSH connection established on port ${{ steps.ids.outputs.SSH_PORT }}"
               break
@@ -2440,6 +2548,7 @@ jobs:
 
           while [ $ELAPSED -lt $MAX_WAIT ]; do
             if ssh -p ${{ steps.ids.outputs.SSH_PORT }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+              -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
               -i "${{ steps.keypair.outputs.KEY_PATH }}" ${{ env.USER }}@${{ env.PUBLIC_IP }} \
               "test -f /tmp/setup-complete" 2>/dev/null; then
               echo "Instance setup completed"
@@ -2463,11 +2572,13 @@ jobs:
         run: |
           echo "Transferring repository to instance..."
           scp -P ${{ steps.ids.outputs.SSH_PORT }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
             -i "${{ steps.keypair.outputs.KEY_PATH }}" \
             /tmp/repo.tar.gz ${{ env.USER }}@${{ env.PUBLIC_IP }}:${{ env.WORKDIR }}/
 
           echo "Extracting repository on instance..."
           ssh -p ${{ steps.ids.outputs.SSH_PORT }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
             -i "${{ steps.keypair.outputs.KEY_PATH }}" ${{ env.USER }}@${{ env.PUBLIC_IP }} \
             "cd ${{ env.WORKDIR }} && tar -xzf repo.tar.gz && rm repo.tar.gz"
 
@@ -2475,6 +2586,7 @@ jobs:
         run: |
           echo "Setting up Python environment and running warmup.py..."
           ssh -p ${{ steps.ids.outputs.SSH_PORT }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
             -i "${{ steps.keypair.outputs.KEY_PATH }}" ${{ env.USER }}@${{ env.PUBLIC_IP }} << 'ENDSSH'
           set -e
           cd ${{ env.WORKDIR }}
@@ -2490,6 +2602,7 @@ jobs:
         run: |
           echo "Building Rust project with cargo..."
           ssh -p ${{ steps.ids.outputs.SSH_PORT }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
             -i "${{ steps.keypair.outputs.KEY_PATH }}" ${{ env.USER }}@${{ env.PUBLIC_IP }} << 'ENDSSH'
           set -e
           cd ${{ env.WORKDIR }}
@@ -2508,6 +2621,7 @@ jobs:
         run: |
           echo "Setting up CI directory..."
           ssh -p ${{ steps.ids.outputs.SSH_PORT }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
             -i "${{ steps.keypair.outputs.KEY_PATH }}" ${{ env.USER }}@${{ env.PUBLIC_IP }} \
             "mkdir -p /tmp/ci"
 
@@ -2515,6 +2629,7 @@ jobs:
         run: |
           echo "Running roller..."
           ssh -p ${{ steps.ids.outputs.SSH_PORT }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
             -i "${{ steps.keypair.outputs.KEY_PATH }}" ${{ env.USER }}@${{ env.PUBLIC_IP }} << 'ENDSSH'
           set -e
           cd ${{ env.WORKDIR }}
@@ -2541,15 +2656,19 @@ jobs:
           # Append the converted notebook content
           cat "/tmp/roller_base.py" >> /tmp/roller.py
 
+          # Create output directory for this example
+          mkdir -p /tmp/ci/roller
+
           # Run the example
           echo "roller" > frontend/.CI
-          python3 /tmp/roller.py 2>&1 | tee /tmp/ci/roller.log
+          python3 /tmp/roller.py 2>&1 | tee /tmp/ci/roller/roller.log
           ENDSSH
 
       - name: Run stack
         run: |
           echo "Running stack..."
           ssh -p ${{ steps.ids.outputs.SSH_PORT }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
             -i "${{ steps.keypair.outputs.KEY_PATH }}" ${{ env.USER }}@${{ env.PUBLIC_IP }} << 'ENDSSH'
           set -e
           cd ${{ env.WORKDIR }}
@@ -2576,15 +2695,19 @@ jobs:
           # Append the converted notebook content
           cat "/tmp/stack_base.py" >> /tmp/stack.py
 
+          # Create output directory for this example
+          mkdir -p /tmp/ci/stack
+
           # Run the example
           echo "stack" > frontend/.CI
-          python3 /tmp/stack.py 2>&1 | tee /tmp/ci/stack.log
+          python3 /tmp/stack.py 2>&1 | tee /tmp/ci/stack/stack.log
           ENDSSH
 
       - name: Run trampoline
         run: |
           echo "Running trampoline..."
           ssh -p ${{ steps.ids.outputs.SSH_PORT }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
             -i "${{ steps.keypair.outputs.KEY_PATH }}" ${{ env.USER }}@${{ env.PUBLIC_IP }} << 'ENDSSH'
           set -e
           cd ${{ env.WORKDIR }}
@@ -2611,15 +2734,19 @@ jobs:
           # Append the converted notebook content
           cat "/tmp/trampoline_base.py" >> /tmp/trampoline.py
 
+          # Create output directory for this example
+          mkdir -p /tmp/ci/trampoline
+
           # Run the example
           echo "trampoline" > frontend/.CI
-          python3 /tmp/trampoline.py 2>&1 | tee /tmp/ci/trampoline.log
+          python3 /tmp/trampoline.py 2>&1 | tee /tmp/ci/trampoline/trampoline.log
           ENDSSH
 
       - name: Run trapped
         run: |
           echo "Running trapped..."
           ssh -p ${{ steps.ids.outputs.SSH_PORT }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
             -i "${{ steps.keypair.outputs.KEY_PATH }}" ${{ env.USER }}@${{ env.PUBLIC_IP }} << 'ENDSSH'
           set -e
           cd ${{ env.WORKDIR }}
@@ -2646,9 +2773,12 @@ jobs:
           # Append the converted notebook content
           cat "/tmp/trapped_base.py" >> /tmp/trapped.py
 
+          # Create output directory for this example
+          mkdir -p /tmp/ci/trapped
+
           # Run the example
           echo "trapped" > frontend/.CI
-          python3 /tmp/trapped.py 2>&1 | tee /tmp/ci/trapped.log
+          python3 /tmp/trapped.py 2>&1 | tee /tmp/ci/trapped/trapped.log
           ENDSSH
 
 
@@ -2658,12 +2788,22 @@ jobs:
         run: |
           echo "Collecting results from all runs..."
           mkdir -p ci
-          rsync -avz --exclude='*.bin' --exclude='*.pickle' -e "ssh -p ${{ steps.ids.outputs.SSH_PORT }} -i ${{ steps.keypair.outputs.KEY_PATH }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" \
-            ${{ env.USER }}@${{ env.PUBLIC_IP }}:/tmp/ci/ ./ci/
+          # Delete large binary files on remote before copying to save bandwidth
+          # CI output is in ppf-cts cache directory: ~/.cache/ppf-cts/ci
+          ssh -p ${{ steps.ids.outputs.SSH_PORT }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
+            -i "${{ steps.keypair.outputs.KEY_PATH }}" ${{ env.USER }}@${{ env.PUBLIC_IP }} \
+            "find ~/.cache/ppf-cts/ci -type f \( -name '*.bin' -o -name '*.pickle' -o -name '*.ply' -o -name '*.gz' \) -delete 2>/dev/null" || true
+          # Copy CI output from ppf-cts cache directory (session data, previews, etc.)
+          rsync -avz -e "ssh -p ${{ steps.ids.outputs.SSH_PORT }} -i ${{ steps.keypair.outputs.KEY_PATH }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=60 -o ServerAliveCountMax=10" \
+            ${{ env.USER }}@${{ env.PUBLIC_IP }}:~/.cache/ppf-cts/ci/ ./ci/ || echo "No ppf-cts CI files found"
+          # Also copy logs from /tmp/ci
+          rsync -avz -e "ssh -p ${{ steps.ids.outputs.SSH_PORT }} -i ${{ steps.keypair.outputs.KEY_PATH }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=60 -o ServerAliveCountMax=10" \
+            ${{ env.USER }}@${{ env.PUBLIC_IP }}:/tmp/ci/ ./ci/ || echo "No log files found"
           echo "## Collected Files:"
-          ls -la ci/
+          ls -laR ci/ | head -100
           echo "## Run Summary:"
-          for log in ci/*.log; do
+          for log in ci/*.log ci/*/*.log; do
             if [ -f "$log" ]; then
               echo "Found: $log"
             fi
@@ -2682,6 +2822,7 @@ jobs:
         run: |
           echo "Getting GPU information..."
           ssh -p ${{ steps.ids.outputs.SSH_PORT }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
             -i "${{ steps.keypair.outputs.KEY_PATH }}" ${{ env.USER }}@${{ env.PUBLIC_IP }} \
             "nvidia-smi" || echo "Failed to get GPU info"
 
@@ -3085,6 +3226,7 @@ jobs:
 
           while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
             if ssh -p ${{ steps.ids.outputs.SSH_PORT }} -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+              -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
               -i "${{ steps.keypair.outputs.KEY_PATH }}" ${{ env.USER }}@${{ env.PUBLIC_IP }} "echo 'SSH ready on custom port'" 2>/dev/null; then
               echo "SSH connection established on port ${{ steps.ids.outputs.SSH_PORT }}"
               break
@@ -3112,6 +3254,7 @@ jobs:
 
           while [ $ELAPSED -lt $MAX_WAIT ]; do
             if ssh -p ${{ steps.ids.outputs.SSH_PORT }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+              -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
               -i "${{ steps.keypair.outputs.KEY_PATH }}" ${{ env.USER }}@${{ env.PUBLIC_IP }} \
               "test -f /tmp/setup-complete" 2>/dev/null; then
               echo "Instance setup completed"
@@ -3135,11 +3278,13 @@ jobs:
         run: |
           echo "Transferring repository to instance..."
           scp -P ${{ steps.ids.outputs.SSH_PORT }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
             -i "${{ steps.keypair.outputs.KEY_PATH }}" \
             /tmp/repo.tar.gz ${{ env.USER }}@${{ env.PUBLIC_IP }}:${{ env.WORKDIR }}/
 
           echo "Extracting repository on instance..."
           ssh -p ${{ steps.ids.outputs.SSH_PORT }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
             -i "${{ steps.keypair.outputs.KEY_PATH }}" ${{ env.USER }}@${{ env.PUBLIC_IP }} \
             "cd ${{ env.WORKDIR }} && tar -xzf repo.tar.gz && rm repo.tar.gz"
 
@@ -3147,6 +3292,7 @@ jobs:
         run: |
           echo "Setting up Python environment and running warmup.py..."
           ssh -p ${{ steps.ids.outputs.SSH_PORT }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
             -i "${{ steps.keypair.outputs.KEY_PATH }}" ${{ env.USER }}@${{ env.PUBLIC_IP }} << 'ENDSSH'
           set -e
           cd ${{ env.WORKDIR }}
@@ -3162,6 +3308,7 @@ jobs:
         run: |
           echo "Building Rust project with cargo..."
           ssh -p ${{ steps.ids.outputs.SSH_PORT }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
             -i "${{ steps.keypair.outputs.KEY_PATH }}" ${{ env.USER }}@${{ env.PUBLIC_IP }} << 'ENDSSH'
           set -e
           cd ${{ env.WORKDIR }}
@@ -3180,6 +3327,7 @@ jobs:
         run: |
           echo "Setting up CI directory..."
           ssh -p ${{ steps.ids.outputs.SSH_PORT }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
             -i "${{ steps.keypair.outputs.KEY_PATH }}" ${{ env.USER }}@${{ env.PUBLIC_IP }} \
             "mkdir -p /tmp/ci"
 
@@ -3187,6 +3335,7 @@ jobs:
         run: |
           echo "Running twist..."
           ssh -p ${{ steps.ids.outputs.SSH_PORT }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
             -i "${{ steps.keypair.outputs.KEY_PATH }}" ${{ env.USER }}@${{ env.PUBLIC_IP }} << 'ENDSSH'
           set -e
           cd ${{ env.WORKDIR }}
@@ -3213,15 +3362,19 @@ jobs:
           # Append the converted notebook content
           cat "/tmp/twist_base.py" >> /tmp/twist.py
 
+          # Create output directory for this example
+          mkdir -p /tmp/ci/twist
+
           # Run the example
           echo "twist" > frontend/.CI
-          python3 /tmp/twist.py 2>&1 | tee /tmp/ci/twist.log
+          python3 /tmp/twist.py 2>&1 | tee /tmp/ci/twist/twist.log
           ENDSSH
 
       - name: Run five-twist
         run: |
           echo "Running five-twist..."
           ssh -p ${{ steps.ids.outputs.SSH_PORT }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
             -i "${{ steps.keypair.outputs.KEY_PATH }}" ${{ env.USER }}@${{ env.PUBLIC_IP }} << 'ENDSSH'
           set -e
           cd ${{ env.WORKDIR }}
@@ -3248,15 +3401,19 @@ jobs:
           # Append the converted notebook content
           cat "/tmp/five-twist_base.py" >> /tmp/five-twist.py
 
+          # Create output directory for this example
+          mkdir -p /tmp/ci/five-twist
+
           # Run the example
           echo "five-twist" > frontend/.CI
-          python3 /tmp/five-twist.py 2>&1 | tee /tmp/ci/five-twist.log
+          python3 /tmp/five-twist.py 2>&1 | tee /tmp/ci/five-twist/five-twist.log
           ENDSSH
 
       - name: Run woven
         run: |
           echo "Running woven..."
           ssh -p ${{ steps.ids.outputs.SSH_PORT }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
             -i "${{ steps.keypair.outputs.KEY_PATH }}" ${{ env.USER }}@${{ env.PUBLIC_IP }} << 'ENDSSH'
           set -e
           cd ${{ env.WORKDIR }}
@@ -3283,15 +3440,19 @@ jobs:
           # Append the converted notebook content
           cat "/tmp/woven_base.py" >> /tmp/woven.py
 
+          # Create output directory for this example
+          mkdir -p /tmp/ci/woven
+
           # Run the example
           echo "woven" > frontend/.CI
-          python3 /tmp/woven.py 2>&1 | tee /tmp/ci/woven.log
+          python3 /tmp/woven.py 2>&1 | tee /tmp/ci/woven/woven.log
           ENDSSH
 
       - name: Run yarn
         run: |
           echo "Running yarn..."
           ssh -p ${{ steps.ids.outputs.SSH_PORT }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
             -i "${{ steps.keypair.outputs.KEY_PATH }}" ${{ env.USER }}@${{ env.PUBLIC_IP }} << 'ENDSSH'
           set -e
           cd ${{ env.WORKDIR }}
@@ -3318,9 +3479,12 @@ jobs:
           # Append the converted notebook content
           cat "/tmp/yarn_base.py" >> /tmp/yarn.py
 
+          # Create output directory for this example
+          mkdir -p /tmp/ci/yarn
+
           # Run the example
           echo "yarn" > frontend/.CI
-          python3 /tmp/yarn.py 2>&1 | tee /tmp/ci/yarn.log
+          python3 /tmp/yarn.py 2>&1 | tee /tmp/ci/yarn/yarn.log
           ENDSSH
 
 
@@ -3330,12 +3494,22 @@ jobs:
         run: |
           echo "Collecting results from all runs..."
           mkdir -p ci
-          rsync -avz --exclude='*.bin' --exclude='*.pickle' -e "ssh -p ${{ steps.ids.outputs.SSH_PORT }} -i ${{ steps.keypair.outputs.KEY_PATH }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" \
-            ${{ env.USER }}@${{ env.PUBLIC_IP }}:/tmp/ci/ ./ci/
+          # Delete large binary files on remote before copying to save bandwidth
+          # CI output is in ppf-cts cache directory: ~/.cache/ppf-cts/ci
+          ssh -p ${{ steps.ids.outputs.SSH_PORT }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
+            -i "${{ steps.keypair.outputs.KEY_PATH }}" ${{ env.USER }}@${{ env.PUBLIC_IP }} \
+            "find ~/.cache/ppf-cts/ci -type f \( -name '*.bin' -o -name '*.pickle' -o -name '*.ply' -o -name '*.gz' \) -delete 2>/dev/null" || true
+          # Copy CI output from ppf-cts cache directory (session data, previews, etc.)
+          rsync -avz -e "ssh -p ${{ steps.ids.outputs.SSH_PORT }} -i ${{ steps.keypair.outputs.KEY_PATH }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=60 -o ServerAliveCountMax=10" \
+            ${{ env.USER }}@${{ env.PUBLIC_IP }}:~/.cache/ppf-cts/ci/ ./ci/ || echo "No ppf-cts CI files found"
+          # Also copy logs from /tmp/ci
+          rsync -avz -e "ssh -p ${{ steps.ids.outputs.SSH_PORT }} -i ${{ steps.keypair.outputs.KEY_PATH }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=60 -o ServerAliveCountMax=10" \
+            ${{ env.USER }}@${{ env.PUBLIC_IP }}:/tmp/ci/ ./ci/ || echo "No log files found"
           echo "## Collected Files:"
-          ls -la ci/
+          ls -laR ci/ | head -100
           echo "## Run Summary:"
-          for log in ci/*.log; do
+          for log in ci/*.log ci/*/*.log; do
             if [ -f "$log" ]; then
               echo "Found: $log"
             fi
@@ -3354,6 +3528,7 @@ jobs:
         run: |
           echo "Getting GPU information..."
           ssh -p ${{ steps.ids.outputs.SSH_PORT }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
             -i "${{ steps.keypair.outputs.KEY_PATH }}" ${{ env.USER }}@${{ env.PUBLIC_IP }} \
             "nvidia-smi" || echo "Failed to get GPU info"
 

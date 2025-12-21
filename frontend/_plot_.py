@@ -15,7 +15,7 @@ from IPython.display import display
 
 from frontend._utils_ import Utils
 
-from ._render_ import OpenGLRenderer
+from ._render_ import OpenGLRenderer, OPENGL_READY
 
 
 class PlotManager:
@@ -554,6 +554,11 @@ class OpenGLRenderEngine:
         tri: np.ndarray,
         seg: np.ndarray,
     ):
+        if not OPENGL_READY:
+            raise RuntimeError(
+                "OpenGL rendering is not available (pyrender not installed). "
+                "Install pyrender with: pip install pyrender"
+            )
         from IPython.display import (
             display,
         )

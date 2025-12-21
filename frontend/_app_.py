@@ -14,7 +14,7 @@ from ._mesh_ import MeshManager
 from ._plot_ import PlotManager
 from ._scene_ import SceneManager
 from ._session_ import FixedSession, ParamManager, SessionManager
-from ._utils_ import Utils
+from ._utils_ import Utils, get_cache_dir
 
 RECOVERABLE_FIXED_SESSION_NAME = "fixed_session.pickle"
 
@@ -107,6 +107,30 @@ class App:
         return Utils.busy()
 
     @staticmethod
+    def is_fast_check() -> bool:
+        """Check if fast check mode is enabled.
+
+        Fast check mode forces simulations to run for only 1 frame,
+        enabling quick validation of all examples.
+
+        Returns:
+            bool: True if fast check mode is enabled.
+        """
+        return Utils.is_fast_check()
+
+    @staticmethod
+    def set_fast_check(enabled: bool = True):
+        """Set fast check mode.
+
+        When enabled, simulations are forced to run for only 1 frame,
+        enabling quick validation of examples.
+
+        Args:
+            enabled: Whether to enable fast check mode. Defaults to True.
+        """
+        Utils.set_fast_check(enabled)
+
+    @staticmethod
     def terminate():
         """Terminates the running application if it is busy."""
         Utils.terminate()
@@ -179,6 +203,7 @@ class App:
                 ["git", "branch", "--show-current"],
                 cwd=base_dir,
                 text=True,
+                stderr=subprocess.DEVNULL,
             ).strip()
             if not git_branch:
                 git_branch = "unknown"
@@ -216,7 +241,12 @@ class App:
         if cache_dir:
             self._cache_dir = cache_dir
         else:
-            self._cache_dir = os.path.expanduser(os.path.join("~", ".cache", "ppf-cts"))
+            if os.name == 'nt':  # Windows - use project-relative cache
+                frontend_dir = os.path.dirname(os.path.realpath(__file__))
+                base_dir = os.path.dirname(frontend_dir)
+                self._cache_dir = os.path.join(base_dir, "cache", "ppf-cts")
+            else:
+                self._cache_dir = os.path.expanduser(os.path.join("~", ".cache", "ppf-cts"))
         if not os.path.exists(self._cache_dir):
             os.makedirs(self._cache_dir)
 
@@ -354,7 +384,4 @@ class App:
                     shutil.rmtree(item_path)
                 else:
                     os.remove(item_path)
-        open3d_data_path = os.path.expanduser(os.path.join("~", "open3d_data"))
-        if os.path.exists(os.path.expanduser(open3d_data_path)):
-            shutil.rmtree(open3d_data_path)
         return self

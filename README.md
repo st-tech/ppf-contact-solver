@@ -1,7 +1,7 @@
 # ZOZO's Contact Solver 🫶
 
 A contact solver for physics-based simulations
-involving 👚 shells, 🪵 solids and 🪢 rods. All made by [ZOZO, Inc.](https://corp.zozo.com/en/)
+involving 👚 shells, 🪵 solids and 🪢 rods. All made by [ZOZO, Inc.](https://corp.zozo.com/en/), the largest fashion e-commerce company in Japan.
 
 [![Getting Started](https://github.com/st-tech/ppf-contact-solver/actions/workflows/getting-started.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/getting-started.yml)
 [![All Examples](https://github.com/st-tech/ppf-contact-solver/actions/workflows/run-all-once.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/run-all-once.yml)
@@ -31,7 +31,7 @@ involving 👚 shells, 🪵 solids and 🪢 rods. All made by [ZOZO, Inc.](https
 - **⚔️ Highly Stressed**: We run GitHub Actions to run stress tests [10 times in a row](#️-ten-consecutive-runs).
 - **🚀 Massively Parallel**: Both contact and elasticity solvers are run on the GPU.
 - **🪟 Windows Executable**: No installation wizard shown. Just unzip and run [(Video)](https://drive.google.com/file/d/1PAj_x6uO8egGpuZL7RvZI7g4k2941edB/view).
-- **🐳 Docker Sealed**: All can be deployed fast. The image is ~3.5GB.
+- **🐳 Docker Sealed**: All can be deployed fast. The image is ~1.4GB.
 - **🌐 JupyterLab Included**: Open your browser and run examples right away [(Video)](https://drive.google.com/file/d/1n068Ai_hlfgapf2xkAutOHo3PkLpJXA4/view).
 - **🐍 Documented Python APIs**: Our Python code is fully [docstringed](https://st-tech.github.io/ppf-contact-solver/frontend.html) and lintable [(Video)](https://drive.google.com/file/d/1vCM7kNgXdqQRBjVaoEb6KwIdRR21V7sV/view).
 - **☁️ Cloud-Ready**: Our solver can be seamlessly deployed on major cloud platforms.
@@ -62,9 +62,8 @@ involving 👚 shells, 🪵 solids and 🪢 rods. All made by [ZOZO, Inc.](https
   - [📦 Deploying on Scaleway](#-deploying-on-scaleway)
   - [📦 Deploying on Amazon Web Services](#-deploying-on-amazon-web-services)
   - [📦 Deploying on Google Compute Engine](#-deploying-on-google-compute-engine)
-- [✒️ Citation](#️-citation)
 - [📬 Contributing](#-contributing)
-- [👥 How This Was Coded](#-how-this-was-coded)
+- [👥 How We Built This](#-how-we-built-this)
 - [🙏 Acknowledgements](#-acknowledgements)
 
 ### 📚 Advanced Contents
@@ -132,7 +131,7 @@ To retain consistency with the paper, we have created a new branch ```sigasia-20
 
 - 🔥 A modern NVIDIA GPU (CUDA 12.8 or newer)
 - 💻 x86 architecture (arm64 is not supported)
-- 🐳 A Docker environment (see [below](#-docker)) or 🪟 Windows 10/11 for native executable
+- 🐳 A Docker environment (see [below](#-docker-linux-and-windows)) or 🪟 Windows 10/11 for native executable (see [below](#-windows-native-executable))
 
 ## 💨 Getting Started
 
@@ -140,7 +139,7 @@ To retain consistency with the paper, we have created a new branch ```sigasia-20
 
 #### 🪟 Windows Native Executable
 
-For Windows 10/11 users, a self-contained executable (~400MB) is available.
+For Windows 10/11 users, a self-contained executable (~230MB) is available.
 No Python or Docker installation is needed.
 All should simply work out of the box [(Video)](https://drive.google.com/file/d/1PAj_x6uO8egGpuZL7RvZI7g4k2941edB/view).
 
@@ -173,7 +172,7 @@ docker run --rm -it `
   --gpus all `
   -p ${MY_WEB_PORT}:${MY_WEB_PORT} `
   -e WEB_PORT=${MY_WEB_PORT} `
-  $IMAGE_NAME # Image size ~3.5GB
+  $IMAGE_NAME # Image size ~1.4GB
 ```
 
 ##### 🐧 Linux (Bash/Zsh)
@@ -186,11 +185,11 @@ docker run --rm -it \
   --gpus all \
   -p ${MY_WEB_PORT}:${MY_WEB_PORT} \
   -e WEB_PORT=${MY_WEB_PORT} \
-  $IMAGE_NAME # Image size ~3.5GB
+  $IMAGE_NAME # Image size ~1.4GB
 ```
 
 The image download shall be started.
-Our image is hosted on [GitHub Container Registry](https://github.com/st-tech/ppf-contact-solver/pkgs/container/ppf-contact-solver-compiled) (~3.5GB).
+Our image is hosted on [GitHub Container Registry](https://github.com/st-tech/ppf-contact-solver/pkgs/container/ppf-contact-solver-compiled) (~1.4GB).
 JupyterLab will then auto-start.
 Eventually you should be seeing:
 
@@ -264,14 +263,14 @@ gap = 0.01
 
 for i in range(5):
 
-    # add the sheet asset to the scene
-    obj = scene.add("sheet")
+    # add the sheet asset to the scene with an vertical offset
+    obj = scene.add("sheet").at(0, gap * i, 0)
 
     # pick two corners
     corner = obj.grab([1, 0, -1]) + obj.grab([-1, 0, -1])
 
-    # place it with an vertical offset and pin the corners
-    obj.at(0, gap * i, 0).pin(corner)
+    # pin the corners
+    obj.pin(corner)
 
     # set fiber directions required for Baraff-Witkin
     obj.direction([1, 0, 0], [0, 0, 1])
@@ -626,19 +625,7 @@ Below, we describe how to deploy our solver on major cloud services. These instr
 - As of late 2024, this configuration costs approximately $0.86 per hour in `us-central1 (Iowa)` and $1.00 per hour in `asia-east1 (Taiwan)`.
 - Port number `8080` is reserved by the OS image. Set `$MY_WEB_PORT` to `8888`. When connecting via `gcloud`, use the following format:  `gcloud compute ssh --zone "xxxx" "instance-name" -- -L 8080:localhost:8888`.
 - *Do not skip* the Docker container creation in the installation process; it is required.
-
 - CLI instructions are described in [(Markdown)](./articles/cloud.md#-google-compute-engine).
-
-## ✒️ Citation
-
-```bibtex
-@software{ppf-contact-solver-2024,
-    title = {ZOZO's Contact Solver},
-    author = {Ryoichi Ando},
-    note = {https://github.com/st-tech/ppf-contact-solver},
-    year = 2024,
-}
-```
 
 ## 📬 Contributing
 
@@ -647,9 +634,9 @@ For the time being, please open issues for bug reports.
 If you wish to extend the codebase, please fork the repository and work on it.
 Thank you!
 
-## 👥 How This Was Coded
+## 👥 How We Built This
 
-A large portion of this codebase was written by the author with GitHub Copilot in the early stages, and nearly all subsequent coding has been carried out through vibe coding with Claude Code and Codex since they became available. All of the code has been carefully human-reviewed by the author before being made public.
+A large portion of this codebase was written by the author with GitHub Copilot in the early stages, and nearly all subsequent coding has been carried out through vibe coding with Claude Code and Codex since they became available. All has been human-reviewed by the author before being made public.
 
 ## 🙏 Acknowledgements
 

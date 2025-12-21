@@ -14,15 +14,13 @@ from enum import Enum
 from typing import Any, Optional
 
 import numpy as np
-import pandas as pd
 
-from scipy.sparse import csr_matrix
 from tqdm import tqdm
 
 from ._asset_ import AssetManager
 from ._param_ import ParamHolder, object_param
 from ._plot_ import Plot, PlotManager
-from ._render_ import MitsubaRenderer, OpenGLRenderer
+from ._render_ import MitsubaRenderer, OpenGLRenderer, OPENGL_READY
 from ._utils_ import Utils
 
 EPS = 1e-3
@@ -935,20 +933,14 @@ class FixedScene:
             self._area = np.zeros(0)
 
         if self._has_dyn_color:
-            sum = np.zeros(len(self._vert[0])) + 0.0001
-            rows, cols, vals = [], [], []
-            for i, f in enumerate(self._tri):
+            # Compute vertex weights for face-to-vertex averaging (replaces scipy sparse matrix)
+            vert_face_count = np.zeros(len(self._vert[0])) + 0.0001
+            for f in self._tri:
                 for j in f:
-                    rows.append(j)
-                    cols.append(i)
-                    vals.append(1.0)
-                    sum[j] += 1
-            self._face_to_vert_mat = csr_matrix(
-                (vals, (rows, cols)), shape=(len(sum), len(self._tri))
-            )
-            self._face_to_vert_mat = self._face_to_vert_mat.multiply(1.0 / sum[:, None])
+                    vert_face_count[j] += 1
+            self._face_to_vert_weights = 1.0 / vert_face_count
         else:
-            self._face_to_vert_mat = None
+            self._face_to_vert_weights = None
 
         # Detect and merge duplicate vertices using hash-based approach
         if merge:
@@ -1216,20 +1208,12 @@ class FixedScene:
                     _compute_area(self._vert[1], self._tri, self._area)
 
                     if self._has_dyn_color:
-                        sum = np.zeros(len(self._vert[0])) + 0.0001
-                        rows, cols, vals = [], [], []
-                        for i, f in enumerate(self._tri):
+                        # Recompute vertex weights for face-to-vertex averaging
+                        vert_face_count = np.zeros(len(self._vert[0])) + 0.0001
+                        for f in self._tri:
                             for j in f:
-                                rows.append(j)
-                                cols.append(i)
-                                vals.append(1.0)
-                                sum[j] += 1
-                        self._face_to_vert_mat = csr_matrix(
-                            (vals, (rows, cols)), shape=(len(sum), len(self._tri))
-                        )
-                        self._face_to_vert_mat = self._face_to_vert_mat.multiply(
-                            1.0 / sum[:, None]
-                        )
+                                vert_face_count[j] += 1
+                        self._face_to_vert_weights = 1.0 / vert_face_count
 
     @property
     def tri_param(self) -> dict[str, list[Any]]:
@@ -1263,9 +1247,10 @@ class FixedScene:
 
         from IPython.display import HTML, display
 
+        from ._utils_ import dict_to_html_table
+
         if self._plot is not None and self._plot.is_jupyter_notebook():
-            df = pd.DataFrame(data)
-            html = df.to_html(classes="table", index=False)
+            html = dict_to_html_table(data, classes="table")
             display(HTML(html))
         else:
             print(data)
@@ -1284,7 +1269,7 @@ class FixedScene:
         if hint is None:
             hint = {}
         if self._has_dyn_color:
-            assert self._face_to_vert_mat is not None
+            assert self._face_to_vert_weights is not None
             assert self._area is not None
 
             max_area = 2.0
@@ -1303,10 +1288,20 @@ class FixedScene:
                     intensity[i] = self._dyn_face_intensity[i]
                     hue = 240.0 * (1.0 - val) / 360.0
                     face_color[i] = np.array(colorsys.hsv_to_rgb(hue, 0.75, 1.0))
-            intensity = self._face_to_vert_mat.dot(intensity)
-            color = (1.0 - intensity[:, None]) * self._color + intensity[
+
+            # Face-to-vertex averaging (replaces sparse matrix dot product)
+            num_verts = len(self._face_to_vert_weights)
+            vert_intensity = np.zeros(num_verts)
+            np.add.at(vert_intensity, self._tri.ravel(), np.repeat(intensity, 3))
+            vert_intensity *= self._face_to_vert_weights
+
+            vert_face_color = np.zeros((num_verts, 3))
+            np.add.at(vert_face_color, self._tri.ravel(), np.repeat(face_color, 3, axis=0))
+            vert_face_color *= self._face_to_vert_weights[:, None]
+
+            color = (1.0 - vert_intensity[:, None]) * self._color + vert_intensity[
                 :, None
-            ] * self._face_to_vert_mat.dot(face_color)
+            ] * vert_face_color
             return color
         else:
             return self._color
@@ -1389,25 +1384,27 @@ class FixedScene:
             )
             mesh.export(path)
 
-        # Skip rendering on Windows (pyrender doesn't work in headless mode)
+        # Skip rendering if pyrender is not available or skip_render is set
         if not skip_render and not os.path.exists(image_path):
-            if Utils.ci_name() is not None:
-                args["width"] = 320
-                args["height"] = 240
-            if "renderer" in args:
-                if args["renderer"] == "mitsuba":
+            renderer_type = args.get("renderer", "opengl")
+            if renderer_type == "opengl" and not OPENGL_READY:
+                # Skip OpenGL rendering when pyrender is not installed
+                pass
+            else:
+                if Utils.ci_name() is not None:
+                    args["width"] = 320
+                    args["height"] = 240
+                if renderer_type == "mitsuba":
                     assert shutil.which("mitsuba") is not None
                     renderer = MitsubaRenderer(args)
-                elif args["renderer"] == "opengl":
+                elif renderer_type == "opengl":
                     renderer = OpenGLRenderer(args)
                 else:
                     raise Exception("unsupported renderer")
-            else:
-                renderer = OpenGLRenderer(args)
 
-            assert tri is not None
-            assert color is not None
-            renderer.render(vert, color, seg, tri, image_path)
+                assert tri is not None
+                assert color is not None
+                renderer.render(vert, color, seg, tri, image_path)
 
         return self
 
@@ -1763,32 +1760,6 @@ class FixedScene:
         vert += time * self._vel
         vert += self._displacement[self._vert[0]]
         return vert
-
-    def check_intersection(self) -> "FixedScene":
-        """Check for self-intersections and intersections with the static mesh.
-
-        Returns:
-            FixedScene: The fixed scene.
-        """
-        import open3d as o3d
-
-        if len(self._vert) and len(self._tri):
-            o3d_mesh = o3d.geometry.TriangleMesh(
-                o3d.utility.Vector3dVector(self._vert),
-                o3d.utility.Vector3iVector(self._tri),
-            )
-            if o3d_mesh.is_self_intersecting():
-                print("WARNING: mesh is self-intersecting")
-            if len(self._static_vert) and len(self._static_tri):
-                o3d_static = o3d.geometry.TriangleMesh(
-                    o3d.utility.Vector3dVector(self._static_vert),
-                    o3d.utility.Vector3iVector(self._static_tri),
-                )
-                if o3d_static.is_self_intersecting():
-                    print("WARNING: static mesh is self-intersecting")
-                if o3d_static.is_intersecting(o3d_mesh):
-                    print("WARNING: mesh is intersecting with static mesh")
-        return self
 
     def preview(
         self,

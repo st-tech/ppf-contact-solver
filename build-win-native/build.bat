@@ -149,8 +149,20 @@ echo.
 echo if not defined CUDA_PATH set CUDA_PATH=C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.8
 echo.
 echo REM Set PATH to include binaries from their source locations
-echo set PATH=%%SRC%%\target\release;%%SRC%%\src\cpp\build\lib;%%CUDA_PATH%%\bin;%%PATH%%
+echo set PATH=%%BUILD_WIN%%\python;%%BUILD_WIN%%\python\Scripts;%%SRC%%\target\release;%%SRC%%\src\cpp\build\lib;%%CUDA_PATH%%\bin;%%PATH%%
 echo set PYTHONPATH=%%SRC%%;%%PYTHONPATH%%
+echo.
+echo REM Set Jupyter/IPython config to build-win-native relative paths
+echo set JUPYTER_CONFIG_DIR=%%BUILD_WIN%%\jupyter\config
+echo set JUPYTER_DATA_DIR=%%BUILD_WIN%%\jupyter\data
+echo set IPYTHONDIR=%%BUILD_WIN%%\jupyter\ipython
+echo.
+echo REM Set dark theme if not already configured
+echo set THEME_DIR=%%JUPYTER_CONFIG_DIR%%\lab\user-settings\@jupyterlab\apputils-extension
+echo if not exist "%%THEME_DIR%%" mkdir "%%THEME_DIR%%"
+echo if not exist "%%THEME_DIR%%\themes.jupyterlab-settings" ^(
+echo     echo {"theme": "JupyterLab Dark"} ^> "%%THEME_DIR%%\themes.jupyterlab-settings"
+echo ^)
 echo.
 echo REM Start JupyterLab
 echo "%%BUILD_WIN%%\python\python.exe" -m jupyterlab --no-browser --port=8080 --ServerApp.token="" --notebook-dir="%%SRC%%\examples"
@@ -179,6 +191,11 @@ echo cuda_bin = os.path.join^(cuda_path, "bin"^)
 echo.
 echo os.environ["PATH"] = bin_dir + ";" + lib_dir + ";" + cuda_bin + ";" + os.environ.get^("PATH", ""^)
 echo os.environ["PYTHONPATH"] = src + ";" + os.environ.get^("PYTHONPATH", ""^)
+echo.
+echo # Set Jupyter/IPython config to build-win-native relative paths
+echo os.environ["JUPYTER_CONFIG_DIR"] = os.path.join^(script_dir, "jupyter", "config"^)
+echo os.environ["JUPYTER_DATA_DIR"] = os.path.join^(script_dir, "jupyter", "data"^)
+echo os.environ["IPYTHONDIR"] = os.path.join^(script_dir, "jupyter", "ipython"^)
 echo.
 echo proc = subprocess.Popen^([
 echo     python_exe, "-m", "jupyterlab",

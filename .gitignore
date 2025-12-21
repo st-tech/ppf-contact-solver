@@ -1,4 +1,5 @@
 target
+tests
 requirements.txt
 .clangd
 .clang-format
@@ -51,3 +52,8 @@ build-win-native/rust
 build-win-native/start.bat
 build-win-native/start-jupyterlab.pyw
 build-win-native/ppf-cts
+build-win-native/*.pem
+build-win-native/*.ps1
+build-win-native/*.json
+build-win-native/*.zip
+build-win-native/ci

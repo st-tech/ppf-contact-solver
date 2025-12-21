@@ -64,11 +64,12 @@ on:
       region:
         description: 'AWS Region'
         required: true
-        default: 'us-east-1'
+        default: 'us-east-2'
         type: choice
         options:
           - us-east-1
           - us-east-2
+          - ap-northeast-1
 
 jobs:
 """
@@ -224,6 +225,7 @@ jobs:
           SSH_PORT="${{ steps.ids.outputs.SSH_PORT }}"
           for i in $(seq 1 60); do
             if ssh -p $SSH_PORT -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \\
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \\
               -o BatchMode=yes -i "$KEY_PATH" Administrator@$PUBLIC_IP "echo SSH_READY" 2>/dev/null | grep -q SSH_READY; then
               echo "SSH ready!"
               break
@@ -233,6 +235,7 @@ jobs:
           done
           for i in $(seq 1 30); do
             if ssh -p $SSH_PORT -o ConnectTimeout=10 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \\
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \\
               -i "$KEY_PATH" Administrator@$PUBLIC_IP "if (Test-Path C:\\\\ssh_ready.txt) { echo READY }" 2>/dev/null | grep -q READY; then
               echo "Setup complete!"
               break
@@ -245,8 +248,10 @@ jobs:
           SSH_PORT="${{ steps.ids.outputs.SSH_PORT }}"
           KEY_PATH="${{ steps.keypair.outputs.KEY_PATH }}"
           scp -P $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \\
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \\
             -i "$KEY_PATH" .github/workflows/scripts/win/install-cuda.ps1 Administrator@$PUBLIC_IP:C:/install_cuda.ps1
           ssh -p $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \\
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \\
             -o ServerAliveInterval=60 -i "$KEY_PATH" Administrator@$PUBLIC_IP \\
             "powershell -ExecutionPolicy Bypass -File C:/install_cuda.ps1"
 
@@ -256,8 +261,10 @@ jobs:
           KEY_PATH="${{ steps.keypair.outputs.KEY_PATH }}"
           git archive --format=zip --output=/tmp/repo.zip HEAD
           scp -P $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \\
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \\
             -i "$KEY_PATH" /tmp/repo.zip Administrator@$PUBLIC_IP:C:/source.zip
           ssh -p $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \\
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \\
             -i "$KEY_PATH" Administrator@$PUBLIC_IP \\
             "powershell -Command \\"if (Test-Path 'C:\\\\ppf-contact-solver') { Remove-Item -Recurse -Force 'C:\\\\ppf-contact-solver' }; New-Item -ItemType Directory -Path 'C:\\\\ppf-contact-solver' -Force; Expand-Archive -Path 'C:\\\\source.zip' -DestinationPath 'C:\\\\ppf-contact-solver' -Force; Remove-Item 'C:\\\\source.zip'\\""
 
@@ -266,6 +273,7 @@ jobs:
           SSH_PORT="${{ steps.ids.outputs.SSH_PORT }}"
           KEY_PATH="${{ steps.keypair.outputs.KEY_PATH }}"
           ssh -p $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \\
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \\
             -o ServerAliveInterval=60 -i "$KEY_PATH" Administrator@$PUBLIC_IP \\
             "cmd /c 'cd C:\\\\ppf-contact-solver\\\\build-win-native && warmup.bat /nopause'"
 
@@ -274,6 +282,7 @@ jobs:
           SSH_PORT="${{ steps.ids.outputs.SSH_PORT }}"
           KEY_PATH="${{ steps.keypair.outputs.KEY_PATH }}"
           ssh -p $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \\
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \\
             -o ServerAliveInterval=60 -i "$KEY_PATH" Administrator@$PUBLIC_IP \\
             "cmd /c 'cd C:\\\\ppf-contact-solver\\\\build-win-native && build.bat /nopause'"
 
@@ -282,6 +291,7 @@ jobs:
           SSH_PORT="${{ steps.ids.outputs.SSH_PORT }}"
           KEY_PATH="${{ steps.keypair.outputs.KEY_PATH }}"
           ssh -p $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \\
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \\
             -i "$KEY_PATH" Administrator@$PUBLIC_IP \\
             "powershell -Command \\"New-Item -ItemType Directory -Path 'C:\\\\ci' -Force\\""
 
@@ -299,8 +309,10 @@ jobs:
           KEY_PATH="${{ steps.keypair.outputs.KEY_PATH }}"
           sed "s/EXAMPLE_PLACEHOLDER/{example}/g" .github/workflows/scripts/win/run-example.ps1 > /tmp/run_{example}.ps1
           scp -P $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \\
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \\
             -i "$KEY_PATH" /tmp/run_{example}.ps1 Administrator@$PUBLIC_IP:C:/run_{example}.ps1
           ssh -p $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \\
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \\
             -o ServerAliveInterval=60 -i "$KEY_PATH" Administrator@$PUBLIC_IP \\
             "powershell -ExecutionPolicy Bypass -File C:/run_{example}.ps1"
 
@@ -317,13 +329,19 @@ jobs:
           KEY_PATH="${{ steps.keypair.outputs.KEY_PATH }}"
           mkdir -p ci
           # Delete large binary files on remote before copying to save bandwidth
-          # CI output is in Windows temp directory
+          # CI output is in project-relative cache: C:\\ppf-contact-solver\\cache\\ppf-cts\\ci
           ssh -p $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \\
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \\
             -i "$KEY_PATH" Administrator@$PUBLIC_IP \\
-            "powershell -Command \\"Get-ChildItem -Path \\$env:TEMP\\\\ci -Recurse -Include '*.bin','*.pickle','*.ply','*.gz' | Remove-Item -Force\\"" || true
-          # Copy entire ci directory from Windows temp directory
+            "powershell -Command \\"Get-ChildItem -Path C:\\\\ppf-contact-solver\\\\cache\\\\ppf-cts\\\\ci -Recurse -Include '*.bin','*.pickle','*.ply','*.gz' -ErrorAction SilentlyContinue | Remove-Item -Force\\"" || true
+          # Copy CI output from ppf-cts cache directory
           scp -P $SSH_PORT -r -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \\
-            -i "$KEY_PATH" "Administrator@$PUBLIC_IP:C:/Users/Administrator/AppData/Local/Temp/ci/*" ./ci/ || echo "No files found"
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \\
+            -i "$KEY_PATH" "Administrator@$PUBLIC_IP:C:/ppf-contact-solver/cache/ppf-cts/ci/*" ./ci/ || echo "No ppf-cts CI files found"
+          # Also copy logs and scripts from C:\\ci
+          scp -P $SSH_PORT -r -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \\
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \\
+            -i "$KEY_PATH" "Administrator@$PUBLIC_IP:C:/ci/*" ./ci/ || echo "No script/log files found"
           echo "## Collected Files:"
           ls -laR ci/ || echo "No files collected"
 
@@ -341,6 +359,7 @@ jobs:
           SSH_PORT="${{ steps.ids.outputs.SSH_PORT }}"
           KEY_PATH="${{ steps.keypair.outputs.KEY_PATH }}"
           ssh -p $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \\
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \\
             -i "$KEY_PATH" Administrator@$PUBLIC_IP "nvidia-smi" || true
 
       - name: Re-authenticate for cleanup

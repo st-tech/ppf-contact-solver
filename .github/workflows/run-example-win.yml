@@ -46,11 +46,12 @@ on:
       region:
         description: 'AWS Region'
         required: true
-        default: 'us-east-1'
+        default: 'us-east-2'
         type: choice
         options:
           - us-east-1
           - us-east-2
+          - ap-northeast-1
 
 jobs:
   run-example:
@@ -372,13 +373,16 @@ jobs:
           KEY_PATH="${{ steps.keypair.outputs.KEY_PATH }}"
           mkdir -p ci
           # Delete large binary files on remote before copying to save bandwidth
-          # CI output is in Windows temp directory
+          # CI output is in project-relative cache: C:\ppf-contact-solver\cache\ppf-cts\ci
           ssh -p $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
             -i "$KEY_PATH" Administrator@$PUBLIC_IP \
-            "powershell -Command \"Get-ChildItem -Path \$env:TEMP\\ci -Recurse -Include '*.bin','*.pickle','*.ply','*.gz' | Remove-Item -Force\"" || true
-          # Copy entire ci directory from Windows temp directory
+            "powershell -Command \"Get-ChildItem -Path C:\\ppf-contact-solver\\cache\\ppf-cts\\ci -Recurse -Include '*.bin','*.pickle','*.ply','*.gz' -ErrorAction SilentlyContinue | Remove-Item -Force\"" || true
+          # Copy CI output from ppf-cts cache directory
           scp -P $SSH_PORT -r -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-            -i "$KEY_PATH" "Administrator@$PUBLIC_IP:C:/Users/Administrator/AppData/Local/Temp/ci/*" ./ci/ || echo "No files found"
+            -i "$KEY_PATH" "Administrator@$PUBLIC_IP:C:/ppf-contact-solver/cache/ppf-cts/ci/*" ./ci/ || echo "No ppf-cts CI files found"
+          # Also copy logs and scripts from C:\ci
+          scp -P $SSH_PORT -r -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -i "$KEY_PATH" "Administrator@$PUBLIC_IP:C:/ci/*" ./ci/ || echo "No script/log files found"
           echo "## Collected Files:"
           ls -laR ci/ || echo "No files collected"
 

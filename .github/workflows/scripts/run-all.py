@@ -26,7 +26,7 @@ def read_examples_list():
 
 
 def trigger_workflow(
-    example_name, instance_type="g6e.2xlarge", region="us-east-1", branch=None
+    example_name, instance_type="g6e.2xlarge", region="us-east-2", branch=None
 ):
     """Trigger a GitHub Actions workflow for a specific example."""
     workflow_file = f"{example_name}.yml"
@@ -63,7 +63,7 @@ def trigger_workflow(
 
 def main():
     instance_type = sys.argv[1] if len(sys.argv) > 1 else "g6e.2xlarge"
-    region = sys.argv[2] if len(sys.argv) > 2 else "us-east-1"
+    region = sys.argv[2] if len(sys.argv) > 2 else "us-east-2"
 
     # Get current branch
     try:

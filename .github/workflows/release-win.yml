@@ -23,7 +23,7 @@ jobs:
       contents: write
 
     env:
-      AWS_REGION: us-east-1
+      AWS_REGION: us-east-2
       INSTANCE_TYPE: g6e.2xlarge
       WORKDIR: C:\ppf-contact-solver
       USER: Administrator
@@ -324,6 +324,15 @@ jobs:
             -o ServerAliveInterval=60 -i "$KEY_PATH" Administrator@$PUBLIC_IP \
             "cmd /c 'cd C:\\ppf-contact-solver\\build-win-native\\dist && headless.bat /nopause'"
 
+      - name: Run fast-check-all.bat on bundle
+        run: |
+          echo "Running fast-check-all.bat on bundle..."
+          SSH_PORT="${{ steps.ids.outputs.SSH_PORT }}"
+          KEY_PATH="${{ steps.keypair.outputs.KEY_PATH }}"
+          ssh -p $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -i "$KEY_PATH" Administrator@$PUBLIC_IP \
+            "cmd /c 'cd C:\\ppf-contact-solver\\build-win-native\\dist && fast-check-all.bat /nopause'"
+
       - name: Clean up test artifacts
         run: |
           echo "Cleaning up test artifacts..."
@@ -331,7 +340,7 @@ jobs:
           KEY_PATH="${{ steps.keypair.outputs.KEY_PATH }}"
           ssh -p $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
             -i "$KEY_PATH" Administrator@$PUBLIC_IP \
-            "powershell -Command \"Remove-Item -Recurse -Force 'C:\\ppf-contact-solver\\build-win-native\\dist\\local' -ErrorAction SilentlyContinue; Remove-Item -Recurse -Force 'C:\\ppf-contact-solver\\build-win-native\\dist\\export' -ErrorAction SilentlyContinue; Get-ChildItem -Path 'C:\\ppf-contact-solver\\build-win-native\\dist' -Recurse -Directory -Filter '__pycache__' | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue; Get-ChildItem -Path 'C:\\ppf-contact-solver\\build-win-native\\dist' -Recurse -Include '*.pyc','*.pyo' | Remove-Item -Force -ErrorAction SilentlyContinue\""
+            "powershell -Command \"Remove-Item -Recurse -Force 'C:\\ppf-contact-solver\\build-win-native\\dist\\local' -ErrorAction SilentlyContinue; Remove-Item -Recurse -Force 'C:\\ppf-contact-solver\\build-win-native\\dist\\cache' -ErrorAction SilentlyContinue; Remove-Item -Recurse -Force 'C:\\ppf-contact-solver\\build-win-native\\dist\\export' -ErrorAction SilentlyContinue; Get-ChildItem -Path 'C:\\ppf-contact-solver\\build-win-native\\dist' -Recurse -Directory -Filter '__pycache__' | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue; Get-ChildItem -Path 'C:\\ppf-contact-solver\\build-win-native\\dist' -Recurse -Include '*.pyc','*.pyo' | Remove-Item -Force -ErrorAction SilentlyContinue\""
 
       - name: Create release archive
         run: |
@@ -525,6 +534,16 @@ jobs:
             -o ServerAliveInterval=60 -i "$KEY_PATH" Administrator@$VERIFY_PUBLIC_IP \
             "cmd /c 'cd C:\\bundle && headless.bat /nopause'"
           echo "Bundle verification PASSED - no external DLL dependencies detected"
+
+      - name: Run fast-check-all.bat on clean environment
+        run: |
+          echo "Running fast-check-all.bat on clean environment..."
+          SSH_PORT="${{ steps.verify-ids.outputs.SSH_PORT }}"
+          KEY_PATH="${{ steps.keypair.outputs.KEY_PATH }}"
+          ssh -p $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -i "$KEY_PATH" Administrator@$VERIFY_PUBLIC_IP \
+            "cmd /c 'cd C:\\bundle && fast-check-all.bat /nopause'"
+          echo "All example notebooks PASSED on clean environment"
 
       - name: Terminate verification instance
         run: |

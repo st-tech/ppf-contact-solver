@@ -67,6 +67,7 @@ COPY --from=builder /root/${PROJ_NAME}/blender_addon /root/${PROJ_NAME}/blender_
 COPY --from=builder /root/${PROJ_NAME}/frontend /root/${PROJ_NAME}/frontend
 COPY --from=builder /root/${PROJ_NAME}/src /root/${PROJ_NAME}/src
 COPY --from=builder /root/${PROJ_NAME}/.git/branch_name.txt /root/${PROJ_NAME}/.git/branch_name.txt
+COPY --from=builder /root/${PROJ_NAME}/.github/workflows/scripts/examples.txt /root/${PROJ_NAME}/examples.txt
 
 # Copy virtual environment from base-image (which has the venv created)
 COPY --from=base-image /root/.local/share/ppf-cts/venv /root/.local/share/ppf-cts/venv
@@ -75,11 +76,9 @@ COPY --from=base-image /root/.local/share/ppf-cts/venv /root/.local/share/ppf-ct
 RUN find /root/.local/share/ppf-cts/venv -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true && \
   find /root/.local/share/ppf-cts/venv -type f -name "*.pyc" -delete 2>/dev/null || true && \
   find /root/.local/share/ppf-cts/venv -type f -name "*.pyo" -delete 2>/dev/null || true && \
-  rm -rf /root/.local/share/ppf-cts/venv/lib/python*/site-packages/pandas/tests 2>/dev/null || true && \
   rm -rf /root/.local/share/ppf-cts/venv/lib/python*/site-packages/matplotlib/tests 2>/dev/null || true && \
   rm -rf /root/.local/share/ppf-cts/venv/lib/python*/site-packages/setuptools/tests 2>/dev/null || true && \
   rm -rf /root/.local/share/ppf-cts/venv/lib/python*/site-packages/jupyterlab/tests 2>/dev/null || true && \
-  rm -rf /root/.local/share/ppf-cts/venv/lib/python*/site-packages/sklearn/tests 2>/dev/null || true && \
   find /root/.local/share/ppf-cts/venv/lib/python*/site-packages -type f -name "*.so" -exec strip --strip-debug {} + 2>/dev/null || true && \
   rm -rf /root/.local/share/ppf-cts/venv/lib/python*/site-packages/pip/_vendor/distlib/*.exe 2>/dev/null || true && \
   rm -rf /root/.local/share/ppf-cts/venv/share/jupyter/lab/staging 2>/dev/null || true && \

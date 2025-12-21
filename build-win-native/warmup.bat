@@ -199,6 +199,41 @@ if not exist "%PYTHON%" (
     echo Embedded Python setup complete!
 )
 
+REM ============================================================
+REM Download and setup MinGit for bundling if not present
+REM ============================================================
+set MINGIT_DIR=%BUILD_WIN%\mingit
+set MINGIT_EXE=%MINGIT_DIR%\cmd\git.exe
+
+if not exist "%MINGIT_EXE%" (
+    echo === Downloading MinGit ===
+
+    set MINGIT_VERSION=2.47.1
+    set MINGIT_URL=https://github.com/git-for-windows/git/releases/download/v!MINGIT_VERSION!.windows.1/MinGit-!MINGIT_VERSION!-64-bit.zip
+    set MINGIT_ZIP=%DOWNLOADS%\MinGit-!MINGIT_VERSION!-64-bit.zip
+
+    if not exist "!MINGIT_ZIP!" (
+        echo Downloading MinGit !MINGIT_VERSION!...
+        powershell -Command "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -Uri '!MINGIT_URL!' -OutFile '!MINGIT_ZIP!' -UseBasicParsing"
+        if errorlevel 1 (
+            echo ERROR: Failed to download MinGit
+            exit /b 1
+        )
+    )
+
+    echo Extracting MinGit...
+    if not exist "%MINGIT_DIR%" mkdir "%MINGIT_DIR%"
+    powershell -Command "Expand-Archive -Path '!MINGIT_ZIP!' -DestinationPath '%MINGIT_DIR%' -Force"
+    if errorlevel 1 (
+        echo ERROR: Failed to extract MinGit
+        exit /b 1
+    )
+
+    echo MinGit setup complete!
+) else (
+    echo MinGit already installed
+)
+
 REM Check if Python exists
 if not exist "%PYTHON%" (
     echo ERROR: Embedded Python not found at %PYTHON%
@@ -224,19 +259,27 @@ echo.
 echo === Installing Python packages ===
 
 REM Core packages from warmup.py python_packages()
-set PACKAGES=numpy pandas libigl plyfile requests gdown trimesh pywavefront matplotlib tqdm pythreejs ipywidgets open3d gpytoolbox tabulate tetgen triangle
+set PACKAGES=numpy numba plyfile requests gdown trimesh pywavefront matplotlib tqdm pythreejs ipywidgets fast-simplification tabulate triangle
 
 REM Development tools
 set DEV_PACKAGES=ruff black isort
 
 REM JupyterLab (LSP disabled on Windows due to embedded Python subprocess issues)
-set JUPYTER_PACKAGES=jupyterlab jupyterlab-code-formatter
+REM nbconvert is needed for fast-check-all.bat to convert notebooks to Python scripts
+set JUPYTER_PACKAGES=jupyterlab jupyterlab-code-formatter nbconvert
 
 echo.
 echo Installing core packages...
 "%PYTHON%" -m pip install --no-warn-script-location %PACKAGES%
 if errorlevel 1 (
     echo WARNING: Some core packages failed to install
+)
+
+echo.
+echo Installing pytetwild (fTetWild wrapper)...
+"%PYTHON%" -m pip install --no-warn-script-location pytetwild
+if errorlevel 1 (
+    echo WARNING: pytetwild failed to install
 )
 
 echo.
@@ -251,13 +294,6 @@ echo Installing JupyterLab packages...
 "%PYTHON%" -m pip install --no-warn-script-location %JUPYTER_PACKAGES%
 if errorlevel 1 (
     echo WARNING: Some JupyterLab packages failed to install
-)
-
-echo.
-echo === Installing sdf package from GitHub ===
-"%PYTHON%" -m pip install --no-warn-script-location git+https://github.com/fogleman/sdf.git
-if errorlevel 1 (
-    echo WARNING: sdf package failed to install
 )
 
 echo.

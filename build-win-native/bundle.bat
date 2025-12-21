@@ -20,6 +20,11 @@ REM Get the directory where this script is located
 set BUILD_WIN=%~dp0
 set BUILD_WIN=%BUILD_WIN:~0,-1%
 
+REM Full cleanup before bundling
+echo [0/9] Performing full cleanup before bundling...
+call "%BUILD_WIN%\clear-all.bat" /nopause
+echo.
+
 REM Get parent directory (SRC_DIR)
 for %%I in ("%BUILD_WIN%\..") do set SRC_DIR=%%~fI
 
@@ -47,6 +52,10 @@ if not exist "%CUDA_DLL%" (
 )
 if not exist "%BUILD_WIN%\python\python.exe" (
     echo ERROR: Embedded Python not found. Please run warmup.bat first.
+    exit /b 1
+)
+if not exist "%BUILD_WIN%\mingit\cmd\git.exe" (
+    echo ERROR: MinGit not found. Please run warmup.bat first.
     exit /b 1
 )
 echo   [OK] Build verified
@@ -131,6 +140,19 @@ if errorlevel 8 (
 echo   [OK] Copied Python environment
 
 REM ============================================================
+REM Copy MinGit (for sparse_clone functionality)
+REM ============================================================
+echo.
+echo [5.3/9] Copying MinGit...
+
+robocopy "%BUILD_WIN%\mingit" "%DIST_DIR%\mingit" /E /NJH /NJS /NDL /NC /NS /NP >nul
+if errorlevel 8 (
+    echo ERROR: Failed to copy MinGit
+    exit /b 1
+)
+echo   [OK] Copied MinGit
+
+REM ============================================================
 REM Shorten webpack chunk IDs to reduce path length
 REM ============================================================
 echo.
@@ -212,9 +234,21 @@ echo.
 echo REM Load configuration
 echo call "%%DIST%%\config.bat"
 echo.
-echo REM Set PATH to include bundled binaries
-echo set PATH=%%DIST%%\bin;%%PATH%%
+echo REM Set PATH to include bundled binaries and MinGit
+echo set PATH=%%DIST%%\python;%%DIST%%\python\Scripts;%%DIST%%\bin;%%DIST%%\mingit\cmd;%%PATH%%
 echo set PYTHONPATH=%%DIST%%;%%PYTHONPATH%%
+echo.
+echo REM Set Jupyter/IPython config to dist-relative paths
+echo set JUPYTER_CONFIG_DIR=%%DIST%%\jupyter\config
+echo set JUPYTER_DATA_DIR=%%DIST%%\jupyter\data
+echo set IPYTHONDIR=%%DIST%%\jupyter\ipython
+echo.
+echo REM Set dark theme if not already configured
+echo set THEME_DIR=%%JUPYTER_CONFIG_DIR%%\lab\user-settings\@jupyterlab\apputils-extension
+echo if not exist "%%THEME_DIR%%" mkdir "%%THEME_DIR%%"
+echo if not exist "%%THEME_DIR%%\themes.jupyterlab-settings" ^(
+echo     echo {"theme": "JupyterLab Dark"} ^> "%%THEME_DIR%%\themes.jupyterlab-settings"
+echo ^)
 echo.
 echo REM Start JupyterLab - auto-increments port if taken
 echo "%%DIST%%\python\python.exe" -m jupyterlab --no-browser --port=%%PORT%% --ServerApp.port_retries=50 --ServerApp.token="" --notebook-dir="%%DIST%%\examples"
@@ -236,9 +270,15 @@ echo.
 echo script_dir = os.path.dirname^(os.path.abspath^(__file__^)^)
 echo python_exe = os.path.join^(script_dir, "python", "pythonw.exe"^)
 echo bin_dir = os.path.join^(script_dir, "bin"^)
+echo mingit_dir = os.path.join^(script_dir, "mingit", "cmd"^)
 echo.
-echo os.environ["PATH"] = bin_dir + ";" + os.environ.get^("PATH", ""^)
+echo os.environ["PATH"] = bin_dir + ";" + mingit_dir + ";" + os.environ.get^("PATH", ""^)
 echo os.environ["PYTHONPATH"] = script_dir + ";" + os.environ.get^("PYTHONPATH", ""^)
+echo.
+echo # Set Jupyter/IPython config to project-relative paths
+echo os.environ["JUPYTER_CONFIG_DIR"] = os.path.join^(script_dir, "jupyter", "config"^)
+echo os.environ["JUPYTER_DATA_DIR"] = os.path.join^(script_dir, "jupyter", "data"^)
+echo os.environ["IPYTHONDIR"] = os.path.join^(script_dir, "jupyter", "ipython"^)
 echo.
 echo proc = subprocess.Popen^([
 echo     python_exe, "-m", "jupyterlab",
@@ -266,8 +306,8 @@ echo REM Get the directory where this script is located
 echo set DIST=%%~dp0
 echo set DIST=%%DIST:~0,-1%%
 echo.
-echo REM Set PATH to include bundled binaries
-echo set PATH=%%DIST%%\bin;%%PATH%%
+echo REM Set PATH to include bundled binaries and MinGit
+echo set PATH=%%DIST%%\python;%%DIST%%\python\Scripts;%%DIST%%\bin;%%DIST%%\mingit\cmd;%%PATH%%
 echo set PYTHONPATH=%%DIST%%;%%PYTHONPATH%%
 echo.
 echo REM Run headless.py
@@ -329,6 +369,16 @@ echo Python is distributed under the Python Software Foundation License.
 echo.
 echo See: https://docs.python.org/3/license.html
 echo.
+echo.
+echo Git ^(MinGit^)
+echo ------------
+echo Git is distributed under the GNU General Public License v2.0 ^(GPLv2^).
+echo.
+echo MinGit is a minimal distribution of Git for Windows.
+echo Source code is available at: https://github.com/git-for-windows/git
+echo.
+echo See: https://www.gnu.org/licenses/old-licenses/gpl-2.0.html
+echo.
 )
 echo   Created THIRD_PARTY_LICENSES.txt
 
@@ -373,11 +423,15 @@ echo CONTENTS
 echo --------
 echo bin/           - Solver binaries and CUDA libraries
 echo python/        - Embedded Python environment
+echo mingit/        - Embedded Git for repository cloning
 echo examples/      - Example Jupyter notebooks
 echo config.bat     - Port configuration
 echo start.bat      - JupyterLab launcher
 echo start-jupyterlab.pyw - GUI launcher
 echo headless.bat   - Run examples without JupyterLab
+echo fast-check-all.bat - Run all example notebooks as tests
+echo clear-cache.bat - Clear cache directories
+echo clear-all.bat  - Full cleanup including session data
 echo.
 echo.
 echo LICENSE
@@ -390,6 +444,14 @@ echo   Created README.txt
 REM Copy config.bat configuration file
 copy "%BUILD_WIN%\config.bat" "%DIST_DIR%\config.bat" >nul
 echo   Copied config.bat
+
+REM Copy fast-check and utility files
+copy "%BUILD_WIN%\fast-check-all.bat" "%DIST_DIR%\fast-check-all.bat" >nul
+copy "%BUILD_WIN%\inject_fast_check.py" "%DIST_DIR%\inject_fast_check.py" >nul
+copy "%BUILD_WIN%\clear-cache.bat" "%DIST_DIR%\clear-cache.bat" >nul
+copy "%BUILD_WIN%\clear-all.bat" "%DIST_DIR%\clear-all.bat" >nul
+copy "%SRC_DIR%\.github\workflows\scripts\examples.txt" "%DIST_DIR%\examples.txt" >nul
+echo   Copied fast-check and utility files
 
 REM ============================================================
 REM Summary
