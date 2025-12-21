@@ -1,0 +1,9 @@
+cff-version: 1.2.0
+title: "ZOZO's Contact Solver"
+message: "If you use this software, please cite it as below."
+type: software
+authors:
+  - family-names: Ando
+    given-names: Ryoichi
+repository-code: "https://github.com/st-tech/ppf-contact-solver"
+date-released: 2024-11-01
