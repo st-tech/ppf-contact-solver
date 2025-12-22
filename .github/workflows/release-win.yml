@@ -261,16 +261,16 @@ jobs:
             sleep 30
           done
 
-      - name: Install CUDA 12.8
+      - name: Install NVIDIA driver only (no CUDA toolkit)
         run: |
-          echo "Installing CUDA 12.8 (this will take 10-20 minutes)..."
+          echo "Installing NVIDIA driver (this will take a few minutes)..."
           SSH_PORT="${{ steps.ids.outputs.SSH_PORT }}"
           KEY_PATH="${{ steps.keypair.outputs.KEY_PATH }}"
           scp -P $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-            -i "$KEY_PATH" .github/workflows/scripts/win/install-cuda.ps1 Administrator@$PUBLIC_IP:C:/install_cuda.ps1
+            -i "$KEY_PATH" .github/workflows/scripts/win/install-nvidia-driver.ps1 Administrator@$PUBLIC_IP:C:/install_driver.ps1
           ssh -p $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
             -o ServerAliveInterval=60 -i "$KEY_PATH" Administrator@$PUBLIC_IP \
-            "powershell -ExecutionPolicy Bypass -File C:/install_cuda.ps1"
+            "powershell -ExecutionPolicy Bypass -File C:/install_driver.ps1"
 
       - name: Create archive of repository
         run: |
@@ -332,6 +332,21 @@ jobs:
           ssh -p $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
             -o ServerAliveInterval=60 -i "$KEY_PATH" Administrator@$PUBLIC_IP \
             "cmd /c 'cd C:\\ppf-contact-solver\\build-win-native\\dist && fast-check-all.bat /nopause'"
+
+      - name: Download build test log
+        if: always()
+        continue-on-error: true
+        run: |
+          SSH_PORT="${{ steps.ids.outputs.SSH_PORT }}"
+          KEY_PATH="${{ steps.keypair.outputs.KEY_PATH }}"
+          echo "Downloading test results log from build instance..."
+          scp -P $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -i "$KEY_PATH" "Administrator@$PUBLIC_IP:C:/ppf-contact-solver/build-win-native/dist/fast-check-results.log" \
+            ./build-fast-check-results.log 2>/dev/null || echo "Log file not found"
+          if [ -f ./build-fast-check-results.log ]; then
+            echo "=== Build Instance Test Results ==="
+            cat ./build-fast-check-results.log
+          fi
 
       - name: Clean up test artifacts
         run: |
@@ -544,6 +559,21 @@ jobs:
             -o ServerAliveInterval=60 -i "$KEY_PATH" Administrator@$VERIFY_PUBLIC_IP \
             "cmd /c 'cd C:\\bundle && fast-check-all.bat /nopause'"
           echo "All example notebooks PASSED on clean environment"
+
+      - name: Download verification test log
+        if: always()
+        continue-on-error: true
+        run: |
+          SSH_PORT="${{ steps.verify-ids.outputs.SSH_PORT }}"
+          KEY_PATH="${{ steps.keypair.outputs.KEY_PATH }}"
+          echo "Downloading test results log from verification instance..."
+          scp -P $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -i "$KEY_PATH" "Administrator@$VERIFY_PUBLIC_IP:C:/bundle/fast-check-results.log" \
+            ./verify-fast-check-results.log 2>/dev/null || echo "Log file not found"
+          if [ -f ./verify-fast-check-results.log ]; then
+            echo "=== Verification Instance Test Results ==="
+            cat ./verify-fast-check-results.log
+          fi
 
       - name: Terminate verification instance
         run: |

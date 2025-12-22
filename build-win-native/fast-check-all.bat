@@ -49,7 +49,13 @@ if exist "%SRC%\frontend" (
 )
 
 set PYTHON=%PYTHON_DIR%\python.exe
-if not defined CUDA_PATH set CUDA_PATH=C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.8
+REM Use local CUDA (in source tree: build-win-native\cuda, in bundle: bin\ has the DLLs)
+if exist "%BUILD_WIN%\cuda\bin" (
+    set CUDA_PATH=%BUILD_WIN%\cuda
+) else (
+    REM In bundled dist, CUDA DLLs are in bin\
+    set CUDA_PATH=
+)
 set PATH=%PYTHON_DIR%;%PYTHON_DIR%\Scripts;%BIN_DIR%;%MINGIT_DIR%;%CUDA_PATH%\bin;%PATH%
 
 REM Clear caches before running tests
@@ -81,19 +87,41 @@ REM Track results
 set PASSED=0
 set FAILED=0
 set FAILED_LIST=
+set PASSED_LIST=
+set TOTAL=0
+set CURRENT=0
+
+REM Count total tests first
+for /f "usebackq tokens=* eol=#" %%n in ("%EXAMPLES_TXT%") do (
+    set NOTEBOOK=%%n
+    if not "!NOTEBOOK!"=="" (
+        set /a TOTAL+=1
+    )
+)
+
+REM Set up log file
+set LOG_FILE=%SCRIPT_DIR%\fast-check-results.log
+echo === Fast Check Results === > "%LOG_FILE%"
+echo Started: %DATE% %TIME% >> "%LOG_FILE%"
+echo Total tests: !TOTAL! >> "%LOG_FILE%"
+echo. >> "%LOG_FILE%"
 
 REM Convert and run each notebook from examples.txt
 echo Converting notebooks to Python and running tests...
+echo Total tests to run: !TOTAL!
+echo Log file: %LOG_FILE%
 echo.
 
 for /f "usebackq tokens=* eol=#" %%n in ("%EXAMPLES_TXT%") do (
     set NOTEBOOK=%%n
     REM Skip empty lines
     if not "!NOTEBOOK!"=="" (
+        set /a CURRENT+=1
         set NOTEBOOK_PATH=%EXAMPLES_DIR%\!NOTEBOOK!.ipynb
 
         if exist "!NOTEBOOK_PATH!" (
-            echo [TEST] !NOTEBOOK!
+            echo [TEST !CURRENT!/!TOTAL!] !NOTEBOOK!
+            echo [TEST !CURRENT!/!TOTAL!] !NOTEBOOK! >> "%LOG_FILE%"
 
             REM Convert notebook to Python (use nbconvert directly, not via jupyter, to avoid hardcoded shebang paths)
             "%PYTHON%" -m nbconvert --to script "!NOTEBOOK_PATH!" --output-dir "%FAST_CHECK_DIR%"
@@ -115,10 +143,13 @@ for /f "usebackq tokens=* eol=#" %%n in ("%EXAMPLES_TXT%") do (
 
                 if !ERRORLEVEL! EQU 0 (
                     echo        PASSED
+                    echo        PASSED >> "%LOG_FILE%"
                     set /a PASSED+=1
+                    set "PASSED_LIST=!PASSED_LIST! !NOTEBOOK!"
                 ) else (
                     echo.
                     echo === FAILED: !NOTEBOOK! ===
+                    echo        FAILED >> "%LOG_FILE%"
                     goto :error
                 )
             ) else (
@@ -139,7 +170,26 @@ if exist "%FAST_CHECK_DIR%" rmdir /s /q "%FAST_CHECK_DIR%"
 call "%SCRIPT_DIR%\clear-cache.bat" /nopause
 
 echo.
-echo === ALL %PASSED% TESTS PASSED ===
+echo ============================================
+echo === ALL !PASSED!/!TOTAL! TESTS PASSED ===
+echo ============================================
+echo.
+echo Passed tests:
+echo. >> "%LOG_FILE%"
+echo ============================================ >> "%LOG_FILE%"
+echo === ALL !PASSED!/!TOTAL! TESTS PASSED === >> "%LOG_FILE%"
+echo ============================================ >> "%LOG_FILE%"
+echo. >> "%LOG_FILE%"
+echo Passed tests: >> "%LOG_FILE%"
+set TEST_NUM=0
+for %%t in (!PASSED_LIST!) do (
+    set /a TEST_NUM+=1
+    echo   !TEST_NUM!. %%t
+    echo   !TEST_NUM!. %%t >> "%LOG_FILE%"
+)
+echo.
+echo Completed: %DATE% %TIME% >> "%LOG_FILE%"
+echo Log saved to: %LOG_FILE%
 echo.
 
 if "%NOPAUSE%"=="0" (

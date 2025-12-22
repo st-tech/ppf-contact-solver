@@ -32,7 +32,8 @@ set DIST_DIR=%BUILD_WIN%\dist
 set BIN_DIR=%DIST_DIR%\bin
 set TARGET_DIR=%DIST_DIR%\target\release
 
-if not defined CUDA_PATH set CUDA_PATH=C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.8
+REM Use local CUDA from build-win-native
+set CUDA_PATH=%BUILD_WIN%\cuda
 
 REM ============================================================
 REM Verify build exists
@@ -122,6 +123,22 @@ for %%D in (%CUDA_DLLS%) do (
     )
 )
 
+REM Copy ffmpeg for video export
+echo.
+echo Copying ffmpeg for video export...
+if exist "%BUILD_WIN%\ffmpeg\ffmpeg.exe" (
+    echo   Source: %BUILD_WIN%\ffmpeg\ffmpeg.exe
+    echo   Target: %BIN_DIR%\ffmpeg.exe
+    copy "%BUILD_WIN%\ffmpeg\ffmpeg.exe" "%BIN_DIR%\" >nul
+    if errorlevel 1 (
+        echo   [FAILED] Could not copy ffmpeg.exe
+    ) else (
+        echo   [OK] Copied ffmpeg.exe to bin/
+    )
+) else (
+    echo   [SKIP] ffmpeg.exe not found at %BUILD_WIN%\ffmpeg\ffmpeg.exe
+)
+
 REM ============================================================
 REM Copy Python environment (exclude caches)
 REM ============================================================
@@ -165,20 +182,24 @@ if errorlevel 1 (
 echo   [OK] Chunk IDs shortened
 
 REM ============================================================
-REM Copy examples (exclude caches and checkpoints)
+REM Copy examples (.ipynb and .py files)
 REM ============================================================
 echo.
 echo [6/9] Copying examples...
+echo   Source: %SRC_DIR%\examples
+echo   Target: %DIST_DIR%\examples
+echo   Filter: *.ipynb and *.py
 
 if exist "%SRC_DIR%\examples" (
-    robocopy "%SRC_DIR%\examples" "%DIST_DIR%\examples" /E /XD __pycache__ .ipynb_checkpoints /XF *.pyc *.pyo /NJH /NJS /NDL /NC /NS /NP >nul
+    echo   Copying notebook and Python files...
+    robocopy "%SRC_DIR%\examples" "%DIST_DIR%\examples" *.ipynb *.py /S /XD .* /XF .*
     if errorlevel 8 (
-        echo ERROR: Failed to copy examples
+        echo   [FAILED] Could not copy examples
         exit /b 1
     )
     echo   [OK] Copied examples
 ) else (
-    echo   WARNING: examples folder not found, skipping
+    echo   [SKIP] examples folder not found
 )
 
 REM ============================================================
@@ -415,8 +436,8 @@ echo.
 echo REQUIREMENTS
 echo ------------
 echo - Windows 10/11 ^(64-bit^)
-echo - NVIDIA GPU with CUDA support
-echo - NVIDIA GPU driver installed
+echo - NVIDIA GPU
+echo - NVIDIA GPU driver installed ^(CUDA toolkit not required - bundled^)
 echo.
 echo.
 echo CONTENTS

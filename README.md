@@ -31,7 +31,7 @@ involving 👚 shells, 🪵 solids and 🪢 rods. All made by [ZOZO, Inc.](https
 - **⚔️ Highly Stressed**: We run GitHub Actions to run stress tests [10 times in a row](#️-ten-consecutive-runs).
 - **🚀 Massively Parallel**: Both contact and elasticity solvers are run on the GPU.
 - **🪟 Windows Executable**: No installation wizard shown. Just unzip and run [(Video)](https://drive.google.com/file/d/1PAj_x6uO8egGpuZL7RvZI7g4k2941edB/view).
-- **🐳 Docker Sealed**: All can be deployed fast. The image is ~1.4GB.
+- **🐳 Docker Sealed**: All can be deployed fast. The image is ~1GB.
 - **🌐 JupyterLab Included**: Open your browser and run examples right away [(Video)](https://drive.google.com/file/d/1n068Ai_hlfgapf2xkAutOHo3PkLpJXA4/view).
 - **🐍 Documented Python APIs**: Our Python code is fully [docstringed](https://st-tech.github.io/ppf-contact-solver/frontend.html) and lintable [(Video)](https://drive.google.com/file/d/1vCM7kNgXdqQRBjVaoEb6KwIdRR21V7sV/view).
 - **☁️ Cloud-Ready**: Our solver can be seamlessly deployed on major cloud platforms.
@@ -140,7 +140,7 @@ To retain consistency with the paper, we have created a new branch ```sigasia-20
 #### 🪟 Windows Native Executable
 
 For Windows 10/11 users, a self-contained executable (~230MB) is available.
-No Python or Docker installation is needed.
+No Python, Docker, or CUDA Toolkit installation is needed.
 All should simply work out of the box [(Video)](https://drive.google.com/file/d/1PAj_x6uO8egGpuZL7RvZI7g4k2941edB/view).
 
 > 🤔 If you are cautious, you can review the [build workflow](https://github.com/st-tech/ppf-contact-solver/actions/workflows/release-win.yml) to verify safety yourself.
@@ -172,7 +172,7 @@ docker run --rm -it `
   --gpus all `
   -p ${MY_WEB_PORT}:${MY_WEB_PORT} `
   -e WEB_PORT=${MY_WEB_PORT} `
-  $IMAGE_NAME # Image size ~1.4GB
+  $IMAGE_NAME # Image size ~1GB
 ```
 
 ##### 🐧 Linux (Bash/Zsh)
@@ -185,11 +185,11 @@ docker run --rm -it \
   --gpus all \
   -p ${MY_WEB_PORT}:${MY_WEB_PORT} \
   -e WEB_PORT=${MY_WEB_PORT} \
-  $IMAGE_NAME # Image size ~1.4GB
+  $IMAGE_NAME # Image size ~1GB
 ```
 
 The image download shall be started.
-Our image is hosted on [GitHub Container Registry](https://github.com/st-tech/ppf-contact-solver/pkgs/container/ppf-contact-solver-compiled) (~1.4GB).
+Our image is hosted on [GitHub Container Registry](https://github.com/st-tech/ppf-contact-solver/pkgs/container/ppf-contact-solver-compiled) (~1GB).
 JupyterLab will then auto-start.
 Eventually you should be seeing:
 
@@ -218,7 +218,7 @@ If you wish to build the docker image from scratch, please refer to the cleaner 
 ## 🐍 How To Use
 
 Our frontend is accessible through a browser using our built-in JupyterLab interface.
-All is set up when you open it for the first time. **No complilation is needed.**
+All is set up when you open it for the first time. **No compilation is needed.**
 Results can be interactively viewed through the browser and exported as needed.
 
 This allows you to interact with the simulator on your laptop while the actual simulation runs on a remote headless server over the internet.
@@ -353,7 +353,7 @@ for line in session.get.log.stdout(n_lines=8):
 Below are some representatives.
 `vid_time` refers to the video time in seconds and is recorded as `float`.
 `ms` refers to the consumed simulation time in milliseconds recorded as `int`.
-`vid_frame` is the video frame count recorede as `int`.
+`vid_frame` is the video frame count recorded as `int`.
 
 | **Name** | **Description** | **Format**
 |---------------|----------------|------------
@@ -403,7 +403,7 @@ All the log files are updated in real-time and can be fetched right after the si
 |![](./asset/image/catalogue/woven.mp4.webp)|![](./asset/image/catalogue/stack.mp4.webp)|![](./asset/image/catalogue/trampoline.mp4.webp)|![](./asset/image/catalogue/needle.mp4.webp)|
 |[cards.ipynb](./examples/cards.ipynb) [(Video)](https://drive.google.com/file/d/1PMdDnlyCsjinbvICKph_0UcXUfUvvUmZ/view)|[codim.ipynb](./examples/codim.ipynb) [(Video)](https://drive.google.com/file/d/19wohf_8Us5Hz3PUe6f9Wp7bfq292-mGK/view)|[hang.ipynb](./examples/hang.ipynb) [(Video)](https://drive.google.com/file/d/1gIjwaRrEifH0FQnZ8HO8Q9-f9FF5ZivG/view)|[trapped.ipynb](./examples/trapped.ipynb) [(Video)](https://drive.google.com/file/d/1Qek0e0qBNWPlBb1hSOZ6o_e2Cqf5rGst/view)|
 |![](./asset/image/catalogue/cards.mp4.webp)|![](./asset/image/catalogue/codim.mp4.webp)|![](./asset/image/catalogue/hang.mp4.webp)|![](./asset/image/catalogue/trapped.mp4.webp)|
-|[domino.ipynb](./examples/domino.ipynb) [(Video)](https://drive.google.com/file/d/1N9y8eZrjSQhAUhKwiO9w8jW_T18zPnYf/view)|[noodle.ipynb](./examples/noodle.ipynb) [(Video)](https://drive.google.com/file/d/1HI1qpsWUSMsswJjPIm9BAVJHMPzUelrH/view)|[drape.ipynb](./examples/drape.pynb) [(Video)](https://drive.google.com/file/d/1PGL3tbA451VhHOViSJJNNdQvmUpg7bQd/view)|[five-twist.ipynb](./examples/five-twist.ipynb) [(Video)](https://drive.google.com/file/d/1EjHLqtAUjYh7KEQ_EQ9Jx6hh262BUze1/view)|
+|[domino.ipynb](./examples/domino.ipynb) [(Video)](https://drive.google.com/file/d/1N9y8eZrjSQhAUhKwiO9w8jW_T18zPnYf/view)|[noodle.ipynb](./examples/noodle.ipynb) [(Video)](https://drive.google.com/file/d/1HI1qpsWUSMsswJjPIm9BAVJHMPzUelrH/view)|[drape.ipynb](./examples/drape.ipynb) [(Video)](https://drive.google.com/file/d/1PGL3tbA451VhHOViSJJNNdQvmUpg7bQd/view)|[five-twist.ipynb](./examples/five-twist.ipynb) [(Video)](https://drive.google.com/file/d/1EjHLqtAUjYh7KEQ_EQ9Jx6hh262BUze1/view)|
 |![](./asset/image/catalogue/domino.mp4.webp)|![](./asset/image/catalogue/noodle.mp4.webp)|![](./asset/image/catalogue/drape.mp4.webp)|![](./asset/image/catalogue/quintupletwist.mp4.webp)|
 |[ribbon.ipynb](./examples/ribbon.ipynb) [(Video)](https://drive.google.com/file/d/17ymVyPJauSPJH_GwAvBHM5eNg97eq6SD/view)|[curtain.ipynb](./examples/curtain.ipynb) [(Video)](https://drive.google.com/file/d/1c9W3YAFAS5r9m9i7sZHsFu8h98C8yy1T/view)|[fishingknot.ipynb](./examples/fishingknot.ipynb) [(Video)](https://drive.google.com/file/d/1RznNGDvP5ZfKm6nwNiTVtFXBsextOeya/view)|[friction.ipynb](./examples/friction.ipynb) [(Video)](https://drive.google.com/file/d/12WGdfDTFIwCT0UFGEZzfmQreM6WSSHet/view)|
 |![](./asset/image/catalogue/ribbon.mp4.webp)|![](./asset/image/catalogue/curtain.mp4.webp)|![](./asset/image/catalogue/fishingknot.mp4.webp)|![](./asset/image/catalogue/friction.mp4.webp)|
@@ -492,7 +492,7 @@ session.stream()
 
 We implemented GitHub Actions that test all of our examples except for large scale ones, which take from days to weeks to finish.
 We perform explicit intersection checks at the end of each step, which raises an error if an intersection is detected.
-**This ensures that all steps are confirmed to be penetration-free if tests are pass.**
+**This ensures that all steps are confirmed to be penetration-free if tests pass.**
 The runner types are described as follows:
 
 ### [![Getting Started](https://github.com/st-tech/ppf-contact-solver/actions/workflows/getting-started.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/getting-started.yml)

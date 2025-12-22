@@ -15,7 +15,7 @@ from IPython.display import display
 
 from frontend._utils_ import Utils
 
-from ._render_ import OpenGLRenderer, OPENGL_READY
+from ._render_ import Rasterizer
 
 
 class PlotManager:
@@ -45,8 +45,8 @@ class Plot:
         """
         if engine == "threejs":
             self._engine = ThreejsPlotEngine()
-        elif engine == "opengl":
-            self._engine = OpenGLRenderEngine()
+        elif engine == "software":
+            self._engine = RasterizerEngine()
         else:
             raise ValueError(f"Unknown engine: {engine}")
 
@@ -543,7 +543,7 @@ class ThreejsPlotEngine:
                 self.geom.tri.exec_three_obj_method("computeVertexNormals")
 
 
-class OpenGLRenderEngine:
+class RasterizerEngine:
     def __init__(self) -> None:
         self._handle = None
 
@@ -554,16 +554,11 @@ class OpenGLRenderEngine:
         tri: np.ndarray,
         seg: np.ndarray,
     ):
-        if not OPENGL_READY:
-            raise RuntimeError(
-                "OpenGL rendering is not available (pyrender not installed). "
-                "Install pyrender with: pip install pyrender"
-            )
         from IPython.display import (
             display,
         )
 
-        engine = OpenGLRenderer()
+        engine = Rasterizer()
         image = engine.render(
             vert,
             color,

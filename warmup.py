@@ -147,10 +147,6 @@ def list_packages():
         "zip",
         "unzip",
         "cmake",
-        "xorg-dev",
-        "libgl1-mesa-dev",
-        "libglu1-mesa-dev",
-        "libosmesa6-dev",
         "libc++-dev",
         "libeigen3-dev",
         "ffmpeg",
@@ -327,13 +323,6 @@ def install_oh_my_zsh():
             f.write(f"source {venv_path}/bin/activate\n")
 
 
-def install_pyopengl():
-    """Install PyOpenGL for custom OpenGL rendering with OSMesa."""
-    pip_path = get_venv_pip()
-    print("Installing PyOpenGL (for OpenGL rendering)...")
-    subprocess.run([pip_path, "install", "pyopengl==3.1.5"], check=True)
-
-
 def setup():
     script_dir = os.path.dirname(os.path.realpath(__file__))
 
@@ -401,9 +390,6 @@ def setup():
     # Install pytetwild (fTetWild wrapper for tetrahedralization)
     print("Installing pytetwild...")
     subprocess.run([pip_path, "install", "pytetwild"], check=True)
-
-    # Install PyOpenGL for custom renderer (no scipy dependency)
-    install_pyopengl()
 
     # Node.js installation (user-level)
     print("Installing Node.js via nvm (Node Version Manager)...")
@@ -708,6 +694,7 @@ def fast_check(limit=None):
     """
     import re
     import tempfile
+    from datetime import datetime
 
     script_dir = os.path.dirname(os.path.realpath(__file__))
     examples_dir = os.path.join(script_dir, "examples")
@@ -734,8 +721,30 @@ def fast_check(limit=None):
     clear_cache()
     print()
 
+    # Read notebooks from examples.txt
+    with open(examples_txt) as f:
+        notebooks = [line.strip() for line in f if line.strip() and not line.startswith('#')]
+
+    total = len(notebooks)
+
+    # Apply limit if specified
+    if limit is not None:
+        notebooks = notebooks[:limit]
+        total = len(notebooks)
+        print(f"(Limited to first {limit} notebooks)")
+        print()
+
+    # Set up log file
+    log_file = os.path.join(script_dir, "fast-check-results.log")
+    with open(log_file, "w") as f:
+        f.write("=== Fast Check Results ===\n")
+        f.write(f"Started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        f.write(f"Total tests: {total}\n\n")
+
     print("=== Fast Check All Examples ===")
     print(f"Using: {examples_txt}")
+    print(f"Total tests to run: {total}")
+    print(f"Log file: {log_file}")
     print()
 
     # Create temporary directory for converted scripts
@@ -743,30 +752,25 @@ def fast_check(limit=None):
     print(f"Working directory: {fast_check_dir}")
     print()
 
-    # Read notebooks from examples.txt
-    with open(examples_txt) as f:
-        notebooks = [line.strip() for line in f if line.strip() and not line.startswith('#')]
-
-    # Apply limit if specified
-    if limit is not None:
-        notebooks = notebooks[:limit]
-        print(f"(Limited to first {limit} notebooks)")
-        print()
-
     passed = 0
     failed = 0
+    passed_list = []
+    current = 0
 
     print("Converting notebooks to Python and running tests...")
     print()
 
     for notebook in notebooks:
+        current += 1
         notebook_path = os.path.join(examples_dir, f"{notebook}.ipynb")
 
         if not os.path.exists(notebook_path):
             print(f"[SKIP] {notebook} - notebook not found", flush=True)
             continue
 
-        print(f"[TEST] {notebook}", flush=True)
+        print(f"[TEST {current}/{total}] {notebook}", flush=True)
+        with open(log_file, "a") as f:
+            f.write(f"[TEST {current}/{total}] {notebook}\n")
 
         # Convert notebook to Python (use nbconvert directly to avoid shebang path issues)
         result = subprocess.run(
@@ -812,10 +816,15 @@ def fast_check(limit=None):
 
         if result.returncode == 0:
             print("       PASSED", flush=True)
+            with open(log_file, "a") as f:
+                f.write("       PASSED\n")
             passed += 1
+            passed_list.append(notebook)
         else:
             print(flush=True)
             print(f"=== FAILED: {notebook} ===", flush=True)
+            with open(log_file, "a") as f:
+                f.write("       FAILED\n")
             # Clean up temp directory and caches
             shutil.rmtree(fast_check_dir, ignore_errors=True)
             clear_cache()
@@ -825,9 +834,31 @@ def fast_check(limit=None):
     shutil.rmtree(fast_check_dir, ignore_errors=True)
     clear_cache()
 
+    # Print summary
     print()
-    print(f"=== ALL {passed} TESTS PASSED ===")
+    print("=" * 44)
+    print(f"=== ALL {passed}/{total} TESTS PASSED ===")
+    print("=" * 44)
     print()
+    print("Passed tests:")
+    for i, name in enumerate(passed_list, 1):
+        print(f"  {i}. {name}")
+    print()
+    print(f"Log saved to: {log_file}")
+    print()
+
+    # Write summary to log file
+    with open(log_file, "a") as f:
+        f.write("\n")
+        f.write("=" * 44 + "\n")
+        f.write(f"=== ALL {passed}/{total} TESTS PASSED ===\n")
+        f.write("=" * 44 + "\n")
+        f.write("\n")
+        f.write("Passed tests:\n")
+        for i, name in enumerate(passed_list, 1):
+            f.write(f"  {i}. {name}\n")
+        f.write(f"\nCompleted: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+
     return 0
 
 

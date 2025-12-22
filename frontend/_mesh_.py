@@ -1203,7 +1203,7 @@ class TriMesh(tuple[np.ndarray, np.ndarray]):
             if platform.system() == "Windows":
                 # On Windows embedded Python, output redirection can cause hangs
                 # Just run pytetwild without suppression - verbose but works
-                print("Starting tetrahedralization process...")
+                print("Running pytetwild...")
                 vert, tet = pytetwild.tetrahedralize(
                     self[0], self[1], edge_length_fac=edge_length_fac, optimize=optimize
                 )

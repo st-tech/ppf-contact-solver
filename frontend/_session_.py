@@ -431,7 +431,7 @@ class SessionExport:
 set SOLVER_PATH={program_path}
 set LIB_PATH={lib_path}
 
-if not defined CUDA_PATH set CUDA_PATH=C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v12.8
+REM CUDA_PATH should be set by start.bat or the environment
 set PATH=%LIB_PATH%;%CUDA_PATH%\\bin;%PATH%
 
 if not exist "%SOLVER_PATH%" (
@@ -536,11 +536,6 @@ fi
         else:
             os.makedirs(path)
 
-        # On Windows, skip rendering (pyrender doesn't work in headless mode)
-        is_windows = sys.platform == "win32"
-        if is_windows:
-            options["skip_render"] = True
-
         for i in tqdm(range(latest_frame), desc="export", ncols=70):
             self.frame(
                 os.path.join(path, f"frame_{i}.{ext}"),
@@ -552,9 +547,19 @@ fi
 
         # Check if any PNG images were rendered before attempting video creation
         png_files = [f for f in os.listdir(path) if f.endswith(".png")]
-        if shutil.which("ffmpeg") is not None and png_files:
+        # Look for ffmpeg in multiple locations
+        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        ffmpeg_candidates = [
+            os.path.join(project_root, "bin", "ffmpeg"),  # Linux/Docker
+            os.path.join(project_root, "bin", "ffmpeg.exe"),  # Windows bundled (dist/)
+            os.path.join(project_root, "build-win-native", "ffmpeg", "ffmpeg.exe"),  # Windows dev
+        ]
+        ffmpeg_path = next((p for p in ffmpeg_candidates if os.path.isfile(p)), None)
+        if ffmpeg_path is None:
+            ffmpeg_path = shutil.which("ffmpeg")
+        if ffmpeg_path is not None and png_files:
             vid_name = "frame.mp4"
-            command = f"ffmpeg -hide_banner -loglevel error -y -r 60 -i frame_%d.{ext}.png -pix_fmt yuv420p -b:v 50000k {vid_name}"
+            command = f'"{ffmpeg_path}" -hide_banner -loglevel error -y -r 60 -i frame_%d.{ext}.png -pix_fmt yuv420p -c:v libx264 {vid_name}'
             subprocess.run(command, shell=True, cwd=path)
             if Utils.in_jupyter_notebook():
                 from IPython.display import Video, display

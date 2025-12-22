@@ -1,5 +1,6 @@
 target
 tests
+bin/
 requirements.txt
 .clangd
 .clang-format
@@ -57,3 +58,6 @@ build-win-native/*.ps1
 build-win-native/*.json
 build-win-native/*.zip
 build-win-native/ci
+build-win-native/temp_ffmpeg
+build-win-native/ffmpeg
+build-win-native/msys64

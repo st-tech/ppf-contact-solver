@@ -20,7 +20,7 @@ from tqdm import tqdm
 from ._asset_ import AssetManager
 from ._param_ import ParamHolder, object_param
 from ._plot_ import Plot, PlotManager
-from ._render_ import MitsubaRenderer, OpenGLRenderer, OPENGL_READY
+from ._render_ import MitsubaRenderer, Rasterizer
 from ._utils_ import Utils
 
 EPS = 1e-3
@@ -1384,27 +1384,23 @@ class FixedScene:
             )
             mesh.export(path)
 
-        # Skip rendering if pyrender is not available or skip_render is set
+        # Skip rendering if skip_render is set
         if not skip_render and not os.path.exists(image_path):
-            renderer_type = args.get("renderer", "opengl")
-            if renderer_type == "opengl" and not OPENGL_READY:
-                # Skip OpenGL rendering when pyrender is not installed
-                pass
+            renderer_type = args.get("renderer", "software")
+            if Utils.ci_name() is not None:
+                args["width"] = 320
+                args["height"] = 240
+            if renderer_type == "mitsuba":
+                assert shutil.which("mitsuba") is not None
+                renderer = MitsubaRenderer(args)
+            elif renderer_type == "software":
+                renderer = Rasterizer(args)
             else:
-                if Utils.ci_name() is not None:
-                    args["width"] = 320
-                    args["height"] = 240
-                if renderer_type == "mitsuba":
-                    assert shutil.which("mitsuba") is not None
-                    renderer = MitsubaRenderer(args)
-                elif renderer_type == "opengl":
-                    renderer = OpenGLRenderer(args)
-                else:
-                    raise Exception("unsupported renderer")
+                raise Exception("unsupported renderer")
 
-                assert tri is not None
-                assert color is not None
-                renderer.render(vert, color, seg, tri, image_path)
+            assert tri is not None
+            assert color is not None
+            renderer.render(vert, color, seg, tri, image_path)
 
         return self
 

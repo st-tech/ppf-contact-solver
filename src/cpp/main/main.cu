@@ -486,6 +486,7 @@ StepResult advance() {
             toi_advanced += std::max(0.0, 1.0 - toi_advanced) *
                             static_cast<double>(toi_recale * toi);
         }
+        logging.message("* toi_advanced: %.2e", toi_advanced);
 
         {
             Vec<Vec3f> eval_x_vec = eval_x.as_vec();
@@ -507,7 +508,6 @@ StepResult advance() {
                    step >= param->min_newton_steps) {
             final_step = true;
         } else {
-            logging.message("* toi_advanced: %.2e", toi_advanced);
             ++step;
             compute_target(dt);
         }

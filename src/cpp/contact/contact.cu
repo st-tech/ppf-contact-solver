@@ -1964,28 +1964,31 @@ __device__ bool point_triangle_inside(const Vec3<T> &p, const Vec3<T> &t0,
     Vec2<Y> c;
     distance::solve<Y>(a_t * a, a_t * (p - t0).template cast<Y>(), c, det);
     if (det) {
-        Vec3<Y> w = Vec3<Y>(det - c[0] - c[1], c[0], c[1]) / det;
-        return w.minCoeff() >= 0.0f && w.maxCoeff() <= 1.0f;
+        Y w0 = c[0] / det;
+        Y w1 = c[1] / det;
+        Y w2 = Y(1.0) - w0 - w1;
+        Y wmin = fmin(fmin(w0, w1), w2);
+        Y wmax = fmax(fmax(w0, w1), w2);
+        return wmin >= 0.0f && wmax <= 1.0f;
     } else {
         return false;
     }
 }
 
-__device__ bool edge_triangle_intersect(const Vec3f &_e0, const Vec3f &_e1,
-                                        const Vec3f &_x0, const Vec3f &_x1,
-                                        const Vec3f &_x2) {
-    Vec3f n = (_x1 - _x0).cross(_x2 - _x0);
-    float s1 = (_e0 - _x0).dot(n);
-    float s2 = (_e1 - _x0).dot(n);
+__device__ bool edge_triangle_intersect(const Vec3f &a0, const Vec3f &a1,
+                                        const Vec3f &b0, const Vec3f &b1,
+                                        const Vec3f &b2) {
+    Vec3f d1 = b1 - b0;
+    Vec3f d2 = b2 - b0;
+    Vec3f e0 = a0 - b0;
+    Vec3f e1 = a1 - b0;
+    Vec3f n = d1.cross(d2);
+    float s1 = e0.dot(n);
+    float s2 = e1.dot(n);
     if (s1 * s2 < 0.0f) {
-        float det = s1 - s2;
-        if (det) {
-            Vec3f r = (_e1 - _e0) * s1 / det;
-            Vec3f t0 = _x0 - _e0;
-            Vec3f t1 = _x1 - _e0;
-            Vec3f t2 = _x2 - _e0;
-            return point_triangle_inside<float, float>(r, t0, t1, t2);
-        }
+        float t = s1 / (s1 - s2);
+        Vec3f r = (1.0f - t) * e0 + t * e1;
+        return point_triangle_inside<float, float>(r, Vec3f::Zero(), d1, d2);
     }
     return false;
 }

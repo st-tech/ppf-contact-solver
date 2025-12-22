@@ -243,17 +243,17 @@ jobs:
             sleep 30
           done
 
-      - name: Install CUDA 12.8
+      - name: Install NVIDIA driver only (no CUDA toolkit)
         run: |
           SSH_PORT="${{ steps.ids.outputs.SSH_PORT }}"
           KEY_PATH="${{ steps.keypair.outputs.KEY_PATH }}"
           scp -P $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \\
             -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \\
-            -i "$KEY_PATH" .github/workflows/scripts/win/install-cuda.ps1 Administrator@$PUBLIC_IP:C:/install_cuda.ps1
+            -i "$KEY_PATH" .github/workflows/scripts/win/install-nvidia-driver.ps1 Administrator@$PUBLIC_IP:C:/install_driver.ps1
           ssh -p $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \\
             -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \\
-            -o ServerAliveInterval=60 -i "$KEY_PATH" Administrator@$PUBLIC_IP \\
-            "powershell -ExecutionPolicy Bypass -File C:/install_cuda.ps1"
+            -i "$KEY_PATH" Administrator@$PUBLIC_IP \\
+            "powershell -ExecutionPolicy Bypass -File C:/install_driver.ps1"
 
       - name: Transfer repository to instance
         run: |

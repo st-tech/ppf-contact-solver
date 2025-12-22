@@ -32,6 +32,9 @@ WORKDIR /root/${PROJ_NAME}
 RUN mkdir -p .git && \
   (git branch --show-current > .git/branch_name.txt 2>/dev/null || echo "unknown" > .git/branch_name.txt)
 
+# Build slim ffmpeg (PNG to MP4 only, ~4MB vs ~28MB for full package)
+RUN .github/workflows/scripts/make-slim-ffmpeg.sh
+
 RUN /root/.cargo/bin/cargo build --release
 
 # Runtime stage for compiled mode (minimal Ubuntu)
@@ -47,12 +50,7 @@ RUN apt-get update && \
   python3-venv \
   ca-certificates \
   git \
-  libx11-6 \
-  libgomp1 \
-  libgl1 \
-  libosmesa6 \
-  libxrender1 \
-  ffmpeg && \
+  libgomp1 && \
   apt-get clean && \
   rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* /var/cache/apt/*.bin /tmp/* /var/tmp/*
 
@@ -68,6 +66,7 @@ COPY --from=builder /root/${PROJ_NAME}/frontend /root/${PROJ_NAME}/frontend
 COPY --from=builder /root/${PROJ_NAME}/src /root/${PROJ_NAME}/src
 COPY --from=builder /root/${PROJ_NAME}/.git/branch_name.txt /root/${PROJ_NAME}/.git/branch_name.txt
 COPY --from=builder /root/${PROJ_NAME}/.github/workflows/scripts/examples.txt /root/${PROJ_NAME}/examples.txt
+COPY --from=builder /root/${PROJ_NAME}/bin/ffmpeg /root/${PROJ_NAME}/bin/ffmpeg
 
 # Copy virtual environment from base-image (which has the venv created)
 COPY --from=base-image /root/.local/share/ppf-cts/venv /root/.local/share/ppf-cts/venv
