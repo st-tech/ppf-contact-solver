@@ -39,4 +39,4 @@ jobs:
           ${{ env.REGISTRY }}/${{ github.repository }}-compiled-sigasia-2024:latest \
           /bin/sh -c "cd /root/ppf-contact-solver && python3 warmup.py fast_check && python3 warmup.py clear_all"
     - name: Push Compiled Image
-      run: docker push ${{ env.REGISTRY }}/${{ github.repository }}-compiled:latest
+      run: docker push ${{ env.REGISTRY }}/${{ github.repository }}-compiled-sigasia-2024:latest
