@@ -1,4 +1,6 @@
 target
+tests
+bin/
 requirements.txt
 .clangd
 .clang-format
@@ -9,6 +11,7 @@ requirements.txt
 *.a
 *.o
 *.d
+*.obj
 cache
 .nfs*
 .DS_Store
@@ -41,3 +44,20 @@ dev/node_modules
 *.log
 src/cpp/kernels/tests/test_exclusive_scan
 src/cpp/kernels/tests/test_reduce
+src/cpp/build
+build-win-native/python
+build-win-native/deps
+build-win-native/.*
+build-win-native/downloads
+build-win-native/rust
+build-win-native/start.bat
+build-win-native/start-jupyterlab.pyw
+build-win-native/ppf-cts
+build-win-native/*.pem
+build-win-native/*.ps1
+build-win-native/*.json
+build-win-native/*.zip
+build-win-native/ci
+build-win-native/temp_ffmpeg
+build-win-native/ffmpeg
+build-win-native/msys64

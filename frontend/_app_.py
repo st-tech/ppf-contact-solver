@@ -6,6 +6,7 @@
 import os
 import pickle
 import shutil
+import sys
 
 from ._asset_ import AssetManager
 from ._extra_ import Extra
@@ -13,9 +14,41 @@ from ._mesh_ import MeshManager
 from ._plot_ import PlotManager
 from ._scene_ import SceneManager
 from ._session_ import FixedSession, ParamManager, SessionManager
-from ._utils_ import Utils
+from ._utils_ import Utils, get_cache_dir
 
 RECOVERABLE_FIXED_SESSION_NAME = "fixed_session.pickle"
+
+
+def _suppress_stale_widget_errors():
+    """Suppress TraitErrors caused by stale widget state in saved notebooks.
+
+    When a notebook with saved widget state is loaded, IPY_MODEL_* references
+    may point to non-existent widget models, causing TraitErrors. This function
+    patches ipywidgets to silently ignore these specific errors.
+    """
+    try:
+        import ipywidgets.widgets.widget as widget_module
+        from traitlets import TraitError
+
+        original_set_state = widget_module.Widget.set_state
+
+        def patched_set_state(self, sync_data):
+            try:
+                original_set_state(self, sync_data)
+            except TraitError as e:
+                # Suppress errors about stale IPY_MODEL references
+                if "IPY_MODEL_" in str(e):
+                    pass  # Silently ignore stale widget state errors
+                else:
+                    raise
+
+        widget_module.Widget.set_state = patched_set_state
+    except ImportError:
+        pass  # ipywidgets not available
+
+
+# Apply the patch when this module is imported
+_suppress_stale_widget_errors()
 
 
 class App:
@@ -50,9 +83,10 @@ class App:
         """Find the root directory of the project.
 
         Returns:
-            str: Path to the root directory of the project.
+            str: Path to the root directory of the project (parent of frontend).
         """
-        return os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        frontend_dir = os.path.dirname(os.path.abspath(__file__))
+        return os.path.dirname(frontend_dir)
 
     @staticmethod
     def get_default_param() -> ParamManager:
@@ -71,6 +105,30 @@ class App:
             bool: True if the application is running, False otherwise.
         """
         return Utils.busy()
+
+    @staticmethod
+    def is_fast_check() -> bool:
+        """Check if fast check mode is enabled.
+
+        Fast check mode forces simulations to run for only 1 frame,
+        enabling quick validation of all examples.
+
+        Returns:
+            bool: True if fast check mode is enabled.
+        """
+        return Utils.is_fast_check()
+
+    @staticmethod
+    def set_fast_check(enabled: bool = True):
+        """Set fast check mode.
+
+        When enabled, simulations are forced to run for only 1 frame,
+        enabling quick validation of examples.
+
+        Args:
+            enabled: Whether to enable fast check mode. Defaults to True.
+        """
+        Utils.set_fast_check(enabled)
 
     @staticmethod
     def terminate():
@@ -118,22 +176,18 @@ class App:
     def get_data_dirpath():
         import subprocess
 
-        proj_root = os.path.dirname(os.path.abspath(__file__))
+        frontend_dir = os.path.dirname(os.path.abspath(__file__))
+        base_dir = os.path.dirname(frontend_dir)
 
         try:
-            branch_file = os.path.join(
-                proj_root,
-                "..",
-                ".git",
-                "branch_name.txt",
-            )
+            branch_file = os.path.join(base_dir, ".git", "branch_name.txt")
             if os.path.exists(branch_file):
                 with open(branch_file) as f:
                     git_branch = f.read().strip()
                     if git_branch:
                         if os.name == 'nt':  # Windows
                             return os.path.join(
-                                proj_root, "..", "build-win-native", "ppf-cts", f"git-{git_branch}"
+                                base_dir, "local", "share", "ppf-cts", f"git-{git_branch}"
                             )
                         else:
                             return os.path.expanduser(
@@ -147,8 +201,9 @@ class App:
         try:
             git_branch = subprocess.check_output(
                 ["git", "branch", "--show-current"],
-                cwd=proj_root,
+                cwd=base_dir,
                 text=True,
+                stderr=subprocess.DEVNULL,
             ).strip()
             if not git_branch:
                 git_branch = "unknown"
@@ -157,7 +212,7 @@ class App:
 
         if os.name == 'nt':  # Windows
             return os.path.join(
-                proj_root, "..", "build-win-native", "ppf-cts", f"git-{git_branch}"
+                base_dir, "local", "share", "ppf-cts", f"git-{git_branch}"
             )
         else:
             return os.path.expanduser(
@@ -186,7 +241,12 @@ class App:
         if cache_dir:
             self._cache_dir = cache_dir
         else:
-            self._cache_dir = os.path.expanduser(os.path.join("~", ".cache", "ppf-cts"))
+            if os.name == 'nt':  # Windows - use project-relative cache
+                frontend_dir = os.path.dirname(os.path.realpath(__file__))
+                base_dir = os.path.dirname(frontend_dir)
+                self._cache_dir = os.path.join(base_dir, "cache", "ppf-cts")
+            else:
+                self._cache_dir = os.path.expanduser(os.path.join("~", ".cache", "ppf-cts"))
         if not os.path.exists(self._cache_dir):
             os.makedirs(self._cache_dir)
 
@@ -324,7 +384,4 @@ class App:
                     shutil.rmtree(item_path)
                 else:
                     os.remove(item_path)
-        open3d_data_path = os.path.expanduser(os.path.join("~", "open3d_data"))
-        if os.path.exists(os.path.expanduser(open3d_data_path)):
-            shutil.rmtree(open3d_data_path)
         return self

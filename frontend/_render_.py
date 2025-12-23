@@ -4,73 +4,16 @@
 # License: Apache v2.0
 
 import os
-import tempfile
-
-# Only use osmesa on Linux (headless rendering)
-if os.name != 'nt':
-    os.environ["PYOPENGL_PLATFORM"] = "osmesa"
-
 import shutil
-
 from typing import Optional
 
 import numpy as np
-import trimesh
-
 from PIL import Image
 
-try:
-    from pyrender import (
-        Mesh,
-        Node,
-        OffscreenRenderer,
-        OrthographicCamera,
-        Primitive,
-        RenderFlags,
-        Scene,
-        SpotLight,
-    )
+from ._utils_ import get_cache_dir
+from ._rasterizer_ import SoftwareRenderer
 
-    _opengl_ready = True
-except (ImportError, AttributeError):
-    _opengl_ready = False
-
-OPENGL_READY = _opengl_ready
-
-if not OPENGL_READY:
-
-    class DummyClass:
-        def __init__(*__args__, **__kwargs__):
-            pass
-
-        def delete(*__args__, **__kwargs__):
-            pass
-
-        def add_node(*__args__, **__kwargs__):
-            pass
-
-        def add(*__args__, **__kwargs__):
-            pass
-
-        def render(*__args__, **__kwargs__):
-            raise RuntimeError(
-                "OpenGL rendering is not available. "
-                "On Windows, this may be due to running in a headless/RDP session. "
-                "Try running with a local display or use session.export.animation() on Linux."
-            )
-
-        @staticmethod
-        def from_trimesh(*__args__, **__kwargs__):
-            return DummyClass()
-
-    OrthographicCamera = DummyClass
-    OffscreenRenderer = DummyClass
-    SpotLight = DummyClass
-    RenderFlags = DummyClass
-    Mesh = DummyClass
-    Primitive = DummyClass
-    Node = DummyClass
-    Scene = DummyClass
+# SoftwareRenderer is always available (uses numpy + numba, works on all platforms)
 
 default_args = {
     "variant": "cuda_ad_rgb",
@@ -81,7 +24,7 @@ default_args = {
     "camera": None,
     "up": [0, 1, 0],
     "sample_count": 64,
-    "tmp_path": os.path.join(tempfile.gettempdir(), "tmp_mesh.ply"),
+    "tmp_path": os.path.join(get_cache_dir(), "tmp_mesh.ply"),
 }
 
 
@@ -91,80 +34,8 @@ def update_default_args(args: dict):
             args[key] = value
 
 
-class OpenGLRenderer:
-    def __init__(self, args: Optional[dict] = None):
-        if args is None:
-            args = {}
-        update_default_args(args)
-        self._r = OffscreenRenderer(
-            viewport_width=args["width"], viewport_height=args["height"]
-        )
-
-    def __del__(self):
-        self._r.delete()
-
-    def render(
-        self,
-        vert: np.ndarray,
-        color: np.ndarray,
-        seg: np.ndarray,
-        face: np.ndarray,
-        output: str | None,
-    ):
-        cam = OrthographicCamera(xmag=1.0, ymag=1.0)
-        cam_pose = np.array(
-            [
-                [1, 0, 0, 0],
-                [0, 1, 0, 0],
-                [0, 0, 1, 1],
-                [0, 0, 0, 1],
-            ]
-        )
-        scene = Scene(ambient_light=np.array([0.3, 0.3, 0.3, 1.0]))
-        rad = np.radians(10)
-        rotation_matrix = np.array(
-            [
-                [1, 0, 0],
-                [0, np.cos(rad), -np.sin(rad)],
-                [0, np.sin(rad), np.cos(rad)],
-            ]
-        )
-        bounds = np.max(vert, axis=0) - np.min(vert, axis=0)
-        center = (bounds / 2) + np.min(vert, axis=0)
-        vert = vert - center
-        vert = np.dot(vert, rotation_matrix.T)
-        vert /= np.max(np.abs(vert))
-        vert *= 0.9
-
-        mesh = trimesh.Trimesh(
-            vertices=vert, faces=face, vertex_colors=color, process=False
-        )
-        scene.add_node(
-            Node(
-                mesh=Mesh.from_trimesh(mesh, smooth=True),
-                translation=np.zeros(3),
-            ),
-        )
-        if len(seg):
-            positions = np.array([vert[i] for i in seg.ravel()])
-            colors = np.array([color[i] for i in seg.ravel()])
-            primitive = Primitive(positions=positions, color_0=colors, mode=1)
-            scene.add(Mesh(primitives=[primitive]))
-        scene.add(cam, pose=cam_pose)
-        scene.add(
-            SpotLight(
-                color=np.ones(3),
-                intensity=3.0,
-                innerConeAngle=np.pi / 16,
-                outerConeAngle=np.pi / 2,
-            ),
-            pose=cam_pose,
-        )
-        color, _ = self._r.render(scene, flags=RenderFlags.SKIP_CULL_FACES)  # type: ignore
-        image = Image.fromarray(color)
-        if output is not None:
-            image.save(output)
-        return image
+# Rasterizer is the main rendering class (pure numpy + numba, works on all platforms)
+Rasterizer = SoftwareRenderer
 
 
 class MitsubaRenderer:
@@ -176,7 +47,8 @@ class MitsubaRenderer:
         self._args = args
 
     def __del__(self):
-        os.remove(self._args["tmp_path"])
+        if os.path.exists(self._args["tmp_path"]):
+            os.remove(self._args["tmp_path"])
 
     def render(
         self,
@@ -296,6 +168,7 @@ class MitsubaRenderer:
 
 if __name__ == "__main__":
     import argparse
+    import trimesh
 
     arg_parser = argparse.ArgumentParser()
     arg_parser.add_argument("-e", "--engine", type=str, required=True)
@@ -320,8 +193,8 @@ if __name__ == "__main__":
     options["height"] = args.height
     options["sample_count"] = args.sample_count
 
-    if args.engine == "opengl":
-        r = OpenGLRenderer(options)
+    if args.engine == "software":
+        r = Rasterizer(options)
     elif args.engine == "mitsuba":
         r = MitsubaRenderer(options)
     else:

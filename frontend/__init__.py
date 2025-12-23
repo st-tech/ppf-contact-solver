@@ -10,6 +10,7 @@ To start the application, simply import the App class from the frontend module.
 
 __all__ = [
     "App",
+    "get_cache_dir",
     "AssetManager",
     "AssetFetcher",
     "AssetUploader",
@@ -43,9 +44,10 @@ __all__ = [
     "BlenderApp",
     "ParamDecoder",
     "SceneDecoder",
+    "sdf",
 ]
 
-from ._app_ import App
+from ._app_ import App, get_cache_dir
 from ._asset_ import AssetFetcher, AssetManager, AssetUploader
 from ._decoder_ import BlenderApp, ParamDecoder, SceneDecoder
 from ._extra_ import Extra
@@ -74,3 +76,4 @@ from ._session_ import (
     SessionOutput,
 )
 from ._utils_ import Utils
+from . import _sdf_ as sdf

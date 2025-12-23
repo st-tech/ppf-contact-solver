@@ -15,7 +15,7 @@ from IPython.display import display
 
 from frontend._utils_ import Utils
 
-from ._render_ import OpenGLRenderer
+from ._render_ import Rasterizer
 
 
 class PlotManager:
@@ -45,8 +45,8 @@ class Plot:
         """
         if engine == "threejs":
             self._engine = ThreejsPlotEngine()
-        elif engine == "opengl":
-            self._engine = OpenGLRenderEngine()
+        elif engine == "software":
+            self._engine = RasterizerEngine()
         else:
             raise ValueError(f"Unknown engine: {engine}")
 
@@ -91,14 +91,19 @@ class Plot:
             self._engine.plot(self._vert, self._color, tri, seg, pts, param)
         return self
 
-    def update(self, vert: np.ndarray | None = None, color: np.ndarray | None = None):
+    def update(
+        self,
+        vert: np.ndarray | None = None,
+        color: np.ndarray | None = None,
+        recompute_normals: bool = True,
+    ):
         if vert is not None:
             self._vert[0 : len(vert)] = vert
             vert = self._vert
         if color is not None:
             self._color[0 : len(color)] = color
             color = self._color
-        self._engine.update(vert, color)
+        self._engine.update(vert, color, recompute_normals)
 
     def tri(
         self,
@@ -516,23 +521,29 @@ class ThreejsPlotEngine:
 
         display(self.obj.renderer)
 
-    def update(self, vert: np.ndarray | None = None, color: np.ndarray | None = None):
+    def update(
+        self,
+        vert: np.ndarray | None = None,
+        color: np.ndarray | None = None,
+        recompute_normals: bool = True,
+    ):
         if vert is not None:
             assert self.buff.vert is not None
             self.buff.vert.array = vert.astype("float32")
             self.buff.vert.needsUpdate = True
-            if self.geom.tri is not None:
-                if self.flat_shading:
-                    self.geom.tri.exec_three_obj_method("computeFaceNormals")
-                else:
-                    self.geom.tri.exec_three_obj_method("computeVertexNormals")
         if color is not None:
             assert self.buff.color is not None
             self.buff.color.array = color.astype("float32")
             self.buff.color.needsUpdate = True
+        # Allow recomputing normals even without new vertices (for debounced updates)
+        if recompute_normals and self.geom.tri is not None:
+            if self.flat_shading:
+                self.geom.tri.exec_three_obj_method("computeFaceNormals")
+            else:
+                self.geom.tri.exec_three_obj_method("computeVertexNormals")
 
 
-class OpenGLRenderEngine:
+class RasterizerEngine:
     def __init__(self) -> None:
         self._handle = None
 
@@ -547,7 +558,7 @@ class OpenGLRenderEngine:
             display,
         )
 
-        engine = OpenGLRenderer()
+        engine = Rasterizer()
         image = engine.render(
             vert,
             color,
@@ -582,7 +593,12 @@ class OpenGLRenderEngine:
         self._param = param
         self._render(self._vert, self._color, self._tri, self._seg)
 
-    def update(self, vert: np.ndarray | None = None, color: np.ndarray | None = None):
+    def update(
+        self,
+        vert: np.ndarray | None = None,
+        color: np.ndarray | None = None,
+        recompute_normals: bool = True,  # unused, for API compatibility
+    ):
         if vert is not None:
             self._vert = vert.copy()
         if color is not None:

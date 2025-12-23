@@ -19,11 +19,12 @@ on:
       region:
         description: 'AWS Region'
         required: true
-        default: 'us-east-1'
+        default: 'us-east-2'
         type: choice
         options:
           - us-east-1
           - us-east-2
+          - ap-northeast-1
 
 jobs:
   run-on-gpu:
@@ -72,16 +73,9 @@ jobs:
         run: |
           echo "Fetching GitHub Actions runner public IP..."
 
-          RUNNER_IP=""
-          RUNNER_IP=$(curl -s --max-time 5 https://api.ipify.org 2>/dev/null || echo "")
+          RUNNER_IP=$(curl -s --max-time 10 https://checkip.amazonaws.com | tr -d '\n')
           if [ -z "$RUNNER_IP" ]; then
-            RUNNER_IP=$(curl -s --max-time 5 https://ifconfig.me 2>/dev/null || echo "")
-          fi
-          if [ -z "$RUNNER_IP" ]; then
-            RUNNER_IP=$(curl -s --max-time 5 https://icanhazip.com 2>/dev/null || echo "")
-          fi
-          if [ -z "$RUNNER_IP" ] || ! echo "$RUNNER_IP" | grep -qE '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$'; then
-            echo "ERROR: Failed to determine or validate runner IP address"
+            echo "ERROR: Failed to get IP from checkip.amazonaws.com"
             exit 1
           fi
 
@@ -419,11 +413,13 @@ jobs:
         run: |
           echo "Transferring repository to instance..."
           scp -P ${{ steps.ids.outputs.SSH_PORT }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
             -i "${{ steps.keypair.outputs.KEY_PATH }}" \
             /tmp/repo.tar.gz ${USER}@${PUBLIC_IP}:${WORKDIR}/
 
           echo "Extracting repository on instance..."
           ssh -p ${{ steps.ids.outputs.SSH_PORT }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
             -i "${{ steps.keypair.outputs.KEY_PATH }}" ${USER}@${PUBLIC_IP} \
             "cd ${WORKDIR} && tar -xzf repo.tar.gz && rm repo.tar.gz"
 
@@ -431,6 +427,7 @@ jobs:
         run: |
           echo "Setting up Python environment and running warmup.py..."
           ssh -p ${{ steps.ids.outputs.SSH_PORT }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
             -i "${{ steps.keypair.outputs.KEY_PATH }}" ${USER}@${PUBLIC_IP} << 'ENDSSH'
           set -e
           cd ${WORKDIR}
@@ -446,6 +443,7 @@ jobs:
         run: |
           echo "Building Rust project with cargo..."
           ssh -p ${{ steps.ids.outputs.SSH_PORT }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
             -i "${{ steps.keypair.outputs.KEY_PATH }}" ${USER}@${PUBLIC_IP} << 'ENDSSH'
           set -e
           cd ${WORKDIR}
@@ -502,10 +500,12 @@ jobs:
           SCRIPT
 
           scp -P ${{ steps.ids.outputs.SSH_PORT }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
             -i "${{ steps.keypair.outputs.KEY_PATH }}" \
             /tmp/convert_notebook.sh ${USER}@${PUBLIC_IP}:/tmp/
 
           ssh -p ${{ steps.ids.outputs.SSH_PORT }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
             -i "${{ steps.keypair.outputs.KEY_PATH }}" ${USER}@${PUBLIC_IP} \
             "chmod +x /tmp/convert_notebook.sh && EXAMPLE='${EXAMPLE}' WORKDIR='${WORKDIR}' /tmp/convert_notebook.sh"
 
@@ -513,6 +513,7 @@ jobs:
         run: |
           echo "Running 1st iteration of ${EXAMPLE}"
           ssh -p ${{ steps.ids.outputs.SSH_PORT }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
             -i "${{ steps.keypair.outputs.KEY_PATH }}" ${USER}@${PUBLIC_IP} \
             "set -o pipefail && echo '1st' > ${WORKDIR}/frontend/.CI && cd ${WORKDIR} && source ~/.local/share/ppf-cts/venv/bin/activate && python3 /tmp/${EXAMPLE}.py 2>&1 | tee /tmp/ci/run_1.log"
 
@@ -520,6 +521,7 @@ jobs:
         run: |
           echo "Running 2nd iteration of ${EXAMPLE}"
           ssh -p ${{ steps.ids.outputs.SSH_PORT }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
             -i "${{ steps.keypair.outputs.KEY_PATH }}" ${USER}@${PUBLIC_IP} \
             "set -o pipefail && echo '2nd' > ${WORKDIR}/frontend/.CI && cd ${WORKDIR} && source ~/.local/share/ppf-cts/venv/bin/activate && python3 /tmp/${EXAMPLE}.py 2>&1 | tee /tmp/ci/run_2.log"
 
@@ -527,6 +529,7 @@ jobs:
         run: |
           echo "Running 3rd iteration of ${EXAMPLE}"
           ssh -p ${{ steps.ids.outputs.SSH_PORT }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
             -i "${{ steps.keypair.outputs.KEY_PATH }}" ${USER}@${PUBLIC_IP} \
             "set -o pipefail && echo '3rd' > ${WORKDIR}/frontend/.CI && cd ${WORKDIR} && source ~/.local/share/ppf-cts/venv/bin/activate && python3 /tmp/${EXAMPLE}.py 2>&1 | tee /tmp/ci/run_3.log"
 
@@ -534,6 +537,7 @@ jobs:
         run: |
           echo "Running 4th iteration of ${EXAMPLE}"
           ssh -p ${{ steps.ids.outputs.SSH_PORT }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
             -i "${{ steps.keypair.outputs.KEY_PATH }}" ${USER}@${PUBLIC_IP} \
             "set -o pipefail && echo '4th' > ${WORKDIR}/frontend/.CI && cd ${WORKDIR} && source ~/.local/share/ppf-cts/venv/bin/activate && python3 /tmp/${EXAMPLE}.py 2>&1 | tee /tmp/ci/run_4.log"
 
@@ -541,6 +545,7 @@ jobs:
         run: |
           echo "Running 5th iteration of ${EXAMPLE}"
           ssh -p ${{ steps.ids.outputs.SSH_PORT }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
             -i "${{ steps.keypair.outputs.KEY_PATH }}" ${USER}@${PUBLIC_IP} \
             "set -o pipefail && echo '5th' > ${WORKDIR}/frontend/.CI && cd ${WORKDIR} && source ~/.local/share/ppf-cts/venv/bin/activate && python3 /tmp/${EXAMPLE}.py 2>&1 | tee /tmp/ci/run_5.log"
 
@@ -548,6 +553,7 @@ jobs:
         run: |
           echo "Running 6th iteration of ${EXAMPLE}"
           ssh -p ${{ steps.ids.outputs.SSH_PORT }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
             -i "${{ steps.keypair.outputs.KEY_PATH }}" ${USER}@${PUBLIC_IP} \
             "set -o pipefail && echo '6th' > ${WORKDIR}/frontend/.CI && cd ${WORKDIR} && source ~/.local/share/ppf-cts/venv/bin/activate && python3 /tmp/${EXAMPLE}.py 2>&1 | tee /tmp/ci/run_6.log"
 
@@ -555,6 +561,7 @@ jobs:
         run: |
           echo "Running 7th iteration of ${EXAMPLE}"
           ssh -p ${{ steps.ids.outputs.SSH_PORT }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
             -i "${{ steps.keypair.outputs.KEY_PATH }}" ${USER}@${PUBLIC_IP} \
             "set -o pipefail && echo '7th' > ${WORKDIR}/frontend/.CI && cd ${WORKDIR} && source ~/.local/share/ppf-cts/venv/bin/activate && python3 /tmp/${EXAMPLE}.py 2>&1 | tee /tmp/ci/run_7.log"
 
@@ -562,6 +569,7 @@ jobs:
         run: |
           echo "Running 8th iteration of ${EXAMPLE}"
           ssh -p ${{ steps.ids.outputs.SSH_PORT }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
             -i "${{ steps.keypair.outputs.KEY_PATH }}" ${USER}@${PUBLIC_IP} \
             "set -o pipefail && echo '8th' > ${WORKDIR}/frontend/.CI && cd ${WORKDIR} && source ~/.local/share/ppf-cts/venv/bin/activate && python3 /tmp/${EXAMPLE}.py 2>&1 | tee /tmp/ci/run_8.log"
 
@@ -569,6 +577,7 @@ jobs:
         run: |
           echo "Running 9th iteration of ${EXAMPLE}"
           ssh -p ${{ steps.ids.outputs.SSH_PORT }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
             -i "${{ steps.keypair.outputs.KEY_PATH }}" ${USER}@${PUBLIC_IP} \
             "set -o pipefail && echo '9th' > ${WORKDIR}/frontend/.CI && cd ${WORKDIR} && source ~/.local/share/ppf-cts/venv/bin/activate && python3 /tmp/${EXAMPLE}.py 2>&1 | tee /tmp/ci/run_9.log"
 
@@ -576,6 +585,7 @@ jobs:
         run: |
           echo "Running 10th iteration of ${EXAMPLE}"
           ssh -p ${{ steps.ids.outputs.SSH_PORT }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
             -i "${{ steps.keypair.outputs.KEY_PATH }}" ${USER}@${PUBLIC_IP} \
             "set -o pipefail && echo '10th' > ${WORKDIR}/frontend/.CI && cd ${WORKDIR} && source ~/.local/share/ppf-cts/venv/bin/activate && python3 /tmp/${EXAMPLE}.py 2>&1 | tee /tmp/ci/run_10.log"
 
@@ -584,10 +594,20 @@ jobs:
         run: |
           echo "Collecting results from all runs..."
           mkdir -p ci
-          rsync -avz --exclude='*.bin' --exclude='*.pickle' -e "ssh -p ${{ steps.ids.outputs.SSH_PORT }} -i ${{ steps.keypair.outputs.KEY_PATH }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" \
-            ${USER}@${PUBLIC_IP}:/tmp/ci/ ./ci/
+          # Delete large binary files on remote before copying to save bandwidth
+          # CI output is in ppf-cts cache directory: ~/.cache/ppf-cts/ci
+          ssh -p ${{ steps.ids.outputs.SSH_PORT }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
+            -i "${{ steps.keypair.outputs.KEY_PATH }}" ${USER}@${PUBLIC_IP} \
+            "find ~/.cache/ppf-cts/ci -type f \( -name '*.bin' -o -name '*.pickle' -o -name '*.ply' -o -name '*.gz' \) -delete 2>/dev/null" || true
+          # Copy CI output from ppf-cts cache directory (session data, previews, etc.)
+          rsync -avz -e "ssh -p ${{ steps.ids.outputs.SSH_PORT }} -i ${{ steps.keypair.outputs.KEY_PATH }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=60 -o ServerAliveCountMax=10" \
+            ${USER}@${PUBLIC_IP}:~/.cache/ppf-cts/ci/ ./ci/ || echo "No ppf-cts CI files found"
+          # Also copy logs from /tmp/ci
+          rsync -avz -e "ssh -p ${{ steps.ids.outputs.SSH_PORT }} -i ${{ steps.keypair.outputs.KEY_PATH }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=60 -o ServerAliveCountMax=10" \
+            ${USER}@${PUBLIC_IP}:/tmp/ci/ ./ci/ || echo "No log files found"
           echo "## Collected Files:"
-          ls -la ci/
+          ls -laR ci/ | head -100
           echo "## Run Summary:"
           for i in {1..10}; do
             if [ -f ci/run_${i}.log ]; then
@@ -610,6 +630,7 @@ jobs:
         run: |
           echo "Getting GPU information..."
           ssh -p ${{ steps.ids.outputs.SSH_PORT }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
             -i "${{ steps.keypair.outputs.KEY_PATH }}" ${USER}@${PUBLIC_IP} \
             "nvidia-smi" || echo "Failed to get GPU info"
 

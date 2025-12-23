@@ -1,0 +1,40 @@
+name: Docker Build Test
+run-name: Docker Build Test
+
+on:
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  build-image:
+    runs-on: ppf-contact-solver-NVIDIA
+    permissions:
+      contents: read
+      packages: write
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v3
+    - name: Docker Login
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    - name: Build Compiled Image
+      uses: docker/build-push-action@v5
+      with:
+        push: false
+        load: true
+        tags: ${{ env.REGISTRY }}/${{ github.repository }}-compiled-sigasia-2024:latest
+    - name: Run headless.py on built image
+      run: |
+        docker run --rm --gpus all \
+          ${{ env.REGISTRY }}/${{ github.repository }}-compiled-sigasia-2024:latest \
+          /bin/sh -c "cd /root/ppf-contact-solver && PYTHONPATH=/root/ppf-contact-solver /root/.local/share/ppf-cts/venv/bin/python examples/headless.py"
+    - name: Run fast_check on built image
+      run: |
+        docker run --rm --gpus all \
+          ${{ env.REGISTRY }}/${{ github.repository }}-compiled-sigasia-2024:latest \
+          /bin/sh -c "cd /root/ppf-contact-solver && python3 warmup.py fast_check && python3 warmup.py clear_all"

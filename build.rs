@@ -44,12 +44,11 @@ fn main() {
         println!("cargo:rustc-link-search=native={}", lib_dir);
         println!("cargo:rustc-link-lib=dylib=libsimbackend_cuda");
 
+        // CUDA_PATH must be set by build.bat (points to local cuda directory)
         let cuda_path = env::var("CUDA_PATH")
-            .unwrap_or_else(|_| r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.8".to_string());
+            .expect("CUDA_PATH environment variable must be set");
         let cuda_lib_path = format!("{}\\lib\\x64", cuda_path);
         println!("cargo:rustc-link-search=native={}", cuda_lib_path);
-        println!("cargo:rustc-link-lib=dylib=cublas");
-        println!("cargo:rustc-link-lib=dylib=cusparse");
         println!("cargo:rustc-link-lib=dylib=cudart");
     }
 }

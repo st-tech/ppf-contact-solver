@@ -4,12 +4,78 @@
 # License: Apache v2.0
 
 import os
+import platform
 import subprocess
-import tempfile
 
 import psutil  # pyright: ignore[reportMissingModuleSource]
 
 PROCESS_NAME = "ppf-contact"
+
+
+def get_cache_dir() -> str:
+    """Get the ppf-cts cache directory.
+
+    Returns a platform-appropriate cache directory for ppf-cts.
+    - Linux/Mac: ~/.cache/ppf-cts
+    - Windows: <project>/.cache/ppf-cts (project-relative)
+
+    Returns:
+        str: Path to the ppf-cts cache directory.
+    """
+    if platform.system() == "Windows":
+        # Use project-relative cache on Windows
+        frontend_dir = os.path.dirname(os.path.realpath(__file__))
+        base_dir = os.path.dirname(frontend_dir)
+        cache_dir = os.path.join(base_dir, "cache", "ppf-cts")
+    else:
+        # Use ~/.cache/ppf-cts on Linux/Mac
+        cache_dir = os.path.expanduser(os.path.join("~", ".cache", "ppf-cts"))
+
+    os.makedirs(cache_dir, exist_ok=True)
+    return cache_dir
+
+
+def dict_to_html_table(data: dict, classes: str = "table", index: bool = False) -> str:
+    """Convert a dictionary to an HTML table.
+
+    Replacement for pandas DataFrame.to_html() to avoid pandas dependency.
+
+    Args:
+        data: Dictionary where keys are column names and values are lists of values.
+        classes: CSS classes to add to the table element.
+        index: Whether to include row index (ignored, kept for API compatibility).
+
+    Returns:
+        HTML string representation of the table.
+    """
+    if not data:
+        return "<table></table>"
+
+    # Get column names and number of rows
+    columns = list(data.keys())
+    num_rows = len(next(iter(data.values()))) if data else 0
+
+    # Build HTML
+    html_parts = [f'<table class="{classes}">']
+
+    # Header
+    html_parts.append("<thead><tr>")
+    for col in columns:
+        html_parts.append(f"<th>{col}</th>")
+    html_parts.append("</tr></thead>")
+
+    # Body
+    html_parts.append("<tbody>")
+    for i in range(num_rows):
+        html_parts.append("<tr>")
+        for col in columns:
+            val = data[col][i] if i < len(data[col]) else ""
+            html_parts.append(f"<td>{val}</td>")
+        html_parts.append("</tr>")
+    html_parts.append("</tbody>")
+
+    html_parts.append("</table>")
+    return "".join(html_parts)
 
 
 class Utils:
@@ -60,10 +126,34 @@ class Utils:
         else:
             return None
 
+    # Module-level flag for fast check mode (set by App.set_fast_check())
+    _fast_check_enabled = False
+
+    @staticmethod
+    def is_fast_check() -> bool:
+        """Determine if fast check mode is enabled.
+
+        Fast check mode forces simulations to run for only 1 frame,
+        enabling quick validation of all examples.
+
+        Returns:
+            bool: True if fast check mode is enabled.
+        """
+        return Utils._fast_check_enabled
+
+    @staticmethod
+    def set_fast_check(enabled: bool = True):
+        """Set fast check mode.
+
+        Args:
+            enabled: Whether to enable fast check mode.
+        """
+        Utils._fast_check_enabled = enabled
+
     @staticmethod
     def get_ci_root() -> str:
         """Get the path to the CI directory."""
-        return os.path.join(tempfile.gettempdir(), "ci")
+        return os.path.join(get_cache_dir(), "ci")
 
     @staticmethod
     def get_ci_dir() -> str:
@@ -114,7 +204,6 @@ class Utils:
                 and proc.info["status"] != psutil.STATUS_ZOMBIE
             ):
                 try:
-                    # Use psutil's terminate method which works cross-platform
                     proc.terminate()
                 except (psutil.NoSuchProcess, psutil.AccessDenied):
                     pass

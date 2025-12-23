@@ -3,18 +3,19 @@
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
 # License: Apache v2.0
 
+import asyncio
 import copy
 import os
 import pickle
 import shutil
 import subprocess
+import sys
 import threading
 import time
 
 from typing import TYPE_CHECKING, Any, Optional
 
 import numpy as np
-import pandas as pd
 
 from tqdm import tqdm
 
@@ -159,6 +160,10 @@ class ParamManager:
         Args:
             path (str): The path to the export directory.
         """
+        # Force frames=1 in fast check mode
+        if Utils.is_fast_check():
+            self._param.set("frames", 1)
+
         if len(self._param.key_list()):
             with open(os.path.join(path, "param.toml"), "w") as f:
                 f.write("[param]\n")
@@ -414,13 +419,20 @@ class SessionExport:
         param.export(self._fixed_session.info.path)
 
         # Platform-specific solver path and script generation
-        if os.name == 'nt':  # Windows
+        if os.name == "nt":  # Windows
             program_path = os.path.join(
                 self._session.proj_root, "target", "release", "ppf-contact-solver.exe"
             )
-            # Generate batch file
+            lib_path = os.path.join(
+                self._session.proj_root, "src", "cpp", "build", "lib"
+            )
+            # Generate batch file with PATH set for DLLs
             command = f"""@echo off
 set SOLVER_PATH={program_path}
+set LIB_PATH={lib_path}
+
+REM CUDA_PATH should be set by start.bat or the environment
+set PATH=%LIB_PATH%;%CUDA_PATH%\\bin;%PATH%
 
 if not exist "%SOLVER_PATH%" (
     echo Error: Solver does not exist at %SOLVER_PATH% >&2
@@ -450,7 +462,7 @@ fi
             path = os.path.join(self._fixed_session.info.path, "command.sh")
             with open(path, "w") as f:
                 f.write(command)
-            if os.name != 'nt':  # chmod not needed on Windows
+            if os.name != "nt":  # chmod not needed on Windows
                 os.chmod(path, 0o755)
         return path
 
@@ -523,6 +535,7 @@ fi
                 shutil.rmtree(path)
         else:
             os.makedirs(path)
+
         for i in tqdm(range(latest_frame), desc="export", ncols=70):
             self.frame(
                 os.path.join(path, f"frame_{i}.{ext}"),
@@ -531,9 +544,22 @@ fi
                 options,
                 delete_exist=clear,
             )
-        if shutil.which("ffmpeg") is not None:
+
+        # Check if any PNG images were rendered before attempting video creation
+        png_files = [f for f in os.listdir(path) if f.endswith(".png")]
+        # Look for ffmpeg in multiple locations
+        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        ffmpeg_candidates = [
+            os.path.join(project_root, "bin", "ffmpeg"),  # Linux/Docker
+            os.path.join(project_root, "bin", "ffmpeg.exe"),  # Windows bundled (dist/)
+            os.path.join(project_root, "build-win-native", "ffmpeg", "ffmpeg.exe"),  # Windows dev
+        ]
+        ffmpeg_path = next((p for p in ffmpeg_candidates if os.path.isfile(p)), None)
+        if ffmpeg_path is None:
+            ffmpeg_path = shutil.which("ffmpeg")
+        if ffmpeg_path is not None and png_files:
             vid_name = "frame.mp4"
-            command = f"ffmpeg -hide_banner -loglevel error -y -r 60 -i frame_%d.{ext}.png -pix_fmt yuv420p -b:v 50000k {vid_name}"
+            command = f'"{ffmpeg_path}" -hide_banner -loglevel error -y -r 60 -i frame_%d.{ext}.png -pix_fmt yuv420p -c:v libx264 {vid_name}'
             subprocess.run(command, shell=True, cwd=path)
             if Utils.in_jupyter_notebook():
                 from IPython.display import Video, display
@@ -541,9 +567,8 @@ fi
                 display(Video(os.path.join(path, vid_name), embed=True))
 
             if ci_name is not None:
-                for file in os.listdir(path):
-                    if file.endswith(".png"):
-                        os.remove(os.path.join(path, file))
+                for file in png_files:
+                    os.remove(os.path.join(path, file))
 
         return Zippable(path)
 
@@ -860,7 +885,7 @@ class SessionGet:
         Returns:
             Optional[str]: The path to the command.sh file if it exists, None otherwise.
         """
-        if os.name == 'nt':  # Windows
+        if os.name == "nt":  # Windows
             command_path = os.path.join(self._fixed_session.info.path, "command.bat")
         else:
             command_path = os.path.join(self._fixed_session.info.path, "command.sh")
@@ -918,9 +943,9 @@ class FixedSession:
             session (Session): The session object.
         """
         self._session = session
-        self._update_preview_interval = 1.0 / 60.0
-        self._update_terminal_interval = 1.0 / 30.0
-        self._update_table_interval = 0.25
+        self._update_preview_interval = 0.1
+        self._update_terminal_interval = 0.1
+        self._update_table_interval = 0.1
         self._info = SessionInfo(session.name).set_path(
             os.path.join(session.app_root, session.name)
         )
@@ -1182,12 +1207,12 @@ class FixedSession:
 
             err_path = os.path.join(self.info.path, "error.log")
             log_path = os.path.join(self.info.path, "stdout.log")
-            if os.name == 'nt':  # Windows
+            if os.name == "nt":  # Windows
                 command = f'"{self._cmd_path}" --load {load}'
             else:
                 command = f"bash {self._cmd_path} --load {load}"
             with open(log_path, "w") as stdout_file, open(err_path, "w") as stderr_file:
-                if os.name == 'nt':  # Windows
+                if os.name == "nt":  # Windows
                     process = subprocess.Popen(
                         command,
                         shell=True,
@@ -1438,12 +1463,18 @@ class FixedSession:
                     }
                     if max_stretch is not None:
                         data["Max Stretch"] = [max_stretch]
-                    df = pd.DataFrame(data)
-                    table.value = df.to_html(
-                        classes="table table-striped", border=0, index=False
+                    from ._utils_ import dict_to_html_table
+
+                    table.value = dict_to_html_table(
+                        data, classes="table table-striped"
                     )
 
-                def live_preview(self):
+                async def live_preview_async():
+                    """Async coroutine for live preview updates.
+
+                    Using async instead of threading allows the event loop to process
+                    button events between updates, preventing UI unresponsiveness.
+                    """
                     nonlocal plot
                     nonlocal terminate_button
                     nonlocal save_and_quit_button
@@ -1464,13 +1495,13 @@ class FixedSession:
                                     plot.update(vert, color)
                             if not Utils.busy():
                                 break
-                            time.sleep(self._update_preview_interval)
+                            await asyncio.sleep(self._update_preview_interval)
                         assert terminate_button is not None
                         assert save_and_quit_button is not None
                         terminate_button.disabled = True
                         terminate_button.description = "Terminated"
                         save_and_quit_button.disabled = True
-                        time.sleep(self._update_preview_interval)
+                        await asyncio.sleep(self._update_preview_interval)
                         last_frame = self.get.latest_frame()
                         update_dataframe(table, last_frame)
                         vertex_data = self.get.vertex(last_frame)
@@ -1481,19 +1512,22 @@ class FixedSession:
                     except Exception as e:
                         print(f"live_preview error: {e}")
 
-                def live_table(self):
+                async def live_table_async():
+                    """Async coroutine for table updates."""
                     nonlocal table
                     try:
                         while True:
                             update_dataframe(table, curr_frame)
                             if not Utils.busy():
                                 break
-                            time.sleep(self._update_table_interval)
+                            await asyncio.sleep(self._update_table_interval)
                     except Exception as e:
                         print(f"live_table error: {e}")
 
-                threading.Thread(target=live_preview, args=(self,)).start()
-                threading.Thread(target=live_table, args=(self,)).start()
+                # Use async coroutines instead of threads to allow event loop
+                # to process button events between updates
+                asyncio.ensure_future(live_preview_async())
+                asyncio.ensure_future(live_table_async())
                 display(widgets.HBox((terminate_button, save_and_quit_button)))
 
             display(table)
@@ -1572,7 +1606,8 @@ class FixedSession:
                             if fixed_scene is not None and frame - 1 < len(vert_list):
                                 vert = vert_list[frame - 1]
                                 color = fixed_scene.color(vert, options)
-                                plot.update(vert, color)
+                                # Always recompute normals for correct lighting
+                                plot.update(vert, color, recompute_normals=True)
 
                         # Create the interactive slider
                         slider = widgets.IntSlider(
@@ -1590,14 +1625,7 @@ class FixedSession:
                                 # Reload frames from disk
                                 new_frame_count = self.get.vertex_frame_count()
                                 if new_frame_count > len(vert_list):
-                                    print(
-                                        f"Loading {new_frame_count - len(vert_list)} new frames..."
-                                    )
-                                    for i in tqdm(
-                                        range(len(vert_list), new_frame_count),
-                                        desc="Loading new frames",
-                                        ncols=70,
-                                    ):
+                                    for i in range(len(vert_list), new_frame_count):
                                         result = self.get.vertex(i)
                                         if result is not None:
                                             vert, _ = result
@@ -1610,15 +1638,8 @@ class FixedSession:
                                     status_label.value = (
                                         f"Loaded {len(vert_list)} frames"
                                     )
-                                    print(f"Loaded {len(vert_list)} frames total.")
-                                    button.description = "Reload"
-                                else:
-                                    print(
-                                        f"No new frames. Total: {len(vert_list)} frames."
-                                    )
-                                    button.description = "Reload"
+                                button.description = "Reload"
                             except Exception as e:
-                                print(f"Reload failed: {e}")
                                 button.description = "Reload"
                             finally:
                                 button.disabled = False
@@ -1679,10 +1700,12 @@ class FixedSession:
                         if os.path.exists(log_path):
                             with open(log_path) as f:
                                 lines = f.readlines()
-                                tail_lines = lines[-n_lines:] if len(lines) > n_lines else lines
-                                tail_output = ''.join(tail_lines).strip()
+                                tail_lines = (
+                                    lines[-n_lines:] if len(lines) > n_lines else lines
+                                )
+                                tail_output = "".join(tail_lines).strip()
                         else:
-                            tail_output = ''
+                            tail_output = ""
                         log_widget.value = (
                             CONSOLE_STYLE
                             + f"<pre style='no-scroll'>{tail_output}</pre>"

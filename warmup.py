@@ -147,10 +147,6 @@ def list_packages():
         "zip",
         "unzip",
         "cmake",
-        "xorg-dev",
-        "libgl1-mesa-dev",
-        "libglu1-mesa-dev",
-        "libosmesa6-dev",
         "libc++-dev",
         "libeigen3-dev",
         "ffmpeg",
@@ -161,22 +157,18 @@ def list_packages():
 def python_packages():
     return [
         "numpy",
-        "pandas",
-        "libigl",
+        "numba",
         "plyfile",
         "requests",
         "gdown",
         "trimesh",
-        "pyrender",
         "pywavefront",
         "matplotlib",
         "tqdm",
         "pythreejs",
         "ipywidgets",
-        "open3d",
-        "gpytoolbox",
+        "fast-simplification",
         "tabulate",
-        "tetgen",
         "triangle",
         "ruff",
         "black",
@@ -186,6 +178,7 @@ def python_packages():
         "python-lsp-server",
         "python-lsp-ruff",
         "jupyterlab-code-formatter",
+        "nbconvert",  # Required for fast_check to convert notebooks to Python scripts
     ]
 
 
@@ -330,17 +323,6 @@ def install_oh_my_zsh():
             f.write(f"source {venv_path}/bin/activate\n")
 
 
-def install_sdf():
-    pip_path = get_venv_pip()
-    run(f"{pip_path} install git+https://github.com/fogleman/sdf.git")
-
-
-def reinstall_pyopengl():
-    pip_path = get_venv_pip()
-    run(f"{pip_path} uninstall -y pyopengl")
-    run(f"{pip_path} install --force-reinstall --no-deps pyopengl==3.1.5")
-
-
 def setup():
     script_dir = os.path.dirname(os.path.realpath(__file__))
 
@@ -405,7 +387,9 @@ def setup():
     if result.returncode == 0:
         print(f"Successfully installed {len(packages)} packages")
 
-    install_sdf()
+    # Install pytetwild (fTetWild wrapper for tetrahedralization)
+    print("Installing pytetwild...")
+    subprocess.run([pip_path, "install", "pytetwild"], check=True)
 
     # Node.js installation (user-level)
     print("Installing Node.js via nvm (Node Version Manager)...")
@@ -481,8 +465,6 @@ def setup():
     print("Or activate manually when needed:")
     print(f"  source {venv_path}/bin/activate")
     print("=" * 60 + "\n")
-
-    reinstall_pyopengl()
 
 
 def set_tmux():
@@ -664,6 +646,332 @@ def start_jupyter():
             process.wait()
 
 
+def show_help():
+    """Show help message with available commands."""
+    help_text = """
+Usage: python3 warmup.py [command] [options]
+
+Commands:
+  (no command)     Run full environment setup (requires confirmation)
+
+  Environment Setup:
+    nvim           Install Neovim editor
+    lazyvim        Install LazyVim configuration
+    lazygit        Install Lazygit terminal UI for git
+    fish           Install Fish shell
+    ohmyzsh        Install Oh My Zsh
+    tmux           Configure tmux
+    clangd         Create clang configuration files
+    vscode         Create VSCode extension recommendations
+    time           Install and configure NTP
+    all            Install all optional tools (nvim, lazyvim, fish, tmux, lazygit)
+
+  Development:
+    jupyter        Start JupyterLab server
+    docs-prepare   Install documentation dependencies (sphinx)
+    docs-build     Build documentation
+    requirements   Generate requirements.txt
+
+  Testing:
+    fast_check [N] Run fast check on example notebooks (optional: limit to N)
+
+  Maintenance:
+    clear_cache    Clear ppf-cts cache directories
+    clear_all      Full cleanup including session data (for release/Docker)
+
+Options:
+  --skip-confirmation   Skip confirmation prompt for full setup
+  -h, --help, help      Show this help message
+"""
+    print(help_text)
+
+
+def fast_check(limit=None):
+    """Run fast check on all example notebooks.
+
+    Args:
+        limit: Optional maximum number of notebooks to test
+    """
+    import re
+    import tempfile
+    from datetime import datetime
+
+    script_dir = os.path.dirname(os.path.realpath(__file__))
+    examples_dir = os.path.join(script_dir, "examples")
+    venv_python = get_venv_python()
+
+    # Find examples.txt - try source location first, then local directory (for Docker)
+    examples_txt = os.path.join(script_dir, ".github", "workflows", "scripts", "examples.txt")
+    if not os.path.exists(examples_txt):
+        examples_txt = os.path.join(script_dir, "examples.txt")
+
+    # Verify examples.txt exists
+    if not os.path.exists(examples_txt):
+        print(f"ERROR: examples.txt not found at {script_dir}/.github/workflows/scripts/examples.txt")
+        print(f"       or at {script_dir}/examples.txt")
+        return 1
+
+    # Verify Python exists
+    if not os.path.exists(venv_python):
+        print(f"ERROR: Python not found at {venv_python}")
+        print("Please run 'python3 warmup.py' first to set up the environment.")
+        return 1
+
+    # Clear caches before running tests
+    clear_cache()
+    print()
+
+    # Read notebooks from examples.txt
+    with open(examples_txt) as f:
+        notebooks = [line.strip() for line in f if line.strip() and not line.startswith('#')]
+
+    total = len(notebooks)
+
+    # Apply limit if specified
+    if limit is not None:
+        notebooks = notebooks[:limit]
+        total = len(notebooks)
+        print(f"(Limited to first {limit} notebooks)")
+        print()
+
+    # Set up log file
+    log_file = os.path.join(script_dir, "fast-check-results.log")
+    with open(log_file, "w") as f:
+        f.write("=== Fast Check Results ===\n")
+        f.write(f"Started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        f.write(f"Total tests: {total}\n\n")
+
+    print("=== Fast Check All Examples ===")
+    print(f"Using: {examples_txt}")
+    print(f"Total tests to run: {total}")
+    print(f"Log file: {log_file}")
+    print()
+
+    # Create temporary directory for converted scripts
+    fast_check_dir = tempfile.mkdtemp(prefix="fast_check_")
+    print(f"Working directory: {fast_check_dir}")
+    print()
+
+    passed = 0
+    failed = 0
+    passed_list = []
+    current = 0
+
+    print("Converting notebooks to Python and running tests...")
+    print()
+
+    for notebook in notebooks:
+        current += 1
+        notebook_path = os.path.join(examples_dir, f"{notebook}.ipynb")
+
+        if not os.path.exists(notebook_path):
+            print(f"[SKIP] {notebook} - notebook not found", flush=True)
+            continue
+
+        print(f"[TEST {current}/{total}] {notebook}", flush=True)
+        with open(log_file, "a") as f:
+            f.write(f"[TEST {current}/{total}] {notebook}\n")
+
+        # Convert notebook to Python (use nbconvert directly to avoid shebang path issues)
+        result = subprocess.run(
+            [venv_python, "-m", "nbconvert", "--to", "script",
+             notebook_path, "--output-dir", fast_check_dir],
+            capture_output=True,
+            text=True
+        )
+
+        py_file = os.path.join(fast_check_dir, f"{notebook}.py")
+        if result.returncode != 0 or not os.path.exists(py_file):
+            print(flush=True)
+            print(f"=== FAILED: {notebook} [nbconvert error code: {result.returncode}] ===", flush=True)
+            if result.stderr:
+                print(f"stderr: {result.stderr}", flush=True)
+            if result.stdout:
+                print(f"stdout: {result.stdout}", flush=True)
+            # Clean up temp directory and caches
+            shutil.rmtree(fast_check_dir, ignore_errors=True)
+            clear_cache()
+            return 1
+
+        # Inject App.set_fast_check() after App.create/load calls
+        with open(py_file) as f:
+            content = f.read()
+
+        pattern = r'(app = App\.(create|load)\([^)]+\))'
+        replacement = r'\1; App.set_fast_check()'
+        content = re.sub(pattern, replacement, content)
+
+        with open(py_file, 'w') as f:
+            f.write(content)
+
+        # Run the Python script
+        env = os.environ.copy()
+        env["PYTHONPATH"] = script_dir + ":" + env.get("PYTHONPATH", "")
+
+        result = subprocess.run(
+            [venv_python, py_file],
+            cwd=examples_dir,
+            env=env
+        )
+
+        if result.returncode == 0:
+            print("       PASSED", flush=True)
+            with open(log_file, "a") as f:
+                f.write("       PASSED\n")
+            passed += 1
+            passed_list.append(notebook)
+        else:
+            print(flush=True)
+            print(f"=== FAILED: {notebook} ===", flush=True)
+            with open(log_file, "a") as f:
+                f.write("       FAILED\n")
+            # Clean up temp directory and caches
+            shutil.rmtree(fast_check_dir, ignore_errors=True)
+            clear_cache()
+            return 1
+
+    # Clean up temp directory and caches
+    shutil.rmtree(fast_check_dir, ignore_errors=True)
+    clear_cache()
+
+    # Print summary
+    print()
+    print("=" * 44)
+    print(f"=== ALL {passed}/{total} TESTS PASSED ===")
+    print("=" * 44)
+    print()
+    print("Passed tests:")
+    for i, name in enumerate(passed_list, 1):
+        print(f"  {i}. {name}")
+    print()
+    print(f"Log saved to: {log_file}")
+    print()
+
+    # Write summary to log file
+    with open(log_file, "a") as f:
+        f.write("\n")
+        f.write("=" * 44 + "\n")
+        f.write(f"=== ALL {passed}/{total} TESTS PASSED ===\n")
+        f.write("=" * 44 + "\n")
+        f.write("\n")
+        f.write("Passed tests:\n")
+        for i, name in enumerate(passed_list, 1):
+            f.write(f"  {i}. {name}\n")
+        f.write(f"\nCompleted: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+
+    return 0
+
+
+def clear_cache():
+    """Clear ppf-cts cache directories (not session data)."""
+    script_dir = os.path.dirname(os.path.realpath(__file__))
+    has_error = False
+
+    print("=== Clearing Caches ===\n")
+
+    # 1. Clear cache directory (~/.cache/ppf-cts on Linux/Mac)
+    cache_dir = os.path.expanduser("~/.cache/ppf-cts")
+    if os.path.exists(cache_dir):
+        print("Removing cache directory...")
+        try:
+            shutil.rmtree(cache_dir)
+            print(f"  [OK] Removed {cache_dir}")
+        except Exception as e:
+            print(f"  [FAIL] Could not remove {cache_dir}: {e}")
+            has_error = True
+    else:
+        print("  [SKIP] Cache directory not found")
+
+    # 2. Clear project-relative cache (cache/ppf-cts)
+    proj_cache_dir = os.path.join(script_dir, "cache", "ppf-cts")
+    if os.path.exists(proj_cache_dir):
+        print("Removing project cache directory...")
+        try:
+            shutil.rmtree(proj_cache_dir)
+            print(f"  [OK] Removed {proj_cache_dir}")
+        except Exception as e:
+            print(f"  [FAIL] Could not remove {proj_cache_dir}: {e}")
+            has_error = True
+    else:
+        print("  [SKIP] Project cache directory not found")
+
+    print()
+    if has_error:
+        print("=== [FAIL] Some caches could not be cleared ===")
+        return 1
+    else:
+        print("=== [SUCCESS] Cache Cleared ===")
+        return 0
+
+
+def clear_all():
+    """Clear all ppf-cts directories including session data. Used for release/Docker builds."""
+    script_dir = os.path.dirname(os.path.realpath(__file__))
+    has_error = False
+
+    print("=== Clearing All (Full Cleanup) ===\n")
+
+    # 1. Clear cache directory (~/.cache/ppf-cts)
+    cache_dir = os.path.expanduser("~/.cache/ppf-cts")
+    if os.path.exists(cache_dir):
+        print("Removing cache directory...")
+        try:
+            shutil.rmtree(cache_dir)
+            print(f"  [OK] Removed {cache_dir}")
+        except Exception as e:
+            print(f"  [FAIL] Could not remove {cache_dir}: {e}")
+            has_error = True
+    else:
+        print("  [SKIP] Cache directory not found")
+
+    # 2. Clear project-relative cache (cache/ppf-cts)
+    proj_cache_dir = os.path.join(script_dir, "cache", "ppf-cts")
+    if os.path.exists(proj_cache_dir):
+        print("Removing project cache directory...")
+        try:
+            shutil.rmtree(proj_cache_dir)
+            print(f"  [OK] Removed {proj_cache_dir}")
+        except Exception as e:
+            print(f"  [FAIL] Could not remove {proj_cache_dir}: {e}")
+            has_error = True
+    else:
+        print("  [SKIP] Project cache directory not found")
+
+    # 3. Clear local session data (local/share/ppf-cts)
+    local_dir = os.path.join(script_dir, "local", "share", "ppf-cts")
+    if os.path.exists(local_dir):
+        print("Removing local session data...")
+        try:
+            shutil.rmtree(local_dir)
+            print(f"  [OK] Removed {local_dir}")
+        except Exception as e:
+            print(f"  [FAIL] Could not remove {local_dir}: {e}")
+            has_error = True
+    else:
+        print("  [SKIP] Local session data not found")
+
+    # 4. Clear user session data (~/.local/share/ppf-cts) - including venv
+    user_data_dir = os.path.expanduser("~/.local/share/ppf-cts")
+    if os.path.exists(user_data_dir):
+        print("Removing user session data...")
+        try:
+            shutil.rmtree(user_data_dir)
+            print(f"  [OK] Removed {user_data_dir}")
+        except Exception as e:
+            print(f"  [FAIL] Could not remove {user_data_dir}: {e}")
+            has_error = True
+    else:
+        print("  [SKIP] User session data not found")
+
+    print()
+    if has_error:
+        print("=== [FAIL] Some directories could not be cleared ===")
+        return 1
+    else:
+        print("=== [SUCCESS] Full Cleanup Complete ===")
+        return 0
+
+
 def build_docs():
     script_dir = os.path.dirname(os.path.realpath(__file__))
     sphinx_build = os.path.join(get_venv_path(), "bin", "sphinx-build")
@@ -811,7 +1119,10 @@ if __name__ == "__main__":
 
     if args:
         mode = args[0]
-        if mode == "nvim":
+        if mode in ("help", "-h", "--help"):
+            show_help()
+            sys.exit(0)
+        elif mode == "nvim":
             install_nvim()
         elif mode == "lazyvim":
             install_lazyvim()
@@ -839,6 +1150,14 @@ if __name__ == "__main__":
             build_docs()
         elif mode == "requirements":
             dump_python_requirements("requirements.txt")
+        elif mode == "clear_cache":
+            sys.exit(clear_cache())
+        elif mode == "clear_all":
+            sys.exit(clear_all())
+        elif mode == "fast_check":
+            # Parse optional limit argument (e.g., fast_check 3)
+            limit = int(args[1]) if len(args) > 1 else None
+            sys.exit(fast_check(limit))
         elif mode == "all":
             create_clang_config()
             install_nvim()
