@@ -325,6 +325,69 @@ jobs:
             -o ServerAliveInterval=60 -i "$KEY_PATH" Administrator@$PUBLIC_IP \
             "cmd /c 'cd C:\\ppf-contact-solver\\build-win-native && build.bat /nopause'"
 
+      - name: Convert assertion notebook to Python script
+        run: |
+          echo "Converting assertion notebook: examples/fail-examples/assertion.ipynb"
+          SSH_PORT="${{ steps.ids.outputs.SSH_PORT }}"
+          KEY_PATH="${{ steps.keypair.outputs.KEY_PATH }}"
+
+          # Use the same conversion pattern as main examples
+          cat > /tmp/convert_assertion.ps1 << 'EOFPS1'
+          $ErrorActionPreference = "Stop"
+          Set-Location C:\ppf-contact-solver
+          $env:PATH = "C:\ppf-contact-solver\build-win-native\python;C:\ppf-contact-solver\build-win-native\python\Scripts;" + $env:PATH
+          New-Item -ItemType Directory -Path "C:\ci" -Force | Out-Null
+          Write-Host "Converting assertion.ipynb to Python script..."
+          & C:\ppf-contact-solver\build-win-native\python\python.exe -m jupyter nbconvert --to python "examples/fail-examples/assertion.ipynb" --output "C:\ci\assertion_base.py"
+          $header = "import sys`nimport os`nsys.path.insert(0, r'C:\ppf-contact-solver')`nsys.path.insert(0, r'C:\ppf-contact-solver\frontend')`nos.environ['PYTHONPATH'] = r'C:\ppf-contact-solver;C:\ppf-contact-solver\frontend;' + os.environ.get('PYTHONPATH', '')"
+          $baseContent = Get-Content "C:\ci\assertion_base.py" -Raw
+          $header + "`n" + $baseContent | Set-Content "C:\ci\assertion.py"
+          Write-Host "Assertion script prepared at C:\ci\assertion.py"
+          EOFPS1
+
+          scp -P $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
+            -i "$KEY_PATH" /tmp/convert_assertion.ps1 Administrator@$PUBLIC_IP:C:/convert_assertion.ps1
+
+          ssh -p $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
+            -i "$KEY_PATH" Administrator@$PUBLIC_IP \
+            "powershell -ExecutionPolicy Bypass -File C:/convert_assertion.ps1"
+
+      - name: Run assertion test (expect failure)
+        run: |
+          echo "Running assertion test to verify error propagation via SSH..."
+          echo "This test uses the same execution pattern as main examples"
+          echo "Expected result: FAILURE (AssertionError)"
+          SSH_PORT="${{ steps.ids.outputs.SSH_PORT }}"
+          KEY_PATH="${{ steps.keypair.outputs.KEY_PATH }}"
+
+          # Create script that runs the same way as main examples
+          cat > /tmp/run_assertion.ps1 << 'EOFPS1'
+          Set-Location C:\ppf-contact-solver
+          "assertion" | Set-Content "frontend\.CI"
+          & C:\ppf-contact-solver\build-win-native\python\python.exe C:\ci\assertion.py 2>&1 | Tee-Object -FilePath "C:\ci\assertion.log"
+          exit $LASTEXITCODE
+          EOFPS1
+
+          scp -P $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
+            -i "$KEY_PATH" /tmp/run_assertion.ps1 Administrator@$PUBLIC_IP:C:/run_assertion.ps1
+
+          # Run and expect failure
+          if ssh -p $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
+            -i "$KEY_PATH" Administrator@$PUBLIC_IP \
+            "powershell -ExecutionPolicy Bypass -File C:/run_assertion.ps1"; then
+            echo "ERROR: Assertion test should have failed but succeeded"
+            echo "This means errors are NOT being propagated correctly!"
+            exit 1
+          else
+            echo "SUCCESS: Assertion test failed as expected"
+            echo "Error propagation via SSH is working correctly"
+            echo "Main example tests can now proceed with confidence"
+          fi
+
       - name: Convert notebook to Python script
         run: |
           echo "Converting domino.ipynb to Python script..."

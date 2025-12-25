@@ -727,6 +727,74 @@ def fast_check(limit=None):
         return 1
     print()
 
+    # Run fail-examples tests (these should all fail)
+    print("=== Running Fail-Examples Tests ===")
+    print("(These notebooks are designed to fail)")
+    print()
+
+    fail_examples_dir = os.path.join(examples_dir, "fail-examples")
+    if os.path.exists(fail_examples_dir):
+        fail_notebooks = [f[:-6] for f in os.listdir(fail_examples_dir) if f.endswith(".ipynb")]
+        fail_notebooks.sort()
+
+        if fail_notebooks:
+            fail_temp_dir = tempfile.mkdtemp(prefix="fail_check_")
+            env = os.environ.copy()
+            env["PYTHONPATH"] = script_dir + ":" + env.get("PYTHONPATH", "")
+
+            for notebook in fail_notebooks:
+                notebook_path = os.path.join(fail_examples_dir, f"{notebook}.ipynb")
+                print(f"[FAIL-TEST] {notebook}", flush=True)
+
+                # Convert notebook to Python
+                result = subprocess.run(
+                    [venv_python, "-m", "nbconvert", "--to", "script",
+                     notebook_path, "--output-dir", fail_temp_dir],
+                    capture_output=True,
+                    text=True
+                )
+
+                py_file = os.path.join(fail_temp_dir, f"{notebook}.py")
+                if result.returncode != 0 or not os.path.exists(py_file):
+                    print(f"           [ERROR] nbconvert failed", flush=True)
+                    shutil.rmtree(fail_temp_dir, ignore_errors=True)
+                    return 1
+
+                # Inject App.set_fast_check() after App.create/load calls
+                with open(py_file) as f:
+                    content = f.read()
+
+                pattern = r'(app = App\.(create|load)\([^)]+\))'
+                replacement = r'\1; App.set_fast_check()'
+                content = re.sub(pattern, replacement, content)
+
+                with open(py_file, 'w') as f:
+                    f.write(content)
+
+                # Run the Python script - expect it to fail
+                result = subprocess.run(
+                    [venv_python, py_file],
+                    cwd=examples_dir,
+                    env=env,
+                    capture_output=True
+                )
+
+                if result.returncode == 0:
+                    print(f"           [ERROR] Expected to fail but passed!", flush=True)
+                    shutil.rmtree(fail_temp_dir, ignore_errors=True)
+                    return 1
+                else:
+                    print(f"           FAILED (as expected)", flush=True)
+
+            shutil.rmtree(fail_temp_dir, ignore_errors=True)
+            print()
+            print(f"All {len(fail_notebooks)} fail-examples failed as expected.")
+        else:
+            print("No fail-example notebooks found.")
+    else:
+        print(f"fail-examples directory not found at {fail_examples_dir}")
+    print()
+
     # Clear caches before running notebook tests
     clear_cache()
     print()

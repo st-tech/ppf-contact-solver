@@ -90,6 +90,59 @@ echo.
 echo === Unit Tests Passed ===
 echo.
 
+REM ============================================================
+REM Run Fail-Examples Tests (these should all fail)
+REM ============================================================
+echo === Running Fail-Examples Tests ===
+echo (These notebooks are designed to fail)
+echo.
+
+set FAIL_EXAMPLES_DIR=%EXAMPLES_DIR%\fail-examples
+set FAIL_CHECK_DIR=%SCRIPT_DIR%\fail_check
+
+if exist "%FAIL_EXAMPLES_DIR%" (
+    REM Create fail_check directory
+    if exist "%FAIL_CHECK_DIR%" rmdir /s /q "%FAIL_CHECK_DIR%"
+    mkdir "%FAIL_CHECK_DIR%"
+
+    set FAIL_COUNT=0
+    for %%f in ("%FAIL_EXAMPLES_DIR%\*.ipynb") do (
+        set FAIL_NOTEBOOK=%%~nf
+        echo [FAIL-TEST] !FAIL_NOTEBOOK!
+
+        REM Convert notebook to Python
+        "%PYTHON%" -m nbconvert --to script "%%f" --output-dir "%FAIL_CHECK_DIR%"
+        if !ERRORLEVEL! NEQ 0 (
+            echo            [ERROR] nbconvert failed
+            if exist "%FAIL_CHECK_DIR%" rmdir /s /q "%FAIL_CHECK_DIR%"
+            goto :error
+        )
+
+        REM Insert App.set_fast_check() after "app = App" line
+        "%PYTHON%" "%INJECT_SCRIPT%" "%FAIL_CHECK_DIR%\!FAIL_NOTEBOOK!.py"
+
+        REM Run the Python script - expect it to fail
+        cd /d "%EXAMPLES_DIR%"
+        "%PYTHON%" "%FAIL_CHECK_DIR%\!FAIL_NOTEBOOK!.py" >nul 2>&1
+
+        if !ERRORLEVEL! EQU 0 (
+            echo            [ERROR] Expected to fail but passed!
+            if exist "%FAIL_CHECK_DIR%" rmdir /s /q "%FAIL_CHECK_DIR%"
+            goto :error
+        ) else (
+            echo            FAILED (as expected^)
+            set /a FAIL_COUNT+=1
+        )
+    )
+
+    if exist "%FAIL_CHECK_DIR%" rmdir /s /q "%FAIL_CHECK_DIR%"
+    echo.
+    echo All !FAIL_COUNT! fail-examples failed as expected.
+) else (
+    echo fail-examples directory not found at %FAIL_EXAMPLES_DIR%
+)
+echo.
+
 echo === Fast Check All Examples ===
 echo Using: %EXAMPLES_TXT%
 echo.

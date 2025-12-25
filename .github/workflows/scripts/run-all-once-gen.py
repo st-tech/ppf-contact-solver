@@ -512,6 +512,45 @@ jobs:
           echo "Cargo build completed"
           ENDSSH
 
+      - name: Convert assertion notebook to Python script
+        run: |
+          echo "Converting assertion notebook: examples/fail-examples/assertion.ipynb"
+          ssh -p ${{{{ steps.ids.outputs.SSH_PORT }}}} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \\
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \\
+            -i "${{{{ steps.keypair.outputs.KEY_PATH }}}}" ${{{{ env.USER }}}}@${{{{ env.PUBLIC_IP }}}} << 'ENDSSH'
+          set -e
+          cd ${{{{ env.WORKDIR }}}}
+          source ~/.local/share/ppf-cts/venv/bin/activate
+          jupyter nbconvert --to python "examples/fail-examples/assertion.ipynb" --output "/tmp/assertion_base.py"
+          echo "import sys" > /tmp/assertion.py
+          echo "import os" >> /tmp/assertion.py
+          echo "sys.path.insert(0, '${{{{ env.WORKDIR }}}}')" >> /tmp/assertion.py
+          echo "sys.path.insert(0, '${{{{ env.WORKDIR }}}}/frontend')" >> /tmp/assertion.py
+          echo "os.environ['PYTHONPATH'] = '${{{{ env.WORKDIR }}}}:${{{{ env.WORKDIR }}}}/frontend:' + os.environ.get('PYTHONPATH', '')" >> /tmp/assertion.py
+          cat "/tmp/assertion_base.py" >> /tmp/assertion.py
+          echo "Assertion script prepared at /tmp/assertion.py"
+          ENDSSH
+
+      - name: Run assertion test (expect failure)
+        run: |
+          echo "Running assertion test to verify error propagation via SSH..."
+          echo "This test uses the same execution pattern as main examples"
+          echo "Expected result: FAILURE (AssertionError)"
+
+          # Run using the exact same pattern as the main example runs - expect it to fail
+          if ssh -p ${{{{ steps.ids.outputs.SSH_PORT }}}} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \\
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \\
+            -i "${{{{ steps.keypair.outputs.KEY_PATH }}}}" ${{{{ env.USER }}}}@${{{{ env.PUBLIC_IP }}}} \\
+            "set -o pipefail && echo 'assertion' > ${{{{ env.WORKDIR }}}}/frontend/.CI && cd ${{{{ env.WORKDIR }}}} && source ~/.local/share/ppf-cts/venv/bin/activate && python3 /tmp/assertion.py 2>&1 | tee /tmp/ci/assertion.log"; then
+            echo "ERROR: Assertion test should have failed but succeeded"
+            echo "This means errors are NOT being propagated correctly!"
+            exit 1
+          else
+            echo "SUCCESS: Assertion test failed as expected"
+            echo "Error propagation via SSH is working correctly"
+            echo "Main example tests can now proceed with confidence"
+          fi
+
       - name: Setup CI directory
         run: |
           echo "Setting up CI directory..."
