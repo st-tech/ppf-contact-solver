@@ -483,7 +483,7 @@ jobs:
           ssh -p ${{{{ steps.ids.outputs.SSH_PORT }}}} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \\
             -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \\
             -i "${{{{ steps.keypair.outputs.KEY_PATH }}}}" ${{{{ env.USER }}}}@${{{{ env.PUBLIC_IP }}}} << 'ENDSSH'
-          set -e
+          set -eo pipefail
           cd ${{{{ env.WORKDIR }}}}
 
           # Run warmup.py
@@ -499,7 +499,7 @@ jobs:
           ssh -p ${{{{ steps.ids.outputs.SSH_PORT }}}} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \\
             -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \\
             -i "${{{{ steps.keypair.outputs.KEY_PATH }}}}" ${{{{ env.USER }}}}@${{{{ env.PUBLIC_IP }}}} << 'ENDSSH'
-          set -e
+          set -eo pipefail
           cd ${{{{ env.WORKDIR }}}}
 
           # Setup Rust environment
@@ -530,7 +530,7 @@ jobs:
           ssh -p ${{{{ steps.ids.outputs.SSH_PORT }}}} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \\
             -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \\
             -i "${{{{ steps.keypair.outputs.KEY_PATH }}}}" ${{{{ env.USER }}}}@${{{{ env.PUBLIC_IP }}}} << 'ENDSSH'
-          set -e
+          set -eo pipefail
           cd ${{{{ env.WORKDIR }}}}
 
           # Activate Python environment
