@@ -15,11 +15,222 @@ from tqdm.auto import tqdm
 from ._bvh_ import (
     MeshBVH,
     bbox_overlap,
-    edge_edge_dist_sq,
-    elements_share_vertex,
-    point_edge_dist_sq,
-    point_triangle_dist_sq,
+    dot3,
 )
+from ._intersection_ import elements_share_vertex
+
+# =============================================================================
+# Distance primitives (moved from _bvh_.py)
+# =============================================================================
+
+
+@njit(cache=True)
+def closest_point_on_triangle(
+    p: np.ndarray, a: np.ndarray, b: np.ndarray, c: np.ndarray
+):
+    """Find closest point on triangle ABC to point P. Returns (closest_point, bary_coords)."""
+    ab = b - a
+    ac = c - a
+    ap = p - a
+
+    d1 = dot3(ab, ap)
+    d2 = dot3(ac, ap)
+
+    # Check if P is in vertex region outside A
+    if d1 <= 0 and d2 <= 0:
+        return a.copy(), np.array([1.0, 0.0, 0.0])
+
+    bp = p - b
+    d3 = dot3(ab, bp)
+    d4 = dot3(ac, bp)
+
+    # Check if P is in vertex region outside B
+    if d3 >= 0 and d4 <= d3:
+        return b.copy(), np.array([0.0, 1.0, 0.0])
+
+    # Check if P is in edge region of AB
+    vc = d1 * d4 - d3 * d2
+    if vc <= 0 and d1 >= 0 and d3 <= 0:
+        denom = d1 - d3
+        v = d1 / denom if denom != 0 else 0.0
+        return a + v * ab, np.array([1.0 - v, v, 0.0])
+
+    cp = p - c
+    d5 = dot3(ab, cp)
+    d6 = dot3(ac, cp)
+
+    # Check if P is in vertex region outside C
+    if d6 >= 0 and d5 <= d6:
+        return c.copy(), np.array([0.0, 0.0, 1.0])
+
+    # Check if P is in edge region of AC
+    vb = d5 * d2 - d1 * d6
+    if vb <= 0 and d2 >= 0 and d6 <= 0:
+        denom = d2 - d6
+        w = d2 / denom if denom != 0 else 0.0
+        return a + w * ac, np.array([1.0 - w, 0.0, w])
+
+    # Check if P is in edge region of BC
+    va = d3 * d6 - d5 * d4
+    d4_d3 = d4 - d3
+    d5_d6 = d5 - d6
+    if va <= 0 and d4_d3 >= 0 and d5_d6 >= 0:
+        denom = d4_d3 + d5_d6
+        w = d4_d3 / denom if denom != 0 else 0.0
+        return b + w * (c - b), np.array([0.0, 1.0 - w, w])
+
+    # P is inside the triangle
+    denom = va + vb + vc
+    if denom == 0:
+        return a.copy(), np.array([1.0, 0.0, 0.0])
+    v = vb / denom
+    w = vc / denom
+    u = 1.0 - v - w
+    return a + v * ab + w * ac, np.array([u, v, w])
+
+
+@njit(cache=True)
+def point_point_dist_sq(p1: np.ndarray, p2: np.ndarray) -> float:
+    """Compute squared distance between two points."""
+    d = p1 - p2
+    return dot3(d, d)
+
+
+@njit(cache=True)
+def point_edge_dist_sq(p: np.ndarray, e0: np.ndarray, e1: np.ndarray) -> float:
+    """Compute squared distance from point to edge segment."""
+    edge = e1 - e0
+    edge_len_sq = dot3(edge, edge)
+    if edge_len_sq < 1e-14:
+        d = p - e0
+        return dot3(d, d)
+
+    t = dot3(p - e0, edge) / edge_len_sq
+    t = max(0.0, min(1.0, t))
+    closest = e0 + t * edge
+    d = p - closest
+    return dot3(d, d)
+
+
+@njit(cache=True)
+def edge_edge_dist_sq(
+    a0: np.ndarray, a1: np.ndarray, b0: np.ndarray, b1: np.ndarray
+) -> float:
+    """Compute squared distance between two edge segments."""
+    d1 = a1 - a0
+    d2 = b1 - b0
+    r = a0 - b0
+
+    a = dot3(d1, d1)
+    e = dot3(d2, d2)
+    f = dot3(d2, r)
+
+    eps = 1e-14
+
+    if a < eps and e < eps:
+        d = a0 - b0
+        return dot3(d, d)
+
+    if a < eps:
+        s = 0.0
+        t = max(0.0, min(1.0, f / e))
+    elif e < eps:
+        t = 0.0
+        s = max(0.0, min(1.0, -dot3(d1, r) / a))
+    else:
+        b_val = dot3(d1, d2)
+        c = dot3(d1, r)
+        denom = a * e - b_val * b_val
+
+        s = max(0.0, min(1.0, (b_val * f - c * e) / denom)) if abs(denom) > eps else 0.0
+
+        t = (b_val * s + f) / e
+
+        if t < 0.0:
+            t = 0.0
+            s = max(0.0, min(1.0, -c / a))
+        elif t > 1.0:
+            t = 1.0
+            s = max(0.0, min(1.0, (b_val - c) / a))
+
+    closest_a = a0 + s * d1
+    closest_b = b0 + t * d2
+    diff = closest_a - closest_b
+    return dot3(diff, diff)
+
+
+@njit(cache=True)
+def point_triangle_dist_sq(
+    p: np.ndarray, v0: np.ndarray, v1: np.ndarray, v2: np.ndarray
+) -> float:
+    """Compute squared distance from point to triangle."""
+    ab = v1 - v0
+    ac = v2 - v0
+    ap = p - v0
+
+    d1 = dot3(ab, ap)
+    d2 = dot3(ac, ap)
+
+    if d1 <= 0 and d2 <= 0:
+        d = p - v0
+        return dot3(d, d)
+
+    bp = p - v1
+    d3 = dot3(ab, bp)
+    d4 = dot3(ac, bp)
+
+    if d3 >= 0 and d4 <= d3:
+        d = p - v1
+        return dot3(d, d)
+
+    vc = d1 * d4 - d3 * d2
+    if vc <= 0 and d1 >= 0 and d3 <= 0:
+        denom = d1 - d3
+        v = d1 / denom if denom != 0 else 0.0
+        closest = v0 + v * ab
+        d = p - closest
+        return dot3(d, d)
+
+    cp = p - v2
+    d5 = dot3(ab, cp)
+    d6 = dot3(ac, cp)
+
+    if d6 >= 0 and d5 <= d6:
+        d = p - v2
+        return dot3(d, d)
+
+    vb = d5 * d2 - d1 * d6
+    if vb <= 0 and d2 >= 0 and d6 <= 0:
+        denom = d2 - d6
+        w = d2 / denom if denom != 0 else 0.0
+        closest = v0 + w * ac
+        d = p - closest
+        return dot3(d, d)
+
+    va = d3 * d6 - d5 * d4
+    d4_d3 = d4 - d3
+    d5_d6 = d5 - d6
+    if va <= 0 and d4_d3 >= 0 and d5_d6 >= 0:
+        denom = d4_d3 + d5_d6
+        w = d4_d3 / denom if denom != 0 else 0.0
+        closest = v1 + w * (v2 - v1)
+        d = p - closest
+        return dot3(d, d)
+
+    denom = va + vb + vc
+    if denom == 0:
+        d = p - v0
+        return dot3(d, d)
+    v = vb / denom
+    w = vc / denom
+    closest = v0 + v * ab + w * ac
+    d = p - closest
+    return dot3(d, d)
+
+
+# =============================================================================
+# Proximity detection
+# =============================================================================
 
 
 @njit(cache=True)

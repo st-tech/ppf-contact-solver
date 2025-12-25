@@ -15,10 +15,232 @@ from tqdm.auto import tqdm
 from ._bvh_ import (
     MeshBVH,
     bbox_overlap,
-    edge_triangle_intersect,
-    elements_share_vertex,
-    triangles_coplanar_overlap,
+    dot3,
 )
+
+# =============================================================================
+# Intersection primitives (moved from _bvh_.py)
+# =============================================================================
+
+
+@njit(cache=True)
+def _cross(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    """Compute cross product of two 3D vectors."""
+    result = np.empty(3, dtype=np.float64)
+    result[0] = a[1] * b[2] - a[2] * b[1]
+    result[1] = a[2] * b[0] - a[0] * b[2]
+    result[2] = a[0] * b[1] - a[1] * b[0]
+    return result
+
+
+@njit(cache=True)
+def _point_triangle_inside(
+    p: np.ndarray,
+    d1: np.ndarray,
+    d2: np.ndarray,
+) -> bool:
+    """Check if point p is inside triangle defined by edges d1, d2 from origin.
+
+    Uses least-squares solve for barycentric coordinates:
+    Solves (A^T A) c = A^T p where A = [d1, d2].
+    """
+    a00 = dot3(d1, d1)
+    a01 = dot3(d1, d2)
+    a11 = dot3(d2, d2)
+    b0 = dot3(d1, p)
+    b1 = dot3(d2, p)
+
+    det = a00 * a11 - a01 * a01
+    if det == 0.0:
+        return False
+
+    w0 = (a11 * b0 - a01 * b1) / det
+    w1 = (a00 * b1 - a01 * b0) / det
+    w2 = 1.0 - w0 - w1
+
+    wmin = min(min(w0, w1), w2)
+    wmax = max(max(w0, w1), w2)
+    return wmin >= 0.0 and wmax <= 1.0
+
+
+@njit(cache=True)
+def edge_triangle_intersect(
+    e0: np.ndarray,
+    e1: np.ndarray,
+    v0: np.ndarray,
+    v1: np.ndarray,
+    v2: np.ndarray,
+) -> bool:
+    """Test if edge segment intersects triangle.
+
+    Uses signed distance approach: checks if edge endpoints are on opposite
+    sides of triangle plane, then verifies intersection point is inside triangle.
+
+    Returns True if the edge passes through the triangle interior.
+    """
+    d1 = v1 - v0
+    d2 = v2 - v0
+    a0 = e0 - v0
+    a1 = e1 - v0
+    n = _cross(d1, d2)
+    s1 = dot3(a0, n)
+    s2 = dot3(a1, n)
+    if s1 * s2 < 0.0:
+        t = s1 / (s1 - s2)
+        r = (1.0 - t) * a0 + t * a1
+        return _point_triangle_inside(r, d1, d2)
+    return False
+
+
+@njit(cache=True)
+def _segments_intersect_2d(
+    p1x: float,
+    p1y: float,
+    p2x: float,
+    p2y: float,
+    p3x: float,
+    p3y: float,
+    p4x: float,
+    p4y: float,
+) -> bool:
+    """Check if 2D line segments (p1,p2) and (p3,p4) intersect."""
+    d1x = p2x - p1x
+    d1y = p2y - p1y
+    d2x = p4x - p3x
+    d2y = p4y - p3y
+
+    cross = d1x * d2y - d1y * d2x
+
+    if abs(cross) < 1e-14:
+        return False
+
+    t = ((p3x - p1x) * d2y - (p3y - p1y) * d2x) / cross
+    u = ((p3x - p1x) * d1y - (p3y - p1y) * d1x) / cross
+
+    eps = 1e-10
+    return eps < t < 1 - eps and eps < u < 1 - eps
+
+
+@njit(cache=True)
+def _point_in_triangle_2d(
+    px: float,
+    py: float,
+    v0x: float,
+    v0y: float,
+    v1x: float,
+    v1y: float,
+    v2x: float,
+    v2y: float,
+) -> bool:
+    """Check if point is strictly inside triangle in 2D."""
+
+    def sign(x1, y1, x2, y2, x3, y3):
+        return (x1 - x3) * (y2 - y3) - (x2 - x3) * (y1 - y3)
+
+    d1 = sign(px, py, v0x, v0y, v1x, v1y)
+    d2 = sign(px, py, v1x, v1y, v2x, v2y)
+    d3 = sign(px, py, v2x, v2y, v0x, v0y)
+
+    has_neg = (d1 < 0) or (d2 < 0) or (d3 < 0)
+    has_pos = (d1 > 0) or (d2 > 0) or (d3 > 0)
+
+    return not (has_neg and has_pos)
+
+
+@njit(cache=True)
+def triangles_coplanar_overlap(
+    t0_v0: np.ndarray,
+    t0_v1: np.ndarray,
+    t0_v2: np.ndarray,
+    t1_v0: np.ndarray,
+    t1_v1: np.ndarray,
+    t1_v2: np.ndarray,
+) -> bool:
+    """Check if two coplanar triangles overlap using 2D projection.
+
+    Returns True if triangles overlap (share interior area).
+    """
+    eps = 1e-10
+
+    # Compute normal of first triangle
+    e1 = t0_v1 - t0_v0
+    e2 = t0_v2 - t0_v0
+    n = _cross(e1, e2)
+    n_len = np.sqrt(dot3(n, n))
+    if n_len < eps:
+        return False
+
+    # Check if second triangle is coplanar with first
+    d0 = abs(dot3(n, t1_v0 - t0_v0))
+    d1 = abs(dot3(n, t1_v1 - t0_v0))
+    d2 = abs(dot3(n, t1_v2 - t0_v0))
+
+    # Scale threshold by triangle size
+    thresh = n_len * eps * 100
+    if d0 > thresh or d1 > thresh or d2 > thresh:
+        return False  # Not coplanar
+
+    # Project to 2D - choose axis with largest normal component
+    an = np.array([abs(n[0]), abs(n[1]), abs(n[2])])
+    if an[0] > an[1] and an[0] > an[2]:
+        ax, ay = 1, 2
+    elif an[1] > an[2]:
+        ax, ay = 0, 2
+    else:
+        ax, ay = 0, 1
+
+    # Triangle 0 vertices in 2D
+    u0x, u0y = t0_v0[ax], t0_v0[ay]
+    u1x, u1y = t0_v1[ax], t0_v1[ay]
+    u2x, u2y = t0_v2[ax], t0_v2[ay]
+
+    # Triangle 1 vertices in 2D
+    v0x, v0y = t1_v0[ax], t1_v0[ay]
+    v1x, v1y = t1_v1[ax], t1_v1[ay]
+    v2x, v2y = t1_v2[ax], t1_v2[ay]
+
+    # Test all edge-edge intersections
+    t0_edges = ((u0x, u0y, u1x, u1y), (u1x, u1y, u2x, u2y), (u2x, u2y, u0x, u0y))
+    t1_edges = ((v0x, v0y, v1x, v1y), (v1x, v1y, v2x, v2y), (v2x, v2y, v0x, v0y))
+
+    for e0 in t0_edges:
+        for e1 in t1_edges:
+            if _segments_intersect_2d(
+                e0[0], e0[1], e0[2], e0[3], e1[0], e1[1], e1[2], e1[3]
+            ):
+                return True
+
+    # Check if any vertex of t1 is inside t0
+    if _point_in_triangle_2d(v0x, v0y, u0x, u0y, u1x, u1y, u2x, u2y):
+        return True
+    if _point_in_triangle_2d(v1x, v1y, u0x, u0y, u1x, u1y, u2x, u2y):
+        return True
+    if _point_in_triangle_2d(v2x, v2y, u0x, u0y, u1x, u1y, u2x, u2y):
+        return True
+
+    # Check if any vertex of t0 is inside t1
+    if _point_in_triangle_2d(u0x, u0y, v0x, v0y, v1x, v1y, v2x, v2y):
+        return True
+    if _point_in_triangle_2d(u1x, u1y, v0x, v0y, v1x, v1y, v2x, v2y):
+        return True
+    return _point_in_triangle_2d(u2x, u2y, v0x, v0y, v1x, v1y, v2x, v2y)
+
+
+@njit(cache=True)
+def elements_share_vertex(
+    elem_i: np.ndarray, size_i: int, elem_j: np.ndarray, size_j: int
+) -> bool:
+    """Check if two elements share any vertex."""
+    for i in range(size_i):
+        for j in range(size_j):
+            if elem_i[i] == elem_j[j]:
+                return True
+    return False
+
+
+# =============================================================================
+# Self-intersection detection
+# =============================================================================
 
 
 @njit(cache=True)

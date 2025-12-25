@@ -6,6 +6,7 @@
 """Check for violations of dynamic vertices against invisible colliders (walls and spheres)."""
 
 import warnings
+
 from typing import Optional
 
 import numpy as np
@@ -108,9 +109,10 @@ def _check_wall_violations_parallel(
     """
     n_verts = len(vertices)
     for i in prange(n_verts):
-        if not is_pinned[i]:
-            if _check_wall_violation_single(vertices[i], wall_pos, wall_normal):
-                violations[i] = True
+        if not is_pinned[i] and _check_wall_violation_single(
+            vertices[i], wall_pos, wall_normal
+        ):
+            violations[i] = True
 
     count = 0
     for i in range(n_verts):
@@ -145,11 +147,10 @@ def _check_sphere_violations_parallel(
     """
     n_verts = len(vertices)
     for i in prange(n_verts):
-        if not is_pinned[i]:
-            if _check_sphere_violation_single(
-                vertices[i], sphere_center, sphere_radius, is_inverted, is_hemisphere
-            ):
-                violations[i] = True
+        if not is_pinned[i] and _check_sphere_violation_single(
+            vertices[i], sphere_center, sphere_radius, is_inverted, is_hemisphere
+        ):
+            violations[i] = True
 
     count = 0
     for i in range(n_verts):
@@ -221,7 +222,9 @@ def check_wall_violations(
                     all_violations.append((vi, wall_idx, float(signed_dist)))
 
             if verbose:
-                warnings.warn(f"Wall {wall_idx}: {count} vertex violations")
+                warnings.warn(
+                    f"Wall {wall_idx}: {count} vertex violations", stacklevel=1
+                )
 
     return all_violations
 
@@ -304,7 +307,10 @@ def check_sphere_violations(
                 if is_hemisphere:
                     mode.append("hemisphere")
                 mode_str = f" ({', '.join(mode)})" if mode else ""
-                warnings.warn(f"Sphere {sphere_idx}{mode_str}: {count} vertex violations")
+                warnings.warn(
+                    f"Sphere {sphere_idx}{mode_str}: {count} vertex violations",
+                    stacklevel=1,
+                )
 
     return all_violations
 
