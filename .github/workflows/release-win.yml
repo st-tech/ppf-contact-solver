@@ -381,6 +381,12 @@ jobs:
       # to verify the bundle has no external DLL dependencies
       # ============================================================
 
+      - name: Re-authenticate for build instance cleanup
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
       - name: Terminate build instance
         run: |
           echo "Terminating build instance: ${{ steps.instance.outputs.INSTANCE_ID }}"

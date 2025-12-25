@@ -370,9 +370,8 @@ class MeshManager:
             x, y, _ = v
             vert[i] = _ex * x + _ey * y
         if gen_uv:
-            # Compute UV coordinates (normalized to [0, 1])
-            u_coords = (X_flat - X_flat.min()) / (X_flat.max() - X_flat.min())
-            v_coords = (Y_flat - Y_flat.min()) / (Y_flat.max() - Y_flat.min())
+            u_coords = vert @ _ex
+            v_coords = vert @ _ey
             vert_with_uv = np.zeros((len(vert), 5))
             vert_with_uv[:, :3] = vert
             vert_with_uv[:, 3] = u_coords
