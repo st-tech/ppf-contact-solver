@@ -11,6 +11,9 @@ from typing import Optional
 
 import numpy as np
 
+from ._bvh_ import compute_barycentric_mapping as _compute_barycentric_mapping
+from ._bvh_ import interpolate_surface as _interpolate_surface
+
 
 def create_mobius(
     length_split: int = 70,
@@ -50,17 +53,12 @@ def create_mobius(
     cos_half = np.cos(half_twist)
     sin_half = np.sin(half_twist)
 
-    X = (r + V * cos_half) * np.cos(U)
-    Y = (r + V * cos_half) * np.sin(U)
-    Z = flatness * V * sin_half
-
-    # Apply scale
-    X *= scale
-    Y *= scale
-    Z *= scale
+    x = (r + V * cos_half) * np.cos(U) * scale
+    y = (r + V * cos_half) * np.sin(U) * scale
+    z = flatness * V * sin_half * scale
 
     # Reshape to vertex array
-    vertices = np.stack([X.ravel(), Y.ravel(), Z.ravel()], axis=1)
+    vertices = np.stack([x.ravel(), y.ravel(), z.ravel()], axis=1)
 
     # Generate faces (triangles)
     faces = []
@@ -158,13 +156,13 @@ def _fix_skinny_triangles(
         # Build vertex merge map using union-find
         parent = np.arange(len(vert))
 
-        def find(x):
+        def find(x, parent=parent):
             if parent[x] != x:
-                parent[x] = find(parent[x])
+                parent[x] = find(parent[x], parent)
             return parent[x]
 
-        def union(x, y):
-            px, py = find(x), find(y)
+        def union(x, y, parent=parent):
+            px, py = find(x, parent), find(y, parent)
             if px != py:
                 parent[px] = py
 
@@ -183,9 +181,11 @@ def _fix_skinny_triangles(
         new_tri = inverse[tri]
 
         # Remove degenerate triangles (where two or more vertices are the same)
-        valid = (new_tri[:, 0] != new_tri[:, 1]) & \
-                (new_tri[:, 1] != new_tri[:, 2]) & \
-                (new_tri[:, 2] != new_tri[:, 0])
+        valid = (
+            (new_tri[:, 0] != new_tri[:, 1])
+            & (new_tri[:, 1] != new_tri[:, 2])
+            & (new_tri[:, 2] != new_tri[:, 0])
+        )
         new_tri = new_tri[valid]
 
         vert, tri = new_vert, new_tri
@@ -336,6 +336,7 @@ class MeshManager:
         height: float = 1,
         ex: Optional[list[float]] = None,
         ey: Optional[list[float]] = None,
+        gen_uv: bool = True,
     ) -> "TriMesh":
         """Create a rectangle mesh with a given resolution, width, height, and spanned by the given vectors `ex` and `ey`.
 
@@ -345,9 +346,10 @@ class MeshManager:
             height (float): a height of the rectangle
             ex (list[float]): a 3D vector to span the rectangle
             ey (list[float]): a 3D vector to span the rectangle
+            gen_uv (bool): if True, include UV coordinates in vertices (Nx5), otherwise Nx3
 
         Returns:
-            TriMesh: a rectangle mesh, a pair of vertices and triangles
+            TriMesh: a rectangle mesh, a pair of vertices (Nx5: x,y,z,u,v or Nx3: x,y,z) and triangles
         """
         if ey is None:
             ey = [0, 1, 0]
@@ -367,6 +369,16 @@ class MeshManager:
         for i, v in enumerate(vert):
             x, y, _ = v
             vert[i] = _ex * x + _ey * y
+        if gen_uv:
+            # Compute UV coordinates (normalized to [0, 1])
+            u_coords = (X_flat - X_flat.min()) / (X_flat.max() - X_flat.min())
+            v_coords = (Y_flat - Y_flat.min()) / (Y_flat.max() - Y_flat.min())
+            vert_with_uv = np.zeros((len(vert), 5))
+            vert_with_uv[:, :3] = vert
+            vert_with_uv[:, 3] = u_coords
+            vert_with_uv[:, 4] = v_coords
+        else:
+            vert_with_uv = vert
         n_faces = 2 * (res_x - 1) * (res_y - 1)
         tri = np.zeros((n_faces, 3), dtype=np.int32)
         tri_idx = 0
@@ -383,7 +395,7 @@ class MeshManager:
                     tri[tri_idx] = [v0, v1, v2]
                     tri[tri_idx + 1] = [v1, v3, v2]
                 tri_idx += 2
-        return TriMesh.create(vert, tri, self._cache_dir)
+        return TriMesh.create(vert_with_uv, tri, self._cache_dir)
 
     def square(
         self,
@@ -391,6 +403,7 @@ class MeshManager:
         size: float = 2,
         ex: Optional[list[float]] = None,
         ey: Optional[list[float]] = None,
+        gen_uv: bool = True,
     ) -> "TriMesh":
         """Create a square mesh with a given resolution and size, spanned by the given vectors `ex` and `ey`.
 
@@ -399,6 +412,7 @@ class MeshManager:
             size (float): a diameter of the square
             ex (list[float]): a 3D vector to span the square
             ey (list[float]): a 3D vector to span the square
+            gen_uv (bool): if True, include UV coordinates in vertices (Nx5), otherwise Nx3
 
         Returns:
             TriMesh: a square mesh, a pair of vertices and triangles
@@ -407,7 +421,7 @@ class MeshManager:
             ey = [0, 1, 0]
         if ex is None:
             ex = [1, 0, 0]
-        return self.rectangle(res, size, size, ex, ey)
+        return self.rectangle(res, size, size, ex, ey, gen_uv)
 
     def circle(self, n: int = 32, r: float = 1, ntri: int = 1024) -> "TriMesh":
         """Create a circle mesh
@@ -440,19 +454,44 @@ class MeshManager:
         # Create icosahedron base
         phi = (1.0 + np.sqrt(5.0)) / 2.0  # golden ratio
         verts_list = [
-            [-1, phi, 0], [1, phi, 0], [-1, -phi, 0], [1, -phi, 0],
-            [0, -1, phi], [0, 1, phi], [0, -1, -phi], [0, 1, -phi],
-            [phi, 0, -1], [phi, 0, 1], [-phi, 0, -1], [-phi, 0, 1],
+            [-1, phi, 0],
+            [1, phi, 0],
+            [-1, -phi, 0],
+            [1, -phi, 0],
+            [0, -1, phi],
+            [0, 1, phi],
+            [0, -1, -phi],
+            [0, 1, -phi],
+            [phi, 0, -1],
+            [phi, 0, 1],
+            [-phi, 0, -1],
+            [-phi, 0, 1],
         ]
         # Normalize to unit sphere
         norm = np.sqrt(1 + phi * phi)
         verts_list = [[v[0] / norm, v[1] / norm, v[2] / norm] for v in verts_list]
 
         faces_list = [
-            [0, 11, 5], [0, 5, 1], [0, 1, 7], [0, 7, 10], [0, 10, 11],
-            [1, 5, 9], [5, 11, 4], [11, 10, 2], [10, 7, 6], [7, 1, 8],
-            [3, 9, 4], [3, 4, 2], [3, 2, 6], [3, 6, 8], [3, 8, 9],
-            [4, 9, 5], [2, 4, 11], [6, 2, 10], [8, 6, 7], [9, 8, 1],
+            [0, 11, 5],
+            [0, 5, 1],
+            [0, 1, 7],
+            [0, 7, 10],
+            [0, 10, 11],
+            [1, 5, 9],
+            [5, 11, 4],
+            [11, 10, 2],
+            [10, 7, 6],
+            [7, 1, 8],
+            [3, 9, 4],
+            [3, 4, 2],
+            [3, 2, 6],
+            [3, 6, 8],
+            [3, 8, 9],
+            [4, 9, 5],
+            [2, 4, 11],
+            [6, 2, 10],
+            [8, 6, 7],
+            [9, 8, 1],
         ]
 
         # Subdivide
@@ -469,19 +508,25 @@ class MeshManager:
                     if edge_key not in edge_midpoints:
                         # Compute midpoint and project to sphere
                         p0, p1 = verts_list[v0], verts_list[v1]
-                        mid = [(p0[0] + p1[0]) / 2, (p0[1] + p1[1]) / 2, (p0[2] + p1[2]) / 2]
+                        mid = [
+                            (p0[0] + p1[0]) / 2,
+                            (p0[1] + p1[1]) / 2,
+                            (p0[2] + p1[2]) / 2,
+                        ]
                         length = np.sqrt(mid[0] ** 2 + mid[1] ** 2 + mid[2] ** 2)
                         mid = [mid[0] / length, mid[1] / length, mid[2] / length]
                         edge_midpoints[edge_key] = len(verts_list)
                         verts_list.append(mid)
                     mids.append(edge_midpoints[edge_key])
                 m0, m1, m2 = mids  # midpoints of ab, bc, ca
-                new_faces.extend([
-                    [a, m0, m2],
-                    [m0, b, m1],
-                    [m2, m1, c],
-                    [m0, m1, m2],
-                ])
+                new_faces.extend(
+                    [
+                        [a, m0, m2],
+                        [m0, b, m1],
+                        [m2, m1, c],
+                        [m0, m1, m2],
+                    ]
+                )
             faces_list = new_faces
 
         verts = np.array(verts_list, dtype=np.float64) * r
@@ -649,7 +694,9 @@ class MeshManager:
         """
         import trimesh.creation
 
-        mesh = trimesh.creation.torus(major_radius=r, minor_radius=R, major_sections=n, minor_sections=n)
+        mesh = trimesh.creation.torus(
+            major_radius=r, minor_radius=R, major_sections=n, minor_sections=n
+        )
         return self._from_trimesh(mesh)
 
     def mobius(
@@ -676,7 +723,9 @@ class MeshManager:
         Returns:
             TriMesh: a mobius mesh, a pair of vertices and triangles
         """
-        V, F = create_mobius(length_split, width_split, twists, r, flatness, width, scale)
+        V, F = create_mobius(
+            length_split, width_split, twists, r, flatness, width, scale
+        )
         return TriMesh.create(V, F, self._cache_dir)
 
     def load_tri(self, path: str) -> "TriMesh":
@@ -724,7 +773,9 @@ class MeshManager:
             "bunny": "BunnyMesh",
         }
         if name not in mesh_files:
-            raise ValueError(f"Unknown preset: {name}. Available: {list(mesh_files.keys())}")
+            raise ValueError(
+                f"Unknown preset: {name}. Available: {list(mesh_files.keys())}"
+            )
 
         # Use downloads subdirectory within cache_dir
         downloads_dir = os.path.join(self._cache_dir, "downloads")
@@ -740,9 +791,11 @@ class MeshManager:
         num_try, max_try, success, wait_time = 0, 5, False, 3
         while num_try < max_try:
             try:
-                with urllib.request.urlopen(url, context=ssl_context) as response:
-                    with open(temp_path, "wb") as out_file:
-                        out_file.write(response.read())
+                with (
+                    urllib.request.urlopen(url, context=ssl_context) as response,
+                    open(temp_path, "wb") as out_file,
+                ):
+                    out_file.write(response.read())
                 success = True
                 break
             except Exception as e:
@@ -894,8 +947,8 @@ class Rod(tuple[np.ndarray, np.ndarray]):
     def scale(
         self,
         scale_x: float,
-        scale_y: float | None = None,
-        scale_z: float | None = None,
+        scale_y: Optional[float] = None,
+        scale_z: Optional[float] = None,
     ) -> "Rod":
         """Scale the rod mesh
 
@@ -915,9 +968,6 @@ class Rod(tuple[np.ndarray, np.ndarray]):
             scale_z = scale_x
         scale(self[0], scale_x, scale_y, scale_z)
         return self
-
-
-from ._bvh_ import compute_barycentric_mapping as _compute_barycentric_mapping
 
 
 class TetMesh(tuple[np.ndarray, np.ndarray, np.ndarray]):
@@ -942,8 +992,8 @@ class TetMesh(tuple[np.ndarray, np.ndarray, np.ndarray]):
     def scale(
         self,
         scale_x: float,
-        scale_y: float | None = None,
-        scale_z: float | None = None,
+        scale_y: Optional[float] = None,
+        scale_z: Optional[float] = None,
     ) -> "TetMesh":
         """Scale the tet mesh
 
@@ -985,7 +1035,9 @@ class TetMesh(tuple[np.ndarray, np.ndarray, np.ndarray]):
         """Check if this TetMesh has surface mapping data."""
         return hasattr(self, "surface_map") and self.surface_map is not None
 
-    def interpolate_surface(self, deformed_vert: np.ndarray = None) -> np.ndarray:
+    def interpolate_surface(
+        self, deformed_vert: Optional[np.ndarray] = None
+    ) -> np.ndarray:
         """Interpolate deformed tet mesh vertices back to original surface vertices.
 
         Uses the stored barycentric mapping to compute positions of original surface
@@ -1006,18 +1058,7 @@ class TetMesh(tuple[np.ndarray, np.ndarray, np.ndarray]):
         tri_indices, bary_coords = self.surface_map
         surf_tri = self[1]  # Surface triangles of tet mesh
 
-        # Get triangle vertices for the matched triangles
-        matched_tris = surf_tri[tri_indices]
-        v0 = deformed_vert[matched_tris[:, 0]]
-        v1 = deformed_vert[matched_tris[:, 1]]
-        v2 = deformed_vert[matched_tris[:, 2]]
-
-        # Interpolate using barycentric coordinates
-        return (
-            bary_coords[:, 0:1] * v0 +
-            bary_coords[:, 1:2] * v1 +
-            bary_coords[:, 2:3] * v2
-        )
+        return _interpolate_surface(deformed_vert, surf_tri, tri_indices, bary_coords)
 
 
 class TriMesh(tuple[np.ndarray, np.ndarray]):
@@ -1100,7 +1141,7 @@ class TriMesh(tuple[np.ndarray, np.ndarray]):
                 # trimesh.remesh.subdivide performs midpoint subdivision
                 vertices, faces = self[0], self[1]
                 for _ in range(n):
-                    vertices, faces = trimesh.remesh.subdivide(vertices, faces)
+                    vertices, faces = trimesh.remesh.subdivide(vertices, faces)[:2]
             elif method == "loop":
                 mesh = self._make_trimesh()
                 mesh = mesh.subdivide_loop(iterations=n)
@@ -1189,10 +1230,6 @@ class TriMesh(tuple[np.ndarray, np.ndarray]):
                 )
             return tet_mesh
         else:
-            import contextlib
-            import io
-            import sys
-
             import pytetwild
 
             # edge_length_fac: tetrahedral edge length as fraction of bbox diagonal
@@ -1204,7 +1241,7 @@ class TriMesh(tuple[np.ndarray, np.ndarray]):
                 # On Windows embedded Python, output redirection can cause hangs
                 # Just run pytetwild without suppression - verbose but works
                 print("Running pytetwild...")
-                vert, tet = pytetwild.tetrahedralize(
+                vert, tet = pytetwild.tetrahedralize(  # type: ignore[attr-defined]
                     self[0], self[1], edge_length_fac=edge_length_fac, optimize=optimize
                 )
                 # Clean up fTetWild temp file
@@ -1220,8 +1257,11 @@ class TriMesh(tuple[np.ndarray, np.ndarray]):
                 try:
                     os.dup2(devnull_fd, 1)
                     os.dup2(devnull_fd, 2)
-                    vert, tet = pytetwild.tetrahedralize(
-                        self[0], self[1], edge_length_fac=edge_length_fac, optimize=optimize
+                    vert, tet = pytetwild.tetrahedralize(  # type: ignore[attr-defined]
+                        self[0],
+                        self[1],
+                        edge_length_fac=edge_length_fac,
+                        optimize=optimize,
                     )
                 finally:
                     os.dup2(old_stdout_fd, 1)
@@ -1250,9 +1290,13 @@ class TriMesh(tuple[np.ndarray, np.ndarray]):
             # Extract surface triangles from tetrahedra
             # A surface face is shared by exactly one tetrahedron
             from collections import Counter
+
             # For each tet face, store (face_indices, opposite_vertex_index)
             face_indices = [
-                ((0, 1, 2), 3), ((0, 1, 3), 2), ((0, 2, 3), 1), ((1, 2, 3), 0)
+                ((0, 1, 2), 3),
+                ((0, 1, 3), 2),
+                ((0, 2, 3), 1),
+                ((1, 2, 3), 0),
             ]
             all_faces = []
             face_to_data = {}  # map sorted face to (original_face, opposite_vertex)
@@ -1303,7 +1347,9 @@ class TriMesh(tuple[np.ndarray, np.ndarray]):
                 map_tri_indices=tri_indices,
                 map_bary_coords=bary_coords,
             )
-            return TetMesh((vert, tri, tet)).set_surface_mapping(tri_indices, bary_coords)
+            return TetMesh((vert, tri, tet)).set_surface_mapping(
+                tri_indices, bary_coords
+            )
 
     def recompute_hash(self) -> "TriMesh":
         """Recompute the hash of the mesh"""
@@ -1359,8 +1405,8 @@ class TriMesh(tuple[np.ndarray, np.ndarray]):
     def scale(
         self,
         scale_x: float,
-        scale_y: float | None = None,
-        scale_z: float | None = None,
+        scale_y: Optional[float] = None,
+        scale_z: Optional[float] = None,
     ) -> "TriMesh":
         """Scale the triangle mesh
 

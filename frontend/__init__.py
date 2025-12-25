@@ -47,7 +47,8 @@ __all__ = [
     "sdf",
 ]
 
-from ._app_ import App, get_cache_dir
+from . import _sdf_ as sdf
+from ._app_ import App
 from ._asset_ import AssetFetcher, AssetManager, AssetUploader
 from ._decoder_ import BlenderApp, ParamDecoder, SceneDecoder
 from ._extra_ import Extra
@@ -75,5 +76,4 @@ from ._session_ import (
     SessionManager,
     SessionOutput,
 )
-from ._utils_ import Utils
-from . import _sdf_ as sdf
+from ._utils_ import Utils, get_cache_dir

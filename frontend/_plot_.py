@@ -93,8 +93,8 @@ class Plot:
 
     def update(
         self,
-        vert: np.ndarray | None = None,
-        color: np.ndarray | None = None,
+        vert: Optional[np.ndarray] = None,
+        color: Optional[np.ndarray] = None,
         recompute_normals: bool = True,
     ):
         if vert is not None:
@@ -308,31 +308,31 @@ class Plot:
 
 @dataclass
 class PlotBuffer:
-    vert: p3s.BufferAttribute | None = None
-    tri: p3s.BufferAttribute | None = None
-    color: p3s.BufferAttribute | None = None
-    pts: p3s.BufferAttribute | None = None
-    seg: p3s.BufferAttribute | None = None
+    vert: Optional[p3s.BufferAttribute] = None
+    tri: Optional[p3s.BufferAttribute] = None
+    color: Optional[p3s.BufferAttribute] = None
+    pts: Optional[p3s.BufferAttribute] = None
+    seg: Optional[p3s.BufferAttribute] = None
 
 
 @dataclass
 class PlotGeometry:
-    tri: p3s.BufferGeometry | None = None
-    pts: p3s.BufferGeometry | None = None
-    seg: p3s.BufferGeometry | None = None
+    tri: Optional[p3s.BufferGeometry] = None
+    pts: Optional[p3s.BufferGeometry] = None
+    seg: Optional[p3s.BufferGeometry] = None
 
 
 @dataclass
 class PlotObject:
-    tri: p3s.Mesh | None = None
-    pts: p3s.Points | None = None
-    seg: p3s.LineSegments | None = None
-    wireframe: p3s.Mesh | None = None
-    light_0: p3s.DirectionalLight | None = None
-    light_1: p3s.AmbientLight | None = None
-    camera: p3s.PerspectiveCamera | None = None
-    scene: p3s.Scene | None = None
-    renderer: p3s.Renderer | None = None
+    tri: Optional[p3s.Mesh] = None
+    pts: Optional[p3s.Points] = None
+    seg: Optional[p3s.LineSegments] = None
+    wireframe: Optional[p3s.Mesh] = None
+    light_0: Optional[p3s.DirectionalLight] = None
+    light_1: Optional[p3s.AmbientLight] = None
+    camera: Optional[p3s.PerspectiveCamera] = None
+    scene: Optional[p3s.Scene] = None
+    renderer: Optional[p3s.Renderer] = None
 
 
 @dataclass
@@ -344,7 +344,7 @@ class PlotParam:
     pts_scale: float = 0.004
     pts_color: str = "white"
     default_color: np.ndarray = field(default_factory=lambda: np.array([1.0, 0.8, 0.2]))
-    lookat: list[float] | None = None
+    lookat: Optional[list[float]] = None
     eyeup: float = 0.0
     fov: float = 50.0
     width: int = 600
@@ -523,8 +523,8 @@ class ThreejsPlotEngine:
 
     def update(
         self,
-        vert: np.ndarray | None = None,
-        color: np.ndarray | None = None,
+        vert: Optional[np.ndarray] = None,
+        color: Optional[np.ndarray] = None,
         recompute_normals: bool = True,
     ):
         if vert is not None:
@@ -595,8 +595,8 @@ class RasterizerEngine:
 
     def update(
         self,
-        vert: np.ndarray | None = None,
-        color: np.ndarray | None = None,
+        vert: Optional[np.ndarray] = None,
+        color: Optional[np.ndarray] = None,
         recompute_normals: bool = True,  # unused, for API compatibility
     ):
         if vert is not None:

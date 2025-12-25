@@ -8,18 +8,22 @@ import colorsys
 import os
 import pickle
 import shutil
+import warnings
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Optional
+from typing import Any, Optional, Union
 
 import numpy as np
 
-from tqdm import tqdm
+from tqdm.auto import tqdm
 
 from ._asset_ import AssetManager
+from ._intersection_ import check_self_intersection
+from ._invisible_collider_ import check_invisible_collider_violations
 from ._param_ import ParamHolder, object_param
 from ._plot_ import Plot, PlotManager
+from ._proximity_ import check_contact_offset_violation
 from ._render_ import MitsubaRenderer, Rasterizer
 from ._utils_ import Utils
 
@@ -29,7 +33,7 @@ EPS = 1e-3
 class SceneManager:
     """SceneManager class. Use this to manage scenes."""
 
-    def __init__(self, plot: PlotManager | None, asset: AssetManager):
+    def __init__(self, plot: Optional[PlotManager], asset: AssetManager):
         """Initialize the scene manager."""
         self._plot = plot
         self._asset = asset
@@ -751,7 +755,7 @@ class PinHolder:
         return self
 
     @property
-    def data(self) -> PinData | None:
+    def data(self) -> Optional[PinData]:
         """Get the pinning data.
 
         Returns:
@@ -822,7 +826,7 @@ class FixedScene:
 
     def __init__(
         self,
-        plot: PlotManager | None,
+        plot: Optional[PlotManager],
         name: str,
         map_by_name: dict[str, list[int]],
         displacement: np.ndarray,
@@ -845,6 +849,11 @@ class FixedScene:
         rod_count: int,
         shell_count: int,
         merge: bool,
+        tri_is_collider: np.ndarray,
+        rod_is_collider: np.ndarray,
+        pinned_vertices: Optional[set[int]] = None,
+        static_vert_for_check: Optional[np.ndarray] = None,
+        static_tri_for_check: Optional[np.ndarray] = None,
     ):
         """Initialize the fixed scene.
 
@@ -871,6 +880,11 @@ class FixedScene:
             shell_vert_range (tuple[int, int]): The index range of the shell vertices.
             rod_count (int): The number of rod elements.
             shell_count (int): The number of shell elements.
+            tri_is_collider (np.ndarray): Boolean array indicating collider triangles.
+            rod_is_collider (np.ndarray): Boolean array indicating collider rod edges.
+            pinned_vertices (Optional[set[int]]): Set of pinned vertex indices. Used to skip checking pinned vertices against invisible colliders.
+            static_vert_for_check (Optional[np.ndarray]): Static mesh vertices for intersection check.
+            static_tri_for_check (Optional[np.ndarray]): Static mesh triangles for intersection check.
         """
 
         self._map_by_name = map_by_name
@@ -905,6 +919,12 @@ class FixedScene:
         self._shell_count = shell_count
         self._has_dyn_color = any(entry != EnumColor.NONE for entry in dyn_face_color)
 
+        # Violation flags - set during validation checks
+        self._has_self_intersection = False
+        self._has_contact_offset_violation = False
+        self._has_wall_violation = False
+        self._has_sphere_violation = False
+
         assert len(self._vert[0]) == len(self._color)
         assert len(self._vert[1]) == len(self._color)
         assert len(self._tri) == len(self._dyn_face_color)
@@ -925,6 +945,145 @@ class FixedScene:
                 assert len(value) == len(self._tet), (
                     f"{key} has {len(value)} entries, but tet has {len(self._tet)} tets"
                 )
+
+        # Check for self-intersections (including static colliders)
+        if len(self._tri) > 0:
+            dynamic_verts = self._vert[1] + self._displacement[self._vert[0]]
+
+            # Combine dynamic and static meshes for intersection check
+            if (
+                static_vert_for_check is not None
+                and static_tri_for_check is not None
+                and len(static_tri_for_check) > 0
+            ):
+                n_dyn_verts = len(dynamic_verts)
+                combined_verts = np.vstack([dynamic_verts, static_vert_for_check])
+                combined_tris = np.vstack(
+                    [self._tri, static_tri_for_check + n_dyn_verts]
+                )
+                # Static triangles are all colliders (fully pinned)
+                static_is_collider = np.ones(len(static_tri_for_check), dtype=bool)
+                combined_is_collider = np.concatenate(
+                    [tri_is_collider, static_is_collider]
+                )
+            else:
+                combined_verts = dynamic_verts
+                combined_tris = self._tri
+                combined_is_collider = tri_is_collider
+
+            intersection_pairs = check_self_intersection(
+                combined_verts, combined_tris, combined_is_collider, verbose=True
+            )
+            if len(intersection_pairs) > 0:
+                self._has_self_intersection = True
+                warnings.warn(
+                    f"Mesh has {len(intersection_pairs)} self-intersections. Self-intersecting meshes are not allowed for simulation.",
+                    stacklevel=1,
+                )
+
+        # Check for contact-offset separation violations (excluding collider elements)
+        n_tris = len(self._tri)
+        n_rods = len(self._rod)
+        tri_offset = self._tri_param.get("contact-offset", [])
+        rod_offset = self._rod_param.get("contact-offset", [])
+        has_tri_offset = tri_offset and any(o > 0 for o in tri_offset)
+        has_rod_offset = rod_offset and any(o > 0 for o in rod_offset)
+
+        if (n_tris > 0 or n_rods > 0) and (has_tri_offset or has_rod_offset):
+            dynamic_verts = self._vert[1] + self._displacement[self._vert[0]]
+
+            # Build combined is_collider array: triangles first, then rods
+            combined_is_collider = np.concatenate(
+                [
+                    tri_is_collider
+                    if len(tri_is_collider)
+                    else np.zeros(0, dtype=bool),
+                    rod_is_collider
+                    if len(rod_is_collider)
+                    else np.zeros(0, dtype=bool),
+                ]
+            )
+
+            # Build combined contact_offset array: triangles first, then rods
+            tri_offset_arr = (
+                np.array(tri_offset, dtype=np.float64)
+                if tri_offset
+                else np.zeros(n_tris, dtype=np.float64)
+            )
+            rod_offset_arr = (
+                np.array(rod_offset, dtype=np.float64)
+                if rod_offset
+                else np.zeros(n_rods, dtype=np.float64)
+            )
+            combined_offset = np.concatenate([tri_offset_arr, rod_offset_arr])
+
+            violations = check_contact_offset_violation(
+                dynamic_verts,
+                F=self._tri if n_tris > 0 else None,
+                E=self._rod if n_rods > 0 else None,
+                is_collider=combined_is_collider,
+                contact_offset=combined_offset,
+                verbose=True,
+            )
+            if len(violations) > 0:
+                self._has_contact_offset_violation = True
+                # Determine element types for error message
+                ei, ej = violations[0][0], violations[0][1]
+                ei_type = "triangle" if ei < n_tris else "edge"
+                ej_type = "triangle" if ej < n_tris else "edge"
+                ei_idx = ei if ei < n_tris else ei - n_tris
+                ej_idx = ej if ej < n_tris else ej - n_tris
+                msg = (
+                    f"Dynamic mesh has {len(violations)} element pairs closer than "
+                    f"their contact-offset separation. First violation: {ei_type} "
+                    f"{ei_idx} and {ej_type} {ej_idx}."
+                )
+                warnings.warn(msg, stacklevel=1)
+
+        # Check for invisible collider violations (walls and spheres)
+        if wall or sphere:
+            dynamic_verts = self._vert[1] + self._displacement[self._vert[0]]
+            wall_violations, sphere_violations = check_invisible_collider_violations(
+                dynamic_verts,
+                wall,
+                sphere,
+                pinned_vertices,
+                verbose=True,
+            )
+
+            if wall_violations:
+                self._has_wall_violation = True
+                vi, wall_idx, signed_dist = wall_violations[0]
+                msg = (
+                    f"Dynamic mesh has {len(wall_violations)} vertices violating wall constraints. "
+                    f"First violation: vertex {vi} is {-signed_dist:.6f} units on the wrong side "
+                    f"of wall {wall_idx}."
+                )
+                warnings.warn(msg, stacklevel=1)
+
+            if sphere_violations:
+                self._has_sphere_violation = True
+                vi, sphere_idx, dist_to_surface = sphere_violations[0]
+                sph = sphere[sphere_idx]
+                mode = []
+                if sph.is_inverted:
+                    mode.append("inverted")
+                if sph.is_hemisphere:
+                    mode.append("hemisphere")
+                mode_str = f" ({', '.join(mode)})" if mode else ""
+                if sph.is_inverted:
+                    msg = (
+                        f"Dynamic mesh has {len(sphere_violations)} vertices violating sphere constraints. "
+                        f"First violation: vertex {vi} is outside inverted sphere{mode_str} {sphere_idx} "
+                        f"(distance to surface: {-dist_to_surface:.6f})."
+                    )
+                else:
+                    msg = (
+                        f"Dynamic mesh has {len(sphere_violations)} vertices violating sphere constraints. "
+                        f"First violation: vertex {vi} is inside sphere{mode_str} {sphere_idx} "
+                        f"(penetration depth: {dist_to_surface:.6f})."
+                    )
+                warnings.warn(msg, stacklevel=1)
 
         if len(self._tri):
             self._area = np.zeros(len(self._tri))
@@ -1220,6 +1379,29 @@ class FixedScene:
         """Get the triangle parameters."""
         return self._tri_param
 
+    @property
+    def has_violations(self) -> bool:
+        """Check if the scene has any violations that prevent simulation."""
+        return (
+            self._has_self_intersection
+            or self._has_contact_offset_violation
+            or self._has_wall_violation
+            or self._has_sphere_violation
+        )
+
+    def get_violation_messages(self) -> list[str]:
+        """Get a list of violation messages for the scene."""
+        messages = []
+        if self._has_self_intersection:
+            messages.append("Scene has self-intersections")
+        if self._has_contact_offset_violation:
+            messages.append("Scene has contact-offset violations")
+        if self._has_wall_violation:
+            messages.append("Scene has wall constraint violations")
+        if self._has_sphere_violation:
+            messages.append("Scene has sphere constraint violations")
+        return messages
+
     def report(self) -> "FixedScene":
         """Print a summary of the scene."""
         data = {}
@@ -1296,7 +1478,9 @@ class FixedScene:
             vert_intensity *= self._face_to_vert_weights
 
             vert_face_color = np.zeros((num_verts, 3))
-            np.add.at(vert_face_color, self._tri.ravel(), np.repeat(face_color, 3, axis=0))
+            np.add.at(
+                vert_face_color, self._tri.ravel(), np.repeat(face_color, 3, axis=0)
+            )
             vert_face_color *= self._face_to_vert_weights[:, None]
 
             color = (1.0 - vert_intensity[:, None]) * self._color + vert_intensity[
@@ -1416,7 +1600,7 @@ class FixedScene:
         """
 
         steps = 14
-        pbar = tqdm(total=steps, desc="build session", ncols=70)
+        pbar = tqdm(total=steps, desc="build session")
 
         if os.path.exists(path):
             if delete_exist:
@@ -1811,7 +1995,8 @@ class FixedScene:
                     tri = self._static_tri + len(vert)
                 vert = np.vstack([vert, static_vert])
                 color = np.vstack([color, static_color])
-                assert len(color) == len(vert)
+            assert vert is not None and color is not None
+            assert len(color) == len(vert)
 
             if options["stitch"] and len(self._stitch_ind) and len(self._stitch_w):
                 stitch_vert, stitch_edge = [], []
@@ -1939,13 +2124,30 @@ class ObjectAdder:
         else:
             obj = Object(self._scene.asset_manager, mesh_name)
             self._scene.object_dict[ref_name] = obj
+            # Auto-set UV from asset if available
+            asset_data = self._scene.asset_manager.fetch.get(mesh_name)
+            if "UV" in asset_data and "F" in asset_data:
+                vertex_uv = asset_data["UV"]
+                faces = asset_data["F"]
+                # Convert vertex UV to per-face UV
+                face_uv = []
+                for f in faces:
+                    uv_per_face = np.array(
+                        [
+                            vertex_uv[f[0]],
+                            vertex_uv[f[1]],
+                            vertex_uv[f[2]],
+                        ]
+                    )
+                    face_uv.append(uv_per_face)
+                obj.set_uv(face_uv)
             return obj
 
 
 class Scene:
     """A scene class."""
 
-    def __init__(self, name: str, plot: PlotManager | None, asset: AssetManager):
+    def __init__(self, name: str, plot: Optional[PlotManager], asset: AssetManager):
         self._name = name
         self._plot = plot
         self._asset = asset
@@ -2038,7 +2240,7 @@ class Scene:
         Returns:
             FixedScene: The built fixed scene.
         """
-        pbar = tqdm(total=11, desc="build scene", ncols=70)
+        pbar = tqdm(total=11, desc="build scene")
         for _, obj in self._object.items():
             obj.update_static()
 
@@ -2169,14 +2371,39 @@ class Scene:
                 concat_vel[map] = obj.object_velocity
                 concat_color[map] = obj.get("color")
 
+        # Collect pinned vertices per object for per-element collider check
+        pinned_verts_by_obj: dict[str, set[int]] = {}
+        for name, obj in dyn_objects:
+            if obj.pin_list:
+                pinned_verts = set()
+                for p in obj.pin_list:
+                    pinned_verts.update(p.index)
+                pinned_verts_by_obj[name] = pinned_verts
+            else:
+                pinned_verts_by_obj[name] = set()
+
+        def is_elem_collider(name: str, elem_verts: list[int]) -> bool:
+            """Check if all vertices of an element are pinned."""
+            pinned = pinned_verts_by_obj.get(name, set())
+            return all(v in pinned for v in elem_verts)
+
+        concat_rod_is_collider = []
+        concat_tri_is_collider = []
+
         pbar.update(1)
         for name, obj in dyn_objects:
             map = map_by_name[name]
             if obj.obj_type == "rod":
                 edge = obj.get("E")
-                t = vec_map(map, edge)
-                concat_rod.extend(t)
-                extend_param(obj.param, concat_rod_param, len(t))
+                if edge is not None:
+                    t = vec_map(map, edge)
+                    concat_rod.extend(t)
+                    # Check each edge: collider only if both vertices are pinned
+                    for e in edge:
+                        concat_rod_is_collider.append(
+                            is_elem_collider(name, e.tolist())
+                        )
+                    extend_param(obj.param, concat_rod_param, len(t))
         rod_count = len(concat_rod)
 
         pbar.update(1)
@@ -2192,6 +2419,9 @@ class Scene:
                     concat_uv.extend([np.zeros((2, 3), dtype=np.float32)] * len(t))
                 concat_dyn_tri_color.extend([obj.dynamic_color] * len(t))
                 concat_dyn_tri_intensity.extend([obj.dynamic_intensity] * len(t))
+                # Check each triangle: collider only if all 3 vertices are pinned
+                for face in tri:
+                    concat_tri_is_collider.append(is_elem_collider(name, face.tolist()))
                 extend_param(obj.param, concat_tri_param, len(t))
         shell_count = len(concat_tri)
 
@@ -2204,6 +2434,9 @@ class Scene:
                 concat_tri.extend(t)
                 concat_dyn_tri_color.extend([obj.dynamic_color] * len(t))
                 concat_dyn_tri_intensity.extend([obj.dynamic_intensity] * len(t))
+                # Check each triangle: collider only if all 3 vertices are pinned
+                for face in tri:
+                    concat_tri_is_collider.append(is_elem_collider(name, face.tolist()))
                 extend_param(
                     obj.param,
                     concat_tri_param,
@@ -2242,6 +2475,11 @@ class Scene:
                 concat_stitch_ind.extend(vec_map(map, stitch_ind))
                 concat_stitch_w.extend(stitch_w)
 
+        # Compute global set of pinned vertices for invisible collider checks
+        global_pinned_vertices: set[int] = set()
+        for pin in concat_pin:
+            global_pinned_vertices.update(pin.index)
+
         pbar.update(1)
         for name, obj in self._object.items():
             if obj.static:
@@ -2259,6 +2497,7 @@ class Scene:
                         len(tri),
                     )
         pbar.update(1)
+        pbar.close()
 
         for key in ["model"]:
             concat_rod_param[key] = []
@@ -2282,6 +2521,16 @@ class Scene:
             concat_tri_param[key] = []
             concat_tet_param[key] = []
             concat_static_param[key] = []
+
+        # Compute static vertices with displacement for intersection check
+        static_vert_for_check = None
+        static_tri_for_check = None
+        if len(concat_static_vert) > 0 and len(concat_static_tri) > 0:
+            static_vert_dmap_arr = np.array(concat_static_vert_dmap)
+            static_vert_for_check = (
+                np.array(concat_static_vert) + concat_displacement[static_vert_dmap_arr]
+            )
+            static_tri_for_check = np.array(concat_static_tri)
 
         fixed = FixedScene(
             self._plot,
@@ -2307,6 +2556,11 @@ class Scene:
             rod_count,
             shell_count,
             merge,
+            np.array(concat_tri_is_collider, dtype=bool),
+            np.array(concat_rod_is_collider, dtype=bool),
+            global_pinned_vertices if global_pinned_vertices else None,
+            static_vert_for_check,
+            static_tri_for_check,
         )
 
         if len(concat_pin):
@@ -2326,7 +2580,6 @@ class Scene:
                 np.array(concat_stitch_w),
             )
 
-        pbar.close()
         return fixed
 
 
@@ -2371,12 +2624,13 @@ class Object:
     @property
     def object_color(self) -> Optional[list[float]]:
         """Get the object color."""
-        if self._color is None:
+        color = self._color
+        if color is None:
             return None
-        elif isinstance(self._color, np.ndarray):
-            return self._color.tolist()
+        elif isinstance(color, list):
+            return color
         else:
-            return self._color
+            return color.tolist()
 
     @property
     def position(self) -> list[float]:
@@ -2413,7 +2667,7 @@ class Object:
         self._at = [0.0, 0.0, 0.0]
         self._scale = 1.0
         self._rotation = np.eye(3)
-        self._color = None
+        self._color: Union[np.ndarray, list[float], None] = None
         self._dyn_color = EnumColor.NONE
         self._dyn_intensity = 1.0
         self._static_color = [0.75, 0.75, 0.75]
@@ -2833,7 +3087,7 @@ class Object:
                 vert_flag[i] = 1
         self._static = np.sum(vert_flag) == len(vert)
 
-    def pin(self, ind: list[int] | None = None) -> PinHolder:
+    def pin(self, ind: Optional[list[int]] = None) -> PinHolder:
         """Set specified vertices as pinned.
 
         Args:

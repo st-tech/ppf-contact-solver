@@ -19,7 +19,6 @@ space = 0.25
 for i in range(5):
     obj = scene.add("sheet")
     obj.at(i * space, 0, 0)
-    obj.direction([0, 1, 0], [0, 0, 1])
     obj.pin(obj.grab([0, 1, 0]))
     obj.param.set("strain-limit", 0.05)
 
