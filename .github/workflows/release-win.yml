@@ -7,14 +7,20 @@ name: Build Windows
 
 on:
   workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run (build only, no release)'
+        required: true
+        type: boolean
+        default: true
 
 jobs:
-  build-windows:
-    name: Build Windows Bundle
+  release-windows:
+    name: Build and Release Windows Bundle
     runs-on: ubuntu-latest
     permissions:
       id-token: write
-      contents: read
+      contents: write
 
     env:
       AWS_REGION: us-east-2
@@ -23,12 +29,15 @@ jobs:
       USER: Administrator
 
     steps:
-      - name: Get version
+      - name: Get version and mode
         id: version
         run: |
           VERSION="$(TZ='Asia/Tokyo' date '+%Y-%m-%d-%H-%M')"
+          DRY_RUN="${{ github.event.inputs.dry_run }}"
           echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+          echo "DRY_RUN=$DRY_RUN" >> $GITHUB_OUTPUT
           echo "Version: $VERSION"
+          echo "Dry run: $DRY_RUN"
 
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -372,6 +381,12 @@ jobs:
       # to verify the bundle has no external DLL dependencies
       # ============================================================
 
+      - name: Re-authenticate for build instance cleanup
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
       - name: Terminate build instance
         run: |
           echo "Terminating build instance: ${{ steps.instance.outputs.INSTANCE_ID }}"
@@ -581,7 +596,34 @@ jobs:
               "IpProtocol=tcp,FromPort=${{ steps.verify-security-group.outputs.SSH_PORT }},ToPort=${{ steps.verify-security-group.outputs.SSH_PORT }},IpRanges=[{CidrIp=${{ steps.verify-security-group.outputs.RUNNER_IP_CIDR }}}]" \
             --region "$AWS_REGION" 2>&1 || echo "Rule may have been removed"
 
-      - name: Extract archive for artifact
+      # ============================================================
+      # PHASE 3: Release (if not dry run)
+      # ============================================================
+
+      - name: Create version tag
+        if: steps.version.outputs.DRY_RUN != 'true'
+        run: |
+          VERSION="${{ steps.version.outputs.VERSION }}"
+          echo "Creating tag $VERSION..."
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "$VERSION" -m "Release $VERSION"
+          git push origin "$VERSION"
+
+      - name: Create GitHub Release
+        if: steps.version.outputs.DRY_RUN != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="${{ steps.version.outputs.VERSION }}"
+          echo "Creating GitHub Release for $VERSION..."
+          gh release create "$VERSION" \
+            --title "ZOZO's Contact Solver $VERSION" \
+            --generate-notes \
+            "ppf-contact-solver-${VERSION}-win64.zip#Windows Bundle (win64)"
+
+      - name: Extract archive for artifact (dry run)
+        if: steps.version.outputs.DRY_RUN == 'true'
         run: |
           VERSION="${{ steps.version.outputs.VERSION }}"
           mkdir -p artifact-contents
@@ -606,18 +648,20 @@ jobs:
           fi
           echo "Archive extracted successfully"
 
-      - name: Upload artifact
+      - name: Upload artifact (dry run)
+        if: steps.version.outputs.DRY_RUN == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.version.outputs.VERSION }}
           path: artifact-contents/
           retention-days: 7
 
-      - name: Build summary
+      - name: Dry run summary
+        if: steps.version.outputs.DRY_RUN == 'true'
         run: |
           VERSION="${{ steps.version.outputs.VERSION }}"
-          echo "## BUILD COMPLETE"
-          echo "Build and verification succeeded."
+          echo "## DRY RUN COMPLETE"
+          echo "Build and verification succeeded. No release was created."
           echo ""
           echo "Verification: Bundle tested on clean Windows instance with only NVIDIA driver"
           echo "              (no CUDA toolkit, no build tools, no Chocolatey, no Git)"
@@ -702,7 +746,7 @@ jobs:
       - name: Summary
         if: always()
         run: |
-          echo "## Build Summary"
+          echo "## Release Build Summary"
           echo "- Version: ${{ steps.version.outputs.VERSION }}"
           echo "- Region: $AWS_REGION"
           echo "- Instance Type: $INSTANCE_TYPE"
@@ -712,3 +756,4 @@ jobs:
           echo "## Workflow Phases"
           echo "1. Build Phase: Compiled on instance with CUDA 12.8 and build tools"
           echo "2. Verification Phase: Tested on clean instance with only NVIDIA driver"
+          echo "3. Release Phase: Created GitHub release (if not dry run)"
