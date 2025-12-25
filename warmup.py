@@ -673,7 +673,8 @@ Commands:
     requirements   Generate requirements.txt
 
   Testing:
-    fast_check [N] Run fast check on example notebooks (optional: limit to N)
+    run_tests      Run frontend unit tests (BVH, self-intersection, proximity)
+    fast_check [N] Run unit tests and example notebooks (optional: limit notebooks to N)
 
   Maintenance:
     clear_cache    Clear ppf-cts cache directories
@@ -717,7 +718,16 @@ def fast_check(limit=None):
         print("Please run 'python3 warmup.py' first to set up the environment.")
         return 1
 
-    # Clear caches before running tests
+    # Run unit tests first
+    print("=== Running Unit Tests ===")
+    print()
+    from frontend.tests._runner_ import run_all_tests
+    if not run_all_tests():
+        print("Unit tests failed. Aborting fast_check.")
+        return 1
+    print()
+
+    # Clear caches before running notebook tests
     clear_cache()
     print()
 
@@ -1154,6 +1164,11 @@ if __name__ == "__main__":
             sys.exit(clear_cache())
         elif mode == "clear_all":
             sys.exit(clear_all())
+        elif mode == "run_tests":
+            from frontend.tests._runner_ import run_all_tests
+
+            success = run_all_tests()
+            sys.exit(0 if success else 1)
         elif mode == "fast_check":
             # Parse optional limit argument (e.g., fast_check 3)
             limit = int(args[1]) if len(args) > 1 else None

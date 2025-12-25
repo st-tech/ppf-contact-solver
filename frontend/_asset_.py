@@ -75,18 +75,26 @@ class AssetUploader:
 
         Args:
             name (str): The name of the asset.
-            V (np.ndarray): The vertices (#x3) of the mesh.
+            V (np.ndarray): The vertices (#x3 or #x5) of the mesh.
+                If #x5, columns 0-2 are xyz coordinates, columns 3-4 are UV coordinates.
             F (np.ndarray): The triangle elements (#x3) of the mesh.
         """
-        if V.shape[1] != 3:
-            raise Exception("V must have 3 columns")
+        if V.shape[1] not in (3, 5):
+            raise Exception("V must have 3 or 5 columns")
         elif F.shape[1] != 3:
             raise Exception("F must have 3 columns")
         if name in self._manager.mesh:
             raise Exception(f"name '{name}' already exists")
         else:
-            self.check_bounds(V, F)
-            self._manager.mesh[name] = ("tri", V, F)
+            if V.shape[1] == 5:
+                # Extract xyz and UV coordinates
+                V_xyz = V[:, :3].copy()
+                V_uv = V[:, 3:5].copy()
+                self.check_bounds(V_xyz, F)
+                self._manager.mesh[name] = ("tri", V_xyz, F, V_uv)
+            else:
+                self.check_bounds(V, F)
+                self._manager.mesh[name] = ("tri", V, F, None)
 
     def tet(self, name: str, V: np.ndarray, F: np.ndarray, T: np.ndarray):
         """Upload a tetrahedral mesh to the asset manager.
@@ -175,7 +183,7 @@ class AssetFetcher:
             name (str): The name of the asset.
 
         Returns:
-            dict[str, np.ndarray]: The asset data, containing the vertices and elements, such as V, F, T, E, Ind, W.
+            dict[str, np.ndarray]: The asset data, containing the vertices and elements, such as V, F, T, E, Ind, W, UV.
         """
         result = {}
         if name not in self._manager.mesh:
@@ -185,6 +193,8 @@ class AssetFetcher:
             if mesh[0] == "tri":
                 result["V"] = mesh[1]
                 result["F"] = mesh[2]
+                if len(mesh) > 3 and mesh[3] is not None:
+                    result["UV"] = mesh[3]
             elif mesh[0] == "tet":
                 result["V"] = mesh[1]
                 result["F"] = mesh[2]

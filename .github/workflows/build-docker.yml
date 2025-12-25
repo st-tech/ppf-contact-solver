@@ -37,6 +37,6 @@ jobs:
       run: |
         docker run --rm --gpus all \
           ${{ env.REGISTRY }}/${{ github.repository }}-compiled:latest \
-          /bin/sh -c "cd /root/ppf-contact-solver && python3 warmup.py fast_check && python3 warmup.py clear_all"
+          /bin/sh -c "cd /root/ppf-contact-solver && /root/.local/share/ppf-cts/venv/bin/python warmup.py fast_check && /root/.local/share/ppf-cts/venv/bin/python warmup.py clear_all"
     - name: Push Compiled Image
       run: docker push ${{ env.REGISTRY }}/${{ github.repository }}-compiled:latest

@@ -32,12 +32,10 @@ jobs:
       - name: Get version and mode
         id: version
         run: |
-          BRANCH="${{ github.ref_name }}"
-          VERSION="ver-${BRANCH}-$(TZ='Asia/Tokyo' date '+%Y-%m-%d-%H-%M')"
+          VERSION="$(TZ='Asia/Tokyo' date '+%Y-%m-%d-%H-%M')"
           DRY_RUN="${{ github.event.inputs.dry_run }}"
           echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
           echo "DRY_RUN=$DRY_RUN" >> $GITHUB_OUTPUT
-          echo "Branch: $BRANCH"
           echo "Version: $VERSION"
           echo "Dry run: $DRY_RUN"
 

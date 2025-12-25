@@ -3,9 +3,12 @@
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
 # License: Apache v2.0
 
+import contextlib
 import os
 import platform
 import subprocess
+
+from typing import Optional
 
 import psutil  # pyright: ignore[reportMissingModuleSource]
 
@@ -103,7 +106,7 @@ class Utils:
             return False
 
     @staticmethod
-    def ci_name() -> str | None:
+    def ci_name() -> Optional[str]:
         """Determine if the code is running in a CI environment.
 
         Returns:
@@ -178,7 +181,7 @@ class Utils:
             return 0
 
     @staticmethod
-    def get_driver_version() -> int | None:
+    def get_driver_version() -> Optional[int]:
         try:
             result = subprocess.run(
                 ["nvidia-smi", "--query-gpu=driver_version", "--format=csv,noheader"],
@@ -203,10 +206,8 @@ class Utils:
                 PROCESS_NAME in proc.info["name"]
                 and proc.info["status"] != psutil.STATUS_ZOMBIE
             ):
-                try:
+                with contextlib.suppress(psutil.NoSuchProcess, psutil.AccessDenied):
                     proc.terminate()
-                except (psutil.NoSuchProcess, psutil.AccessDenied):
-                    pass
 
     @staticmethod
     def busy() -> bool:

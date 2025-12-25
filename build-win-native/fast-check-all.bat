@@ -75,6 +75,21 @@ if not exist "%PYTHON%" (
     goto :error
 )
 
+REM ============================================================
+REM Run Unit Tests (equivalent to warmup.py run_tests)
+REM ============================================================
+echo === Running Unit Tests ===
+echo.
+"%PYTHON%" -c "from frontend.tests._runner_ import run_all_tests; import sys; sys.exit(0 if run_all_tests() else 1)"
+if errorlevel 1 (
+    echo.
+    echo === UNIT TESTS FAILED ===
+    goto :error
+)
+echo.
+echo === Unit Tests Passed ===
+echo.
+
 echo === Fast Check All Examples ===
 echo Using: %EXAMPLES_TXT%
 echo.

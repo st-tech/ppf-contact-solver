@@ -6,7 +6,8 @@
 import os
 import pickle
 import shutil
-import sys
+
+from typing import Optional
 
 from ._asset_ import AssetManager
 from ._extra_ import Extra
@@ -14,7 +15,7 @@ from ._mesh_ import MeshManager
 from ._plot_ import PlotManager
 from ._scene_ import SceneManager
 from ._session_ import FixedSession, ParamManager, SessionManager
-from ._utils_ import Utils, get_cache_dir
+from ._utils_ import Utils
 
 RECOVERABLE_FIXED_SESSION_NAME = "fixed_session.pickle"
 
@@ -28,6 +29,7 @@ def _suppress_stale_widget_errors():
     """
     try:
         import ipywidgets.widgets.widget as widget_module
+
         from traitlets import TraitError
 
         original_set_state = widget_module.Widget.set_state
@@ -348,7 +350,7 @@ class App:
         return self._cache_dir
 
     @property
-    def ci_dir(self) -> str | None:
+    def ci_dir(self) -> Optional[str]:
         """Get the path to the CI directory.
 
         Returns:
@@ -385,3 +387,14 @@ class App:
                 else:
                     os.remove(item_path)
         return self
+
+    @staticmethod
+    def run_tests() -> bool:
+        """Run all frontend tests.
+
+        Returns:
+            bool: True if all tests pass, False otherwise.
+        """
+        from .tests._runner_ import run_all_tests
+
+        return run_all_tests()

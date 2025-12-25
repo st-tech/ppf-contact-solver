@@ -8,10 +8,12 @@ Pure software rasterizer using NumPy and Numba.
 Lightweight headless rendering without heavy dependencies.
 """
 
+from typing import Optional
+
 import numpy as np
+
 from numba import njit, prange
 from PIL import Image
-from typing import Optional
 
 
 @njit(parallel=True, cache=True)
@@ -157,13 +159,12 @@ def _draw_line_bresenham(
                 px = x0 + ox
                 py = y0 + oy
 
-                if 0 <= px < width and 0 <= py < height:
-                    if z < depth_buffer[py, px]:
-                        depth_buffer[py, px] = z
-                        framebuffer[py, px, 0] = int(min(1.0, r) * 255)
-                        framebuffer[py, px, 1] = int(min(1.0, g) * 255)
-                        framebuffer[py, px, 2] = int(min(1.0, b) * 255)
-                        framebuffer[py, px, 3] = 255
+                if 0 <= px < width and 0 <= py < height and z < depth_buffer[py, px]:
+                    depth_buffer[py, px] = z
+                    framebuffer[py, px, 0] = int(min(1.0, r) * 255)
+                    framebuffer[py, px, 1] = int(min(1.0, g) * 255)
+                    framebuffer[py, px, 2] = int(min(1.0, b) * 255)
+                    framebuffer[py, px, 3] = 255
 
         if x0 == x1 and y0 == y1:
             break
@@ -280,7 +281,7 @@ class SoftwareRenderer:
         color: np.ndarray,
         seg: np.ndarray,
         face: np.ndarray,
-        output: str | None,
+        output: Optional[str],
     ) -> Optional[np.ndarray]:
         """Render a mesh with vertex colors.
 

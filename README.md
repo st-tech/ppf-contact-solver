@@ -272,9 +272,6 @@ for i in range(5):
     # pin the corners
     obj.pin(corner)
 
-    # set fiber directions required for Baraff-Witkin
-    obj.direction([1, 0, 0], [0, 0, 1])
-
     # set the strict limit on maximum strain to 5% per triangle
     obj.param.set("strain-limit", 0.05)
 

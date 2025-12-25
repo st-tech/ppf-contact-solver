@@ -38,11 +38,11 @@ class BlenderApp:
                 "branch_name.txt"
             )
             if os.path.exists(branch_file):
-                with open(branch_file, "r") as f:
+                with open(branch_file) as f:
                     git_branch = f.read().strip()
                     if not git_branch:
                         git_branch = "unknown"
-        except:
+        except Exception:
             pass
 
         # Fallback to git command if branch_name.txt not found or empty

@@ -71,8 +71,8 @@ class Extra:
         if shutil.which("git") is None:
             raise FileNotFoundError(
                 "git is not found in PATH. The bundled distribution includes MinGit, "
-                "but it may not be in PATH. Please ensure you're running from start.bat "
-                "or add mingit/cmd to your PATH. For manual installation: choco install git"
+                + "but it may not be in PATH. Please ensure you're running from start.bat "
+                + "or add mingit/cmd to your PATH. For manual installation: choco install git"
             )
         if delete_exist and os.path.exists(dest):
             shutil.rmtree(dest)

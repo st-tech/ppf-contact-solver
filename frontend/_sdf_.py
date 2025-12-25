@@ -2,6 +2,7 @@
 # SDF (Signed Distance Field) implementation with numba JIT compilation
 
 import numpy as np
+
 from numba import njit, prange
 
 # Marching cubes edge table - maps cube configuration to edges that intersect surface
@@ -401,7 +402,7 @@ def eval_sdf_grid_with_progress(xs, ys, zs, sdf_types, sdf_params, progress=True
     grid = np.empty((nx, ny, nz), dtype=np.float64)
 
     try:
-        from tqdm import tqdm
+        from tqdm.auto import tqdm
         iterator = tqdm(range(nx), desc="SDF eval", unit="slice")
     except ImportError:
         # No tqdm, fall back to fast bulk evaluation

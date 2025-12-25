@@ -5,13 +5,13 @@
 
 import os
 import shutil
+
 from typing import Optional
 
 import numpy as np
-from PIL import Image
 
-from ._utils_ import get_cache_dir
 from ._rasterizer_ import SoftwareRenderer
+from ._utils_ import get_cache_dir
 
 # SoftwareRenderer is always available (uses numpy + numba, works on all platforms)
 
@@ -58,7 +58,7 @@ class MitsubaRenderer:
         face: np.ndarray,
         path: str,
     ):
-        import mitsuba as mi
+        import mitsuba as mi  # type: ignore[import-not-found]
 
         mi.set_variant(self._args["variant"])
         self._export_ply(self._args["tmp_path"], vert, color, face)
@@ -168,6 +168,7 @@ class MitsubaRenderer:
 
 if __name__ == "__main__":
     import argparse
+
     import trimesh
 
     arg_parser = argparse.ArgumentParser()

@@ -1,5 +1,5 @@
 target
-tests
+/tests
 bin/
 requirements.txt
 .clangd
