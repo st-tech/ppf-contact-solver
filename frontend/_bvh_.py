@@ -840,22 +840,20 @@ def edge_triangle_intersect(
     s = e0 - v0
     u = f * _dot3(s, h)
 
-    if u < eps or u > 1.0 - eps:
+    if u < 0.0 or u > 1.0:
         return False
 
     q = _cross(s, edge1)
     v = f * _dot3(edge_dir, q)
 
-    if v < eps or u + v > 1.0 - eps:
+    if v < 0.0 or u + v > 1.0:
         return False
 
     t = f * _dot3(edge2, q)
 
-    # Check if intersection is within edge segment (exclusive of endpoints)
-    edge_len = np.sqrt(edge_len_sq)
-    t_normalized = t / edge_len if edge_len > eps else 0.0
-
-    return eps < t_normalized < 1.0 - eps
+    # Check if intersection is within edge segment
+    # t is already parameterized [0,1] for the segment since edge_dir is unnormalized
+    return 0.0 < t < 1.0
 
 
 @njit(cache=True)

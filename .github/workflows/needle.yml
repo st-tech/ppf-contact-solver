@@ -458,6 +458,57 @@ jobs:
           echo "Cargo build completed"
           ENDSSH
 
+      - name: Convert assertion notebook to Python script
+        run: |
+          echo "Converting assertion notebook: examples/fail-examples/assertion.ipynb"
+
+          cat > /tmp/convert_assertion.sh << 'SCRIPTEOF'
+          #!/bin/bash
+          set -e
+          cd $WORKDIR
+          source ~/.local/share/ppf-cts/venv/bin/activate
+          jupyter nbconvert --to python "examples/fail-examples/assertion.ipynb" --output "/tmp/assertion_base.py"
+          cat > /tmp/assertion.py << 'PYEOF'
+          import sys
+          import os
+          sys.path.insert(0, '$WORKDIR')
+          sys.path.insert(0, '$WORKDIR/frontend')
+          os.environ['PYTHONPATH'] = '$WORKDIR:$WORKDIR/frontend:' + os.environ.get('PYTHONPATH', '')
+          PYEOF
+          cat "/tmp/assertion_base.py" >> /tmp/assertion.py
+          echo "Assertion script prepared at /tmp/assertion.py"
+          SCRIPTEOF
+
+          scp -P ${{ steps.ids.outputs.SSH_PORT }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
+            -i "${{ steps.keypair.outputs.KEY_PATH }}" \
+            /tmp/convert_assertion.sh ${USER}@${PUBLIC_IP}:/tmp/
+
+          ssh -p ${{ steps.ids.outputs.SSH_PORT }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
+            -i "${{ steps.keypair.outputs.KEY_PATH }}" ${USER}@${PUBLIC_IP} \
+            "chmod +x /tmp/convert_assertion.sh && WORKDIR='${WORKDIR}' /tmp/convert_assertion.sh"
+
+      - name: Run assertion test (expect failure)
+        run: |
+          echo "Running assertion test to verify error propagation via SSH..."
+          echo "This test uses the same execution pattern as main examples"
+          echo "Expected result: FAILURE (AssertionError)"
+
+          # Run using the exact same pattern as the main example iterations
+          if ssh -p ${{ steps.ids.outputs.SSH_PORT }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
+            -i "${{ steps.keypair.outputs.KEY_PATH }}" ${USER}@${PUBLIC_IP} \
+            "set -o pipefail && echo 'assertion' > ${WORKDIR}/frontend/.CI && cd ${WORKDIR} && source ~/.local/share/ppf-cts/venv/bin/activate && python3 /tmp/assertion.py 2>&1 | tee /tmp/ci/assertion.log"; then
+            echo "ERROR: Assertion test should have failed but succeeded"
+            echo "This means errors are NOT being propagated correctly!"
+            exit 1
+          else
+            echo "SUCCESS: Assertion test failed as expected"
+            echo "Error propagation via SSH is working correctly"
+            echo "Main example tests can now proceed with confidence"
+          fi
+
       - name: Convert notebook to Python script
         run: |
           echo "Converting notebook example: ${EXAMPLE}.ipynb to Python script"
