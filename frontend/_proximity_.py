@@ -235,9 +235,9 @@ def point_triangle_dist_sq(
 
 @njit(cache=True)
 def _tri_tri_distance_sq(
-    verts: np.ndarray, tri_i: np.ndarray, tri_j: np.ndarray
+    verts: np.ndarray, tri_i: np.ndarray, tri_j: np.ndarray, threshold_sq: float
 ) -> float:
-    """Compute minimum distance squared between two triangles."""
+    """Compute minimum distance squared between two triangles with early exit."""
     min_dist_sq = np.inf
 
     t0_i, t1_i, t2_i = verts[tri_i[0]], verts[tri_i[1]], verts[tri_i[2]]
@@ -249,12 +249,16 @@ def _tri_tri_distance_sq(
         dist_sq = point_triangle_dist_sq(p, t0_j, t1_j, t2_j)
         if dist_sq < min_dist_sq:
             min_dist_sq = dist_sq
+            if min_dist_sq < threshold_sq:
+                return min_dist_sq
 
     for vj in range(3):
         p = verts[tri_j[vj]]
         dist_sq = point_triangle_dist_sq(p, t0_i, t1_i, t2_i)
         if dist_sq < min_dist_sq:
             min_dist_sq = dist_sq
+            if min_dist_sq < threshold_sq:
+                return min_dist_sq
 
     # Edge-edge tests (9 combinations)
     edges = ((0, 1), (1, 2), (2, 0))
@@ -267,15 +271,17 @@ def _tri_tri_distance_sq(
             dist_sq = edge_edge_dist_sq(a0, a1, b0, b1)
             if dist_sq < min_dist_sq:
                 min_dist_sq = dist_sq
+                if min_dist_sq < threshold_sq:
+                    return min_dist_sq
 
     return min_dist_sq
 
 
 @njit(cache=True)
 def _tri_edge_distance_sq(
-    verts: np.ndarray, tri: np.ndarray, edge: np.ndarray
+    verts: np.ndarray, tri: np.ndarray, edge: np.ndarray, threshold_sq: float
 ) -> float:
-    """Compute minimum distance squared between triangle and edge."""
+    """Compute minimum distance squared between triangle and edge with early exit."""
     min_dist_sq = np.inf
 
     t0, t1, t2 = verts[tri[0]], verts[tri[1]], verts[tri[2]]
@@ -285,9 +291,13 @@ def _tri_edge_distance_sq(
     dist_sq = point_triangle_dist_sq(e0, t0, t1, t2)
     if dist_sq < min_dist_sq:
         min_dist_sq = dist_sq
+        if min_dist_sq < threshold_sq:
+            return min_dist_sq
     dist_sq = point_triangle_dist_sq(e1, t0, t1, t2)
     if dist_sq < min_dist_sq:
         min_dist_sq = dist_sq
+        if min_dist_sq < threshold_sq:
+            return min_dist_sq
 
     # Triangle vertices to edge
     for vi in range(3):
@@ -295,6 +305,8 @@ def _tri_edge_distance_sq(
         dist_sq = point_edge_dist_sq(p, e0, e1)
         if dist_sq < min_dist_sq:
             min_dist_sq = dist_sq
+            if min_dist_sq < threshold_sq:
+                return min_dist_sq
 
     # Triangle edges to edge
     tri_edges = ((0, 1), (1, 2), (2, 0))
@@ -304,6 +316,8 @@ def _tri_edge_distance_sq(
         dist_sq = edge_edge_dist_sq(a0, a1, e0, e1)
         if dist_sq < min_dist_sq:
             min_dist_sq = dist_sq
+            if min_dist_sq < threshold_sq:
+                return min_dist_sq
 
     return min_dist_sq
 
@@ -377,7 +391,7 @@ def _find_close_tri_tri(
                 if not bbox_overlap(bbox_min_i, bbox_max_i, expanded_min, expanded_max):
                     continue
 
-                dist_sq = _tri_tri_distance_sq(verts, tri_i, tri_j)
+                dist_sq = _tri_tri_distance_sq(verts, tri_i, tri_j, required_dist_sq)
                 if dist_sq < required_dist_sq:
                     if not count_only:
                         out_pairs[pair_idx + count, 0] = ti
@@ -466,7 +480,7 @@ def _find_close_tri_edge(
                 if not bbox_overlap(bbox_min_i, bbox_max_i, expanded_min, expanded_max):
                     continue
 
-                dist_sq = _tri_edge_distance_sq(verts, tri, edge)
+                dist_sq = _tri_edge_distance_sq(verts, tri, edge, required_dist_sq)
                 if dist_sq < required_dist_sq:
                     if not count_only:
                         # Triangle index first, then edge index (offset by n_tris)

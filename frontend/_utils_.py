@@ -38,6 +38,24 @@ def get_cache_dir() -> str:
     return cache_dir
 
 
+def get_export_base_path() -> str:
+    """Get the base path for export directories.
+
+    When fast_check mode is enabled, exports go to the cache directory
+    to avoid leaving artifacts in the examples directory.
+    Otherwise, exports go to the 'export' directory relative to project root.
+
+    Returns:
+        str: The base path for export directories.
+    """
+    if Utils.is_fast_check():
+        # Use cache directory for fast_check mode
+        return os.path.join(get_cache_dir(), "export")
+    else:
+        # Use relative 'export' directory for normal operation
+        return "export"
+
+
 def dict_to_html_table(data: dict, classes: str = "table", index: bool = False) -> str:
     """Convert a dictionary to an HTML table.
 

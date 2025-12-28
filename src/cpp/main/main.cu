@@ -18,6 +18,8 @@
 #include "../kernels/exclusive_scan.hpp"
 #include "../kernels/reduce.hpp"
 #include "../kernels/vec_ops.hpp"
+#include "../lbvh/bvh_storage.hpp"
+#include "../lbvh/lbvh.hpp"
 #include "../main/cuda_utils.hpp"
 #include "../simplelog/SimpleLog.h"
 #include "../solver/solver.hpp"
@@ -73,7 +75,40 @@ bool initialize(DataSet _host_dataset, DataSet _dev_dataset, ParamSet *_param) {
 
     contact::initialize(host_dataset, *param);
 
+    // Initialize GPU LBVH construction buffers
+    // Use max of main mesh and collision mesh sizes
+    unsigned collision_mesh_face_count = host_dataset.constraint.mesh.face.size;
+    unsigned max_faces = face_count > collision_mesh_face_count ? face_count : collision_mesh_face_count;
+    unsigned max_edges = edge_count > collision_mesh_edge_count ? edge_count : collision_mesh_edge_count;
+    unsigned max_verts = surface_vert_count > collision_mesh_vert_count ? surface_vert_count : collision_mesh_vert_count;
+    lbvh::initialize(max_faces, max_edges, max_verts);
+
     if (!param->disable_contact) {
+        // Name: Initial LBVH Build
+        // Format: list[(int,ms)]
+        // Map: initial_lbvh_build
+        // Description:
+        // Time consumed for building the initial LBVH (Linear Bounding Volume
+        // Hierarchy) structures for faces, edges, and vertices at the start
+        // of the simulation. Only a single record is expected.
+        logging.push("lbvh build");
+        lbvh::build_face_bvh(dev_dataset.vertex.curr, dev_dataset.vertex.curr,
+                             1.0f, dev_dataset.mesh.mesh.face,
+                             bvh_storage::get_bvh().face, contact::get_face_aabb(),
+                             dev_dataset.prop.face,
+                             dev_dataset.param_arrays.face);
+        lbvh::build_edge_bvh(dev_dataset.vertex.curr, dev_dataset.vertex.curr,
+                             1.0f, dev_dataset.mesh.mesh.edge,
+                             bvh_storage::get_bvh().edge, contact::get_edge_aabb(),
+                             dev_dataset.prop.edge,
+                             dev_dataset.param_arrays.edge);
+        lbvh::build_vertex_bvh(dev_dataset.vertex.curr, dev_dataset.vertex.curr,
+                               1.0f, bvh_storage::get_bvh().vertex,
+                               contact::get_vertex_aabb(), surface_vert_count,
+                               dev_dataset.prop.vertex,
+                               dev_dataset.param_arrays.vertex);
+        lbvh::build_collision_mesh_bvh(dev_dataset, *param);
+        logging.pop();
         // Name: Initial Check Intersection Time
         // Format: list[(int,ms)]
         // Map: initial_check_intersection
@@ -82,9 +117,6 @@ bool initialize(DataSet _host_dataset, DataSet _dev_dataset, ParamSet *_param) {
         // beginning of the simulation.
         // Only a single record is expected.
         logging.push("check intersection");
-        contact::update_aabb(host_dataset, dev_dataset, dev_dataset.vertex.prev,
-                             dev_dataset.vertex.curr, *param);
-        contact::update_collision_mesh_aabb(host_dataset, dev_dataset, *param);
         if (!contact::check_intersection(dev_dataset, dev_dataset.vertex.prev,
                                          *param) ||
             !contact::check_intersection(dev_dataset, dev_dataset.vertex.curr,
@@ -133,6 +165,31 @@ StepResult advance() {
     FixedCSRMat &fixed_hess = tmp::fixed_hessian;
 
     SimpleLog::set(prm.time);
+
+    // Build BVH on GPU
+    if (!prm.disable_contact) {
+        // Name: LBVH Build
+        // Format: list[(vid_time,ms)]
+        // Map: lbvh_build
+        // Description:
+        // Time consumed for rebuilding the LBVH (Linear Bounding Volume
+        // Hierarchy) structures for faces, edges, and vertices at each
+        // simulation step for collision detection.
+        logging.push("lbvh build");
+        lbvh::build_face_bvh(data.vertex.curr, data.vertex.curr, 1.0f,
+                             data.mesh.mesh.face, bvh_storage::get_bvh().face,
+                             contact::get_face_aabb(), data.prop.face,
+                             data.param_arrays.face);
+        lbvh::build_edge_bvh(data.vertex.curr, data.vertex.curr, 1.0f,
+                             data.mesh.mesh.edge, bvh_storage::get_bvh().edge,
+                             contact::get_edge_aabb(), data.prop.edge,
+                             data.param_arrays.edge);
+        lbvh::build_vertex_bvh(data.vertex.curr, data.vertex.curr, 1.0f,
+                               bvh_storage::get_bvh().vertex, contact::get_vertex_aabb(),
+                               host_data.surface_vert_count, data.prop.vertex,
+                               data.param_arrays.vertex);
+        logging.pop();
+    }
 
     auto vertex_curr = data.vertex.curr.data;
     auto vertex_prev = data.vertex.prev.data;
@@ -437,6 +494,24 @@ StepResult advance() {
             }
         }
 
+        if (!param->disable_contact) {
+            logging.push("aabb update");
+            Vec<Vec3f> target_vec = target.as_vec();
+            Vec<Vec3f> eval_x_vec = eval_x.as_vec();
+            lbvh::update_face_aabb(target_vec, eval_x_vec,
+                                   prm.line_search_max_t, data.mesh.mesh.face,
+                                   bvh_storage::get_bvh().face, contact::get_face_aabb(),
+                                   data.prop.face, data.param_arrays.face);
+            lbvh::update_edge_aabb(target_vec, eval_x_vec,
+                                   prm.line_search_max_t, data.mesh.mesh.edge,
+                                   bvh_storage::get_bvh().edge, contact::get_edge_aabb(),
+                                   data.prop.edge, data.param_arrays.edge);
+            lbvh::update_vertex_aabb(
+                target_vec, eval_x_vec, prm.line_search_max_t, bvh_storage::get_bvh().vertex,
+                contact::get_vertex_aabb(), host_data.surface_vert_count,
+                data.prop.vertex, data.param_arrays.vertex);
+            logging.pop();
+        }
         // Name: Line Search Time
         // Format: list[(vid_time,ms)]
         // Description:
@@ -444,9 +519,6 @@ StepResult advance() {
         // CCD is performed to find the maximal feasible substep without
         // collision.
         logging.push("line search");
-        if (!param->disable_contact) {
-            contact::update_aabb(host_data, data, target, eval_x, prm);
-        }
         float SL_toi = 1.0f;
         float toi = 1.0f;
         toi = fmin(toi, contact::line_search(data, target, eval_x, prm));
@@ -514,16 +586,25 @@ StepResult advance() {
     }
 
     if (result.success()) {
-        // Name: Time to Check Intersection
-        // Format: list[(vid_time,ms)]
-        // Map: runtime_intersection_check
-        // Description:
-        // At the end of step, an explicit intersection check is
-        // performed. This number records the consumed time in
-        // milliseconds.
         if (!param->disable_contact) {
+            // Update AABBs for final positions before intersection check
+            Vec<Vec3f> eval_x_vec = eval_x.as_vec();
+            logging.push("aabb update");
+            lbvh::update_face_aabb(eval_x_vec, eval_x_vec, 1.0f,
+                                   data.mesh.mesh.face, bvh_storage::get_bvh().face,
+                                   contact::get_face_aabb(), data.prop.face,
+                                   data.param_arrays.face);
+            lbvh::update_edge_aabb(eval_x_vec, eval_x_vec, 1.0f,
+                                   data.mesh.mesh.edge, bvh_storage::get_bvh().edge,
+                                   contact::get_edge_aabb(), data.prop.edge,
+                                   data.param_arrays.edge);
+            lbvh::update_vertex_aabb(
+                eval_x_vec, eval_x_vec, 1.0f, bvh_storage::get_bvh().vertex,
+                contact::get_vertex_aabb(), host_data.surface_vert_count,
+                data.prop.vertex, data.param_arrays.vertex);
+            logging.pop();
             logging.push("check intersection");
-            if (!contact::check_intersection(data, eval_x, prm)) {
+            if (!contact::check_intersection(data, eval_x_vec, prm)) {
                 logging.message("### intersection detected");
                 result.intersection_free = false;
             }
@@ -568,12 +649,6 @@ StepResult advance() {
     }
 
     return result;
-}
-
-void update_bvh(BVHSet bvh) {
-    contact::resize_aabb(bvh);
-    contact::update_aabb(host_dataset, dev_dataset, dev_dataset.vertex.curr,
-                         dev_dataset.vertex.prev, *param);
 }
 
 } // namespace main_helper
@@ -629,12 +704,6 @@ DataSet malloc_dataset(DataSet dataset, ParamSet param) {
             mem::malloc_device(dataset.constraint.mesh.face);
         tmp_collision_mesh.edge =
             mem::malloc_device(dataset.constraint.mesh.edge);
-        tmp_collision_mesh.face_bvh = {
-            mem::malloc_device(dataset.constraint.mesh.face_bvh.node),
-            mem::malloc_device(dataset.constraint.mesh.face_bvh.level)};
-        tmp_collision_mesh.edge_bvh = {
-            mem::malloc_device(dataset.constraint.mesh.edge_bvh.node),
-            mem::malloc_device(dataset.constraint.mesh.edge_bvh.level)};
 
         tmp_collision_mesh.prop.vertex =
             mem::malloc_device(dataset.constraint.mesh.prop.vertex);
@@ -673,20 +742,6 @@ DataSet malloc_dataset(DataSet dataset, ParamSet param) {
         tmp_collision_mesh,
     };
 
-    BVH face_bvh = {
-        mem::malloc_device(dataset.bvh.face.node, param.bvh_alloc_factor),
-        mem::malloc_device(dataset.bvh.face.level, param.bvh_alloc_factor),
-    };
-    BVH edge_bvh = {
-        mem::malloc_device(dataset.bvh.edge.node, param.bvh_alloc_factor),
-        mem::malloc_device(dataset.bvh.edge.level, param.bvh_alloc_factor),
-    };
-    BVH vertex_bvh = {
-        mem::malloc_device(dataset.bvh.vertex.node, param.bvh_alloc_factor),
-        mem::malloc_device(dataset.bvh.vertex.level, param.bvh_alloc_factor),
-    };
-    BVHSet dev_bvhset = {face_bvh, edge_bvh, vertex_bvh};
-
     Vec<Mat2x2f> dev_inv_rest2x2 = mem::malloc_device(dataset.inv_rest2x2);
     Vec<Mat3x3f> dev_inv_rest3x3 = mem::malloc_device(dataset.inv_rest3x3);
 
@@ -715,7 +770,6 @@ DataSet malloc_dataset(DataSet dataset, ParamSet param) {
                            dev_inv_rest2x2,
                            dev_inv_rest3x3,
                            dev_constraint,
-                           dev_bvhset,
                            dev_fixed_index_table,
                            dev_transpose_table,
                            dataset.rod_count,
@@ -752,29 +806,6 @@ extern "C" DLL_EXPORT void fetch() {
     mem::copy_from_device_to_host(main_helper::dev_dataset.vertex.prev.data,
                                   main_helper::host_dataset.vertex.prev.data,
                                   main_helper::host_dataset.vertex.prev.size);
-}
-
-extern "C" DLL_EXPORT void update_bvh(const BVHSet *bvh) {
-    main_helper::host_dataset.bvh = *bvh;
-    if (bvh->face.node.size) {
-        mem::copy_to_device(bvh->face.node,
-                            main_helper::dev_dataset.bvh.face.node);
-        mem::copy_to_device(bvh->face.level,
-                            main_helper::dev_dataset.bvh.face.level);
-    }
-    if (bvh->edge.node.size) {
-        mem::copy_to_device(bvh->edge.node,
-                            main_helper::dev_dataset.bvh.edge.node);
-        mem::copy_to_device(bvh->edge.level,
-                            main_helper::dev_dataset.bvh.edge.level);
-    }
-    if (bvh->vertex.node.size) {
-        mem::copy_to_device(bvh->vertex.node,
-                            main_helper::dev_dataset.bvh.vertex.node);
-        mem::copy_to_device(bvh->vertex.level,
-                            main_helper::dev_dataset.bvh.vertex.level);
-    }
-    main_helper::update_bvh(main_helper::host_dataset.bvh);
 }
 
 extern "C" DLL_EXPORT void fetch_dyn_counts(unsigned *n_value, unsigned *n_offset) {

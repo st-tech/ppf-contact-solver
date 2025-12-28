@@ -78,6 +78,21 @@ if exist "!JUPYTER_DIR!" (
     echo   [SKIP] Jupyter directory not found
 )
 
+REM Clear export directory in examples (legacy location cleanup)
+set EXPORT_DIR=!PROJ_ROOT!\examples\export
+if exist "!EXPORT_DIR!" (
+    echo Removing export directory in examples...
+    rmdir /s /q "!EXPORT_DIR!"
+    if exist "!EXPORT_DIR!" (
+        echo   [FAIL] Could not remove !EXPORT_DIR!
+        set HAS_ERROR=1
+    ) else (
+        echo   [OK] Removed !EXPORT_DIR!
+    )
+) else (
+    echo   [SKIP] Export directory in examples not found
+)
+
 echo.
 if %HAS_ERROR%==1 (
     echo === [FAIL] Some caches could not be cleared ===

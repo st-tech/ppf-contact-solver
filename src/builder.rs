@@ -3,7 +3,6 @@
 // Review: Ryoichi Ando (ryoichi.ando@zozo.com)
 // License: Apache v2.0
 
-use super::bvh::{self, Aabb};
 use super::cvec::*;
 use super::cvecvec::*;
 use super::data::{self, *};
@@ -231,13 +230,6 @@ pub fn build(
         tet: CVec::from(tet_params.as_slice()),
     };
 
-    let n_surface_vert = mesh.mesh.mesh.surface_vert_count;
-    let surface_vert: Matrix3xX<f32> = vertex.columns(0, n_surface_vert).into_owned();
-    let bvh_set = BvhSet {
-        face: build_bvh(vertex, Some(&mesh.mesh.mesh.face)),
-        edge: build_bvh(vertex, Some(&mesh.mesh.mesh.edge)),
-        vertex: build_bvh::<1>(&surface_vert, None),
-    };
     let mut inv_rest2x2 = Vec::new();
     for i in 0..mesh.mesh.mesh.shell_face_count {
         let f = mesh.mesh.mesh.face.column(i);
@@ -465,7 +457,6 @@ pub fn build(
         inv_rest2x2,
         inv_rest3x3,
         constraint,
-        bvh: bvh_set,
         fixed_index_table: CVecVec::from(&fixed_index_table[..]),
         transpose_table: CVecVec::from(&transpose_table[..]),
         rod_count: rod_count as u32,
@@ -514,7 +505,6 @@ pub fn make_param(args: &SimArgs) -> data::ParamSet {
             _ => panic!("Invalid barrier: {}", args.barrier),
         },
         csrmat_max_nnz: args.csrmat_max_nnz,
-        bvh_alloc_factor: args.bvh_alloc_factor,
         fix_xz: args.fix_xz,
     }
 }
@@ -552,54 +542,6 @@ impl ConvertToU32 for Vec<Vec<usize>> {
         self.iter()
             .map(|inner_vec| inner_vec.iter().map(|&x| x as u32).collect::<Vec<_>>())
             .collect::<Vec<_>>()
-    }
-}
-
-pub type ArbitrayElement<const N: usize> =
-    na::Matrix<usize, na::Const<N>, na::Dyn, na::VecStorage<usize, na::Const<N>, na::Dyn>>;
-
-pub fn build_bvh<const N: usize>(
-    vertex: &Matrix3xX<f32>,
-    elements: Option<&ArbitrayElement<N>>,
-) -> Bvh {
-    let aabb = if let Some(elements) = elements {
-        bvh::generate_aabb(vertex, elements)
-    } else {
-        vertex
-            .column_iter()
-            .enumerate()
-            .map(|(i, x)| {
-                (
-                    Aabb {
-                        min: x.map(f64::from),
-                        max: x.map(f64::from),
-                    },
-                    i,
-                )
-            })
-            .collect::<Vec<_>>()
-    };
-    if !aabb.is_empty() {
-        let tree = bvh::Tree::build_tree(aabb);
-        let node = tree
-            .node
-            .iter()
-            .map(|&x| match x {
-                bvh::Node::Parent(left, right) => {
-                    data::Vec2u::new(left as u32 + 1, right as u32 + 1)
-                }
-                bvh::Node::Leaf(i) => data::Vec2u::new(i as u32 + 1, 0),
-            })
-            .collect::<Vec<_>>();
-        data::Bvh {
-            node: CVec::from(&node[..]),
-            level: CVecVec::from(&tree.level.to_u32()[..]),
-        }
-    } else {
-        data::Bvh {
-            node: CVec::new(),
-            level: CVecVec::new(),
-        }
     }
 }
 
@@ -742,8 +684,6 @@ pub fn make_collision_mesh(
                 .collect::<Vec<_>>()
                 .as_slice(),
         ),
-        face_bvh: build_bvh(vertex, Some(&mesh.mesh.face)),
-        edge_bvh: build_bvh(vertex, Some(&mesh.mesh.edge)),
         prop: CollisionMeshPropSet {
             vertex: CVec::from(collision_vertex_props.as_slice()),
             edge: CVec::from(collision_edge_props.as_slice()),

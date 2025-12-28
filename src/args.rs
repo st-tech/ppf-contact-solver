@@ -42,7 +42,6 @@ pub struct SimArgs {
     pub eiganalysis_eps: f32,
     pub friction_eps: f32,
     pub csrmat_max_nnz: u32,
-    pub bvh_alloc_factor: u32,
     pub frames: i32,
     pub auto_save: i32,
     pub barrier: String,

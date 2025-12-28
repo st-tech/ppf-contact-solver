@@ -11,8 +11,118 @@ from typing import Optional
 
 import numpy as np
 
+from numba import njit, prange
+
 from ._bvh_ import compute_barycentric_mapping as _compute_barycentric_mapping
 from ._bvh_ import interpolate_surface as _interpolate_surface
+
+# =============================================================================
+# Numba-optimized mesh generation helpers
+# =============================================================================
+
+
+@njit(cache=True)
+def _generate_grid_faces(length_split: int, width_split: int, out_faces: np.ndarray):
+    """Generate faces for a grid mesh (used by mobius, cylinder, etc.)."""
+    idx = 0
+    for i in range(length_split):
+        next_i = (i + 1) % length_split
+        for j in range(width_split - 1):
+            v0 = i * width_split + j
+            v1 = i * width_split + j + 1
+            v2 = next_i * width_split + j
+            v3 = next_i * width_split + j + 1
+            out_faces[idx, 0] = v0
+            out_faces[idx, 1] = v2
+            out_faces[idx, 2] = v1
+            out_faces[idx + 1, 0] = v1
+            out_faces[idx + 1, 1] = v2
+            out_faces[idx + 1, 2] = v3
+            idx += 2
+
+
+@njit(cache=True)
+def _generate_rect_faces(
+    res_x: int, res_y: int, out_faces: np.ndarray
+):
+    """Generate faces for a rectangle mesh with alternating diagonal pattern."""
+    idx = 0
+    for j in range(res_y - 1):
+        for i in range(res_x - 1):
+            v0 = i * res_y + j
+            v1 = v0 + 1
+            v2 = v0 + res_y
+            v3 = v2 + 1
+            if (i % 2) == (j % 2):
+                out_faces[idx, 0] = v0
+                out_faces[idx, 1] = v1
+                out_faces[idx, 2] = v3
+                out_faces[idx + 1, 0] = v0
+                out_faces[idx + 1, 1] = v3
+                out_faces[idx + 1, 2] = v2
+            else:
+                out_faces[idx, 0] = v0
+                out_faces[idx, 1] = v1
+                out_faces[idx, 2] = v2
+                out_faces[idx + 1, 0] = v1
+                out_faces[idx + 1, 1] = v3
+                out_faces[idx + 1, 2] = v2
+            idx += 2
+
+
+@njit(cache=True)
+def _generate_cylinder_verts(
+    n: int, ny: int, min_x: float, dx: float, dy: float, r: float, out_verts: np.ndarray
+):
+    """Generate vertices for a cylinder mesh."""
+    for j in range(ny):
+        theta = j * dy
+        sin_t = np.sin(theta)
+        cos_t = np.cos(theta)
+        for i in range(n + 1):
+            idx = (n + 1) * j + i
+            out_verts[idx, 0] = min_x + i * dx
+            out_verts[idx, 1] = sin_t * r
+            out_verts[idx, 2] = cos_t * r
+
+
+@njit(cache=True)
+def _generate_cylinder_faces(n: int, ny: int, out_faces: np.ndarray):
+    """Generate faces for a cylinder mesh."""
+    for j in range(ny):
+        for i in range(n):
+            idx = j * n + i
+            v0 = (n + 1) * j + i
+            v1 = (n + 1) * j + i + 1
+            v2 = (n + 1) * ((j + 1) % ny) + (i + 1)
+            v3 = (n + 1) * ((j + 1) % ny) + i
+            if (i % 2) == (j % 2):
+                out_faces[2 * idx, 0] = v1
+                out_faces[2 * idx, 1] = v2
+                out_faces[2 * idx, 2] = v0
+                out_faces[2 * idx + 1, 0] = v3
+                out_faces[2 * idx + 1, 1] = v0
+                out_faces[2 * idx + 1, 2] = v2
+            else:
+                out_faces[2 * idx, 0] = v0
+                out_faces[2 * idx, 1] = v1
+                out_faces[2 * idx, 2] = v3
+                out_faces[2 * idx + 1, 0] = v2
+                out_faces[2 * idx + 1, 1] = v3
+                out_faces[2 * idx + 1, 2] = v1
+
+
+@njit(parallel=True, cache=True)
+def _transform_verts_2d(
+    verts: np.ndarray, ex: np.ndarray, ey: np.ndarray, out_verts: np.ndarray
+):
+    """Transform 2D grid vertices using basis vectors."""
+    n = len(verts)
+    for i in prange(n):
+        x, y = verts[i, 0], verts[i, 1]
+        out_verts[i, 0] = ex[0] * x + ey[0] * y
+        out_verts[i, 1] = ex[1] * x + ey[1] * y
+        out_verts[i, 2] = ex[2] * x + ey[2] * y
 
 
 def create_mobius(
@@ -60,23 +170,10 @@ def create_mobius(
     # Reshape to vertex array
     vertices = np.stack([x.ravel(), y.ravel(), z.ravel()], axis=1)
 
-    # Generate faces (triangles)
-    faces = []
-    for i in range(length_split):
-        for j in range(width_split - 1):
-            # Current vertex index
-            v0 = i * width_split + j
-            v1 = i * width_split + j + 1
-            # Next column (wrap around for closed loop)
-            next_i = (i + 1) % length_split
-            v2 = next_i * width_split + j
-            v3 = next_i * width_split + j + 1
-
-            # Two triangles per quad
-            faces.append([v0, v2, v1])
-            faces.append([v1, v2, v3])
-
-    faces = np.array(faces, dtype=np.int32)
+    # Generate faces using numba-optimized function
+    n_faces = 2 * length_split * (width_split - 1)
+    faces = np.zeros((n_faces, 3), dtype=np.int32)
+    _generate_grid_faces(length_split, width_split, faces)
 
     return vertices, faces
 
@@ -364,11 +461,12 @@ class MeshManager:
         X, Y = np.meshgrid(x, y, indexing="ij")
         X_flat, Y_flat = X.flatten(), Y.flatten()
         Z_flat = np.full_like(X_flat, 0)
-        vert = np.vstack((X_flat, Y_flat, Z_flat)).T
-        _ex, _ey = np.array(ex), np.array(ey)
-        for i, v in enumerate(vert):
-            x, y, _ = v
-            vert[i] = _ex * x + _ey * y
+        grid_vert = np.vstack((X_flat, Y_flat, Z_flat)).T
+        _ex = np.ascontiguousarray(ex, dtype=np.float64)
+        _ey = np.ascontiguousarray(ey, dtype=np.float64)
+        # Transform vertices using numba
+        vert = np.zeros((len(grid_vert), 3), dtype=np.float64)
+        _transform_verts_2d(grid_vert, _ex, _ey, vert)
         if gen_uv:
             u_coords = vert @ _ex
             v_coords = vert @ _ey
@@ -378,22 +476,10 @@ class MeshManager:
             vert_with_uv[:, 4] = v_coords
         else:
             vert_with_uv = vert
+        # Generate faces using numba
         n_faces = 2 * (res_x - 1) * (res_y - 1)
         tri = np.zeros((n_faces, 3), dtype=np.int32)
-        tri_idx = 0
-        for j in range(res_y - 1):
-            for i in range(res_x - 1):
-                v0 = i * res_y + j
-                v1 = v0 + 1
-                v2 = v0 + res_y
-                v3 = v2 + 1
-                if (i % 2) == (j % 2):
-                    tri[tri_idx] = [v0, v1, v3]
-                    tri[tri_idx + 1] = [v0, v3, v2]
-                else:
-                    tri[tri_idx] = [v0, v1, v2]
-                    tri[tri_idx + 1] = [v1, v3, v2]
-                tri_idx += 2
+        _generate_rect_faces(res_x, res_y, tri)
         return TriMesh.create(vert_with_uv, tri, self._cache_dir)
 
     def square(
@@ -559,30 +645,13 @@ class MeshManager:
         dy = 2.0 * np.pi / ny
         n_vert = (n + 1) * ny
 
-        V = np.zeros((n_vert, 3))
-        for j in range(ny):
-            for i in range(n + 1):
-                theta = j * dy
-                idx = (n + 1) * j + i
-                x = min_x + i * dx
-                y = np.sin(theta) * r
-                z = np.cos(theta) * r
-                V[idx] = [x, y, z]
+        # Generate vertices using numba
+        V = np.zeros((n_vert, 3), dtype=np.float64)
+        _generate_cylinder_verts(n, ny, min_x, dx, dy, r, V)
 
+        # Generate faces using numba
         F = np.zeros((2 * n * ny, 3), dtype=np.int32)
-        for j in range(ny):
-            for i in range(n):
-                idx = j * n + i
-                v0 = (n + 1) * j + i
-                v1 = (n + 1) * j + i + 1
-                v2 = (n + 1) * ((j + 1) % ny) + (i + 1)
-                v3 = (n + 1) * ((j + 1) % ny) + i
-                if (i % 2) == (j % 2):
-                    F[2 * idx] = [v1, v2, v0]
-                    F[2 * idx + 1] = [v3, v0, v2]
-                else:
-                    F[2 * idx] = [v0, v1, v3]
-                    F[2 * idx + 1] = [v2, v3, v1]
+        _generate_cylinder_faces(n, ny, F)
 
         return V, F
 

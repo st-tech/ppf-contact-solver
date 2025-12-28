@@ -1262,15 +1262,10 @@ impl Scene {
                             t_end,
                             transition,
                         } => {
-                            if time < *t_start {
-                                // Before start time, no scaling
-                            } else if time >= *t_end {
-                                let p = position.unwrap_or_else(|| self.vert.column(ind).into());
-                                let p = p - center;
-                                position = Some(p * (*factor) + center);
-                                kinematic = true;
-                            } else {
-                                let mut progress = (time - t_start) / (t_end - t_start);
+                            let t = time.min(*t_end);
+                            if t > *t_start {
+                                // Interpolate scale factor from 1.0 to target
+                                let mut progress = (t - t_start) / (t_end - t_start);
                                 if transition == "smooth" {
                                     progress = progress * progress * (3.0 - 2.0 * progress);
                                 }

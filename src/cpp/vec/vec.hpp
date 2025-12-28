@@ -118,6 +118,16 @@ template <class T> struct Vec {
         }
         return result;
     }
+    static Vec<T> reserve(unsigned n) {
+        Vec<T> result;
+        if (n > 0) {
+            result.allocated = n;
+            CUDA_HANDLE_ERROR(
+                cudaMalloc(&result.data, result.allocated * sizeof(T)));
+            result.size = 0;
+        }
+        return result;
+    }
     bool free() {
         if (data) {
             CUDA_HANDLE_ERROR(cudaFree((void *)data));

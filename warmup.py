@@ -973,6 +973,19 @@ def clear_cache():
     else:
         print("  [SKIP] Project cache directory not found")
 
+    # 3. Clear export directory in examples (legacy location cleanup)
+    export_dir = os.path.join(script_dir, "examples", "export")
+    if os.path.exists(export_dir):
+        print("Removing export directory in examples...")
+        try:
+            shutil.rmtree(export_dir)
+            print(f"  [OK] Removed {export_dir}")
+        except Exception as e:
+            print(f"  [FAIL] Could not remove {export_dir}: {e}")
+            has_error = True
+    else:
+        print("  [SKIP] Export directory in examples not found")
+
     print()
     if has_error:
         print("=== [FAIL] Some caches could not be cleared ===")
@@ -1040,6 +1053,19 @@ def clear_all():
             has_error = True
     else:
         print("  [SKIP] User session data not found")
+
+    # 5. Clear export directory in examples (legacy location cleanup)
+    export_dir = os.path.join(script_dir, "examples", "export")
+    if os.path.exists(export_dir):
+        print("Removing export directory in examples...")
+        try:
+            shutil.rmtree(export_dir)
+            print(f"  [OK] Removed {export_dir}")
+        except Exception as e:
+            print(f"  [FAIL] Could not remove {export_dir}: {e}")
+            has_error = True
+    else:
+        print("  [SKIP] Export directory in examples not found")
 
     print()
     if has_error:

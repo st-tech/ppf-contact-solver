@@ -5,6 +5,7 @@
 
 import os
 import pickle
+import platform
 import shutil
 
 from typing import Optional
@@ -187,7 +188,7 @@ class App:
                 with open(branch_file) as f:
                     git_branch = f.read().strip()
                     if git_branch:
-                        if os.name == 'nt':  # Windows
+                        if platform.system() == "Windows":  # Windows
                             return os.path.join(
                                 base_dir, "local", "share", "ppf-cts", f"git-{git_branch}"
                             )
@@ -212,7 +213,7 @@ class App:
         except (subprocess.CalledProcessError, FileNotFoundError):
             git_branch = "unknown"
 
-        if os.name == 'nt':  # Windows
+        if platform.system() == "Windows":  # Windows
             return os.path.join(
                 base_dir, "local", "share", "ppf-cts", f"git-{git_branch}"
             )
@@ -243,7 +244,7 @@ class App:
         if cache_dir:
             self._cache_dir = cache_dir
         else:
-            if os.name == 'nt':  # Windows - use project-relative cache
+            if platform.system() == "Windows":  # Windows - use project-relative cache
                 frontend_dir = os.path.dirname(os.path.realpath(__file__))
                 base_dir = os.path.dirname(frontend_dir)
                 self._cache_dir = os.path.join(base_dir, "cache", "ppf-cts")

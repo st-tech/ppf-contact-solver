@@ -7,6 +7,7 @@ import asyncio
 import copy
 import os
 import pickle
+import platform
 import shutil
 import subprocess
 import threading
@@ -21,7 +22,7 @@ from tqdm.auto import tqdm
 from ._param_ import ParamHolder, app_param
 from ._parse_ import CppRustDocStringParser
 from ._scene_ import FixedScene
-from ._utils_ import Utils
+from ._utils_ import Utils, get_export_base_path
 
 if TYPE_CHECKING:
     from ._plot_ import Plot
@@ -424,7 +425,7 @@ class SessionExport:
         param.export(self._fixed_session.info.path)
 
         # Platform-specific solver path and script generation
-        if os.name == "nt":  # Windows
+        if platform.system() == "Windows":  # Windows
             program_path = os.path.join(
                 self._session.proj_root, "target", "release", "ppf-contact-solver.exe"
             )
@@ -467,7 +468,7 @@ fi
             path = os.path.join(self._fixed_session.info.path, "command.sh")
             with open(path, "w") as f:
                 f.write(command)
-            if os.name != "nt":  # chmod not needed on Windows
+            if platform.system() != "Windows":  # chmod not needed on Windows
                 os.chmod(path, 0o755)
         return path
 
@@ -499,7 +500,7 @@ fi
                 scene = self._session.fixed_scene
                 assert scene is not None
                 path = os.path.join(
-                    "export",
+                    get_export_base_path(),
                     self._fixed_session.session.app_name,
                     self._fixed_session.info.name,
                 )
@@ -507,12 +508,12 @@ fi
         # Check if frames are available
         latest_frame = self._fixed_session.get.latest_frame()
         if latest_frame == 0:
-            if Utils.busy():
+            if self._fixed_session.is_running():
                 print(
                     "No frames available yet. Waiting for simulation to generate frames..."
                 )
                 # Wait for frames to become available
-                while Utils.busy() and self._fixed_session.get.latest_frame() == 0:
+                while self._fixed_session.is_running() and self._fixed_session.get.latest_frame() == 0:
                     time.sleep(1)
                 latest_frame = self._fixed_session.get.latest_frame()
                 if latest_frame == 0:
@@ -892,7 +893,7 @@ class SessionGet:
         Returns:
             Optional[str]: The path to the command.sh file if it exists, None otherwise.
         """
-        if os.name == "nt":  # Windows
+        if platform.system() == "Windows":  # Windows
             command_path = os.path.join(self._fixed_session.info.path, "command.bat")
         else:
             command_path = os.path.join(self._fixed_session.info.path, "command.sh")
@@ -950,6 +951,7 @@ class FixedSession:
             session (Session): The session object.
         """
         self._session = session
+        self._process: Optional[subprocess.Popen] = None
         self._update_preview_interval = 0.1
         self._update_terminal_interval = 0.1
         self._update_table_interval = 0.1
@@ -1010,6 +1012,29 @@ class FixedSession:
             display(message)
         else:
             print(message)
+
+    def is_running(self) -> bool:
+        """Check if the solver process is running.
+
+        This method first checks the stored process handle (most reliable),
+        then falls back to Utils.busy() for broader detection.
+
+        Returns:
+            bool: True if the solver is running, False otherwise.
+        """
+        # First check the stored process handle (most reliable)
+        if self._process is not None:
+            try:
+                if self._process.poll() is None:
+                    return True
+                # Process has exited, clear the reference
+                self._process = None
+            except OSError:
+                # Process handle became invalid
+                self._process = None
+
+        # Fall back to Utils.busy() for cases where process was started externally
+        return Utils.busy()
 
     def _analyze_solver_error(self, log_lines, err_lines):
         """Analyze log and error files for specific failure patterns.
@@ -1185,13 +1210,14 @@ class FixedSession:
         if os.path.exists(self.save_and_quit_file_path()):
             os.remove(self.save_and_quit_file_path())
         self._check_ready()
-        if Utils.busy():
+        if self.is_running():
             if force:
                 Utils.terminate()
+                self._process = None
             else:
                 from IPython.display import display
 
-                self.print("Solver is already running. Teriminate first.")
+                self.print("Solver is already running. Terminate first.")
                 display(self._terminate_button("Terminate Now"))
                 return self
 
@@ -1205,7 +1231,7 @@ class FixedSession:
         if self._cmd_path:
             if load == 0:
                 export_path = os.path.join(
-                    "export",
+                    get_export_base_path(),
                     self._session.app_name,
                     self.info.name,
                 )
@@ -1214,22 +1240,22 @@ class FixedSession:
 
             err_path = os.path.join(self.info.path, "error.log")
             log_path = os.path.join(self.info.path, "stdout.log")
-            if os.name == "nt":  # Windows
+            if platform.system() == "Windows":  # Windows
                 command = f'"{self._cmd_path}" --load {load}'
             else:
                 command = f"bash {self._cmd_path} --load {load}"
             with open(log_path, "w") as stdout_file, open(err_path, "w") as stderr_file:
-                if os.name == "nt":  # Windows
-                    process = subprocess.Popen(
+                if platform.system() == "Windows":  # Windows
+                    self._process = subprocess.Popen(
                         command,
                         shell=True,
                         stdout=stdout_file,
                         stderr=stderr_file,
-                        creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
+                        creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,  # pyright: ignore[reportAttributeAccessIssue]
                         cwd=self._session.proj_root,
                     )
                 else:
-                    process = subprocess.Popen(
+                    self._process = subprocess.Popen(
                         command,
                         shell=True,
                         stdout=stdout_file,
@@ -1237,14 +1263,31 @@ class FixedSession:
                         start_new_session=True,
                         cwd=self._session.proj_root,
                     )
+            process = self._process
             if blocking is None:
                 blocking = not Utils.in_jupyter_notebook()
             if not blocking:
-                # Wait for process to start (needed for Utils.busy() to detect it)
-                for _ in range(10):  # Wait up to 1 second
-                    if Utils.busy():
-                        break
-                    time.sleep(0.1)
+                # Wait briefly for process to initialize and verify it's stable
+                time.sleep(0.2)  # Give process time to start
+                if not self.is_running():
+                    # Process exited immediately - check for errors
+                    if os.path.exists(err_path):
+                        with open(err_path) as f:
+                            err_lines = f.readlines()
+                    else:
+                        err_lines = []
+                    if os.path.exists(log_path):
+                        with open(log_path) as f:
+                            log_lines = f.readlines()
+                    else:
+                        log_lines = []
+                    error_message = self._analyze_solver_error(log_lines, err_lines)
+                    if error_message:
+                        raise ValueError(error_message)
+                    elif err_lines:
+                        raise ValueError(f"Solver failed: {''.join(err_lines[:5])}")
+                    else:
+                        raise ValueError("Solver failed to start")
             if blocking:
                 while not os.path.exists(log_path) and not os.path.exists(err_path):
                     time.sleep(1)
@@ -1269,7 +1312,7 @@ class FixedSession:
                         raise ValueError("Solver failed to start")
                 else:
                     time.sleep(1)
-                    while Utils.busy():
+                    while self.is_running():
                         if self.initialize_finished():
                             break
                         time.sleep(1)
@@ -1358,7 +1401,8 @@ class FixedSession:
                 button.disabled = True
                 button.description = "Terminating..."
                 Utils.terminate()
-                while Utils.busy():
+                self._process = None
+                while self.is_running():
                     time.sleep(0.25)
                 button.description = "Terminated"
 
@@ -1397,8 +1441,9 @@ class FixedSession:
                 button.disabled = True
                 button.description = "Requesting..."
                 self.save_and_quit()
-                while Utils.busy():
+                while self.is_running():
                     time.sleep(0.25)
+                self._process = None
                 button.description = "Done"
 
             button = widgets.Button(description=description)
@@ -1455,7 +1500,7 @@ class FixedSession:
             terminate_button = self._terminate_button()
             save_and_quit_button = self._save_and_quit_button()
 
-            if live_update and Utils.busy():
+            if live_update and self.is_running():
 
                 def update_dataframe(table, curr_frame):
                     summary = self.get.log.summary()
@@ -1501,7 +1546,7 @@ class FixedSession:
                                     color = self.fixed_scene.color(vert, options)
                                     update_dataframe(table, curr_frame)
                                     plot.update(vert, color)
-                            if not Utils.busy():
+                            if not self.is_running():
                                 break
                             await asyncio.sleep(self._update_preview_interval)
                         assert terminate_button is not None
@@ -1526,7 +1571,7 @@ class FixedSession:
                     try:
                         while True:
                             update_dataframe(table, curr_frame)
-                            if not Utils.busy():
+                            if not self.is_running():
                                 break
                             await asyncio.sleep(self._update_table_interval)
                     except Exception as e:
@@ -1582,7 +1627,7 @@ class FixedSession:
                                 "Waiting for simulation to generate at least one frame..."
                             )
                             while self.get.vertex_frame_count() == 0:
-                                if not Utils.busy():
+                                if not self.is_running():
                                     print(
                                         "Simulation finished but no frames were generated."
                                     )
@@ -1716,7 +1761,7 @@ class FixedSession:
                             CONSOLE_STYLE
                             + f"<pre style='no-scroll'>{tail_output}</pre>"
                         )
-                        if not Utils.busy():
+                        if not self.is_running():
                             log_widget.value += "<p style='color: red;'>Terminated.</p>"
                             if os.path.exists(err_path):
                                 with open(err_path) as file:

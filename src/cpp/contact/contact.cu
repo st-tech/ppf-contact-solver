@@ -7,6 +7,7 @@
 #include "../buffer/buffer.hpp"
 #include "../csrmat/csrmat.hpp"
 #include "../data.hpp"
+#include "../lbvh/bvh_storage.hpp"
 #include "../energy/model/fix.hpp"
 #include "../energy/model/friction.hpp"
 #include "../energy/model/push.hpp"
@@ -33,197 +34,33 @@ static unsigned max_of_two(unsigned a, unsigned b) { return a > b ? a : b; }
 __device__ inline float sqr(float x) { return x * x; }
 
 void initialize(const DataSet &data, const ParamSet &param) {
-    BVHSet bvhset = data.bvh;
-
     // Initialize AABB buffers (kept in storage namespace)
-    storage::face_aabb =
-        Vec<AABB>::alloc(bvhset.face.node.size, param.bvh_alloc_factor);
-    storage::edge_aabb =
-        Vec<AABB>::alloc(bvhset.edge.node.size, param.bvh_alloc_factor);
-    storage::vertex_aabb =
-        Vec<AABB>::alloc(bvhset.vertex.node.size, param.bvh_alloc_factor);
-    storage::collision_mesh_face_aabb =
-        Vec<AABB>::alloc(data.constraint.mesh.face_bvh.node.size);
-    storage::collision_mesh_edge_aabb =
-        Vec<AABB>::alloc(data.constraint.mesh.edge_bvh.node.size);
+    // Calculate BVH node counts: 2n-1 nodes for n primitives
+    unsigned n_faces = data.mesh.mesh.face.size;
+    unsigned n_edges = data.mesh.mesh.edge.size;
+    unsigned n_verts = data.surface_vert_count;
+    unsigned face_bvh_nodes = n_faces > 0 ? 2 * n_faces - 1 : 0;
+    unsigned edge_bvh_nodes = n_edges > 0 ? 2 * n_edges - 1 : 0;
+    unsigned vertex_bvh_nodes = n_verts > 0 ? 2 * n_verts - 1 : 0;
 
-    // Temporary buffers are now allocated on demand from the buffer pool
+    storage::face_aabb = Vec<AABB>::alloc(face_bvh_nodes);
+    storage::edge_aabb = Vec<AABB>::alloc(edge_bvh_nodes);
+    storage::vertex_aabb = Vec<AABB>::alloc(vertex_bvh_nodes);
+
+    unsigned cm_faces = data.constraint.mesh.face.size;
+    unsigned cm_edges = data.constraint.mesh.edge.size;
+    unsigned cm_face_bvh_nodes = cm_faces > 0 ? 2 * cm_faces - 1 : 0;
+    unsigned cm_edge_bvh_nodes = cm_edges > 0 ? 2 * cm_edges - 1 : 0;
+
+    storage::collision_mesh_face_aabb = Vec<AABB>::alloc(cm_face_bvh_nodes);
+    storage::collision_mesh_edge_aabb = Vec<AABB>::alloc(cm_edge_bvh_nodes);
 }
 
-void resize_aabb(const BVHSet &bvh) {
-    storage::face_aabb.resize(bvh.face.node.size);
-    storage::edge_aabb.resize(bvh.edge.node.size);
-}
-
-__device__ void update_face_aabb(const Vec<Vec3f> &x0, const Vec<Vec3f> &x1,
-                                 const BVH &bvh, Vec<AABB> &aabb,
-                                 const Vec<Vec3u> &face,
-                                 const Vec<FaceProp> &prop,
-                                 const Vec<FaceParam> &face_params,
-                                 unsigned level, const ParamSet &param,
-                                 float extrapolate, unsigned i) {
-    unsigned index = bvh.level(level, i);
-    Vec2u node = bvh.node[index];
-    if (node[1] == 0) {
-        unsigned leaf = node[0] - 1;
-        const FaceParam &fparam = face_params[prop[leaf].param_index];
-        float ext_eps = 0.5f * fparam.ghat + fparam.offset;
-        Vec3f y00 = x0[face[leaf][0]];
-        Vec3f y01 = x0[face[leaf][1]];
-        Vec3f y02 = x0[face[leaf][2]];
-        Vec3f y10 = x1[face[leaf][0]];
-        Vec3f y11 = x1[face[leaf][1]];
-        Vec3f y12 = x1[face[leaf][2]];
-        Vec3f z10 = extrapolate * (y10 - y00) + y00;
-        Vec3f z11 = extrapolate * (y11 - y01) + y01;
-        Vec3f z12 = extrapolate * (y12 - y02) + y02;
-        aabb[index] = aabb::join(aabb::make(y00, y01, y02, ext_eps),
-                                 aabb::make(z10, z11, z12, ext_eps));
-    } else {
-        unsigned left = node[0] - 1;
-        unsigned right = node[1] - 1;
-        aabb[index] = aabb::join(aabb[left], aabb[right]);
-    }
-}
-
-__device__ void update_edge_aabb(const Vec<Vec3f> &x0, const Vec<Vec3f> &x1,
-                                 const BVH &bvh, Vec<AABB> aabb,
-                                 const Vec<Vec2u> &edge,
-                                 const Vec<EdgeProp> prop,
-                                 const Vec<EdgeParam> &edge_params,
-                                 unsigned level, const ParamSet &param,
-                                 float extrapolate, unsigned i) {
-    unsigned index = bvh.level(level, i);
-    Vec2u node = bvh.node[index];
-    if (node[1] == 0) {
-        unsigned leaf = node[0] - 1;
-        unsigned i0 = edge[leaf][0];
-        unsigned i1 = edge[leaf][1];
-        Vec3f y00 = x0[i0];
-        Vec3f y01 = x0[i1];
-        Vec3f y10 = x1[i0];
-        Vec3f y11 = x1[i1];
-        Vec3f z10 = extrapolate * (y10 - y00) + y00;
-        Vec3f z11 = extrapolate * (y11 - y01) + y01;
-        const EdgeParam &eparam = edge_params[prop[leaf].param_index];
-        float ext_eps = 0.5f * eparam.ghat + eparam.offset;
-        aabb[index] = aabb::join(aabb::make(y00, y01, ext_eps),
-                                 aabb::make(z10, z11, ext_eps));
-    } else {
-        unsigned left = node[0] - 1;
-        unsigned right = node[1] - 1;
-        aabb[index] = aabb::join(aabb[left], aabb[right]);
-    }
-}
-
-__device__ void update_vertex_aabb(const Vec<Vec3f> &x0, const Vec<Vec3f> &x1,
-                                   const BVH &bvh, Vec<AABB> aabb,
-                                   const Vec<VertexProp> &prop,
-                                   const Vec<VertexParam> &vertex_params,
-                                   unsigned level, const ParamSet &param,
-                                   float extrapolate, unsigned i) {
-    unsigned index = bvh.level(level, i);
-    Vec2u node = bvh.node[index];
-    if (node[1] == 0) {
-        unsigned leaf = node[0] - 1;
-        const VertexParam &vparam = vertex_params[prop[leaf].param_index];
-        float ext_eps = 0.5f * vparam.ghat + vparam.offset;
-        Vec3f y0 = x0[leaf];
-        Vec3f y1 = x1[leaf];
-        Vec3f z1 = extrapolate * (y1 - y0) + y0;
-        aabb[index] = aabb::make(y0, z1, ext_eps);
-    } else {
-        unsigned left = node[0] - 1;
-        unsigned right = node[1] - 1;
-        aabb[index] = aabb::join(aabb[left], aabb[right]);
-    }
-}
-
-void update_aabb(const DataSet &host_data, const DataSet &dev_data,
-                 const Vec<Vec3f> &x0, const Vec<Vec3f> &x1,
-                 const ParamSet &param) {
-
-    const MeshInfo &mesh = dev_data.mesh;
-    const BVHSet &bvhset = dev_data.bvh;
-    float extrapolate = param.line_search_max_t;
-
-    const BVH &face_bvh = bvhset.face;
-    Vec<AABB> face_aabb = storage::face_aabb;
-    Vec<FaceProp> face_prop = dev_data.prop.face;
-    Vec<FaceParam> face_params = dev_data.param_arrays.face;
-    Vec<EdgeParam> edge_params = dev_data.param_arrays.edge;
-    Vec<VertexParam> vertex_params = dev_data.param_arrays.vertex;
-
-    for (unsigned level = 0; level < bvhset.face.level.size; ++level) {
-        unsigned count = host_data.bvh.face.level.count(level);
-        DISPATCH_START(count)
-        [mesh, face_prop, face_params, param, x0, x1, face_bvh, level,
-         extrapolate, face_aabb] __device__(unsigned i) mutable {
-            update_face_aabb(x0, x1, face_bvh, face_aabb, mesh.mesh.face,
-                             face_prop, face_params, level, param, extrapolate,
-                             i);
-        } DISPATCH_END;
-    }
-    const BVH &edge_bvh = bvhset.edge;
-    Vec<AABB> edge_aabb = storage::edge_aabb;
-    Vec<EdgeProp> edge_prop = dev_data.prop.edge;
-    for (unsigned level = 0; level < bvhset.edge.level.size; ++level) {
-        unsigned count = host_data.bvh.edge.level.count(level);
-        DISPATCH_START(count)
-        [mesh, edge_prop, edge_params, param, x0, x1, edge_bvh, level,
-         extrapolate, edge_aabb] __device__(unsigned i) mutable {
-            update_edge_aabb(x0, x1, edge_bvh, edge_aabb, mesh.mesh.edge,
-                             edge_prop, edge_params, level, param, extrapolate,
-                             i);
-        } DISPATCH_END;
-    }
-    const BVH &vertex_bvh = bvhset.vertex;
-    Vec<AABB> vertex_aabb = storage::vertex_aabb;
-    Vec<VertexProp> vertex_prop = dev_data.prop.vertex;
-    for (unsigned level = 0; level < bvhset.vertex.level.size; ++level) {
-        unsigned count = host_data.bvh.vertex.level.count(level);
-        DISPATCH_START(count)
-        [mesh, vertex_prop, vertex_params, param, x0, x1, vertex_bvh, level,
-         extrapolate, vertex_aabb] __device__(unsigned i) mutable {
-            update_vertex_aabb(x0, x1, vertex_bvh, vertex_aabb, vertex_prop,
-                               vertex_params, level, param, extrapolate, i);
-        } DISPATCH_END;
-    }
-}
-
-void update_collision_mesh_aabb(const DataSet &host_data,
-                                const DataSet &dev_data,
-                                const ParamSet &param) {
-    const Vec<Vec3f> &vertex = dev_data.constraint.mesh.vertex;
-    const BVH &face_bvh = dev_data.constraint.mesh.face_bvh;
-    Vec<AABB> face_aabb = storage::collision_mesh_face_aabb;
-    Vec<FaceProp> face_prop = dev_data.constraint.mesh.prop.face;
-    Vec<EdgeProp> edge_prop = dev_data.constraint.mesh.prop.edge;
-    Vec<FaceParam> face_params = dev_data.constraint.mesh.param_arrays.face;
-    Vec<EdgeParam> edge_params = dev_data.constraint.mesh.param_arrays.edge;
-    const Vec<Vec3u> &face = dev_data.constraint.mesh.face;
-    for (unsigned level = 0; level < face_bvh.level.size; ++level) {
-        unsigned count = host_data.constraint.mesh.face_bvh.level.count(level);
-        DISPATCH_START(count)
-        [vertex, face_bvh, face_prop, face_params, param, level, face_aabb,
-         face] __device__(unsigned i) mutable {
-            update_face_aabb(vertex, vertex, face_bvh, face_aabb, face,
-                             face_prop, face_params, level, param, 0.0f, i);
-        } DISPATCH_END;
-    }
-    const BVH &edge_bvh = dev_data.constraint.mesh.edge_bvh;
-    Vec<AABB> edge_aabb = storage::collision_mesh_edge_aabb;
-    const Vec<Vec2u> &edge = dev_data.constraint.mesh.edge;
-    for (unsigned level = 0; level < edge_bvh.level.size; ++level) {
-        unsigned count = host_data.constraint.mesh.edge_bvh.level.count(level);
-        DISPATCH_START(count)
-        [vertex, edge_bvh, edge_prop, edge_params, param, level, edge_aabb,
-         edge] __device__(unsigned i) mutable {
-            update_edge_aabb(vertex, vertex, edge_bvh, edge_aabb, edge,
-                             edge_prop, edge_params, level, param, 0.0f, i);
-        } DISPATCH_END;
-    }
-}
+Vec<AABB> &get_face_aabb() { return storage::face_aabb; }
+Vec<AABB> &get_edge_aabb() { return storage::edge_aabb; }
+Vec<AABB> &get_vertex_aabb() { return storage::vertex_aabb; }
+Vec<AABB> &get_collision_mesh_face_aabb() { return storage::collision_mesh_face_aabb; }
+Vec<AABB> &get_collision_mesh_edge_aabb() { return storage::collision_mesh_edge_aabb; }
 
 __device__ bool edge_has_shared_vert(const Vec2u &e0, const Vec2u &e1) {
     for (int i = 0; i < 2; i++) {
@@ -1078,9 +915,9 @@ unsigned embed_contact_force_hessian(const DataSet &data,
     unsigned max_contact_vert = (surface_vert_count > collision_mesh_vert_count)
                                     ? surface_vert_count
                                     : collision_mesh_vert_count;
-    const BVH face_bvh = data.bvh.face;
-    const BVH edge_bvh = data.bvh.edge;
-    const BVH vertex_bvh = data.bvh.vertex;
+    const BVH face_bvh = bvh_storage::get_bvh().face;
+    const BVH edge_bvh = bvh_storage::get_bvh().edge;
+    const BVH vertex_bvh = bvh_storage::get_bvh().vertex;
     const Vec<AABB> face_aabb = storage::face_aabb;
     const Vec<AABB> edge_aabb = storage::edge_aabb;
     const Vec<AABB> vertex_aabb = storage::vertex_aabb;
@@ -1266,7 +1103,7 @@ unsigned embed_constraint_force_hessian(const DataSet &data,
                                     ? surface_vert_count
                                     : collision_mesh_vert_count;
 
-    const BVH &face_bvh = data.bvh.face;
+    const BVH &face_bvh = bvh_storage::get_bvh().face;
     const Vec<AABB> face_aabb = storage::face_aabb;
 
     Vec<VertexParam> vertex_params = data.param_arrays.vertex;
@@ -1299,8 +1136,8 @@ unsigned embed_constraint_force_hessian(const DataSet &data,
     if (!param.disable_contact) {
         CollisionHessForceEmbedArgs args = {
             data.constraint.mesh.vertex,      data.constraint.mesh.face,
-            data.constraint.mesh.edge,        data.constraint.mesh.face_bvh,
-            data.constraint.mesh.edge_bvh,    storage::collision_mesh_face_aabb,
+            data.constraint.mesh.edge,        bvh_storage::get_collision_mesh_bvh().face,
+            bvh_storage::get_collision_mesh_bvh().edge,    storage::collision_mesh_face_aabb,
             storage::collision_mesh_edge_aabb};
 
         DISPATCH_START(surface_vert_count)
@@ -1752,7 +1589,7 @@ float line_search(const DataSet &data, const Vec<Vec3f> &x0,
                   const Vec<Vec3f> &x1, const ParamSet &param) {
 
     const MeshInfo &mesh = data.mesh;
-    const BVHSet &bvhset = data.bvh;
+    const BVHSet &bvhset = bvh_storage::get_bvh();
 
     unsigned surface_vert_count = data.surface_vert_count;
     unsigned edge_count = mesh.mesh.edge.size;
@@ -1763,8 +1600,8 @@ float line_search(const DataSet &data, const Vec<Vec3f> &x0,
 
     const BVH &face_bvh = bvhset.face;
     const BVH &edge_bvh = bvhset.edge;
-    const BVH &collision_mesh_face_bvh = data.constraint.mesh.face_bvh;
-    const BVH &collision_mesh_edge_bvh = data.constraint.mesh.edge_bvh;
+    const BVH &collision_mesh_face_bvh = bvh_storage::get_collision_mesh_bvh().face;
+    const BVH &collision_mesh_edge_bvh = bvh_storage::get_collision_mesh_bvh().edge;
     const Vec<Vec2u> &collision_mesh_edge = data.constraint.mesh.edge;
     const Vec<Vec3u> &collision_mesh_face = data.constraint.mesh.face;
     const Vec<Vec3f> &collision_mesh_vertex = data.constraint.mesh.vertex;
@@ -2134,9 +1971,9 @@ bool check_intersection(const DataSet &data, const Vec<Vec3f> &vertex,
                         const ParamSet &param) {
 
     unsigned edge_count = data.mesh.mesh.edge.size;
-    const BVH &face_bvh = data.bvh.face;
-    const BVH &edge_bvh = data.bvh.edge;
-    const BVH &collision_mesh_face_bvh = data.constraint.mesh.face_bvh;
+    const BVH &face_bvh = bvh_storage::get_bvh().face;
+    const BVH &edge_bvh = bvh_storage::get_bvh().edge;
+    const BVH &collision_mesh_face_bvh = bvh_storage::get_collision_mesh_bvh().face;
     const MeshInfo &mesh = data.mesh;
     const Vec<Vec3u> &collision_mesh_face = data.constraint.mesh.face;
     const Vec<AABB> face_aabb = storage::face_aabb;

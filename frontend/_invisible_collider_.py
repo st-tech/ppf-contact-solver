@@ -42,51 +42,6 @@ def _check_wall_violation_single(
     return signed_dist < 0.0
 
 
-@njit(cache=True)
-def _check_sphere_violation_single(
-    vertex: np.ndarray,
-    sphere_center: np.ndarray,
-    sphere_radius: float,
-    is_inverted: bool,
-    is_hemisphere: bool,
-) -> bool:
-    """Check if a single vertex violates sphere constraint.
-
-    For normal sphere: vertex must be OUTSIDE (distance >= radius)
-    For inverted sphere: vertex must be INSIDE (distance <= radius)
-    For hemisphere (bowl): above center.y, treat as cylinder (only check horizontal distance)
-
-    Args:
-        vertex: Vertex position (3,)
-        sphere_center: Center of sphere (3,)
-        sphere_radius: Radius of sphere
-        is_inverted: If True, collision is with inside of sphere
-        is_hemisphere: If True, top half is open (bowl shape)
-
-    Returns:
-        True if vertex violates the sphere constraint
-    """
-    # For hemisphere, if vertex is above center.y, project center to vertex's y-level
-    # This creates a cylinder-like region above the hemisphere
-    if is_hemisphere and vertex[1] > sphere_center[1]:
-        center = np.array([sphere_center[0], vertex[1], sphere_center[2]])
-    else:
-        center = sphere_center
-
-    diff = vertex - center
-    dist_sq = diff[0] * diff[0] + diff[1] * diff[1] + diff[2] * diff[2]
-    dist = np.sqrt(dist_sq)
-
-    if is_inverted:
-        # For inverted sphere, vertex must be inside (distance <= radius)
-        # Violation if distance > radius (outside the sphere)
-        return dist > sphere_radius
-    else:
-        # For normal sphere, vertex must be outside (distance >= radius)
-        # Violation if distance < radius (inside the sphere)
-        return dist < sphere_radius
-
-
 @njit(parallel=True, cache=True)
 def _check_wall_violations_parallel(
     vertices: np.ndarray,
@@ -108,17 +63,57 @@ def _check_wall_violations_parallel(
         Number of violations found
     """
     n_verts = len(vertices)
+
+    # Check violations in parallel
     for i in prange(n_verts):
         if not is_pinned[i] and _check_wall_violation_single(
             vertices[i], wall_pos, wall_normal
         ):
             violations[i] = True
 
+    # Parallel reduction for counting
     count = 0
-    for i in range(n_verts):
+    for i in prange(n_verts):
         if violations[i]:
             count += 1
     return count
+
+
+@njit(cache=True)
+def _check_sphere_violation(
+    vertex: np.ndarray,
+    sphere_center: np.ndarray,
+    sphere_radius_sq: float,
+    is_inverted: bool,
+    is_hemisphere: bool,
+) -> bool:
+    """Check if a single vertex violates sphere constraint using squared distance.
+
+    This version avoids sqrt for the check, only computing it when needed.
+    """
+    # For hemisphere, if vertex is above center.y, project center to vertex's y-level
+    if is_hemisphere and vertex[1] > sphere_center[1]:
+        cx = sphere_center[0]
+        cy = vertex[1]
+        cz = sphere_center[2]
+    else:
+        cx = sphere_center[0]
+        cy = sphere_center[1]
+        cz = sphere_center[2]
+
+    dx = vertex[0] - cx
+    dy = vertex[1] - cy
+    dz = vertex[2] - cz
+    dist_sq = dx*dx + dy*dy + dz*dz
+
+    if is_inverted:
+        # For inverted sphere, vertex must be inside (distance <= radius)
+        # Violation if distance > radius (outside the sphere)
+        return dist_sq > sphere_radius_sq
+    else:
+        # For normal sphere, vertex must be outside (distance >= radius)
+        # Violation if distance < radius (inside the sphere)
+        return dist_sq < sphere_radius_sq
 
 
 @njit(parallel=True, cache=True)
@@ -146,14 +141,18 @@ def _check_sphere_violations_parallel(
         Number of violations found
     """
     n_verts = len(vertices)
+    sphere_radius_sq = sphere_radius * sphere_radius
+
+    # Check violations in parallel using squared distance
     for i in prange(n_verts):
-        if not is_pinned[i] and _check_sphere_violation_single(
-            vertices[i], sphere_center, sphere_radius, is_inverted, is_hemisphere
+        if not is_pinned[i] and _check_sphere_violation(
+            vertices[i], sphere_center, sphere_radius_sq, is_inverted, is_hemisphere
         ):
             violations[i] = True
 
+    # Parallel reduction for counting
     count = 0
-    for i in range(n_verts):
+    for i in prange(n_verts):
         if violations[i]:
             count += 1
     return count

@@ -328,29 +328,6 @@ pub struct ParamArrays {
     pub tet: CVec<TetParam>,
 }
 
-#[repr(C)]
-#[derive(Serialize, Deserialize)]
-pub struct Bvh {
-    pub node: CVec<Vec2u>,
-    pub level: CVecVec<u32>,
-}
-
-impl Bvh {
-    pub fn new() -> Self {
-        Self {
-            node: CVec::new(),
-            level: CVecVec::new(),
-        }
-    }
-}
-
-#[repr(C)]
-#[derive(Serialize, Deserialize)]
-pub struct BvhSet {
-    pub face: Bvh,
-    pub edge: Bvh,
-    pub vertex: Bvh,
-}
 
 #[repr(C)]
 #[derive(Debug, Serialize, Deserialize, Copy, Clone, Default, Hash, PartialEq, Eq)]
@@ -459,8 +436,6 @@ pub struct CollisionMesh {
     pub vertex: CVec<Vec3fp>,
     pub face: CVec<Vec3u>,
     pub edge: CVec<Vec2u>,
-    pub face_bvh: Bvh,
-    pub edge_bvh: Bvh,
     pub prop: CollisionMeshPropSet,
     pub param_arrays: CollisionMeshParamArrays,
     pub neighbor: Neighbor,
@@ -472,8 +447,6 @@ impl CollisionMesh {
             vertex: CVec::new(),
             face: CVec::new(),
             edge: CVec::new(),
-            face_bvh: Bvh::new(),
-            edge_bvh: Bvh::new(),
             prop: CollisionMeshPropSet::new(),
             param_arrays: CollisionMeshParamArrays::new(),
             neighbor: Neighbor::new(),
@@ -519,7 +492,6 @@ pub struct ParamSet {
     pub wind: Vec3f,
     pub barrier: Barrier,
     pub csrmat_max_nnz: u32,
-    pub bvh_alloc_factor: u32,
     pub fix_xz: f32,
     pub disable_contact: bool,
     pub fitting: bool,
@@ -557,7 +529,6 @@ pub struct DataSet {
     pub inv_rest2x2: CVec<Mat2x2f>,
     pub inv_rest3x3: CVec<Mat3x3f>,
     pub constraint: Constraint,
-    pub bvh: BvhSet,
     pub fixed_index_table: CVecVec<u32>,
     pub transpose_table: CVecVec<Vec2u>,
     pub rod_count: u32,

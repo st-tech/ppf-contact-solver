@@ -16,6 +16,7 @@ from typing import Any, Optional, Union
 
 import numpy as np
 
+from numba import njit, prange
 from tqdm.auto import tqdm
 
 from ._asset_ import AssetManager
@@ -26,6 +27,102 @@ from ._plot_ import Plot, PlotManager
 from ._proximity_ import check_contact_offset_violation
 from ._render_ import MitsubaRenderer, Rasterizer
 from ._utils_ import Utils
+
+# Numba-optimized utility functions for scene building
+
+
+@njit(cache=True)
+def find_min_edge_length_tris(
+    verts: np.ndarray,
+    tris: np.ndarray,
+) -> float:
+    """Find minimum edge length from triangles."""
+    min_len_sq = np.inf
+    n_tris = len(tris)
+
+    for ti in range(n_tris):
+        t0, t1, t2 = tris[ti, 0], tris[ti, 1], tris[ti, 2]
+        v0 = verts[t0]
+        v1 = verts[t1]
+        v2 = verts[t2]
+
+        # Edge 0-1
+        d = v1 - v0
+        len_sq = d[0] * d[0] + d[1] * d[1] + d[2] * d[2]
+        if len_sq > 0 and len_sq < min_len_sq:
+            min_len_sq = len_sq
+
+        # Edge 1-2
+        d = v2 - v1
+        len_sq = d[0] * d[0] + d[1] * d[1] + d[2] * d[2]
+        if len_sq > 0 and len_sq < min_len_sq:
+            min_len_sq = len_sq
+
+        # Edge 2-0
+        d = v0 - v2
+        len_sq = d[0] * d[0] + d[1] * d[1] + d[2] * d[2]
+        if len_sq > 0 and len_sq < min_len_sq:
+            min_len_sq = len_sq
+
+    if min_len_sq == np.inf:
+        return np.inf
+    return np.sqrt(min_len_sq)
+
+
+@njit(cache=True)
+def find_min_edge_length_edges(
+    verts: np.ndarray,
+    edges: np.ndarray,
+) -> float:
+    """Find minimum edge length from edge elements."""
+    min_len_sq = np.inf
+    n_edges = len(edges)
+
+    for ei in range(n_edges):
+        e0, e1 = edges[ei, 0], edges[ei, 1]
+        v0 = verts[e0]
+        v1 = verts[e1]
+        d = v1 - v0
+        len_sq = d[0] * d[0] + d[1] * d[1] + d[2] * d[2]
+        if len_sq > 0 and len_sq < min_len_sq:
+            min_len_sq = len_sq
+
+    if min_len_sq == np.inf:
+        return np.inf
+    return np.sqrt(min_len_sq)
+
+
+@njit(parallel=True, cache=True)
+def compute_face_to_vertex_counts(
+    tris: np.ndarray,
+    n_verts: int,
+    out_counts: np.ndarray,
+):
+    """Count faces per vertex in parallel."""
+    n_tris = len(tris)
+
+    # Reset counts
+    for i in prange(n_verts):
+        out_counts[i] = 0
+
+    # Count - need atomic operations, so use sequential for correctness
+    for ti in range(n_tris):
+        out_counts[tris[ti, 0]] += 1
+        out_counts[tris[ti, 1]] += 1
+        out_counts[tris[ti, 2]] += 1
+
+
+@njit(parallel=True, cache=True)
+def compute_face_to_vertex_weights(
+    counts: np.ndarray,
+    out_weights: np.ndarray,
+    epsilon: float = 0.0001,
+):
+    """Compute inverse weights from counts in parallel."""
+    n = len(counts)
+    for i in prange(n):
+        out_weights[i] = 1.0 / (counts[i] + epsilon)
+
 
 EPS = 1e-3
 
@@ -1092,12 +1189,13 @@ class FixedScene:
             self._area = np.zeros(0)
 
         if self._has_dyn_color:
-            # Compute vertex weights for face-to-vertex averaging (replaces scipy sparse matrix)
-            vert_face_count = np.zeros(len(self._vert[0])) + 0.0001
-            for f in self._tri:
-                for j in f:
-                    vert_face_count[j] += 1
-            self._face_to_vert_weights = 1.0 / vert_face_count
+            # Compute vertex weights for face-to-vertex averaging (numba-optimized)
+            n_verts = len(self._vert[0])
+            tri_arr = np.ascontiguousarray(self._tri, dtype=np.int64)
+            vert_face_count = np.zeros(n_verts, dtype=np.float64)
+            compute_face_to_vertex_counts(tri_arr, n_verts, vert_face_count)
+            self._face_to_vert_weights = np.zeros(n_verts, dtype=np.float64)
+            compute_face_to_vertex_weights(vert_face_count, self._face_to_vert_weights)
         else:
             self._face_to_vert_weights = None
 
@@ -1105,31 +1203,24 @@ class FixedScene:
         if merge:
             vertex_hash_map = {}
 
-            # Compute minimal edge length from triangles and edges
+            # Compute actual vertex positions for min edge length calculation
+            actual_verts = self._vert[1] + self._displacement[self._vert[0]]
+            actual_verts = np.ascontiguousarray(actual_verts, dtype=np.float64)
+
+            # Compute minimal edge length from triangles and edges using numba
             min_edge_length = float("inf")
 
-            # Check edges from rods
-            for edge in self._rod:
-                v0 = self._vert[1][edge[0]] + self._displacement[self._vert[0][edge[0]]]
-                v1 = self._vert[1][edge[1]] + self._displacement[self._vert[0][edge[1]]]
-                edge_length = np.linalg.norm(v1 - v0)
-                if edge_length > 0:
-                    min_edge_length = min(min_edge_length, edge_length)
+            if len(self._rod) > 0:
+                rod_arr = np.ascontiguousarray(self._rod, dtype=np.int64)
+                rod_min = find_min_edge_length_edges(actual_verts, rod_arr)
+                if rod_min < min_edge_length:
+                    min_edge_length = rod_min
 
-            # Check edges from triangles
-            for tri in self._tri:
-                for i in range(3):
-                    v0 = (
-                        self._vert[1][tri[i]]
-                        + self._displacement[self._vert[0][tri[i]]]
-                    )
-                    v1 = (
-                        self._vert[1][tri[(i + 1) % 3]]
-                        + self._displacement[self._vert[0][tri[(i + 1) % 3]]]
-                    )
-                    edge_length = np.linalg.norm(v1 - v0)
-                    if edge_length > 0:
-                        min_edge_length = min(min_edge_length, edge_length)
+            if len(self._tri) > 0:
+                tri_arr = np.ascontiguousarray(self._tri, dtype=np.int64)
+                tri_min = find_min_edge_length_tris(actual_verts, tri_arr)
+                if tri_min < min_edge_length:
+                    min_edge_length = tri_min
 
             # Set epsilon based on minimal edge length
             if min_edge_length == float("inf"):
@@ -1367,12 +1458,15 @@ class FixedScene:
                     _compute_area(self._vert[1], self._tri, self._area)
 
                     if self._has_dyn_color:
-                        # Recompute vertex weights for face-to-vertex averaging
-                        vert_face_count = np.zeros(len(self._vert[0])) + 0.0001
-                        for f in self._tri:
-                            for j in f:
-                                vert_face_count[j] += 1
-                        self._face_to_vert_weights = 1.0 / vert_face_count
+                        # Recompute vertex weights for face-to-vertex averaging (numba)
+                        n_verts = len(self._vert[0])
+                        tri_arr = np.ascontiguousarray(self._tri, dtype=np.int64)
+                        vert_face_count = np.zeros(n_verts, dtype=np.float64)
+                        compute_face_to_vertex_counts(tri_arr, n_verts, vert_face_count)
+                        self._face_to_vert_weights = np.zeros(n_verts, dtype=np.float64)
+                        compute_face_to_vertex_weights(
+                            vert_face_count, self._face_to_vert_weights
+                        )
 
     @property
     def tri_param(self) -> dict[str, list[Any]]:

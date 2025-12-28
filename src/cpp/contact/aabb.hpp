@@ -78,10 +78,8 @@ __device__ unsigned query(const BVH &bvh, Vec<AABB> aabb, F op, T query) {
             if (op.test(aabb[index], query)) {
                 if (bvh.node[index][1] == 0) {
                     unsigned leaf_index = bvh.node[index][0] - 1;
-                    if (op.test(aabb[index], query)) {
-                        if (op(leaf_index)) {
-                            count++;
-                        }
+                    if (op(leaf_index)) {
+                        count++;
                     }
                 } else {
                     if (head + 2 >= AABB_MAX_QUERY) {

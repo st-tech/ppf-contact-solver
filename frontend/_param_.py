@@ -119,11 +119,6 @@ def app_param() -> dict[str, tuple[Any, str, str]]:
             "Maximal Matrix Entries for Contact Matrix Entries on the GPU",
             "Pre-allocated contact matrix entries for GPU. Too large may cause OOM, too small may cause failure.",
         ),
-        "bvh-alloc-factor": (
-            2,
-            "Extra Memory Allocation Factor for BVH on the GPU",
-            "Factor to pre-allocate BVH memory on GPU.",
-        ),
         "frames": (
             300,
             "Maximal Frame Count to Simulate",

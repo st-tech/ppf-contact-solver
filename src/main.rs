@@ -6,7 +6,6 @@
 mod args;
 mod backend;
 mod builder;
-mod bvh;
 mod cvec;
 mod cvecvec;
 mod data;
@@ -17,7 +16,7 @@ mod triutils;
 use args::{ProgramArgs, SimArgs};
 use backend::MeshSet;
 use clap::Parser;
-use data::{BvhSet, DataSet, EdgeParam, EdgeProp, ParamSet};
+use data::{DataSet, EdgeParam, EdgeProp, ParamSet};
 use flate2::{read::GzDecoder, write::GzEncoder, Compression};
 use log::*;
 use log4rs::append::console::ConsoleAppender;

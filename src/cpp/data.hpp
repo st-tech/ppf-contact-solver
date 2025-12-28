@@ -203,7 +203,7 @@ struct ParamArrays {
 
 struct BVH {
     Vec<Vec2u> node;
-    VecVec<unsigned> level;
+    VecVec<unsigned> level; // Nodes grouped by depth (level[0] = root, level[last] = leaves)
 };
 
 struct BVHSet {
@@ -269,8 +269,6 @@ struct CollisionMesh {
     Vec<Vec3f> vertex;
     Vec<Vec3u> face;
     Vec<Vec2u> edge;
-    BVH face_bvh;
-    BVH edge_bvh;
     struct {
         Vec<VertexProp> vertex;
         Vec<FaceProp> face;
@@ -322,7 +320,6 @@ struct ParamSet {
     Vec3f wind;
     Barrier barrier;
     unsigned csrmat_max_nnz;
-    unsigned bvh_alloc_factor;
     float fix_xz;
     bool disable_contact;
     bool fitting;
@@ -351,7 +348,6 @@ struct DataSet {
     Vec<Mat2x2f> inv_rest2x2;
     Vec<Mat3x3f> inv_rest3x3;
     Constraint constraint;
-    BVHSet bvh;
     VecVec<unsigned> fixed_index_table;
     VecVec<Vec2u> transpose_table;
     unsigned rod_count;
