@@ -35,29 +35,29 @@ Since the materials below are lengthy, we provide a summary of the final results
 
 ## 📖 What's the Story?
 
-If you are solving it implicitly, you’ll probably need both the force and the force jacobian of a potential energy ⚡ with respect to 🎢 strain.
+If you are solving it implicitly, you'll probably need both the force and the force jacobian of a potential energy with respect to strain.
 For example, let $\Psi(F)$ denote a hyper-elasticity potential energy with respect to a strain tensor $F$.
 $F$ is a $3 \times 3$ matrix for solids and a $3 \times 2$ matrix for shells. It is alternatively called the deformation gradient.
 Force derivatives refer to $\frac{\partial^2 \Psi}{\partial f_i \partial f_j}$, where **$f_i$ is a single entry of matrix $F$**.
 
 ## 🚧 What's the Problem?
 
-We could manage 😖 to calculate the force $\frac{\partial \Psi}{\partial f_i}$, but the force jacobian $\frac{\partial^2 \Psi}{\partial f_i \partial f_j}$ is so hard 😵‍💫 that it drives us crazy! 🤯
-But what a bummer! 😰 The reality is **cruel 💀**; what we actually need is the 🔍 **eigen-decomposed force jacobian**, not simply the force jacobian! 😭
-They are necessary to project them onto the semi-positive space, ensuring that the Newton's method does descend the energy to be minimized. 🤔
-A brute-force solution using numerical factorization is too 🐌 slow (it's a dense $9 \times 9$ matrix!).
-Symbolic math software 💥 explodes.
-🚧 Dead end 🚧.
+We could manage to calculate the force $\frac{\partial \Psi}{\partial f_i}$, but the force jacobian $\frac{\partial^2 \Psi}{\partial f_i \partial f_j}$ is so hard that it drives us crazy!
+But what a bummer! The reality is **cruel**; what we actually need is the **eigen-decomposed force jacobian**, not simply the force jacobian!
+They are necessary to project them onto the semi-positive space, ensuring that the Newton's method does descend the energy to be minimized.
+A brute-force solution using numerical factorization is too slow (it's a dense $9 \times 9$ matrix!).
+Symbolic math software explodes.
+Dead end.
 
 > [!NOTE]
 > Some readers may instead opt for position-based dynamics or projective dynamics, which do not require force jacobian.
-> However, these first-order convergent methods are not suitable for highly stiff materials or high-resolution meshes due to their slow convergence 🐢.
-> If you’re skeptical, try it yourself.
-> They are best suited for real-time applications, such as 🎮 video games.
+> However, these first-order convergent methods are not suitable for highly stiff materials or high-resolution meshes due to their slow convergence.
+> If you're skeptical, try it yourself.
+> They are best suited for real-time applications, such as video games.
 
 ## 🤔 Why Not Just Use Past Literature?
 
-We know that there is excellent literature out there 📚 but it has ⛔ limitations.
+We know that there is excellent literature out there but it has limitations.
 The most popular one [(1)](#1) heavily depends on invariants, but not all isotropic energies can be clearly expressed with them, or at least not without considerable human effort.
 For example, how can we write a flavor of [Ogden](https://en.wikipedia.org/wiki/Ogden_hyperelastic_model) energy $\sum_k \left( \lambda_1^{0.5^k} + \lambda_2^{0.5^k} + \lambda_3^{0.5^k} - 3 \right)$ using invariants?
 
@@ -65,7 +65,7 @@ For example, how can we write a flavor of [Ogden](https://en.wikipedia.org/wiki/
 > A practical example where our singular-value eigenanalysis is essential is the isotropic strain-limiting energies, which are discussed in the supplementary.
 
 Other method [(2)](#2) can handle such cases but have singularities when two stretches are the same along principal axes.
-This means that even a rest pose 🛟 is considered a singular case.
+This means that even a rest pose is considered a singular case.
 Technically, our method is mathematically a variant of Zhu [(3)](#3); though, we eliminate (not all) the singularities they have and offer a more explicit solution.
 A notable difference is that ours has the ability to re-derive the eigen system revealed by Smith et al. [(1)](#1).
 This is only possible with our formulation, not with Zhu [(3)](#3).
@@ -78,11 +78,11 @@ This is only possible with our formulation, not with Zhu [(3)](#3).
 
 ## 🎯 Our Goals
 
-Without further ado, let us pin 📌 our objectives:
+Without further ado, let us pin our objectives:
 
 - We just need $\frac{\partial \Psi}{\partial f_i}$ and the eigen-filtered $\frac{\partial^2 \Psi}{\partial f_i \partial f_j}$; nothing else.
 - We only use singular values, not invariants.
-- It has to be both reasonably fast 🚀 and simple ✏️.
+- It has to be both reasonably fast and simple.
 
 > [!TIP]
 > Once you obtain $\frac{\partial \Psi}{\partial f_i}$ and $\frac{\partial^2 \Psi}{\partial f_i \partial f_j}$; we can apply the following chain rule
@@ -101,7 +101,7 @@ Without further ado, let us pin 📌 our objectives:
 
 ## 🔍 Eigen-decomposed Force Jacobians
 
-If you are only interested in **isotropic** squishables 🎈 (e.g., their stretches aren't biased in any direction), we have a good solution 🎁 for it.
+If you are only interested in **isotropic** squishables (e.g., their stretches aren't biased in any direction), we have a good solution for it.
 
 ### 🪵 Volumetric Elasticity Energies
 
@@ -118,7 +118,7 @@ Let us list some popular ones (with Lamé and model-specific parameters substitu
 
 $\sigma_{1 \cdots 3}$ are obtained via a numerical SVD of $F$ at a reasonable time.
 It's just a $3 \times 3$ matrix.
-You may find that our closed-formed SVD routine (Apache v2.0) below is useful.
+You may find that our closed-form SVD routine (Apache v2.0) below is useful.
 
 ```
 /* Apache v2.0 License */
@@ -149,7 +149,7 @@ At the line ```solve_symm_eigen()``` we can use a closed-form solution.
 > It may sound overwhelming, but aside from finding the three roots of a cubic equation, everything else is trivial.
 > I've written our own closed-form $3 \times 3$ eigen decomposition [(Code Link)](../eigsys/eig-hpp), so go ahead and use it!
 
-Let's get our hands dirty 👐. We’ll first write down a set of matrices and scalars.
+Let's get our hands dirty. We'll first write down a set of matrices and scalars.
 
 ```math
 \begin{align}
@@ -257,7 +257,7 @@ Finally, the eigen-filtered force jacobian are
 where $q_k$ is a single entry of $Q_k$ located at the same row and column as $f_k$.
 Yes, it’s really that simple.
 You don't believe it?
-We've writen a Python code to numerically check its correctness. Check this out [(Code)](../eigsys/eigsys_3.py).
+We've written a Python code to numerically check its correctness. Check this out [(Code)](../eigsys/eigsys_3.py).
 
 Okay, there's one more step.
 When $\sigma_i = \sigma_j$, $\lambda_{4,5,6}$ result in division by zero.
@@ -278,17 +278,17 @@ But in this case, we can use the following approximation instead:
 > For this approximation to work, the energy definition must satisfy the Valanis-Landel hypothesis: $\Psi_{\mathrm{3D}}(\sigma_1, \sigma_2, \sigma_3)$ should be invariant to the order of $\sigma_1$, $\sigma_2$, and $\sigma_3$. For example, $\Psi_{\mathrm{3D}}(\sigma_1, \sigma_2, \sigma_3) = \Psi_{\mathrm{3D}}(\sigma_2, \sigma_1, \sigma_3)$.
 > All isotropic energies must satisfy this condition.
 
-Our Python code 🐍 above also checks this, and we assure you that it works even $\sigma_i = \sigma_j$ exactly! 🥳
-If you’re feeling even lazy 🥱 to write symbolic expressions for $\frac{\partial \Psi_{\mathrm{3D}}}{\partial \sigma_i}$ and $\frac{\partial^2 \Psi_{\mathrm{3D}}}{\partial \sigma_i \partial \sigma_j}$, you can let a smart automatic differentiator do it for you.
+Our Python code above also checks this, and we assure you that it works even $\sigma_i = \sigma_j$ exactly!
+If you're feeling even lazy to write symbolic expressions for $\frac{\partial \Psi_{\mathrm{3D}}}{\partial \sigma_i}$ and $\frac{\partial^2 \Psi_{\mathrm{3D}}}{\partial \sigma_i \partial \sigma_j}$, you can let a smart automatic differentiator do it for you.
 The overhead should be negligible since the variables are only  $\sigma_1$, $\sigma_2$ and $\sigma_3$, and major energies are concisely written in terms of singular values.
-This way, we can truly automate 🤖 everything, meaning we won’t need to work on any math 😙 whenever we change the target elastic energy.
-Plug and play. 🔌
+This way, we can truly automate everything, meaning we won't need to work on any math whenever we change the target elastic energy.
+Plug and play.
 
 ### 🧭 Using Cauchy-Green Invariants
 
-Picky readers 🤏 point out that singularities still exist $\sigma_i + \sigma_j = 0$, which is a bit extreme since elements need to be inverted to reach this condition, assuming you opt an inversion-aware SVD.
+Picky readers point out that singularities still exist $\sigma_i + \sigma_j = 0$, which is a bit extreme since elements need to be inverted to reach this condition, assuming you opt an inversion-aware SVD.
 Of course, this occurs frequently in graphics applications, so it should be taken seriously.
-The good news 📰 is that we can remove all the singularities in cases where the energies are expressed as a function of Cauchy-Green invariants, as shown by Stomakhin et al. [(2)](#2).
+The good news is that we can remove all the singularities in cases where the energies are expressed as a function of Cauchy-Green invariants, as shown by Stomakhin et al. [(2)](#2).
 More specifically, this means that the potential is defined as:
 
 ```math
@@ -308,7 +308,7 @@ $I_{1 \cdots 3}$ are Cauchy-Green invariants:
 \end{align}
 ```
 
-With the above definitions, all singularies are cleanly removed such that:
+With the above definitions, all singularities are cleanly removed such that:
 
 ```math
 \begin{equation}
@@ -361,7 +361,7 @@ where
 \end{bmatrix} I_k.
 ```
 
-To make your life easier 😙, we'll write down explicit expressions:
+To make your life easier, we'll write down explicit expressions:
 
 ```math
 \begin{align}
@@ -395,9 +395,9 @@ where $C = F^T F$ and
 
 Just to be clear, $\frac{\partial I_k}{\partial F}$ yields a $3 \times 3$ matrix, and $\frac{\partial I_k}{\partial f_i}$ represents the single entry of $\frac{\partial I_k}{\partial F}$ corresponding to the same row and column as $f_i$.
 
-This way, you will only need to prepare $\frac{\partial^2 \Psi_{\mathrm{3D}}}{\partial I_i \partial I_j}$ and $\frac{\partial \Psi_{\mathrm{3D}}}{\partial I_k}$ whenever you change 🔁 the target energy density.
-This approach is often more convenient than working directly with the singular values because many (not all) major energy ⚡ functions are described in terms of Cauchy-Green invariants, and it's also more succinct.
-Everything else works without changing your code 🥳.
+This way, you will only need to prepare $\frac{\partial^2 \Psi_{\mathrm{3D}}}{\partial I_i \partial I_j}$ and $\frac{\partial \Psi_{\mathrm{3D}}}{\partial I_k}$ whenever you change the target energy density.
+This approach is often more convenient than working directly with the singular values because many (not all) major energy functions are described in terms of Cauchy-Green invariants, and it's also more succinct.
+Everything else works without changing your code.
 We wrote a Python script to verify the correctness of the materials in this section [(Code)](../eigsys/eigsys_invariants_3.py).
 
 ### 🥼 For Shell Elasticity
@@ -405,7 +405,7 @@ We wrote a Python script to verify the correctness of the materials in this sect
 We can extend the idea above for triangular meshes.
 Recalling that $F$ is $3 \times 2$ for shells, the dimensions of $U$ and $V^T$ change to $U_{3 \times 2}$ and $V^T_{2 \times 2}$, respectively.
 If you use our SVD code above, such changes are automatically handled.
-How to obrain $F$ from $x$ is mentioned in the paper supplementary.
+How to obtain $F$ from $x$ is mentioned in the paper supplementary.
 
 With this setting, the list of matrices $Q$ and scalars $\lambda$ are given by
 

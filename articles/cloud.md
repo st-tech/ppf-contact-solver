@@ -232,7 +232,7 @@ rm -rf .runpod
 
 ### 📦 [Scaleway](https://www.scaleway.com/en/)
 
-Set up your Scaleway CLI by following 📚 [this guide](https://www.scaleway.com/en/cli/).
+Set up your Scaleway CLI by following [this guide](https://www.scaleway.com/en/cli/).
 Also, register your public SSH key.
 Here’s how to create a GPU instance and SSH into the instance with port forwarding.
 This setup costs approximately €0.76 per hour.
@@ -265,7 +265,7 @@ ssh root@${ip} -L 8080:localhost:8080
 ```
 
 SSH might fail until the instance is fully loaded; try again at intervals.
-Once connected, run the same Docker 🐧 [Linux](../articles/install.md#-linux) command on the instance to set up a 🐳 Docker environment.
+Once connected, run the same Docker [Linux](../articles/install.md#-linux) command on the instance to set up a Docker environment.
 After use, run the following command to clean up.
 
 ```bash
@@ -281,9 +281,9 @@ Also, check that both the flexible IP and its associated storage are deleted.
 
 ### 📦 [Google Compute Engine](https://cloud.google.com/products/compute)
 
-First, set up your `gcloud` CLI by following 📚 [this guide](https://cloud.google.com/sdk/docs/install?hl=en).
-Next, run the command below to provision an ⚡ NVIDIA L4 GPU instance.
-As of late 2024, this setup costs approximately 💵 $1 per hour.
+First, set up your `gcloud` CLI by following [this guide](https://cloud.google.com/sdk/docs/install?hl=en).
+Next, run the command below to provision an NVIDIA L4 GPU instance.
+As of late 2024, this setup costs approximately $1 per hour.
 
 ```bash
 IMAGE="projects/ml-images/global/images/c0-deeplearning-common-gpu-v20241118-debian-11-py310"
@@ -303,7 +303,7 @@ gcloud compute instances create $INSTANCE_NAME \
     --shielded-vtpm
 ```
 
-After creating the instance, try connecting to it via `ssh` using the 🌐 `gcloud` interface. Since port `8080` is taken by the deployed image, make sure to select a different port on the host side.
+After creating the instance, try connecting to it via `ssh` using the `gcloud` interface. Since port `8080` is taken by the deployed image, make sure to select a different port on the host side.
 Here, we set the host-side port to `8888`.
 Note that the local port remains `8080` so that the JupyterLab interface can be accessed at <http://localhost:8080>.
 I know this might be confusing, so just copy and paste if you're okay with it.
@@ -316,7 +316,7 @@ gcloud compute ssh --zone=$ZONE $INSTANCE_NAME -- -L 8080:localhost:8888
 As shown in this [(Video)](https://drive.google.com/file/d/1dj6TvR2IVLKLFXtO8QRrRl-8xQ7G547A/view?usp=sharing), the instance may take a few minutes to load, so early SSH access fails.
 Keep trying at intervals; it should connect once the host is ready.
 
-Next, run the same Docker 🐧 [Linux](../articles/install.md#-linux) command in the instance to set up a 🐳 Docker environment. Be sure to change `$MY_WEB_PORT` to `8888` in this case.
+Next, run the same Docker [Linux](../articles/install.md#-linux) command in the instance to set up a Docker environment. Be sure to change `$MY_WEB_PORT` to `8888` in this case.
 
 ```
 MY_WEB_PORT=8888  # Make sure to set the port to 8888

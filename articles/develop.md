@@ -1,11 +1,11 @@
 ## 🧑‍💻 Setting Up Your Development Environment
 
-Advanced users may be interested in inspecting our 📜 core code to examine how each component ⚙️ contributes to our solver pipeline 🔄. To facilitate this task, we provide a guide below for setting up a comfortable development environment using either 🖥️ [VSCode](https://azure.microsoft.com/en-us/products/visual-studio-code) or ⌨️ [NeoVim](https://neovim.io/).
-In fact, this is how we 🚀 develop.
+Advanced users may be interested in inspecting our core code to examine how each component contributes to our solver pipeline. To facilitate this task, we provide a guide below for setting up a comfortable development environment using either [VSCode](https://azure.microsoft.com/en-us/products/visual-studio-code) or [NeoVim](https://neovim.io/).
+In fact, this is how we develop.
 
 ### 🖥️ Complete Installation
 
-First, complete the entire [installation process](../README.md#-getting-started) and keep the Docker container 🚢 running.
+First, complete the entire [installation process](../README.md#-getting-started) and keep the Docker container running.
 Make sure that your terminal is attached to the container, with the current directory pointing to `ppf-contact-solver` directory.
 
 ### 🛠️ [clangd](https://clangd.llvm.org/) Setup
@@ -14,14 +14,14 @@ Just to avoid confusion, all the `python3 warmup.py ...` commands below must be 
 
 Our code is not compatible with [C/C++ IntelliSense](https://marketplace.visualstudio.com/items?itemName=ms-vscode.cpptools) provided by Microsoft.
 We instead employ [clangd](https://clangd.llvm.org/) for linting, so make sure not to install IntelliSense into the container.
-Otherwise, you will be overwhelmed by 🐞 errors and ⚠️ warnings.
+Otherwise, you will be overwhelmed by errors and warnings.
 First, run the following command:
 
 ```bash
 python3 warmup.py clangd
 ```
 
-This generates the `.clangd` and `.clang-format` config files, which we adhere to when writing code 💻.
+This generates the `.clangd` and `.clang-format` config files, which we adhere to when writing code.
 They will be automatically detected by [clangd](https://clangd.llvm.org/).
 
 ### 🖥️ [VSCode](https://azure.microsoft.com/en-us/products/visual-studio-code) Users
@@ -48,7 +48,7 @@ We provide one-liners to install [NeoVim](https://neovim.io/) and other handy to
 - [🐟 fish shell](https://fishshell.com/): `python3 warmup.py fish`
 - [⌨️ oh-my-zsh](https://ohmyz.sh/): `python3 warmup.py ohmyzsh`
 
-Nevertheless, for security reasons, we strongly encourage you 👀 review `warmup.py` before running these commands.
+Nevertheless, for security reasons, we strongly encourage you to review `warmup.py` before running these commands.
 The code is not lengthy.
 If possible, we also strongly suggest following the official instructions to install them.
 These commands exist because this is exactly how we initiate our development environment for all new containers.

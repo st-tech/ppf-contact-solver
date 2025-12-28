@@ -51,7 +51,7 @@ In this code, the BVH is continuously updated on the CPU side in the background 
 
 On 2024-Dec-22, we encountered a situation where the PCG solver in our "hang" example `hang.ipynb` failed to converge, resulting in a simulation failure.
 
-This issue occurred because the step size was set to `0.01`, which turned to be unreliably large for this setting.
+This issue occurred because the step size was set to `0.01`, which turned out to be unreliably large for this setting.
 We have now changed it to `0.001`.
 This makes the system more diagonally dominant, leading to improved conditioning.
 
