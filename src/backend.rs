@@ -243,28 +243,46 @@ impl Backend {
                     "{}/vert_{}.bin.tmp",
                     program_args.output, self.state.curr_frame
                 );
-                let mut file = OpenOptions::new()
+                let file = OpenOptions::new()
                     .write(true)
                     .create(true)
                     .truncate(true)
                     .open(path.clone())
                     .unwrap();
+                let mut writer = std::io::BufWriter::with_capacity(64 * 1024, file);
                 let surface_vert_count = self.mesh.mesh.mesh.vertex_count;
-                let data: Vec<f32> = self
+                // Write vertices in chunks to avoid large RAM allocation
+                const CHUNK_SIZE: usize = 4096;
+                let mut chunk_buf: Vec<f32> = Vec::with_capacity(CHUNK_SIZE);
+                for v in self
                     .state
                     .curr_vertex
                     .columns(0, surface_vert_count)
                     .iter()
-                    .copied()
-                    .collect();
-                let buff = unsafe {
-                    std::slice::from_raw_parts(
-                        data.as_ptr() as *const u8,
-                        data.len() * std::mem::size_of::<f32>(),
-                    )
-                };
-                file.write_all(buff).unwrap();
-                file.flush().unwrap();
+                {
+                    chunk_buf.push(*v);
+                    if chunk_buf.len() >= CHUNK_SIZE {
+                        let buff = unsafe {
+                            std::slice::from_raw_parts(
+                                chunk_buf.as_ptr() as *const u8,
+                                chunk_buf.len() * std::mem::size_of::<f32>(),
+                            )
+                        };
+                        writer.write_all(buff).unwrap();
+                        chunk_buf.clear();
+                    }
+                }
+                // Write remaining data
+                if !chunk_buf.is_empty() {
+                    let buff = unsafe {
+                        std::slice::from_raw_parts(
+                            chunk_buf.as_ptr() as *const u8,
+                            chunk_buf.len() * std::mem::size_of::<f32>(),
+                        )
+                    };
+                    writer.write_all(buff).unwrap();
+                }
+                writer.flush().unwrap();
                 std::fs::rename(path.clone(), path.replace(".tmp", "")).unwrap();
                 super::remove_old_files(
                     &program_args.output,

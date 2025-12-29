@@ -307,12 +307,6 @@ fn setup(program_args: &ProgramArgs) {
     }
 }
 
-fn compress_to_gz(data: Vec<u8>) -> Vec<u8> {
-    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
-    encoder.write_all(&data).unwrap();
-    encoder.finish().unwrap()
-}
-
 fn decompress_from_gz(compressed_data: Vec<u8>) -> Vec<u8> {
     let mut decoder = GzDecoder::new(compressed_data.as_slice());
     let mut decompressed_data = Vec::new();
@@ -320,9 +314,13 @@ fn decompress_from_gz(compressed_data: Vec<u8>) -> Vec<u8> {
     decompressed_data
 }
 
+/// Streams serialization directly to a gzip-compressed file without buffering entire data in RAM.
 fn save<T: serde::Serialize>(obj: &T, path: &str) {
-    let data = bincode::serialize(obj).unwrap();
-    std::fs::write(path, compress_to_gz(data)).unwrap();
+    let file = std::fs::File::create(path).unwrap();
+    let buf_writer = std::io::BufWriter::with_capacity(64 * 1024, file);
+    let mut encoder = GzEncoder::new(buf_writer, Compression::default());
+    bincode::serialize_into(&mut encoder, obj).unwrap();
+    encoder.finish().unwrap();
 }
 
 fn read_gz(path: &str) -> Vec<u8> {
