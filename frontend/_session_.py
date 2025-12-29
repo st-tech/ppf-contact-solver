@@ -1397,14 +1397,17 @@ class FixedSession:
         if Utils.in_jupyter_notebook():
             import ipywidgets as widgets
 
-            def _terminate(button):
+            async def _terminate_async(button):
                 button.disabled = True
                 button.description = "Terminating..."
                 Utils.terminate()
                 self._process = None
                 while self.is_running():
-                    time.sleep(0.25)
+                    await asyncio.sleep(0.25)
                 button.description = "Terminated"
+
+            def _terminate(button):
+                asyncio.ensure_future(_terminate_async(button))
 
             button = widgets.Button(description=description)
             button.on_click(_terminate)
@@ -1437,14 +1440,17 @@ class FixedSession:
         if Utils.in_jupyter_notebook():
             import ipywidgets as widgets
 
-            def _save_and_quit(button):
+            async def _save_and_quit_async(button):
                 button.disabled = True
                 button.description = "Requesting..."
                 self.save_and_quit()
                 while self.is_running():
-                    time.sleep(0.25)
+                    await asyncio.sleep(0.25)
                 self._process = None
                 button.description = "Done"
+
+            def _save_and_quit(button):
+                asyncio.ensure_future(_save_and_quit_async(button))
 
             button = widgets.Button(description=description)
             button.on_click(_save_and_quit)
@@ -1781,18 +1787,25 @@ class FixedSession:
                 thread = threading.Thread(target=live_stream, args=(self,))
                 thread.start()
 
-                def toggle_stream(b):
+                async def toggle_stream_async(b):
                     nonlocal stop
                     nonlocal thread
                     if thread.is_alive():
                         stop = True
-                        thread.join()
+                        b.disabled = True
+                        b.description = "Stopping..."
+                        while thread.is_alive():
+                            await asyncio.sleep(0.1)
+                        b.disabled = False
                         b.description = "Start Live Stream"
                     else:
                         thread = threading.Thread(target=live_stream, args=(self,))
                         stop = False
                         thread.start()
                         b.description = "Stop Live Stream"
+
+                def toggle_stream(b):
+                    asyncio.ensure_future(toggle_stream_async(b))
 
                 button.on_click(toggle_stream)
             else:
