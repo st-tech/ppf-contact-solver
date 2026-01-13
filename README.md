@@ -48,6 +48,7 @@ involving 👚 shells, 🪵 solids and 🪢 rods. All made by [ZOZO, Inc.](https
   - [🪟 Windows Native Executable](#-windows-native-executable)
   - [🐳 Docker (Linux and Windows)](#-docker-linux-and-windows)
 - [🐍 How To Use](#-how-to-use)
+- [🧩 Community's Blender Add-ons](#-communitys-blender-addons)
 - [📚 Python APIs and Parameters](#-python-apis-and-parameters)
 - [🔍 Obtaining Logs](#-obtaining-logs)
 - [🖼️ Catalogue](#️-catalogue)
@@ -307,6 +308,13 @@ session.export.animation()
 ```
 
 <img src="./asset/image/drape-preview.webp" alt="drape">
+
+## 🧩 Community's Blender Add-ons
+
+Official Blender add-ons are not yet ready, but we have community versions that you can try today:
+
+- [AndoSim](https://github.com/Slaymish/AndoSim)
+- [ArzteZ-PPF-solver](https://github.com/tavcitavci-sys-tavci-ui/ArzteZ-PPF-solver)
 
 ## 📚 Python APIs and Parameters
 
