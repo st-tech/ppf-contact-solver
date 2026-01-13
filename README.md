@@ -48,7 +48,7 @@ involving 👚 shells, 🪵 solids and 🪢 rods. All made by [ZOZO, Inc.](https
   - [🪟 Windows Native Executable](#-windows-native-executable)
   - [🐳 Docker (Linux and Windows)](#-docker-linux-and-windows)
 - [🐍 How To Use](#-how-to-use)
-- [🧩 Community's Blender Add-ons](#-communitys-blender-addons)
+- [🧩 Community's Blender Add-ons](#-communitys-blender-add-ons)
 - [📚 Python APIs and Parameters](#-python-apis-and-parameters)
 - [🔍 Obtaining Logs](#-obtaining-logs)
 - [🖼️ Catalogue](#️-catalogue)
