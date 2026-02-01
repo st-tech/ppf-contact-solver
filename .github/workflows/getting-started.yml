@@ -12,10 +12,12 @@ jobs:
   headless:
     runs-on: ppf-contact-solver-NVIDIA
     timeout-minutes: 60
+    permissions:
+      contents: read
 
     steps:
       - name: check out repo
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: install NVIDIA driver and CUDA toolkit
         run: |

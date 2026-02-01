@@ -5,8 +5,6 @@
 # License: Apache v2.0
 
 import argparse
-import math
-
 from pathlib import Path
 
 
@@ -30,7 +28,6 @@ def split_examples(examples, num_instances):
     start = 0
 
     for i in range(num_instances):
-        # First 'remainder' chunks get one extra example
         chunk_size = base_size + (1 if i < remainder else 0)
         end = start + chunk_size
 
@@ -43,7 +40,7 @@ def split_examples(examples, num_instances):
 
 
 def generate_workflow(examples_chunks):
-    """Generate the run-all-once.yml workflow file."""
+    """Generate the run-all-once.yml workflow file using EICE approach."""
 
     workflow = """# File: run-all-once.yml
 # Code: Claude Code and Codex
@@ -112,31 +109,10 @@ jobs:
         with:
           role-to-assume: ${{{{ secrets.AWS_ROLE_ARN }}}}
           aws-region: ${{{{ env.AWS_REGION }}}}
+          role-duration-seconds: 21600
 
-      - name: Verify AWS authentication
-        run: |
-          echo "Testing AWS authentication..."
-          aws sts get-caller-identity
-          echo "AWS Region: $AWS_REGION"
-          echo "Instance Type: $INSTANCE_TYPE"
-          echo "Branch: $BRANCH"
-          echo "Examples: $EXAMPLES"
-
-      - name: Get GitHub Actions runner public IP
-        id: runner-ip
-        run: |
-          echo "Fetching GitHub Actions runner public IP..."
-          RUNNER_IP=$(curl -s --max-time 10 https://checkip.amazonaws.com | tr -d '\\n')
-          if [ -z "$RUNNER_IP" ]; then
-            echo "ERROR: Failed to get IP from checkip.amazonaws.com"
-            exit 1
-          fi
-          echo "::add-mask::$RUNNER_IP"
-          echo "RUNNER_IP=$RUNNER_IP" >> $GITHUB_OUTPUT
-          echo "GitHub Actions Runner IP: $RUNNER_IP"
-
-      - name: Find Deep Learning AMI
-        id: ami
+      - name: Find Deep Learning AMI and network resources
+        id: setup
         run: |
           echo "Finding latest Deep Learning AMI with GPU support..."
           AMI_ID=$(aws ec2 describe-images \\
@@ -151,213 +127,95 @@ jobs:
 
           if [ "$AMI_ID" = "None" ] || [ -z "$AMI_ID" ]; then
             echo "ERROR: Deep Learning AMI not found in region $AWS_REGION"
-            echo "This workflow requires the Deep Learning AMI with pre-installed NVIDIA drivers"
-            echo "Please check if the AMI is available in your selected region"
             exit 1
           fi
-
           echo "AMI_ID=$AMI_ID" >> $GITHUB_OUTPUT
           echo "Found AMI: $AMI_ID"
 
-      - name: Get default VPC ID
-        id: vpc
-        run: |
-          echo "Getting default VPC ID..."
-          VPC_ID=$(aws ec2 describe-vpcs \\
-            --filters "Name=isDefault,Values=true" \\
-            --query 'Vpcs[0].VpcId' \\
-            --region "$AWS_REGION" \\
-            --output text)
+          # Get GitHub Actions dedicated VPC, subnet, and security group
+          VPC_ID=$(aws ec2 describe-vpcs --filters "Name=tag:Name,Values=github-actions-vpc" --query 'Vpcs[0].VpcId' --output text)
+          SUBNET_ID=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$VPC_ID" --query 'Subnets[0].SubnetId' --output text)
+          SG_ID=$(aws ec2 describe-security-groups --filters "Name=vpc-id,Values=$VPC_ID" "Name=group-name,Values=github-actions-sg" --query 'SecurityGroups[0].GroupId' --output text)
 
           if [ "$VPC_ID" = "None" ] || [ -z "$VPC_ID" ]; then
-            echo "ERROR: Default VPC not found in region $AWS_REGION"
+            echo "ERROR: github-actions-vpc not found in region $AWS_REGION"
             exit 1
           fi
 
-          echo "VPC_ID=$VPC_ID" >> $GITHUB_OUTPUT
-          echo "Default VPC: $VPC_ID"
+          echo "::add-mask::$VPC_ID"
+          echo "::add-mask::$SUBNET_ID"
+          echo "::add-mask::$SG_ID"
+          echo "SUBNET_ID=$SUBNET_ID" >> $GITHUB_OUTPUT
+          echo "SG_ID=$SG_ID" >> $GITHUB_OUTPUT
+          echo "VPC: $VPC_ID, Subnet: $SUBNET_ID, SG: $SG_ID"
 
-      - name: Generate unique identifiers
+      - name: Generate unique identifiers and SSH key
         id: ids
         run: |
           TIMESTAMP=$(date +%Y%m%d%H%M%S)
           RANDOM_SUFFIX=$(head /dev/urandom | tr -dc a-z0-9 | head -c 6)
           TEMP_INSTANCE_ID="temp-${{TIMESTAMP}}-${{RANDOM_SUFFIX}}"
-
-          # Generate random SSH port (10001-65535)
-          SSH_PORT=$((10001 + RANDOM % 55535))
-          echo "::add-mask::$SSH_PORT"
           echo "TIMESTAMP=$TIMESTAMP" >> $GITHUB_OUTPUT
           echo "TEMP_INSTANCE_ID=$TEMP_INSTANCE_ID" >> $GITHUB_OUTPUT
-          echo "SSH_PORT=$SSH_PORT" >> $GITHUB_OUTPUT
           echo "Temporary Instance ID: $TEMP_INSTANCE_ID"
-          echo "SSH Port: $SSH_PORT"
 
-      - name: Setup persistent security group
-        id: security-group
-        run: |
-          echo "Setting up persistent security group 'github-actions-persistent'..."
-
-          SG_NAME="github-actions-persistent"
-          SG_DESCRIPTION="Persistent security group for GitHub Actions with dynamic rules"
-
-          # Check if security group already exists
-          SG_ID=$(aws ec2 describe-security-groups \\
-            --filters "Name=group-name,Values=$SG_NAME" \\
-            --query 'SecurityGroups[0].GroupId' \\
-            --region "$AWS_REGION" \\
-            --output text || echo "")
-
-          if [ "$SG_ID" = "None" ] || [ -z "$SG_ID" ]; then
-            echo "Security group does not exist. Creating new one..."
-
-            # Create security group
-            SG_ID=$(aws ec2 create-security-group \\
-              --group-name "$SG_NAME" \\
-              --description "$SG_DESCRIPTION" \\
-              --vpc-id "${{{{ steps.vpc.outputs.VPC_ID }}}}" \\
-              --query 'GroupId' \\
-              --region "$AWS_REGION" \\
-              --output text)
-
-            echo "Security Group created: $SG_ID"
-
-            # Tag the security group
-            aws ec2 create-tags \\
-              --resources "$SG_ID" \\
-              --tags \\
-                "Key=Name,Value=$SG_NAME" \\
-                "Key=ManagedBy,Value=GitHubActions" \\
-                "Key=Purpose,Value=PersistentDynamicRules" \\
-                "Key=CreatedAt,Value=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \\
-              --region "$AWS_REGION"
-
-            echo "Security Group tagged successfully"
-          else
-            echo "Using existing security group: $SG_ID"
-          fi
-
-          echo "SG_ID=$SG_ID" >> $GITHUB_OUTPUT
-
-          # Add only custom SSH port (no port 22)
-          echo "Adding ingress rule for runner IP on port ${{{{ steps.ids.outputs.SSH_PORT }}}}"
-          aws ec2 authorize-security-group-ingress \\
-            --group-id "$SG_ID" \\
-            --ip-permissions \\
-              "IpProtocol=tcp,FromPort=${{{{ steps.ids.outputs.SSH_PORT }}}},ToPort=${{{{ steps.ids.outputs.SSH_PORT }}}},IpRanges=[{{CidrIp=${{{{ steps.runner-ip.outputs.RUNNER_IP }}}}/32,Description='GHA Run ${{{{ github.run_id }}}} Port ${{{{ steps.ids.outputs.SSH_PORT }}}}'}}]" \\
-            --region "$AWS_REGION" 2>&1 || echo "Note: Rule may already exist"
-
-          echo "RUNNER_IP_CIDR=${{{{ steps.runner-ip.outputs.RUNNER_IP }}}}/32" >> $GITHUB_OUTPUT
-          echo "SSH_PORT=${{{{ steps.ids.outputs.SSH_PORT }}}}" >> $GITHUB_OUTPUT
-          echo "SSH ingress rule added successfully (custom port only)"
-
-          RULE_COUNT=$(aws ec2 describe-security-groups \\
-            --group-ids "$SG_ID" \\
-            --query 'length(SecurityGroups[0].IpPermissions)' \\
-            --region "$AWS_REGION" \\
-            --output text)
-          echo "Security group has $RULE_COUNT active ingress rule(s)"
-
-      - name: Retrieve SSH key from Parameter Store
-        id: keypair
-        run: |
-          echo "Retrieving SSH private key from AWS Systems Manager..."
-          KEY_NAME="${{{{ secrets.AWS_KEY_PAIR_NAME }}}}"
-
-          # Retrieve the SSH private key from Parameter Store
-          aws ssm get-parameter \\
-            --name "/github-actions/ec2/ssh-key" \\
-            --with-decryption \\
-            --query 'Parameter.Value' \\
-            --region "$AWS_REGION" \\
-            --output text > /tmp/github-actions-ec2.pem
-
-          chmod 600 /tmp/github-actions-ec2.pem
-          echo "SSH key retrieved successfully"
-          echo "KEY_PATH=/tmp/github-actions-ec2.pem" >> $GITHUB_OUTPUT
+          # Generate SSH key early so we can embed it in user-data
+          rm -f /tmp/ec2key /tmp/ec2key.pub
+          ssh-keygen -t rsa -f /tmp/ec2key -N "" -q
+          echo "SSH key generated"
 
       - name: Create user data script
         run: |
-          echo '#!/bin/bash' > /tmp/user-data.sh
-          echo 'set -x' >> /tmp/user-data.sh
-          echo 'exec > >(tee /var/log/user-data.log) 2>&1' >> /tmp/user-data.sh
-          echo '' >> /tmp/user-data.sh
-          echo 'echo "=== User Data Script Started ==="' >> /tmp/user-data.sh
-          echo '' >> /tmp/user-data.sh
-          echo '# Wait for system to be ready' >> /tmp/user-data.sh
-          echo 'sleep 5' >> /tmp/user-data.sh
-          echo '' >> /tmp/user-data.sh
-          echo '# Create SSH privilege separation directory' >> /tmp/user-data.sh
-          echo 'echo "Creating /run/sshd directory"' >> /tmp/user-data.sh
-          echo 'mkdir -p /run/sshd' >> /tmp/user-data.sh
-          echo 'chmod 0755 /run/sshd' >> /tmp/user-data.sh
-          echo '' >> /tmp/user-data.sh
-          echo '# Configure custom SSH port' >> /tmp/user-data.sh
-          echo 'echo "Configuring SSH port to '\"${{{{ steps.ids.outputs.SSH_PORT }}}}\"'"' >> /tmp/user-data.sh
-          echo 'perl -pi -e "s/^#?Port 22$/Port '\"${{{{ steps.ids.outputs.SSH_PORT }}}}\"'/" /etc/ssh/sshd_config' >> /tmp/user-data.sh
-          echo '' >> /tmp/user-data.sh
-          echo '# Ensure Port directive exists' >> /tmp/user-data.sh
-          echo 'if ! grep -q "^Port '\"${{{{ steps.ids.outputs.SSH_PORT }}}}\"'" /etc/ssh/sshd_config; then' >> /tmp/user-data.sh
-          echo '  echo "Port '\"${{{{ steps.ids.outputs.SSH_PORT }}}}\"'" >> /etc/ssh/sshd_config' >> /tmp/user-data.sh
-          echo 'fi' >> /tmp/user-data.sh
-          echo '' >> /tmp/user-data.sh
-          echo 'echo "SSH config after modification:"' >> /tmp/user-data.sh
-          echo 'grep "^Port" /etc/ssh/sshd_config' >> /tmp/user-data.sh
-          echo '' >> /tmp/user-data.sh
-          echo '# Disable systemd socket activation' >> /tmp/user-data.sh
-          echo 'echo "Disabling socket activation"' >> /tmp/user-data.sh
-          echo 'systemctl stop ssh.socket' >> /tmp/user-data.sh
-          echo 'systemctl disable ssh.socket' >> /tmp/user-data.sh
-          echo '' >> /tmp/user-data.sh
-          echo '# Test SSH configuration' >> /tmp/user-data.sh
-          echo 'echo "Testing SSH configuration"' >> /tmp/user-data.sh
-          echo 'sshd -t' >> /tmp/user-data.sh
-          echo 'if [ $? -eq 0 ]; then' >> /tmp/user-data.sh
-          echo '  echo "SSH config valid, restarting SSH service"' >> /tmp/user-data.sh
-          echo '  systemctl restart ssh.service' >> /tmp/user-data.sh
-          echo '  sleep 2' >> /tmp/user-data.sh
-          echo '  systemctl status ssh.service' >> /tmp/user-data.sh
-          echo '  echo "Checking listening ports:"' >> /tmp/user-data.sh
-          echo '  ss -tlnp | grep sshd || netstat -tlnp | grep sshd' >> /tmp/user-data.sh
-          echo '  echo "SSH reconfiguration successful"' >> /tmp/user-data.sh
-          echo 'else' >> /tmp/user-data.sh
-          echo '  echo "ERROR: SSH config invalid"' >> /tmp/user-data.sh
-          echo '  exit 1' >> /tmp/user-data.sh
-          echo 'fi' >> /tmp/user-data.sh
-          echo '' >> /tmp/user-data.sh
-          echo '# Install Rust (needed for cargo build)' >> /tmp/user-data.sh
-          echo 'curl --proto '"'"'=https'"'"' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y' >> /tmp/user-data.sh
-          echo 'source "$HOME/.cargo/env"' >> /tmp/user-data.sh
-          echo '' >> /tmp/user-data.sh
-          echo '# Verify nvidia-smi is available' >> /tmp/user-data.sh
-          echo 'if command -v nvidia-smi &> /dev/null; then' >> /tmp/user-data.sh
-          echo '    echo "NVIDIA drivers confirmed"' >> /tmp/user-data.sh
-          echo '    nvidia-smi' >> /tmp/user-data.sh
-          echo 'else' >> /tmp/user-data.sh
-          echo '    echo "Warning: nvidia-smi not found"' >> /tmp/user-data.sh
-          echo 'fi' >> /tmp/user-data.sh
-          echo '' >> /tmp/user-data.sh
-          echo '# Create workspace directory' >> /tmp/user-data.sh
-          echo 'mkdir -p ${{{{ env.WORKDIR }}}}/workspace' >> /tmp/user-data.sh
-          echo 'chown -R ${{{{ env.USER }}}}:${{{{ env.USER }}}} ${{{{ env.WORKDIR }}}}/workspace' >> /tmp/user-data.sh
-          echo '' >> /tmp/user-data.sh
-          echo 'nvidia-smi | tee /tmp/nvidia-smi-output.txt' >> /tmp/user-data.sh
-          echo 'touch /tmp/setup-complete' >> /tmp/user-data.sh
-          echo 'echo "=== User Data Script Complete ==="' >> /tmp/user-data.sh
+          SSH_PUBKEY=$(cat /tmp/ec2key.pub)
+          cat > /tmp/user-data.sh << EOF
+          #!/bin/bash
+          set -x
+          exec > >(tee /var/log/user-data.log) 2>&1
+
+          echo "=== User Data Script Started ==="
+
+          # Wait for system to be ready
+          sleep 5
+
+          # Setup SSH key for persistent authentication (no 60s expiry)
+          mkdir -p /home/ubuntu/.ssh
+          echo "${{SSH_PUBKEY}}" >> /home/ubuntu/.ssh/authorized_keys
+          chown -R ubuntu:ubuntu /home/ubuntu/.ssh
+          chmod 700 /home/ubuntu/.ssh
+          chmod 600 /home/ubuntu/.ssh/authorized_keys
+          echo "SSH key installed permanently"
+
+          # Verify nvidia-smi is available
+          if command -v nvidia-smi &> /dev/null; then
+              echo "NVIDIA drivers confirmed"
+              nvidia-smi
+          else
+              echo "Warning: nvidia-smi not found"
+          fi
+
+          # Create workspace directory
+          mkdir -p /home/ubuntu/workspace
+          chown -R ubuntu:ubuntu /home/ubuntu/workspace
+
+          nvidia-smi | tee /tmp/nvidia-smi-output.txt
+          touch /tmp/setup-complete
+          echo "=== User Data Script Complete ==="
+          EOF
 
       - name: Launch EC2 instance
         id: instance
         run: |
-          echo "Launching EC2 instance with SSH configured on port ${{{{ steps.ids.outputs.SSH_PORT }}}}..."
+          echo "Launching EC2 instance..."
 
           # Base64 encode for AWS
           USER_DATA=$(base64 -w 0 /tmp/user-data.sh)
 
           INSTANCE_ID=$(aws ec2 run-instances \\
-            --image-id "${{{{ steps.ami.outputs.AMI_ID }}}}" \\
+            --image-id "${{{{ steps.setup.outputs.AMI_ID }}}}" \\
             --instance-type "$INSTANCE_TYPE" \\
-            --key-name "${{{{ secrets.AWS_KEY_PAIR_NAME }}}}" \\
-            --security-group-ids "${{{{ steps.security-group.outputs.SG_ID }}}}" \\
+            --subnet-id "${{{{ steps.setup.outputs.SUBNET_ID }}}}" \\
+            --security-group-ids "${{{{ steps.setup.outputs.SG_ID }}}}" \\
+            --associate-public-ip-address \\
             --user-data "$USER_DATA" \\
             --block-device-mappings "DeviceName=/dev/sda1,Ebs={{VolumeSize=256,VolumeType=gp3,DeleteOnTermination=true}}" \\
             --tag-specifications \\
@@ -374,7 +232,6 @@ jobs:
                 {{Key=Name,Value=gpu-runner-batch-{idx}-${{{{ steps.ids.outputs.TIMESTAMP }}}}-volume}},\\
                 {{Key=ManagedBy,Value=GitHubActions}},\\
                 {{Key=Purpose,Value=GPURunner}},\\
-                {{Key=Workflow,Value=${{{{ github.workflow }}}}}},\\
                 {{Key=Batch,Value={idx}}}\\
               ]" \\
             --instance-initiated-shutdown-behavior terminate \\
@@ -383,79 +240,47 @@ jobs:
             --output text)
 
           echo "INSTANCE_ID=$INSTANCE_ID" >> $GITHUB_OUTPUT
+          echo "$INSTANCE_ID" > /tmp/instance_id.txt
           echo "Instance launched: $INSTANCE_ID"
 
-      - name: Wait for instance to be running
+      - name: Wait for instance and user-data
         run: |
+          INSTANCE_ID=$(cat /tmp/instance_id.txt)
           echo "Waiting for instance to be running..."
-          aws ec2 wait instance-running \\
-            --instance-ids "${{{{ steps.instance.outputs.INSTANCE_ID }}}}" \\
-            --region "$AWS_REGION"
+          aws ec2 wait instance-running --instance-ids "$INSTANCE_ID" --region "$AWS_REGION"
 
-          PUBLIC_IP=$(aws ec2 describe-instances \\
-            --instance-ids "${{{{ steps.instance.outputs.INSTANCE_ID }}}}" \\
-            --query 'Reservations[0].Instances[0].PublicIpAddress' \\
-            --region "$AWS_REGION" \\
-            --output text)
+          echo "Instance is running, waiting for user-data to complete..."
 
-          echo "::add-mask::$PUBLIC_IP"
-          echo "PUBLIC_IP=$PUBLIC_IP" >> $GITHUB_ENV
-          echo "Instance is running at: $PUBLIC_IP"
+          # Wait for setup-complete (user-data finished, SSH key installed)
+          MAX_ATTEMPTS=60
+          for i in $(seq 1 $MAX_ATTEMPTS); do
+            # Open tunnel temporarily
+            aws ec2-instance-connect open-tunnel \\
+              --instance-id "$INSTANCE_ID" \\
+              --local-port 2222 &
+            TUNNEL_PID=$!
+            sleep 3
 
-      - name: Wait for cloud-init and SSH on custom port
-        run: |
-          echo "Waiting for cloud-init to complete and SSH to be available on port ${{{{ steps.ids.outputs.SSH_PORT }}}}..."
-
-          # Wait longer initially to allow cloud-init to run
-          echo "Waiting 60 seconds for cloud-init to start..."
-          sleep 60
-
-          MAX_ATTEMPTS=40
-          ATTEMPT=0
-
-          while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
-            if ssh -p ${{{{ steps.ids.outputs.SSH_PORT }}}} -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \\
-              -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \\
-              -i "${{{{ steps.keypair.outputs.KEY_PATH }}}}" ${{{{ env.USER }}}}@${{{{ env.PUBLIC_IP }}}} "echo 'SSH ready on custom port'" 2>/dev/null; then
-              echo "SSH connection established on port ${{{{ steps.ids.outputs.SSH_PORT }}}}"
+            # Check if setup is complete (includes SSH connectivity check)
+            if ssh -i /tmp/ec2key -p 2222 \\
+              -o StrictHostKeyChecking=no \\
+              -o UserKnownHostsFile=/dev/null \\
+              -o ConnectTimeout=5 \\
+              ubuntu@localhost "test -f /tmp/setup-complete && echo READY" 2>/dev/null | grep -q READY; then
+              echo "Instance setup completed on attempt $i"
+              kill $TUNNEL_PID 2>/dev/null || true
               break
-            else
-              ATTEMPT=$((ATTEMPT + 1))
-              if [ $ATTEMPT -eq $MAX_ATTEMPTS ]; then
-                echo "Failed to establish SSH connection on port ${{{{ steps.ids.outputs.SSH_PORT }}}} after $MAX_ATTEMPTS attempts"
-                echo "Attempting to fetch console output for debugging..."
-                aws ec2 get-console-output \\
-                  --instance-id "${{{{ steps.instance.outputs.INSTANCE_ID }}}}" \\
-                  --region "$AWS_REGION" \\
-                  --output text || echo "Could not fetch console output"
-                exit 1
-              fi
-              echo "Attempt $ATTEMPT/$MAX_ATTEMPTS failed, retrying in 10 seconds..."
-              sleep 10
             fi
-          done
 
-      - name: Wait for instance setup
-        run: |
-          echo "Waiting for instance setup to complete..."
-          MAX_WAIT=300
-          ELAPSED=0
+            kill $TUNNEL_PID 2>/dev/null || true
 
-          while [ $ELAPSED -lt $MAX_WAIT ]; do
-            if ssh -p ${{{{ steps.ids.outputs.SSH_PORT }}}} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \\
-              -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \\
-              -i "${{{{ steps.keypair.outputs.KEY_PATH }}}}" ${{{{ env.USER }}}}@${{{{ env.PUBLIC_IP }}}} \\
-              "test -f /tmp/setup-complete" 2>/dev/null; then
-              echo "Instance setup completed"
+            if [ $i -eq $MAX_ATTEMPTS ]; then
+              echo "Setup timeout after $MAX_ATTEMPTS attempts, continuing anyway..."
               break
-            else
-              sleep 10
-              ELAPSED=$((ELAPSED + 10))
-              if [ $ELAPSED -ge $MAX_WAIT ]; then
-                echo "Setup timeout, continuing anyway..."
-                break
-              fi
             fi
+
+            echo "Attempt $i/$MAX_ATTEMPTS: Setup not complete, waiting 10s..."
+            sleep 10
           done
 
       - name: Create archive of repository
@@ -466,25 +291,40 @@ jobs:
       - name: Transfer repository to instance
         run: |
           echo "Transferring repository to instance..."
-          scp -P ${{{{ steps.ids.outputs.SSH_PORT }}}} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \\
-            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \\
-            -i "${{{{ steps.keypair.outputs.KEY_PATH }}}}" \\
-            /tmp/repo.tar.gz ${{{{ env.USER }}}}@${{{{ env.PUBLIC_IP }}}}:${{{{ env.WORKDIR }}}}/
+          INSTANCE_ID=$(cat /tmp/instance_id.txt)
 
-          echo "Extracting repository on instance..."
-          ssh -p ${{{{ steps.ids.outputs.SSH_PORT }}}} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \\
-            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \\
-            -i "${{{{ steps.keypair.outputs.KEY_PATH }}}}" ${{{{ env.USER }}}}@${{{{ env.PUBLIC_IP }}}} \\
-            "cd ${{{{ env.WORKDIR }}}} && tar -xzf repo.tar.gz && rm repo.tar.gz"
+          aws ec2-instance-connect open-tunnel --instance-id "$INSTANCE_ID" --local-port 2222 &
+          TUNNEL_PID=$!
+          sleep 5
+
+          rsync -avz -e "ssh -i /tmp/ec2key -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" \\
+            /tmp/repo.tar.gz ubuntu@localhost:${{{{env.WORKDIR}}}}/
+
+          ssh -i /tmp/ec2key -p 2222 \\
+            -o StrictHostKeyChecking=no \\
+            -o UserKnownHostsFile=/dev/null \\
+            ubuntu@localhost \\
+            "cd ${{{{env.WORKDIR}}}} && tar -xzf repo.tar.gz && rm repo.tar.gz"
+
+          kill $TUNNEL_PID 2>/dev/null || true
 
       - name: Setup Python environment and run warmup
         run: |
           echo "Setting up Python environment and running warmup.py..."
-          ssh -p ${{{{ steps.ids.outputs.SSH_PORT }}}} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \\
-            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \\
-            -i "${{{{ steps.keypair.outputs.KEY_PATH }}}}" ${{{{ env.USER }}}}@${{{{ env.PUBLIC_IP }}}} << 'ENDSSH'
-          set -eo pipefail
-          cd ${{{{ env.WORKDIR }}}}
+          INSTANCE_ID=$(cat /tmp/instance_id.txt)
+
+          aws ec2-instance-connect open-tunnel --instance-id "$INSTANCE_ID" --local-port 2222 &
+          TUNNEL_PID=$!
+          sleep 5
+
+          ssh -i /tmp/ec2key -p 2222 \\
+            -o StrictHostKeyChecking=no \\
+            -o UserKnownHostsFile=/dev/null \\
+            -o ServerAliveInterval=60 \\
+            -o ServerAliveCountMax=10 \\
+            ubuntu@localhost << 'ENDSSH'
+          set -e
+          cd ${{{{env.WORKDIR}}}}
 
           # Run warmup.py
           echo "Running warmup.py..."
@@ -493,14 +333,25 @@ jobs:
           echo "Warmup completed"
           ENDSSH
 
+          kill $TUNNEL_PID 2>/dev/null || true
+
       - name: Build Rust project
         run: |
           echo "Building Rust project with cargo..."
-          ssh -p ${{{{ steps.ids.outputs.SSH_PORT }}}} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \\
-            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \\
-            -i "${{{{ steps.keypair.outputs.KEY_PATH }}}}" ${{{{ env.USER }}}}@${{{{ env.PUBLIC_IP }}}} << 'ENDSSH'
-          set -eo pipefail
-          cd ${{{{ env.WORKDIR }}}}
+          INSTANCE_ID=$(cat /tmp/instance_id.txt)
+
+          aws ec2-instance-connect open-tunnel --instance-id "$INSTANCE_ID" --local-port 2222 &
+          TUNNEL_PID=$!
+          sleep 5
+
+          ssh -i /tmp/ec2key -p 2222 \\
+            -o StrictHostKeyChecking=no \\
+            -o UserKnownHostsFile=/dev/null \\
+            -o ServerAliveInterval=60 \\
+            -o ServerAliveCountMax=10 \\
+            ubuntu@localhost << 'ENDSSH'
+          set -e
+          cd ${{{{env.WORKDIR}}}}
 
           # Setup Rust environment
           source "$HOME/.cargo/env"
@@ -512,52 +363,19 @@ jobs:
           echo "Cargo build completed"
           ENDSSH
 
-      - name: Convert assertion notebook to Python script
-        run: |
-          echo "Converting assertion notebook: examples/fail-examples/assertion.ipynb"
-          ssh -p ${{{{ steps.ids.outputs.SSH_PORT }}}} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \\
-            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \\
-            -i "${{{{ steps.keypair.outputs.KEY_PATH }}}}" ${{{{ env.USER }}}}@${{{{ env.PUBLIC_IP }}}} << 'ENDSSH'
-          set -e
-          cd ${{{{ env.WORKDIR }}}}
-          source ~/.local/share/ppf-cts/venv/bin/activate
-          jupyter nbconvert --to python "examples/fail-examples/assertion.ipynb" --output "/tmp/assertion_base.py"
-          echo "import sys" > /tmp/assertion.py
-          echo "import os" >> /tmp/assertion.py
-          echo "sys.path.insert(0, '${{{{ env.WORKDIR }}}}')" >> /tmp/assertion.py
-          echo "sys.path.insert(0, '${{{{ env.WORKDIR }}}}/frontend')" >> /tmp/assertion.py
-          echo "os.environ['PYTHONPATH'] = '${{{{ env.WORKDIR }}}}:${{{{ env.WORKDIR }}}}/frontend:' + os.environ.get('PYTHONPATH', '')" >> /tmp/assertion.py
-          cat "/tmp/assertion_base.py" >> /tmp/assertion.py
-          echo "Assertion script prepared at /tmp/assertion.py"
-          ENDSSH
-
-      - name: Run assertion test (expect failure)
-        run: |
-          echo "Running assertion test to verify error propagation via SSH..."
-          echo "This test uses the same execution pattern as main examples"
-          echo "Expected result: FAILURE (AssertionError)"
-
-          # Run using the exact same pattern as the main example runs - expect it to fail
-          if ssh -p ${{{{ steps.ids.outputs.SSH_PORT }}}} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \\
-            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \\
-            -i "${{{{ steps.keypair.outputs.KEY_PATH }}}}" ${{{{ env.USER }}}}@${{{{ env.PUBLIC_IP }}}} \\
-            "set -o pipefail && echo 'assertion' > ${{{{ env.WORKDIR }}}}/frontend/.CI && cd ${{{{ env.WORKDIR }}}} && source ~/.local/share/ppf-cts/venv/bin/activate && python3 /tmp/assertion.py 2>&1 | tee /tmp/ci/assertion.log"; then
-            echo "ERROR: Assertion test should have failed but succeeded"
-            echo "This means errors are NOT being propagated correctly!"
-            exit 1
-          else
-            echo "SUCCESS: Assertion test failed as expected"
-            echo "Error propagation via SSH is working correctly"
-            echo "Main example tests can now proceed with confidence"
-          fi
+          kill $TUNNEL_PID 2>/dev/null || true
 
       - name: Setup CI directory
         run: |
-          echo "Setting up CI directory..."
-          ssh -p ${{{{ steps.ids.outputs.SSH_PORT }}}} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \\
-            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \\
-            -i "${{{{ steps.keypair.outputs.KEY_PATH }}}}" ${{{{ env.USER }}}}@${{{{ env.PUBLIC_IP }}}} \\
-            "mkdir -p /tmp/ci"
+          INSTANCE_ID=$(cat /tmp/instance_id.txt)
+          aws ec2-instance-connect open-tunnel --instance-id "$INSTANCE_ID" --local-port 2222 &
+          TUNNEL_PID=$!
+          sleep 5
+          ssh -i /tmp/ec2key -p 2222 \\
+            -o StrictHostKeyChecking=no \\
+            -o UserKnownHostsFile=/dev/null \\
+            ubuntu@localhost "mkdir -p /tmp/ci"
+          kill $TUNNEL_PID 2>/dev/null || true
 
 """
 
@@ -566,11 +384,20 @@ jobs:
             workflow += f"""      - name: Run {example}
         run: |
           echo "Running {example}..."
-          ssh -p ${{{{ steps.ids.outputs.SSH_PORT }}}} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \\
-            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \\
-            -i "${{{{ steps.keypair.outputs.KEY_PATH }}}}" ${{{{ env.USER }}}}@${{{{ env.PUBLIC_IP }}}} << 'ENDSSH'
+          INSTANCE_ID=$(cat /tmp/instance_id.txt)
+
+          aws ec2-instance-connect open-tunnel --instance-id "$INSTANCE_ID" --local-port 2222 &
+          TUNNEL_PID=$!
+          sleep 5
+
+          ssh -i /tmp/ec2key -p 2222 \\
+            -o StrictHostKeyChecking=no \\
+            -o UserKnownHostsFile=/dev/null \\
+            -o ServerAliveInterval=60 \\
+            -o ServerAliveCountMax=10 \\
+            ubuntu@localhost << 'ENDSSH'
           set -eo pipefail
-          cd ${{{{ env.WORKDIR }}}}
+          cd ${{{{env.WORKDIR}}}}
 
           # Activate Python environment
           source ~/.local/share/ppf-cts/venv/bin/activate
@@ -578,18 +405,8 @@ jobs:
           # Convert notebook to Python script
           jupyter nbconvert --to python "examples/{example}.ipynb" --output "/tmp/{example}_base.py"
 
-          # Create the runnable script with proper imports
-          cat > /tmp/{example}.py << 'PYEOF'
-          import sys
-          import os
-
-          # Add the repository root to Python path so frontend can be imported
-          sys.path.insert(0, '${{{{ env.WORKDIR }}}}')
-          sys.path.insert(0, '${{{{ env.WORKDIR }}}}/frontend')
-
-          # Set environment variables if needed
-          os.environ['PYTHONPATH'] = '${{{{ env.WORKDIR }}}}:${{{{ env.WORKDIR }}}}/frontend:' + os.environ.get('PYTHONPATH', '')
-          PYEOF
+          # Create the runnable script with proper imports (using printf to avoid nested heredoc)
+          printf '%s\\n' 'import sys' 'import os' '' '# Add the repository root to Python path' "sys.path.insert(0, '${{{{env.WORKDIR}}}}')" "sys.path.insert(0, '${{{{env.WORKDIR}}}}/frontend')" '' '# Set environment variables' "os.environ['"'PYTHONPATH'"'] = '${{{{env.WORKDIR}}}}:${{{{env.WORKDIR}}}}/frontend:' + os.environ.get('"'PYTHONPATH'"', '')" > /tmp/{example}.py
 
           # Append the converted notebook content
           cat "/tmp/{example}_base.py" >> /tmp/{example}.py
@@ -602,35 +419,46 @@ jobs:
           python3 /tmp/{example}.py 2>&1 | tee /tmp/ci/{example}/{example}.log
           ENDSSH
 
+          kill $TUNNEL_PID 2>/dev/null || true
+
 """
 
         workflow += f"""
-
       - name: Collect results
         if: success() || failure()
         run: |
           echo "Collecting results from all runs..."
           mkdir -p ci
+
+          INSTANCE_ID=$(cat /tmp/instance_id.txt)
+
+          # Open tunnel for this step
+          aws ec2-instance-connect open-tunnel \\
+            --instance-id "$INSTANCE_ID" \\
+            --local-port 2222 &
+          TUNNEL_PID=$!
+          sleep 5
+
           # Delete large binary files on remote before copying to save bandwidth
-          # CI output is in ppf-cts cache directory: ~/.cache/ppf-cts/ci
-          ssh -p ${{{{ steps.ids.outputs.SSH_PORT }}}} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \\
-            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \\
-            -i "${{{{ steps.keypair.outputs.KEY_PATH }}}}" ${{{{ env.USER }}}}@${{{{ env.PUBLIC_IP }}}} \\
+          ssh -i /tmp/ec2key -p 2222 \\
+            -o StrictHostKeyChecking=no \\
+            -o UserKnownHostsFile=/dev/null \\
+            ubuntu@localhost \\
             "find ~/.cache/ppf-cts/ci -type f \\( -name '*.bin' -o -name '*.pickle' -o -name '*.ply' -o -name '*.gz' \\) -delete 2>/dev/null" || true
-          # Copy CI output from ppf-cts cache directory (session data, previews, etc.)
-          rsync -avz -e "ssh -p ${{{{ steps.ids.outputs.SSH_PORT }}}} -i ${{{{ steps.keypair.outputs.KEY_PATH }}}} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=60 -o ServerAliveCountMax=10" \\
-            ${{{{ env.USER }}}}@${{{{ env.PUBLIC_IP }}}}:~/.cache/ppf-cts/ci/ ./ci/ || echo "No ppf-cts CI files found"
+
+          # Copy CI output from ppf-cts cache directory
+          rsync -avz -e "ssh -i /tmp/ec2key -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" \\
+            ubuntu@localhost:~/.cache/ppf-cts/ci/ ./ci/ || echo "No ppf-cts CI files found"
+
           # Also copy logs from /tmp/ci
-          rsync -avz -e "ssh -p ${{{{ steps.ids.outputs.SSH_PORT }}}} -i ${{{{ steps.keypair.outputs.KEY_PATH }}}} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=60 -o ServerAliveCountMax=10" \\
-            ${{{{ env.USER }}}}@${{{{ env.PUBLIC_IP }}}}:/tmp/ci/ ./ci/ || echo "No log files found"
+          rsync -avz -e "ssh -i /tmp/ec2key -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" \\
+            ubuntu@localhost:/tmp/ci/ ./ci/ || echo "No log files found"
+
           echo "## Collected Files:"
           ls -laR ci/ | head -100
-          echo "## Run Summary:"
-          for log in ci/*.log ci/*/*.log; do
-            if [ -f "$log" ]; then
-              echo "Found: $log"
-            fi
-          done
+
+          # Close tunnel
+          kill $TUNNEL_PID 2>/dev/null || true
 
       - name: Upload artifact
         if: success() || failure()
@@ -644,10 +472,22 @@ jobs:
         if: success() || failure()
         run: |
           echo "Getting GPU information..."
-          ssh -p ${{{{ steps.ids.outputs.SSH_PORT }}}} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \\
-            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \\
-            -i "${{{{ steps.keypair.outputs.KEY_PATH }}}}" ${{{{ env.USER }}}}@${{{{ env.PUBLIC_IP }}}} \\
-            "nvidia-smi" || echo "Failed to get GPU info"
+          INSTANCE_ID=$(cat /tmp/instance_id.txt)
+
+          # Open tunnel for this step
+          aws ec2-instance-connect open-tunnel \\
+            --instance-id "$INSTANCE_ID" \\
+            --local-port 2222 &
+          TUNNEL_PID=$!
+          sleep 5
+
+          ssh -i /tmp/ec2key -p 2222 \\
+            -o StrictHostKeyChecking=no \\
+            -o UserKnownHostsFile=/dev/null \\
+            ubuntu@localhost "nvidia-smi" || echo "Failed to get GPU info"
+
+          # Close tunnel
+          kill $TUNNEL_PID 2>/dev/null || true
 
       - name: Re-authenticate for cleanup
         if: always()
@@ -656,6 +496,7 @@ jobs:
         with:
           role-to-assume: ${{{{ secrets.AWS_ROLE_ARN }}}}
           aws-region: ${{{{ env.AWS_REGION }}}}
+          role-duration-seconds: 21600
 
       - name: Cleanup - Terminate Instance
         if: always()
@@ -671,38 +512,6 @@ jobs:
             echo "No instance to terminate"
           fi
 
-      - name: Cleanup - Remove Ingress Rules
-        if: always()
-        continue-on-error: true
-        run: |
-          if [ -n "${{{{ steps.security-group.outputs.SG_ID }}}}" ] && [ -n "${{{{ steps.security-group.outputs.RUNNER_IP_CIDR }}}}" ]; then
-            echo "Removing ingress rules from security group ${{{{ steps.security-group.outputs.SG_ID }}}}"
-
-            # Remove custom port rule
-            if [ -n "${{{{ steps.security-group.outputs.SSH_PORT }}}}" ]; then
-              echo "Removing port ${{{{ steps.security-group.outputs.SSH_PORT }}}} rule..."
-              aws ec2 revoke-security-group-ingress \\
-                --group-id "${{{{ steps.security-group.outputs.SG_ID }}}}" \\
-                --ip-permissions \\
-                  "IpProtocol=tcp,FromPort=${{{{ steps.security-group.outputs.SSH_PORT }}}},ToPort=${{{{ steps.security-group.outputs.SSH_PORT }}}},IpRanges=[{{CidrIp=${{{{ steps.security-group.outputs.RUNNER_IP_CIDR }}}}}}]" \\
-                --region "$AWS_REGION" 2>&1 || echo "Note: Custom port rule may have already been removed"
-            fi
-
-            echo "Ingress rule removed successfully"
-            echo "Security group ${{{{ steps.security-group.outputs.SG_ID }}}} remains for future use"
-          else
-            echo "No ingress rules to remove"
-          fi
-
-      - name: Cleanup - Remove Local SSH Key
-        if: always()
-        continue-on-error: true
-        run: |
-          if [ -n "${{{{ steps.keypair.outputs.KEY_PATH }}}}" ] && [ -f "${{{{ steps.keypair.outputs.KEY_PATH }}}}" ]; then
-            rm -f "${{{{ steps.keypair.outputs.KEY_PATH }}}}"
-            echo "Local SSH key file removed"
-          fi
-
       - name: Summary
         if: always()
         run: |
@@ -712,7 +521,6 @@ jobs:
           echo "- Branch: $BRANCH"
           echo "- Examples: $EXAMPLES"
           echo "- Instance ID: ${{{{ steps.instance.outputs.INSTANCE_ID || 'Not launched' }}}}"
-          echo "- Run Status: ${{{{ steps.run-examples.outcome || 'Not run' }}}}"
 
 """
 

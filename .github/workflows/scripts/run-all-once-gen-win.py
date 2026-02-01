@@ -40,7 +40,7 @@ def split_examples(examples, num_instances):
 
 
 def generate_workflow(examples_chunks):
-    """Generate the run-all-once-win.yml workflow file."""
+    """Generate the run-all-once-win.yml workflow file using EICE approach."""
 
     workflow = """# File: run-all-once-win.yml
 # Code: Claude Code
@@ -77,7 +77,7 @@ jobs:
     for idx, chunk in enumerate(examples_chunks, 1):
         examples_list = " ".join(chunk)
 
-        job_template = """  run-batch-{idx}:
+        workflow += f"""  run-batch-{idx}:
     name: Run Batch {idx} (Windows)
     runs-on: ubuntu-latest
     permissions:
@@ -85,9 +85,9 @@ jobs:
       contents: read
 
     env:
-      AWS_REGION: ${{ github.event.inputs.region }}
-      INSTANCE_TYPE: ${{ github.event.inputs.instance_type }}
-      BRANCH: ${{ github.ref_name }}
+      AWS_REGION: ${{{{ github.event.inputs.region }}}}
+      INSTANCE_TYPE: ${{{{ github.event.inputs.instance_type }}}}
+      BRANCH: ${{{{ github.ref_name }}}}
       EXAMPLES: "{examples_list}"
       WORKDIR: C:\\ppf-contact-solver
       USER: Administrator
@@ -96,9 +96,9 @@ jobs:
       - name: Show input parameters
         run: |
           echo "## Input Parameters - Batch {idx} (Windows)"
-          echo "Branch: ${{ github.ref_name }}"
-          echo "Instance Type: ${{ github.event.inputs.instance_type }}"
-          echo "Region: ${{ github.event.inputs.region }}"
+          echo "Branch: ${{{{ github.ref_name }}}}"
+          echo "Instance Type: ${{{{ github.event.inputs.instance_type }}}}"
+          echo "Region: ${{{{ github.event.inputs.region }}}}"
           echo "Examples: {examples_list}"
 
       - name: Checkout repository
@@ -107,306 +107,315 @@ jobs:
       - name: Configure AWS credentials via OIDC
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: ${{ env.AWS_REGION }}
+          role-to-assume: ${{{{ secrets.AWS_ROLE_ARN }}}}
+          aws-region: ${{{{ env.AWS_REGION }}}}
+          role-duration-seconds: 21600
 
-      - name: Verify AWS authentication
+      - name: Find Windows Server AMI and network resources
+        id: setup
         run: |
-          echo "Testing AWS authentication..."
-          aws sts get-caller-identity
-
-      - name: Get GitHub Actions runner public IP
-        id: runner-ip
-        run: |
-          echo "Fetching GitHub Actions runner public IP..."
-          RUNNER_IP=$(curl -s --max-time 10 https://checkip.amazonaws.com | tr -d '\\n')
-          if [ -z "$RUNNER_IP" ]; then
-            echo "ERROR: Failed to get IP from checkip.amazonaws.com"
-            exit 1
-          fi
-          echo "::add-mask::$RUNNER_IP"
-          echo "RUNNER_IP=$RUNNER_IP" >> $GITHUB_OUTPUT
-          echo "GitHub Actions Runner IP: $RUNNER_IP"
-
-      - name: Find Windows Server 2025 AMI
-        id: ami
-        run: |
+          echo "Finding latest Windows Server 2025 AMI..."
           AMI_ID=$(aws ec2 describe-images \\
             --owners amazon \\
-            --filters "Name=name,Values=Windows_Server-2025-English-Full-Base-*" "Name=state,Values=available" \\
+            --filters \\
+              "Name=name,Values=Windows_Server-2025-English-Full-Base-*" \\
+              "Name=state,Values=available" \\
             --query 'sort_by(Images, &CreationDate)[-1].ImageId' \\
-            --region "$AWS_REGION" --output text)
+            --region "$AWS_REGION" \\
+            --output text)
+
           if [ "$AMI_ID" = "None" ] || [ -z "$AMI_ID" ]; then
-            echo "ERROR: Windows Server 2025 AMI not found"
+            echo "ERROR: Windows Server 2025 AMI not found in region $AWS_REGION"
             exit 1
           fi
           echo "AMI_ID=$AMI_ID" >> $GITHUB_OUTPUT
+          echo "Found AMI: $AMI_ID"
 
-      - name: Get default VPC ID
-        id: vpc
-        run: |
-          VPC_ID=$(aws ec2 describe-vpcs --filters "Name=isDefault,Values=true" \\
-            --query 'Vpcs[0].VpcId' --region "$AWS_REGION" --output text)
+          # Get GitHub Actions dedicated VPC, subnet, and security group
+          VPC_ID=$(aws ec2 describe-vpcs --filters "Name=tag:Name,Values=github-actions-vpc" --query 'Vpcs[0].VpcId' --output text)
+          SUBNET_ID=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$VPC_ID" --query 'Subnets[0].SubnetId' --output text)
+          SG_ID=$(aws ec2 describe-security-groups --filters "Name=vpc-id,Values=$VPC_ID" "Name=group-name,Values=github-actions-sg" --query 'SecurityGroups[0].GroupId' --output text)
+
           if [ "$VPC_ID" = "None" ] || [ -z "$VPC_ID" ]; then
-            echo "ERROR: Default VPC not found"
+            echo "ERROR: github-actions-vpc not found in region $AWS_REGION"
             exit 1
           fi
-          echo "VPC_ID=$VPC_ID" >> $GITHUB_OUTPUT
+
+          echo "::add-mask::$VPC_ID"
+          echo "::add-mask::$SUBNET_ID"
+          echo "::add-mask::$SG_ID"
+          echo "SUBNET_ID=$SUBNET_ID" >> $GITHUB_OUTPUT
+          echo "SG_ID=$SG_ID" >> $GITHUB_OUTPUT
+          echo "VPC: $VPC_ID, Subnet: $SUBNET_ID, SG: $SG_ID"
 
       - name: Generate unique identifiers
         id: ids
         run: |
           TIMESTAMP=$(date +%Y%m%d%H%M%S)
           RANDOM_SUFFIX=$(head /dev/urandom | tr -dc a-z0-9 | head -c 6)
-          SSH_PORT=$((10001 + RANDOM % 55535))
-          echo "::add-mask::$SSH_PORT"
           echo "TIMESTAMP=$TIMESTAMP" >> $GITHUB_OUTPUT
-          echo "SSH_PORT=$SSH_PORT" >> $GITHUB_OUTPUT
+          echo "Timestamp: $TIMESTAMP"
 
-      - name: Setup persistent security group
-        id: security-group
-        run: |
-          SG_NAME="github-actions-windows-persistent"
-          SG_ID=$(aws ec2 describe-security-groups --filters "Name=group-name,Values=$SG_NAME" \\
-            --query 'SecurityGroups[0].GroupId' --region "$AWS_REGION" --output text || echo "")
-          if [ "$SG_ID" = "None" ] || [ -z "$SG_ID" ]; then
-            SG_ID=$(aws ec2 create-security-group --group-name "$SG_NAME" \\
-              --description "GitHub Actions Windows builds" \\
-              --vpc-id "${{ steps.vpc.outputs.VPC_ID }}" \\
-              --query 'GroupId' --region "$AWS_REGION" --output text)
-            aws ec2 create-tags --resources "$SG_ID" --tags "Key=Name,Value=$SG_NAME" --region "$AWS_REGION"
-          fi
-          echo "SG_ID=$SG_ID" >> $GITHUB_OUTPUT
-          aws ec2 authorize-security-group-ingress --group-id "$SG_ID" \\
-            --ip-permissions "IpProtocol=tcp,FromPort=${{ steps.ids.outputs.SSH_PORT }},ToPort=${{ steps.ids.outputs.SSH_PORT }},IpRanges=[{CidrIp=${{ steps.runner-ip.outputs.RUNNER_IP }}/32}]" \\
-            --region "$AWS_REGION" 2>&1 || echo "Rule may exist"
-          echo "RUNNER_IP_CIDR=${{ steps.runner-ip.outputs.RUNNER_IP }}/32" >> $GITHUB_OUTPUT
-          echo "SSH_PORT=${{ steps.ids.outputs.SSH_PORT }}" >> $GITHUB_OUTPUT
-
-      - name: Retrieve SSH key from Parameter Store
+      - name: Create EC2 key pair
         id: keypair
         run: |
-          aws ssm get-parameter --name "/github-actions/ec2/ssh-key" --with-decryption \\
-            --query 'Parameter.Value' --region "$AWS_REGION" --output text > /tmp/github-actions-ec2.pem
-          chmod 600 /tmp/github-actions-ec2.pem
-          echo "KEY_PATH=/tmp/github-actions-ec2.pem" >> $GITHUB_OUTPUT
+          KEY_NAME="win-batch-{idx}-${{{{ steps.ids.outputs.TIMESTAMP }}}}"
+          echo "::add-mask::$KEY_NAME"
+          echo "KEY_NAME=$KEY_NAME" >> $GITHUB_OUTPUT
+
+          aws ec2 create-key-pair \\
+            --key-name "$KEY_NAME" \\
+            --query 'KeyMaterial' \\
+            --output text > /tmp/ec2key
+          chmod 600 /tmp/ec2key
+          echo "Created key pair: $KEY_NAME"
 
       - name: Create Windows user data script
         run: |
-          SSH_PORT="${{ steps.ids.outputs.SSH_PORT }}"
-          sed "s/SSH_PORT_PLACEHOLDER/$SSH_PORT/g" .github/workflows/scripts/win/user-data.ps1 > /tmp/user-data.ps1
+          # Use standard SSH port 22 for EC2 Instance Connect
+          sed "s/SSH_PORT_PLACEHOLDER/22/g" .github/workflows/scripts/win/user-data.ps1 > /tmp/user-data.ps1
+          echo "User data script created with SSH port 22"
 
       - name: Launch EC2 instance
         id: instance
         run: |
+          echo "Launching Windows EC2 instance..."
           INSTANCE_ID=$(aws ec2 run-instances \\
-            --image-id "${{ steps.ami.outputs.AMI_ID }}" \\
+            --image-id "${{{{ steps.setup.outputs.AMI_ID }}}}" \\
             --instance-type "$INSTANCE_TYPE" \\
-            --key-name "${{ secrets.AWS_KEY_PAIR_NAME }}" \\
-            --security-group-ids "${{ steps.security-group.outputs.SG_ID }}" \\
+            --key-name "${{{{ steps.keypair.outputs.KEY_NAME }}}}" \\
+            --subnet-id "${{{{ steps.setup.outputs.SUBNET_ID }}}}" \\
+            --security-group-ids "${{{{ steps.setup.outputs.SG_ID }}}}" \\
+            --associate-public-ip-address \\
             --user-data file:///tmp/user-data.ps1 \\
-            --block-device-mappings "DeviceName=/dev/sda1,Ebs={VolumeSize=100,VolumeType=gp3,DeleteOnTermination=true}" \\
-            --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=gpu-runner-win-batch-{idx}-${{ steps.ids.outputs.TIMESTAMP }}},{Key=ManagedBy,Value=GitHubActions},{Key=Batch,Value={idx}}]" \\
+            --block-device-mappings "DeviceName=/dev/sda1,Ebs={{VolumeSize=100,VolumeType=gp3,DeleteOnTermination=true}}" \\
+            --tag-specifications \\
+              "ResourceType=instance,Tags=[{{Key=Name,Value=gpu-runner-win-batch-{idx}-${{{{ steps.ids.outputs.TIMESTAMP }}}}}},{{Key=ManagedBy,Value=GitHubActions}},{{Key=Purpose,Value=WindowsGPURunner}},{{Key=Workflow,Value=${{{{ github.workflow }}}}}},{{Key=RunId,Value=${{{{ github.run_id }}}}}},{{Key=Branch,Value=${{{{ env.BRANCH }}}}}},{{Key=Batch,Value={idx}}}]" \\
+              "ResourceType=volume,Tags=[{{Key=Name,Value=gpu-runner-win-batch-{idx}-${{{{ steps.ids.outputs.TIMESTAMP }}}}-volume}},{{Key=ManagedBy,Value=GitHubActions}},{{Key=Purpose,Value=WindowsGPURunner}}]" \\
             --instance-initiated-shutdown-behavior terminate \\
-            --query 'Instances[0].InstanceId' --region "$AWS_REGION" --output text)
+            --query 'Instances[0].InstanceId' \\
+            --region "$AWS_REGION" \\
+            --output text)
           echo "INSTANCE_ID=$INSTANCE_ID" >> $GITHUB_OUTPUT
+          echo "Instance launched: $INSTANCE_ID"
 
-      - name: Wait for instance to be running
+      - name: Wait for instance ready
         run: |
-          aws ec2 wait instance-running --instance-ids "${{ steps.instance.outputs.INSTANCE_ID }}" --region "$AWS_REGION"
-          PUBLIC_IP=$(aws ec2 describe-instances --instance-ids "${{ steps.instance.outputs.INSTANCE_ID }}" \\
-            --query 'Reservations[0].Instances[0].PublicIpAddress' --region "$AWS_REGION" --output text)
-          echo "::add-mask::$PUBLIC_IP"
-          echo "PUBLIC_IP=$PUBLIC_IP" >> $GITHUB_ENV
+          INSTANCE_ID="${{{{ steps.instance.outputs.INSTANCE_ID }}}}"
+          echo "$INSTANCE_ID" > /tmp/instance_id.txt
+          echo "Waiting for instance status checks..."
+          aws ec2 wait instance-status-ok --instance-ids "$INSTANCE_ID"
 
-      - name: Wait for SSH
-        run: |
-          KEY_PATH="${{ steps.keypair.outputs.KEY_PATH }}"
-          SSH_PORT="${{ steps.ids.outputs.SSH_PORT }}"
-          for i in $(seq 1 60); do
-            if ssh -p $SSH_PORT -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \\
-            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \\
-              -o BatchMode=yes -i "$KEY_PATH" Administrator@$PUBLIC_IP "echo SSH_READY" 2>/dev/null | grep -q SSH_READY; then
-              echo "SSH ready!"
+          echo "Waiting for OpenSSH to be ready via EC2 Instance Connect..."
+          for i in {{1..30}}; do
+            timeout 15 aws ec2-instance-connect open-tunnel \\
+              --instance-id "$INSTANCE_ID" \\
+              --remote-port 22 \\
+              --local-port 2222 &
+            TUNNEL_PID=$!
+            sleep 5
+
+            if nc -z localhost 2222 2>/dev/null; then
+              echo "SSH is responding on attempt $i"
+              kill $TUNNEL_PID 2>/dev/null || true
               break
             fi
-            echo "Waiting for SSH ($i/60)..."
-            sleep 30
-          done
-          for i in $(seq 1 30); do
-            if ssh -p $SSH_PORT -o ConnectTimeout=10 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \\
-            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \\
-              -i "$KEY_PATH" Administrator@$PUBLIC_IP "if (Test-Path C:\\\\ssh_ready.txt) { echo READY }" 2>/dev/null | grep -q READY; then
-              echo "Setup complete!"
-              break
-            fi
-            sleep 30
-          done
 
-      - name: Install NVIDIA driver only (no CUDA toolkit)
+            kill $TUNNEL_PID 2>/dev/null || true
+            if [ $i -eq 30 ]; then
+              echo "ERROR: SSH not ready after 30 attempts"
+              exit 1
+            fi
+            echo "Attempt $i/30: SSH not ready, waiting 10s..."
+            sleep 10
+          done
+          echo "Instance ready for SSH connections"
+
+      - name: Install NVIDIA driver
         run: |
-          SSH_PORT="${{ steps.ids.outputs.SSH_PORT }}"
-          KEY_PATH="${{ steps.keypair.outputs.KEY_PATH }}"
-          scp -P $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \\
+          echo "Installing NVIDIA driver..."
+          INSTANCE_ID=$(cat /tmp/instance_id.txt)
+
+          # Open tunnel for this step
+          aws ec2-instance-connect open-tunnel \\
+            --instance-id "$INSTANCE_ID" \\
+            --remote-port 22 \\
+            --local-port 2222 &
+          TUNNEL_PID=$!
+          sleep 5
+
+          scp -P 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \\
             -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \\
-            -i "$KEY_PATH" .github/workflows/scripts/win/install-nvidia-driver.ps1 Administrator@$PUBLIC_IP:C:/install_driver.ps1
-          ssh -p $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \\
+            -i /tmp/ec2key .github/workflows/scripts/win/install-nvidia-driver.ps1 Administrator@localhost:C:/install_driver.ps1
+
+          ssh -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \\
             -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \\
-            -i "$KEY_PATH" Administrator@$PUBLIC_IP \\
+            -i /tmp/ec2key Administrator@localhost \\
             "powershell -ExecutionPolicy Bypass -File C:/install_driver.ps1"
+
+          # Close tunnel
+          kill $TUNNEL_PID 2>/dev/null || true
 
       - name: Transfer repository to instance
         run: |
-          SSH_PORT="${{ steps.ids.outputs.SSH_PORT }}"
-          KEY_PATH="${{ steps.keypair.outputs.KEY_PATH }}"
+          echo "Creating and transferring repository archive..."
           git archive --format=zip --output=/tmp/repo.zip HEAD
-          scp -P $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \\
+
+          INSTANCE_ID=$(cat /tmp/instance_id.txt)
+
+          # Open tunnel for this step
+          aws ec2-instance-connect open-tunnel \\
+            --instance-id "$INSTANCE_ID" \\
+            --remote-port 22 \\
+            --local-port 2222 &
+          TUNNEL_PID=$!
+          sleep 5
+
+          scp -P 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \\
             -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \\
-            -i "$KEY_PATH" /tmp/repo.zip Administrator@$PUBLIC_IP:C:/source.zip
-          ssh -p $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \\
+            -i /tmp/ec2key /tmp/repo.zip Administrator@localhost:C:/source.zip
+
+          ssh -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \\
             -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \\
-            -i "$KEY_PATH" Administrator@$PUBLIC_IP \\
-            "powershell -Command \\"if (Test-Path 'C:\\\\ppf-contact-solver') { Remove-Item -Recurse -Force 'C:\\\\ppf-contact-solver' }; New-Item -ItemType Directory -Path 'C:\\\\ppf-contact-solver' -Force; Expand-Archive -Path 'C:\\\\source.zip' -DestinationPath 'C:\\\\ppf-contact-solver' -Force; Remove-Item 'C:\\\\source.zip'\\""
+            -i /tmp/ec2key Administrator@localhost \\
+            "powershell -Command \\"if (Test-Path 'C:\\\\ppf-contact-solver') {{ Remove-Item -Recurse -Force 'C:\\\\ppf-contact-solver' }}; New-Item -ItemType Directory -Path 'C:\\\\ppf-contact-solver' -Force; Expand-Archive -Path 'C:\\\\source.zip' -DestinationPath 'C:\\\\ppf-contact-solver' -Force; Remove-Item 'C:\\\\source.zip'\\""
+
+          # Close tunnel
+          kill $TUNNEL_PID 2>/dev/null || true
 
       - name: Run warmup.bat
         run: |
-          SSH_PORT="${{ steps.ids.outputs.SSH_PORT }}"
-          KEY_PATH="${{ steps.keypair.outputs.KEY_PATH }}"
-          ssh -p $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \\
+          echo "Running warmup.bat..."
+          INSTANCE_ID=$(cat /tmp/instance_id.txt)
+
+          # Open tunnel for this step
+          aws ec2-instance-connect open-tunnel \\
+            --instance-id "$INSTANCE_ID" \\
+            --remote-port 22 \\
+            --local-port 2222 &
+          TUNNEL_PID=$!
+          sleep 5
+
+          ssh -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \\
             -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \\
-            -o ServerAliveInterval=60 -i "$KEY_PATH" Administrator@$PUBLIC_IP \\
+            -i /tmp/ec2key Administrator@localhost \\
             "cmd /c 'cd C:\\\\ppf-contact-solver\\\\build-win-native && warmup.bat /nopause'"
+
+          # Close tunnel
+          kill $TUNNEL_PID 2>/dev/null || true
 
       - name: Run build.bat
         run: |
-          SSH_PORT="${{ steps.ids.outputs.SSH_PORT }}"
-          KEY_PATH="${{ steps.keypair.outputs.KEY_PATH }}"
-          ssh -p $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \\
+          echo "Running build.bat..."
+          INSTANCE_ID=$(cat /tmp/instance_id.txt)
+
+          # Open tunnel for this step
+          aws ec2-instance-connect open-tunnel \\
+            --instance-id "$INSTANCE_ID" \\
+            --remote-port 22 \\
+            --local-port 2222 &
+          TUNNEL_PID=$!
+          sleep 5
+
+          ssh -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \\
             -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \\
-            -o ServerAliveInterval=60 -i "$KEY_PATH" Administrator@$PUBLIC_IP \\
+            -i /tmp/ec2key Administrator@localhost \\
             "cmd /c 'cd C:\\\\ppf-contact-solver\\\\build-win-native && build.bat /nopause'"
 
-      - name: Convert assertion notebook to Python script
-        run: |
-          echo "Converting assertion notebook: examples/fail-examples/assertion.ipynb"
-          SSH_PORT="${{ steps.ids.outputs.SSH_PORT }}"
-          KEY_PATH="${{ steps.keypair.outputs.KEY_PATH }}"
-
-          # Use the same conversion pattern as main examples
-          cat > /tmp/convert_assertion.ps1 << 'EOFPS1'
-          $ErrorActionPreference = "Stop"
-          Set-Location C:\\ppf-contact-solver
-          $env:PATH = "C:\\ppf-contact-solver\\build-win-native\\python;C:\\ppf-contact-solver\\build-win-native\\python\\Scripts;" + $env:PATH
-          New-Item -ItemType Directory -Path "C:\\ci" -Force | Out-Null
-          Write-Host "Converting assertion.ipynb to Python script..."
-          & C:\\ppf-contact-solver\\build-win-native\\python\\python.exe -m jupyter nbconvert --to python "examples/fail-examples/assertion.ipynb" --output "C:\\ci\\assertion_base.py"
-          $header = "import sys`nimport os`nsys.path.insert(0, r'C:\\ppf-contact-solver')`nsys.path.insert(0, r'C:\\ppf-contact-solver\\frontend')`nos.environ['PYTHONPATH'] = r'C:\\ppf-contact-solver;C:\\ppf-contact-solver\\frontend;' + os.environ.get('PYTHONPATH', '')"
-          $baseContent = Get-Content "C:\\ci\\assertion_base.py" -Raw
-          $header + "`n" + $baseContent | Set-Content "C:\\ci\\assertion.py"
-          Write-Host "Assertion script prepared at C:\\ci\\assertion.py"
-          EOFPS1
-
-          scp -P $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \\
-            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \\
-            -i "$KEY_PATH" /tmp/convert_assertion.ps1 Administrator@$PUBLIC_IP:C:/convert_assertion.ps1
-
-          ssh -p $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \\
-            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \\
-            -i "$KEY_PATH" Administrator@$PUBLIC_IP \\
-            "powershell -ExecutionPolicy Bypass -File C:/convert_assertion.ps1"
-
-      - name: Run assertion test (expect failure)
-        run: |
-          echo "Running assertion test to verify error propagation via SSH..."
-          echo "This test uses the same execution pattern as main examples"
-          echo "Expected result: FAILURE (AssertionError)"
-          SSH_PORT="${{ steps.ids.outputs.SSH_PORT }}"
-          KEY_PATH="${{ steps.keypair.outputs.KEY_PATH }}"
-
-          # Create script that runs the same way as main examples
-          cat > /tmp/run_assertion.ps1 << 'EOFPS1'
-          Set-Location C:\\ppf-contact-solver
-          "assertion" | Set-Content "frontend\\.CI"
-          & C:\\ppf-contact-solver\\build-win-native\\python\\python.exe C:\\ci\\assertion.py 2>&1 | Tee-Object -FilePath "C:\\ci\\assertion.log"
-          exit $LASTEXITCODE
-          EOFPS1
-
-          scp -P $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \\
-            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \\
-            -i "$KEY_PATH" /tmp/run_assertion.ps1 Administrator@$PUBLIC_IP:C:/run_assertion.ps1
-
-          # Run and expect failure
-          if ssh -p $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \\
-            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \\
-            -i "$KEY_PATH" Administrator@$PUBLIC_IP \\
-            "powershell -ExecutionPolicy Bypass -File C:/run_assertion.ps1"; then
-            echo "ERROR: Assertion test should have failed but succeeded"
-            echo "This means errors are NOT being propagated correctly!"
-            exit 1
-          else
-            echo "SUCCESS: Assertion test failed as expected"
-            echo "Error propagation via SSH is working correctly"
-            echo "Main example tests can now proceed with confidence"
-          fi
+          # Close tunnel
+          kill $TUNNEL_PID 2>/dev/null || true
 
       - name: Setup CI directory
         run: |
-          SSH_PORT="${{ steps.ids.outputs.SSH_PORT }}"
-          KEY_PATH="${{ steps.keypair.outputs.KEY_PATH }}"
-          ssh -p $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \\
-            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \\
-            -i "$KEY_PATH" Administrator@$PUBLIC_IP \\
+          INSTANCE_ID=$(cat /tmp/instance_id.txt)
+
+          # Open tunnel for this step
+          aws ec2-instance-connect open-tunnel \\
+            --instance-id "$INSTANCE_ID" \\
+            --remote-port 22 \\
+            --local-port 2222 &
+          TUNNEL_PID=$!
+          sleep 5
+
+          ssh -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \\
+            -i /tmp/ec2key Administrator@localhost \\
             "powershell -Command \\"New-Item -ItemType Directory -Path 'C:\\\\ci' -Force\\""
 
-"""
+          # Close tunnel
+          kill $TUNNEL_PID 2>/dev/null || true
 
-        workflow += job_template.replace("{idx}", str(idx)).replace(
-            "{examples_list}", examples_list
-        )
+"""
 
         # Generate a step for each example
         for example in chunk:
-            example_step = """      - name: Run {example}
+            workflow += f"""      - name: Run {example}
         run: |
-          SSH_PORT="${{ steps.ids.outputs.SSH_PORT }}"
-          KEY_PATH="${{ steps.keypair.outputs.KEY_PATH }}"
+          echo "Running {example}..."
+          INSTANCE_ID=$(cat /tmp/instance_id.txt)
+
           sed "s/EXAMPLE_PLACEHOLDER/{example}/g" .github/workflows/scripts/win/run-example.ps1 > /tmp/run_{example}.ps1
-          scp -P $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \\
+
+          # Open tunnel for this step
+          aws ec2-instance-connect open-tunnel \\
+            --instance-id "$INSTANCE_ID" \\
+            --remote-port 22 \\
+            --local-port 2222 &
+          TUNNEL_PID=$!
+          sleep 5
+
+          scp -P 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \\
             -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \\
-            -i "$KEY_PATH" /tmp/run_{example}.ps1 Administrator@$PUBLIC_IP:C:/run_{example}.ps1
-          ssh -p $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \\
+            -i /tmp/ec2key /tmp/run_{example}.ps1 Administrator@localhost:C:/run_{example}.ps1
+
+          ssh -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \\
             -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \\
-            -o ServerAliveInterval=60 -i "$KEY_PATH" Administrator@$PUBLIC_IP \\
+            -i /tmp/ec2key Administrator@localhost \\
             "powershell -ExecutionPolicy Bypass -File C:/run_{example}.ps1"
 
+          # Close tunnel
+          kill $TUNNEL_PID 2>/dev/null || true
+
 """
-            workflow += example_step.replace("{example}", example)
 
         # Cleanup steps
-        cleanup_template = """
+        workflow += f"""
       - name: Collect results
         if: success() || failure()
         run: |
           echo "Collecting results..."
-          SSH_PORT="${{ steps.ids.outputs.SSH_PORT }}"
-          KEY_PATH="${{ steps.keypair.outputs.KEY_PATH }}"
           mkdir -p ci
+
+          INSTANCE_ID=$(cat /tmp/instance_id.txt)
+
+          # Open tunnel for this step
+          aws ec2-instance-connect open-tunnel \\
+            --instance-id "$INSTANCE_ID" \\
+            --remote-port 22 \\
+            --local-port 2222 &
+          TUNNEL_PID=$!
+          sleep 5
+
           # Delete large binary files on remote before copying to save bandwidth
-          # CI output is in project-relative cache: C:\\ppf-contact-solver\\cache\\ppf-cts\\ci
-          ssh -p $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \\
+          ssh -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \\
             -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \\
-            -i "$KEY_PATH" Administrator@$PUBLIC_IP \\
+            -i /tmp/ec2key Administrator@localhost \\
             "powershell -Command \\"Get-ChildItem -Path C:\\\\ppf-contact-solver\\\\cache\\\\ppf-cts\\\\ci -Recurse -Include '*.bin','*.pickle','*.ply','*.gz' -ErrorAction SilentlyContinue | Remove-Item -Force\\"" || true
+
           # Copy CI output from ppf-cts cache directory
-          scp -P $SSH_PORT -r -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \\
+          scp -P 2222 -r -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \\
             -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \\
-            -i "$KEY_PATH" "Administrator@$PUBLIC_IP:C:/ppf-contact-solver/cache/ppf-cts/ci/*" ./ci/ || echo "No ppf-cts CI files found"
+            -i /tmp/ec2key "Administrator@localhost:C:/ppf-contact-solver/cache/ppf-cts/ci/*" ./ci/ || echo "No ppf-cts CI files found"
+
           # Also copy logs and scripts from C:\\ci
-          scp -P $SSH_PORT -r -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \\
+          scp -P 2222 -r -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \\
             -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \\
-            -i "$KEY_PATH" "Administrator@$PUBLIC_IP:C:/ci/*" ./ci/ || echo "No script/log files found"
+            -i /tmp/ec2key "Administrator@localhost:C:/ci/*" ./ci/ || echo "No script/log files found"
+
           echo "## Collected Files:"
           ls -laR ci/ || echo "No files collected"
+
+          # Close tunnel
+          kill $TUNNEL_PID 2>/dev/null || true
 
       - name: Upload artifact
         if: success() || failure()
@@ -419,54 +428,62 @@ jobs:
       - name: GPU information
         if: success() || failure()
         run: |
-          SSH_PORT="${{ steps.ids.outputs.SSH_PORT }}"
-          KEY_PATH="${{ steps.keypair.outputs.KEY_PATH }}"
-          ssh -p $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \\
+          echo "Getting GPU information..."
+          INSTANCE_ID=$(cat /tmp/instance_id.txt)
+
+          # Open tunnel for this step
+          aws ec2-instance-connect open-tunnel \\
+            --instance-id "$INSTANCE_ID" \\
+            --remote-port 22 \\
+            --local-port 2222 &
+          TUNNEL_PID=$!
+          sleep 5
+
+          ssh -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \\
             -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \\
-            -i "$KEY_PATH" Administrator@$PUBLIC_IP "nvidia-smi" || true
+            -i /tmp/ec2key Administrator@localhost "nvidia-smi" || echo "Failed to get GPU info"
+
+          # Close tunnel
+          kill $TUNNEL_PID 2>/dev/null || true
 
       - name: Re-authenticate for cleanup
         if: always()
         continue-on-error: true
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: ${{ env.AWS_REGION }}
+          role-to-assume: ${{{{ secrets.AWS_ROLE_ARN }}}}
+          aws-region: ${{{{ env.AWS_REGION }}}}
+          role-duration-seconds: 21600
 
       - name: Cleanup - Terminate Instance
         if: always()
         continue-on-error: true
         run: |
-          if [ -n "${{ steps.instance.outputs.INSTANCE_ID }}" ]; then
-            aws ec2 terminate-instances --instance-ids "${{ steps.instance.outputs.INSTANCE_ID }}" --region "$AWS_REGION" || true
+          if [ -n "${{{{ steps.instance.outputs.INSTANCE_ID }}}}" ]; then
+            echo "Terminating instance: ${{{{ steps.instance.outputs.INSTANCE_ID }}}}"
+            aws ec2 terminate-instances \\
+              --instance-ids "${{{{ steps.instance.outputs.INSTANCE_ID }}}}" \\
+              --region "$AWS_REGION" || true
           fi
 
-      - name: Cleanup - Remove Ingress Rules
+      - name: Cleanup - Delete Key Pair
         if: always()
         continue-on-error: true
         run: |
-          if [ -n "${{ steps.security-group.outputs.SG_ID }}" ] && [ -n "${{ steps.security-group.outputs.RUNNER_IP_CIDR }}" ]; then
-            aws ec2 revoke-security-group-ingress --group-id "${{ steps.security-group.outputs.SG_ID }}" \\
-              --ip-permissions "IpProtocol=tcp,FromPort=${{ steps.security-group.outputs.SSH_PORT }},ToPort=${{ steps.security-group.outputs.SSH_PORT }},IpRanges=[{CidrIp=${{ steps.security-group.outputs.RUNNER_IP_CIDR }}}]" \\
-              --region "$AWS_REGION" 2>&1 || true
+          if [ -n "${{{{ steps.keypair.outputs.KEY_NAME }}}}" ]; then
+            echo "Deleting key pair: ${{{{ steps.keypair.outputs.KEY_NAME }}}}"
+            aws ec2 delete-key-pair --key-name "${{{{ steps.keypair.outputs.KEY_NAME }}}}" || true
           fi
-
-      - name: Cleanup - Remove Local SSH Key
-        if: always()
-        continue-on-error: true
-        run: rm -f "${{ steps.keypair.outputs.KEY_PATH }}"
+          rm -f /tmp/ec2key
 
       - name: Summary
         if: always()
         run: |
-          echo "## Batch {idx} Summary"
+          echo "## Batch {idx} Summary (Windows)"
           echo "- Examples: {examples_list}"
-          echo "- Instance: ${{ steps.instance.outputs.INSTANCE_ID || 'Not launched' }}"
+          echo "- Instance: ${{{{ steps.instance.outputs.INSTANCE_ID || 'Not launched' }}}}"
 
 """
-        workflow += cleanup_template.replace("{idx}", str(idx)).replace(
-            "{examples_list}", examples_list
-        )
 
     return workflow
 
