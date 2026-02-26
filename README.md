@@ -30,10 +30,10 @@ involving 👚 shells, 🪵 solids and 🪢 rods. All made by [ZOZO, Inc.](https
 - **📐 Finite Element Method**: We use FEM for deformables and symbolic force jacobians.
 - **⚔️ Highly Stressed**: We run GitHub Actions to run stress tests [10 times in a row](#️-ten-consecutive-runs).
 - **🚀 Massively Parallel**: Both contact and elasticity solvers are run on the GPU.
-- **🪟 Windows Executable**: No installation wizard shown. Just unzip and run [(Video)](https://drive.google.com/file/d/1PAj_x6uO8egGpuZL7RvZI7g4k2941edB/view).
+- **🪟 Windows Executable**: No installation wizard shown. Just unzip and run [(Video)](https://zozo.box.com/s/hkfxby26tycfsm7embpw1ld82urhitu7).
 - **🐳 Docker Sealed**: All can be deployed fast. The image is ~1GB.
-- **🌐 JupyterLab Included**: Open your browser and run examples right away [(Video)](https://drive.google.com/file/d/1n068Ai_hlfgapf2xkAutOHo3PkLpJXA4/view).
-- **🐍 Documented Python APIs**: Our Python code is fully [docstringed](https://st-tech.github.io/ppf-contact-solver/frontend.html) and lintable [(Video)](https://drive.google.com/file/d/1vCM7kNgXdqQRBjVaoEb6KwIdRR21V7sV/view).
+- **🌐 JupyterLab Included**: Open your browser and run examples right away [(Video)](https://zozo.box.com/s/4555t7c8v8uspyb4zhzbni5tn6wezra3).
+- **🐍 Documented Python APIs**: Our Python code is fully [docstringed](https://st-tech.github.io/ppf-contact-solver/frontend.html) and lintable [(Video)](https://zozo.box.com/s/e7cfizbuaig9drpe01q5ospx8gez98ug).
 - **☁️ Cloud-Ready**: Our solver can be seamlessly deployed on major cloud platforms.
 - **✨ Stay Clean**: You can remove all traces after use.
 
@@ -74,12 +74,12 @@ involving 👚 shells, 🪵 solids and 🪢 rods. All made by [ZOZO, Inc.](https
 
 ## 📝 Change History
 
-- (2025.12.18) Added native Windows standalone executable build support [(Video)](https://drive.google.com/file/d/1PAj_x6uO8egGpuZL7RvZI7g4k2941edB/view).
-- (2025.11.26) Added [large-woven.ipynb](./examples/large-woven.ipynb) [(Video)](https://drive.google.com/file/d/16Pb_pwSVoQ6YD9zb-HhUKCbyf3qUzyKx/view) to [large scale examples](#️-large-scale-examples).
-- (2025.11.12) Added [five-twist.ipynb](./examples/five-twist.ipynb) [(Video)](https://drive.google.com/file/d/1EjHLqtAUjYh7KEQ_EQ9Jx6hh262BUze1/view) and [large-five-twist.ipynb](./examples/large-five-twist.ipynb) [(Video)](https://drive.google.com/file/d/1STOfH1Y-F-ycnV6sGNut7GNWnpoSo11f/view) showcasing over 180M count. See [large scale examples](#️-large-scale-examples).
+- (2025.12.18) Added native Windows standalone executable build support [(Video)](https://zozo.box.com/s/hkfxby26tycfsm7embpw1ld82urhitu7).
+- (2025.11.26) Added [large-woven.ipynb](./examples/large-woven.ipynb) [(Video)](https://zozo.box.com/s/m6ws08pueo30hbamu64flm1xo14la9x8) to [large scale examples](#️-large-scale-examples).
+- (2025.11.12) Added [five-twist.ipynb](./examples/five-twist.ipynb) [(Video)](https://zozo.box.com/s/qi4uup7ngi1la7fo1dygnl9rtudpvo3b) and [large-five-twist.ipynb](./examples/large-five-twist.ipynb) [(Video)](https://zozo.box.com/s/8ua5r1cno9but33pid7z9jhzvfeydr27) showcasing over 180M count. See [large scale examples](#️-large-scale-examples).
 - (2025.10.03) Massive refactor of the codebase [(Markdown)](./articles/refactor_202510.md). Note that this change includes breaking changes to our Python APIs.
 - (2025.08.09) Added a hindsight note in [eigensystem analysis](./articles/eigensys.md) to acknowledge prior work by [Poya et al. (2023)](https://romeric.github.io/).
-- (2025.05.01) Simulation states now can be saved and loaded [(Video)](https://drive.google.com/file/d/1aCEwVPbX_Am6bwj6NrwARS6K_IkT45c-/view).
+- (2025.05.01) Simulation states now can be saved and loaded [(Video)](https://zozo.box.com/s/ax8xtkqkir3fasrxjjoxuznj4vew69u3).
 
 <details>
 <summary>More history records</summary>
@@ -87,18 +87,18 @@ involving 👚 shells, 🪵 solids and 🪢 rods. All made by [ZOZO, Inc.](https
 - (2025.03.03) Added a [budget table on AWS](#-budget-table-on-aws).
 - (2025.02.28) Added a [reference branch and a Docker image of our TOG paper](#-technical-materials).
 - (2025.02.26) Added Floating Point-Rounding Errors in ACCD in [hindsight](./articles/hindsight.md).
-- (2025.02.07) Updated the [trapped example](./examples/trapped.ipynb) [(Video)](https://drive.google.com/file/d/1Qek0e0qBNWPlBb1hSOZ6o_e2Cqf5rGst/view) with squishy balls.
+- (2025.02.07) Updated the [trapped example](./examples/trapped.ipynb) [(Video)](https://zozo.box.com/s/58au2sg70ojd02fy6cs4ly6s3cmywr10) with squishy balls.
 - (2025.03.03) Added a [budget table on AWS](#-budget-table-on-aws).
 - (2025.02.28) Added a [reference branch and a Docker image of our TOG paper](#-technical-materials).
 - (2025.02.26) Added Floating Point-Rounding Errors in ACCD in [hindsight](./articles/hindsight.md).
-- (2025.02.07) Updated the [trapped example](./examples/trapped.ipynb) [(Video)](https://drive.google.com/file/d/1Qek0e0qBNWPlBb1hSOZ6o_e2Cqf5rGst/view) with squishy balls.
-- (2025.1.8) Added a [domino example](./examples/domino.ipynb) [(Video)](https://drive.google.com/file/d/1N9y8eZrjSQhAUhKwiO9w8jW_T18zPnYf/view).
-- (2025.1.5) Added a [single twist example](./examples/twist.ipynb) [(Video)](https://drive.google.com/file/d/1LDFKS-iBvl2uDdPVKaazQL25tYGEEyXr/view).
+- (2025.02.07) Updated the [trapped example](./examples/trapped.ipynb) [(Video)](https://zozo.box.com/s/58au2sg70ojd02fy6cs4ly6s3cmywr10) with squishy balls.
+- (2025.1.8) Added a [domino example](./examples/domino.ipynb) [(Video)](https://zozo.box.com/s/w0fppdoli8heyuyi12n086vkax92lph3).
+- (2025.1.5) Added a [single twist example](./examples/twist.ipynb) [(Video)](https://zozo.box.com/s/ekky63rp5i8bme1r4fjv4tlh558m5f6n).
 - (2024.12.31) Added full documentation for Python APIs, parameters, and log files [(GitHub Pages)](https://st-tech.github.io/ppf-contact-solver).
 - (2024.12.27) Line search for strain limiting is improved [(Markdown)](./articles/bug.md#new-strain-limiting-line-search)
 - (2024.12.23) Added [(Bug Fixes and Updates)](./articles/bug.md)
-- (2024.12.21) Added a [house of cards example](./examples/cards.ipynb) [(Video)](https://drive.google.com/file/d/1PMdDnlyCsjinbvICKph_0UcXUfUvvUmZ/view)
-- (2024.12.18) Added a [frictional contact example](./examples/friction.ipynb): armadillo sliding on the slope [(Video)](https://drive.google.com/file/d/12WGdfDTFIwCT0UFGEZzfmQreM6WSSHet/view)
+- (2024.12.21) Added a [house of cards example](./examples/cards.ipynb) [(Video)](https://zozo.box.com/s/k2a6910gynnete3vfo5dgkhkwkaf96mj)
+- (2024.12.18) Added a [frictional contact example](./examples/friction.ipynb): armadillo sliding on the slope [(Video)](https://zozo.box.com/s/vhhua1s3f93cihg97vp98kzk3wo924ot)
 - (2024.12.18) Added a [hindsight](./articles/hindsight.md) noting that the tilt angle was not $30^\circ$, but rather $26.57^\circ$
 - (2024.12.16) Removed thrust dependencies to fix runtime errors for the driver version `560.94` [(Issue Link)](https://github.com/st-tech/ppf-contact-solver/issues/1)
 </details>
@@ -108,12 +108,12 @@ involving 👚 shells, 🪵 solids and 🪢 rods. All made by [ZOZO, Inc.](https
 #### 📘 **A Cubic Barrier with Elasticity-Inclusive Dynamic Stiffness**
 
 - 📚 Published in [ACM Transactions on Graphics (TOG) Vol.43, No.6](https://dl.acm.org/doi/abs/10.1145/3687908)
-- 🎥 Main video [(Video)](https://drive.google.com/file/d/1OzPbUoqddUYDvXMvRnUHH7kz0nZhmt7K/view?usp=drive_link)
-- 🎥 Additional video examples [(Directory)](https://drive.google.com/drive/folders/1O4t3CBcG8qqju_qun0RP60OULK4_1tTf?usp=drive_link)
-- 🎥 Presentation videos [(Short)](https://drive.google.com/file/d/1axAbFRtbOxhkU7K3Wf9F5gh2iDNJn6CZ/view) [(Long)](<https://drive.google.com/file/d/1zybHydN0a0cZ-ifl_D_LYLwdMOnz2YnP/view>)
-- 📃 Main paper [(PDF)](https://drive.google.com/file/d/1OrOKJH_im1L4j1cJB18sfvNHEbZVSqjL/view?usp=drive_link) ([Hindsight)](./articles/hindsight.md)
-- 📊 Supplementary PDF [(PDF)](https://drive.google.com/file/d/1ptjFNVufPBV4-vb5UDh1yTgz8-esjaSF/view?usp=drive_link)
-- 🤖 Supplementary scripts [(Directory)](https://drive.google.com/drive/folders/13CO068xLkd6ZSxsqtJQdNadgMrbbfSug?usp=drive_link)
+- 🎥 Main video [(Video)](https://zozo.box.com/s/dpyum2shhlptzukd45jbqpdgl3f9zm51)
+- 🎥 Additional video examples [(Directory)](https://zozo.box.com/s/l3lnj5wk42s1l9fk78dk5smc5n1bc563)
+- 🎥 Presentation videos [(Short)](https://zozo.box.com/s/2ijudkl67tdntpxcrhfulxj6b0duomr0) [(Long)](<https://zozo.box.com/s/7efg1840osuvn7nczf1k2o48lt394jze>)
+- 📃 Main paper [(PDF)](https://zozo.box.com/s/xnmpgsdul0o7jdk4yyjju00937653w7t) ([Hindsight)](./articles/hindsight.md)
+- 📊 Supplementary PDF [(PDF)](https://zozo.box.com/s/ulc7i2jcz0bt9n27g5dfvk5ytvydkqw3)
+- 🤖 Supplementary scripts [(Directory)](https://zozo.box.com/s/26cvgnyuaa6quof8cplkte775bxa5qnp)
 - 🔍 Singular-value eigenanalysis [(Markdown)](./articles/eigensys.md)
 
 ##### 📌 Reference Implementation
@@ -142,7 +142,7 @@ To retain consistency with the paper, we have created a new branch ```sigasia-20
 
 For Windows 10/11 users, a self-contained executable (~230MB) is available.
 No Python, Docker, or CUDA Toolkit installation is needed.
-All should simply work out of the box [(Video)](https://drive.google.com/file/d/1PAj_x6uO8egGpuZL7RvZI7g4k2941edB/view).
+All should simply work out of the box [(Video)](https://zozo.box.com/s/hkfxby26tycfsm7embpw1ld82urhitu7).
 
 > 🤔 If you are cautious, you can review the [build workflow](https://github.com/st-tech/ppf-contact-solver/actions/workflows/release-win.yml) to verify safety yourself.
 We try to maximize transparency; **we never build locally and upload.**
@@ -224,7 +224,7 @@ Results can be interactively viewed through the browser and exported as needed.
 
 This allows you to interact with the simulator on your laptop while the actual simulation runs on a remote headless server over the internet.
 This means that **you don't have to own NVIDIA hardware**, but can rent it at [vast.ai](https://vast.ai) or [RunPod](https://www.runpod.io/) for less than $0.5 per hour.
-Actually, this [(Video)](https://drive.google.com/file/d/1n068Ai_hlfgapf2xkAutOHo3PkLpJXA4/view) was recorded on a [vast.ai](https://vast.ai) instance.
+Actually, this [(Video)](https://zozo.box.com/s/4555t7c8v8uspyb4zhzbni5tn6wezra3) was recorded on a [vast.ai](https://vast.ai) instance.
 The experience is good! 👍
 
 Our Python interface is designed with the following principles in mind:
@@ -319,7 +319,7 @@ Official Blender add-ons are not yet ready, but we have community versions that 
 ## 📚 Python APIs and Parameters
 
 - Full API documentation is available on our [GitHub Pages](https://st-tech.github.io/ppf-contact-solver/frontend.html). The major APIs are documented using docstrings and compiled with [Sphinx](https://www.sphinx-doc.org/en/master/)
-We have also included [`jupyter-lsp`](https://github.com/jupyter-lsp/jupyterlab-lsp) to provide interactive linting assistance and display docstrings as you type. See this video [(Video)](https://drive.google.com/file/d/1vCM7kNgXdqQRBjVaoEb6KwIdRR21V7sV/view) for an example.
+We have also included [`jupyter-lsp`](https://github.com/jupyter-lsp/jupyterlab-lsp) to provide interactive linting assistance and display docstrings as you type. See this video [(Video)](https://zozo.box.com/s/e7cfizbuaig9drpe01q5ospx8gez98ug) for an example.
 The behaviors can be changed through the settings.
 
 - A list of parameters used in `param.set(key,value)` is documented here: [(Global Parameters)](https://st-tech.github.io/ppf-contact-solver/global_parameters.html) [(Object Parameters)](https://st-tech.github.io/ppf-contact-solver/object_parameters.html).
@@ -404,15 +404,15 @@ All the log files are updated in real-time and can be fetched right after the si
 
 |||||
 |---|---|---|---|
-|[woven.ipynb](./examples/woven.ipynb) [(Video)](https://drive.google.com/file/d/1xt9zT47nEJ76prI4QUvBBqdavdVw9vTX/view)|[stack.ipynb](./examples/stack.ipynb) [(Video)](https://drive.google.com/file/d/1BAGtVaVJhAYWFFZStmKEBTA1u0bRnKro/view)|[trampoline.ipynb](./examples/trampoline.ipynb) [(Video)](https://drive.google.com/file/d/1qrh29Y_mn77bfg7d4-d4oBtNU5bzoJbP/view)|[needle.ipynb](./examples/needle.ipynb) [(Video)](https://drive.google.com/file/d/1DyyM3ER0liq63x24I2TJ7JVK3_2EJDc6/view)|
+|[woven.ipynb](./examples/woven.ipynb) [(Video)](https://zozo.box.com/s/run6g4opx6iknqtknkipohyj6bmnjxu7)|[stack.ipynb](./examples/stack.ipynb) [(Video)](https://zozo.box.com/s/81ecyyug64xbr7v6lj7z2r4m09sjk3nk)|[trampoline.ipynb](./examples/trampoline.ipynb) [(Video)](https://zozo.box.com/s/q19wsfjcp3ia82kqu3kp9mak29ljmbns)|[needle.ipynb](./examples/needle.ipynb) [(Video)](https://zozo.box.com/s/43bq01vgursul164coytdqx0yfk6jsva)|
 |![](./asset/image/catalogue/woven.mp4.webp)|![](./asset/image/catalogue/stack.mp4.webp)|![](./asset/image/catalogue/trampoline.mp4.webp)|![](./asset/image/catalogue/needle.mp4.webp)|
-|[cards.ipynb](./examples/cards.ipynb) [(Video)](https://drive.google.com/file/d/1PMdDnlyCsjinbvICKph_0UcXUfUvvUmZ/view)|[codim.ipynb](./examples/codim.ipynb) [(Video)](https://drive.google.com/file/d/19wohf_8Us5Hz3PUe6f9Wp7bfq292-mGK/view)|[hang.ipynb](./examples/hang.ipynb) [(Video)](https://drive.google.com/file/d/1gIjwaRrEifH0FQnZ8HO8Q9-f9FF5ZivG/view)|[trapped.ipynb](./examples/trapped.ipynb) [(Video)](https://drive.google.com/file/d/1Qek0e0qBNWPlBb1hSOZ6o_e2Cqf5rGst/view)|
+|[cards.ipynb](./examples/cards.ipynb) [(Video)](https://zozo.box.com/s/k2a6910gynnete3vfo5dgkhkwkaf96mj)|[codim.ipynb](./examples/codim.ipynb) [(Video)](https://zozo.box.com/s/1rtit36y9yki9lmjrr0sxzhfirsv5myb)|[hang.ipynb](./examples/hang.ipynb) [(Video)](https://zozo.box.com/s/k9darcmdqj3lvneqk82cg91lx3nj8cb1)|[trapped.ipynb](./examples/trapped.ipynb) [(Video)](https://zozo.box.com/s/58au2sg70ojd02fy6cs4ly6s3cmywr10)|
 |![](./asset/image/catalogue/cards.mp4.webp)|![](./asset/image/catalogue/codim.mp4.webp)|![](./asset/image/catalogue/hang.mp4.webp)|![](./asset/image/catalogue/trapped.mp4.webp)|
-|[domino.ipynb](./examples/domino.ipynb) [(Video)](https://drive.google.com/file/d/1N9y8eZrjSQhAUhKwiO9w8jW_T18zPnYf/view)|[noodle.ipynb](./examples/noodle.ipynb) [(Video)](https://drive.google.com/file/d/1HI1qpsWUSMsswJjPIm9BAVJHMPzUelrH/view)|[drape.ipynb](./examples/drape.ipynb) [(Video)](https://drive.google.com/file/d/1PGL3tbA451VhHOViSJJNNdQvmUpg7bQd/view)|[five-twist.ipynb](./examples/five-twist.ipynb) [(Video)](https://drive.google.com/file/d/1EjHLqtAUjYh7KEQ_EQ9Jx6hh262BUze1/view)|
+|[domino.ipynb](./examples/domino.ipynb) [(Video)](https://zozo.box.com/s/w0fppdoli8heyuyi12n086vkax92lph3)|[noodle.ipynb](./examples/noodle.ipynb) [(Video)](https://zozo.box.com/s/catr9t4dlse0edaxhdewb6dbvjgc9t0w)|[drape.ipynb](./examples/drape.ipynb) [(Video)](https://zozo.box.com/s/gcuffxr1ntxm5uv8fqesoodxdr2ru3ls)|[five-twist.ipynb](./examples/five-twist.ipynb) [(Video)](https://zozo.box.com/s/qi4uup7ngi1la7fo1dygnl9rtudpvo3b)|
 |![](./asset/image/catalogue/domino.mp4.webp)|![](./asset/image/catalogue/noodle.mp4.webp)|![](./asset/image/catalogue/drape.mp4.webp)|![](./asset/image/catalogue/quintupletwist.mp4.webp)|
-|[ribbon.ipynb](./examples/ribbon.ipynb) [(Video)](https://drive.google.com/file/d/17ymVyPJauSPJH_GwAvBHM5eNg97eq6SD/view)|[curtain.ipynb](./examples/curtain.ipynb) [(Video)](https://drive.google.com/file/d/1c9W3YAFAS5r9m9i7sZHsFu8h98C8yy1T/view)|[fishingknot.ipynb](./examples/fishingknot.ipynb) [(Video)](https://drive.google.com/file/d/1RznNGDvP5ZfKm6nwNiTVtFXBsextOeya/view)|[friction.ipynb](./examples/friction.ipynb) [(Video)](https://drive.google.com/file/d/12WGdfDTFIwCT0UFGEZzfmQreM6WSSHet/view)|
+|[ribbon.ipynb](./examples/ribbon.ipynb) [(Video)](https://zozo.box.com/s/b3otzpqtpmxdd8go7ih0m7xlzjbc7qkj)|[curtain.ipynb](./examples/curtain.ipynb) [(Video)](https://zozo.box.com/s/yqngh1dfyuup8r3to002tzld89e4jgz7)|[fishingknot.ipynb](./examples/fishingknot.ipynb) [(Video)](https://zozo.box.com/s/4x8nhru1mzxjk2z310kouc1vxv7kyszf)|[friction.ipynb](./examples/friction.ipynb) [(Video)](https://zozo.box.com/s/vhhua1s3f93cihg97vp98kzk3wo924ot)|
 |![](./asset/image/catalogue/ribbon.mp4.webp)|![](./asset/image/catalogue/curtain.mp4.webp)|![](./asset/image/catalogue/fishingknot.mp4.webp)|![](./asset/image/catalogue/friction.mp4.webp)|
-|[belt.ipynb](./examples/belt.ipynb) [(Video)](https://drive.google.com/file/d/1bmIlSkKlxeVrMA0r5JYKjy2T4j0Ux3Q2/view)|[fitting.ipynb](./examples/fitting.ipynb) [(Video)](https://drive.google.com/file/d/1JPY9dQkY7vvUveetRQr3obeOAZk05sfI/view)|[roller.ipynb](./examples/roller.ipynb) [(Video)](https://drive.google.com/file/d/15tEpF1ecLRkmvHbexj5hOhV49WZoxABs/view)|[yarn.ipynb](./examples/yarn.ipynb) [(Video)](https://drive.google.com/file/d/1DfXpresnxGWhQtLS83c0X-UDnxzyv8Lz/view)|
+|[belt.ipynb](./examples/belt.ipynb) [(Video)](https://zozo.box.com/s/0g6lo1n44eenk5619fxixia4z6ge08e6)|[fitting.ipynb](./examples/fitting.ipynb) [(Video)](https://zozo.box.com/s/6tscl116y05hic4dkk5ov4qb38bix8st)|[roller.ipynb](./examples/roller.ipynb) [(Video)](https://zozo.box.com/s/r0ea8135hljo8u50yug0tlgyst6vjgde)|[yarn.ipynb](./examples/yarn.ipynb) [(Video)](https://zozo.box.com/s/ig82ql72f8yc3pxbw44pveqjr2v514b7)|
 |![](./asset/image/catalogue/belt.mp4.webp)|![](./asset/image/catalogue/fitting.mp4.webp)|![](./asset/image/catalogue/roller.mp4.webp)|![](./asset/image/catalogue/yarn.mp4.webp)|
 
 ### 💰 Budget Table on AWS
@@ -455,7 +455,7 @@ These examples are not included in GitHub Action tests since they can take days 
 
 | | | |
 |---|---|---|
-| [large-twist.ipynb](./examples/large-twist.ipynb) [(Video)](https://drive.google.com/file/d/1vZ7JHza1U6zO9W8DMtSsNZidl_YQXf1e/view) | [large-five-twist.ipynb](./examples/large-five-twist.ipynb) [(Video)](https://drive.google.com/file/d/1STOfH1Y-F-ycnV6sGNut7GNWnpoSo11f/view) | [large-woven.ipynb](./examples/large-woven.ipynb) [(Video)](https://drive.google.com/file/d/16Pb_pwSVoQ6YD9zb-HhUKCbyf3qUzyKx/view) |
+| [large-twist.ipynb](./examples/large-twist.ipynb) [(Video)](https://zozo.box.com/s/dy1rtvrk3c1499o29wobawu10jzfc1fu) | [large-five-twist.ipynb](./examples/large-five-twist.ipynb) [(Video)](https://zozo.box.com/s/8ua5r1cno9but33pid7z9jhzvfeydr27) | [large-woven.ipynb](./examples/large-woven.ipynb) [(Video)](https://zozo.box.com/s/m6ws08pueo30hbamu64flm1xo14la9x8) |
 | ![twist](./asset/image/large-scale/twist.jpg) | ![five-twist](./asset/image/large-scale/five-twist.jpg) | ![woven](./asset/image/large-scale/woven.jpg) |
 
 | Example | Commit | #Vert | #Face | #Rod | #Contact | #Frame | Time/Frame |

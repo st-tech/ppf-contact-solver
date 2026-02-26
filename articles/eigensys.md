@@ -21,7 +21,7 @@ Readers who wish to mention this article should refer to the original work:
 }
 ```
 
-We believe our article here remains valuable. For example, our treatment extends to shell elements with 3×2 deformation gradients. For comprehensive technical details, readers are referred to our supplementary materials in Sections E and F.9 of the [supplementary material](https://drive.google.com/file/d/1ptjFNVufPBV4-vb5UDh1yTgz8-esjaSF/view).
+We believe our article here remains valuable. For example, our treatment extends to shell elements with 3×2 deformation gradients. For comprehensive technical details, readers are referred to our supplementary materials in Sections E and F.9 of the [supplementary material](https://zozo.box.com/s/ulc7i2jcz0bt9n27g5dfvk5ytvydkqw3).
 
 ## 🏁 The Final Results
 
