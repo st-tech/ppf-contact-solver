@@ -15,7 +15,7 @@
 
 ### 🎥 Installation Videos
 
-We provide uninterrupted recorded installation videos (🪟 Windows [(Video)](https://zozo.box.com/s/rbda1bsrc7x1ss4swz30vpssjobeoj3c), 🐧 Linux [(Video)](https://zozo.box.com/s/tymm9mqydvyd8hx28nfse55a1gx80axp), ☁ [vast.ai](https://vast.ai) [(Video)](https://zozo.box.com/s/g2yektvhm1r7bdzyewf75n3o277r5414), and ☁️ [Google Cloud](https://cloud.google.com/products/compute) [(Video)](https://zozo.box.com/s/6zfd42fof3tw8ldjgtk8wb1tr0rp6knc))
+We provide uninterrupted recorded installation videos (🪟 Windows [(Video)](https://zozo.box.com/s/cepynbieg3vdvv3q3ix1ybn2g0ix8531), 🐧 Linux [(Video)](https://zozo.box.com/s/w4doo2hjirds3qhlzk62dzu6csxatpyo), ☁ [vast.ai](https://vast.ai) [(Video)](https://zozo.box.com/s/nigd94wnjy6jkxo7e0zlbfnzausyf22b), and ☁️ [Google Cloud](https://cloud.google.com/products/compute) [(Video)](https://zozo.box.com/s/y9wvc901yud55waxaesl62djrl32o498))
 to reduce stress during the installation process. We encourage you to check them out to get a sense of how things go and how long each step takes.
 
 ### 🪟 Windows

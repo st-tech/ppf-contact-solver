@@ -313,7 +313,7 @@ I know this might be confusing, so just copy and paste if you're okay with it.
 gcloud compute ssh --zone=$ZONE $INSTANCE_NAME -- -L 8080:localhost:8888
 ```
 
-As shown in this [(Video)](https://zozo.box.com/s/6zfd42fof3tw8ldjgtk8wb1tr0rp6knc), the instance may take a few minutes to load, so early SSH access fails.
+As shown in this [(Video)](https://zozo.box.com/s/y9wvc901yud55waxaesl62djrl32o498), the instance may take a few minutes to load, so early SSH access fails.
 Keep trying at intervals; it should connect once the host is ready.
 
 Next, run the same Docker [Linux](../articles/install.md#-linux) command in the instance to set up a Docker environment. Be sure to change `$MY_WEB_PORT` to `8888` in this case.
