@@ -116,10 +116,6 @@ involving 👚 shells, 🪵 solids and 🪢 rods. All made by [ZOZO, Inc.](https
 - 🤖 Supplementary scripts [(Directory)](https://zozo.box.com/s/m6h1t5eykdsuynx7kqr3wqi9789pfl9n)
 - 🔍 Singular-value eigenanalysis [(Markdown)](./articles/eigensys.md)
 
-##### 🤖 LLM Transparency
-
-See [LLM Transparency](#-llm-transparency).
-
 ##### 📌 Reference Implementation
 
 The main branch is undergoing frequent updates and will deviate from the paper.
