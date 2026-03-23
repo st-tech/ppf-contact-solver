@@ -11,7 +11,7 @@ involving 👚 shells, 🪵 solids and 🪢 rods. All made by [ZOZO, Inc.](https
 [![Build Windows](https://github.com/st-tech/ppf-contact-solver/actions/workflows/release-win.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/release-win.yml)
 ![solver_logo](./asset/image/teaser-image.jpg)
 
-##### 🤖 Our Use of LLMs
+#### 🤖 Our Use of LLMs
 
 > We **highly** respect that readers expect human-written content. The majority of content is human-generated and human-reviewed, retaining the author's own voice, with only minimal use of an LLM. See [🤖 LLM Transparency](#-llm-transparency).
 
