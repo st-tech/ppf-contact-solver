@@ -1,1 +1,5 @@
 sphinx
+shibuya
+sphinx-togglebutton
+myst-parser
+numpy
