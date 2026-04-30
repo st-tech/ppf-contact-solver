@@ -599,14 +599,8 @@ struct CollisionMeshVertexFaceContactForceHessEmbed_M2C {
                 float mass = dyn_vert_prop[vertex_index].mass;
                 Vec3f proj_x = y + normal * (offset + ghat);
                 float gap_squared = sqr(e.norm() - offset);
-                // Static face mimics the dyn vertex's mass → 2x the
-                // diagonal inertia term. Gives the barrier the same
-                // effective stiffness it would see in a dyn-dyn contact
-                // with equal masses, damping the instability we used to
-                // hit when the static side contributed zero.
                 float stiff_k =
-                    normal.dot(local_hess * normal)
-                    + 2.0f * mass / gap_squared;
+                    normal.dot(local_hess * normal) + mass / gap_squared;
                 Vec3f f = stiff_k * push::gradient(-proj_x, normal, ghat);
                 Mat3x3f H = stiff_k * push::hessian(-proj_x, normal, ghat);
                 Friction _friction(f, -q, normal, friction, param.friction_eps);
@@ -672,16 +666,13 @@ struct CollisionMeshVertexFaceContactForceHessEmbed_C2M {
                 Vec3f normal = e.normalized();
                 Mat9x9f local_hess = Mat9x9f::Zero();
                 float gap_squared = sqr(e.norm() - offset);
-                // Static vertex mimics the dynamic face's aggregate mass
-                // — 2x the diagonal term matches what a dyn-dyn PF
-                // contact would see with equal masses on both sides.
                 for (unsigned ii = 0; ii < 3; ++ii) {
                     for (unsigned jj = 0; jj < 3; ++jj) {
                         local_hess.block<3, 3>(3 * ii, 3 * jj) =
                             fixed_hess_in(fc[ii], fc[jj]);
                     }
                     local_hess.block<3, 3>(3 * ii, 3 * ii) +=
-                        (2.0f * dyn_vert_prop[fc[ii]].mass / gap_squared) *
+                        (dyn_vert_prop[fc[ii]].mass / gap_squared) *
                         Mat3x3f::Identity();
                 }
                 Vec9f normal_ext;
@@ -775,14 +766,11 @@ struct CollisionMeshEdgeEdgeContactForceHessEmbed {
                 }
                 Mat6x6f mass_diag = Mat6x6f::Zero();
                 float gap_squared = sqr(e.norm() - offset);
-                // Static edge mimics the dyn edge's mass — 2x the
-                // diagonal gives the barrier the inertia buffer a
-                // dyn-dyn EE contact with equal masses would provide.
                 mass_diag.block<3, 3>(0, 0) =
-                    (2.0f * dyn_vert_prop[mesh_edge[0]].mass / gap_squared) *
+                    (dyn_vert_prop[mesh_edge[0]].mass / gap_squared) *
                     Mat3x3f::Identity();
                 mass_diag.block<3, 3>(3, 3) =
-                    (2.0f * dyn_vert_prop[mesh_edge[1]].mass / gap_squared) *
+                    (dyn_vert_prop[mesh_edge[1]].mass / gap_squared) *
                     Mat3x3f::Identity();
                 float stiff_k =
                     ((local_hess + mass_diag) * normal_ext).dot(normal_ext) /
