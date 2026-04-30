@@ -306,11 +306,17 @@ class EffectRunner:
 
     def set_fetched_frames(self, frames: list[int]) -> None:
         """Set the list of already-fetched frame numbers."""
-        self._fetched = list(frames)
+        # Hold ``_anim_lock`` so a concurrent ``_do_fetch_frames`` running
+        # on the I/O worker can detect the reassignment via its
+        # ``self._fetched is not fetched`` guard and discard a stale
+        # live-fetch instead of leaking frames into the new context.
+        with self._anim_lock:
+            self._fetched = list(frames)
 
     def clear_fetched_frames(self) -> None:
         """Clear the fetched frame tracking."""
-        self._fetched = []
+        with self._anim_lock:
+            self._fetched = []
 
     # -- background thread helpers --
 
@@ -430,7 +436,10 @@ class EffectRunner:
             self._anim_frames.clear()
             self._anim_total = 0
             self._anim_applied = 0
-        self._fetched = []
+            # Inside the lock so a live-fetch in flight on the I/O worker
+            # observes the reassigned reference via its stale-context
+            # guard and bails instead of appending to the new list.
+            self._fetched = []
         self._response_cache.clear()
         # The project_name is bound to the connection, not to the
         # Blender scene; clearing it here makes load-time disconnect
@@ -829,6 +838,23 @@ class EffectRunner:
             def interrupt_cb():
                 return self._interrupt.is_set()
 
+            # Stale-context guard. ``self._fetched`` is reassigned (not
+            # mutated) by ``clear_fetched_frames``, ``set_fetched_frames``,
+            # ``_do_disconnect``, and ``DoResetAnimationBuffer``-adjacent
+            # flows (the FetchRequested transition runs ``clear_fetched_frames``
+            # on the caller side just before dispatching). Live-fetches
+            # queued under the previous reference must not append into the
+            # new context — otherwise frames they fetched leak into the
+            # newly-cleared ``_anim_frames`` and into the new ``_fetched``,
+            # making a subsequent full fetch under-count ``_anim_total``
+            # while ``_anim_applied`` over-counts (the bl_chain_reconnect
+            # macOS regression: ``(applied=9, total=7)``).
+            if self._fetched is not fetched:
+                if not only_latest:
+                    self._engine.dispatch(FetchFailed(
+                        reason="fetch frames: context reset before start"))
+                return
+
             to_fetch = [i for i in frames if i not in fetched]
             if not only_latest:
                 with self._anim_lock:
@@ -861,9 +887,20 @@ class EffectRunner:
                     interrupt_cb=interrupt_cb,
                 )
                 vert = numpy.frombuffer(data, dtype=numpy.float32).reshape(-1, 3)
+                # Re-check the context inside the lock that gates every
+                # ``_anim_frames`` mutation. ``clear_fetched_frames`` /
+                # ``set_fetched_frames`` take the same lock, so once we
+                # observe the reference still matches we know no reset
+                # can land before the append completes.
                 with self._anim_lock:
+                    if self._fetched is not fetched:
+                        if only_latest:
+                            return
+                        self._engine.dispatch(FetchFailed(
+                            reason="fetch frames: context reset mid-fetch"))
+                        return
                     self._anim_frames.append((i, vert))
-                self._fetched.append(i)
+                    self._fetched.append(i)
                 fetched_count += 1
                 if not only_latest:
                     self._engine.dispatch(ProgressUpdated(

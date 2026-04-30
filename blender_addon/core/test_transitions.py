@@ -345,6 +345,17 @@ class TestSolverOps:
         s2, _ = transition(s, BuildRequested())
         assert s2.active_upload_id == ""
 
+    def test_build_clears_progress_and_error(self):
+        # Stale progress/error from a prior run or build must not bleed
+        # into a fresh build's UI state.
+        s = AppState(
+            phase=Phase.ONLINE, server=Server.RUNNING, solver=Solver.READY,
+            progress=0.7, error="prior failure",
+        )
+        s2, _ = transition(s, BuildRequested())
+        assert s2.progress == 0.0
+        assert s2.error == ""
+
     def test_build_rejected_when_offline(self):
         s = AppState(phase=Phase.OFFLINE)
         s2, fx = transition(s, BuildRequested())
@@ -361,6 +372,19 @@ class TestSolverOps:
         q = _get_effect(fx, DoQuery)
         assert q.request == {"request": "start"}
 
+    def test_run_clears_frame_and_error(self):
+        # A new run's transition must wipe the prior run's frame/error
+        # tail. Without this, a poll that lands between RunRequested
+        # and the start-command response can surface stale frame as
+        # if it belonged to the new run, false-positive saw_running.
+        s = AppState(
+            phase=Phase.ONLINE, server=Server.RUNNING, solver=Solver.READY,
+            frame=9, error="prior run failure",
+        )
+        s2, _ = transition(s, RunRequested())
+        assert s2.frame == 0
+        assert s2.error == ""
+
     def test_run_rejected_when_busy(self):
         s = AppState(
             phase=Phase.ONLINE, server=Server.RUNNING,
@@ -375,6 +399,17 @@ class TestSolverOps:
         assert s2.solver == Solver.STARTING
         q = _get_effect(fx, DoQuery)
         assert q.request == {"request": "resume"}
+
+    def test_resume_clears_frame_and_error(self):
+        # Same staleness contract as RunRequested. The server's first
+        # poll after resume repopulates frame with the saved index.
+        s = AppState(
+            phase=Phase.ONLINE, server=Server.RUNNING, solver=Solver.RESUMABLE,
+            frame=5, error="stale",
+        )
+        s2, _ = transition(s, ResumeRequested())
+        assert s2.frame == 0
+        assert s2.error == ""
 
     def test_resume_rejected_when_not_resumable(self):
         s = AppState(phase=Phase.ONLINE, server=Server.RUNNING, solver=Solver.READY)

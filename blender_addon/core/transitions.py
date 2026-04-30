@@ -277,12 +277,16 @@ def transition(state: AppState, event: Event) -> tuple[AppState, list[Effect]]:
             # Reset active_upload_id; the first poll after this request
             # pins it from the server's response.  Any subsequent change
             # in the server's upload_id is then an explicit desync.
+            # Reset progress and error so the build UI doesn't carry
+            # residue from a prior run/build into this one.
             return (
                 replace(
                     state,
                     activity=Activity.BUILDING,
                     solver=Solver.BUILDING,
                     active_upload_id="",
+                    progress=0.0,
+                    error="",
                 ),
                 [DoQuery({"request": "build"}), DoLog("Start build...")],
             )
@@ -291,12 +295,21 @@ def transition(state: AppState, event: Event) -> tuple[AppState, list[Effect]]:
         case RunRequested() \
                 if state.can_operate \
                 and state.solver in (Solver.READY, Solver.RESUMABLE, Solver.FAILED):
+            # Reset frame/error so a poll that lands between this
+            # transition and the server's start-command response can't
+            # surface the prior run's tail (e.g. frame=9 from run N) as
+            # if it belonged to run N+1. Without this, waiters that
+            # treat ``state.frame > 0`` as "the run advanced" can short-
+            # circuit before run N+1 has actually started — the
+            # bl_chain_reconnect (applied=9, total=0) regression.
             return (
                 replace(
                     state,
                     solver=Solver.STARTING,
                     progress=0.0,
                     activity=Activity.IDLE,
+                    frame=0,
+                    error="",
                 ),
                 [DoClearAnimation(), DoClearInterrupt(),
                  DoQuery({"request": "start"})],
@@ -304,8 +317,13 @@ def transition(state: AppState, event: Event) -> tuple[AppState, list[Effect]]:
 
         case ResumeRequested() \
                 if state.can_operate and state.solver == Solver.RESUMABLE:
+            # Same staleness reset as RunRequested. The server's first
+            # response after resume will repopulate ``frame`` with the
+            # saved frame index; until that lands, ``frame=0`` keeps
+            # waiters from false-positive on the pre-save tail.
             return (
-                replace(state, solver=Solver.STARTING, progress=0.0),
+                replace(state, solver=Solver.STARTING, progress=0.0,
+                        frame=0, error=""),
                 [DoClearInterrupt(), DoQuery({"request": "resume"})],
             )
 
@@ -694,6 +712,28 @@ def _interpret_response(
                 "protocol 0.03 reply."
             )],
         )
+
+    # Stale-poll guard during STARTING. After RunRequested or
+    # ResumeRequested transitions us into Solver.STARTING, a status
+    # poll that was already in flight on the I/O worker may return
+    # the server's pre-start state (e.g. ``READY`` with the prior
+    # run's frame). If we accept that response, the engine state is
+    # dragged back to READY+frame=N before the start command's own
+    # response arrives, and any waiter that treats ``frame > 0``
+    # plus ``solver in (READY, RESUMABLE)`` as "run done" fires too
+    # early — the bl_chain_reconnect (applied=9, total=0) regression.
+    #
+    # We discard such polls. The legitimate ways out of STARTING are:
+    #   - ``status="BUSY"`` (server is working) → solver advances.
+    #   - SAVE_AND_QUIT request mid-start → solver=SAVING.
+    #   - explicit ``error`` (start rejected) → honor the downgrade.
+    # Anything else while STARTING is the stale-poll race; preserve
+    # STARTING and frame=0 until the next poll/response advances us.
+    if state.solver == Solver.STARTING \
+            and solver not in (Solver.STARTING, Solver.RUNNING, Solver.SAVING) \
+            and not error_msg:
+        solver = Solver.STARTING
+        frame = 0
 
     # Log error and mark as failed when server reports an error.
     #
