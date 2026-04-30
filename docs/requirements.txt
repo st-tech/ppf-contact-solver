@@ -1,12 +1,1 @@
-# Docs build dependencies.
-# Install with: python -m venv .venv && .venv/bin/pip install -r requirements.txt
-# docs/build.sh bootstraps this automatically on first run.
-sphinx>=7
-shibuya
-sphinx-togglebutton
-myst-parser
-# numpy's real types leak into frontend type annotations (e.g. `list[float]
-# | np.ndarray`), so it can't be mocked via autodoc_mock_imports.  Everything
-# else frontend needs (numba, tqdm, PIL, psutil, pythreejs, IPython,
-# pytetwild) is mocked in conf.py.
-numpy
+sphinx
