@@ -2,3 +2,10 @@ requirements.txt
 __pycache__/
 .DS_Store
 uv.lock
+Cargo.lock
+target/
+blender_addon/lib/
+.ipynb_checkpoints/
+.virtual_documents/
+report.json
+src/cpp/kernels/tests/

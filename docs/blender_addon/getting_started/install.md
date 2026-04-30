@@ -56,29 +56,56 @@ the `addon-latest` GitHub Release in place, and the per-version zip lives
 on an immutable `addon-YYYY-MM-DD-HHMM` release that the index references
 by absolute URL.
 
-### Option B: Install from a Local Zip (manual)
+### Option B: Install from a Local Checkout (script)
 
 Useful when you are working from a checkout, are offline, or want to install
-a build that has not been published as a release yet.
+a build that has not been published as a release yet. The scripts link the
+repository's `blender_addon/` directory into Blender's `extensions/user_default`
+so edits in the checkout are picked up after a Blender restart, with no
+re-zipping.
 
-1. From the repository root, zip the add-on directory:
+1. Clone the repository and `cd` into it.
+2. Run the script for your platform from the repository root:
+
+   On macOS or Linux:
 
    ```bash
-   zip -r ppf-cts-blender.zip blender_addon
+   ./install-blender-addon.sh
    ```
 
    On Windows PowerShell:
 
    ```powershell
-   Compress-Archive -Path blender_addon -DestinationPath ppf-cts-blender.zip
+   .\install-blender-addon.ps1
    ```
 
-2. In Blender, open **Edit → Preferences → Get Extensions**, click the
-   dropdown menu, and pick **Install from Disk…**. Select the zip.
-3. Alternatively, drag-and-drop the `blender_addon/` folder onto an open
-   Blender window. Blender 5.x recognizes the extension manifest and offers
-   the same install dialog.
+   The script auto-detects your installed Blender version. On a fresh machine
+   where Blender has not been launched yet, point it at the binary so it can
+   create the prefs directory itself:
+
+   ```bash
+   PPF_BLENDER_BIN=/path/to/blender ./install-blender-addon.sh
+   ```
+
+   ```powershell
+   $env:PPF_BLENDER_BIN = "C:\Program Files\Blender Foundation\Blender 5.0\blender.exe"
+   .\install-blender-addon.ps1
+   ```
+
+3. Start Blender and enable **ZOZO's Contact Solver** under
+   **Edit → Preferences → Add-ons** (search for `ZOZO`), or pass
+   `--addons bl_ext.user_default.ppf_contact_solver` on the command line.
 4. Verify the sidebar tab as in Option A.
+
+To remove the link later, re-run the script with the uninstall flag:
+
+```bash
+./install-blender-addon.sh --uninstall
+```
+
+```powershell
+.\install-blender-addon.ps1 -Uninstall
+```
 
 :::{tip}
 If the sidebar tab is missing after install, the add-on probably crashed
