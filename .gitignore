@@ -2,6 +2,11 @@ target
 /tests
 bin/
 requirements.txt
+
+# Blender autosave / crash artifacts
+*.blend1
+*.blend2
+*.blend@
 .clangd
 .clang-format
 *.lock
@@ -34,13 +39,15 @@ examples/_*
 frontend/**/.*
 _skipped.node
 docs/_*
+!docs/_static
+!docs/_static/**
+!docs/_templates
+!docs/_templates/**
 docs/global_parameters.rst
 docs/object_parameters.rst
 docs/logs.rst
-private/vast-dev
-private/log
+!docs/requirements.txt
 blender_addon/lib
-dev/node_modules
 *.log
 src/cpp/kernels/tests/test_exclusive_scan
 src/cpp/kernels/tests/test_reduce
@@ -61,4 +68,5 @@ build-win-native/ci
 build-win-native/temp_ffmpeg
 build-win-native/ffmpeg
 build-win-native/msys64
-.claude
+.claude/worktrees
+.venv/

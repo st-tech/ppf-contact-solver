@@ -1,0 +1,212 @@
+/* sphinx-togglebutton places its button inside the admonition title
+   bar. Position it flush-right inside the title and keep the chevron
+   on the same line regardless of theme. */
+.admonition.toggle > .admonition-title {
+    position: relative;
+    padding-right: 9em;
+    cursor: pointer;
+}
+
+.admonition.toggle > .admonition-title > button.toggle-button {
+    position: absolute;
+    top: 50%;
+    right: 0.7em;
+    transform: translateY(-50%);
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35em;
+    color: inherit;
+    background: transparent;
+    border: 0;
+}
+
+.admonition.toggle > .admonition-title > button.toggle-button::before {
+    color: inherit;
+    opacity: 0.9;
+}
+
+/* Fixed GitHub link in the top-right corner. Shibuya exposes its own
+   header GitHub icon via `github_url`, so this chip is redundant under
+   shibuya; hide it here and re-enable per theme if it's ever needed. */
+a.gh-corner-link {
+    display: none;
+}
+
+/* Dark-mode SVG rendering.
+   Our embedded SVG diagrams were drawn for a light background (pastel
+   fills, dark text). On shibuya's dark theme they stand out as bright
+   blocks. Rather than maintain per-SVG dark palettes, invert luminance
+   at render time and rotate hues 180° so colours stay roughly in their
+   original family (blue stays blue, etc.). invert(0.92) avoids pure
+   white → pure black, which reads slightly softer.
+
+   Targets shibuya's explicit dark toggle (`data-color-mode="dark"`) and
+   also applies under OS-level dark mode when shibuya is in its default
+   auto setting (`data-color-mode="auto"` or unset). */
+[data-color-mode="dark"] img[src$=".svg"] {
+    filter: invert(0.92) hue-rotate(180deg);
+}
+
+@media (prefers-color-scheme: dark) {
+    :root:not([data-color-mode="light"]) img[src$=".svg"] {
+        filter: invert(0.92) hue-rotate(180deg);
+    }
+}
+
+.gallery-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+    gap: 1rem;
+    margin: 1.5rem 0;
+}
+
+.gallery-grid--teaser {
+    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+}
+
+.gallery-card {
+    margin: 0;
+    overflow: hidden;
+    border: 1px solid rgba(127, 127, 127, 0.22);
+    border-radius: 18px;
+    background: rgba(127, 127, 127, 0.05);
+    box-shadow: 0 14px 28px rgba(0, 0, 0, 0.08);
+}
+
+.gallery-card img {
+    display: block;
+    width: 100%;
+    aspect-ratio: 1 / 1;
+    object-fit: cover;
+    background: rgba(127, 127, 127, 0.08);
+}
+
+.gallery-card figcaption {
+    display: grid;
+    gap: 0.25rem;
+    padding: 0.9rem 1rem 1rem;
+}
+
+.gallery-card figcaption strong {
+    font-size: 0.98rem;
+}
+
+.gallery-card figcaption span {
+    font-size: 0.92rem;
+    line-height: 1.45;
+    opacity: 0.78;
+}
+
+@media (hover: hover) {
+    .gallery-card {
+        transition: transform 160ms ease, box-shadow 160ms ease,
+            border-color 160ms ease;
+    }
+
+    .gallery-card:hover {
+        transform: translateY(-2px);
+        border-color: rgba(127, 127, 127, 0.34);
+        box-shadow: 0 18px 34px rgba(0, 0, 0, 0.12);
+    }
+}
+
+/* Tutorial thumbnails. We target any link that wraps an <img> whose
+   filename ends in -opt.jpg so Markdown's [![alt](path)](url) renders
+   with a circular dark backdrop and a white play triangle. Pure CSS,
+   no baked-in graphics, no custom class required (which lets Sphinx
+   continue to handle the image-copy pipeline normally).
+
+   The .tutorial-grid wrapper lays the cards out two-up on desktop,
+   collapsing to a single column on narrow viewports. */
+.tutorial-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 1rem 1.25rem;
+    margin: 1.5rem 0;
+}
+
+.tutorial-grid figure {
+    margin: 0;
+    display: grid;
+    gap: 0.4rem;
+}
+
+.tutorial-grid figcaption {
+    display: grid;
+    gap: 0.15rem;
+    line-height: 1.35;
+}
+
+.tutorial-grid figcaption strong {
+    font-weight: 600;
+    font-size: 1rem;
+}
+
+.tutorial-grid figcaption span {
+    font-size: 0.9rem;
+    opacity: 0.78;
+}
+
+.tutorial-grid p {
+    margin: 0;
+}
+
+@media (max-width: 720px) {
+    .tutorial-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+a:has(> img[src$="-opt.jpg"]) {
+    position: relative;
+    display: inline-block;
+    line-height: 0;
+    border-radius: 12px;
+    overflow: hidden;
+}
+
+a:has(> img[src$="-opt.jpg"]) > img {
+    display: block;
+    max-width: 100%;
+    height: auto;
+}
+
+a:has(> img[src$="-opt.jpg"])::before {
+    content: "";
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 88px;
+    height: 88px;
+    border-radius: 50%;
+    background: rgba(0, 0, 0, 0.6);
+    transform: translate(-50%, -50%);
+    pointer-events: none;
+    transition: background 160ms ease, transform 160ms ease;
+}
+
+a:has(> img[src$="-opt.jpg"])::after {
+    content: "";
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 0;
+    height: 0;
+    border-left: 28px solid #fff;
+    border-top: 18px solid transparent;
+    border-bottom: 18px solid transparent;
+    transform: translate(-35%, -50%);
+    pointer-events: none;
+    transition: transform 160ms ease;
+}
+
+@media (hover: hover) {
+    a:has(> img[src$="-opt.jpg"]):hover::before {
+        background: rgba(0, 0, 0, 0.78);
+        transform: translate(-50%, -50%) scale(1.06);
+    }
+
+    a:has(> img[src$="-opt.jpg"]):hover::after {
+        transform: translate(-35%, -50%) scale(1.06);
+    }
+}
