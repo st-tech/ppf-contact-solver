@@ -61,3 +61,4 @@ build-win-native/ci
 build-win-native/temp_ffmpeg
 build-win-native/ffmpeg
 build-win-native/msys64
+.claude
