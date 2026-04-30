@@ -160,7 +160,6 @@ def python_packages():
         "numba",
         "plyfile",
         "requests",
-        "gdown",
         "trimesh",
         "pywavefront",
         "matplotlib",
@@ -546,9 +545,18 @@ def start_jupyter():
     # Setup log file
     log_file = "/tmp/jupyter.log"
 
-    # Start JupyterLab in background
+    # Start JupyterLab in background.
+    #
+    # Bind 127.0.0.1 by default; only fall back to 0.0.0.0 when we're
+    # inside a Docker container, where docker -p HOST:CONTAINER forwards
+    # traffic to the container's external interface (eth0) and a
+    # loopback bind would not be reachable from outside. On bare metal
+    # the loopback bind keeps the unauthenticated JupyterLab off the
+    # network; reach it via SSH port forwarding (`ssh -L 8080:localhost:8080`).
     venv_python = get_venv_python()
-    command = f"{venv_python} -m jupyterlab -y --allow-root --no-browser --port={web_port} --ip=0.0.0.0 --NotebookApp.token='' --NotebookApp.password='' --NotebookApp.allow_origin='*'"
+    in_docker = os.path.exists("/.dockerenv")
+    bind_ip = "0.0.0.0" if in_docker else "127.0.0.1"
+    command = f"{venv_python} -m jupyterlab -y --allow-root --no-browser --port={web_port} --ip={bind_ip} --NotebookApp.token='' --NotebookApp.password='' --NotebookApp.allow_origin='*'"
     env = os.environ.copy()
     env["PYTHONPATH"] = script_dir
     env["PYTHONUNBUFFERED"] = "1"
@@ -668,8 +676,6 @@ Commands:
 
   Development:
     jupyter        Start JupyterLab server
-    docs-prepare   Install documentation dependencies (sphinx)
-    docs-build     Build documentation
     requirements   Generate requirements.txt
 
   Testing:
@@ -1076,134 +1082,6 @@ def clear_all():
         return 0
 
 
-def build_docs():
-    script_dir = os.path.dirname(os.path.realpath(__file__))
-    sphinx_build = os.path.join(get_venv_path(), "bin", "sphinx-build")
-    run(f"{sphinx_build} -b html ./ ./_build", cwd=os.path.join(script_dir, "docs"))
-
-
-def make_docs():
-    from frontend import App
-
-    # Generate global parameters documentation
-    with open(os.path.join("docs", "global_parameters.rst"), "w") as file:
-        file.write(
-            export_param_sphinx(App.get_default_param(), title="global parameters")
-        )
-
-    # Generate object parameters documentation
-    with open(os.path.join("docs", "object_parameters.rst"), "w") as file:
-        file.write(export_object_param_sphinx())
-
-    with open(os.path.join("docs", "logs.rst"), "w") as file:
-        file.write(export_log_sphinx())
-    print("Sphinx .rst files has been exported.")
-
-
-def export_param_sphinx(param, title="parameters"):
-    rst_content = []
-
-    rst_content.append(f"{title}\n")
-    rst_content.append("=" * len(title) + "\n\n")
-
-    params_dict = param._param._params
-
-    for name, (value, short_desc, long_desc) in params_dict.items():
-        rst_content.append(f"{name}\n")
-        rst_content.append("-" * len(name) + "\n\n")
-
-        rst_content.append(".. list-table::\n\n")
-        rst_content.append("   * - Parameter\n")
-        rst_content.append(f"     - {name}\n")
-        rst_content.append("   * - Default Value\n")
-        rst_content.append(f"     - {value}\n")
-        rst_content.append("   * - Description\n")
-        rst_content.append(f"     - {short_desc}\n")
-        if long_desc:
-            rst_content.append("   * - Details\n")
-            rst_content.append(f"     - {long_desc}\n")
-
-        rst_content.append("\n")
-
-    return "".join(rst_content)
-
-
-def export_object_param_sphinx():
-    from frontend._param_ import object_param
-
-    rst_content = []
-
-    title = "object parameters"
-    rst_content.append(f"{title}\n")
-    rst_content.append("=" * len(title) + "\n\n")
-
-    # Collect parameters from all object types
-    obj_types = ["tri", "tet", "rod"]
-    all_params = {obj_type: object_param(obj_type) for obj_type in obj_types}
-
-    # Get unique parameter names (they should be the same across types)
-    param_names = list(all_params["tri"].keys())
-
-    for name in param_names:
-        rst_content.append(f"{name}\n")
-        rst_content.append("-" * len(name) + "\n\n")
-
-        rst_content.append(".. list-table::\n\n")
-        rst_content.append("   * - Parameter\n")
-        rst_content.append(f"     - {name}\n")
-
-        # Show default values for each type
-        rst_content.append("   * - Default Value (tri)\n")
-        rst_content.append(f"     - {all_params['tri'][name][0]}\n")
-        rst_content.append("   * - Default Value (tet)\n")
-        rst_content.append(f"     - {all_params['tet'][name][0]}\n")
-        rst_content.append("   * - Default Value (rod)\n")
-        rst_content.append(f"     - {all_params['rod'][name][0]}\n")
-
-        # Use description from tri (they should be the same)
-        short_desc = all_params["tri"][name][1]
-        long_desc = all_params["tri"][name][2]
-
-        rst_content.append("   * - Description\n")
-        rst_content.append(f"     - {short_desc}\n")
-        if long_desc:
-            rst_content.append("   * - Details\n")
-            rst_content.append(f"     - {long_desc}\n")
-
-        rst_content.append("\n")
-
-    return "".join(rst_content)
-
-
-def export_log_sphinx():
-    from frontend import CppRustDocStringParser
-
-    script_dir = os.path.dirname(os.path.realpath(__file__))
-    src_dir = os.path.join(script_dir, "src")
-    result = CppRustDocStringParser.get_logging_docstrings(src_dir)
-
-    rst_content = []
-
-    title = "log lookup names"
-    rst_content.append(f"{title}\n")
-    rst_content.append("=" * len(title) + "\n\n")
-
-    for name, doc in result.items():
-        rst_content.append(f"{name}\n")
-        rst_content.append("-" * len(name) + "\n\n")
-
-        rst_content.append(".. list-table::\n\n")
-
-        for key, value in doc.items():
-            if key != "filename" and value:
-                rst_content.append(f"   * - {key}\n")
-                rst_content.append(f"     - {value}\n")
-
-        rst_content.append("\n")
-
-    return "".join(rst_content)
-
-
 if __name__ == "__main__":
     # Check architecture - only x86_64 is supported
     machine = platform.machine().lower()
@@ -1246,12 +1124,6 @@ if __name__ == "__main__":
             set_time()
         elif mode == "jupyter":
             start_jupyter()
-        elif mode == "docs-prepare":
-            pip_path = get_venv_pip()
-            run(f"{pip_path} install sphinx sphinxawesome-theme sphinx_autobuild")
-        elif mode == "docs-build":
-            make_docs()
-            build_docs()
         elif mode == "requirements":
             dump_python_requirements("requirements.txt")
         elif mode == "clear_cache":

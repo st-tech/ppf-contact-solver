@@ -9,6 +9,8 @@
 
 namespace buffer {
 
+// Global memory pool instance
+// Buffers are allocated on-demand when get<T>() is called
 static MemoryPool global_pool;
 
 MemoryPool &get() { return global_pool; }

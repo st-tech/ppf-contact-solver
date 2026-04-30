@@ -82,16 +82,23 @@ if exist "%MINGIT_DIR%\cmd\git.exe" (
 REM ============================================================
 REM Download Eigen if not present
 REM ============================================================
-if not exist "%DEPS%\eigen-3.4.0" (
-    echo [0/3] Downloading Eigen 3.4.0...
+call "%BUILD_WIN%\scripts\load-downloads.bat"
+if errorlevel 1 (
+    echo ERROR: Failed to load download manifest
+    exit /b 1
+)
+
+REM Eigen extracts to a directory whose name matches the archive stem
+for %%I in ("%FILE_EIGEN%") do set EIGEN_STEM=%%~nI
+if not exist "%DEPS%\%EIGEN_STEM%" (
+    echo [0/3] Downloading Eigen...
     if not exist "%DOWNLOADS%" mkdir "%DOWNLOADS%"
     if not exist "%DEPS%" mkdir "%DEPS%"
 
-    set EIGEN_URL=https://gitlab.com/libeigen/eigen/-/archive/3.4.0/eigen-3.4.0.zip
-    set EIGEN_ZIP=%DOWNLOADS%\eigen-3.4.0.zip
+    set "EIGEN_ZIP=%DOWNLOADS%\%FILE_EIGEN%"
 
     if not exist "!EIGEN_ZIP!" (
-        curl.exe -L -o "!EIGEN_ZIP!" "!EIGEN_URL!"
+        curl.exe -fL -o "!EIGEN_ZIP!" "%URL_EIGEN%"
         if errorlevel 1 (
             echo ERROR: Failed to download Eigen
             exit /b 1
@@ -135,11 +142,11 @@ echo ============================================================
 echo.
 
 set NVCC="%CUDA_PATH%\bin\nvcc.exe"
-set EIGEN_DIR=%DEPS%\eigen-3.4.0
+set EIGEN_DIR=%DEPS%\%EIGEN_STEM%
 
 REM Source files
 set CPP_SRCS=%CPP_DIR%\simplelog\SimpleLog.cpp %CPP_DIR%\stub.cpp
-set CU_SRCS=%CPP_DIR%\buffer\buffer.cu %CPP_DIR%\main\main.cu %CPP_DIR%\utility\utility.cu %CPP_DIR%\utility\dispatcher.cu %CPP_DIR%\csrmat\csrmat.cu %CPP_DIR%\contact\contact.cu %CPP_DIR%\energy\energy.cu %CPP_DIR%\eigenanalysis\eigenanalysis.cu %CPP_DIR%\barrier\barrier.cu %CPP_DIR%\strainlimiting\strainlimiting.cu %CPP_DIR%\solver\solver.cu %CPP_DIR%\kernels\reduce.cu %CPP_DIR%\kernels\exclusive_scan.cu %CPP_DIR%\kernels\vec_ops.cu %CPP_DIR%\kernels\radix_sort.cu %CPP_DIR%\lbvh\lbvh.cu
+set CU_SRCS=%CPP_DIR%\buffer\buffer.cu %CPP_DIR%\main\main.cu %CPP_DIR%\utility\utility.cu %CPP_DIR%\utility\dispatcher.cu %CPP_DIR%\csrmat\csrmat.cu %CPP_DIR%\contact\contact.cu %CPP_DIR%\energy\energy.cu %CPP_DIR%\eigenanalysis\eigenanalysis.cu %CPP_DIR%\barrier\barrier.cu %CPP_DIR%\strainlimiting\strainlimiting.cu %CPP_DIR%\solver\solver.cu %CPP_DIR%\kernels\reduce.cu %CPP_DIR%\kernels\exclusive_scan.cu %CPP_DIR%\kernels\vec_ops.cu %CPP_DIR%\kernels\radix_sort.cu %CPP_DIR%\lbvh\lbvh.cu %CPP_DIR%\plasticity\plasticity.cu
 
 REM Compiler flags
 set NVCC_FLAGS=-std=c++17 --expt-relaxed-constexpr --extended-lambda -O3 -rdc=true -shared -Wno-deprecated-gpu-targets

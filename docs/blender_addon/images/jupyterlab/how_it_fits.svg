@@ -1,0 +1,80 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 340" role="img" aria-label="How the JupyterLab pieces fit together: Blender plus add-on talks to the solver host to transfer the scene and export the notebook, then opens the browser which attaches back to the solver host via BlenderApp.open">
+  <title>JupyterLab transport diagram</title>
+  <desc>
+    Three lanes. On the left, Blender plus the add-on. In the middle,
+    the solver host that owns the pickled scene and the exported
+    notebook. On the right, the browser. The add-on pushes the mesh
+    and parameters and the notebook file through the solver
+    connection, while the browser URL is opened separately. Once
+    loaded, the browser attaches back to the solver host by calling
+    BlenderApp.open inside the notebook.
+  </desc>
+
+  <defs>
+    <marker id="h-arrow-b" viewBox="0 0 10 10" refX="9" refY="5"
+            markerWidth="10" markerHeight="10" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#2e6da4" />
+    </marker>
+    <marker id="h-arrow-g" viewBox="0 0 10 10" refX="9" refY="5"
+            markerWidth="10" markerHeight="10" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#3a8a3a" />
+    </marker>
+    <marker id="h-arrow-k" viewBox="0 0 10 10" refX="9" refY="5"
+            markerWidth="10" markerHeight="10" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#1a1a1a" />
+    </marker>
+  </defs>
+
+  <style>
+    .hdr-title  { font: 700 16px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #1a1a1a; }
+    .hdr-sub    { font: italic 12px -apple-system, sans-serif; fill: #555; }
+    .hdr-addon  { fill: #e9eef7; stroke: #8fa7c7; stroke-width: 1; }
+    .hdr-host   { fill: #fff3e0; stroke: #d7a95a; stroke-width: 1; }
+    .hdr-browser{ fill: #eef6eb; stroke: #86b36a; stroke-width: 1; }
+    .lifeline   { stroke: #aaa; stroke-width: 1.2; stroke-dasharray: 4 4; }
+    .arr-b      { stroke: #2e6da4; stroke-width: 2; fill: none; }
+    .arr-g      { stroke: #3a8a3a; stroke-width: 2; fill: none; }
+    .arr-k      { stroke: #1a1a1a; stroke-width: 2; fill: none; }
+    .lbl        { font: 600 13px -apple-system, sans-serif; fill: #1a1a1a; }
+    .lbl-mono   { font: 600 12px "Menlo", "Consolas", monospace; fill: #1a1a1a; }
+    .note       { font: 12px -apple-system, sans-serif; fill: #555; }
+  </style>
+
+  <!-- Lane headers -->
+  <rect x="30"  y="20" width="220" height="54" rx="6" class="hdr-addon" />
+  <text x="140" y="43" text-anchor="middle" class="hdr-title">Blender + add-on</text>
+  <text x="140" y="62" text-anchor="middle" class="hdr-sub">local workstation</text>
+
+  <rect x="320" y="20" width="220" height="54" rx="6" class="hdr-host" />
+  <text x="430" y="43" text-anchor="middle" class="hdr-title">solver host</text>
+  <text x="430" y="62" text-anchor="middle" class="hdr-sub">pickles + notebook</text>
+
+  <rect x="610" y="20" width="220" height="54" rx="6" class="hdr-browser" />
+  <text x="720" y="43" text-anchor="middle" class="hdr-title">browser</text>
+  <text x="720" y="62" text-anchor="middle" class="hdr-sub">JupyterLab UI</text>
+
+  <!-- Lifelines -->
+  <line x1="140" y1="74" x2="140" y2="310" class="lifeline" />
+  <line x1="430" y1="74" x2="430" y2="310" class="lifeline" />
+  <line x1="720" y1="74" x2="720" y2="310" class="lifeline" />
+
+  <!-- Transfer arrow: add-on -> solver host -->
+  <line x1="150" y1="115" x2="420" y2="115" class="arr-b" marker-end="url(#h-arrow-b)" />
+  <text x="285" y="108" text-anchor="middle" class="lbl">transfer</text>
+  <text x="285" y="131" text-anchor="middle" class="note">mesh + params</text>
+
+  <!-- Export notebook arrow: add-on -> solver host -->
+  <line x1="150" y1="165" x2="420" y2="165" class="arr-b" marker-end="url(#h-arrow-b)" />
+  <text x="285" y="158" text-anchor="middle" class="lbl">Export notebook</text>
+  <text x="285" y="181" text-anchor="middle" class="lbl-mono">&lt;project&gt;.ipynb</text>
+
+  <!-- Open arrow: add-on -> browser (spans both gaps) -->
+  <line x1="150" y1="220" x2="710" y2="220" class="arr-k" marker-end="url(#h-arrow-k)" />
+  <text x="430" y="213" text-anchor="middle" class="lbl">Open</text>
+  <text x="430" y="236" text-anchor="middle" class="lbl-mono">http://host:8080/lab/tree/…</text>
+
+  <!-- BlenderApp.open arrow: browser -> solver host (notebook attach) -->
+  <line x1="710" y1="280" x2="440" y2="280" class="arr-g" marker-end="url(#h-arrow-g)" />
+  <text x="575" y="273" text-anchor="middle" class="lbl-mono">BlenderApp.open(project)</text>
+  <text x="575" y="296" text-anchor="middle" class="note">notebook attaches to the pickles</text>
+</svg>

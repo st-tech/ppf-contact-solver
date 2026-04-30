@@ -41,14 +41,23 @@ CONSOLE_STYLE = """
 
 
 class ParamManager:
-    """Class to manage simulation parameters."""
+    """Class to manage simulation parameters.
+
+    Example:
+        Configure the standard simulation parameters for a session before
+        building it::
+
+            session = app.session.create(scene)
+            (
+                session.param.set("frames", 120)
+                             .set("dt", 0.01)
+                             .set("fps", 30)
+            )
+            session = session.build()
+    """
 
     def __init__(self):
-        """Initialize the Param class.
-
-        Args:
-            app_root (str): The root directory of the application.
-        """
+        """Initialize the ParamManager."""
         self._key = None
         self._param = ParamHolder(app_param())
         self._default_param = self._param.copy()
@@ -56,22 +65,47 @@ class ParamManager:
         self._dyn_param = {}
 
     def copy(self) -> "ParamManager":
-        """Copy the Param object.
+        """Copy the ParamManager object.
 
         Returns:
-            Param: The copied Param object.
+            ParamManager: The copied ParamManager object.
+
+        Example:
+            Snapshot the current parameters before tweaking one of them::
+
+                baseline = session.param.copy()
+                session.param.set("dt", 0.005)
         """
         return copy.deepcopy(self)
 
     def set(self, key: str, value: Optional[Any] = None) -> "ParamManager":
         """Set a parameter value.
 
+        If ``value`` is ``None``, the parameter is set to ``True``.
+
         Args:
-            key (str): The parameter key.
-            value (Any): The parameter value.
+            key (str): The parameter key. Must not contain an underscore;
+                use ``-`` instead.
+            value (Any, optional): The parameter value. Defaults to ``None``
+                (interpreted as ``True``).
 
         Returns:
-            Param: The updated Param object.
+            ParamManager: The updated ParamManager object.
+
+        Raises:
+            ValueError: If ``key`` contains an underscore or does not exist.
+
+        Example:
+            Chain several ``.set`` calls to configure a session. Keys use
+            hyphens, never underscores::
+
+                (
+                    session.param.set("frames", 250)
+                                 .set("dt", 0.01)
+                                 .set("fps", 30)
+                                 .set("min-newton-steps", 32)
+                                 .set("gravity", [0, 0, 0])
+                )
         """
         if "_" in key:
             raise ValueError("Key cannot contain underscore. Use '-' instead.")
@@ -84,15 +118,33 @@ class ParamManager:
         return self
 
     def clear_all(self):
-        """Clear all parameters to their default values."""
+        """Clear all parameters to their default values.
+
+        Example:
+            Reset every parameter back to its default before configuring a
+            new run::
+
+                session.param.clear_all()
+                session.param.set("frames", 60).set("dt", 0.01)
+        """
         self._param = self._default_param.copy()
         self._dyn_param = {}
 
     def clear(self, key: str) -> "ParamManager":
-        """Clear a parameter.
+        """Reset a parameter to its default value and drop any dynamic entries for it.
 
         Args:
             key (str): The parameter key.
+
+        Returns:
+            ParamManager: The updated ParamManager object.
+
+        Example:
+            Revert a single parameter back to its default after trying an
+            override::
+
+                session.param.set("dt", 0.001)
+                session.param.clear("dt")
         """
         self._param.set(key, self._default_param.get(key))
         if key in self._dyn_param:
@@ -100,13 +152,25 @@ class ParamManager:
         return self
 
     def dyn(self, key: str) -> "ParamManager":
-        """Set a current dynamic parameter key.
+        """Select the current dynamic parameter key and reset the internal time cursor.
 
         Args:
             key (str): The dynamic parameter key.
 
         Returns:
-            Param: The updated Param object.
+            ParamManager: The updated ParamManager object.
+
+        Raises:
+            ValueError: If ``key`` does not exist.
+
+        Example:
+            Flip gravity between t=1s and t=2s, then restore it::
+
+                g = session.param.get("gravity")
+                (session.param.dyn("gravity")
+                              .time(1.0).hold()
+                              .time(1.5).change([-x for x in g])
+                              .time(2.0).change(g))
         """
         if key not in self._param.key_list():
             raise ValueError(f"Key {key} does not exist")
@@ -119,10 +183,23 @@ class ParamManager:
         """Change the value of the dynamic parameter at the current time.
 
         Args:
-            value (float): The new value of the dynamic parameter.
+            value (Any): The new value of the dynamic parameter. May be a
+                scalar, bool, or list/tuple of floats, depending on the key.
 
         Returns:
-            Param: The updated Param object.
+            ParamManager: The updated ParamManager object.
+
+        Raises:
+            ValueError: If no dynamic key is currently selected.
+
+        Example:
+            Slow playback to 10% after the third second via a dynamic key::
+
+                (
+                    session.param.dyn("playback")
+                                 .time(2.99).hold()
+                                 .time(3.0).change(0.1)
+                )
         """
         if self._key is None:
             raise ValueError("Key is not set")
@@ -138,10 +215,22 @@ class ParamManager:
             return self
 
     def hold(self) -> "ParamManager":
-        """Hold the current value of the dynamic parameter.
+        """Hold the current value of the dynamic parameter at the current time.
 
         Returns:
-            Param: The updated Param object.
+            ParamManager: The updated ParamManager object.
+
+        Raises:
+            ValueError: If no dynamic key is currently selected.
+
+        Example:
+            Keep playback steady until t=2.99s, then drop it at t=3.0s::
+
+                (
+                    session.param.dyn("playback")
+                                 .time(2.99).hold()
+                                 .time(3.0).change(0.1)
+                )
         """
         if self._key is None:
             raise ValueError("Key is not set")
@@ -155,10 +244,18 @@ class ParamManager:
         return self
 
     def export(self, path: str):
-        """Export the parameters to a file.
+        """Export the parameters to ``param.toml`` (and ``dyn_param.txt`` when present).
+
+        In fast-check mode, ``frames`` is forced to ``1``.
 
         Args:
             path (str): The path to the export directory.
+
+        Example:
+            Write the parameters alongside a session directory for inspection
+            or external launching::
+
+                session.param.export(fixed_session.info.path)
         """
         # Force frames=1 in fast check mode
         if Utils.is_fast_check():
@@ -177,6 +274,9 @@ class ParamManager:
                                 f.write(f"{key} = true\n")
                             else:
                                 f.write(f"{key} = false\n")
+                        elif hasattr(val, "__len__") and not isinstance(val, str):
+                            items = ", ".join(str(float(x)) for x in val)
+                            f.write(f"{key} = [{items}]\n")
                         else:
                             f.write(f"{key} = {val}\n")
                     else:
@@ -187,23 +287,39 @@ class ParamManager:
                     f.write(f"[{key}]\n")
                     for entry in vals:
                         time, val = entry
-                        if isinstance(val, float):
+                        if isinstance(val, (list, tuple)):
+                            items = " ".join(str(float(x)) for x in val)
+                            f.write(f"{time} {items}\n")
+                        elif isinstance(val, float):
                             f.write(f"{time} {val}\n")
                         elif isinstance(val, bool):
                             f.write(f"{time} {float(val)}\n")
                         else:
                             raise ValueError(
-                                f"Value must be float or bool. {val} is given."
+                                f"Value must be float, bool, or list. {val} is given."
                             )
 
     def time(self, time: float) -> "ParamManager":
-        """Set the current time for the dynamic parameter.
+        """Advance the current time cursor for the dynamic parameter.
 
         Args:
-            time (float): The current time.
+            time (float): The new current time. Must be strictly greater than
+                the previous value.
 
         Returns:
-            Param: The updated Param object.
+            ParamManager: The updated ParamManager object.
+
+        Raises:
+            ValueError: If ``time`` is not strictly increasing.
+
+        Example:
+            Advance the cursor between two dynamic-value updates::
+
+                (
+                    session.param.dyn("playback")
+                                 .time(1.0).hold()
+                                 .time(2.0).change(0.5)
+                )
         """
         if time <= self._time:
             raise ValueError("Time must be increasing")
@@ -215,11 +331,20 @@ class ParamManager:
         """Get the value of a parameter.
 
         Args:
-            key (Optional[str], optional): The parameter key.
-            If not specified, all parameters are returned.
+            key (Optional[str]): The parameter key. Must be specified.
 
         Returns:
             Any: The value of the parameter.
+
+        Raises:
+            ValueError: If ``key`` is ``None``.
+
+        Example:
+            Read the current gravity vector so a dynamic override can flip
+            its sign later::
+
+                g = session.param.get("gravity")
+                print(g)
         """
         if key is None:
             raise ValueError("Key must be specified")
@@ -231,12 +356,27 @@ class ParamManager:
 
         Returns:
             ItemsView: The parameter items.
+
+        Example:
+            Inspect every parameter currently configured on the session::
+
+                for key, value in session.param.items():
+                    print(f"{key} = {value}")
         """
         return self._param.items()
 
 
 class SessionManager:
-    """Class to manage simulation sessions."""
+    """Class to manage simulation sessions.
+
+    Example:
+        Create a session from a built scene and launch it::
+
+            session = app.session.create(scene)
+            session.param.set("frames", 60).set("dt", 0.01)
+            session = session.build()
+            session.start(blocking=True)
+    """
 
     def __init__(self, app_name: str, app_root: str, proj_root: str, data_dirpath: str):
         """Initialize the SessionManager class.
@@ -258,17 +398,32 @@ class SessionManager:
 
         Returns:
             dict: The sessions.
+
+        Example:
+            Print the names of every session currently tracked by the app::
+
+                for name in app.session.list():
+                    print(name)
         """
         return self._sessions
 
     def select(self, name: str = "session"):
-        """Select a session.
+        """Select an existing session by name.
 
         Args:
-            name (str): The name of the session.
+            name (str): The name of the session. Defaults to ``"session"``.
 
         Returns:
             Session: The selected session.
+
+        Raises:
+            ValueError: If no session with the given name exists.
+
+        Example:
+            Re-fetch a previously-created session by name::
+
+                app.session.create(scene, name="run-A")
+                session = app.session.select("run-A")
         """
         if name not in self._sessions:
             raise ValueError(f"Session {name} does not exist")
@@ -277,15 +432,32 @@ class SessionManager:
     def create(self, scene: FixedScene, name: str = "") -> "Session":
         """Create a new session.
 
+        If ``name`` is empty, an auto-generated name is used: ``"session"``
+        for the first call, then ``"session-1"``, ``"session-2"``, ... for
+        subsequent calls.
+
         Args:
             scene (FixedScene): The scene object.
-            name (str): The name of the session. If not specified, defaults to "session".
+            name (str): The name of the session. Defaults to ``""``
+                (auto-generated).
 
         Returns:
             Session: The created session.
 
         Raises:
-            Exception: If the scene has violations (self-intersections, contact-offset violations, etc.)
+            Exception: If the scene has violations (self-intersections,
+                contact-offset violations, etc.).
+
+        Example:
+            Create a session from a built fixed scene and configure it::
+
+                scene = app.scene.create()
+                scene.add("sheet").at(0, 0.5, 0)
+                scene = scene.build()
+
+                session = app.session.create(scene)
+                session.param.set("frames", 60).set("dt", 0.01)
+                session = session.build()
         """
         assert isinstance(scene, FixedScene), "Scene must be a FixedScene object"
         if scene.has_violations:
@@ -312,10 +484,14 @@ class SessionManager:
         return session.init(scene)
 
     def _terminate_or_raise(self, force: bool):
-        """Terminate the solver if it is running, or raise an exception.
+        """Terminate the solver if it is running, or raise if ``force`` is ``False``.
 
         Args:
-            force (bool): Whether to force termination.
+            force (bool): If ``True``, terminate a running solver; otherwise
+                raise a ``ValueError``.
+
+        Raises:
+            ValueError: If the solver is running and ``force`` is ``False``.
         """
         if Utils.busy():
             if force:
@@ -329,6 +505,12 @@ class SessionManager:
         Args:
             name (str): The name of the session.
             force (bool, optional): Whether to force deletion.
+
+        Example:
+            Tear down a named session, terminating the solver if it is
+            still running::
+
+                app.session.delete("run-A", force=True)
         """
         self._terminate_or_raise(force)
         if name in self._sessions:
@@ -340,6 +522,12 @@ class SessionManager:
 
         Args:
             force (bool, optional): Whether to force clearing.
+
+        Example:
+            Remove every session and any running solver before starting
+            fresh::
+
+                app.session.clear(force=True)
         """
         self._terminate_or_raise(force)
         for session in self._sessions.values():
@@ -348,14 +536,24 @@ class SessionManager:
 
 
 class SessionInfo:
-    """Class to store session information."""
+    """Class to store session information.
+
+    Example:
+        Read the on-disk directory path for a built session::
+
+            fixed_session = session.build()
+            print(fixed_session.info.name)
+            print(fixed_session.info.path)
+    """
 
     def __init__(self, name: str):
         """Initialize the SessionInfo class.
 
+        The session directory path is initialized empty and should be set via
+        :meth:`set_path`.
+
         Args:
             name (str): The name of the session.
-            path (str): The path to the session directory.
         """
         self._name = name
         self._path = ""
@@ -365,18 +563,44 @@ class SessionInfo:
 
         Args:
             path (str): The path to the session directory.
+
+        Returns:
+            SessionInfo: This instance, for chaining.
+
+        Example:
+            Normally this is called by :class:`SessionManager` during session
+            construction. A direct call may be useful when relocating an
+            existing session on disk::
+
+                info = SessionInfo("my_run")
+                info.set_path("/data/sessions/my_run")
+                print(info.path)
         """
         self._path = path
         return self
 
     @property
     def name(self) -> str:
-        """Get the name of the session."""
+        """Get the name of the session.
+
+        Example:
+            Inspect the session name before starting a run::
+
+                session = app.session.create(fixed_scene).build()
+                print(session.info.name)
+        """
         return self._name
 
     @property
     def path(self) -> str:
-        """Get the path to the session directory."""
+        """Get the path to the session directory.
+
+        Example:
+            Read the on-disk session directory after building::
+
+                session = app.session.create(fixed_scene).build()
+                print(session.info.path)
+        """
         return self._path
 
 
@@ -385,7 +609,11 @@ class Zippable:
         self._dirpath = dirpath
 
     def zip(self):
-        """Zip the directory."""
+        """Zip the directory.
+
+        No-op when running in a CI environment (as detected by
+        :meth:`Utils.ci_name`).
+        """
         ci_name = Utils.ci_name()
         if ci_name is not None:
             print("CI detected. Skipping zipping.")
@@ -399,13 +627,20 @@ class Zippable:
 
 
 class SessionExport:
-    """Class to handle session export operations."""
+    """Class to handle session export operations.
+
+    Example:
+        Export every simulated frame and zip the output directory::
+
+            session.start(blocking=True)
+            session.export.animation().zip()
+    """
 
     def __init__(self, fixed_session: "FixedSession"):
         """Initialize the SessionExport class.
 
         Args:
-            session (FixedSession): The fixed session object.
+            fixed_session (FixedSession): The fixed session object.
         """
         self._fixed_session = fixed_session
         self._session = fixed_session.session
@@ -414,13 +649,23 @@ class SessionExport:
         self,
         param: ParamManager,
     ) -> str:
-        """Generate a shell command to run the solver.
+        """Generate a platform-specific launcher script for the solver.
+
+        On Windows, writes a ``command.bat`` file; on Linux/macOS, writes a
+        ``command.sh`` script (marked executable).
 
         Args:
-            param (Param): The simulation parameters.
+            param (ParamManager): The simulation parameters.
 
         Returns:
-            str: The shell command.
+            str: The path to the generated launcher script.
+
+        Example:
+            Regenerate the solver launcher alongside a session (useful for
+            re-running from the command line)::
+
+                path = session.export.shell_command(session.session.param)
+                print(path)
         """
         param.export(self._fixed_session.info.path)
 
@@ -482,12 +727,30 @@ fi
     ) -> Zippable:
         """Export the animation frames.
 
+        If no frames are available yet, waits for the simulation if it is
+        running, otherwise returns early. When ``ffmpeg`` is available and
+        rendered PNGs are produced, also encodes an ``frame.mp4`` video in
+        the export directory.
+
         Args:
-            path (str): The path to the export directory. If set empty, it will use the default path.
-            ext (str, optional): The file extension. Defaults to "ply".
-            include_static (bool, optional): Whether to include the static mesh.
-            options (dict, optional): Additional arguments passed to a renderer.
+            path (str): The path to the export directory. If empty, a default
+                path is used.
+            ext (str, optional): The file extension. Defaults to ``"ply"``.
+            include_static (bool, optional): Whether to include the static
+                mesh. Defaults to ``True``.
             clear (bool, optional): Whether to clear the existing files.
+                Defaults to ``False``.
+            options (dict, optional): Additional arguments passed to the
+                renderer.
+
+        Returns:
+            Zippable: A handle to the export directory that can be zipped.
+
+        Example:
+            Export every frame as PLY and zip the result::
+
+                session.start(blocking=True)
+                session.export.animation().zip()
         """
         if options is None:
             options = {}
@@ -592,13 +855,22 @@ fi
 
         Args:
             path (str): The path to the export file.
-            frame (Optional[int], optional): The frame number. Defaults to None.
-            include_static (bool, optional): Whether to include the static mesh.
-            options (dict, optional): Additional arguments passed to a renderer.
-            delete_exist (bool, optional): Whether to delete the existing file.
+            frame (Optional[int], optional): The frame number. If ``None``,
+                the latest available frame is used. Defaults to ``None``.
+            include_static (bool, optional): Whether to include the static
+                mesh. Defaults to ``True``.
+            options (dict, optional): Additional arguments passed to the
+                renderer.
+            delete_exist (bool, optional): Whether to delete the existing
+                file. Defaults to ``False``.
 
         Returns:
-            Session: The session object.
+            FixedSession: The owning fixed session object.
+
+        Example:
+            Export just the latest frame as an OBJ file::
+
+                session.export.frame("latest.obj")
         """
 
         if options is None:
@@ -628,19 +900,33 @@ fi
 
 
 class SessionOutput:
-    """Class to handle session output operations."""
+    """Class to handle session output operations.
+
+    Example:
+        Locate the solver output directory for a built session (used by
+        exporters and log readers)::
+
+            print(session.output.path)
+    """
 
     def __init__(self, session: "FixedSession"):
         """Initialize the SessionOutput class.
 
         Args:
-            session (Session): The session object.
+            session (FixedSession): The fixed session object.
         """
         self._session = session
 
     @property
     def path(self) -> str:
-        """Get the path to the output directory."""
+        """Get the path to the output directory.
+
+        Example:
+            Locate the solver output directory for post-processing::
+
+                session = session.build().start(blocking=True)
+                output_dir = session.output.path
+        """
         return os.path.join(self._session.info.path, "output")
 
 
@@ -657,6 +943,13 @@ class SessionLog:
 
         Returns:
             list[str]: The list of log names.
+
+        Example:
+            List every log channel the solver can emit, then confirm a
+            channel of interest is present::
+
+                names = session.get.log.names()
+                assert "time-per-frame" in names
         """
         return list(self._log.keys())
 
@@ -688,6 +981,13 @@ class SessionLog:
 
         Returns:
             list[str]: The last n lines of the stdout log file.
+
+        Example:
+            Print the last 8 lines of solver stdout for a quick health
+            check::
+
+                for line in session.get.log.stdout(n_lines=8):
+                    print(line)
         """
         return self._tail_file(
             os.path.join(self._fixed_session.info.path, "stdout.log"), n_lines
@@ -701,19 +1001,33 @@ class SessionLog:
 
         Returns:
             list[str]: The last n lines of the stderr log file.
+
+        Example:
+            Surface any solver errors without loading the full log::
+
+                for line in session.get.log.stderr(n_lines=20):
+                    print(line)
         """
         return self._tail_file(
             os.path.join(self._fixed_session.info.path, "error.log"), n_lines
         )
 
     def numbers(self, name: str):
-        """Get a pair of numbers from a log file.
+        """Get the list of (x, y) number pairs recorded for a given log.
 
         Args:
-            name (str): The name of the log file.
+            name (str): The name of the log.
 
         Returns:
-            list[list[float]]: The list of pair of numbers.
+            Optional[list[list[float | int]]]: The list of number pairs, or
+            ``None`` if the log name is unknown or the backing file does not
+            exist. Integer-valued entries are returned as ``int``.
+
+        Example:
+            Average wall-clock time per video frame::
+
+                pairs = session.get.log.numbers("time-per-frame")
+                avg_ms = sum(n for _, n in pairs) / len(pairs)
         """
 
         def float_or_int(var):
@@ -739,13 +1053,20 @@ class SessionLog:
             return None
 
     def number(self, name: str):
-        """Get the latest value from a log file.
+        """Get the latest value from a log.
 
         Args:
-            name (str): The name of the log file.
+            name (str): The name of the log.
 
         Returns:
-            float: The latest value.
+            Optional[float | int]: The latest recorded value, or ``None`` if
+            unavailable.
+
+        Example:
+            Read the most recent Newton iteration count::
+
+                latest = session.get.log.number("newton-steps")
+                print(latest)
         """
         entries = self.numbers(name)
         if entries:
@@ -754,10 +1075,17 @@ class SessionLog:
             return None
 
     def summary(self):
-        """Get a summary of the session log.
+        """Get a summary of the session log using the latest values of key metrics.
 
         Returns:
-            dict: A dictionary containing the summary of the session log. Each key is a log name and the value is the latest value.
+            dict: A dictionary mapping metric name to a formatted latest value.
+            When ``max-sigma`` is positive, a ``"stretch"`` entry is also
+            included as a percentage.
+
+        Example:
+            Print a compact summary of the solver's current status::
+
+                print(session.get.log.summary())
         """
         time_per_frame = convert_time(self.number("time-per-frame"))
         time_per_step = convert_time(self.number("time-per-step"))
@@ -776,29 +1104,109 @@ class SessionLog:
             result["stretch"] = f"{100.0 * (max_sigma - 1.0):.2f}%"
         return result
 
+    def average_summary(self):
+        """Get averages for log-backed metrics only.
+
+        Returns:
+            dict: A dictionary containing averaged statistics. Metrics without a
+            corresponding existing ``.out`` file are omitted.
+
+        Example:
+            Print the run-averaged metrics after a simulation has finished::
+
+                print(session.get.log.average_summary())
+        """
+
+        def average(name: str):
+            entries = self.numbers(name)
+            if not entries:
+                return None
+            values = [entry[1] for entry in entries]
+            if not values:
+                return None
+            return sum(values) / len(values)
+
+        def maximum(name: str):
+            entries = self.numbers(name)
+            if not entries:
+                return None
+            values = [entry[1] for entry in entries]
+            if not values:
+                return None
+            return max(values)
+
+        result = {}
+        time_per_frame = average("time-per-frame")
+        if time_per_frame is not None:
+            result["time-per-frame"] = convert_time(time_per_frame)
+
+        time_per_step = average("time-per-step")
+        if time_per_step is not None:
+            result["time-per-step"] = convert_time(time_per_step)
+
+        n_contact = maximum("num-contact")
+        if n_contact is not None:
+            result["num-contact (max)"] = convert_integer(round(n_contact))
+
+        n_newton = average("newton-steps")
+        if n_newton is not None:
+            result["newton-steps"] = f"{n_newton:.2f}"
+
+        n_pcg = average("pcg-iter")
+        if n_pcg is not None:
+            result["pcg-iter"] = f"{n_pcg:.2f}"
+
+        max_sigma = average("max-sigma")
+        if max_sigma is not None and max_sigma > 0.0:
+            result["stretch"] = f"{100.0 * (max_sigma - 1.0):.2f}%"
+
+        return result
+
 
 class SessionGet:
-    """Class to handle session data retrieval operations."""
+    """Class to handle session data retrieval operations.
+
+    Example:
+        Pull the most recent vertex buffer and a log channel from a running
+        or completed session::
+
+            vert, frame = session.get.vertex()
+            per_frame_ms = session.get.log.numbers("time-per-frame")
+    """
 
     def __init__(self, fixed_session: "FixedSession"):
         """Initialize the SessionGet class.
 
         Args:
-            session (Session): The session object.
+            fixed_session (FixedSession): The fixed session object.
         """
         self._fixed_session = fixed_session
         self._log = SessionLog(fixed_session)
 
     @property
     def log(self) -> SessionLog:
-        """Get the session log object."""
+        """Get the session log object.
+
+        Example:
+            Fetch the list of emitted log channels::
+
+                session = session.build().start(blocking=True)
+                channels = session.get.log.names()
+        """
         return self._log
 
     def vertex_frame_count(self) -> int:
-        """Get the vertex count.
+        """Get the highest frame index that has an exported vertex buffer.
 
         Returns:
-            int: The vertex count.
+            int: The highest frame index found in ``output/vert_*.bin``, or
+            ``0`` if none exist.
+
+        Example:
+            Wait until at least one frame is on disk before replaying::
+
+                while session.get.vertex_frame_count() == 0:
+                    time.sleep(0.5)
         """
         path = os.path.join(self._fixed_session.info.path, "output")
         max_frame = 0
@@ -815,6 +1223,12 @@ class SessionGet:
 
         Returns:
             int: The latest frame number.
+
+        Example:
+            Poll the most recent frame index while the solver runs::
+
+                frame = session.get.latest_frame()
+                print(f"solver is on frame {frame}")
         """
         path = os.path.join(self._fixed_session.info.path, "output")
         if os.path.exists(path):
@@ -833,13 +1247,23 @@ class SessionGet:
 
         Returns:
             list[int]: The list of saved frame numbers.
+
+        Example:
+            Resume from the newest saved state if any exist::
+
+                saved = session.get.saved()
+                if saved:
+                    session.resume(max(saved))
         """
         result = []
         output_path = os.path.join(self._fixed_session.info.path, "output")
         if os.path.exists(output_path):
             for file in os.listdir(output_path):
                 if file.startswith("state_") and file.endswith(".bin.gz"):
-                    frame = int(file.split("_")[1].split(".")[0])
+                    try:
+                        frame = int(file.split("_")[1].split(".")[0])
+                    except (IndexError, ValueError):
+                        continue
                     result.append(frame)
         return result
 
@@ -847,10 +1271,21 @@ class SessionGet:
         """Get the vertex data for a specific frame.
 
         Args:
-            n (Optional[int], optional): The frame number. If not specified, the latest frame is returned. Defaults to None.
+            n (Optional[int], optional): The frame number. If ``None``, the
+                latest frame is returned. Defaults to ``None``.
 
         Returns:
-            Optional[tuple[np.ndarray, int]]: The vertex data and frame number.
+            Optional[tuple[np.ndarray, int]]: A tuple ``(vertices, frame)``
+            where ``vertices`` has shape ``(N, 3)`` and dtype ``float32``, or
+            ``None`` if no data is available.
+
+        Example:
+            Read the latest exported vertex buffer from disk::
+
+                result = session.get.vertex()
+                if result is not None:
+                    vert, frame = result
+                    print(vert.shape, frame)
         """
         path = os.path.join(self._fixed_session.info.path, "output")
         if os.path.exists(path):
@@ -859,7 +1294,10 @@ class SessionGet:
                 frames = []
                 for file in files:
                     if file.startswith("vert") and file.endswith(".bin"):
-                        frame = int(file.split("_")[1].split(".")[0])
+                        try:
+                            frame = int(file.split("_")[1].split(".")[0])
+                        except (IndexError, ValueError):
+                            continue
                         frames.append(frame)
                 if len(frames) > 0:
                     frames = sorted(frames)
@@ -888,10 +1326,21 @@ class SessionGet:
         return None
 
     def command(self) -> Optional[str]:
-        """Get the path to the command.sh file.
+        """Get the path to the solver launcher script.
+
+        On Windows this points at ``command.bat``; elsewhere at
+        ``command.sh``.
 
         Returns:
-            Optional[str]: The path to the command.sh file if it exists, None otherwise.
+            Optional[str]: The path to the launcher script if it exists,
+            ``None`` otherwise.
+
+        Example:
+            Print the launcher path so it can be re-run from a shell::
+
+                path = session.get.command()
+                if path:
+                    print(path)
         """
         if platform.system() == "Windows":  # Windows
             command_path = os.path.join(self._fixed_session.info.path, "command.bat")
@@ -906,6 +1355,12 @@ class SessionGet:
 
         Returns:
             list[str]: The lines from the parameter summary file, or empty list if file doesn't exist.
+
+        Example:
+            Print the parameter summary captured by the solver at launch::
+
+                for line in session.get.param_summary():
+                    print(line)
         """
         summary_path = os.path.join(self._fixed_session.info.path, "param_summary.txt")
         if os.path.exists(summary_path):
@@ -918,6 +1373,11 @@ class SessionGet:
 
         Reads both nvidia-smi.txt and nvidia-smi-q.txt from the nvidia-smi directory
         and prints their concatenated contents.
+
+        Example:
+            Inspect the GPU state captured at the start of a run::
+
+                session.get.nvidia_smi()
         """
         nvidia_smi_dir = os.path.join(self._fixed_session.info.path, "nvidia-smi")
         nvidia_smi_path = os.path.join(nvidia_smi_dir, "nvidia-smi.txt")
@@ -942,13 +1402,31 @@ class SessionGet:
 
 
 class FixedSession:
-    """Class to manage a fixed simulation session."""
+    """Class to manage a fixed simulation session.
+
+    Returned by :meth:`Session.build`. Use it to launch the solver, monitor
+    it, pull results, and export.
+
+    Example:
+        Build a session from a configured :class:`Session` and run it to
+        completion, then export::
+
+            fixed_session = session.build()
+            fixed_session.start(blocking=True)
+            fixed_session.export.animation().zip()
+    """
 
     def __init__(self, session: "Session"):
-        """Initialize the Session class.
+        """Initialize the FixedSession from a parent Session.
+
+        Deletes any prior on-disk session directory, exports the fixed
+        scene, and writes the solver launcher script.
 
         Args:
-            session (Session): The session object.
+            session (Session): The parent session object.
+
+        Raises:
+            ValueError: If the parent session has no fixed scene.
         """
         self._session = session
         self._process: Optional[subprocess.Popen] = None
@@ -977,27 +1455,62 @@ class FixedSession:
 
     @property
     def info(self) -> SessionInfo:
-        """Get the session information."""
+        """Get the session information.
+
+        Example:
+            Read the session name and directory path::
+
+                session = app.session.create(fixed_scene).build()
+                print(session.info.name, session.info.path)
+        """
         return self._info
 
     @property
     def export(self) -> SessionExport:
-        """Get the session export object."""
+        """Get the session export object.
+
+        Example:
+            Export the session shell command for reproducible replays::
+
+                session = app.session.create(fixed_scene).build()
+                cmd_path = session.export.shell_command(session.session.param)
+        """
         return self._export
 
     @property
     def get(self) -> SessionGet:
-        """Get the session get object."""
+        """Get the session get object.
+
+        Example:
+            Retrieve solver-emitted log channel names::
+
+                session = session.build().start(blocking=True)
+                channels = session.get.log.names()
+        """
         return self._get
 
     @property
     def output(self) -> SessionOutput:
-        """Get the session output object."""
+        """Get the session output object.
+
+        Example:
+            Locate the solver output directory::
+
+                session = app.session.create(fixed_scene).build()
+                print(session.output.path)
+        """
         return self._output
 
     @property
     def session(self) -> "Session":
-        """Get the session object."""
+        """Get the session object.
+
+        Example:
+            Reach back to the parent :class:`Session` for its parameters::
+
+                fixed = app.session.create(fixed_scene).build()
+                params = fixed.session.param
+        """
         return self._session
 
     def print(self, message):
@@ -1005,6 +1518,11 @@ class FixedSession:
 
         Args:
             message (str): The message to print.
+
+        Example:
+            Emit a status line that renders nicely in Jupyter or stdout::
+
+                session.print("Launching solver...")
         """
         if Utils.in_jupyter_notebook():
             from IPython.display import display
@@ -1021,6 +1539,13 @@ class FixedSession:
 
         Returns:
             bool: True if the solver is running, False otherwise.
+
+        Example:
+            Poll the solver state after launching non-blocking::
+
+                session.start()
+                while session.is_running():
+                    time.sleep(1)
         """
         # First check the stored process handle (most reliable)
         if self._process is not None:
@@ -1035,6 +1560,50 @@ class FixedSession:
 
         # Fall back to Utils.busy() for cases where process was started externally
         return Utils.busy()
+
+    def running(self) -> bool:
+        """Alias for :meth:`is_running`.
+
+        Example:
+            Shorthand form for polling solver state::
+
+                session.start()
+                while session.running():
+                    time.sleep(1)
+        """
+        return self.is_running()
+
+    def run(self, blocking: Optional[bool] = None) -> "FixedSession":
+        """Idempotent launcher: ensure the solver is running.
+
+        - If the solver is already running (this process or another host
+          process detected via ``Utils.busy()``), return without
+          relaunching.
+        - Otherwise, start a fresh simulation from frame 0.
+
+        To pick up a previously-saved state, use :meth:`resume` explicitly,
+        since ``run()`` never auto-resumes.
+
+        Args:
+            blocking (Optional[bool]): If ``True``, block until the solver
+                finishes. If ``None``, defaults to blocking outside Jupyter
+                and non-blocking inside Jupyter.
+
+        Returns:
+            FixedSession: This session.
+
+        Example:
+            Ensure the solver is running without restarting it if it already
+            is::
+
+                session.run(blocking=True)
+        """
+        if self.is_running():
+            return self
+        # force=True here bypasses start()'s auto-resume branch so we
+        # always begin from frame 0. It won't terminate anything because
+        # is_running() was just False.
+        return self.start(force=True, blocking=blocking)
 
     def _analyze_solver_error(self, log_lines, err_lines):
         """Analyze log and error files for specific failure patterns.
@@ -1077,7 +1646,11 @@ class FixedSession:
                 "Overflow detected",
                 "Numerical overflow",
             ),
-            ("assert", "Internal assertion failed"),
+            (
+                "e.squarednorm() > sqr(offset)",
+                "Contact offset too large: a rod vertex is within offset distance "
+                "of a triangle face. Reduce contact-offset or increase separation.",
+            ),
         ]
 
         for line in all_lines:
@@ -1086,10 +1659,27 @@ class FixedSession:
                 if pattern.lower() in line_lower:
                     return message
 
+        # Check for panic/assertion with surrounding context
+        for i, line in enumerate(all_lines):
+            if "panicked at" in line or "assertion failed" in line.lower():
+                context_lines = []
+                # Include up to 3 lines before and after for context
+                for j in range(max(0, i - 3), min(len(all_lines), i + 4)):
+                    stripped = all_lines[j].strip()
+                    if stripped:
+                        context_lines.append(stripped)
+                return "\n".join(context_lines)
+
         return None
 
     def delete(self):
-        """Delete the session."""
+        """Delete the session.
+
+        Example:
+            Remove the on-disk session directory before a clean rerun::
+
+                session.delete()
+        """
         if os.path.exists(self.info.path):
             shutil.rmtree(self.info.path)
 
@@ -1099,10 +1689,19 @@ class FixedSession:
             raise ValueError("Scene must be initialized")
 
     def finished(self) -> bool:
-        """Check if the session is finished.
+        """Check if the session has finished.
+
+        Any stderr lines present are printed as a side effect.
 
         Returns:
-            bool: True if the session is finished, False otherwise.
+            bool: ``True`` if a ``finished.txt`` marker exists in the output
+            directory, ``False`` otherwise.
+
+        Example:
+            Assert the run completed cleanly in CI::
+
+                if app.ci:
+                    assert session.finished()
         """
         finished_path = os.path.join(self.output.path, "finished.txt")
         error = self.get.log.stderr()
@@ -1112,10 +1711,19 @@ class FixedSession:
         return os.path.exists(finished_path)
 
     def initialize_finished(self) -> bool:
-        """Check if the session initialization is finished.
+        """Check if the session initialization has finished.
+
+        Any stderr lines present are printed as a side effect.
 
         Returns:
-            bool: True if the session initialization is finished, False otherwise.
+            bool: ``True`` if an ``initialize_finish.txt`` marker exists in
+            the output directory, ``False`` otherwise.
+
+        Example:
+            Wait for solver initialization to complete before continuing::
+
+                while not session.initialize_finished():
+                    time.sleep(1)
         """
         initialize_finish_path = os.path.join(self.output.path, "initialize_finish.txt")
         error = self.get.log.stderr()
@@ -1130,6 +1738,23 @@ class FixedSession:
         force: bool = True,
         blocking: Optional[bool] = None,
     ) -> "FixedSession":
+        """Resume the solver from a saved state.
+
+        Args:
+            frame (int): The saved frame to resume from. If ``-1``, resumes
+                from the most recent saved frame. Defaults to ``-1``.
+            force (bool): Forwarded to :meth:`start`. Defaults to ``True``.
+            blocking (Optional[bool]): Forwarded to :meth:`start`.
+
+        Returns:
+            FixedSession: This session.
+
+        Example:
+            Pick up where a previous run left off::
+
+                session.resume()                 # latest saved frame
+                session.resume(frame=120)        # specific saved frame
+        """
         if self._param is None:
             print("Session is not yet started")
             return self
@@ -1153,24 +1778,39 @@ class FixedSession:
     ) -> "FixedSession":
         """Start the session.
 
-        For Jupyter Notebook, the function will return immediately and the solver
-        will run in the background. If blocking is set to True, the function will block
-        until the solver is finished.
-        When Jupiter Notebook is not detected, the function will block until the solver
-        is finished.
+        Inside a Jupyter notebook the function returns immediately by
+        default and the solver runs in the background; outside Jupyter it
+        blocks until the solver finishes. Pass ``blocking`` explicitly to
+        override this behavior.
+
+        If saved states exist and ``force`` is ``False``, this delegates to
+        :meth:`resume` from the latest saved frame.
 
         Args:
-            param (Param): The simulation parameters.
-            force (bool, optional): Whether to force starting the simulation.
-            blocking (bool, optional): Whether to block the execution.
-            load (int, optional): The frame number to load from saved states. Defaults to 0.
+            force (bool, optional): If ``True``, terminate any running
+                solver and skip the auto-resume branch. Defaults to
+                ``False``.
+            blocking (Optional[bool], optional): Whether to block until the
+                solver finishes. Defaults to ``None`` (auto-detect based on
+                Jupyter).
+            load (int, optional): The frame number to load from saved
+                states. Defaults to ``0`` (start fresh).
 
         Returns:
-            Session: The started session.
+            FixedSession: The started session.
+
+        Example:
+            Launch the solver and return immediately for notebook-style
+            monitoring::
+
+                session.start().preview()
+                session.stream()
+
+            Or block until finished when running as a script::
+
+                session.start(blocking=True)
         """
-        gpu_count = Utils.get_gpu_count()
-        if gpu_count == 0:
-            raise ValueError("GPU is not detected.")
+        Utils.check_gpu()
 
         driver_version = Utils.get_driver_version()
         min_driver_version = 520
@@ -1270,7 +1910,20 @@ class FixedSession:
                 # Wait briefly for process to initialize and verify it's stable
                 time.sleep(0.2)  # Give process time to start
                 if not self.is_running():
-                    # Process exited immediately - check for errors
+                    # Process exited within 0.2s. Could be a startup crash
+                    # (rc != 0) or a legitimately-short run that finished
+                    # before the poll (rc == 0). The latter happens in
+                    # practice when resuming from a saved frame near the
+                    # end of the simulation: load state, run remaining
+                    # frame(s), exit cleanly. Without this distinction
+                    # the solver wrapper would misclassify a successful
+                    # short run as ``"Solver failed to start"``.
+                    rc = process.poll() if process is not None else None
+                    if rc is None or rc == 0:
+                        # Clean exit (or process not yet observable but
+                        # is_running() reported false — give it the benefit
+                        # of the doubt rather than raise on stale state).
+                        return self
                     if os.path.exists(err_path):
                         with open(err_path) as f:
                             err_lines = f.readlines()
@@ -1287,7 +1940,9 @@ class FixedSession:
                     elif err_lines:
                         raise ValueError(f"Solver failed: {''.join(err_lines[:5])}")
                     else:
-                        raise ValueError("Solver failed to start")
+                        raise ValueError(
+                            f"Solver failed to start (rc={rc})"
+                        )
             if blocking:
                 while not os.path.exists(log_path) and not os.path.exists(err_path):
                     time.sleep(1)
@@ -1416,13 +2071,29 @@ class FixedSession:
             return None
 
     def save_and_quit_file_path(self) -> str:
-        """Get the flagging file path for saving and quitting the session.
+        """Get the flag-file path that signals the solver to save and quit.
+
         If this file exists, the solver will save the session and quit.
-        After the session is saved, the file will be removed."""
+        After the session is saved, the file is removed.
+
+        Example:
+            Check for the save-and-quit sentinel file::
+
+                path = session.save_and_quit_file_path()
+                print(os.path.exists(path))
+        """
         return os.path.join(self.info.path, "output", "save_and_quit")
 
     def save_and_quit(self):
-        """Save the session and quit the solver."""
+        """Save the session and quit the solver.
+
+        Example:
+            Ask a running solver to checkpoint and exit gracefully::
+
+                session.save_and_quit()
+                while session.is_running():
+                    time.sleep(1)
+        """
         open(
             self.save_and_quit_file_path(),
             "w",
@@ -1459,6 +2130,21 @@ class FixedSession:
             return None
 
     def update_options(self, options: dict) -> dict:
+        """Return a copy of ``options`` with missing defaults filled in.
+
+        Args:
+            options (dict): User-supplied render options.
+
+        Returns:
+            dict: A new dictionary combining ``options`` with the session's
+            default option values.
+
+        Example:
+            Add the session's default render flags to a user-provided
+            options dict::
+
+                opts = session.update_options({"flat_shading": True})
+        """
         options = dict(options)
         for key, value in self._default_opts.items():
             if key not in options:
@@ -1471,15 +2157,26 @@ class FixedSession:
         live_update: bool = True,
         engine: str = "threejs",
     ) -> Optional["Plot"]:
-        """Live view the session.
+        """Live-view the session inside a Jupyter notebook.
+
+        Outside Jupyter this is a no-op and returns ``None``.
 
         Args:
             options (dict, optional): The render options.
-            live_update (bool, optional): Whether to enable live update.
-            engine (str, optional): The rendering engine. Defaults to "threejs".
+            live_update (bool, optional): Whether to enable live updates.
+                Defaults to ``True``.
+            engine (str, optional): The rendering engine. Defaults to
+                ``"threejs"``.
 
         Returns:
-            Optional[Plot]: The plot object.
+            Optional[Plot]: The plot object, or ``None`` when not running
+            inside a Jupyter notebook.
+
+        Example:
+            Kick off a run and watch it in-notebook while tailing stdout::
+
+                session.start().preview()   # live frame playback
+                session.stream()            # tail solver stdout
         """
         if options is None:
             options = {}
@@ -1597,13 +2294,25 @@ class FixedSession:
     def animate(
         self, options: Optional[dict] = None, engine: str = "threejs"
     ) -> "FixedSession":
-        """Show the animation.
+        """Show the animation inside a Jupyter notebook.
+
+        Outside Jupyter this is a no-op. Loads all available frames from
+        disk and exposes a slider plus a reload button to pull in frames
+        produced after the initial load.
 
         Args:
             options (dict, optional): The render options.
+            engine (str, optional): The rendering engine. Defaults to
+                ``"threejs"``.
 
         Returns:
-            Session: The animated session.
+            FixedSession: This session.
+
+        Example:
+            Replay frames once the run has finished (or has enough frames
+            on disk)::
+
+                session.animate()
         """
         if options is None:
             options = {}
@@ -1710,13 +2419,23 @@ class FixedSession:
         return self
 
     def stream(self, n_lines=40) -> "FixedSession":
-        """Stream the session logs.
+        """Stream the tail of the session stdout log inside a Jupyter notebook.
+
+        Outside Jupyter this is a no-op.
 
         Args:
-            n_lines (int, optional): The number of lines to stream. Defaults to 40.
+            n_lines (int, optional): The number of trailing lines to
+                display. Defaults to ``40``.
 
         Returns:
-            Session: The session object.
+            FixedSession: This session.
+
+        Example:
+            Kick off a run and watch both the live preview and stdout tail
+            in a notebook cell::
+
+                session.start().preview()
+                session.stream()
         """
         if Utils.in_jupyter_notebook():
             import ipywidgets as widgets
@@ -1818,12 +2537,32 @@ class FixedSession:
 
     @property
     def fixed_scene(self) -> Optional[FixedScene]:
-        """Get the fixed scene."""
+        """Get the fixed scene.
+
+        Example:
+            Retrieve the bound scene from a fixed session::
+
+                fixed = app.session.create(scene).build()
+                scene_ref = fixed.fixed_scene
+        """
         return self._session.fixed_scene
 
 
 class Session:
-    """Class to setup a simulation session."""
+    """Class to setup a simulation session.
+
+    Instances are created via :meth:`SessionManager.create`, configured via
+    the :attr:`param` manager, then finalized with :meth:`build` to produce
+    a :class:`FixedSession`.
+
+    Example:
+        Configure a session and build it into a runnable fixed session::
+
+            session = app.session.create(scene)
+            session.param.set("frames", 120).set("dt", 0.01)
+            fixed_session = session.build()
+            fixed_session.start(blocking=True)
+    """
 
     def __init__(
         self,
@@ -1856,7 +2595,14 @@ class Session:
 
     @property
     def param(self) -> ParamManager:
-        """Get the session parameter manager."""
+        """Get the session parameter manager.
+
+        Example:
+            Configure solver parameters before building the session::
+
+                session = app.session.create(scene)
+                session.param.set("frames", 120).set("dt", 0.01)
+        """
         return self._param
 
     @property
@@ -1865,36 +2611,78 @@ class Session:
 
         Returns:
             Optional[FixedScene]: The fixed scene object.
+
+        Example:
+            Inspect the bound scene before finalizing::
+
+                session = app.session.create(scene)
+                print(session.fixed_scene)
         """
         return self._fixed_scene
 
     @property
     def fixed_session(self) -> Optional[FixedSession]:
-        """Get the fixed session.val
+        """Get the fixed session.
 
         Returns:
-            Optional[FixedSession]: The fixed session object.
+            Optional[FixedSession]: The fixed session object, or ``None`` if
+            :meth:`build` has not been called yet.
+
+        Example:
+            Access the built runnable session after calling :meth:`build`::
+
+                session = app.session.create(scene)
+                session.build()
+                fixed = session.fixed_session
         """
         return self._fixed_session
 
     @property
     def proj_root(self) -> str:
-        """Get the project root directory."""
+        """Get the project root directory.
+
+        Example:
+            Print the project root for the current session::
+
+                session = app.session.create(scene)
+                print(session.proj_root)
+        """
         return self._proj_root
 
     @property
     def app_name(self) -> str:
-        """Get the application name."""
+        """Get the application name.
+
+        Example:
+            Read the owning application name::
+
+                session = app.session.create(scene)
+                print(session.app_name)
+        """
         return self._app_name
 
     @property
     def name(self) -> str:
-        """Get the session name."""
+        """Get the session name.
+
+        Example:
+            Retrieve the session name for logging or display::
+
+                session = app.session.create(scene)
+                print(session.name)
+        """
         return self._name
 
     @property
     def app_root(self) -> str:
-        """Get the application root directory."""
+        """Get the application root directory.
+
+        Example:
+            Locate the application root on disk::
+
+                session = app.session.create(scene)
+                print(session.app_root)
+        """
         return self._app_root
 
     def _check_ready(self):
@@ -1903,18 +2691,40 @@ class Session:
             raise ValueError("Scene must be initialized")
 
     def init(self, scene: FixedScene) -> "Session":
-        """Initialize the session with a fixed scene.
+        """Attach a fixed scene to this session.
 
         Args:
             scene (FixedScene): The fixed scene.
 
         Returns:
-            Session: The initialized session.
+            Session: This session, for chaining.
+
+        Example:
+            :meth:`SessionManager.create` calls this internally, but it can
+            also be used to re-bind a scene to an existing session::
+
+                session.init(scene).param.set("frames", 60)
         """
         self._fixed_scene = scene
         return self
 
     def build(self) -> FixedSession:
+        """Build and persist a :class:`FixedSession` from this session.
+
+        Pickles the built session into its directory and creates a symlink
+        (or a ``.txt`` fallback on Windows without symlink privileges) under
+        the data dir for convenient access.
+
+        Returns:
+            FixedSession: The newly built fixed session.
+
+        Example:
+            Finalize a configured session and start it::
+
+                session.param.set("frames", 60).set("dt", 0.01)
+                fixed_session = session.build()
+                fixed_session.start(blocking=True)
+        """
         self._fixed_session = FixedSession(self)
         # Use app name with counter suffix if autogenerated
         if self._autogenerated is not None:
@@ -1930,7 +2740,7 @@ class Session:
     def _save_fixed_session(
         self, fixed_session: FixedSession, name: Optional[str] = None
     ):
-        """Saves the fixed session to a recoverable file and creates symlink."""
+        """Save the fixed session to a recoverable file and create a symlink."""
         session_path = os.path.join(
             fixed_session.info.path, RECOVERABLE_FIXED_SESSION_NAME
         )
@@ -1999,3 +2809,71 @@ def convert_integer(number) -> str:
         return f"{number / 1_000_000:.2f}M"
     else:
         return f"{number / 1_000_000_000:.2f}B"
+
+
+def read_average_summary_from_disk(session_root: str) -> dict:
+    """Read averaged simulation stats from .out files on disk.
+
+    Standalone function usable without a FixedSession — uses the same
+    docstring parser and metric definitions as SessionLog.average_summary().
+
+    Args:
+        session_root: Path to the session directory (containing output/data/*.out).
+
+    Returns:
+        dict with formatted stats (same format as SessionLog.average_summary).
+    """
+    data_dir = os.path.join(session_root, "output", "data")
+    if not os.path.isdir(data_dir):
+        return {}
+
+    # Discover log name → filename mapping from source code
+    src_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src")
+    from ._parse_ import CppRustDocStringParser
+    log_map = CppRustDocStringParser.get_logging_docstrings(src_path)
+
+    def _read_values(name: str):
+        if name not in log_map:
+            return None
+        path = os.path.join(data_dir, log_map[name]["filename"])
+        if not os.path.exists(path):
+            return None
+        values = []
+        with open(path) as f:
+            for line in f:
+                parts = line.strip().split()
+                if len(parts) >= 2:
+                    try:
+                        values.append(float(parts[1]))
+                    except ValueError:
+                        pass
+        return values if values else None
+
+    def _avg(name):
+        v = _read_values(name)
+        return sum(v) / len(v) if v else None
+
+    def _max(name):
+        v = _read_values(name)
+        return max(v) if v else None
+
+    result = {}
+    val = _avg("time-per-frame")
+    if val is not None:
+        result["time-per-frame"] = convert_time(val)
+    val = _avg("time-per-step")
+    if val is not None:
+        result["time-per-step"] = convert_time(val)
+    val = _max("num-contact")
+    if val is not None:
+        result["num-contact (max)"] = convert_integer(round(val))
+    val = _avg("newton-steps")
+    if val is not None:
+        result["newton-steps"] = f"{val:.2f}"
+    val = _avg("pcg-iter")
+    if val is not None:
+        result["pcg-iter"] = f"{val:.2f}"
+    val = _avg("max-sigma")
+    if val is not None and val > 0.0:
+        result["stretch"] = f"{100.0 * (val - 1.0):.2f}%"
+    return result

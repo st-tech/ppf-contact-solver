@@ -3,9 +3,9 @@
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
 # License: Apache v2.0
 
-"""
-Pure software rasterizer using NumPy and Numba.
-Lightweight headless rendering without heavy dependencies.
+"""Pure software rasterizer using NumPy and Numba.
+
+Provides lightweight headless rendering without heavy dependencies.
 """
 
 from typing import Optional
@@ -27,17 +27,19 @@ def _rasterize_triangles(
     light_dir: np.ndarray,
     ambient: float,
 ) -> None:
-    """Rasterize triangles with depth testing and simple lighting.
+    """Rasterize triangles with depth testing and two-sided diffuse lighting.
+
+    The framebuffer and depth buffer are modified in place.
 
     Args:
-        framebuffer: RGBA image buffer (H, W, 4) uint8
-        depth_buffer: Depth buffer (H, W) float32
-        screen_verts: Screen-space vertices (N, 4) [x, y, z, w]
-        colors: Vertex colors (N, 3) float32
-        normals: Vertex normals (N, 3) float32
-        faces: Triangle indices (F, 3) int32
-        light_dir: Normalized light direction (3,) float32
-        ambient: Ambient light intensity
+        framebuffer: RGBA image buffer (H, W, 4) uint8.
+        depth_buffer: Depth buffer (H, W) float32. Smaller values are nearer.
+        screen_verts: Screen-space vertices (N, 4) as [x, y, z, w].
+        colors: Vertex colors (N, 3) float32 in [0, 1].
+        normals: Vertex normals (N, 3) float32.
+        faces: Triangle indices (F, 3) int32.
+        light_dir: Normalized light direction (3,) float32.
+        ambient: Ambient light intensity in [0, 1].
     """
     height, width = framebuffer.shape[:2]
 
@@ -126,7 +128,12 @@ def _draw_line_bresenham(
     r1: float, g1: float, b1: float,
     line_width: int,
 ) -> None:
-    """Draw a single line using Bresenham's algorithm with no gaps."""
+    """Draw a single line using Bresenham's algorithm, interpolating depth and color.
+
+    Depth and color are linearly interpolated from endpoint 0 to endpoint 1 and
+    written into a square brush of side ``line_width`` centered on each pixel,
+    subject to a depth test.
+    """
     height, width = framebuffer.shape[:2]
     half_width = line_width // 2
 
@@ -191,13 +198,15 @@ def _rasterize_lines(
 ) -> None:
     """Rasterize line segments with depth testing using Bresenham's algorithm.
 
+    The framebuffer and depth buffer are modified in place.
+
     Args:
-        framebuffer: RGBA image buffer (H, W, 4) uint8
-        depth_buffer: Depth buffer (H, W) float32
-        screen_verts: Screen-space vertices (N, 4) [x, y, z, w]
-        colors: Vertex colors (N, 3) float32
-        segments: Line segment indices (S, 2) int32
-        line_width: Line width in pixels
+        framebuffer: RGBA image buffer (H, W, 4) uint8.
+        depth_buffer: Depth buffer (H, W) float32. Smaller values are nearer.
+        screen_verts: Screen-space vertices (N, 4) as [x, y, z, w].
+        colors: Vertex colors (N, 3) float32 in [0, 1].
+        segments: Line segment indices (S, 2) int32.
+        line_width: Line width in pixels.
     """
     for si in prange(len(segments)):
         i0, i1 = segments[si]
@@ -221,7 +230,11 @@ def _rasterize_lines(
 
 
 def _compute_normals(vertices: np.ndarray, faces: np.ndarray) -> np.ndarray:
-    """Compute per-vertex normals from faces."""
+    """Compute per-vertex normals as the normalized sum of incident face normals.
+
+    Face areas contribute to the accumulated weights because the raw cross
+    product is used (not a unit normal) before accumulation.
+    """
     normals = np.zeros_like(vertices, dtype=np.float32)
 
     if len(faces) == 0:
@@ -250,7 +263,7 @@ def _compute_normals(vertices: np.ndarray, faces: np.ndarray) -> np.ndarray:
 
 
 def _ortho_matrix(left: float, right: float, bottom: float, top: float, near: float, far: float) -> np.ndarray:
-    """Create orthographic projection matrix."""
+    """Return an orthographic projection matrix for the given view volume."""
     return np.array([
         [2 / (right - left), 0, 0, -(right + left) / (right - left)],
         [0, 2 / (top - bottom), 0, -(top + bottom) / (top - bottom)],
@@ -262,10 +275,17 @@ def _ortho_matrix(left: float, right: float, bottom: float, top: float, near: fl
 class SoftwareRenderer:
     """Software rasterizer for headless mesh rendering.
 
-    Pure numpy/numba implementation that works on all platforms.
+    A pure NumPy/Numba implementation that works on all platforms without
+    requiring a GPU or windowing system.
     """
 
     def __init__(self, args: Optional[dict] = None):
+        """Initialize the renderer.
+
+        Args:
+            args (Optional[dict]): Optional configuration. Recognized keys are
+                ``width`` (default 640) and ``height`` (default 480).
+        """
         if args is None:
             args = {}
         self._width = args.get("width", 640)
@@ -283,17 +303,23 @@ class SoftwareRenderer:
         face: np.ndarray,
         output: Optional[str],
     ) -> Optional[np.ndarray]:
-        """Render a mesh with vertex colors.
+        """Render a mesh with vertex colors to a file or a numpy array.
+
+        The mesh is centered, rotated slightly, and scaled to fit into the
+        orthographic view volume before rasterization. The output is RGBA on a
+        white background.
 
         Args:
-            vert: Vertices (N, 3)
-            color: Vertex colors (N, 3) or (N, 4)
-            seg: Line segments (S, 2)
-            face: Triangle faces (F, 3)
-            output: Output file path (None to return array)
+            vert: Vertices (N, 3).
+            color: Vertex colors (N, 3) or (N, 4); the alpha channel is dropped
+                when four components are provided.
+            seg: Line segment indices (S, 2).
+            face: Triangle face indices (F, 3).
+            output: Output file path, or ``None`` to return the image buffer.
 
         Returns:
-            RGBA image as numpy array if output is None
+            Optional[np.ndarray]: The RGBA image buffer (H, W, 4) uint8 when
+            ``output`` is ``None``, otherwise ``None``.
         """
         width, height = self._width, self._height
 

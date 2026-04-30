@@ -17,6 +17,8 @@ use args::{ProgramArgs, SimArgs};
 use backend::MeshSet;
 use clap::Parser;
 use data::{DataSet, EdgeParam, EdgeProp, ParamSet};
+use rayon::prelude::*;
+use std::collections::HashMap;
 use flate2::{read::GzDecoder, write::GzEncoder, Compression};
 use log::*;
 use log4rs::append::console::ConsoleAppender;
@@ -25,7 +27,6 @@ use log4rs::encode::pattern::PatternEncoder;
 use mesh::Mesh as SimMesh;
 use more_asserts::*;
 use scene::Scene;
-use std::collections::HashMap;
 use std::ffi::CString;
 use std::fs::OpenOptions;
 use std::io::{Read, Write};
@@ -34,9 +35,15 @@ use {builder::Props, cvec::CVec};
 
 extern crate nalgebra as na;
 
+#[cfg(not(feature = "emulated"))]
 extern "C" {
     fn set_log_path(data_dir: *const c_char);
 }
+
+// Emulated build provides a Rust no-op so the call site in setup() stays
+// identical between modes. The C++ logger doesn't exist in this build.
+#[cfg(feature = "emulated")]
+unsafe fn set_log_path(_data_dir: *const c_char) {}
 
 #[no_mangle]
 extern "C" fn print_rust(message: *const libc::c_char) {
@@ -108,16 +115,22 @@ fn main() {
         }
 
         info!("Processing edge properties...");
-        let mut edge_prop = Vec::new();
-        for i in 0..mesh.mesh.mesh.edge.ncols() {
-            let rod = mesh.mesh.mesh.edge.column(i);
-            let x0 = mesh.vertex.column(rod[0]);
-            let x1 = mesh.vertex.column(rod[1]);
-            if i < mesh.mesh.mesh.rod_count {
-                let prop = props.edge[i];
-                total_rod_mass += prop.mass;
-                edge_prop.push(prop);
-            } else {
+        // Process rod edges (sequential, small count)
+        for i in 0..mesh.mesh.mesh.rod_count {
+            let prop = props.edge[i];
+            total_rod_mass += prop.mass;
+        }
+
+        // Process non-rod edges (parallelized)
+        // Phase 1: Parallel computation
+        let rod_count = mesh.mesh.mesh.rod_count;
+        let edge_count = mesh.mesh.mesh.edge.ncols();
+        let non_rod_edge_data: Vec<(f32, EdgeParam)> = (rod_count..edge_count)
+            .into_par_iter()
+            .map(|i| {
+                let rod = mesh.mesh.mesh.edge.column(i);
+                let x0 = mesh.vertex.column(rod[0]);
+                let x1 = mesh.vertex.column(rod[1]);
                 let length = (x1 - x0).norm();
                 let mut ghat_sum = 0.0;
                 let mut offset_sum = 0.0;
@@ -136,28 +149,35 @@ fn main() {
                 let ghat = ghat_sum / area_sum;
                 let offset = offset_sum / area_sum;
                 let friction = friction_sum / area_sum;
-
-                // Create edge param and deduplicate
                 let param = EdgeParam {
                     stiffness: 0.0,
                     bend: 0.0,
                     ghat,
                     offset,
                     friction,
+                    strainlimit: 0.0,
+                    plasticity: 0.0,
+                    plasticity_threshold: 0.0,
+                    bend_rest_from_geometry: false,
                 };
-                let param_idx = *edge_param_map.entry(param).or_insert_with(|| {
-                    let new_idx = props.edge_params.len() as u32;
-                    props.edge_params.push(param);
-                    new_idx
-                });
+                (length, param)
+            })
+            .collect();
 
-                props.edge.push(EdgeProp {
-                    length,
-                    mass: 0.0,
-                    fixed: false,
-                    param_index: param_idx,
-                });
-            }
+        // Phase 2: Sequential deduplication
+        for (length, param) in non_rod_edge_data {
+            let param_idx = *edge_param_map.entry(param).or_insert_with(|| {
+                let new_idx = props.edge_params.len() as u32;
+                props.edge_params.push(param);
+                new_idx
+            });
+            props.edge.push(EdgeProp {
+                length,
+                initial_length: length,
+                mass: 0.0,
+                fixed: false,
+                param_index: param_idx,
+            });
         }
 
         for prop in props.tet.iter() {
@@ -280,6 +300,14 @@ fn setup(program_args: &ProgramArgs) {
 
     if !std::path::Path::new(&program_args.output).exists() {
         std::fs::create_dir_all(&program_args.output).unwrap_or(());
+    }
+    // ``output/data/`` holds the per-frame .out streams (total_mass,
+    // time_per_frame, frame_to_time, ...). Nothing else creates it,
+    // so a fresh run on a clean output dir hits NotFound when the
+    // first writeln! fires. Make sure the dir exists up-front.
+    let data_dir = format!("{}/data", program_args.output);
+    if !std::path::Path::new(&data_dir).exists() {
+        std::fs::create_dir_all(&data_dir).unwrap_or(());
     }
     let save_and_quit_path =
         std::path::Path::new(program_args.output.as_str()).join("save_and_quit");

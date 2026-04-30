@@ -1,0 +1,106 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 820 420" role="img" aria-label="Blender Z-up vs solver Y-up coordinate conversion">
+  <title>Z-up (Blender) vs Y-up (solver) coordinate conversion</title>
+  <desc>
+    Two right-handed coordinate triads placed side by side. On the left,
+    the Blender frame has X pointing right, Y pointing diagonally into
+    the page, and Z pointing straight up. On the right, the solver frame
+    has X pointing right, Y pointing straight up, and Z pointing
+    diagonally toward the viewer (out of the page). An arrow between
+    them is labeled with the conversion rule: a Blender vector
+    (x, y, z) is shipped to the solver as [x, z, -y], and solver results
+    are un-flipped the same way on fetch.
+  </desc>
+
+  <defs>
+    <!-- Arrowheads per axis color -->
+    <marker id="arrow-x" viewBox="0 0 10 10" refX="9" refY="5"
+            markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#c93b3b" />
+    </marker>
+    <marker id="arrow-y" viewBox="0 0 10 10" refX="9" refY="5"
+            markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#3a8a3a" />
+    </marker>
+    <marker id="arrow-z" viewBox="0 0 10 10" refX="9" refY="5"
+            markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#2e6da4" />
+    </marker>
+    <marker id="arrow-map" viewBox="0 0 10 10" refX="9" refY="5"
+            markerWidth="10" markerHeight="10" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#555" />
+    </marker>
+  </defs>
+
+  <style>
+    .title   { font: 700 20px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #1a1a1a; }
+    .subtitle{ font: italic 13px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #555; }
+    .axisx   { stroke: #c93b3b; stroke-width: 3; fill: none; }
+    .axisy   { stroke: #3a8a3a; stroke-width: 3; fill: none; }
+    .axisz   { stroke: #2e6da4; stroke-width: 3; fill: none; }
+    .lbl-x   { font: 700 16px -apple-system, sans-serif; fill: #c93b3b; }
+    .lbl-y   { font: 700 16px -apple-system, sans-serif; fill: #3a8a3a; }
+    .lbl-z   { font: 700 16px -apple-system, sans-serif; fill: #2e6da4; }
+    .note    { font: 12px -apple-system, sans-serif; fill: #666; }
+    .origin  { fill: #333; }
+    .hdr-bg-b { fill: #f2f4f8; }
+    .hdr-bg-s { fill: #eef6eb; }
+    .divider { stroke: #bbb; stroke-width: 1; stroke-dasharray: 3 3; }
+    .map     { stroke: #555; stroke-width: 2; fill: none; }
+    .map-tx  { font: 600 14px -apple-system, "Menlo", monospace; fill: #1a1a1a; }
+    .map-nt  { font: italic 12px -apple-system, sans-serif; fill: #666; }
+  </style>
+
+  <!-- Header bands -->
+  <rect x="0"   y="0" width="360" height="60" class="hdr-bg-b" />
+  <rect x="460" y="0" width="360" height="60" class="hdr-bg-s" />
+
+  <!-- Titles -->
+  <text x="180" y="28" text-anchor="middle" class="title">Blender</text>
+  <text x="180" y="48" text-anchor="middle" class="subtitle">Z-up, right-handed</text>
+  <text x="640" y="28" text-anchor="middle" class="title">Solver</text>
+  <text x="640" y="48" text-anchor="middle" class="subtitle">Y-up, right-handed</text>
+
+  <!-- Left: Blender triad -->
+  <!-- origin at (180, 260) -->
+  <!-- X axis: right, +140 along +x -->
+  <line x1="180" y1="260" x2="320" y2="260" class="axisx" marker-end="url(#arrow-x)" />
+  <text x="330" y="265" class="lbl-x">X</text>
+  <!-- Y axis: up-left-ish diagonal (into screen); vector (-100, -58) -->
+  <line x1="180" y1="260" x2="80" y2="202" class="axisy" marker-end="url(#arrow-y)" />
+  <text x="58" y="195" class="lbl-y">Y</text>
+  <!-- Z axis: straight up, length 140 -->
+  <line x1="180" y1="260" x2="180" y2="120" class="axisz" marker-end="url(#arrow-z)" />
+  <text x="188" y="118" class="lbl-z">Z (up)</text>
+  <!-- Origin dot -->
+  <circle cx="180" cy="260" r="3.5" class="origin" />
+  <text x="180" y="330" text-anchor="middle" class="note">X right · Y into scene · Z up</text>
+
+  <!-- Divider -->
+  <line x1="410" y1="80" x2="410" y2="360" class="divider" />
+
+  <!-- Conversion arrow / label between columns -->
+  <line x1="370" y1="210" x2="450" y2="210" class="map" marker-end="url(#arrow-map)" />
+  <text x="410" y="192" text-anchor="middle" class="map-tx">(x, y, z)</text>
+  <text x="410" y="235" text-anchor="middle" class="map-tx">[x, z, -y]</text>
+  <text x="410" y="255" text-anchor="middle" class="map-nt">encode to solver</text>
+  <!-- Return arrow (below) -->
+  <line x1="450" y1="320" x2="370" y2="320" class="map" marker-end="url(#arrow-map)" />
+  <text x="410" y="305" text-anchor="middle" class="map-tx">[X, Y, Z]</text>
+  <text x="410" y="345" text-anchor="middle" class="map-tx">(X, -Z, Y)</text>
+  <text x="410" y="365" text-anchor="middle" class="map-nt">decode on fetch</text>
+
+  <!-- Right: Solver triad -->
+  <!-- origin at (640, 260) -->
+  <!-- X axis: right -->
+  <line x1="640" y1="260" x2="780" y2="260" class="axisx" marker-end="url(#arrow-x)" />
+  <text x="790" y="265" class="lbl-x">X</text>
+  <!-- Y axis: straight up -->
+  <line x1="640" y1="260" x2="640" y2="120" class="axisy" marker-end="url(#arrow-y)" />
+  <text x="648" y="118" class="lbl-y">Y (up)</text>
+  <!-- Z axis: down-left-ish diagonal (out of screen, toward viewer); vector (-100, +58) -->
+  <line x1="640" y1="260" x2="540" y2="318" class="axisz" marker-end="url(#arrow-z)" />
+  <text x="518" y="330" class="lbl-z">Z</text>
+  <!-- Origin dot -->
+  <circle cx="640" cy="260" r="3.5" class="origin" />
+  <text x="640" y="378" text-anchor="middle" class="note">X right · Y up · Z toward viewer</text>
+</svg>

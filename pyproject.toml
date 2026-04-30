@@ -1,0 +1,112 @@
+[tool.ruff]
+# Exclude a variety of commonly ignored directories.
+exclude = [
+    ".bzr",
+    ".direnv",
+    ".eggs",
+    ".git",
+    ".git-rewrite",
+    ".hg",
+    ".ipynb_checkpoints",
+    ".mypy_cache",
+    ".nox",
+    ".pants.d",
+    ".pyenv",
+    ".pytest_cache",
+    ".pytype",
+    ".ruff_cache",
+    ".svn",
+    ".tox",
+    ".vscode",
+    "__pypackages__",
+    "_build",
+    "buck-out",
+    "build",
+    "dist",
+    "node_modules",
+    "site-packages",
+    "venv",
+    "lib",  # Exclude the lib directory with installed packages
+    "blender-mcp",  # Exclude the blender-mcp directory
+]
+
+# Same as Black.
+line-length = 88
+indent-width = 4
+
+# Assume Python 3.11
+target-version = "py311"
+
+[tool.ruff.lint]
+# Enable Pyflakes (`F`) and a subset of the pycodestyle (`E`) codes by default.
+# Unlike Flake8, Ruff doesn't enable pycodestyle warnings (`W`) or
+# McCabe complexity (`C901`) by default.
+select = [
+    "E4",
+    "E7",
+    "E9",
+    "F",
+    "W",
+    "I",      # isort
+    "N",      # pep8-naming  
+    "UP",     # pyupgrade
+    "B",      # flake8-bugbear
+    "C4",     # flake8-comprehensions
+    "PIE",    # flake8-pie
+    "SIM",    # flake8-simplify
+    "TCH",    # flake8-type-checking
+]
+
+ignore = [
+    "E501",   # Line too long (handled by formatter)
+    "F401",   # Unused import (common in __init__.py files)
+    "F403",   # Star imports (common in Blender addons)
+    "N801",   # Class name should use CapWords (Blender operators use PREFIX_OT_Name)
+    "N802",   # Function name should be lowercase (Blender API uses camelCase)
+    "N803",   # Argument name should be lowercase (Blender API uses camelCase)
+    "N806",   # Variable in function should be lowercase (Blender API uses camelCase)
+    "B008",   # Do not perform function calls in argument defaults (common in Blender)
+    "UP007",  # Use X | Y for type annotations (prefer Optional[X])
+    "UP045",  # Use X | None for type annotations (prefer Optional[X])
+]
+
+# Allow fix for all enabled rules (when `--fix`) is provided.
+fixable = ["ALL"]
+unfixable = []
+
+# Allow unused variables when underscore-prefixed.
+dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
+
+[tool.ruff.format]
+# Like Black, use double quotes for strings.
+quote-style = "double"
+
+# Like Black, indent with spaces, rather than tabs.
+indent-style = "space"
+
+# Like Black, respect magic trailing commas.
+skip-magic-trailing-comma = false
+
+# Like Black, automatically detect the appropriate line ending.
+line-ending = "auto"
+
+# Enable auto-formatting of code examples in docstrings. Markdown,
+# reStructuredText code/literal blocks and doctests are all supported.
+docstring-code-format = false
+
+# Set the line length limit used when formatting code snippets in
+# docstrings.
+docstring-code-line-length = "dynamic"
+
+[tool.ruff.lint.per-file-ignores]
+# Ignore specific rules for Blender addon files
+"blender_addon/__init__.py" = ["F401", "F403"]
+"blender_addon/ui/*.py" = ["N802", "N803", "N806"]
+"blender_addon/core/*.py" = ["N802", "N803", "N806"]
+"blender_addon/mcp/*.py" = ["N802", "N803", "N806"]
+
+[tool.ruff.lint.isort]
+# Use a single line between direct and from import
+lines-between-types = 1
+# Place imports for the current package in a separate section
+known-first-party = ["blender_addon"]

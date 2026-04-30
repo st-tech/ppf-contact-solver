@@ -102,10 +102,10 @@ jobs:
           echo "Examples: {examples_list}"
 
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Configure AWS credentials via OIDC
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{{{ secrets.AWS_ROLE_ARN }}}}
           aws-region: ${{{{ env.AWS_REGION }}}}
@@ -159,7 +159,7 @@ jobs:
       - name: Create EC2 key pair
         id: keypair
         run: |
-          KEY_NAME="win-batch-{idx}-${{{{ steps.ids.outputs.TIMESTAMP }}}}"
+          KEY_NAME="win-batch-{idx}-${{{{ steps.ids.outputs.TIMESTAMP }}}}-${{{{ github.run_id }}}}"
           echo "::add-mask::$KEY_NAME"
           echo "KEY_NAME=$KEY_NAME" >> $GITHUB_OUTPUT
 
@@ -419,7 +419,7 @@ jobs:
 
       - name: Upload artifact
         if: success() || failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ci-win-batch-{idx}
           path: ci
@@ -449,7 +449,7 @@ jobs:
       - name: Re-authenticate for cleanup
         if: always()
         continue-on-error: true
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{{{ secrets.AWS_ROLE_ARN }}}}
           aws-region: ${{{{ env.AWS_REGION }}}}

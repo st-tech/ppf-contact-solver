@@ -35,7 +35,9 @@ def _solve_2x2(a00: float, a01: float, a10: float, a11: float, b0: float, b1: fl
 def point_edge_distance_coeff(
     p: np.ndarray, e0: np.ndarray, e1: np.ndarray
 ) -> np.ndarray:
-    """Find barycentric coordinates of closest point on edge to point p."""
+    """Find barycentric coordinates of the closest point on the infinite line
+    through ``e0`` and ``e1`` to point ``p``. Returns ``[0.5, 0.5]`` when the
+    edge is degenerate."""
     r = e1 - e0
     d = _dot(r, r)
     if d > 0.0:
@@ -49,7 +51,8 @@ def point_edge_distance_coeff(
 def point_edge_distance_coeff_clamped(
     p: np.ndarray, e0: np.ndarray, e1: np.ndarray
 ) -> np.ndarray:
-    """Find clamped barycentric coordinates of closest point on edge segment."""
+    """Find barycentric coordinates of the closest point on the edge segment
+    ``[e0, e1]`` to ``p``, clamped to ``[0, 1]``."""
     c = point_edge_distance_coeff(p, e0, e1)
     if c[0] >= 0.0 and c[0] <= 1.0:
         return c
@@ -63,7 +66,9 @@ def point_edge_distance_coeff_clamped(
 def point_triangle_distance_coeff(
     p: np.ndarray, t0: np.ndarray, t1: np.ndarray, t2: np.ndarray
 ) -> np.ndarray:
-    """Find barycentric coordinates of closest point on triangle plane to point p."""
+    """Find barycentric coordinates of the closest point on the triangle's
+    supporting plane to ``p``. Falls back to the longest edge when the
+    triangle is degenerate."""
     r0 = t1 - t0
     r1 = t2 - t0
     dp = p - t0
@@ -101,7 +106,8 @@ def point_triangle_distance_coeff(
 def point_triangle_distance_coeff_clamped(
     p: np.ndarray, t0: np.ndarray, t1: np.ndarray, t2: np.ndarray
 ) -> np.ndarray:
-    """Find clamped barycentric coordinates of closest point on triangle."""
+    """Find barycentric coordinates of the closest point on the triangle
+    ``(t0, t1, t2)`` to ``p``, clamped to the triangle's interior."""
     c = point_triangle_distance_coeff(p, t0, t1, t2)
 
     if (
@@ -125,7 +131,8 @@ def point_triangle_distance_coeff_clamped(
 def edge_edge_distance_coeff(
     ea0: np.ndarray, ea1: np.ndarray, eb0: np.ndarray, eb1: np.ndarray
 ) -> np.ndarray:
-    """Find coefficients for closest points between two edges."""
+    """Find coefficients ``[1-ta, ta, 1-tb, tb]`` parameterising the closest
+    points between the lines through ``(ea0, ea1)`` and ``(eb0, eb1)``."""
     r0 = ea1 - ea0
     r1 = eb1 - eb0
     d = eb0 - ea0
@@ -177,7 +184,9 @@ def edge_edge_distance_coeff(
 def edge_edge_distance_coeff_clamped(
     ea0: np.ndarray, ea1: np.ndarray, eb0: np.ndarray, eb1: np.ndarray
 ) -> np.ndarray:
-    """Find clamped coefficients for closest points between two edge segments."""
+    """Find coefficients ``[1-ta, ta, 1-tb, tb]`` for the closest points
+    between the edge segments ``[ea0, ea1]`` and ``[eb0, eb1]``, clamped
+    to each segment."""
     c = edge_edge_distance_coeff(ea0, ea1, eb0, eb1)
 
     if (

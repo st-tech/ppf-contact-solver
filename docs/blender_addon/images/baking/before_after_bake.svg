@@ -1,0 +1,164 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 560" role="img" aria-label="Bake Animation: before and after. Before: object carries a ContactSolverCache MESH_CACHE modifier pointing at a per-object PC2 file on disk, is assigned to a Dynamics Group, and has pin vertex groups attached. After: modifier gone, PC2 file deleted from disk, assignment cleared, pin vertex groups removed, and the animation now lives in per-frame shape keys plus their value fcurves">
+  <title>Bake Animation: before and after state</title>
+  <desc>
+    Two-column before and after diagram for the Bake Animation
+    operator on a mesh object. Before state on the left shows the
+    mesh carrying a ContactSolverCache MESH_CACHE modifier with
+    format PC2 pointing at a per-object PC2 cache file under
+    blend_dir slash data slash blend_basename, plus pin vertex
+    groups like ShoulderPins and CollarPins, plus membership in a
+    Dynamics Group such as Cloth Shell. A disk block under the mesh
+    shows the PC2 file on disk. After state on the right shows the
+    same mesh with the modifier gone, the pin vertex groups
+    removed, the Dynamics Group assignment cleared, and the
+    animation now stored as one shape key per fetched frame named
+    ContactSolverBake_NNNNN plus the matching value fcurves. The
+    disk block under the mesh shows the PC2 file deleted. A central
+    arrow labeled Bake Animation destructive connects the two
+    panels; the destructive label is in red. A footer notes that
+    rods bake to per-control-point keyframes on the curve instead
+    of shape keys, and that Abort during a modal bake restores the
+    pre-bake state in full.
+  </desc>
+
+  <defs>
+    <marker id="b-arrow" viewBox="0 0 10 10" refX="9" refY="5"
+            markerWidth="12" markerHeight="12" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#b03838" />
+    </marker>
+  </defs>
+
+  <style>
+    .title       { font: 700 17px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #1a1a1a; }
+    .sub         { font: 13px -apple-system, sans-serif; fill: #555; }
+
+    .col-title   { font: 700 16px -apple-system, sans-serif; fill: #1a1a1a; }
+    .col-sub     { font: italic 12px -apple-system, sans-serif; fill: #555; }
+
+    .panel-box   { fill: #fafbfd; stroke: #aab4c4; stroke-width: 1.3; }
+    .panel-box-after { fill: #f8fafa; stroke: #aab4c4; stroke-width: 1.3; }
+
+    .obj-box     { fill: #e9eef7; stroke: #6a85a8; stroke-width: 1.2; }
+    .obj-lbl     { font: 700 13px -apple-system, sans-serif; fill: #1a1a1a; }
+
+    .mod-box     { fill: #fff3e0; stroke: #d7a95a; stroke-width: 1.2; }
+    .mod-box-off { fill: #f2f2f2; stroke: #c0c0c0; stroke-width: 1; stroke-dasharray: 5 3; }
+
+    .sk-box      { fill: #eef6eb; stroke: #86b36a; stroke-width: 1.2; }
+    .vg-box      { fill: #f8f0f4; stroke: #b080a0; stroke-width: 1.2; }
+    .grp-box     { fill: #fbf6e4; stroke: #c9a63a; stroke-width: 1.2; }
+    .disk-box    { fill: #f1eee6; stroke: #a0937a; stroke-width: 1.2; }
+    .disk-box-del{ fill: #f8f2f2; stroke: #b09090; stroke-width: 1; stroke-dasharray: 5 3; }
+
+    .hdr-t       { font: 700 12.5px -apple-system, sans-serif; fill: #1a1a1a; }
+    .hdr-mono    { font: 600 11px "Menlo", "Consolas", monospace; fill: #1a1a1a; }
+    .hdr-mono-m  { font: 600 11px "Menlo", "Consolas", monospace; fill: #555; }
+    .hdr-muted   { font: 11.5px -apple-system, sans-serif; fill: #999; font-style: italic; }
+    .hdr-off     { font: 600 11px "Menlo", "Consolas", monospace; fill: #aaa; }
+
+    .arr-main    { stroke: #b03838; stroke-width: 2.8; fill: none; }
+    .arr-lbl     { font: 700 15px -apple-system, sans-serif; fill: #a02a2a; }
+    .arr-sub     { font: 700 12px -apple-system, sans-serif; fill: #a02a2a; }
+
+    .note        { font: 11.5px -apple-system, sans-serif; fill: #555; }
+    .note-em     { font: 700 11.5px -apple-system, sans-serif; fill: #1a1a1a; }
+
+    .removed-x   { font: 700 16px -apple-system, sans-serif; fill: #b03838; }
+  </style>
+
+  <!-- Title -->
+  <text x="20" y="30" class="title">Bake Animation: before and after</text>
+  <text x="20" y="50" class="sub">The modifier and the PC2 file are the add-on's. Shape keys and fcurves are the object's own. Baking is the one-way handoff.</text>
+
+  <!-- ============ Left panel: BEFORE ============ -->
+  <rect x="20" y="70" width="430" height="460" rx="10" class="panel-box" />
+  <text x="40" y="94" class="col-title">Before: while iterating</text>
+  <text x="40" y="112" class="col-sub">Add-on drives playback; cache lives on disk.</text>
+
+  <!-- Object header -->
+  <rect x="40" y="130" width="390" height="36" rx="6" class="obj-box" />
+  <text x="54" y="152" class="obj-lbl">Cube  (mesh)</text>
+  <text x="188" y="152" class="hdr-muted">assigned to group, pinned, cached</text>
+
+  <!-- Modifier block -->
+  <rect x="40" y="180" width="390" height="68" rx="6" class="mod-box" />
+  <text x="54" y="200" class="hdr-t">Modifier stack</text>
+  <text x="54" y="220" class="hdr-mono">[1]  ContactSolverCache   (MESH_CACHE)</text>
+  <text x="74" y="236" class="hdr-mono-m">Format:  PC2</text>
+
+  <!-- File path detail under modifier -->
+  <rect x="40" y="258" width="390" height="38" rx="6" class="disk-box" />
+  <text x="54" y="276" class="hdr-t">On disk</text>
+  <text x="54" y="290" class="hdr-mono">&lt;blend_dir&gt;/data/&lt;basename&gt;/Cube.pc2</text>
+
+  <!-- Vertex groups -->
+  <rect x="40" y="308" width="390" height="54" rx="6" class="vg-box" />
+  <text x="54" y="326" class="hdr-t">Vertex groups (pins)</text>
+  <text x="54" y="342" class="hdr-mono">ShoulderPins</text>
+  <text x="54" y="356" class="hdr-mono">CollarPins</text>
+
+  <!-- Group membership -->
+  <rect x="40" y="374" width="390" height="36" rx="6" class="grp-box" />
+  <text x="54" y="396" class="hdr-t">Dynamics Group:  <tspan class="hdr-mono">Cloth  (Shell)</tspan></text>
+
+  <!-- Shape keys: none -->
+  <rect x="40" y="422" width="390" height="36" rx="6" class="mod-box-off" />
+  <text x="54" y="444" class="hdr-off">Shape keys:  (none)</text>
+
+  <!-- fcurves: none -->
+  <rect x="40" y="470" width="390" height="36" rx="6" class="mod-box-off" />
+  <text x="54" y="492" class="hdr-off">Value fcurves:  (none)</text>
+
+  <!-- ============ Center arrow ============ -->
+  <line x1="458" y1="290" x2="542" y2="290" class="arr-main" marker-end="url(#b-arrow)" />
+  <text x="500" y="275" text-anchor="middle" class="arr-lbl">Bake Animation</text>
+  <text x="500" y="316" text-anchor="middle" class="arr-sub">destructive · irreversible</text>
+
+  <!-- ============ Right panel: AFTER ============ -->
+  <rect x="550" y="70" width="430" height="460" rx="10" class="panel-box-after" />
+  <text x="570" y="94" class="col-title">After: self-contained Blender animation</text>
+  <text x="570" y="112" class="col-sub">Plays without the add-on; renders on any farm.</text>
+
+  <!-- Object header -->
+  <rect x="570" y="130" width="390" height="36" rx="6" class="obj-box" />
+  <text x="584" y="152" class="obj-lbl">Cube  (mesh)</text>
+  <text x="718" y="152" class="hdr-muted">animation lives on the object</text>
+
+  <!-- Modifier gone -->
+  <rect x="570" y="180" width="390" height="68" rx="6" class="mod-box-off" />
+  <text x="584" y="200" class="hdr-t">Modifier stack</text>
+  <text x="584" y="222" class="hdr-off">[ ]  ContactSolverCache    (removed)</text>
+  <text x="944" y="222" text-anchor="end" class="removed-x">✗</text>
+  <text x="584" y="238" class="hdr-muted">slot freed; no further cache-modifier playback</text>
+
+  <!-- File on disk: deleted -->
+  <rect x="570" y="258" width="390" height="38" rx="6" class="disk-box-del" />
+  <text x="584" y="276" class="hdr-t">On disk</text>
+  <text x="584" y="290" class="hdr-off">&lt;blend_dir&gt;/data/&lt;basename&gt;/Cube.pc2</text>
+  <text x="944" y="290" text-anchor="end" class="removed-x">✗</text>
+
+  <!-- Vertex groups cleared -->
+  <rect x="570" y="308" width="390" height="54" rx="6" class="mod-box-off" />
+  <text x="584" y="326" class="hdr-t">Vertex groups (pins)</text>
+  <text x="584" y="342" class="hdr-off">ShoulderPins   (removed)</text>
+  <text x="584" y="356" class="hdr-off">CollarPins     (removed)</text>
+  <text x="944" y="344" text-anchor="end" class="removed-x">✗</text>
+
+  <!-- Group membership cleared -->
+  <rect x="570" y="374" width="390" height="36" rx="6" class="mod-box-off" />
+  <text x="584" y="396" class="hdr-t">Dynamics Group:  <tspan class="hdr-off">(cleared)</tspan></text>
+  <text x="944" y="396" text-anchor="end" class="removed-x">✗</text>
+
+  <!-- Shape keys appear -->
+  <rect x="570" y="422" width="390" height="36" rx="6" class="sk-box" />
+  <text x="584" y="440" class="hdr-t">Shape keys  (one per fetched frame)</text>
+  <text x="584" y="454" class="hdr-mono">ContactSolverBake_00001, _00002, …</text>
+
+  <!-- fcurves appear -->
+  <rect x="570" y="470" width="390" height="36" rx="6" class="sk-box" />
+  <text x="584" y="488" class="hdr-t">Value fcurves  (CONSTANT, 0→1→0)</text>
+  <text x="584" y="502" class="hdr-mono">one shape-key value channel per frame</text>
+
+  <!-- Footer -->
+  <text x="20" y="548" class="note"><tspan class="note-em">Curves (rods)</tspan> bake to per-control-point keyframes on <tspan class="hdr-mono">co</tspan> / <tspan class="hdr-mono">handle_left</tspan> / <tspan class="hdr-mono">handle_right</tspan> instead of shape keys, but the same cleanup (modifier, pin VGs, group assignment, PC2 file) applies. <tspan class="note-em">Abort</tspan> during a modal bake restores the full pre-bake state.</text>
+</svg>

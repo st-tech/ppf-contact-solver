@@ -3,7 +3,6 @@
 // Review: Ryoichi Ando (ryoichi.ando@zozo.com)
 // License: Apache v2.0
 
-
 use nalgebra::{Matrix3xX, Matrix4xX};
 
 pub fn area(x: &Matrix3xX<f32>, faces: &Matrix3xX<usize>, index: usize) -> f32 {

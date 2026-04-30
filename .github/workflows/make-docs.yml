@@ -20,16 +20,20 @@ concurrency:
 jobs:
   # Build job
   build:
+    # Only build/deploy from the main branch. Triggering workflow_dispatch
+    # against any other ref (e.g. dev, which carries private source) is a
+    # no-op so private content can't reach GitHub Pages.
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
-      - name: Setup environment
-        run: python3 warmup.py --skip-confirmation
-      - name: Install docs dependencies
-        run: $HOME/.local/share/ppf-cts/venv/bin/python3 warmup.py docs-prepare
+        uses: actions/checkout@v5
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
       - name: Build Docs
-        run: $HOME/.local/share/ppf-cts/venv/bin/python3 warmup.py docs-build
+        run: bash docs/build.sh
       - name: List Artifacts
         run: ls -al ./docs/_build/
       - name: Upload Artifact
@@ -41,6 +45,7 @@ jobs:
 
   # Deployment job
   deploy:
+    if: github.ref == 'refs/heads/main'
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}

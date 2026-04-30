@@ -1,0 +1,96 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 360" role="img" aria-label="Docker over SSH transport topology: the add-on lives on the Blender workstation while the Docker daemon and container run on a remote Linux host reached over SSH">
+  <title>Docker over SSH transport topology</title>
+  <desc>
+    A single block diagram showing that in Docker over SSH (and Docker
+    over SSH Command) mode the add-on stays on the Blender workstation
+    while the daemon and container live on a remote Linux host reached
+    over SSH. Lifecycle commands ride docker exec on the SSH session
+    and server traffic rides an SSH tunnel to the container's
+    published port on the remote's localhost; the port publish on the
+    container is what makes the tunnel actually reach server.py.
+  </desc>
+
+  <defs>
+    <marker id="ds-arrow-b" viewBox="0 0 10 10" refX="9" refY="5"
+            markerWidth="10" markerHeight="10" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#2e6da4" />
+    </marker>
+    <marker id="ds-arrow-p" viewBox="0 0 10 10" refX="9" refY="5"
+            markerWidth="10" markerHeight="10" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#6a3ea1" />
+    </marker>
+  </defs>
+
+  <style>
+    .hdr-title     { font: 700 15px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #1a1a1a; }
+    .hdr-sub       { font: italic 12px -apple-system, sans-serif; fill: #555; }
+    .hdr-addon     { fill: #e9eef7; stroke: #8fa7c7; stroke-width: 1; }
+    .hdr-host      { fill: #fff3e0; stroke: #d7a95a; stroke-width: 1; }
+    .hdr-container { fill: #eef6eb; stroke: #86b36a; stroke-width: 1; }
+    .mode-title    { font: 700 16px -apple-system, sans-serif; fill: #1a1a1a; }
+    .mode-sub      { font: 12px -apple-system, sans-serif; fill: #555; }
+    .arr-ctl       { stroke: #2e6da4; stroke-width: 2; fill: none; }
+    .arr-data      { stroke: #6a3ea1; stroke-width: 2; fill: none; stroke-dasharray: 5 4; }
+    .lbl           { font: 600 12px -apple-system, sans-serif; fill: #1a1a1a; }
+    .lbl-ctl       { font: 600 12px -apple-system, sans-serif; fill: #1f4a75; }
+    .lbl-data      { font: 600 12px -apple-system, sans-serif; fill: #5a3492; }
+    .lbl-mono      { font: 600 11px "Menlo", "Consolas", monospace; fill: #1a1a1a; }
+    .note          { font: 12px -apple-system, sans-serif; fill: #555; }
+    .machine-box   { fill: none; stroke: #aaa; stroke-width: 1.2; stroke-dasharray: 6 4; }
+    .machine-lbl   { font: italic 11px -apple-system, sans-serif; fill: #777; }
+    .port-pill     { fill: #fff3e0; stroke: #d7a95a; stroke-width: 1; }
+    .port-tx       { font: 700 11px -apple-system, sans-serif; fill: #7a4a00; }
+    .legend-box    { fill: #fafafa; stroke: #ddd; stroke-width: 1; }
+  </style>
+
+  <!-- ============ Legend ============ -->
+  <rect x="480" y="14" width="360" height="46" rx="6" class="legend-box" />
+  <line x1="495" y1="32" x2="525" y2="32" class="arr-ctl" marker-end="url(#ds-arrow-b)" />
+  <text x="532" y="36" class="lbl-ctl">lifecycle</text>
+  <text x="532" y="50" class="note">start/stop/exec, port check</text>
+  <line x1="660" y1="32" x2="690" y2="32" class="arr-data" marker-end="url(#ds-arrow-p)" />
+  <text x="697" y="36" class="lbl-data">server traffic</text>
+  <text x="697" y="50" class="note">SSH tunnel to server.py</text>
+
+  <!-- ============ Docker over SSH ============ -->
+  <text x="20" y="30" class="mode-title">Docker over SSH</text>
+  <text x="20" y="50" class="mode-sub">Daemon and container run on a remote Linux host, reached over SSH.</text>
+
+  <rect x="20" y="80" width="260" height="190" rx="8" class="machine-box" />
+  <text x="36" y="100" class="machine-lbl">Blender workstation</text>
+
+  <rect x="300" y="80" width="540" height="190" rx="8" class="machine-box" />
+  <text x="316" y="100" class="machine-lbl">Remote Linux host (SSH reachable)</text>
+
+  <rect x="50"  y="122" width="220" height="70" rx="6" class="hdr-addon" />
+  <text x="160" y="150" text-anchor="middle" class="hdr-title">Blender + add-on</text>
+  <text x="160" y="170" text-anchor="middle" class="hdr-sub">paramiko (SSH)</text>
+
+  <rect x="320" y="122" width="220" height="70" rx="6" class="hdr-host" />
+  <text x="430" y="150" text-anchor="middle" class="hdr-title">Docker daemon</text>
+  <text x="430" y="170" text-anchor="middle" class="hdr-sub">on the remote host</text>
+
+  <rect x="590" y="122" width="220" height="70" rx="6" class="hdr-container" />
+  <text x="700" y="150" text-anchor="middle" class="hdr-title">container</text>
+  <text x="700" y="170" text-anchor="middle" class="lbl-mono">server.py :PORT</text>
+
+  <!-- port pill, attached under the container -->
+  <rect x="595" y="202" width="210" height="22" rx="11" class="port-pill" />
+  <text x="700" y="217" text-anchor="middle" class="port-tx">-p PORT:PORT must be published</text>
+
+  <!-- lifecycle: addon via SSH to daemon via exec to container -->
+  <line x1="270" y1="144" x2="320" y2="144" class="arr-ctl" marker-end="url(#ds-arrow-b)" />
+  <line x1="540" y1="144" x2="590" y2="144" class="arr-ctl" marker-end="url(#ds-arrow-b)" />
+  <text x="295" y="136" text-anchor="middle" class="lbl-mono">ssh</text>
+  <text x="565" y="136" text-anchor="middle" class="lbl-mono">exec</text>
+
+  <!-- server traffic: SSH tunnel from addon to container's published localhost port -->
+  <path d="M 270 180 Q 430 252 590 180" class="arr-data" marker-end="url(#ds-arrow-p)" />
+  <text x="430" y="250" text-anchor="middle" class="lbl-data">SSH tunnel (direct-tcpip) to remote localhost:&lt;port&gt;</text>
+  <text x="430" y="266" text-anchor="middle" class="note">arrives at server.py through the port the container publishes</text>
+
+  <!-- footnote -->
+  <text x="20" y="308" class="note"><tspan class="lbl">Docker over SSH Command</tspan> is identical at the transport level; only the SSH fields (host, port, user, key)</text>
+  <text x="20" y="326" class="note">are parsed from a pasted <tspan class="lbl-mono">ssh ...</tspan> string instead of entered as fields.</text>
+  <text x="20" y="350" class="note">The container must publish the server port; without <tspan class="lbl-mono">-p &lt;port&gt;:&lt;port&gt;</tspan> the SSH tunnel cannot reach <tspan class="lbl-mono">server.py</tspan>.</text>
+</svg>

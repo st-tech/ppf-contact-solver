@@ -1,0 +1,113 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 320" role="img" aria-label="Five 3D sphere snapshots showing the shrink example at frames 1, 30, 60, 90, and 120: the first three spheres are identical in size at radius 1.0 (the Hold plateau), then the sphere shrinks to 0.75 at frame 90 and 0.5 at frame 120">
+  <title>Sphere shrink example: 3D snapshots along the timeline</title>
+  <desc>
+    A horizontal strip of five shaded 3D spheres resting on a
+    common ground line, left to right. The first three spheres,
+    at frames 1, 30, and 60, are all the same size (radius 1.0):
+    these three frames form the Hold plateau during which the
+    sphere does not change. The fourth sphere at frame 90 is
+    smaller (radius 0.75) because the radius is halfway along the
+    linear ramp from 1.0 down to 0.5. The fifth sphere at frame
+    120 is smallest (radius 0.5), the end of the ramp. Each
+    sphere casts an elliptical shadow on the ground and carries a
+    small frame label and radius value underneath.
+  </desc>
+
+  <defs>
+    <radialGradient id="sph-fill" cx="35%" cy="30%" r="75%">
+      <stop offset="0%" stop-color="#e7edf7" />
+      <stop offset="45%" stop-color="#6fa2d6" />
+      <stop offset="100%" stop-color="#2e4a70" />
+    </radialGradient>
+    <radialGradient id="sph-fill-hold" cx="35%" cy="30%" r="75%">
+      <stop offset="0%" stop-color="#e7edf7" />
+      <stop offset="45%" stop-color="#6fa2d6" />
+      <stop offset="100%" stop-color="#2e4a70" />
+    </radialGradient>
+    <radialGradient id="shadow-grad" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#000" stop-opacity="0.28" />
+      <stop offset="70%" stop-color="#000" stop-opacity="0.08" />
+      <stop offset="100%" stop-color="#000" stop-opacity="0" />
+    </radialGradient>
+  </defs>
+
+  <style>
+    .title       { font: 700 17px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #1a1a1a; }
+    .sub         { font: 13px -apple-system, sans-serif; fill: #555; }
+
+    .ground      { stroke: #aab0b8; stroke-width: 1.2; fill: none; }
+    .sphere      { stroke: #1a3350; stroke-width: 1; }
+
+    .frame-lbl   { font: 700 13px -apple-system, sans-serif; fill: #1a1a1a; }
+    .radius-lbl  { font: 600 11.5px "Menlo", "Consolas", monospace; fill: #444; }
+
+    .hold-band   { fill: #fff6e0; stroke: #e6a820; stroke-width: 1; stroke-dasharray: 5 3; }
+    .hold-lbl    { font: 700 12px -apple-system, sans-serif; fill: #7a5a00; }
+    .ramp-lbl    { font: 700 12px -apple-system, sans-serif; fill: #1f4a75; }
+    .note        { font: 11px -apple-system, sans-serif; fill: #555; }
+  </style>
+
+  <!-- Title -->
+  <text x="20" y="30" class="title">Sphere snapshots along the timeline</text>
+  <text x="20" y="50" class="sub">Same three keyframes (1 Initial · 60 Hold · 120 Radius=0.5), drawn as the sphere would appear in the viewport at five moments.</text>
+
+  <!-- Hold-plateau highlight band behind frames 1-60 -->
+  <rect x="40" y="75" width="430" height="200" rx="10" class="hold-band" />
+  <text x="255" y="90" text-anchor="middle" class="hold-lbl">Hold plateau: frames 1 → 60 at radius 1.0</text>
+
+  <!-- Ground line -->
+  <line x1="20" y1="230" x2="880" y2="230" class="ground" />
+
+  <!-- Snapshot positions (centers on the ground): x = 100, 250, 400, 600, 800
+       Radii, in viewport px (50 px = radius 1.0):
+         frame 1   → R=1.0 → 50 px
+         frame 30  → R=1.0 → 50 px
+         frame 60  → R=1.0 → 50 px
+         frame 90  → R=0.75 → 37.5 px
+         frame 120 → R=0.5 → 25 px
+       Sphere center-y = 230 - r. -->
+
+  <!-- Frame 1 -->
+  <ellipse cx="100" cy="232" rx="56" ry="8" fill="url(#shadow-grad)" />
+  <circle cx="100" cy="180" r="50" fill="url(#sph-fill-hold)" class="sphere" />
+  <text x="100" y="258" text-anchor="middle" class="frame-lbl">Frame 1</text>
+  <text x="100" y="274" text-anchor="middle" class="radius-lbl">R = 1.0</text>
+  <text x="100" y="288" text-anchor="middle" class="note">(Initial)</text>
+
+  <!-- Frame 30 -->
+  <ellipse cx="250" cy="232" rx="56" ry="8" fill="url(#shadow-grad)" />
+  <circle cx="250" cy="180" r="50" fill="url(#sph-fill-hold)" class="sphere" />
+  <text x="250" y="258" text-anchor="middle" class="frame-lbl">Frame 30</text>
+  <text x="250" y="274" text-anchor="middle" class="radius-lbl">R = 1.0</text>
+  <text x="250" y="288" text-anchor="middle" class="note">(mid-plateau)</text>
+
+  <!-- Frame 60 -->
+  <ellipse cx="400" cy="232" rx="56" ry="8" fill="url(#shadow-grad)" />
+  <circle cx="400" cy="180" r="50" fill="url(#sph-fill-hold)" class="sphere" />
+  <text x="400" y="258" text-anchor="middle" class="frame-lbl">Frame 60</text>
+  <text x="400" y="274" text-anchor="middle" class="radius-lbl">R = 1.0</text>
+  <text x="400" y="288" text-anchor="middle" class="note">(Hold ✓, ramp starts)</text>
+
+  <!-- Linear-ramp arc annotation across the right half -->
+  <text x="600" y="90" text-anchor="middle" class="ramp-lbl">Linear ramp: frames 60 → 120</text>
+  <text x="600" y="104" text-anchor="middle" class="note">radius 1.0 → 0.5</text>
+
+  <!-- Frame 90 -->
+  <ellipse cx="600" cy="232" rx="42" ry="6" fill="url(#shadow-grad)" />
+  <circle cx="600" cy="192.5" r="37.5" fill="url(#sph-fill)" class="sphere" />
+  <text x="600" y="258" text-anchor="middle" class="frame-lbl">Frame 90</text>
+  <text x="600" y="274" text-anchor="middle" class="radius-lbl">R = 0.75</text>
+  <text x="600" y="288" text-anchor="middle" class="note">(mid-ramp)</text>
+
+  <!-- Frame 120 -->
+  <ellipse cx="800" cy="232" rx="28" ry="4" fill="url(#shadow-grad)" />
+  <circle cx="800" cy="205" r="25" fill="url(#sph-fill)" class="sphere" />
+  <text x="800" y="258" text-anchor="middle" class="frame-lbl">Frame 120</text>
+  <text x="800" y="274" text-anchor="middle" class="radius-lbl">R = 0.5</text>
+  <text x="800" y="288" text-anchor="middle" class="note">(target)</text>
+
+  <!-- Scale reference (ring at R=1.0 around the frame 120 sphere, faint) -->
+  <circle cx="800" cy="180" r="50" fill="none" stroke="#c0c6cc" stroke-width="1" stroke-dasharray="3 3" />
+  <text x="862" y="140" class="note">faint ring =</text>
+  <text x="862" y="154" class="note">original R=1.0</text>
+</svg>

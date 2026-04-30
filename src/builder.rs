@@ -6,10 +6,10 @@
 use super::cvec::*;
 use super::cvecvec::*;
 use super::data::{self, *};
-
 use super::{mesh::Mesh, MeshSet, SimArgs};
 use more_asserts::*;
 use na::{vector, Matrix2, Matrix2xX, Matrix3, Matrix3x2, Matrix3xX};
+use rayon::prelude::*;
 use std::collections::HashMap;
 
 pub struct Props {
@@ -19,6 +19,34 @@ pub struct Props {
     pub edge_params: Vec<EdgeParam>,
     pub face_params: Vec<FaceParam>,
     pub tet_params: Vec<TetParam>,
+}
+
+/// Signed dihedral angle between the two faces sharing the edge
+/// `v0-v1` with opposite vertices `v2` and `v3`. Mirrors the device-side
+/// `face_dihedral_angle` after `remap(hinge)` in `dihedral_angle.hpp`:
+/// that kernel reorders the hinge to (v[2], v[1], v[0], v[3]) and computes
+/// the angle, so here the hinge column `(h0, h1, h2, h3)` maps to
+/// `v0 = h2, v1 = h1, v2 = h0, v3 = h3`. Callers pass the reordered verts.
+fn signed_dihedral_angle(
+    v0: &na::Vector3<f32>,
+    v1: &na::Vector3<f32>,
+    v2: &na::Vector3<f32>,
+    v3: &na::Vector3<f32>,
+) -> f32 {
+    let n1 = (v1 - v0).cross(&(v2 - v0));
+    let n2 = (v2 - v3).cross(&(v1 - v3));
+    let n1_sq = n1.norm_squared();
+    let n2_sq = n2.norm_squared();
+    if n1_sq <= 0.0 || n2_sq <= 0.0 {
+        return 0.0;
+    }
+    let dot = n1.dot(&n2) / (n1_sq * n2_sq).sqrt();
+    let angle = dot.clamp(-1.0, 1.0).acos();
+    if n2.cross(&n1).dot(&(v1 - v2)) < 0.0 {
+        -angle
+    } else {
+        angle
+    }
 }
 
 pub fn build(
@@ -32,6 +60,7 @@ pub fn build(
     let (vertex, uv) = (&mesh.vertex, &mesh.uv);
     let n_vert = vertex.ncols();
     let n_shells = mesh.mesh.mesh.shell_face_count;
+    let rod_count = mesh.mesh.mesh.rod_count;
     let neighbor = Neighbor {
         vertex: VertexNeighbor {
             face: CVecVec::from(&mesh.mesh.neighbor.vertex.face.to_u32()[..]),
@@ -47,44 +76,51 @@ pub fn build(
         },
     };
 
-    // Update fixed flags based on vertex fix_index
-    for (i, prop) in props.face.iter_mut().enumerate() {
-        if mesh.mesh.mesh.face.column(i).iter().all(|&j| {
-            let mut vp = VertexProp::default();
-            for (fi, pair) in constraint.fix.iter().enumerate() {
-                if pair.index as usize == j {
-                    vp.fix_index = (fi + 1) as u32;
-                }
-            }
-            vp.fix_index > 0
-        }) {
+    // Update fixed flags based on vertex fix_index (parallelized)
+    // Pre-collect fixed vertex indices into a HashSet for thread-safe access
+    use std::collections::HashSet;
+    let fixed_vertices: HashSet<usize> = constraint
+        .fix
+        .iter()
+        .map(|pair| pair.index as usize)
+        .collect();
+
+    props.face.par_iter_mut().enumerate().for_each(|(i, prop)| {
+        if mesh
+            .mesh
+            .mesh
+            .face
+            .column(i)
+            .iter()
+            .all(|&j| fixed_vertices.contains(&j))
+        {
             prop.fixed = true;
         }
-    }
-    for (i, prop) in props.edge.iter_mut().enumerate() {
+    });
+    props.edge.par_iter_mut().enumerate().for_each(|(i, prop)| {
         if mesh
             .mesh
             .mesh
             .edge
             .column(i)
             .iter()
-            .all(|&j| constraint.fix.iter().any(|pair| pair.index as usize == j))
+            .all(|&j| fixed_vertices.contains(&j))
         {
             prop.fixed = true;
         }
-    }
-    for (i, prop) in props.tet.iter_mut().enumerate() {
+    });
+    props.tet.par_iter_mut().enumerate().for_each(|(i, prop)| {
         if mesh
             .mesh
             .mesh
             .tet
             .column(i)
             .iter()
-            .all(|&j| constraint.fix.iter().any(|pair| pair.index as usize == j))
+            .all(|&j| fixed_vertices.contains(&j))
         {
             prop.fixed = true;
         }
-    }
+    });
 
     // Props now contains final props and params directly
     let edge_props = &props.edge;
@@ -96,6 +132,11 @@ pub fn build(
 
     // Build vertex props and params
     let mut vertex_prop = vec![VertexProp::default(); n_vert];
+    // rod-bend rest angle defaults to π (straight); mutated below for interior
+    // rod vertices whose adjacent edge params request rest-from-geometry.
+    for vp in vertex_prop.iter_mut() {
+        vp.rest_bend_angle = std::f32::consts::PI;
+    }
     let mut temp_vertex_params = Vec::new();
     for (i, pair) in constraint.fix.iter().enumerate() {
         vertex_prop[pair.index as usize].fix_index = (i + 1) as u32;
@@ -104,104 +145,242 @@ pub fn build(
         vertex_prop[pair.index as usize].pull_index = (i + 1) as u32;
     }
 
-    // Aggregate vertex params from faces and edges
-    for (i, face_prop) in face_props.iter().enumerate() {
-        for &j in mesh.mesh.mesh.face.column(i).iter() {
-            if i < n_shells || sim_args.include_face_mass {
-                vertex_prop[j].mass += face_prop.mass / 3.0;
-                vertex_prop[j].area += face_prop.area / 3.0;
-            }
+    // Populate rod-bend rest angle for interior rod vertices whose adjacent
+    // rod-edges request rest-from-geometry. Matches the device-side gate at
+    // src/cpp/energy/energy.cu:333: vertex has exactly 2 rod edges and 0
+    // faces.
+    for j in 0..n_vert {
+        let adj_edges: Vec<usize> = mesh
+            .mesh
+            .neighbor
+            .vertex
+            .edge[j]
+            .iter()
+            .copied()
+            .filter(|&ei| ei < rod_count)
+            .collect();
+        if adj_edges.len() != 2 {
+            continue;
         }
-    }
-    for (i, edge_prop) in edge_props.iter().enumerate() {
-        if i < mesh.mesh.mesh.rod_count {
-            for &j in mesh.mesh.mesh.edge.column(i).iter() {
-                vertex_prop[j].mass += edge_prop.mass / 2.0;
-            }
+        if !mesh.mesh.neighbor.vertex.face[j].is_empty() {
+            continue;
         }
-    }
-    for (i, tet_prop) in tet_props.iter().enumerate() {
-        for &j in mesh.mesh.mesh.tet.column(i).iter() {
-            vertex_prop[j].mass += tet_prop.mass / 4.0;
-            vertex_prop[j].volume += tet_prop.volume / 4.0;
+        let from_geometry = adj_edges.iter().any(|&ei| {
+            let edge_prop = &edge_props[ei];
+            edge_params[edge_prop.param_index as usize]
+                .bend_rest_from_geometry
+        });
+        if !from_geometry {
+            continue;
         }
+        let edge_0 = mesh.mesh.mesh.edge.column(adj_edges[0]);
+        let edge_1 = mesh.mesh.mesh.edge.column(adj_edges[1]);
+        let other_0 = if edge_0[0] == j { edge_0[1] } else { edge_0[0] };
+        let other_1 = if edge_1[0] == j { edge_1[1] } else { edge_1[0] };
+        let x0 = vertex.column(other_0).into_owned();
+        let x1 = vertex.column(j).into_owned();
+        let x2 = vertex.column(other_1).into_owned();
+        let e0 = x0 - x1;
+        let e1 = x2 - x1;
+        let n0 = e0.norm();
+        let n1 = e1.norm();
+        if n0 <= 0.0 || n1 <= 0.0 {
+            continue;
+        }
+        let cos_theta = (e0.dot(&e1) / (n0 * n1)).clamp(-1.0, 1.0);
+        vertex_prop[j].rest_bend_angle = cos_theta.acos();
     }
 
-    // Build vertex params by aggregating from face/edge params
+    // Aggregate vertex area from all faces (needed for wind/air forces on all surfaces)
+    let area_contributions: Vec<(usize, f32)> = face_props
+        .par_iter()
+        .enumerate()
+        .flat_map(|(i, face_prop)| {
+            mesh.mesh
+                .mesh
+                .face
+                .column(i)
+                .iter()
+                .map(|&j| (j, face_prop.area / 3.0))
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    for (j, area) in area_contributions {
+        vertex_prop[j].area += area;
+    }
+
+    // Aggregate vertex mass from faces (shell faces always, solid faces only if include_face_mass)
+    let mass_contributions: Vec<(usize, f32)> = face_props
+        .par_iter()
+        .enumerate()
+        .filter(|(i, _)| *i < n_shells || sim_args.include_face_mass)
+        .flat_map(|(i, face_prop)| {
+            mesh.mesh
+                .mesh
+                .face
+                .column(i)
+                .iter()
+                .map(|&j| (j, face_prop.mass / 3.0))
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    for (j, mass) in mass_contributions {
+        vertex_prop[j].mass += mass;
+    }
+
+    // Aggregate vertex mass from edges (parallelized collection, sequential merge)
+    let edge_contributions: Vec<(usize, f32)> = edge_props
+        .par_iter()
+        .enumerate()
+        .filter(|(i, _)| *i < rod_count)
+        .flat_map(|(i, edge_prop)| {
+            mesh.mesh
+                .mesh
+                .edge
+                .column(i)
+                .iter()
+                .map(|&j| (j, edge_prop.mass / 2.0))
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    for (j, mass) in edge_contributions {
+        vertex_prop[j].mass += mass;
+    }
+
+    // Aggregate vertex mass/volume from tets (parallelized collection, sequential merge)
+    let tet_contributions: Vec<(usize, f32, f32)> = tet_props
+        .par_iter()
+        .enumerate()
+        .flat_map(|(i, tet_prop)| {
+            mesh.mesh
+                .mesh
+                .tet
+                .column(i)
+                .iter()
+                .map(|&j| (j, tet_prop.mass / 4.0, tet_prop.volume / 4.0))
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    for (j, mass, volume) in tet_contributions {
+        vertex_prop[j].mass += mass;
+        vertex_prop[j].volume += volume;
+    }
+
+    // Build vertex params by aggregating from face/edge params (parallelized)
+    // Phase 1: Parallel computation of vertex params
+    let vertex_params_data: Vec<Option<VertexParam>> = (0..n_vert)
+        .into_par_iter()
+        .map(|j| {
+            let mut ghat = 0.0f32;
+            let mut offset = 0.0f32;
+            let mut friction = 0.0f32;
+            let mut found = false;
+
+            // Aggregate from faces
+            for &fi in mesh.mesh.neighbor.vertex.face[j].iter() {
+                if fi < face_props.len() {
+                    let face_prop = &face_props[fi];
+                    let face_param = &face_params[face_prop.param_index as usize];
+                    ghat = face_param.ghat;
+                    offset = face_param.offset;
+                    friction = friction.max(face_param.friction);
+                    found = true;
+                }
+            }
+
+            // Aggregate from edges (for rods)
+            for &ei in mesh.mesh.neighbor.vertex.edge[j].iter() {
+                if ei < rod_count && ei < edge_props.len() {
+                    let edge_prop = &edge_props[ei];
+                    let edge_param = &edge_params[edge_prop.param_index as usize];
+                    ghat = edge_param.ghat;
+                    offset = edge_param.offset;
+                    friction = friction.max(edge_param.friction);
+                    found = true;
+                }
+            }
+
+            if found {
+                Some(VertexParam { ghat, offset, friction })
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    // Phase 2: Sequential deduplication
     let mut vertex_param_map: HashMap<VertexParam, u32> = HashMap::new();
-    for (j, vp) in vertex_prop.iter_mut().enumerate() {
-        let mut ghat = 0.0f32;
-        let mut offset = 0.0f32;
-        let mut friction = 0.0f32;
-        let mut found = false;
-
-        // Aggregate from faces
-        for &fi in mesh.mesh.neighbor.vertex.face[j].iter() {
-            if fi < face_props.len() {
-                let face_prop = &face_props[fi];
-                let face_param = &face_params[face_prop.param_index as usize];
-                ghat = face_param.ghat;
-                offset = face_param.offset;
-                friction = friction.max(face_param.friction);
-                found = true;
-            }
-        }
-
-        // Aggregate from edges (for rods)
-        for &ei in mesh.mesh.neighbor.vertex.edge[j].iter() {
-            if ei < mesh.mesh.mesh.rod_count && ei < edge_props.len() {
-                let edge_prop = &edge_props[ei];
-                let edge_param = &edge_params[edge_prop.param_index as usize];
-                ghat = edge_param.ghat;
-                offset = edge_param.offset;
-                friction = friction.max(edge_param.friction);
-                found = true;
-            }
-        }
-
-        if found {
-            let vparam = VertexParam {
-                ghat,
-                offset,
-                friction,
-            };
+    for (j, vparam_opt) in vertex_params_data.into_iter().enumerate() {
+        if let Some(vparam) = vparam_opt {
             let param_idx = *vertex_param_map.entry(vparam).or_insert_with(|| {
                 let new_idx = temp_vertex_params.len() as u32;
                 temp_vertex_params.push(vparam);
                 new_idx
             });
-            vp.param_index = param_idx;
+            vertex_prop[j].param_index = param_idx;
         }
     }
 
-    // Build hinge props and params
-    let mut temp_hinge_props = Vec::new();
+    // Build hinge props and params (parallelized)
+    // Phase 1: Parallel computation of hinge data
+    let hinge_columns: Vec<_> = mesh.mesh.mesh.hinge.column_iter().collect();
+    let hinge_data: Vec<(f32, f32, bool, HingeParam)> = hinge_columns
+        .into_par_iter()
+        .enumerate()
+        .map(|(i, hinge)| {
+            let x = vertex.column(hinge[0]) - vertex.column(hinge[1]);
+            let length = x.norm();
+            let mut offset_sum = 0.0;
+            let mut ghat_sum = 0.0;
+            let mut bend_sum = 0.0;
+            let mut plasticity_sum = 0.0;
+            let mut plasticity_threshold_sum = 0.0;
+            let mut area_sum = 0.0;
+            let mut all_fixed = true;
+            let mut from_geometry = false;
+            for &j in mesh.mesh.neighbor.hinge.face[i].iter() {
+                let face_prop = &face_props[j];
+                let face_param = &face_params[face_prop.param_index as usize];
+                all_fixed = all_fixed && face_prop.fixed;
+                offset_sum += face_prop.area * face_param.offset;
+                ghat_sum += face_prop.area * face_param.ghat;
+                bend_sum += face_prop.area * face_param.bend;
+                plasticity_sum += face_prop.area * face_param.bend_plasticity;
+                plasticity_threshold_sum +=
+                    face_prop.area * face_param.bend_plasticity_threshold;
+                area_sum += face_prop.area;
+                if face_param.bend_rest_from_geometry {
+                    from_geometry = true;
+                }
+            }
+            assert_gt!(area_sum, 0.0);
+            let hparam = HingeParam {
+                bend: if all_fixed { 0.0 } else { bend_sum / area_sum },
+                ghat: ghat_sum / area_sum,
+                offset: offset_sum / area_sum,
+                plasticity: plasticity_sum / area_sum,
+                plasticity_threshold: plasticity_threshold_sum / area_sum,
+            };
+            let rest_angle = if from_geometry {
+                // Mirror the device-side `remap` in dihedral_angle.hpp:14
+                // before calling face_dihedral_angle: (h2, h1, h0, h3).
+                let v0 = vertex.column(hinge[2]).into_owned();
+                let v1 = vertex.column(hinge[1]).into_owned();
+                let v2 = vertex.column(hinge[0]).into_owned();
+                let v3 = vertex.column(hinge[3]).into_owned();
+                signed_dihedral_angle(&v0, &v1, &v2, &v3)
+            } else {
+                0.0
+            };
+            (length, rest_angle, all_fixed, hparam)
+        })
+        .collect();
+
+    // Phase 2: Sequential deduplication
+    let mut temp_hinge_props = Vec::with_capacity(hinge_data.len());
     let mut temp_hinge_params = Vec::new();
     let mut hinge_param_map: HashMap<HingeParam, u32> = HashMap::new();
-
-    for (i, hinge) in mesh.mesh.mesh.hinge.column_iter().enumerate() {
-        let x = vertex.column(hinge[0]) - vertex.column(hinge[1]);
-        let length = x.norm();
-        let mut offset_sum = 0.0;
-        let mut ghat_sum = 0.0;
-        let mut bend_sum = 0.0;
-        let mut area_sum = 0.0;
-        let mut all_fixed = true;
-        for &j in mesh.mesh.neighbor.hinge.face[i].iter() {
-            let face_prop = &face_props[j];
-            let face_param = &face_params[face_prop.param_index as usize];
-            all_fixed = all_fixed && face_prop.fixed;
-            offset_sum += face_prop.area * face_param.offset;
-            ghat_sum += face_prop.area * face_param.ghat;
-            bend_sum += face_prop.area * face_param.bend;
-            area_sum += face_prop.area;
-        }
-        assert_gt!(area_sum, 0.0);
-        let hparam = HingeParam {
-            bend: if all_fixed { 0.0 } else { bend_sum / area_sum },
-            ghat: ghat_sum / area_sum,
-            offset: offset_sum / area_sum,
-        };
+    for (length, rest_angle, all_fixed, hparam) in hinge_data {
         let param_idx = *hinge_param_map.entry(hparam).or_insert_with(|| {
             let new_idx = temp_hinge_params.len() as u32;
             temp_hinge_params.push(hparam);
@@ -210,6 +389,7 @@ pub fn build(
         temp_hinge_props.push(HingeProp {
             fixed: all_fixed,
             length,
+            rest_angle,
             param_index: param_idx,
         });
     }
@@ -230,63 +410,88 @@ pub fn build(
         tet: CVec::from(tet_params.as_slice()),
     };
 
-    let mut inv_rest2x2 = Vec::new();
-    for i in 0..mesh.mesh.mesh.shell_face_count {
-        let f = mesh.mesh.mesh.face.column(i);
-        let mut d_mat_inv = None;
-        if let Some(uv) = uv.as_ref() {
-            let (x0, x1, x2) = (uv[i].column(0), uv[i].column(1), uv[i].column(2));
-            let (y0, y1, y2) = (
-                vertex.column(f[0]),
-                vertex.column(f[1]),
-                vertex.column(f[2]),
-            );
-            let (lx0, lx1) = ((x1 - x0).norm(), (x2 - x0).norm());
-            let (ly0, ly1) = ((y1 - y0).norm(), (y2 - y0).norm());
-            let face_param = &face_params[face_props[i].param_index as usize];
-            let shrink_factor = face_param.shrink;
-            let d_mat = Matrix2::<f32>::from_columns(&[
-                shrink_factor * ly0 * (x1 - x0) / lx0,
-                shrink_factor * ly1 * (x2 - x0) / lx1,
-            ]);
-            if lx0 > 0.0 && lx1 > 0.0 && d_mat.norm_squared() > 0.0 {
-                d_mat_inv = d_mat.try_inverse();
-            }
-        }
-        if let Some(d_mat_inv) = d_mat_inv {
-            inv_rest2x2.push(d_mat_inv);
-        } else {
+    // Parallel computation of inv_rest2x2 matrices
+    let rest_v = mesh.rest_vertex.as_ref().unwrap_or(&mesh.vertex);
+    let inv_rest2x2: Vec<Matrix2<f32>> = (0..mesh.mesh.mesh.shell_face_count)
+        .into_par_iter()
+        .map(|i| {
+            let f = mesh.mesh.mesh.face.column(i);
+            // Compute rest-pose from 3D geometry projected into tangent plane
             let (x0, x1, x2) = (
-                vertex.column(f[0]),
-                vertex.column(f[1]),
-                vertex.column(f[2]),
+                rest_v.column(f[0]),
+                rest_v.column(f[1]),
+                rest_v.column(f[2]),
             );
-            let d_mat = Matrix3x2::<f32>::from_columns(&[(x1 - x0), (x2 - x0)]);
-            let e1 = d_mat.column(0).cross(&d_mat.column(1));
-            let e2 = e1.cross(&d_mat.column(0)).normalize();
+            let dx = Matrix3x2::<f32>::from_columns(&[
+                x1 - x0,
+                x2 - x0,
+            ]);
+            let n = dx.column(0).cross(&dx.column(1));
+            let e2 = n.cross(&dx.column(0)).normalize();
             let proj_mat =
-                Matrix3x2::<f32>::from_columns(&[d_mat.column(0).normalize(), e2]).transpose();
-            let d_mat = proj_mat * d_mat;
-            inv_rest2x2.push(d_mat.try_inverse().unwrap());
-        }
-    }
+                Matrix3x2::<f32>::from_columns(&[dx.column(0).normalize(), e2]).transpose();
+            let d_mat = proj_mat * dx;
+            // When UV data exists, rotate d_mat to align with the UV first-edge
+            // direction and apply shrink. This preserves UV orientation for
+            // Baraff-Witkin anisotropy while keeping F ≈ I at rest.
+            let d_mat = if let Some(uv) = uv.as_ref() {
+                let uv_e0 = uv[i].column(1) - uv[i].column(0);
+                let lu0 = uv_e0.norm();
+                if lu0 > 0.0 {
+                    let uv_dir = uv_e0 / lu0;
+                    // Rotation from (1,0) to uv_dir
+                    let rot = Matrix2::<f32>::new(
+                        uv_dir[0], -uv_dir[1],
+                        uv_dir[1],  uv_dir[0],
+                    );
+                    let face_param = &face_params[face_props[i].param_index as usize];
+                    debug_assert!(
+                        face_param.shrink_x > 0.0 && face_param.shrink_y > 0.0,
+                        "FaceParam::shrink_x/shrink_y uninitialized"
+                    );
+                    let shrink = Matrix2::<f32>::new(
+                        face_param.shrink_x, 0.0,
+                        0.0, face_param.shrink_y,
+                    );
+                    shrink * rot * d_mat
+                } else {
+                    d_mat
+                }
+            } else {
+                d_mat
+            };
+            d_mat.try_inverse().unwrap()
+        })
+        .collect();
 
-    let mut inv_rest3x3 = Vec::new();
-    for tet in mesh.mesh.mesh.tet.column_iter() {
-        let (x0, x1, x2, x3) = (
-            vertex.column(tet[0]),
-            vertex.column(tet[1]),
-            vertex.column(tet[2]),
-            vertex.column(tet[3]),
-        );
-        let mat = Matrix3::<f32>::from_columns(&[(x1 - x0), (x2 - x0), (x3 - x0)]);
-        if let Some(inv_mat) = mat.try_inverse() {
-            inv_rest3x3.push(inv_mat);
-        } else {
-            println!("{}", mat);
-            panic!("Degenerate tetrahedron");
-        }
-    }
+    // Parallel computation of inv_rest3x3 matrices
+    let tet_columns: Vec<_> = mesh.mesh.mesh.tet.column_iter().collect();
+    let inv_rest3x3: Vec<Matrix3<f32>> = tet_columns
+        .into_par_iter()
+        .enumerate()
+        .map(|(i, tet)| {
+            let (x0, x1, x2, x3) = (
+                rest_v.column(tet[0]),
+                rest_v.column(tet[1]),
+                rest_v.column(tet[2]),
+                rest_v.column(tet[3]),
+            );
+            let tet_param = &tet_params[tet_props[i].param_index as usize];
+            let s = tet_param.shrink;
+            debug_assert!(s > 0.0, "TetParam::shrink uninitialized");
+            let mat = s * Matrix3::<f32>::from_columns(&[
+                x1 - x0,
+                x2 - x0,
+                x3 - x0,
+            ]);
+            if let Some(inv_mat) = mat.try_inverse() {
+                inv_mat
+            } else {
+                println!("{}", mat);
+                panic!("Degenerate tetrahedron");
+            }
+        })
+        .collect();
 
     let inv_rest2x2 = CVec::from(&inv_rest2x2[..]);
     let inv_rest3x3 = CVec::from(&inv_rest3x3[..]);
@@ -436,14 +641,14 @@ pub fn build(
             vertex
                 .column_iter()
                 .zip(velocity.column_iter())
-                .map(|(x, y)| x - (dt * y))
+                .map(|(x, y)| x - dt * y)
                 .collect::<Vec<_>>()
                 .as_slice(),
         ),
         curr: CVec::from(
             vertex
                 .column_iter()
-                .map(|x| x.into())
+                .map(|x| x.into_owned())
                 .collect::<Vec<_>>()
                 .as_slice(),
         ),
@@ -467,16 +672,11 @@ pub fn build(
 
 pub fn make_param(args: &SimArgs) -> data::ParamSet {
     let dt = args.dt.min(0.9999 / args.fps as f32);
-    let wind = match args.wind_dim {
-        0 => Vec3f::new(args.wind, 0.0, 0.0),
-        1 => Vec3f::new(0.0, args.wind, 0.0),
-        2 => Vec3f::new(0.0, 0.0, args.wind),
-        _ => panic!("Invalid wind dimension: {}", args.wind_dim),
-    };
+    let wind = Vec3f::new(args.wind[0], args.wind[1], args.wind[2]);
     data::ParamSet {
         time: 0.0,
         disable_contact: args.disable_contact,
-        fitting: args.fitting,
+        inactive_momentum: args.inactive_momentum,
         air_friction: args.air_friction,
         air_density: args.air_density,
         constraint_tol: args.constraint_tol,
@@ -496,13 +696,19 @@ pub fn make_param(args: &SimArgs) -> data::ParamSet {
         eiganalysis_eps: args.eiganalysis_eps,
         friction_eps: args.friction_eps,
         isotropic_air_friction: args.isotropic_air_friction,
-        gravity: Vec3f::new(0.0, args.gravity, 0.0),
+        gravity: Vec3f::new(args.gravity[0], args.gravity[1], args.gravity[2]),
         wind,
         barrier: match args.barrier.as_str() {
             "cubic" => data::Barrier::Cubic,
             "quad" => data::Barrier::Quad,
             "log" => data::Barrier::Log,
             _ => panic!("Invalid barrier: {}", args.barrier),
+        },
+        friction_mode: match args.friction_mode.as_str() {
+            "min" => data::FrictionMode::Min,
+            "max" => data::FrictionMode::Max,
+            "mean" => data::FrictionMode::Mean,
+            _ => panic!("Invalid friction-mode: {}", args.friction_mode),
         },
         csrmat_max_nnz: args.csrmat_max_nnz,
         fix_xz: args.fix_xz,
@@ -607,6 +813,10 @@ pub fn make_collision_mesh(
             ghat: ghat_sum / area_sum,
             offset: offset_sum / area_sum,
             friction: friction_sum / area_sum,
+            strainlimit: 0.0,
+            plasticity: 0.0,
+            plasticity_threshold: 0.0,
+            bend_rest_from_geometry: false,
         };
         let param_idx = *edge_param_map.entry(param).or_insert_with(|| {
             let new_idx = unique_edge_params.len() as u32;
@@ -615,6 +825,7 @@ pub fn make_collision_mesh(
         });
         collision_edge_props.push(EdgeProp {
             length: 0.0,
+            initial_length: 0.0,
             mass: 0.0,
             fixed: false,
             param_index: param_idx,
@@ -654,6 +865,7 @@ pub fn make_collision_mesh(
             area: 0.0,
             volume: 0.0,
             mass: 0.0,
+            rest_bend_angle: std::f32::consts::PI,
             fix_index: 0,
             pull_index: 0,
             param_index: param_idx,
@@ -664,7 +876,7 @@ pub fn make_collision_mesh(
         vertex: CVec::from(
             vertex
                 .column_iter()
-                .map(|x| x.into())
+                .map(|x| x.into_owned())
                 .collect::<Vec<_>>()
                 .as_slice(),
         ),

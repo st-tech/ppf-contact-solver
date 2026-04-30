@@ -15,15 +15,15 @@ jobs:
       packages: write
     steps:
     - name: Checkout
-      uses: actions/checkout@v4
+      uses: actions/checkout@v5
     - name: Docker Login
-      uses: docker/login-action@v3
+      uses: docker/login-action@v4
       with:
         registry: ${{ env.REGISTRY }}
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
     - name: Build Compiled Image
-      uses: docker/build-push-action@v5
+      uses: docker/build-push-action@v7
       with:
         push: false
         load: true

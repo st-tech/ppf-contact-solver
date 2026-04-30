@@ -58,6 +58,14 @@ if exist "%BUILD_WIN%\cuda\bin" (
 )
 set PATH=%PYTHON_DIR%;%PYTHON_DIR%\Scripts;%BIN_DIR%;%MINGIT_DIR%;%CUDA_PATH%\bin;%PATH%
 
+REM Point Python at certifi's CA bundle. urllib.request.urlretrieve
+REM (used by some examples to fetch mesh assets) doesn't auto-load
+REM Windows' system cert store under the embedded Python distribution,
+REM so without this the clean-environment verify run fails with
+REM SSLCertVerificationError on any HTTPS asset download.
+set SSL_CERT_FILE=%PYTHON_DIR%\Lib\site-packages\certifi\cacert.pem
+set REQUESTS_CA_BUNDLE=%PYTHON_DIR%\Lib\site-packages\certifi\cacert.pem
+
 REM Clear caches before running tests
 call "%SCRIPT_DIR%\clear-cache.bat" /nopause
 echo.

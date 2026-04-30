@@ -7,7 +7,11 @@ from typing import Any
 
 
 def app_param() -> dict[str, tuple[Any, str, str]]:
-    """Application parameters for the simulation."""
+    """Return the default application parameters for the simulation.
+
+    Each entry maps a parameter key to a ``(default_value, display_name,
+    description)`` tuple.
+    """
     return {
         "disable-contact": (
             False,
@@ -29,10 +33,10 @@ def app_param() -> dict[str, tuple[Any, str, str]]:
             "Step Size",
             "Step size for the simulation. Small step size increases accuracy, large step size increases speed but may cause solver divergence.",
         ),
-        "fitting": (
+        "inactive-momentum": (
             False,
-            "Fitting Mode",
-            "Enable fitting mode for the simulation. Adjusts step size and disables inertia.",
+            "Inactive Momentum",
+            "Enable inactive momentum mode for the simulation. Adjusts step size and disables inertia.",
         ),
         "playback": (
             1.0,
@@ -92,12 +96,12 @@ def app_param() -> dict[str, tuple[Any, str, str]]:
         "ccd-reduction": (
             0.01,
             "CCD Reduction Factor",
-            "This factor is multiplied to the initial gap to set the CCD threshold.",
+            "Factor multiplied to the initial gap to set the CCD threshold.",
         ),
         "ccd-max-iter": (
             4096,
             "Maximum CCD Iterations",
-            "The maximum number of iterations for ACCD.",
+            "Maximum number of iterations for ACCD.",
         ),
         "max-dx": (
             1.0,
@@ -134,6 +138,11 @@ def app_param() -> dict[str, tuple[Any, str, str]]:
             "Barrier Model for Contact",
             "Contact barrier potential model. Choices: cubic, quad, log.",
         ),
+        "friction-mode": (
+            "min",
+            "Friction Combination Mode",
+            "How to combine the friction coefficients of two contacting elements. Choices: min, max, mean. Default min preserves the prior behavior (the more slippery side wins).",
+        ),
         "stitch-stiffness": (
             1.0,
             "Stiffness Factor for Stitches",
@@ -149,9 +158,8 @@ def app_param() -> dict[str, tuple[Any, str, str]]:
             "Air Dragging Coefficient",
             "Per-vertex air dragging coefficient.",
         ),
-        "gravity": (-9.8, "Gravity Coefficient", "Gravity coefficient."),
-        "wind": (0.0, "Wind Coefficient", "Wind strength."),
-        "wind-dim": (0, "Wind Direction", "Wind direction."),
+        "gravity": ([0.0, -9.8, 0.0], "Gravity Vector", "Gravity acceleration vector (solver Y-up)."),
+        "wind": ([0.0, 0.0, 0.0], "Wind Force", "Wind force vector (XYZ)."),
         "include-face-mass": (
             False,
             "Flag to Include Shell Mass for Volume Solids",
@@ -171,15 +179,26 @@ def app_param() -> dict[str, tuple[Any, str, str]]:
 
 
 def object_param(obj_type: str) -> dict[str, tuple[Any, str, str]]:
-    """Material parameters for the object."""
+    """Return the default material parameters for an object of the given type.
+
+    Args:
+        obj_type: One of ``"tri"``, ``"tet"``, or ``"rod"``.
+
+    Returns:
+        Mapping from parameter key to ``(default_value, display_name,
+        description)`` tuple. The returned keys depend on ``obj_type``.
+
+    Raises:
+        ValueError: If ``obj_type`` is not one of the supported values.
+    """
     if obj_type == "tri":
         model = "baraff-witkin"
-        young_mod = 100.0
+        young_mod = 1000.0
         density = 1.0
         offset = 0.0
-        bend = 2.0
+        bend = 10.0
     elif obj_type == "tet":
-        model = "snhk"
+        model = "arap"
         young_mod = 500.0
         density = 1000.0
         offset = 0.0
@@ -192,43 +211,113 @@ def object_param(obj_type: str) -> dict[str, tuple[Any, str, str]]:
         bend = 0.0
     else:
         raise ValueError(f"Unknown object type: {obj_type}")
-    return {
+    params = {
         "model": (
             model,
             "Deformation Model",
-            "Deformation model for the object. Choices are: arap, stvk, baraff-witkin, snhk.",
+            "Elastic constitutive model used to evaluate stretch energy. Valid choices are 'arap', 'stvk', 'baraff-witkin' (shells only), and 'snhk' (stable neo-Hookean). Rods are always solved with ARAP internally.",
         ),
         "density": (
             density,
             "Density",
-            "Material density per volume, area or length, depending on the material type.",
+            "Rest-state mass density. Units depend on element type: kg/m^3 for 'tet' (volumetric), kg/m^2 for 'tri' (areal), and kg/m for 'rod' (linear). Must be positive.",
         ),
         "young-mod": (
             young_mod,
             "Young's Modulus",
-            "Young's modulus for the material divided by the volumetric density.",
+            "Stiffness coefficient fed into the constitutive model, pre-normalized by density (units of Pa/rho). This decouples mass from stiffness, so doubling density alone leaves the motion unchanged. Must be positive.",
         ),
-        "poiss-rat": (0.35, "Poisson's Ratio", "Poisson's ratio for the material."),
-        "bend": (bend, "Bending Stiffness", "Bending stiffness factor."),
-        "shrink": (1.0, "Shrink Factor", "Shrink factor for thin shells."),
-        "contact-gap": (1e-3, "Contact Gap", "Gap distance for contact detection."),
-        "contact-offset": (offset, "Contact Offset", "Offset of contact surface."),
+        "poiss-rat": (
+            0.35,
+            "Poisson's Ratio",
+            "Poisson's ratio used together with Young's modulus to derive the Lame parameters. Valid range is (0, 0.5); values near 0.5 produce near-incompressible behavior. Used by 'tri' and 'tet' elements only.",
+        ),
+        "bend": (
+            bend,
+            "Bending Stiffness",
+            "Dimensionless bending stiffness for shell hinges (between adjacent 'tri' faces) and for rod-joint bending at interior rod vertices. Must be non-negative. Not used by 'tet' elements.",
+        ),
+        "shrink-x": (
+            1.0,
+            "Shrink X",
+            "Anisotropic rest-shape scale along the UV X (warp) direction for 'tri' shells. Values below 1.0 pre-shrink the cloth, above 1.0 pre-stretch it. Must be positive. Cannot be combined with a non-zero strain limit on the same face.",
+        ),
+        "shrink-y": (
+            1.0,
+            "Shrink Y",
+            "Anisotropic rest-shape scale along the UV Y (weft) direction for 'tri' shells. Values below 1.0 pre-shrink the cloth, above 1.0 pre-stretch it. Must be positive. Cannot be combined with a non-zero strain limit on the same face.",
+        ),
+        "shrink": (
+            1.0,
+            "Shrink",
+            "Isotropic rest-shape scale for 'tet' solids. Values below 1.0 pre-contract the solid so it pulls toward a smaller target, above 1.0 pre-inflate it. Must be positive. Ignored by 'tri' and 'rod' elements.",
+        ),
+        "contact-gap": (
+            1e-3,
+            "Contact Gap",
+            "Barrier activation distance for contact detection, in scene units. At each pair the solver uses the mean of the two participants' gaps as the threshold. Must be positive.",
+        ),
+        "contact-offset": (
+            offset,
+            "Contact Offset",
+            "Extra per-element padding added on top of the contact gap (scene units). At each pair the two participants' offsets are summed, acting like a skin thickness that guarantees minimum clearance. Must be non-negative.",
+        ),
         "strain-limit": (
             0.0,
             "Strain Limit",
-            "Maximum strain limit. 0.0 disables strain limiting. Valid only for triangle elements.",
+            "Upper bound on per-element tensile strain (dimensionless, e.g. 0.05 = 5% stretch). 0.0 disables strain limiting. Supported on 'tri' and 'rod' elements only, and incompatible with non-unit shrink-x/shrink-y on the same face.",
         ),
         "friction": (
             0.0,
             "Friction Coefficient",
-            "Friction coefficient for the object.",
+            "Coulomb friction coefficient at contacts (dimensionless). When two elements touch, the solver uses the minimum of the two participants' coefficients, so the more slippery side wins. Must be non-negative.",
         ),
         "length-factor": (
             1.0,
-            "Length Factor",
-            "Length factor for rod objects.",
+            "Rod Rest-Length Factor",
+            "Multiplier applied to each rod edge's rest length (dimensionless). Values below 1.0 pre-tension the rod, above 1.0 pre-compress it. Must be positive. Used by 'rod' elements only.",
+        ),
+        "pressure": (
+            0.0,
+            "Inflation Pressure",
+            "Per-face inflation pressure pushing 'tri' shells outward along the face normal. Must be non-negative; 0.0 disables inflation. Ignored by 'tet' and 'rod' elements.",
         ),
     }
+    if obj_type in ("tri", "tet"):
+        params["plasticity"] = (
+            0.0,
+            "Plasticity Rate",
+            "Rate constant (per second) for stretch plasticity, driving the rest shape toward the current deformation via alpha = 1 - exp(-rate * dt). 0.0 disables plasticity; higher values creep faster. Must be non-negative.",
+        )
+        params["plasticity-threshold"] = (
+            0.0,
+            "Plasticity Threshold",
+            "Dead zone (dimensionless) around unit principal stretch S=1. Plasticity only activates on a singular value k when |S_k - 1| exceeds this threshold. 0.0 means any deviation triggers creep.",
+        )
+    # Note: "tet" keeps the bend-plasticity fields at 0.0 defaults even
+    # though tetrahedra don't use them. This is so a solid's surface
+    # triangles (tet-typed obj, F-data) can join `concat_tri_param`
+    # alongside shell tris without a key-set mismatch. The scene
+    # builder strips these keys from `concat_tet_param` (where the
+    # solid's tetrahedra land) so the unused zeros never reach the
+    # solver's tet data.
+    if obj_type in ("tri", "rod", "tet"):
+        params["bend-plasticity"] = (
+            0.0,
+            "Bend Plasticity Rate",
+            "Rate constant (per second) for bending plasticity that drifts the rest angle of shell hinges and interior rod joints toward the current angle. 0.0 disables. Applies to 'tri' and 'rod'; kept on 'tet' only as a placeholder and ignored by the solver.",
+        )
+        params["bend-plasticity-threshold"] = (
+            0.0,
+            "Bend Plasticity Threshold",
+            "Angular dead zone (radians) around the rest angle. Bend plasticity only activates when |theta - theta_rest| exceeds this threshold. 0.0 means any angular deviation triggers creep.",
+        )
+        params["bend-rest-from-geometry"] = (
+            0.0,
+            "Bend Rest From Initial Geometry",
+            "If non-zero, initialize each hinge or rod-joint rest angle from the initial pose instead of the default (flat for shells, straight for rods). Treated as a boolean flag.",
+        )
+    return params
 
 
 class ParamHolder:

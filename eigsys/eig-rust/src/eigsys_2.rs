@@ -99,8 +99,8 @@ fn expand_u(u: &Matrix3x2<f64>) -> Matrix3<f64> {
 }
 
 pub fn run() {
-    let mut rng = rand::thread_rng();
-    let f = Matrix3x2::from_fn(|_, _| rng.gen_range(-1.0..1.0));
+    let mut rng = rand::rng();
+    let f = Matrix3x2::from_fn(|_, _| rng.random_range(-1.0..1.0));
     println!("---- F ----");
     println!("{}", f);
 

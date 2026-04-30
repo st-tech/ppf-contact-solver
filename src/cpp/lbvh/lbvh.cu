@@ -130,9 +130,9 @@ __global__ void compute_face_centroids_kernel(const Vec3f *vertex,
     Vec3f v1 = vertex[f[1]];
     Vec3f v2 = vertex[f[2]];
 
-    cx[i] = (float(v0[0]) + float(v1[0]) + float(v2[0])) / 3.0f;
-    cy[i] = (float(v0[1]) + float(v1[1]) + float(v2[1])) / 3.0f;
-    cz[i] = (float(v0[2]) + float(v1[2]) + float(v2[2])) / 3.0f;
+    cx[i] = (v0[0] + v1[0] + v2[0]) / 3.0f;
+    cy[i] = (v0[1] + v1[1] + v2[1]) / 3.0f;
+    cz[i] = (v0[2] + v1[2] + v2[2]) / 3.0f;
 }
 
 __global__ void compute_edge_centroids_kernel(const Vec3f *vertex,
@@ -147,9 +147,9 @@ __global__ void compute_edge_centroids_kernel(const Vec3f *vertex,
     Vec3f v0 = vertex[e[0]];
     Vec3f v1 = vertex[e[1]];
 
-    cx[i] = (float(v0[0]) + float(v1[0])) / 2.0f;
-    cy[i] = (float(v0[1]) + float(v1[1])) / 2.0f;
-    cz[i] = (float(v0[2]) + float(v1[2])) / 2.0f;
+    cx[i] = (v0[0] + v1[0]) / 2.0f;
+    cy[i] = (v0[1] + v1[1]) / 2.0f;
+    cz[i] = (v0[2] + v1[2]) / 2.0f;
 }
 
 __global__ void compute_vertex_centroids_kernel(const Vec3f *vertex,
@@ -161,9 +161,9 @@ __global__ void compute_vertex_centroids_kernel(const Vec3f *vertex,
     }
 
     Vec3f v = vertex[i];
-    cx[i] = float(v[0]);
-    cy[i] = float(v[1]);
-    cz[i] = float(v[2]);
+    cx[i] = v[0];
+    cy[i] = v[1];
+    cz[i] = v[2];
 }
 
 // Atomic min for floats using CAS (works correctly for all float values)
@@ -717,22 +717,23 @@ compute_leaf_aabbs_face_kernel(const Vec3f *x0, const Vec3f *x1,
     Vec3f y00 = x0[f[0]], y01 = x0[f[1]], y02 = x0[f[2]];
     Vec3f y10 = x1[f[0]], y11 = x1[f[1]], y12 = x1[f[2]];
 
-    Vec3f z10 = float(extrapolate) * (y10 - y00) + y00;
-    Vec3f z11 = float(extrapolate) * (y11 - y01) + y01;
-    Vec3f z12 = float(extrapolate) * (y12 - y02) + y02;
+    Vec3f z10 = extrapolate * (y10 - y00) + y00;
+    Vec3f z11 = extrapolate * (y11 - y01) + y01;
+    Vec3f z12 = extrapolate * (y12 - y02) + y02;
 
     const FaceParam &fparam = params[prop[prim_idx].param_index];
     float margin = 0.5f * fparam.ghat + fparam.offset;
 
     AABB box;
     for (int d = 0; d < 3; ++d) {
-        float minv0 = fminf(float(y00[d]), fminf(float(y01[d]), float(y02[d])));
-        float maxv0 = fmaxf(float(y00[d]), fmaxf(float(y01[d]), float(y02[d])));
-        float minv1 = fminf(float(z10[d]), fminf(float(z11[d]), float(z12[d])));
-        float maxv1 = fmaxf(float(z10[d]), fmaxf(float(z11[d]), float(z12[d])));
-        box.min[d] = float(fminf(minv0, minv1) - margin);
-        box.max[d] = float(fmaxf(maxv0, maxv1) + margin);
+        float minv0 = fminf(y00[d], fminf(y01[d], y02[d]));
+        float maxv0 = fmaxf(y00[d], fmaxf(y01[d], y02[d]));
+        float minv1 = fminf(z10[d], fminf(z11[d], z12[d]));
+        float maxv1 = fmaxf(z10[d], fmaxf(z11[d], z12[d]));
+        box.min[d] = fminf(minv0, minv1) - margin;
+        box.max[d] = fmaxf(maxv0, maxv1) + margin;
     }
+    box.active = true;
     aabb[leaf_idx] = box;
 }
 
@@ -756,21 +757,22 @@ compute_leaf_aabbs_edge_kernel(const Vec3f *x0, const Vec3f *x1,
     Vec3f y00 = x0[e[0]], y01 = x0[e[1]];
     Vec3f y10 = x1[e[0]], y11 = x1[e[1]];
 
-    Vec3f z10 = float(extrapolate) * (y10 - y00) + y00;
-    Vec3f z11 = float(extrapolate) * (y11 - y01) + y01;
+    Vec3f z10 = extrapolate * (y10 - y00) + y00;
+    Vec3f z11 = extrapolate * (y11 - y01) + y01;
 
     const EdgeParam &eparam = params[prop[prim_idx].param_index];
     float margin = 0.5f * eparam.ghat + eparam.offset;
 
     AABB box;
     for (int d = 0; d < 3; ++d) {
-        float minv0 = fminf(float(y00[d]), float(y01[d]));
-        float maxv0 = fmaxf(float(y00[d]), float(y01[d]));
-        float minv1 = fminf(float(z10[d]), float(z11[d]));
-        float maxv1 = fmaxf(float(z10[d]), float(z11[d]));
-        box.min[d] = float(fminf(minv0, minv1) - margin);
-        box.max[d] = float(fmaxf(maxv0, maxv1) + margin);
+        float minv0 = fminf(y00[d], y01[d]);
+        float maxv0 = fmaxf(y00[d], y01[d]);
+        float minv1 = fminf(z10[d], z11[d]);
+        float maxv1 = fmaxf(z10[d], z11[d]);
+        box.min[d] = fminf(minv0, minv1) - margin;
+        box.max[d] = fmaxf(maxv0, maxv1) + margin;
     }
+    box.active = true;
     aabb[leaf_idx] = box;
 }
 
@@ -790,18 +792,19 @@ __global__ void compute_leaf_aabbs_vertex_kernel(
 
     Vec3f y0 = x0[prim_idx];
     Vec3f y1 = x1[prim_idx];
-    Vec3f z1 = float(extrapolate) * (y1 - y0) + y0;
+    Vec3f z1 = extrapolate * (y1 - y0) + y0;
 
     const VertexParam &vparam = params[prop[prim_idx].param_index];
     float margin = 0.5f * vparam.ghat + vparam.offset;
 
     AABB box;
     for (int d = 0; d < 3; ++d) {
-        float minv = fminf(float(y0[d]), float(z1[d]));
-        float maxv = fmaxf(float(y0[d]), float(z1[d]));
-        box.min[d] = float(minv - margin);
-        box.max[d] = float(maxv + margin);
+        float minv = fminf(y0[d], z1[d]);
+        float maxv = fmaxf(y0[d], z1[d]);
+        box.min[d] = minv - margin;
+        box.max[d] = maxv + margin;
     }
+    box.active = true;
     aabb[leaf_idx] = box;
 }
 
@@ -830,11 +833,21 @@ __global__ void merge_aabbs_kernel(const unsigned *level_nodes,
     AABB right_box = aabb[right];
 
     AABB merged;
-    for (int d = 0; d < 3; ++d) {
-        merged.min[d] = left_box.min[d] < right_box.min[d] ? left_box.min[d]
-                                                           : right_box.min[d];
-        merged.max[d] = left_box.max[d] > right_box.max[d] ? left_box.max[d]
-                                                           : right_box.max[d];
+    if (left_box.active && right_box.active) {
+        for (int d = 0; d < 3; ++d) {
+            merged.min[d] = left_box.min[d] < right_box.min[d] ? left_box.min[d]
+                                                               : right_box.min[d];
+            merged.max[d] = left_box.max[d] > right_box.max[d] ? left_box.max[d]
+                                                               : right_box.max[d];
+        }
+        merged.active = true;
+    } else if (left_box.active) {
+        merged = left_box;
+    } else if (right_box.active) {
+        merged = right_box;
+    } else {
+        merged = left_box; // both inactive
+        merged.active = false;
     }
     aabb[node_idx] = merged;
 }
@@ -868,11 +881,21 @@ __global__ void merge_level_kernel(const unsigned *level_data,
     AABB right_box = aabb[right];
 
     AABB merged;
-    for (int d = 0; d < 3; ++d) {
-        merged.min[d] = left_box.min[d] < right_box.min[d] ? left_box.min[d]
-                                                           : right_box.min[d];
-        merged.max[d] = left_box.max[d] > right_box.max[d] ? left_box.max[d]
-                                                           : right_box.max[d];
+    if (left_box.active && right_box.active) {
+        for (int d = 0; d < 3; ++d) {
+            merged.min[d] = left_box.min[d] < right_box.min[d] ? left_box.min[d]
+                                                               : right_box.min[d];
+            merged.max[d] = left_box.max[d] > right_box.max[d] ? left_box.max[d]
+                                                               : right_box.max[d];
+        }
+        merged.active = true;
+    } else if (left_box.active) {
+        merged = left_box;
+    } else if (right_box.active) {
+        merged = right_box;
+    } else {
+        merged = left_box; // both inactive
+        merged.active = false;
     }
     aabb[node_idx] = merged;
 }
@@ -899,9 +922,8 @@ void propagate_aabbs(Vec<AABB> &aabb, const Vec<Vec2u> &nodes,
     // from level[level.size-2] down to level[0] (root)
     for (int l = (int)level.size - 2; l >= 0; --l) {
         unsigned level_size = h_offsets[l + 1] - h_offsets[l];
-        if (level_size == 0) {
+        if (level_size == 0)
             continue;
-        }
         unsigned grid = (level_size + BLOCK - 1) / BLOCK;
         merge_level_kernel<<<grid, BLOCK>>>(level.data, level.offset,
                                             (unsigned)l, aabb.data, nodes.data);

@@ -1,0 +1,188 @@
+# File: blender.yml
+# Purpose: Run the headless Blender debug rig (blender_addon/debug/) on
+# free GitHub-hosted Linux + macOS runners in parallel.
+# License: Apache v2.0
+#
+# Both runners install Blender 5.1.1 from the Blender Foundation's
+# official download mirror, build the Rust solver with `--features
+# emulated --no-default-features` (no CUDA), install the addon as a
+# Blender 5 extension via install-blender-addon.sh, and run the full
+# scenario registry. Linux uses Xvfb for the virtual display the
+# bootstrap's event loop needs; macOS has a real WindowServer.
+
+name: Blender CI
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    env:
+      BLENDER_VERSION: '5.1.1'
+      # Speed up emulated solver steps (default 1000ms wall-clock per
+      # step is fine for local dev but stretches CI runs).
+      PPF_EMULATED_STEP_MS: '100'
+      # Flush Python stdout line-by-line so the orchestrator's per-
+      # scenario start/finish lines appear in the Actions log UI as
+      # they happen, not in one block at the end of the step.
+      PYTHONUNBUFFERED: '1'
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Pin debug root under runner temp
+        # Job-level env can't reference ``runner.*`` because the runner
+        # isn't provisioned yet; do it from a step so the failure-
+        # artifact upload at the end finds the rig's worker dirs in the
+        # same place on every OS.
+        shell: bash
+        run: echo "PPF_DEBUG_ROOT=$RUNNER_TEMP/ppf-debug" >> "$GITHUB_ENV"
+
+      # ------------------------------------------------------------------
+      # Graphics-layer setup comes first so the slow Rust build and
+      # Python venv install only happen once we know Blender can start.
+      # ------------------------------------------------------------------
+      - name: Linux runtime deps + Xvfb
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            xvfb x11-xserver-utils \
+            libxi6 libxxf86vm1 libxfixes3 libxrender1 \
+            libgl1 libglu1-mesa libxkbcommon0 libsm6 \
+            libdbus-1-3 libsndfile1
+          # Bring up Xvfb on :99 with a 24-bit screen large enough for
+          # any panel redraws the rig might trigger.
+          Xvfb :99 -screen 0 1280x720x24 -ac >/tmp/xvfb.log 2>&1 &
+          for _ in 1 2 3 4 5; do
+            xset -q -display :99 >/dev/null 2>&1 && break || sleep 1
+          done
+          echo "DISPLAY=:99" >> "$GITHUB_ENV"
+
+      # ------------------------------------------------------------------
+      # Blender 5.1.1 from the Blender Foundation's official mirror
+      # ------------------------------------------------------------------
+      - name: Download Blender (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          url="https://download.blender.org/release/Blender5.1/blender-${BLENDER_VERSION}-linux-x64.tar.xz"
+          curl -fL -o /tmp/blender.tar.xz "$url"
+          mkdir -p "$HOME/blender"
+          tar -xf /tmp/blender.tar.xz -C "$HOME/blender" --strip-components=1
+          echo "PPF_BLENDER_BIN=$HOME/blender/blender" >> "$GITHUB_ENV"
+
+      - name: Download Blender (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          url="https://download.blender.org/release/Blender5.1/blender-${BLENDER_VERSION}-macos-arm64.dmg"
+          curl -fL -o /tmp/blender.dmg "$url"
+          # hdiutil prints the mount path; we capture it instead of
+          # hard-coding /Volumes/Blender so a renamed volume label
+          # doesn't break the workflow silently.
+          mount=$(hdiutil attach -nobrowse /tmp/blender.dmg | awk '/\/Volumes\// {print $NF; exit}')
+          cp -R "$mount/Blender.app" /Applications/
+          hdiutil detach "$mount"
+          echo "PPF_BLENDER_BIN=/Applications/Blender.app/Contents/MacOS/Blender" >> "$GITHUB_ENV"
+
+      - name: Probe Blender launch
+        # Cross-platform sanity check: launch Blender in full UI with a
+        # 3s timer-driven quit. Fails the workflow if Blender can't
+        # initialize, so we don't waste the ~5 min Rust build on a
+        # broken runner.
+        shell: bash
+        run: |
+          set -euo pipefail
+          LOG="$RUNNER_TEMP/blender_probe.log"
+          "$PPF_BLENDER_BIN" \
+            --python-expr "import threading, os, time; threading.Thread(target=lambda: (time.sleep(3), os._exit(0)), daemon=True).start()" \
+            2>&1 | tee "$LOG" || true
+          echo "----- probe log tail -----"
+          tail -n 40 "$LOG"
+          echo "--------------------------"
+          if grep -qE 'Probably a libepoxy bug|missing WGL_ARB_extensions_string' "$LOG"; then
+            echo "::error::Blender failed to initialize OpenGL"
+            exit 1
+          fi
+          echo "Blender launch probe OK"
+
+      # ------------------------------------------------------------------
+      # Heavy build steps: only run if the launch probe passed.
+      # ------------------------------------------------------------------
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: emulated-${{ matrix.os }}
+
+      - name: Build emulated solver
+        run: cargo build --release --features emulated --no-default-features
+
+      # ------------------------------------------------------------------
+      # Python venv + frontend deps (the rig's debug server runs the real
+      # frontend module, which needs numpy/scipy/numba/pythreejs/...)
+      # ------------------------------------------------------------------
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Create venv + install Python deps
+        shell: bash
+        run: |
+          python -m venv .venv
+          .venv/bin/python -m pip install --upgrade pip
+          .venv/bin/python -m pip install \
+            numpy scipy numba plyfile requests trimesh pywavefront \
+            matplotlib tqdm pythreejs ipywidgets fast-simplification \
+            tabulate triangle psutil tomli ipython pillow pytetwild
+
+      # ------------------------------------------------------------------
+      # Install the addon as a Blender 5 extension. install-blender-
+      # addon.sh honors PPF_BLENDER_BIN as its cold-start path so the
+      # install works before Blender has booted to materialize the
+      # user-prefs tree.
+      # ------------------------------------------------------------------
+      - name: Install addon
+        run: ./install-blender-addon.sh
+
+      # ------------------------------------------------------------------
+      # Run all registered scenarios. Default --parallel=1 keeps RAM
+      # under the 7 GB free-runner ceiling; bump later if green and
+      # we want to shave wall-clock.
+      # ------------------------------------------------------------------
+      - name: Run all scenarios
+        shell: bash
+        run: |
+          .venv/bin/python blender_addon/debug/main.py runtests \
+            --timeout 360 \
+            --report report.json
+
+      # ------------------------------------------------------------------
+      # Always upload the aggregated report; on failure, also upload the
+      # per-worker dirs (server logs, blender stdout/stderr, probe events).
+      # ------------------------------------------------------------------
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: report-${{ matrix.os }}
+          path: report.json
+          if-no-files-found: warn
+
+      - name: Upload worker artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: ppf-debug-${{ matrix.os }}
+          path: ${{ runner.temp }}/ppf-debug/
+          if-no-files-found: ignore

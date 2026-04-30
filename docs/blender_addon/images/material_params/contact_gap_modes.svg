@@ -1,0 +1,86 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 820 480" role="img" aria-label="Absolute vs ratio contact gap illustration">
+  <title>Absolute vs ratio contact gap</title>
+  <desc>
+    Two side-by-side columns, each showing a small and a large object with
+    their contact-gap halo drawn as a dashed red ring. In the Absolute
+    column, both halos are the same thickness (~20 px) so the small
+    object's halo looks huge relative to it and the large object's halo
+    looks small. In the Ratio column, each halo is 50% of the object's
+    radius, so both objects look proportionally wrapped, and the visual
+    feel of the contact layer stays consistent regardless of scale.
+  </desc>
+
+  <style>
+    .title      { font: 700 20px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #1a1a1a; }
+    .subtitle   { font: italic 13px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #555; }
+    .label      { font: 600 13px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #1a1a1a; }
+    .note       { font: 11px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #666; }
+    .obj        { fill: #2e6da4; }
+    .gap        { stroke: #c93b3b; stroke-width: 2; stroke-dasharray: 6 4; fill: none; }
+    .bracket    { stroke: #c93b3b; stroke-width: 1.5; fill: none; }
+    .bracket-tx { font: 600 11px -apple-system, sans-serif; fill: #c93b3b; }
+    .divider    { stroke: #bbb; stroke-width: 1; stroke-dasharray: 3 3; }
+    .hdr-bg-abs { fill: #fdf2f2; }
+    .hdr-bg-rat { fill: #eef6fb; }
+  </style>
+
+  <!-- Header bands -->
+  <rect x="0"   y="0" width="410" height="68" class="hdr-bg-abs" />
+  <rect x="410" y="0" width="410" height="68" class="hdr-bg-rat" />
+
+  <!-- Left column: ABSOLUTE -->
+  <text x="205" y="30" text-anchor="middle" class="title">Absolute</text>
+  <text x="205" y="54" text-anchor="middle" class="subtitle">contact_gap = fixed distance</text>
+
+  <!-- Small object in absolute mode: obj r=30, gap ring +20px -->
+  <circle cx="135" cy="160" r="50" class="gap" />
+  <circle cx="135" cy="160" r="30" class="obj" />
+  <text x="135" y="235" text-anchor="middle" class="label">small</text>
+
+  <!-- Large object in absolute mode: obj r=80, gap ring +20px (SAME as small) -->
+  <circle cx="275" cy="370" r="100" class="gap" />
+  <circle cx="275" cy="370" r="80" class="obj" />
+  <text x="275" y="480" text-anchor="middle" class="label" style="font-size:13px">large</text>
+
+  <!-- Callout: same halo thickness -->
+  <path d="M 70 165 L 50 165 L 50 185 L 70 185" class="bracket" />
+  <text x="28" y="180" text-anchor="middle" class="bracket-tx">
+    <tspan x="30" dy="0">same</tspan>
+    <tspan x="30" dy="14">20 px</tspan>
+  </text>
+  <path d="M 160 370 L 140 370 L 140 390 L 160 390" class="bracket" />
+  <text x="118" y="385" text-anchor="middle" class="bracket-tx">
+    <tspan x="120" dy="0">same</tspan>
+    <tspan x="120" dy="14">20 px</tspan>
+  </text>
+
+  <!-- Divider -->
+  <line x1="410" y1="80" x2="410" y2="465" class="divider" />
+
+  <!-- Right column: RATIO -->
+  <text x="615" y="30" text-anchor="middle" class="title">Ratio</text>
+  <text x="615" y="54" text-anchor="middle" class="subtitle">contact_gap_rat = fraction of bbox</text>
+
+  <!-- Small object in ratio mode: obj r=30, gap ring = +50% (r=45) -->
+  <circle cx="545" cy="160" r="45" class="gap" />
+  <circle cx="545" cy="160" r="30" class="obj" />
+  <text x="545" y="235" text-anchor="middle" class="label">small</text>
+
+  <!-- Large object in ratio mode: obj r=80, gap ring = +50% (r=120) -->
+  <circle cx="685" cy="370" r="120" class="gap" />
+  <circle cx="685" cy="370" r="80" class="obj" />
+  <text x="685" y="480" text-anchor="middle" class="label" style="font-size:13px">large</text>
+
+  <!-- Callout: proportional halo -->
+  <path d="M 493 165 L 473 165 L 473 185 L 493 185" class="bracket" />
+  <text x="450" y="180" text-anchor="middle" class="bracket-tx">
+    <tspan x="452" dy="0">15 px</tspan>
+    <tspan x="452" dy="14">(50%)</tspan>
+  </text>
+  <path d="M 548 370 L 528 370 L 528 390 L 548 390" class="bracket" />
+  <text x="500" y="385" text-anchor="middle" class="bracket-tx">
+    <tspan x="505" dy="0">40 px</tspan>
+    <tspan x="505" dy="14">(50%)</tspan>
+  </text>
+
+</svg>

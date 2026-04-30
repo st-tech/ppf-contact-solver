@@ -20,7 +20,7 @@ NVCC_FLAGS += $(foreach warn,$(SUPPRESS_WARNINGS),--diag-suppress=$(warn))
 NVCC_CPP_FLAGS=-std=c++17 -O3 -MMD -Xcompiler -fPIC,-Wall,-Wno-unused-function
 
 # Source files
-BASE_DIRS=buffer main utility csrmat contact energy eigenanalysis barrier strainlimiting solver lbvh
+BASE_DIRS=buffer main utility csrmat contact energy eigenanalysis barrier strainlimiting solver lbvh plasticity
 KERNEL_FILES=kernels/reduce.cu kernels/exclusive_scan.cu kernels/vec_ops.cu kernels/radix_sort.cu
 CUDA_FILES=$(foreach dir,$(BASE_DIRS),$(dir)/$(dir).cu) $(KERNEL_FILES)
 SIMPLELOG_FILES=simplelog/SimpleLog.cpp

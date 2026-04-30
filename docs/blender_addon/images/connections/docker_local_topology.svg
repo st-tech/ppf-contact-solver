@@ -1,0 +1,80 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 270" role="img" aria-label="Docker (local) transport topology: the Blender add-on, the Docker daemon, and the container running server.py all live on the Blender workstation">
+  <title>Docker (local) transport topology</title>
+  <desc>
+    A single block diagram showing that in Docker (local) mode the
+    Blender add-on, the Docker daemon, and the container running
+    server.py all live on the Blender workstation. The add-on drives
+    the daemon with docker-py and reaches server.py with a plain TCP
+    socket to localhost on the port the container publishes.
+  </desc>
+
+  <defs>
+    <marker id="dl-arrow-b" viewBox="0 0 10 10" refX="9" refY="5"
+            markerWidth="10" markerHeight="10" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#2e6da4" />
+    </marker>
+    <marker id="dl-arrow-p" viewBox="0 0 10 10" refX="9" refY="5"
+            markerWidth="10" markerHeight="10" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#6a3ea1" />
+    </marker>
+  </defs>
+
+  <style>
+    .hdr-title     { font: 700 15px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #1a1a1a; }
+    .hdr-sub       { font: italic 12px -apple-system, sans-serif; fill: #555; }
+    .hdr-addon     { fill: #e9eef7; stroke: #8fa7c7; stroke-width: 1; }
+    .hdr-host      { fill: #fff3e0; stroke: #d7a95a; stroke-width: 1; }
+    .hdr-container { fill: #eef6eb; stroke: #86b36a; stroke-width: 1; }
+    .mode-title    { font: 700 16px -apple-system, sans-serif; fill: #1a1a1a; }
+    .mode-sub      { font: 12px -apple-system, sans-serif; fill: #555; }
+    .arr-ctl       { stroke: #2e6da4; stroke-width: 2; fill: none; }
+    .arr-data      { stroke: #6a3ea1; stroke-width: 2; fill: none; stroke-dasharray: 5 4; }
+    .lbl           { font: 600 12px -apple-system, sans-serif; fill: #1a1a1a; }
+    .lbl-ctl       { font: 600 12px -apple-system, sans-serif; fill: #1f4a75; }
+    .lbl-data      { font: 600 12px -apple-system, sans-serif; fill: #5a3492; }
+    .lbl-mono      { font: 600 11px "Menlo", "Consolas", monospace; fill: #1a1a1a; }
+    .note          { font: 12px -apple-system, sans-serif; fill: #555; }
+    .machine-box   { fill: none; stroke: #aaa; stroke-width: 1.2; stroke-dasharray: 6 4; }
+    .machine-lbl   { font: italic 11px -apple-system, sans-serif; fill: #777; }
+    .legend-box    { fill: #fafafa; stroke: #ddd; stroke-width: 1; }
+  </style>
+
+  <!-- ============ Legend ============ -->
+  <rect x="480" y="14" width="360" height="46" rx="6" class="legend-box" />
+  <line x1="495" y1="32" x2="525" y2="32" class="arr-ctl" marker-end="url(#dl-arrow-b)" />
+  <text x="532" y="36" class="lbl-ctl">lifecycle</text>
+  <text x="532" y="50" class="note">start/stop/exec</text>
+  <line x1="660" y1="32" x2="690" y2="32" class="arr-data" marker-end="url(#dl-arrow-p)" />
+  <text x="697" y="36" class="lbl-data">server traffic</text>
+  <text x="697" y="50" class="note">TCP to server.py</text>
+
+  <!-- ============ Docker (local) ============ -->
+  <text x="20" y="30" class="mode-title">Docker (local)</text>
+  <text x="20" y="50" class="mode-sub">Daemon and container both run on the Blender machine.</text>
+
+  <rect x="20" y="70" width="820" height="170" rx="8" class="machine-box" />
+  <text x="36" y="90" class="machine-lbl">Blender workstation</text>
+
+  <rect x="50"  y="110" width="220" height="70" rx="6" class="hdr-addon" />
+  <text x="160" y="138" text-anchor="middle" class="hdr-title">Blender + add-on</text>
+  <text x="160" y="158" text-anchor="middle" class="hdr-sub">docker-py + socket</text>
+
+  <rect x="320" y="110" width="220" height="70" rx="6" class="hdr-host" />
+  <text x="430" y="138" text-anchor="middle" class="hdr-title">Docker daemon</text>
+  <text x="430" y="158" text-anchor="middle" class="hdr-sub">local Unix socket</text>
+
+  <rect x="590" y="110" width="220" height="70" rx="6" class="hdr-container" />
+  <text x="700" y="138" text-anchor="middle" class="hdr-title">container</text>
+  <text x="700" y="158" text-anchor="middle" class="lbl-mono">server.py :PORT</text>
+
+  <!-- lifecycle: addon -> daemon -> container -->
+  <line x1="270" y1="132" x2="320" y2="132" class="arr-ctl" marker-end="url(#dl-arrow-b)" />
+  <line x1="540" y1="132" x2="590" y2="132" class="arr-ctl" marker-end="url(#dl-arrow-b)" />
+  <text x="295" y="124" text-anchor="middle" class="lbl-mono">docker-py</text>
+  <text x="565" y="124" text-anchor="middle" class="lbl-mono">exec</text>
+
+  <!-- server traffic: addon -> container directly (bypasses daemon) -->
+  <path d="M 270 168 Q 430 216 590 168" class="arr-data" marker-end="url(#dl-arrow-p)" />
+  <text x="430" y="213" text-anchor="middle" class="lbl-data">socket to localhost:&lt;port&gt;</text>
+  <text x="430" y="229" text-anchor="middle" class="note">reaches server.py via the port the container publishes</text>
+</svg>

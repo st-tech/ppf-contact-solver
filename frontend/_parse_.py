@@ -7,8 +7,49 @@ import os
 
 
 class CppRustDocStringParser:
+    """Parser for logging-related docstrings in the C++/Rust sources.
+
+    Example:
+        Harvest the log-name table from the bundled C++/Rust sources
+        so a session's recorded log keys can be annotated::
+
+            import os
+            from frontend import App, CppRustDocStringParser
+
+            src_dir = os.path.join(App.get_proj_root(), "src")
+            entries = CppRustDocStringParser.get_logging_docstrings(src_dir)
+            print(sorted(entries)[:5])
+    """
+
     @staticmethod
     def get_logging_docstrings(root: str) -> dict[str, dict[str, str]]:
+        """Scan ``root`` for logging docstrings in ``.cu`` and ``.rs`` files.
+
+        Walks ``root`` recursively (skipping ``args.rs``) and parses ``//``
+        comment blocks describing ``SimpleLog``, ``logging.push``, and
+        ``logging.mark`` call sites. Each block contributes a ``Label: value``
+        dictionary plus a free-form ``Description`` and a derived ``filename``.
+
+        Args:
+            root (str): Directory to search.
+
+        Returns:
+            dict[str, dict[str, str]]: Mapping from entry name (with
+            underscores replaced by hyphens) to the parsed docstring fields,
+            sorted by key.
+
+        Example:
+            Look up the metadata associated with a specific log name
+            under the bundled solver sources::
+
+                import os
+                from frontend import App, CppRustDocStringParser
+
+                src_dir = os.path.join(App.get_proj_root(), "src")
+                entries = CppRustDocStringParser.get_logging_docstrings(src_dir)
+                if "time-per-frame" in entries:
+                    print(entries["time-per-frame"].get("Description"))
+        """
         result = {}
         doc = {}
         par_name = None

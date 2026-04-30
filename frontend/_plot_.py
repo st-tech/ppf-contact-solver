@@ -19,29 +19,69 @@ from ._render_ import Rasterizer
 
 
 class PlotManager:
-    """PlotManager class. Use this to create a plot."""
+    """Factory for creating :class:`Plot` instances with shared parameters.
+
+    Example:
+        Reach the plot manager from the app and render a sheet::
+
+            app = App.create("demo")
+            V, F = app.mesh.square(res=64)
+            app.plot.create().tri(V, F)
+    """
 
     def __init__(self) -> None:
-        """Initialize the plot manager."""
+        """Initialize the plot manager with default plot parameters."""
         self.param = PlotParam()
 
     def create(self, engine: str = "threejs") -> "Plot":
-        """Create a plot."""
+        """Create a new plot using the given rendering engine.
+
+        Args:
+            engine (str): The rendering engine to use. Either ``"threejs"`` or ``"software"``.
+
+        Returns:
+            Plot: A new plot bound to this manager's parameters.
+
+        Example:
+            Create a plot and chain a triangle viewer call::
+
+                V, F = app.mesh.icosphere(r=1.0, subdiv_count=3)
+                app.plot.create().tri(V, F)
+        """
         return Plot(engine, self.param)
 
     def is_jupyter_notebook(self) -> bool:
-        """Check if the code is running in a Jupyter notebook."""
+        """Return True if the code is running inside a Jupyter notebook.
+
+        Example:
+            Only build a plot when running inside a notebook::
+
+                if app.plot.is_jupyter_notebook():
+                    app.plot.create().tri(V, F)
+        """
         return Utils.in_jupyter_notebook()
 
 
 class Plot:
-    """Plot class. Use this to create a plot."""
+    """A plot backed by either the pythreejs or software rasterizer engine.
+
+    Example:
+        Construct a plot via :meth:`PlotManager.create` and draw a mesh::
+
+            plot = app.plot.create()
+            V, F = app.mesh.square(res=32)
+            plot.tri(V, F)
+    """
 
     def __init__(self, engine: str, param: "PlotParam") -> None:
-        """Initialize the plot.
+        """Initialize the plot with the selected rendering engine.
 
         Args:
-            _darkmode (bool): True to turn on dark mode, False otherwise.
+            engine (str): The rendering engine. Either ``"threejs"`` or ``"software"``.
+            param (PlotParam): The plot parameters shared with this plot.
+
+        Raises:
+            ValueError: If ``engine`` is not a recognized engine name.
         """
         if engine == "threejs":
             self._engine = ThreejsPlotEngine()
@@ -55,7 +95,15 @@ class Plot:
         self.param = param
 
     def is_jupyter_notebook(self) -> bool:
-        """Check if the code is running in a Jupyter notebook."""
+        """Return True if the code is running inside a Jupyter notebook.
+
+        Example:
+            Skip expensive mesh conversion when not in a notebook::
+
+                plot = app.plot.create()
+                if plot.is_jupyter_notebook():
+                    plot.tri(V, F)
+        """
         return Utils.in_jupyter_notebook()
 
     def plot(
@@ -67,18 +115,26 @@ class Plot:
         pts: np.ndarray = np.zeros(0),
         param_override: Optional[dict] = None,
     ) -> "Plot":
-        """Plot a mesh.
+        """Plot a mesh with optional triangles, edges, and points.
+
+        Rendering is only performed when running inside a Jupyter notebook.
 
         Args:
-            vert (np.ndarray): The vertices (#x3) of the mesh.
-            color (np.ndarray): The color (#x3) of the mesh. Each value should be in [0,1].
-            tri (np.ndarray): The triangle elements (#x3) of the mesh.
-            seg (np.ndarray): The edge elements (#x2) of the mesh.
-            pts (np.ndarray): The point elements (#x1) of the mesh.
-            param_override (dict): The parameter override.
+            vert (np.ndarray): The vertices (Nx3) of the mesh.
+            color (np.ndarray): Per-vertex colors (Nx3) with each value in [0, 1].
+            tri (np.ndarray): The triangle elements (Fx3) of the mesh.
+            seg (np.ndarray): The edge elements (Ex2) of the mesh.
+            pts (np.ndarray): The point element indices (Px1) of the mesh.
+            param_override (Optional[dict]): Fields to override on a copy of the plot parameters.
 
         Returns:
-            Plot: The plot object.
+            Plot: ``self`` for method chaining.
+
+        Example:
+            Render triangles and edges together with a camera override::
+
+                plot = app.plot.create()
+                plot.plot(V, tri=F, seg=edges, param_override={"fov": 30})
         """
         if param_override is None:
             param_override = {}
@@ -97,6 +153,23 @@ class Plot:
         color: Optional[np.ndarray] = None,
         recompute_normals: bool = True,
     ):
+        """Update the cached vertex or color buffers and forward to the engine.
+
+        Args:
+            vert (Optional[np.ndarray]): New vertex positions. Only the leading
+                ``len(vert)`` rows of the cached buffer are overwritten.
+            color (Optional[np.ndarray]): New per-vertex colors. Only the leading
+                ``len(color)`` rows of the cached buffer are overwritten.
+            recompute_normals (bool): Whether to recompute normals after the update.
+
+        Example:
+            Animate a cached plot by pushing new vertex positions each frame::
+
+                plot = app.plot.create().tri(V, F)
+                for t in range(10):
+                    V_t = V + np.array([0, 0.01 * t, 0])
+                    plot.update(vert=V_t)
+        """
         if vert is not None:
             self._vert[0 : len(vert)] = vert
             vert = self._vert
@@ -113,17 +186,31 @@ class Plot:
         color: np.ndarray = np.zeros(0),
         param_override: Optional[dict] = None,
     ) -> "Plot":
-        """Plot a triangle mesh.
+        """Plot a triangle mesh, optionally with visualized stitch connections.
+
+        If ``stitch`` is provided, additional vertices and edges are generated
+        to visualize each stitch as a line segment.
 
         Args:
-            vert (np.ndarray): The vertices (#x3) of the mesh.
-            tri (np.ndarray): The triangle elements (#x3) of the mesh.
-            stitch (tuple[np.ndarray, np.ndarray]): The stitch data (index #x3 and weight #x2).
-            color (np.ndarray): The color (#x3) of the mesh. Each value should be in [0,1].
-            param_override (dict): The parameter override.
+            vert (np.ndarray): The vertices (Nx3 or Nx2) of the mesh. 2D inputs
+                are padded to 3D by appending a zero column.
+            tri (np.ndarray): The triangle elements (Fx3) of the mesh.
+            stitch (tuple[np.ndarray, np.ndarray]): Stitch data as a pair of
+                arrays: an index array (Sx3) and a weight array (Sx2).
+            color (np.ndarray): Per-vertex colors (Nx3) with each value in [0, 1].
+            param_override (Optional[dict]): Fields to override on a copy of the plot parameters.
 
         Returns:
-            Plot: The plot object.
+            Plot: ``self`` for method chaining.
+
+        Raises:
+            ValueError: If ``tri`` does not have exactly 3 columns.
+
+        Example:
+            Plot a tetrahedralized armadillo's surface triangles::
+
+                V, F, T = app.mesh.preset("armadillo").decimate(19000).tetrahedralize()
+                app.plot.create().tri(V, F)
         """
         if param_override is None:
             param_override = {}
@@ -163,16 +250,24 @@ class Plot:
         color: np.ndarray,
         param_override: Optional[dict] = None,
     ) -> "Plot":
-        """Add edges to the plot.
+        """Plot a set of edges.
 
         Args:
-            vert (np.ndarray): The vertices (#x3) of the edges.
-            edge (np.ndarray): The edge elements (#x2) of the edges.
-            color (np.ndarray): The color (#x3) of the edges. Each value should be in [0,1].
-            param_override (dict): The parameter override.
+            vert (np.ndarray): The vertices (Nx3) used by the edges.
+            edge (np.ndarray): The edge elements (Ex2) as pairs of vertex indices.
+            color (np.ndarray): Per-vertex colors (Nx3) with each value in [0, 1].
+            param_override (Optional[dict]): Fields to override on a copy of the plot parameters.
 
         Returns:
-            Plot: The plot object.
+            Plot: ``self`` for method chaining.
+
+        Example:
+            Draw just the edges of a mesh colored uniformly::
+
+                V, F = app.mesh.icosphere(r=1.0, subdiv_count=2)
+                edges = np.vstack([F[:, [0, 1]], F[:, [1, 2]], F[:, [2, 0]]])
+                colors = np.tile([1.0, 0.3, 0.3], (len(V), 1))
+                app.plot.create().edge(V, edges, colors)
         """
         if param_override is None:
             param_override = {}
@@ -182,14 +277,20 @@ class Plot:
         return self
 
     def point(self, vert: np.ndarray, param_override: Optional[dict] = None) -> "Plot":
-        """Add points to the plot.
+        """Plot a set of points.
 
         Args:
-            vert (np.ndarray): The vertices (#x3) of the points.
-            param_override (dict): The parameter override.
+            vert (np.ndarray): The vertex positions (Nx3) of the points.
+            param_override (Optional[dict]): Fields to override on a copy of the plot parameters.
 
         Returns:
-            Plot: The plot object.
+            Plot: ``self`` for method chaining.
+
+        Example:
+            Scatter a random point cloud::
+
+                pts = np.random.rand(200, 3)
+                app.plot.create().point(pts)
         """
         if param_override is None:
             param_override = {}
@@ -212,16 +313,29 @@ class Plot:
         color: np.ndarray = np.zeros(0),
         param_override: Optional[dict] = None,
     ) -> "Plot":
-        """Plot a curve.
+        """Plot a curve as a sequence of connected line segments.
+
+        If ``_edge`` is empty, a closed loop is built by connecting each vertex
+        to the next one (with wrap-around).
 
         Args:
-            vert (np.ndarray): The vertices (#x3) of the curve.
-            _edge (np.ndarray): The edge elements (#x2) of the curve.
-            color (np.ndarray): The color (#x3) of the curve. Each value should be in [0,1].
-            param_override (dict): The parameter override.
+            vert (np.ndarray): The vertex positions (Nx3 or Nx2) of the curve.
+                2D inputs are padded to 3D by appending a zero column.
+            _edge (np.ndarray): Optional explicit edge elements (Ex2) of the curve.
+            color (np.ndarray): Per-vertex colors (Nx3) with each value in [0, 1].
+            param_override (Optional[dict]): Fields to override on a copy of the plot parameters.
 
         Returns:
-            Plot: The plot object.
+            Plot: ``self`` for method chaining.
+
+        Example:
+            Plot a parametric 2D curve as a closed loop::
+
+                N = 500
+                t = np.linspace(0, 2 * np.pi, N, endpoint=False)
+                r = 0.85 * np.cos(10 * t) + 1
+                P = np.column_stack([r * np.cos(t), r * np.sin(t)])
+                app.plot.create().curve(P)
         """
         if param_override is None:
             param_override = {}
@@ -252,18 +366,29 @@ class Plot:
         color: np.ndarray = np.zeros(0),
         param_override: Optional[dict] = None,
     ) -> "Plot":
-        """Plot a tetrahedral mesh.
+        """Plot a tetrahedral mesh by rendering the cut surface as triangles.
+
+        Tetrahedra whose centroid lies past ``cut`` along ``axis`` contribute
+        their faces; internal faces shared by two such tetrahedra are removed,
+        leaving only the visible surface of the cut region. ``flat_shading`` is
+        forced on unless ``param_override`` explicitly sets it.
 
         Args:
-            vert (np.ndarray): The vertices (#x3) of the mesh.
-            tet (np.ndarray): The tetrahedral elements (#x4) of the mesh.
-            axis (int): The axis to cut the mesh.
-            cut (float): The cut ratio.
-            color (np.ndarray): The color (#x3) of the mesh. Each value should be in [0,1].
-            param_override (dict): The parameter override.
+            vert (np.ndarray): The vertices (Nx3) of the mesh.
+            tet (np.ndarray): The tetrahedral elements (Tx4) of the mesh.
+            axis (int): The axis index (0, 1, or 2) along which to cut.
+            cut (float): The cut ratio in [0, 1] along ``axis``.
+            color (np.ndarray): Per-vertex colors (Nx3) with each value in [0, 1].
+            param_override (Optional[dict]): Fields to override on a copy of the plot parameters.
 
         Returns:
-            Plot: The plot object.
+            Plot: ``self`` for method chaining.
+
+        Example:
+            Slice an armadillo tet mesh along the x axis and preview it::
+
+                V, F, T = app.mesh.preset("armadillo").decimate(19000).tetrahedralize()
+                app.plot.create().tet(V, T, axis=0, cut=0.5)
         """
         if param_override is None:
             param_override = {}
@@ -345,7 +470,7 @@ class PlotParam:
     pts_color: str = "white"
     default_color: np.ndarray = field(default_factory=lambda: np.array([1.0, 0.8, 0.2]))
     lookat: Optional[list[float]] = None
-    eyeup: float = 0.0
+    eye: Optional[list[float]] = None
     fov: float = 50.0
     width: int = 600
     height: int = 600
@@ -486,7 +611,10 @@ class ThreejsPlotEngine:
             self.obj.wireframe = None
 
         scale = np.max(bbox)
-        position = [0, scale * param.eyeup, 1.25 * scale]
+        if param.eye is not None:
+            position = list(param.eye)
+        else:
+            position = [0, 0, 1.25 * scale]
 
         self.obj.light_0 = p3s.DirectionalLight(
             position=position, intensity=param.direct_intensity

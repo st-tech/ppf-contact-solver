@@ -56,12 +56,22 @@ compute_stiffness(const Proximity<N> &prox, const SVecf<N> &mass,
     float g = norm - offset;
     assert(g > 0.0f);
     float sqr_x = g * g;
+    // Static-side participants have mass == 0, which collapses their
+    // diagonal contribution to zero and leaves the contact stiffness
+    // feeling inertia from only one side — unstable at stiff collisions.
+    // Replace zero masses with the max non-zero mass so the static side
+    // mimics the dynamic partner's inertia.
+    float m_max = 0.0f;
     for (unsigned ii = 0; ii < N; ++ii) {
+        if (mass[ii] > m_max) m_max = mass[ii];
+    }
+    for (unsigned ii = 0; ii < N; ++ii) {
+        float m_ii = mass[ii] > 0.0f ? mass[ii] : m_max;
         for (unsigned jj = 0; jj < N; ++jj) {
             Mat3x3f val = Mat3x3f::Zero();
             val += hess(prox.index[ii], prox.index[jj]);
             if (ii == jj) {
-                val += (mass[ii] / sqr_x) * Mat3x3f::Identity();
+                val += (m_ii / sqr_x) * Mat3x3f::Identity();
             }
             local_hess.template block<3, 3>(3 * ii, 3 * jj) = val;
         }

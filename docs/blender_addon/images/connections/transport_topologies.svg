@@ -1,0 +1,178 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 820" role="img" aria-label="Transport topologies: where the Blender add-on and server.py live for each of the five connection types, and how the add-on reaches the solver in each one">
+  <title>Transport topologies across the five connection types</title>
+  <desc>
+    Five stacked block diagrams, one per connection type, showing which
+    machine the Blender add-on and server.py each live on. Top row,
+    Local on Linux, keeps both on the Blender workstation and talks
+    over a loopback TCP socket with no transport boundary. Second row,
+    SSH and SSH Command, keeps the add-on on the workstation and
+    reaches server.py on a remote Linux host through a paramiko SSH
+    session, with server traffic riding an SSH tunnel. Third row,
+    Docker on the local machine, keeps the add-on, Docker daemon, and
+    container all on the Blender workstation. Fourth row, Docker over
+    SSH and over SSH Command, keeps the add-on on the workstation and
+    reaches the daemon and container on a remote Linux host through a
+    single SSH session. Bottom row, Windows Native, launches server.py
+    as a hidden subprocess on the same Windows workstation as the
+    add-on. Blue solid arrows carry lifecycle commands (start, stop,
+    exec, port checks) and purple dashed arrows carry TCP traffic to
+    server.py.
+  </desc>
+
+  <defs>
+    <marker id="f-arrow-b" viewBox="0 0 10 10" refX="9" refY="5"
+            markerWidth="10" markerHeight="10" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#2e6da4" />
+    </marker>
+    <marker id="f-arrow-p" viewBox="0 0 10 10" refX="9" refY="5"
+            markerWidth="10" markerHeight="10" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#6a3ea1" />
+    </marker>
+  </defs>
+
+  <style>
+    .hdr-title     { font: 700 14px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #1a1a1a; }
+    .hdr-sub       { font: italic 11px -apple-system, sans-serif; fill: #555; }
+    .hdr-addon     { fill: #e9eef7; stroke: #8fa7c7; stroke-width: 1; }
+    .hdr-host      { fill: #fff3e0; stroke: #d7a95a; stroke-width: 1; }
+    .hdr-container { fill: #eef6eb; stroke: #86b36a; stroke-width: 1; }
+    .mode-title    { font: 700 15px -apple-system, sans-serif; fill: #1a1a1a; }
+    .mode-sub      { font: 12px -apple-system, sans-serif; fill: #555; }
+    .arr-ctl       { stroke: #2e6da4; stroke-width: 2; fill: none; }
+    .arr-data      { stroke: #6a3ea1; stroke-width: 2; fill: none; stroke-dasharray: 5 4; }
+    .lbl-ctl       { font: 600 12px -apple-system, sans-serif; fill: #1f4a75; }
+    .lbl-data      { font: 600 12px -apple-system, sans-serif; fill: #5a3492; }
+    .lbl-mono      { font: 600 11px "Menlo", "Consolas", monospace; fill: #1a1a1a; }
+    .note          { font: 11px -apple-system, sans-serif; fill: #555; }
+    .machine-box   { fill: none; stroke: #aaa; stroke-width: 1.2; stroke-dasharray: 6 4; }
+    .machine-lbl   { font: italic 11px -apple-system, sans-serif; fill: #777; }
+    .legend-box    { fill: #fafafa; stroke: #ddd; stroke-width: 1; }
+  </style>
+
+  <!-- ============ Legend ============ -->
+  <rect x="520" y="12" width="370" height="46" rx="6" class="legend-box" />
+  <line x1="535" y1="30" x2="565" y2="30" class="arr-ctl" marker-end="url(#f-arrow-b)" />
+  <text x="572" y="34" class="lbl-ctl">lifecycle</text>
+  <text x="572" y="48" class="note">start / stop / exec / port check</text>
+  <line x1="695" y1="30" x2="725" y2="30" class="arr-data" marker-end="url(#f-arrow-p)" />
+  <text x="732" y="34" class="lbl-data">server traffic</text>
+  <text x="732" y="48" class="note">TCP to server.py</text>
+
+  <!-- ============ Row 1: Local (Linux) ============ -->
+  <text x="20" y="90" class="mode-title">Local (Linux)</text>
+  <text x="20" y="108" class="mode-sub">Add-on and <tspan class="lbl-mono">server.py</tspan> share one Linux workstation. Loopback TCP, no transport boundary.</text>
+
+  <rect x="20" y="120" width="860" height="72" rx="8" class="machine-box" />
+  <text x="36" y="138" class="machine-lbl">Blender workstation (Linux)</text>
+
+  <rect x="60"  y="146" width="230" height="40" rx="6" class="hdr-addon" />
+  <text x="175" y="163" text-anchor="middle" class="hdr-title">Blender + add-on</text>
+  <text x="175" y="179" text-anchor="middle" class="hdr-sub">local subprocess + socket</text>
+
+  <rect x="620" y="146" width="230" height="40" rx="6" class="hdr-container" />
+  <text x="735" y="163" text-anchor="middle" class="hdr-title">server.py</text>
+  <text x="735" y="179" text-anchor="middle" class="lbl-mono">python3 server.py :PORT</text>
+
+  <line x1="290" y1="158" x2="620" y2="158" class="arr-ctl" marker-end="url(#f-arrow-b)" />
+  <line x1="290" y1="174" x2="620" y2="174" class="arr-data" marker-end="url(#f-arrow-p)" />
+  <text x="455" y="154" text-anchor="middle" class="lbl-mono">nohup python3</text>
+  <text x="455" y="188" text-anchor="middle" class="lbl-mono">socket to localhost:&lt;port&gt;</text>
+
+  <!-- ============ Row 2: SSH / SSH Command ============ -->
+  <text x="20" y="225" class="mode-title">SSH  /  SSH Command</text>
+  <text x="20" y="243" class="mode-sub">Add-on on the workstation, <tspan class="lbl-mono">server.py</tspan> on a remote Linux host. One paramiko SSH session carries both.</text>
+
+  <rect x="20"  y="255" width="270" height="80" rx="8" class="machine-box" />
+  <text x="36"  y="273" class="machine-lbl">Blender workstation</text>
+  <rect x="310" y="255" width="570" height="80" rx="8" class="machine-box" />
+  <text x="326" y="273" class="machine-lbl">Remote Linux host</text>
+
+  <rect x="45"  y="283" width="220" height="40" rx="6" class="hdr-addon" />
+  <text x="155" y="300" text-anchor="middle" class="hdr-title">Blender + add-on</text>
+  <text x="155" y="316" text-anchor="middle" class="hdr-sub">paramiko (SSH)</text>
+
+  <rect x="540" y="283" width="320" height="40" rx="6" class="hdr-container" />
+  <text x="700" y="300" text-anchor="middle" class="hdr-title">server.py</text>
+  <text x="700" y="316" text-anchor="middle" class="lbl-mono">nohup python3 server.py :PORT</text>
+
+  <line x1="265" y1="295" x2="540" y2="295" class="arr-ctl" marker-end="url(#f-arrow-b)" />
+  <line x1="265" y1="311" x2="540" y2="311" class="arr-data" marker-end="url(#f-arrow-p)" />
+  <text x="402" y="291" text-anchor="middle" class="lbl-mono">ssh exec</text>
+  <text x="402" y="325" text-anchor="middle" class="lbl-mono">SSH tunnel (direct-tcpip)</text>
+
+  <!-- ============ Row 3: Docker (local) ============ -->
+  <text x="20" y="372" class="mode-title">Docker (local)</text>
+  <text x="20" y="390" class="mode-sub">Daemon and container both on the Blender workstation. Detailed in <tspan class="lbl-mono">connections/docker</tspan>.</text>
+
+  <rect x="20" y="402" width="860" height="100" rx="8" class="machine-box" />
+  <text x="36" y="420" class="machine-lbl">Blender workstation (Linux)</text>
+
+  <rect x="45"  y="430" width="220" height="40" rx="6" class="hdr-addon" />
+  <text x="155" y="447" text-anchor="middle" class="hdr-title">Blender + add-on</text>
+  <text x="155" y="463" text-anchor="middle" class="hdr-sub">docker-py + socket</text>
+
+  <rect x="335" y="430" width="220" height="40" rx="6" class="hdr-host" />
+  <text x="445" y="447" text-anchor="middle" class="hdr-title">Docker daemon</text>
+  <text x="445" y="463" text-anchor="middle" class="hdr-sub">local Unix socket</text>
+
+  <rect x="625" y="430" width="220" height="40" rx="6" class="hdr-container" />
+  <text x="735" y="447" text-anchor="middle" class="hdr-title">container</text>
+  <text x="735" y="463" text-anchor="middle" class="lbl-mono">server.py :PORT</text>
+
+  <line x1="265" y1="442" x2="335" y2="442" class="arr-ctl" marker-end="url(#f-arrow-b)" />
+  <line x1="555" y1="442" x2="625" y2="442" class="arr-ctl" marker-end="url(#f-arrow-b)" />
+  <text x="300" y="436" text-anchor="middle" class="lbl-mono">docker-py</text>
+  <text x="590" y="436" text-anchor="middle" class="lbl-mono">exec</text>
+
+  <path d="M 265 470 Q 445 500 625 470" class="arr-data" marker-end="url(#f-arrow-p)" />
+  <text x="445" y="497" text-anchor="middle" class="note">socket to localhost:&lt;port&gt; (bypasses daemon)</text>
+
+  <!-- ============ Row 4: Docker over SSH / over SSH Command ============ -->
+  <text x="20" y="540" class="mode-title">Docker over SSH  /  over SSH Command</text>
+  <text x="20" y="558" class="mode-sub">Daemon and container on a remote Linux host. Detailed in <tspan class="lbl-mono">connections/docker</tspan>.</text>
+
+  <rect x="20"  y="570" width="230" height="100" rx="8" class="machine-box" />
+  <text x="36"  y="588" class="machine-lbl">Blender workstation</text>
+  <rect x="270" y="570" width="610" height="100" rx="8" class="machine-box" />
+  <text x="286" y="588" class="machine-lbl">Remote Linux host (SSH reachable)</text>
+
+  <rect x="35"  y="598" width="200" height="40" rx="6" class="hdr-addon" />
+  <text x="135" y="615" text-anchor="middle" class="hdr-title">Blender + add-on</text>
+  <text x="135" y="631" text-anchor="middle" class="hdr-sub">paramiko (SSH)</text>
+
+  <rect x="300" y="598" width="240" height="40" rx="6" class="hdr-host" />
+  <text x="420" y="615" text-anchor="middle" class="hdr-title">Docker daemon</text>
+  <text x="420" y="631" text-anchor="middle" class="hdr-sub">on the remote host</text>
+
+  <rect x="610" y="598" width="240" height="40" rx="6" class="hdr-container" />
+  <text x="730" y="615" text-anchor="middle" class="hdr-title">container</text>
+  <text x="730" y="631" text-anchor="middle" class="lbl-mono">server.py :PORT (-p &lt;port&gt;:&lt;port&gt;)</text>
+
+  <line x1="235" y1="610" x2="300" y2="610" class="arr-ctl" marker-end="url(#f-arrow-b)" />
+  <line x1="540" y1="610" x2="610" y2="610" class="arr-ctl" marker-end="url(#f-arrow-b)" />
+  <text x="267" y="604" text-anchor="middle" class="lbl-mono">ssh</text>
+  <text x="575" y="604" text-anchor="middle" class="lbl-mono">exec</text>
+
+  <path d="M 235 638 Q 420 668 610 638" class="arr-data" marker-end="url(#f-arrow-p)" />
+  <text x="420" y="665" text-anchor="middle" class="note">SSH tunnel to remote localhost:&lt;port&gt;</text>
+
+  <!-- ============ Row 5: Windows Native ============ -->
+  <text x="20" y="708" class="mode-title">Windows Native</text>
+  <text x="20" y="726" class="mode-sub">Add-on launches <tspan class="lbl-mono">server.py</tspan> as a hidden subprocess on the same Windows workstation. No SSH, no Docker.</text>
+
+  <rect x="20" y="738" width="860" height="72" rx="8" class="machine-box" />
+  <text x="36" y="756" class="machine-lbl">Blender workstation (Windows)</text>
+
+  <rect x="60"  y="764" width="230" height="40" rx="6" class="hdr-addon" />
+  <text x="175" y="781" text-anchor="middle" class="hdr-title">Blender + add-on</text>
+  <text x="175" y="797" text-anchor="middle" class="hdr-sub">Win32 subprocess + socket</text>
+
+  <rect x="620" y="764" width="230" height="40" rx="6" class="hdr-container" />
+  <text x="735" y="781" text-anchor="middle" class="hdr-title">server.py</text>
+  <text x="735" y="797" text-anchor="middle" class="lbl-mono">python.exe server.py :PORT</text>
+
+  <line x1="290" y1="776" x2="620" y2="776" class="arr-ctl" marker-end="url(#f-arrow-b)" />
+  <line x1="290" y1="792" x2="620" y2="792" class="arr-data" marker-end="url(#f-arrow-p)" />
+  <text x="455" y="772" text-anchor="middle" class="lbl-mono">CreateProcess (no console)</text>
+  <text x="455" y="806" text-anchor="middle" class="lbl-mono">socket to localhost:&lt;port&gt;</text>
+</svg>

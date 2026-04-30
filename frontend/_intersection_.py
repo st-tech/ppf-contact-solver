@@ -16,6 +16,7 @@ from ._bvh_ import (
     MeshBVH,
     bbox_overlap,
     dot3,
+    extract_edges_with_tri_map,
 )
 
 # =============================================================================
@@ -25,7 +26,7 @@ from ._bvh_ import (
 
 @njit(cache=True)
 def _cross(a: np.ndarray, b: np.ndarray) -> np.ndarray:
-    """Compute cross product of two 3D vectors."""
+    """Return the cross product of two 3D vectors as a new array."""
     result = np.empty(3, dtype=np.float64)
     result[0] = a[1] * b[2] - a[2] * b[1]
     result[1] = a[2] * b[0] - a[0] * b[2]
@@ -39,10 +40,12 @@ def _point_triangle_inside(
     d1: np.ndarray,
     d2: np.ndarray,
 ) -> bool:
-    """Check if point p is inside triangle defined by edges d1, d2 from origin.
+    """Return True if p lies inside the triangle with edges d1, d2 from the origin.
 
-    Uses least-squares solve for barycentric coordinates:
-    Solves (A^T A) c = A^T p where A = [d1, d2].
+    The triangle has vertices 0, d1, d2. Solves the 2x2 normal-equation
+    system (A^T A) c = A^T p with A = [d1, d2] for the two free
+    barycentric weights, then checks all three weights lie in [0, 1].
+    Returns False for a degenerate triangle (zero Gram determinant).
     """
     a00 = dot3(d1, d1)
     a01 = dot3(d1, d2)
@@ -71,12 +74,12 @@ def edge_triangle_intersect(
     v1: np.ndarray,
     v2: np.ndarray,
 ) -> bool:
-    """Test if edge segment intersects triangle.
+    """Test whether segment (e0, e1) crosses triangle (v0, v1, v2).
 
-    Uses signed distance approach: checks if edge endpoints are on opposite
-    sides of triangle plane, then verifies intersection point is inside triangle.
-
-    Returns True if the edge passes through the triangle interior.
+    Uses signed distances to the triangle plane: if the endpoints lie
+    on strictly opposite sides, the plane-crossing point is computed
+    and tested against the triangle. Coplanar or touching cases (at
+    least one endpoint exactly on the plane) return False.
     """
     d1 = v1 - v0
     d2 = v2 - v0
@@ -103,7 +106,11 @@ def _segments_intersect_2d(
     p4x: float,
     p4y: float,
 ) -> bool:
-    """Check if 2D line segments (p1,p2) and (p3,p4) intersect."""
+    """Return True if 2D segments (p1, p2) and (p3, p4) intersect in their interiors.
+
+    Uses an epsilon-padded open-interval test on the segment parameters,
+    so shared endpoints and grazing contact do not count as intersection.
+    """
     d1x = p2x - p1x
     d1y = p2y - p1y
     d2x = p4x - p3x
@@ -132,7 +139,11 @@ def _point_in_triangle_2d(
     v2x: float,
     v2y: float,
 ) -> bool:
-    """Check if point is strictly inside triangle in 2D."""
+    """Return True if the 2D point lies inside (or on an edge of) the 2D triangle.
+
+    Uses a same-sign test on the three half-planes; points exactly on
+    an edge produce a zero sign and are treated as inside.
+    """
 
     def sign(x1, y1, x2, y2, x3, y3):
         return (x1 - x3) * (y2 - y3) - (x2 - x3) * (y1 - y3)
@@ -156,9 +167,14 @@ def triangles_coplanar_overlap(
     t1_v1: np.ndarray,
     t1_v2: np.ndarray,
 ) -> bool:
-    """Check if two coplanar triangles overlap using 2D projection.
+    """Return True if two coplanar triangles overlap after 2D projection.
 
-    Returns True if triangles overlap (share interior area).
+    Verifies coplanarity by checking the signed distances of t1's
+    vertices to t0's plane against a size-scaled tolerance; non-coplanar
+    inputs return False. When coplanar, projects both triangles onto
+    the axis pair with the smallest normal component and returns True
+    if any edges cross or any vertex of one triangle lies inside the
+    other.
     """
     eps = 1e-10
 
@@ -230,7 +246,7 @@ def triangles_coplanar_overlap(
 def elements_share_vertex(
     elem_i: np.ndarray, size_i: int, elem_j: np.ndarray, size_j: int
 ) -> bool:
-    """Check if two elements share any vertex."""
+    """Return True if the two index arrays share any vertex index."""
     for i in range(size_i):
         for j in range(size_j):
             if elem_i[i] == elem_j[j]:
@@ -266,7 +282,15 @@ def _find_edge_tri_intersections(
     pair_idx: int,
     count_only: bool,
 ) -> int:
-    """Find triangles intersected by edge ei using triangle BVH."""
+    """Find triangles intersected by edge ei via the triangle BVH.
+
+    Skips the edge's own parent triangle(s), triangles that share any
+    vertex with the edge, and pairs in which both the edge's parent
+    triangle and the candidate triangle are marked as colliders. When
+    count_only is False, each hit (ei, ti) is written into out_pairs
+    starting at pair_idx. Returns the number of hits found for this
+    edge.
+    """
     edge = edges[ei]
     e0 = verts[edge[0]]
     e1 = verts[edge[1]]
@@ -470,10 +494,13 @@ def _edge_tri_pairs_to_tri_pairs(
     edge_tri_pairs: np.ndarray,
     edge_to_tri: np.ndarray,
 ) -> list[tuple[int, int]]:
-    """Convert edge-triangle intersection pairs to triangle-triangle pairs.
+    """Convert edge-triangle hits into sorted, deduplicated triangle-triangle pairs.
 
-    Each edge belongs to 1-2 triangles. When an edge intersects a triangle,
-    we report the pair (edge's parent triangle, intersected triangle).
+    Each mesh edge belongs to one or two parent triangles. For every
+    (edge, tri) hit, this emits (parent_tri, tri) ordered so the
+    smaller index comes first, skipping any pair where a parent equals
+    the hit triangle. Rod edges (edge_to_tri entries of -1) contribute
+    no pairs here and must be handled by the caller.
     """
     tri_pairs_set: set[tuple[int, int]] = set()
 
@@ -500,37 +527,51 @@ def check_self_intersection(
     V: np.ndarray,
     F: np.ndarray,
     is_collider: Optional[np.ndarray] = None,
+    rod_edges: Optional[np.ndarray] = None,
     verbose: bool = False,
 ) -> list[tuple[int, int]]:
-    """Check for self-intersections in a triangle mesh.
+    """Check for self-intersections in a triangle mesh, optionally including rod edges.
 
-    Uses edge-triangle intersection tests: when two triangles intersect,
-    an edge from one must pass through the other. BVHs are built for both
-    triangles and edges for efficient queries.
+    Uses edge-triangle intersection tests: when two triangles intersect
+    in general position, at least one edge of one triangle pierces the
+    other. Mesh edges are queried against a BVH over the triangles;
+    coplanar overlap is handled as a separate fallback test.
+
+    Rod edges (from open curves) are appended to the mesh edge list
+    with a parent triangle of -1, so they bypass the adjacent-triangle
+    filter and are tested against every triangle. Their hits are
+    reported separately as (-1, tri_idx) pairs.
 
     Args:
-        V: Vertices (N, 3)
-        F: Triangle faces (M, 3)
-        is_collider: Optional boolean array (M,) indicating which triangles
-            belong to collider meshes. Pairs where BOTH triangles are
+        V: Vertices (N, 3).
+        F: Triangle faces (M, 3).
+        is_collider: Optional boolean array (M,) marking triangles that
+            belong to collider meshes. Pairs where both triangles are
             colliders are skipped.
-        verbose: If True, show progress bar.
+        rod_edges: Optional edge array (K, 2) for rod/curve edges to
+            test against triangles.
+        verbose: If True, display a tqdm progress bar for the four
+            phases (flatten, build BVH, count, collect).
 
     Returns:
-        List of intersecting triangle pairs (i, j) where i < j.
-        Empty list if no intersections found.
+        Sorted list of intersecting pairs. Triangle-triangle pairs are
+        (i, j) with i < j; rod-triangle hits appear as (-1, tri_idx)
+        and are appended after the triangle-triangle pairs. Empty list
+        if no intersections are found.
     """
     V = np.ascontiguousarray(V, dtype=np.float64)
     F = np.ascontiguousarray(F, dtype=np.int32)
 
     n_tris = len(F)
-    if n_tris < 2:
+    has_rods = rod_edges is not None and len(rod_edges) > 0
+    if n_tris < 2 and not has_rods:
         return []
 
     steps = ["Flatten", "Building BVH", "Counting intersections", "Collecting pairs"]
     pbar = tqdm(total=len(steps), desc="intersection check", disable=not verbose)
 
-    # Build mesh BVH (triangles + edges)
+    # Build mesh BVH. If rod edges provided, append them to mesh edges
+    # with edge_to_tri = [-1, -1] so they bypass the adjacent-tri filter.
     pbar.set_postfix_str(steps[0])
 
     def on_flatten():
@@ -540,7 +581,18 @@ def check_self_intersection(
     def on_build():
         pbar.update(1)
 
-    mesh_bvh = MeshBVH(V, tris=F, on_flatten=on_flatten, on_build=on_build)
+    if has_rods:
+        # Extract mesh edges first, then append rod edges
+        mesh_edges, mesh_edge_to_tri = extract_edges_with_tri_map(F)
+        rod_arr = np.ascontiguousarray(rod_edges, dtype=np.int32)
+        combined_edges = np.vstack([mesh_edges, rod_arr])
+        rod_e2t = np.full((len(rod_arr), 2), -1, dtype=np.int32)
+        combined_e2t = np.vstack([mesh_edge_to_tri, rod_e2t])
+        mesh_bvh = MeshBVH(V, tris=F, edges=combined_edges,
+                           edge_to_tri=combined_e2t,
+                           on_flatten=on_flatten, on_build=on_build)
+    else:
+        mesh_bvh = MeshBVH(V, tris=F, on_flatten=on_flatten, on_build=on_build)
 
     if mesh_bvh.tri_bvh is None or mesh_bvh.edge_bvh is None:
         pbar.close()
@@ -620,4 +672,16 @@ def check_self_intersection(
     pbar.close()
 
     # Convert edge-triangle pairs to triangle-triangle pairs
-    return _edge_tri_pairs_to_tri_pairs(edge_tri_pairs, edge_to_tri)
+    tri_tri_pairs = _edge_tri_pairs_to_tri_pairs(edge_tri_pairs, edge_to_tri)
+
+    # For rod edges, edge_to_tri is [-1, -1], so _edge_tri_pairs_to_tri_pairs
+    # skips them. Collect rod-triangle intersections separately.
+    if has_rods:
+        n_mesh_edges = len(mesh_edges) if has_rods else mesh_bvh.n_edges
+        for pair in edge_tri_pairs:
+            edge_idx, tri_idx = int(pair[0]), int(pair[1])
+            if edge_idx >= n_mesh_edges:
+                # This is a rod edge hitting a triangle
+                tri_tri_pairs.append((-1, tri_idx))
+
+    return tri_tri_pairs

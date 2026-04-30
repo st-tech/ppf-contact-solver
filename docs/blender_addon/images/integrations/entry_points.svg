@@ -1,0 +1,144 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 640" role="img" aria-label="Three entry points (MCP Streamable HTTP, Blender UI operators, and the Python module) funnel into the same shared add-on core, through one of five transports, to server.py">
+  <title>Three entry points converge on the same add-on surface</title>
+  <desc>
+    A layered block diagram. The top row shows three client categories:
+    AI agents and automation talking to the add-on remotely (in terms
+    of process), a human operator driving the Blender sidebar directly,
+    and a Python user scripting the add-on from Blender's text editor
+    or a notebook. Each client lands in a protocol box in the second
+    row: an MCP Streamable HTTP server on localhost port 9633; Blender
+    operators keyed by bl_idname; and the zozo_contact_solver Python
+    module,
+    which forwards unknown attributes to the matching operator. All
+    three protocol boxes funnel into a single shared add-on core row
+    labeled scene.zozo_contact_solver, the place where pins, merges,
+    colliders, and every scene mutation run through the same
+    validation. A single transport row below that stands in for the
+    five connection types. At the bottom, server.py runs on whichever
+    side of the transport boundary the mode places it. An orange pill
+    on the MCP box reminds the reader that the HTTP server binds
+    localhost only.
+  </desc>
+
+  <defs>
+    <marker id="e-arrow" viewBox="0 0 10 10" refX="9" refY="5"
+            markerWidth="10" markerHeight="10" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#2e6da4" />
+    </marker>
+    <marker id="e-arrow-g" viewBox="0 0 10 10" refX="9" refY="5"
+            markerWidth="10" markerHeight="10" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#5a7a3a" />
+    </marker>
+  </defs>
+
+  <style>
+    .title       { font: 700 17px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #1a1a1a; }
+    .sub         { font: 13px -apple-system, sans-serif; fill: #555; }
+    .row-lbl     { font: italic 12px -apple-system, sans-serif; fill: #777; }
+
+    .box-client  { fill: #f3f5fa; stroke: #8fa7c7; stroke-width: 1.2; }
+    .box-proto   { fill: #fff3e0; stroke: #d7a95a; stroke-width: 1.2; }
+    .box-core    { fill: #f2ecf7; stroke: #9a80c0; stroke-width: 1.3; }
+    .box-trans   { fill: #f5f5f5; stroke: #999; stroke-width: 1.2; stroke-dasharray: 6 4; }
+    .box-server  { fill: #eef6eb; stroke: #86b36a; stroke-width: 1.3; }
+
+    .hdr-title   { font: 700 14px -apple-system, sans-serif; fill: #1a1a1a; }
+    .hdr-sub     { font: 11.5px -apple-system, sans-serif; fill: #444; }
+    .hdr-mono    { font: 600 11px "Menlo", "Consolas", monospace; fill: #1a1a1a; }
+    .hdr-italic  { font: italic 11px -apple-system, sans-serif; fill: #555; }
+
+    .arr         { stroke: #2e6da4; stroke-width: 2; fill: none; }
+    .arr-g       { stroke: #5a7a3a; stroke-width: 2; fill: none; stroke-dasharray: 5 4; }
+    .lbl-mono    { font: 600 11px "Menlo", "Consolas", monospace; fill: #1a1a1a; }
+
+    .pill-warn   { fill: #fde2d0; stroke: #d77a3a; stroke-width: 1; }
+    .pill-tx     { font: 700 10.5px -apple-system, sans-serif; fill: #7a3a00; }
+    .note        { font: 11px -apple-system, sans-serif; fill: #555; }
+  </style>
+
+  <!-- Title -->
+  <text x="20" y="30" class="title">The add-on's three entry points</text>
+  <text x="20" y="50" class="sub">MCP, the Blender UI, and the Python module all land on the same validation layer, and then on the same transport.</text>
+
+  <!-- ============ Row 1: Clients ============ -->
+  <text x="20" y="88" class="row-lbl">who is driving the add-on</text>
+
+  <!-- AI agents -->
+  <rect x="30" y="98" width="280" height="72" rx="8" class="box-client" />
+  <text x="170" y="122" text-anchor="middle" class="hdr-title">AI agents &amp; automation</text>
+  <text x="170" y="140" text-anchor="middle" class="hdr-sub">Claude Desktop, IDE plugins,</text>
+  <text x="170" y="156" text-anchor="middle" class="hdr-sub">CI runners, shell scripts</text>
+
+  <!-- Human -->
+  <rect x="340" y="98" width="280" height="72" rx="8" class="box-client" />
+  <text x="480" y="122" text-anchor="middle" class="hdr-title">Human operator</text>
+  <text x="480" y="140" text-anchor="middle" class="hdr-sub">Blender 3D viewport sidebar</text>
+  <text x="480" y="156" text-anchor="middle" class="hdr-sub">(N-panel, buttons, fields)</text>
+
+  <!-- Python user -->
+  <rect x="650" y="98" width="280" height="72" rx="8" class="box-client" />
+  <text x="790" y="122" text-anchor="middle" class="hdr-title">Python user</text>
+  <text x="790" y="140" text-anchor="middle" class="hdr-sub">Blender text editor,</text>
+  <text x="790" y="156" text-anchor="middle" class="hdr-sub">JupyterLab notebooks, add-on code</text>
+
+  <!-- ============ Arrows clients -> protocols ============ -->
+  <line x1="170" y1="170" x2="170" y2="210" class="arr" marker-end="url(#e-arrow)" />
+  <line x1="480" y1="170" x2="480" y2="210" class="arr" marker-end="url(#e-arrow)" />
+  <line x1="790" y1="170" x2="790" y2="210" class="arr" marker-end="url(#e-arrow)" />
+
+  <!-- ============ Row 2: Protocols ============ -->
+  <text x="20" y="230" class="row-lbl">how that drive lands in the add-on</text>
+
+  <!-- MCP -->
+  <rect x="30" y="240" width="280" height="100" rx="8" class="box-proto" />
+  <text x="170" y="264" text-anchor="middle" class="hdr-title">MCP Streamable HTTP</text>
+  <text x="170" y="282" text-anchor="middle" class="hdr-mono">POST/GET/DELETE /mcp</text>
+  <text x="170" y="300" text-anchor="middle" class="hdr-mono">:9633 (fallback +1…+9)</text>
+  <rect x="75" y="310" width="190" height="20" rx="10" class="pill-warn" />
+  <text x="170" y="324" text-anchor="middle" class="pill-tx">localhost only (do not expose)</text>
+
+  <!-- Blender operators -->
+  <rect x="340" y="240" width="280" height="100" rx="8" class="box-proto" />
+  <text x="480" y="264" text-anchor="middle" class="hdr-title">Blender operators</text>
+  <text x="480" y="284" text-anchor="middle" class="hdr-mono">bl_idname = "solver.*"</text>
+  <text x="480" y="300" text-anchor="middle" class="hdr-mono">bl_idname = "object.*"</text>
+  <text x="480" y="320" text-anchor="middle" class="hdr-italic">fired by every button in the panel</text>
+
+  <!-- Python module -->
+  <rect x="650" y="240" width="280" height="100" rx="8" class="box-proto" />
+  <text x="790" y="264" text-anchor="middle" class="hdr-title">zozo_contact_solver module</text>
+  <text x="790" y="284" text-anchor="middle" class="hdr-mono">solver.create_group(...)</text>
+  <text x="790" y="300" text-anchor="middle" class="hdr-mono">solver.transfer_data(), ...</text>
+  <text x="790" y="320" text-anchor="middle" class="hdr-italic">forwards unknown attrs to operators</text>
+
+  <!-- ============ Arrows protocols -> core ============ -->
+  <path d="M 170 340 L 170 380 L 480 380" class="arr" marker-end="url(#e-arrow)" />
+  <line x1="480" y1="340" x2="480" y2="380" class="arr" marker-end="url(#e-arrow)" />
+  <path d="M 790 340 L 790 380 L 480 380" class="arr" />
+
+  <!-- ============ Row 3: Shared core ============ -->
+  <text x="20" y="400" class="row-lbl">where every path meets (same validation, same scene state)</text>
+
+  <rect x="30" y="410" width="900" height="80" rx="10" class="box-core" />
+  <text x="480" y="434" text-anchor="middle" class="hdr-title">Add-on core</text>
+  <text x="480" y="454" text-anchor="middle" class="hdr-mono">scene.zozo_contact_solver  ::  state, object_group_0…31, merge_pairs, invisible_colliders</text>
+  <text x="480" y="474" text-anchor="middle" class="hdr-italic">pins, merges, colliders, transfer, run, fetch: all three paths share this validation layer</text>
+
+  <!-- Arrow core -> transport -->
+  <line x1="480" y1="490" x2="480" y2="528" class="arr-g" marker-end="url(#e-arrow-g)" />
+  <text x="490" y="512" class="lbl-mono">TCP to server.py</text>
+
+  <!-- ============ Row 4: Transport ============ -->
+  <text x="20" y="548" class="row-lbl">across one of the five transports</text>
+
+  <rect x="30" y="558" width="900" height="46" rx="8" class="box-trans" />
+  <text x="480" y="578" text-anchor="middle" class="hdr-title">Transport</text>
+  <text x="480" y="594" text-anchor="middle" class="hdr-mono">Local  /  SSH (+ Command)  /  Docker  /  Docker over SSH (+ Command)  /  Windows Native</text>
+
+  <!-- Arrow transport -> server -->
+  <line x1="480" y1="604" x2="480" y2="614" class="arr-g" marker-end="url(#e-arrow-g)" />
+
+  <!-- server.py box -->
+  <rect x="330" y="614" width="300" height="22" rx="6" class="box-server" />
+  <text x="480" y="630" text-anchor="middle" class="hdr-mono">server.py  :PORT</text>
+</svg>

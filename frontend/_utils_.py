@@ -24,6 +24,17 @@ def get_cache_dir() -> str:
 
     Returns:
         str: Path to the ppf-cts cache directory.
+
+    Example:
+        Stage a downloaded mesh inside the shared cache directory so
+        later runs can reuse it::
+
+            import os
+            from frontend import get_cache_dir
+
+            cache = get_cache_dir()
+            mesh_path = os.path.join(cache, "fishingknot.ply")
+            print(mesh_path)
     """
     if platform.system() == "Windows":
         # Use project-relative cache on Windows
@@ -57,17 +68,20 @@ def get_export_base_path() -> str:
 
 
 def dict_to_html_table(data: dict, classes: str = "table", index: bool = False) -> str:
-    """Convert a dictionary to an HTML table.
+    """Convert a column-oriented dictionary to an HTML table.
 
-    Replacement for pandas DataFrame.to_html() to avoid pandas dependency.
+    Replacement for pandas ``DataFrame.to_html()`` that avoids the pandas
+    dependency.
 
     Args:
-        data: Dictionary where keys are column names and values are lists of values.
-        classes: CSS classes to add to the table element.
-        index: Whether to include row index (ignored, kept for API compatibility).
+        data: Dictionary where keys are column names and values are lists
+            of cell values. The row count is taken from the first column.
+        classes: CSS classes to set on the ``<table>`` element.
+        index: Accepted for API compatibility with pandas; ignored.
 
     Returns:
-        HTML string representation of the table.
+        HTML string representation of the table. Returns ``<table></table>``
+        when ``data`` is empty.
     """
     if not data:
         return "<table></table>"
@@ -100,11 +114,36 @@ def dict_to_html_table(data: dict, classes: str = "table", index: bool = False) 
 
 
 class Utils:
-    """Utility class for frontend."""
+    """Utility class for frontend.
+
+    Example:
+        Check whether the solver is running and stop it if so before
+        kicking off a new simulation::
+
+            from frontend import Utils
+
+            if Utils.busy():
+                Utils.terminate()
+            print("gpus:", Utils.get_gpu_count())
+    """
 
     @staticmethod
     def in_jupyter_notebook():
-        """Determine if the code is running in a Jupyter notebook."""
+        """Determine if the code is running in a Jupyter notebook.
+
+        Returns ``False`` when a ``.CLI`` or ``.CI`` marker file is present
+        alongside this module, or when IPython is unavailable.
+
+        Example:
+            Gate optional rich widgets behind notebook detection::
+
+                from frontend import Utils
+
+                if Utils.in_jupyter_notebook():
+                    print("interactive widgets available")
+                else:
+                    print("running from a script")
+        """
         dirpath = os.path.dirname(os.path.abspath(__file__))
         if os.path.exists(os.path.join(dirpath, ".CLI")) or os.path.exists(
             os.path.join(dirpath, ".CI")
@@ -128,12 +167,24 @@ class Utils:
         """Determine if the code is running in a CI environment.
 
         Returns:
-            name (str): The name of the CI environment, or an empty string if not in a CI environment.
+            Optional[str]: The name of the CI environment read from the
+            ``.CI`` file, or ``None`` if no ``.CI`` file is present.
+
+        Raises:
+            ValueError: If the ``.CI`` file exists but is empty.
+
+        Example:
+            Skip a heavy example when running under CI::
+
+                from frontend import Utils
+
+                if Utils.ci_name() is not None:
+                    print("running in CI; using short config")
         """
         dirpath = os.path.dirname(os.path.abspath(__file__))
         path = os.path.join(dirpath, ".CI")
         if os.path.exists(path):
-            with open(path) as f:
+            with open(path, encoding="utf-8") as f:
                 lines = f.readlines()
                 last_line = ""
                 if len(lines) > 0:
@@ -159,6 +210,14 @@ class Utils:
 
         Returns:
             bool: True if fast check mode is enabled.
+
+        Example:
+            Shorten a simulation when running under fast-check mode::
+
+                from frontend import Utils
+
+                frames = 1 if Utils.is_fast_check() else 240
+                print("frames:", frames)
         """
         return Utils._fast_check_enabled
 
@@ -168,17 +227,48 @@ class Utils:
 
         Args:
             enabled: Whether to enable fast check mode.
+
+        Example:
+            Toggle fast-check mode on before running a smoke test and
+            turn it back off afterwards::
+
+                from frontend import Utils
+
+                Utils.set_fast_check(True)
+                try:
+                    assert Utils.is_fast_check()
+                finally:
+                    Utils.set_fast_check(False)
         """
         Utils._fast_check_enabled = enabled
 
     @staticmethod
     def get_ci_root() -> str:
-        """Get the path to the CI directory."""
+        """Get the path to the CI directory.
+
+        Example:
+            Print the root directory under which per-CI-environment
+            artifacts are stored::
+
+                from frontend import Utils
+
+                print(Utils.get_ci_root())
+        """
         return os.path.join(get_cache_dir(), "ci")
 
     @staticmethod
     def get_ci_dir() -> str:
-        """Get the path to the CI local directory."""
+        """Get the path to the CI local directory.
+
+        Example:
+            Resolve the CI scratch directory when running under a CI
+            environment::
+
+                from frontend import Utils
+
+                if Utils.ci_name() is not None:
+                    print(Utils.get_ci_dir())
+        """
         ci_name = Utils.ci_name()
         assert ci_name is not None
         return os.path.join(Utils.get_ci_root(), ci_name)
@@ -216,9 +306,75 @@ class Utils:
             print("nvidia-smi not found. Is NVIDIA driver installed?")
             return None
 
+    MIN_SM = 60  # Pascal or later
+
+    @staticmethod
+    def check_gpu():
+        """Check that an NVIDIA GPU with sufficient compute capability is present.
+
+        Raises:
+            RuntimeError: If nvidia-smi is not found or the GPU's SM version
+                is below MIN_SM.
+
+        Example:
+            Validate the GPU before building a session, falling back to
+            a helpful message on unsupported hardware::
+
+                from frontend import Utils
+
+                try:
+                    Utils.check_gpu()
+                except RuntimeError as e:
+                    print("GPU check failed:", e)
+        """
+        try:
+            result = subprocess.run(
+                ["nvidia-smi", "--query-gpu=name,compute_cap",
+                 "--format=csv,noheader,nounits"],
+                capture_output=True, text=True, timeout=5,
+            )
+        except FileNotFoundError:
+            raise RuntimeError(
+                "nvidia-smi not found. An NVIDIA GPU with CUDA support is required."
+            )
+        if result.returncode != 0:
+            raise RuntimeError(
+                "nvidia-smi failed. An NVIDIA GPU with CUDA support is required."
+            )
+        for line in result.stdout.strip().split("\n"):
+            parts = [p.strip() for p in line.split(",")]
+            if len(parts) == 2:
+                gpu_name = parts[0]
+                try:
+                    sm_ver = int(parts[1].replace(".", ""))
+                except ValueError:
+                    continue
+                if sm_ver < Utils.MIN_SM:
+                    raise RuntimeError(
+                        f"GPU '{gpu_name}' has compute capability sm_{sm_ver}, "
+                        f"but sm_{Utils.MIN_SM} or higher is required. "
+                        f"Please use a newer GPU (Pascal architecture or later)."
+                    )
+                return  # GPU is sufficient
+        raise RuntimeError(
+            "No NVIDIA GPU detected. An NVIDIA GPU is required to run the solver."
+        )
+
     @staticmethod
     def terminate():
-        """Terminate the solver."""
+        """Terminate any running solver processes.
+
+        Sends a terminate signal to every non-zombie process whose name
+        contains ``PROCESS_NAME``.
+
+        Example:
+            Kill a stuck solver process before starting a new run::
+
+                from frontend import Utils
+
+                if Utils.busy():
+                    Utils.terminate()
+        """
         for proc in psutil.process_iter(["pid", "name", "status"]):
             if (
                 PROCESS_NAME in proc.info["name"]
@@ -233,6 +389,15 @@ class Utils:
 
         Returns:
             bool: True if the solver is running, False otherwise.
+
+        Example:
+            Poll until the current simulation has released the GPU::
+
+                import time
+                from frontend import Utils
+
+                while Utils.busy():
+                    time.sleep(1)
         """
         for proc in psutil.process_iter(["pid", "name", "status"]):
             if (

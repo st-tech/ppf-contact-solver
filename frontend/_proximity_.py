@@ -28,7 +28,12 @@ from ._intersection_ import elements_share_vertex
 def closest_point_on_triangle(
     p: np.ndarray, a: np.ndarray, b: np.ndarray, c: np.ndarray
 ):
-    """Find closest point on triangle ABC to point P. Returns (closest_point, bary_coords)."""
+    """Find the closest point on triangle ABC to point P.
+
+    Returns (closest_point, bary_coords) where bary_coords are the
+    barycentric weights (u, v, w) of the closest point with respect to
+    (a, b, c).
+    """
     ab = b - a
     ac = c - a
     ap = p - a
@@ -91,14 +96,14 @@ def closest_point_on_triangle(
 
 @njit(cache=True)
 def point_point_dist_sq(p1: np.ndarray, p2: np.ndarray) -> float:
-    """Compute squared distance between two points."""
+    """Compute the squared distance between two 3D points."""
     d = p1 - p2
     return dot3(d, d)
 
 
 @njit(cache=True)
 def point_edge_dist_sq(p: np.ndarray, e0: np.ndarray, e1: np.ndarray) -> float:
-    """Compute squared distance from point to edge segment."""
+    """Compute the squared distance from point p to the segment e0-e1."""
     edge = e1 - e0
     edge_len_sq = dot3(edge, edge)
     if edge_len_sq < 1e-14:
@@ -116,7 +121,7 @@ def point_edge_dist_sq(p: np.ndarray, e0: np.ndarray, e1: np.ndarray) -> float:
 def edge_edge_dist_sq(
     a0: np.ndarray, a1: np.ndarray, b0: np.ndarray, b1: np.ndarray
 ) -> float:
-    """Compute squared distance between two edge segments."""
+    """Compute the squared distance between segments a0-a1 and b0-b1."""
     d1 = a1 - a0
     d2 = b1 - b0
     r = a0 - b0
@@ -163,7 +168,7 @@ def edge_edge_dist_sq(
 def point_triangle_dist_sq(
     p: np.ndarray, v0: np.ndarray, v1: np.ndarray, v2: np.ndarray
 ) -> float:
-    """Compute squared distance from point to triangle."""
+    """Compute the squared distance from point p to triangle (v0, v1, v2)."""
     ab = v1 - v0
     ac = v2 - v0
     ap = p - v0
@@ -237,7 +242,10 @@ def point_triangle_dist_sq(
 def _tri_tri_distance_sq(
     verts: np.ndarray, tri_i: np.ndarray, tri_j: np.ndarray, threshold_sq: float
 ) -> float:
-    """Compute minimum distance squared between two triangles with early exit."""
+    """Compute the minimum squared distance between two triangles.
+
+    Returns early as soon as a squared distance below threshold_sq is found.
+    """
     min_dist_sq = np.inf
 
     t0_i, t1_i, t2_i = verts[tri_i[0]], verts[tri_i[1]], verts[tri_i[2]]
@@ -281,7 +289,10 @@ def _tri_tri_distance_sq(
 def _tri_edge_distance_sq(
     verts: np.ndarray, tri: np.ndarray, edge: np.ndarray, threshold_sq: float
 ) -> float:
-    """Compute minimum distance squared between triangle and edge with early exit."""
+    """Compute the minimum squared distance between a triangle and an edge.
+
+    Returns early as soon as a squared distance below threshold_sq is found.
+    """
     min_dist_sq = np.inf
 
     t0, t1, t2 = verts[tri[0]], verts[tri[1]], verts[tri[2]]
@@ -347,7 +358,14 @@ def _find_close_tri_tri(
     pair_idx: int,
     count_only: bool,
 ) -> int:
-    """Find triangles close to triangle ti using triangle BVH."""
+    """Find triangles close to triangle ti by traversing the triangle BVH.
+
+    Only pairs (ti, tj) with tj > ti are considered, so each pair is
+    reported once. Pairs where both elements are colliders, or where the
+    triangles share a vertex, are skipped. When count_only is True, only
+    the number of matches is returned; otherwise the matches are written
+    into out_pairs starting at pair_idx.
+    """
     tri_i = tris[ti]
     offset_i = contact_offset[ti]
     bbox_min_i = tri_bboxes_min[ti] - offset_i
@@ -437,7 +455,13 @@ def _find_close_tri_edge(
     pair_idx: int,
     count_only: bool,
 ) -> int:
-    """Find edges close to triangle ti using edge BVH."""
+    """Find edges close to triangle ti by traversing the edge BVH.
+
+    Pairs where both elements are colliders, or where the triangle and
+    edge share a vertex, are skipped. Reported edge indices are offset by
+    n_tris so triangle and edge indices share a single namespace. When
+    count_only is True, only the number of matches is returned.
+    """
     tri = tris[ti]
     offset_i = tri_offset[ti]
     bbox_min_i = tri_bboxes_min[ti] - offset_i
@@ -522,7 +546,13 @@ def _find_close_edge_edge(
     pair_idx: int,
     count_only: bool,
 ) -> int:
-    """Find edges close to edge ei using edge BVH."""
+    """Find edges close to edge ei by traversing the edge BVH.
+
+    Only pairs (ei, ej) with ej > ei are considered. Pairs where both
+    elements are colliders, or where the edges share a vertex, are
+    skipped. Reported edge indices are offset by n_tris so triangle and
+    edge indices share a single namespace.
+    """
     edge_i = edges[ei]
     offset_i = contact_offset[ei]
     bbox_min_i = edge_bboxes_min[ei] - offset_i
@@ -787,25 +817,28 @@ def check_contact_offset_violation(
     contact_offset: Optional[np.ndarray] = None,
     verbose: bool = False,
 ) -> list[tuple[int, int]]:
-    """Check for contact offset violations between mesh elements.
+    """Check for contact-offset violations between mesh elements.
 
-    Uses shared MeshBVH with separate triangle and edge BVHs for efficient queries.
-    Finds pairs of elements that are closer than the sum of their contact offsets.
+    Builds a shared MeshBVH with separate triangle and edge BVHs and finds
+    pairs of elements whose distance is smaller than the sum of their
+    contact offsets.
 
     Args:
-        V: Vertices (N, 3)
-        F: Triangle faces (M, 3), optional
-        E: Edge segments (K, 2), optional
-        is_collider: Boolean array indicating collider elements.
-            Length = M + K (triangles first, then edges).
-            Pairs where BOTH elements are colliders are skipped.
-        contact_offset: Contact offset per element (M + K,).
-            Defaults to 0.0 for all elements.
-        verbose: If True, show progress bar.
+        V: Vertex positions, shape (N, 3).
+        F: Triangle faces, shape (M, 3). Optional.
+        E: Edge segments, shape (K, 2). Optional.
+        is_collider: Boolean array of length M + K (triangles first, then
+            edges) marking collider elements. Pairs where both elements
+            are colliders are skipped. Defaults to all False.
+        contact_offset: Per-element contact offset, shape (M + K,).
+            Defaults to 0.0 for every element.
+        verbose: If True, show a tqdm progress bar covering BVH build and
+            each enabled proximity stage.
 
     Returns:
-        List of element pairs (i, j) where distance < offset_i + offset_j.
-        Indices: 0..M-1 are triangles, M..M+K-1 are edges.
+        A list of element index pairs (i, j) whose distance is strictly
+        less than offset_i + offset_j. Indices 0..M-1 refer to triangles
+        and M..M+K-1 refer to edges.
     """
     V = np.ascontiguousarray(V, dtype=np.float64)
 

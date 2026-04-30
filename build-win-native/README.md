@@ -25,6 +25,12 @@ This downloads and installs locally (no admin required):
 
 First run takes 20-30 minutes to download everything (~10GB total).
 
+Before any download starts, `warmup.bat` runs `scripts\check-downloads.bat`
+to verify every URL in `scripts\downloads.txt` (the single source of truth
+for tool URLs) is reachable. If a pointer has rotted upstream, warmup
+aborts with the failing URL listed; fix the entry in
+`scripts\downloads.txt` and re-run.
+
 ### 2. Build
 
 ```batch
@@ -68,6 +74,35 @@ clear-cache.bat   # Clear runtime caches
 clear-all.bat     # Full cleanup including session data
 ```
 
+When to run which:
+
+| Goal                                 | Sequence                                                                              |
+| ------------------------------------ | ------------------------------------------------------------------------------------- |
+| Rebuild from cached env              | `clean-build.bat` -> `build.bat`                                                      |
+| Fresh tools (re-download everything) | `clean-env.bat` -> `warmup.bat` -> `build.bat`                                        |
+| Clear runtime caches only            | `clear-cache.bat` (use `clear-all.bat` instead to also drop session data)             |
+| Total reset                          | `clean-env.bat` + `clean-build.bat` + `clear-all.bat` -> `warmup.bat` -> `build.bat`  |
+
+`clean-env.bat` first kills any process whose executable lives under this
+directory (orphan `git.exe`, `python.exe`, etc.) so a stuck background
+task does not silently lock files and leave them behind. If a `rmdir`
+still fails, the script exits non-zero and prints the offending path.
+
+## Updating tool versions
+
+All external download URLs and filenames are centralized in
+`scripts\downloads.txt`. To bump a tool (for example CUDA 12.8 -> 12.9),
+edit the matching `URL_*` and `FILE_*` lines together, then verify the
+new pointer:
+
+```batch
+scripts\check-downloads.bat
+```
+
+`warmup.bat` runs the same check on every invocation, so a bad pointer
+fails fast at the manifest layer rather than partway through a multi-GB
+download.
+
 ## Script Reference
 
 | Script | Purpose |
@@ -82,6 +117,8 @@ clear-all.bat     # Full cleanup including session data
 | `clear-cache.bat` | Clear runtime caches |
 | `clear-all.bat` | Full cleanup including session data |
 | `git-pull.bat` | Update source via git pull |
+| `scripts\downloads.txt` | Single source of truth for tool URLs and filenames |
+| `scripts\check-downloads.bat` | Verify every URL in `scripts\downloads.txt` is reachable |
 
 ## Notes
 

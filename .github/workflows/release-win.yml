@@ -40,10 +40,10 @@ jobs:
           echo "Dry run: $DRY_RUN"
 
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Configure AWS credentials via OIDC
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
@@ -145,7 +145,7 @@ jobs:
       - name: Create key pair for build instance
         id: keypair
         run: |
-          KEY_NAME="win-release-build-${{ steps.ids.outputs.TIMESTAMP }}"
+          KEY_NAME="win-release-build-${{ steps.ids.outputs.TIMESTAMP }}-${{ github.run_id }}"
           echo "::add-mask::$KEY_NAME"
           echo "KEY_NAME=$KEY_NAME" >> $GITHUB_OUTPUT
           aws ec2 create-key-pair \
@@ -429,7 +429,7 @@ jobs:
       # ============================================================
 
       - name: Re-authenticate for build instance cleanup
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
@@ -459,7 +459,7 @@ jobs:
       - name: Create key pair for verification instance
         id: verify-keypair
         run: |
-          KEY_NAME="win-release-verify-${{ steps.verify-ids.outputs.TIMESTAMP }}"
+          KEY_NAME="win-release-verify-${{ steps.verify-ids.outputs.TIMESTAMP }}-${{ github.run_id }}"
           echo "::add-mask::$KEY_NAME"
           echo "KEY_NAME=$KEY_NAME" >> $GITHUB_OUTPUT
           aws ec2 create-key-pair \
@@ -724,7 +724,7 @@ jobs:
 
       - name: Upload artifact (dry run)
         if: steps.version.outputs.DRY_RUN == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ${{ steps.version.outputs.VERSION }}
           path: artifact-contents/
@@ -746,7 +746,7 @@ jobs:
       - name: Re-authenticate for cleanup
         if: always()
         continue-on-error: true
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}

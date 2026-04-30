@@ -47,6 +47,10 @@ void update_vertex_aabb(const Vec<Vec3f> &x0, const Vec<Vec3f> &x1,
                         unsigned surface_vert_count, const Vec<VertexProp> &prop,
                         const Vec<VertexParam> &params);
 
+// Re-propagate internal node AABBs bottom-up after leaf modification
+void propagate_aabbs(Vec<AABB> &aabb, const Vec<Vec2u> &nodes,
+                     const VecVec<unsigned> &level);
+
 // Build collision mesh BVHs (static obstacles)
 void build_collision_mesh_bvh(const DataSet &data, const ParamSet &param);
 

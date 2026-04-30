@@ -5,11 +5,11 @@
 
 """Test suite for the frontend module."""
 
-from .._bvh_ import compute_barycentric_mapping, interpolate_surface
+from .._bvh_ import compute_frame_mapping, interpolate_surface
 from .._intersection_ import check_self_intersection
 
 __all__ = [
     "check_self_intersection",
-    "compute_barycentric_mapping",
+    "compute_frame_mapping",
     "interpolate_surface",
 ]

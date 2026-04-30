@@ -22,6 +22,17 @@ float line_search(const DataSet &data, const Vec<Vec3f> &eval_x,
                   const Vec<Vec3f> &prev, Vec<float> &min_gap,
                   const ParamSet &param);
 
+void embed_rod_strainlimiting_force_hessian(const DataSet &data,
+                                            const Vec<Vec3f> &eval_x,
+                                            Vec<float> &force,
+                                            const FixedCSRMat &fixed_hess_in,
+                                            FixedCSRMat &fixed_hess_out,
+                                            const ParamSet &param);
+
+float rod_line_search(const DataSet &data, const Vec<Vec3f> &eval_x,
+                      const Vec<Vec3f> &prev, Vec<float> &tmp_edge,
+                      const ParamSet &param);
+
 } // namespace strainlimiting
 
 #endif

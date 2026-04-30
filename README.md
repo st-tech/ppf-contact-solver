@@ -9,15 +9,18 @@ involving 👚 shells, 🪵 solids and 🪢 rods. All made by [ZOZO, Inc.](https
 [![Python API Docs](https://github.com/st-tech/ppf-contact-solver/actions/workflows/make-docs.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/make-docs.yml)
 [![Docker Build](https://github.com/st-tech/ppf-contact-solver/actions/workflows/build-docker.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/build-docker.yml)
 [![Build Windows](https://github.com/st-tech/ppf-contact-solver/actions/workflows/release-win.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/release-win.yml)
+[![Blender CI](https://github.com/st-tech/ppf-contact-solver/actions/workflows/blender.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/blender.yml)
 ![solver_logo](./asset/image/teaser-image.jpg)
 
-#### 🤖 Our Use of LLMs
-
-> We **highly** respect that readers expect human-written content. The majority of texts are human-typed. Our use of LLMs is clarified in [🤖 LLM Transparency](#-llm-transparency).
+> 🤖 We **highly** respect that readers expect to hear the author's original voice and tone, which we work to retain throughout. Our use of LLMs is clarified in [(Markdown)](./articles/llm_transparency.md).
 
 ## 👀 Quick Look
 
-🚀 Double click `start.bat` (Windows) or run a Docker command (Linux/Windows) to get it running
+🎨 Simulate remotely from our [Blender add-on](https://st-tech.github.io/ppf-contact-solver) (screenshots taken on macOS; you can also run locally if you have a modern NVIDIA GPU on Windows or Linux)
+
+![glance-blender](./docs/blender_addon/images/blender.webp)
+
+🚀 Or double click `start.bat` (Windows) or run a Docker command (Linux/Windows) to get it running
 
 ![glance-terminal](./asset/image/glance-terminal.webp)
 
@@ -37,8 +40,10 @@ involving 👚 shells, 🪵 solids and 🪢 rods. All made by [ZOZO, Inc.](https
 - **🪟 Windows Executable**: No installation wizard shown. Just unzip and run [(Video)](https://zozo.box.com/s/9rthkw122fyss5qxuf5mie9xywg7jzdz).
 - **🐳 Docker Sealed**: All can be deployed fast. The image is ~1GB.
 - **🌐 JupyterLab Included**: Open your browser and run examples right away [(Video)](https://zozo.box.com/s/jgd6ijfmwee04vvnnfzapq7m2eq7cxy8).
-- **🐍 Documented Python APIs**: Our Python code is fully [docstringed](https://st-tech.github.io/ppf-contact-solver/frontend.html) and lintable [(Video)](https://zozo.box.com/s/52atrfn70vn8u07iwzbyrrz5ameczo03).
+- **🐍 Documented Python APIs**: Our Python code is fully [docstringed](https://st-tech.github.io/ppf-contact-solver/jupyterlab_api/module_reference.html) and lintable [(Video)](https://zozo.box.com/s/52atrfn70vn8u07iwzbyrrz5ameczo03).
 - **☁️ Cloud-Ready**: Our solver can be seamlessly deployed on major cloud platforms.
+- **🎨 Blender Add-on**: Simulate remotely and fetch results locally, even on macOS.
+- **🤖 MCP Support**: Let a LLM run simulations for you using natural language.
 - **✨ Stay Clean**: You can remove all traces after use.
 
 > ⚠️ Built for offline uses; not real time. Some examples may run at an interactive rate.
@@ -52,10 +57,13 @@ involving 👚 shells, 🪵 solids and 🪢 rods. All made by [ZOZO, Inc.](https
   - [🪟 Windows Native Executable](#-windows-native-executable)
   - [🐳 Docker (Linux and Windows)](#-docker-linux-and-windows)
 - [🐍 How To Use](#-how-to-use)
-- [🧩 Community's Blender Add-ons](#-communitys-blender-add-ons)
-- [📚 Python APIs and Parameters](#-python-apis-and-parameters)
+  - [🎨 Blender Add-on](#-blender-add-on)
+  - [🌐 JupyterLab](#-jupyterlab)
+    - [📚 Python APIs and Parameters](#-python-apis-and-parameters)
 - [🔍 Obtaining Logs](#-obtaining-logs)
 - [🖼️ Catalogue](#️-catalogue)
+  - [🎨 Blender Add-on Examples](#-blender-add-on-examples)
+  - [🌐 JupyterLab Examples](#-jupyterlab-examples)
   - [💰 Budget Table on AWS](#-budget-table-on-aws)
   - [🏗️ Large Scale Examples](#️-large-scale-examples)
 - [🚀 GitHub Actions](#-github-actions)
@@ -67,8 +75,8 @@ involving 👚 shells, 🪵 solids and 🪢 rods. All made by [ZOZO, Inc.](https
   - [📦 Deploying on Scaleway](#-deploying-on-scaleway)
   - [📦 Deploying on Amazon Web Services](#-deploying-on-amazon-web-services)
   - [📦 Deploying on Google Compute Engine](#-deploying-on-google-compute-engine)
+- [🧩 Community's Blender Add-ons](#-communitys-blender-add-ons)
 - [📬 Contributing](#-contributing)
-- [🤖 LLM Transparency](#-llm-transparency)
 - [🙏 Acknowledgements](#-acknowledgements)
 
 ### 📚 Advanced Contents
@@ -78,6 +86,7 @@ involving 👚 shells, 🪵 solids and 🪢 rods. All made by [ZOZO, Inc.](https
 
 ## 📝 Change History
 
+- (2026.04.30) Added a Blender Add-on support. See the [documentation](https://st-tech.github.io/ppf-contact-solver).
 - (2025.12.18) Added native Windows standalone executable build support [(Video)](https://zozo.box.com/s/9rthkw122fyss5qxuf5mie9xywg7jzdz).
 - (2025.11.26) Added [large-woven.ipynb](./examples/large-woven.ipynb) [(Video)](https://zozo.box.com/s/kc81msjfo4yw9eozn8i8bean0gbph0pj) to [large scale examples](#️-large-scale-examples).
 - (2025.11.12) Added [five-twist.ipynb](./examples/five-twist.ipynb) [(Video)](https://zozo.box.com/s/36h8jpu5vcgc5t4xln2l68afj7izsx4h) and [large-five-twist.ipynb](./examples/large-five-twist.ipynb) [(Video)](https://zozo.box.com/s/v62q7cbfnpl3hufwwy2nmewyes2w1iw6) showcasing over 180M count. See [large scale examples](#️-large-scale-examples).
@@ -137,8 +146,11 @@ To retain consistency with the paper, we have created a new branch ```sigasia-20
 - 🔥 A modern NVIDIA GPU (CUDA 12.8 or newer)
 - 💻 x86 architecture (arm64 is not supported)
 - 🐳 A Docker environment (see [below](#-docker-linux-and-windows)) or 🪟 Windows 10/11 for native executable (see [below](#-windows-native-executable))
+- 🎨 Blender 5+ (only if you intend to use the Blender add-on)
 
 ## 💨 Getting Started
+
+Whether you plan to use the Blender add-on or the JupyterLab interface, the solver engine itself must first be deployed. The steps below apply to both.
 
 > ⚠️ Do not run `warmup.py` locally. If you do, you are very likely to hit failures and find it difficult to cleanup.
 
@@ -170,12 +182,14 @@ Next, run the following command to start the container. If no edits are needed, 
 ##### 🪟 Windows (PowerShell)
 
 ```bash
-$MY_WEB_PORT = 8080  # Web port on your side
+$MY_WEB_PORT = 8080      # JupyterLab port on your side
+$MY_BLENDER_PORT = 9090  # Solver port for the Blender add-on
 $IMAGE_NAME = "ghcr.io/st-tech/ppf-contact-solver-compiled:latest"
 docker run --rm -it `
   --name ppf-contact-solver `
   --gpus all `
   -p ${MY_WEB_PORT}:${MY_WEB_PORT} `
+  -p ${MY_BLENDER_PORT}:${MY_BLENDER_PORT} `
   -e WEB_PORT=${MY_WEB_PORT} `
   $IMAGE_NAME # Image size ~1GB
 ```
@@ -183,12 +197,14 @@ docker run --rm -it `
 ##### 🐧 Linux (Bash/Zsh)
 
 ```bash
-MY_WEB_PORT=8080  # Web port on your side
+MY_WEB_PORT=8080      # JupyterLab port on your side
+MY_BLENDER_PORT=9090  # Solver port for the Blender add-on
 IMAGE_NAME=ghcr.io/st-tech/ppf-contact-solver-compiled:latest
 docker run --rm -it \
   --name ppf-contact-solver \
   --gpus all \
   -p ${MY_WEB_PORT}:${MY_WEB_PORT} \
+  -p ${MY_BLENDER_PORT}:${MY_BLENDER_PORT} \
   -e WEB_PORT=${MY_WEB_PORT} \
   $IMAGE_NAME # Image size ~1GB
 ```
@@ -222,15 +238,131 @@ If you wish to build the docker image from scratch, please refer to the cleaner 
 
 ## 🐍 How To Use
 
-Our frontend is accessible through a browser using our built-in JupyterLab interface.
-All is set up when you open it for the first time. **No compilation is needed.**
-Results can be interactively viewed through the browser and exported as needed.
+We provide two frontends: a Blender add-on and a JupyterLab interface. The Blender add-on lets you build scenes and run simulations entirely within Blender's UI, while JupyterLab lets you script everything in Python from your browser. Both communicate with the same solver engine, so pick whichever you like.
 
-This allows you to interact with the simulator on your laptop while the actual simulation runs on a remote headless server over the internet.
+In both cases, you can interact with the simulator on your laptop while the actual simulation runs on a remote headless server over the internet.
 This means that **you don't have to own NVIDIA hardware**, but can rent it at [vast.ai](https://vast.ai) or [RunPod](https://www.runpod.io/) for less than $0.5 per hour.
+That said, if you do have a modern NVIDIA GPU on a local Windows or Linux machine, you can also run the solver directly on it.
 Actually, this [(Video)](https://zozo.box.com/s/jgd6ijfmwee04vvnnfzapq7m2eq7cxy8) was recorded on a [vast.ai](https://vast.ai) instance.
 The experience is good! 👍
 
+### 🎨 Blender Add-on
+
+Our Blender add-on aims to offer a familiar UI that best feels like everything works locally, but under the hood, it communicates with a remote server where **all** simulations run, and then the results are fetched back.
+
+This provides a unique experience where users can leverage powerful **remote** GPUs while working seamlessly in their local Blender environment. Remarkably, our Blender add-on works even on **macOS** systems 😊, unlike other CUDA-based physics simulator add-ons that require local NVIDIA GPUs.
+More importantly, **you can work on a laptop without worrying about draining the battery fast**. 🔋
+
+Follow this page [How to Install](https://st-tech.github.io/ppf-contact-solver/blender_addon/getting_started/install.html) to learn how to install the add-on. For a thorough walk through workflow, we refer to our documentation below:
+
+<p align="center">
+  <a href="https://st-tech.github.io/ppf-contact-solver"><img src="./asset/image/read-blender-addon-docs.svg" alt="Read Blender Add-on Documentation" height="35"></a>
+</p>
+
+Here are some highlights:
+
+#### 📖 Docs Look
+
+We maintain a [full docs site](https://st-tech.github.io/ppf-contact-solver) with workflow guides and recorded walkthroughs for the add-on:
+
+<table>
+<tr>
+<td width="50%" valign="top"><img src="./docs/blender_addon/images/screenshots/documentation-dark-small.png" alt="Workflow documentation page on the docs site, showing the Blender / solver coordinate system explanation."></td>
+<td width="50%" valign="top"><img src="./docs/blender_addon/images/screenshots/video-tutorials-dark-small.jpg" alt="Video Tutorials page on the docs site, showing a grid of recorded walkthroughs."></td>
+</tr>
+<tr>
+<td valign="top">Workflow documentation page. <a href="https://st-tech.github.io/ppf-contact-solver/blender_addon/workflow/index.html">(Link)</a></td>
+<td valign="top">Video tutorials page. <a href="https://st-tech.github.io/ppf-contact-solver/blender_addon/tutorial.html">(Link)</a></td>
+</tr>
+</table>
+
+#### 🖼️ UI Look
+
+Here are a couple of screenshots of the add-on running inside Blender:
+
+<table>
+<tr>
+<td width="50%" valign="top"><img src="./docs/blender_addon/images/gallery/kite-ui-small.jpg" alt="The kite scene set up inside Blender using the add-on."></td>
+<td width="50%" valign="top"><img src="./docs/blender_addon/images/gallery/zebra-ui-small.jpg" alt="The zebra scene set up inside Blender using the add-on."></td>
+</tr>
+<tr>
+<td valign="top">Kite scene set up in Blender. <a href="https://zozo.box.com/s/dbtktx71fd0gb4z2trnvew7l3t8fuwxu">(full-size)</a></td>
+<td valign="top">Zebra scene set up in Blender. <a href="https://zozo.box.com/s/bkt5uviyqx825os7r854xslurqpxcj2k">(full-size)</a></td>
+</tr>
+</table>
+
+#### 🤖 From Natural Language to Simulation (via MCP)
+
+We expose all of the add-on's tools through an MCP server, so any LLM (Claude, Codex, etc.) can drive the whole pipeline from a natural language prompt. Scene building, parameter tweaks, and running the simulation all happen without UI clicks. Here are two examples:
+
+<table>
+<tr>
+<td width="50%" valign="top"><img src="./docs/blender_addon/images/gallery/mcp.webp" alt="Codex terminal on the left driving Blender on the right through the MCP server, building a bowl-and-spheres scene from a natural language prompt."></td>
+<td width="50%" valign="top"><img src="./docs/blender_addon/images/gallery/drape-over-sphere.webp" alt="A cloth sheet draped over a sphere, produced from a single natural language prompt through the MCP server."></td>
+</tr>
+<tr>
+<td valign="top">Codex (left) driving Blender (right) through the add-on's MCP server.</td>
+<td valign="top">A prompt: drape a sheet over a sphere and make an animation video mp4 render 300 frames.</td>
+</tr>
+</table>
+
+#### 🐍 From a Python Script to Simulation
+
+You can also drive the entire pipeline from a Python script inside Blender's scripting editor. This is handy for procedural scene setup and batch variant generation. Below is a full example that drapes a sheet over a sphere:
+
+```python
+import bpy
+from zozo_contact_solver import solver
+
+# Reset any prior state.
+solver.clear()
+
+# Create a sphere (the static collider) at the origin.
+bpy.ops.mesh.primitive_ico_sphere_add(subdivisions=4, radius=0.5, location=(0, 0, 0))
+bpy.context.object.name = "Sphere"
+
+# Create a 2x2 sheet just above the sphere as a 64x64 grid.
+bpy.ops.mesh.primitive_grid_add(x_subdivisions=64, y_subdivisions=64, size=2, location=(0, 0, 0.6))
+sheet = bpy.context.object
+sheet.name = "Sheet"
+
+# Pin the two corners on the -x edge via a vertex group.
+vg = sheet.vertex_groups.new(name="Corners")
+corner_indices = [
+    i for i, v in enumerate(sheet.data.vertices)
+    if v.co.x < -0.99 and abs(abs(v.co.y) - 1.0) < 0.01
+]
+vg.add(corner_indices, 1.0, "REPLACE")
+
+# Build solver groups.
+cloth = solver.create_group("Cloth", type="SHELL")
+cloth.add("Sheet")
+cloth.param.enable_strain_limit = True
+cloth.param.strain_limit = 0.05
+cloth.param.bend = 1
+
+ball = solver.create_group("Ball", type="STATIC")
+ball.add("Sphere")
+
+# Pin the two sheet corners.
+cloth.create_pin("Sheet", "Corners")
+
+# Scene parameters.
+solver.param.frame_count = 100
+solver.param.step_size = 0.01
+```
+
+Here's how the script runs inside Blender [(full-size)](https://zozo.box.com/s/m86w3jyprvz5dug2pr7k73bozdbgldfl):
+
+![python-scripting](./docs/blender_addon/images/screenshots/python-scripting.jpg)
+
+For the full `solver.*` surface, see the [Blender Python API guide](https://st-tech.github.io/ppf-contact-solver/blender_addon/integrations/python_api.html).
+
+### 🌐 JupyterLab
+
+Our frontend is accessible through a browser using our built-in JupyterLab interface.
+All is set up when you open it for the first time.
+Results can be interactively viewed through the browser and exported as needed.
 Our Python interface is designed with the following principles in mind:
 
 - **🛠️ In-Pipeline Tri/Tet Creation**: Depending on external 3D/CAD softwares for triangulation or tetrahedralization makes dynamic resolution changes cumbersome. We provide handy `.triangulate()` and `.tetrahedralize()` calls to keep everything in-pipeline, allowing users to skip explicit mesh exports to 3D/CAD software.
@@ -313,20 +445,13 @@ session.export.animation()
 
 <img src="./asset/image/drape-preview.webp" alt="drape">
 
-## 🧩 Community's Blender Add-ons
+#### 📚 Python APIs and Parameters
 
-Official Blender add-ons are not yet ready, but we have community versions that you can try today:
-
-- [AndoSim](https://github.com/Slaymish/AndoSim)
-- [ArzteZ-PPF-solver](https://github.com/tavcitavci-sys-tavci-ui/ArzteZ-PPF-solver)
-
-## 📚 Python APIs and Parameters
-
-- Full API documentation is available on our [GitHub Pages](https://st-tech.github.io/ppf-contact-solver/frontend.html). The major APIs are documented using docstrings and compiled with [Sphinx](https://www.sphinx-doc.org/en/master/)
+- Full API documentation is available on our [GitHub Pages](https://st-tech.github.io/ppf-contact-solver/jupyterlab_api/module_reference.html). The major APIs are documented using docstrings and compiled with [Sphinx](https://www.sphinx-doc.org/en/master/)
 We have also included [`jupyter-lsp`](https://github.com/jupyter-lsp/jupyterlab-lsp) to provide interactive linting assistance and display docstrings as you type. See this video [(Video)](https://zozo.box.com/s/52atrfn70vn8u07iwzbyrrz5ameczo03) for an example.
 The behaviors can be changed through the settings.
 
-- A list of parameters used in `param.set(key,value)` is documented here: [(Global Parameters)](https://st-tech.github.io/ppf-contact-solver/global_parameters.html) [(Object Parameters)](https://st-tech.github.io/ppf-contact-solver/object_parameters.html).
+- A list of parameters used in `param.set(key,value)` is documented here: [(Simulation Parameters)](https://st-tech.github.io/ppf-contact-solver/jupyterlab_api/simulation_parameters.html) [(Material Parameters)](https://st-tech.github.io/ppf-contact-solver/jupyterlab_api/material_parameters.html).
 
 > ⚠️ Please note that our Python APIs are subject to breaking changes as this repository undergoes frequent iterations. If you need APIs to be fixed, please fork.
 
@@ -375,7 +500,7 @@ Below are some representatives.
 | num-contact | Contact count | `list[(vid_time,count)]` |
 | max-sigma | Max stretch | `list(vid_time,float)` |
 
-The full list of log names and their descriptions is documented here: [(GitHub Pages)](https://st-tech.github.io/ppf-contact-solver/logs.html).
+The full list of log names and their descriptions is documented here: [(GitHub Pages)](https://st-tech.github.io/ppf-contact-solver/jupyterlab_api/log_channels.html).
 
 Note that some entries have multiple records at the same video time. This occurs because the same operation is executed multiple times within a single step during the inner Newton's iterations. For example, the linear system solve is performed at each Newton's step, so if multiple Newton's steps are executed, multiple linear system solve times appear in the record at the same video time.
 
@@ -405,6 +530,21 @@ This returns `list[str]`.
 All the log files are updated in real-time and can be fetched right after the simulation starts; you don't have to wait until it finishes.
 
 ## 🖼️ Catalogue
+
+### 🎨 Blender Add-on Examples
+
+These scenes are all built directly in Blender using our [add-on](#-blender-add-on). You set the geometry, constraints, and parameters from Blender's UI, and the simulation itself runs on a remote solver, or directly on your local machine if you have a modern NVIDIA GPU on Windows or Linux.
+
+||||
+|---|---|---|
+|[kite.blend](https://zozo.box.com/s/j5tg9hy7nf1fdea1yg0s6holzwwus77t) [(Video)](https://zozo.box.com/s/7siwyp04s1vs48znwnt5vx1vhgodyr4h)|[crumple.blend](https://zozo.box.com/s/69ysygaqfud3bba8v3w33eqcbfn6l76u) [(Video)](https://zozo.box.com/s/ddrqqq87gpn0mekqx0yaukez87casten)|[puff.blend](https://zozo.box.com/s/mfc64djyjyunuhnmn51rm4jexxenx0si) [(Video)](https://zozo.box.com/s/8dpuoqbg80vxvxwsga36nz1633vx4k6u)|
+|![](./docs/blender_addon/images/gallery/kite.webp)|![](./docs/blender_addon/images/gallery/crumple.webp)|![](./docs/blender_addon/images/gallery/puff.webp)|
+|[press.blend](https://zozo.box.com/s/n1upezi7j0eufmrsief4qh252of7g1nq) [(Video)](https://zozo.box.com/s/nt8s46e6kke9poruvxmtxv5v56p2ysit)|[zebra.blend](https://zozo.box.com/s/qcos081dolarpczz8mheegvwqalxcnu2) [(Video)](https://zozo.box.com/s/rvcqynftqk27fczplafm0wgt95xmhb1k)|[curtain.blend](https://zozo.box.com/s/f8775589v2jd3nnmm7dzjrfy44xmbuhl) [(Video)](https://zozo.box.com/s/e558genjdno7jz9m0svojte5eco6q7tm)|
+|![](./docs/blender_addon/images/gallery/press.webp)|![](./docs/blender_addon/images/gallery/zebra.webp)|![](./docs/blender_addon/images/gallery/curtain.webp)|
+
+### 🌐 JupyterLab Examples
+
+All these examples run on our Python frontend through JupyterLab. Click any notebook to see how the scene is built, or click the video link to watch the result.
 
 |||||
 |---|---|---|---|
@@ -456,7 +596,6 @@ Below is a table summarizing the estimated costs for running our examples on a N
 Large scale examples are run on a [vast.ai](https://vast.ai) instance with an RTX 4090.
 These examples are not included in GitHub Action tests since they can take days to finish.
 
-
 | | | |
 |---|---|---|
 | [large-twist.ipynb](./examples/large-twist.ipynb) [(Video)](https://zozo.box.com/s/awtqwo572t7ixuy04va478zn6f69djlr) | [large-five-twist.ipynb](./examples/large-five-twist.ipynb) [(Video)](https://zozo.box.com/s/v62q7cbfnpl3hufwwy2nmewyes2w1iw6) | [large-woven.ipynb](./examples/large-woven.ipynb) [(Video)](https://zozo.box.com/s/kc81msjfo4yw9eozn8i8bean0gbph0pj) |
@@ -467,7 +606,6 @@ These examples are not included in GitHub Action tests since they can take days 
 | large-twist | [cbafbd2](https://github.com/st-tech/ppf-contact-solver/tree/cbafbd2197fc7f28673386dfaf1e8d8a1be49937) | 3.2M | 6.4M | ```N/A``` | 56.7M | 2,000 | 46.4s |
 | large-five-twist | [6ab6984](https://github.com/st-tech/ppf-contact-solver/commit/6ab6984d95f67673f1ebfdc996b0320123d88bed) | 8.2M | 16.4M | ```N/A``` | 184.1M | 2,413 | 144.5s |
 | large-woven | [4c07b83](https://github.com/st-tech/ppf-contact-solver/commit/4c07b834b299e49bb08797940e9f0869789301b8) | 2.7M | ```N/A``` | 2.7M | 8.9M | 946 | 436.8s |
-
 
 📝 Large scale examples take a very long time, and it's easy to lose connection or close the browser.
 Our frontend lets you close and reopen it at your convenience. Just recover your session after you reconnect.
@@ -496,7 +634,6 @@ session.preview()
 session.stream()
 ```
 
-
 ## 🚀 GitHub Actions
 
 We implemented GitHub Actions that test all of our examples except for large scale ones, which take from days to weeks to finish.
@@ -514,6 +651,10 @@ This is not a self-hosted runner, meaning that each time the runner launches, al
 We use the GitHub-hosted runner, but the actual simulation runs on a `g6e.2xlarge` AWS instance.
 Since we start with a fresh instance, the environment is clean every time.
 We take advantage of the ability to deploy on the cloud; this action is performed in parallel, which reduces the total action time.
+
+### [![Blender CI](https://github.com/st-tech/ppf-contact-solver/actions/workflows/blender.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/blender.yml)
+
+This action exercises our [Blender add-on](#-blender-add-on) on free GitHub-hosted Linux and macOS runners in parallel. Blender 5.1.1 is installed from the official Blender Foundation mirror, the Rust solver is built in CPU-emulated mode (no CUDA required), and the add-on is installed as a Blender 5 extension. A headless test rig then runs the full scenario registry covering add-on UI flows.
 
 ### 📦 Action Artifacts
 
@@ -582,14 +723,14 @@ Also, we apply small jitters to the position of objects in the scene, so **at ea
 
 ## 📡 Deploying on Cloud Services
 
-Our contact solver is designed for heavy use in cloud services, enabling:
+Running our solver on the cloud has a few practical perks:
 
-- **💰 Cost-Effective Development**: Quickly deploy testing environments and delete them when not in use, saving costs.
-- **📈 Flexible Scalability**: Scale as needed. For example, you can launch multiple instances for short-term spiky demands.
-- **🤝 Work Together**: Share the JupyterLab link with remote collaborators to work together.
-- **🔒 Strong Security**: Benefit from the security features provided by cloud providers.
-- **🐛 Fast Bug Tracking**: Users and developers can easily share the same hardware, kernel, and driver environment, making it easier to reproduce and fix bugs.
-- **🛠️ Zero Hardware Maintenance**: No need to maintain hardware or introduce redundancy for malfunctions.
+- **💰 Pay only when you use it**: Spin up an instance, run your experiment, and delete it when you're done. You pay for hours, not for a GPU sitting on your desk.
+- **📈 Scale on demand**: If you have a deadline, just launch multiple instances and run experiments in parallel. No waiting in a queue.
+- **🤝 Share with collaborators**: Send the JupyterLab link to a remote teammate and they can watch the simulation right alongside you.
+- **🔒 Cloud-grade security**: You inherit whatever security the provider gives you, which is usually a lot more than you'd set up yourself.
+- **🐛 Easier bug repro**: When users and developers are on the same kernel and driver, reproducing a bug is far easier than juggling different local setups.
+- **🛠️ No hardware to babysit**: No drivers to update, no fans to clean, no GPU to replace when it dies.
 
 Below, we describe how to deploy our solver on major cloud services. These instructions are up to date as of late 2024 and are subject to change.
 
@@ -636,23 +777,19 @@ Below, we describe how to deploy our solver on major cloud services. These instr
 - *Do not skip* the Docker container creation in the installation process; it is required.
 - CLI instructions are described in [(Markdown)](./articles/cloud.md#-google-compute-engine).
 
+## 🧩 Community's Blender Add-ons
+
+Alongside our [official Blender add-on](#-blender-add-on), the following community add-ons are also available:
+
+- [AndoSim](https://github.com/Slaymish/AndoSim)
+- [ArzteZ-PPF-solver](https://github.com/tavcitavci-sys-tavci-ui/ArzteZ-PPF-solver)
+
 ## 📬 Contributing
 
 We appreciate your interest in opening pull requests, but we are not ready to accept external contributions because doing so involves resolving copyright and licensing matters with [ZOZO, Inc.](https://corp.zozo.com/en/)
 For the time being, please open issues for bug reports.
 If you wish to extend the codebase, please fork the repository and work on it.
 Thank you!
-
-## 🤖 LLM Transparency
-
-- A large portion of this codebase was written with GitHub Copilot in the early stages, and nearly all subsequent coding has been carried out through vibe coding with Claude Code and Codex since they became available. All has been human-reviewed by the author before being made public.
-- This README is mostly hand-typed in the author's voice and then proofread by an LLM with minimal changes. Minor parts (e.g., tables) are greatly assisted by an LLM.
-- Python docstrings are auto-generated by an LLM.
-- The author **does** understand algorithmic and theoretical backgrounds.
-- Comments in example jupyter notebooks are auto-generated with an LLM.
-- An LLM is used to proofread and polish the wording, though this iterative process has introduced minor expansions or contractions, all of which are carefully human-checked and corrected where necessary.
-- The paper draft is written directly in English, **not in Japanese and then translated**. Writing directly in English avoids polluated hallucinated nuances during translation. The author has verified not only surface-level meaning but also delicate nuances throughout.
-- Ultimately, the author carefully checked the fine-grained details.
 
 ## 🙏 Acknowledgements
 

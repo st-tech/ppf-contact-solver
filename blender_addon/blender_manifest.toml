@@ -11,7 +11,7 @@ tagline = "A contact solver for physics-based simulations"
 maintainer = "Ryoichi Ando <ryoichi.ando@zozo.com>"
 type = "add-on"
 website = "https://github.com/st-tech/ppf-contact-solver"
-blender_version_min = "4.2.0"
+blender_version_min = "5.0.0"
 license = [
   "Apache-2.0",
 ]

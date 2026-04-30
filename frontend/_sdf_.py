@@ -309,7 +309,7 @@ SDF_CAPSULE = 1
 
 @njit(cache=True)
 def sdf_sphere(x, y, z, cx, cy, cz, radius):
-    """Compute sphere SDF at point."""
+    """Compute the signed distance from point (x, y, z) to a sphere."""
     dx = x - cx
     dy = y - cy
     dz = z - cz
@@ -318,7 +318,11 @@ def sdf_sphere(x, y, z, cx, cy, cz, radius):
 
 @njit(cache=True)
 def sdf_capsule(x, y, z, p0x, p0y, p0z, bax, bay, baz, ba_dot_ba, radius):
-    """Compute capsule SDF at point."""
+    """Compute the signed distance from point (x, y, z) to a capsule.
+
+    The capsule axis is given by endpoint p0 and direction vector ba = p1 - p0.
+    ba_dot_ba is the precomputed squared length of ba.
+    """
     pax = x - p0x
     pay = y - p0y
     paz = z - p0z
@@ -336,7 +340,11 @@ def sdf_capsule(x, y, z, p0x, p0y, p0z, bax, bay, baz, ba_dot_ba, radius):
 
 @njit(cache=True, parallel=True)
 def eval_sdf_grid(xs, ys, zs, sdf_types, sdf_params):
-    """Evaluate SDF on entire grid using numba parallel."""
+    """Evaluate the SDF union on the full (xs, ys, zs) grid in parallel.
+
+    The union is computed as the minimum distance across all primitives
+    described by sdf_types and sdf_params.
+    """
     nx, ny, nz = len(xs), len(ys), len(zs)
     grid = np.empty((nx, ny, nz), dtype=np.float64)
     num_sdfs = len(sdf_types)
@@ -366,7 +374,7 @@ def eval_sdf_grid(xs, ys, zs, sdf_types, sdf_params):
 
 @njit(cache=True, parallel=True)
 def eval_sdf_slice(x, ys, zs, sdf_types, sdf_params):
-    """Evaluate SDF on a single x-slice using numba parallel."""
+    """Evaluate the SDF union on a single x-slice in parallel over y."""
     ny, nz = len(ys), len(zs)
     slice_grid = np.empty((ny, nz), dtype=np.float64)
     num_sdfs = len(sdf_types)
@@ -392,7 +400,12 @@ def eval_sdf_slice(x, ys, zs, sdf_types, sdf_params):
 
 
 def eval_sdf_grid_with_progress(xs, ys, zs, sdf_types, sdf_params, progress=True):
-    """Evaluate SDF on grid with optional progress bar."""
+    """Evaluate the SDF union on the grid with an optional tqdm progress bar.
+
+    When progress is False or tqdm is not installed, this falls back to the
+    faster bulk evaluation in eval_sdf_grid. Otherwise, the grid is filled
+    slice by slice so a progress bar can be shown.
+    """
     if not progress:
         # Use faster bulk evaluation without progress
         return eval_sdf_grid(xs, ys, zs, sdf_types, sdf_params)
@@ -416,16 +429,26 @@ def eval_sdf_grid_with_progress(xs, ys, zs, sdf_types, sdf_params, progress=True
 
 def marching_cubes(sdf_func, bounds, step, progress=True):
     """
-    Simple marching cubes implementation.
+    Extract a triangle mesh from an SDF using marching cubes.
 
     Args:
-        sdf_func: SDF object with get_numba_data() method
-        bounds: ((min_x, min_y, min_z), (max_x, max_y, max_z))
-        step: Grid step size
-        progress: Show progress bar (default True)
+        sdf_func: SDF object providing a get_numba_data() method.
+        bounds: ((min_x, min_y, min_z), (max_x, max_y, max_z)).
+        step: Grid step size.
+        progress: If True, show a progress bar during grid evaluation.
 
     Returns:
-        vertices, faces as numpy arrays
+        (vertices, faces) as numpy arrays. When no surface is found,
+        empty arrays of shapes (0, 3) and (0, 3) are returned.
+
+    Example:
+        Mesh a sphere SDF with a uniform grid::
+
+            from frontend import sdf
+            from frontend._sdf_ import marching_cubes
+
+            shape = sdf.sphere(1.0)
+            verts, faces = marching_cubes(shape, shape.bounds(), step=0.05)
     """
     (min_x, min_y, min_z), (max_x, max_y, max_z) = bounds
 
@@ -511,22 +534,64 @@ def marching_cubes(sdf_func, bounds, step, progress=True):
 
 
 class SDF:
-    """Base class for signed distance functions."""
+    """Base class for signed distance functions.
+
+    Primitives (``SphereSDF``, ``CapsuleSDF``) and composite operators
+    (``UnionSDF``, ``IntersectionSDF``, ``DifferenceSDF``) all inherit
+    from ``SDF``. Composite shapes are built with the operator overloads
+    ``|`` (union), ``&`` (intersection), and ``-`` (difference). Use
+    :meth:`save` to mesh the field and write it to disk.
+
+    Example:
+        Build a squishy ball with capsule spikes and save it as a mesh
+        (pattern from ``examples/trapped.ipynb``)::
+
+            from frontend import sdf
+
+            shape = sdf.sphere(1.1)
+            shape = shape | sdf.capsule([-1, 0, 0], [1, 0, 0], 0.05)
+            shape.save("squishy.ply", step=0.03)
+    """
 
     def __or__(self, other):
-        """Union of two SDFs."""
+        """Return the union of this SDF with another.
+
+        Example:
+            Combine two primitives into one shape::
+
+                from frontend import sdf
+
+                shape = sdf.sphere(1.0) | sdf.capsule([0, 0, 0], [2, 0, 0], 0.2)
+                shape.save("peanut.ply", step=0.02)
+        """
         return UnionSDF(self, other)
 
     def __and__(self, other):
-        """Intersection of two SDFs."""
+        """Return the intersection of this SDF with another.
+
+        Example:
+            Keep only the overlap of two spheres::
+
+                from frontend import sdf
+
+                lens = sdf.sphere(1.0, center=(0.3, 0, 0)) & sdf.sphere(1.0, center=(-0.3, 0, 0))
+        """
         return IntersectionSDF(self, other)
 
     def __sub__(self, other):
-        """Difference of two SDFs."""
+        """Return the difference of this SDF with another (self minus other).
+
+        Example:
+            Carve a smaller sphere out of a larger one::
+
+                from frontend import sdf
+
+                shell = sdf.sphere(1.0) - sdf.sphere(0.8)
+        """
         return DifferenceSDF(self, other)
 
     def bounds(self):
-        """Return bounding box as ((min_x, min_y, min_z), (max_x, max_y, max_z))."""
+        """Return the bounding box as ((min_x, min_y, min_z), (max_x, max_y, max_z))."""
         raise NotImplementedError
 
     def get_numba_data(self):
@@ -534,7 +599,18 @@ class SDF:
         raise NotImplementedError
 
     def save(self, path, step=0.01, progress=True):
-        """Save SDF as mesh file."""
+        """Mesh this SDF with marching cubes and export it to a file.
+
+        The file format is determined by the path extension via trimesh.
+
+        Example:
+            Mesh a sphere-plus-capsule union and save it as PLY::
+
+                from frontend import sdf
+
+                shape = sdf.sphere(1.1) | sdf.capsule([-1, 0, 0], [1, 0, 0], 0.05)
+                shape.save("squishy.ply", step=0.03)
+        """
         import trimesh
 
         b = self.bounds()
@@ -544,6 +620,19 @@ class SDF:
 
 
 class SphereSDF(SDF):
+    """Signed distance field of a sphere centered at ``center`` with the given radius.
+
+    Typically constructed via the :func:`sphere` convenience function.
+
+    Example:
+        Build a unit sphere and mesh it to disk::
+
+            from frontend import sdf
+
+            shape = sdf.sphere(1.0, center=(0, 0, 0))
+            shape.save("ball.ply", step=0.02)
+    """
+
     def __init__(self, radius, center=(0, 0, 0)):
         self.radius = radius
         self.cx, self.cy, self.cz = float(center[0]), float(center[1]), float(center[2])
@@ -564,6 +653,20 @@ class SphereSDF(SDF):
 
 
 class CapsuleSDF(SDF):
+    """Signed distance field of a capsule (swept sphere along a line segment).
+
+    The capsule axis runs from ``p0`` to ``p1`` with the given radius.
+    Typically constructed via the :func:`capsule` convenience function.
+
+    Example:
+        Build a horizontal capsule and save it::
+
+            from frontend import sdf
+
+            shape = sdf.capsule([-1, 0, 0], [1, 0, 0], 0.2)
+            shape.save("capsule.ply", step=0.02)
+    """
+
     def __init__(self, p0, p1, radius):
         self.p0x, self.p0y, self.p0z = float(p0[0]), float(p0[1]), float(p0[2])
         self.p1x, self.p1y, self.p1z = float(p1[0]), float(p1[1]), float(p1[2])
@@ -602,6 +705,23 @@ class CapsuleSDF(SDF):
 
 
 class UnionSDF(SDF):
+    """Union of two or more SDFs (the ``|`` operator).
+
+    Nested unions are automatically flattened so the numba evaluator can
+    scan all primitives in a single pass.
+
+    Example:
+        Combine three primitives via the ``|`` operator::
+
+            from frontend import sdf
+
+            shape = (
+                sdf.sphere(1.0)
+                | sdf.capsule([-1, 0, 0], [1, 0, 0], 0.1)
+                | sdf.sphere(0.4, center=(0, 1, 0))
+            )
+    """
+
     def __init__(self, a, b):
         # Flatten nested unions
         self.children = []
@@ -631,6 +751,20 @@ class UnionSDF(SDF):
 
 
 class IntersectionSDF(SDF):
+    """Intersection of two or more SDFs (the ``&`` operator).
+
+    Numba-accelerated grid evaluation is not yet supported for
+    intersections; use the Python ``__call__`` path or marching cubes
+    with a small grid.
+
+    Example:
+        Lens-shaped intersection of two offset spheres::
+
+            from frontend import sdf
+
+            lens = sdf.sphere(1.0, center=(0.3, 0, 0)) & sdf.sphere(1.0, center=(-0.3, 0, 0))
+    """
+
     def __init__(self, a, b):
         self.children = []
         for s in (a, b):
@@ -654,6 +788,20 @@ class IntersectionSDF(SDF):
 
 
 class DifferenceSDF(SDF):
+    """Difference ``a - b`` of two SDFs (the ``-`` operator).
+
+    Numba-accelerated grid evaluation is not yet supported for
+    differences; use the Python ``__call__`` path or marching cubes
+    with a small grid.
+
+    Example:
+        Hollow out a sphere to get a shell::
+
+            from frontend import sdf
+
+            shell = sdf.sphere(1.0) - sdf.sphere(0.8)
+    """
+
     def __init__(self, a, b):
         self.a = a
         self.b = b
@@ -671,10 +819,29 @@ class DifferenceSDF(SDF):
 
 # Convenience functions
 def sphere(radius, center=(0, 0, 0)):
-    """Create a sphere SDF."""
+    """Create a sphere SDF with the given radius and center.
+
+    Example:
+        Build a unit sphere and mesh it::
+
+            from frontend import sdf
+
+            shape = sdf.sphere(1.0)
+            shape.save("ball.ply", step=0.02)
+    """
     return SphereSDF(radius, center)
 
 
 def capsule(p0, p1, radius):
-    """Create a capsule SDF."""
+    """Create a capsule SDF with axis endpoints p0 and p1 and the given radius.
+
+    Example:
+        Add a capsule spike to a sphere (pattern from
+        ``examples/trapped.ipynb``)::
+
+            from frontend import sdf
+
+            shape = sdf.sphere(1.1) | sdf.capsule([-1, 0, 0], [1, 0, 0], 0.05)
+            shape.save("spiky.ply", step=0.03)
+    """
     return CapsuleSDF(p0, p1, radius)

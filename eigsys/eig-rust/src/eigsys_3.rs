@@ -101,8 +101,8 @@ fn gen_df(i: usize, j: usize) -> Matrix3<f64> {
 }
 
 pub fn run() {
-    let mut rng = rand::thread_rng();
-    let f = Matrix3::<f64>::from_iterator((0..9).map(|_| rng.gen_range(-1.0..1.0)));
+    let mut rng = rand::rng();
+    let f = Matrix3::<f64>::from_iterator((0..9).map(|_| rng.random_range(-1.0..1.0)));
     let verbose = false;
     let models = ["ARAP", "SymDirichlet", "MIPS", "Ogden", "Yeoh"];
 

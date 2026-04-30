@@ -238,6 +238,23 @@ if exist "%SRC_DIR%\src" (
 )
 
 REM ============================================================
+REM Copy server Python package (server.py imports from server/)
+REM ============================================================
+echo.
+echo [8.5/9] Copying server module...
+
+if exist "%SRC_DIR%\server" (
+    robocopy "%SRC_DIR%\server" "%DIST_DIR%\server" /E /XD __pycache__ /XF *.pyc *.pyo test_*.py /NJH /NJS /NDL /NC /NS /NP >nul
+    if errorlevel 8 (
+        echo ERROR: Failed to copy server
+        exit /b 1
+    )
+    echo   [OK] Copied server
+) else (
+    echo   WARNING: server folder not found, skipping
+)
+
+REM ============================================================
 REM Generate launcher and documentation
 REM ============================================================
 echo.
@@ -258,6 +275,13 @@ echo.
 echo REM Set PATH to include bundled binaries and MinGit
 echo set PATH=%%DIST%%\python;%%DIST%%\python\Scripts;%%DIST%%\bin;%%DIST%%\mingit\cmd;%%PATH%%
 echo set PYTHONPATH=%%DIST%%;%%PYTHONPATH%%
+echo.
+echo REM Point Python at certifi's CA bundle so HTTPS works in the
+echo REM bundled embedded distribution. The unparenthesized phrasing
+echo REM here is deliberate: parens inside this generator's outer
+echo REM redirect block confuse cmd.exe's parser.
+echo set SSL_CERT_FILE=%%DIST%%\python\Lib\site-packages\certifi\cacert.pem
+echo set REQUESTS_CA_BUNDLE=%%DIST%%\python\Lib\site-packages\certifi\cacert.pem
 echo.
 echo REM Set Jupyter/IPython config to dist-relative paths
 echo set JUPYTER_CONFIG_DIR=%%DIST%%\jupyter\config
@@ -330,6 +354,10 @@ echo.
 echo REM Set PATH to include bundled binaries and MinGit
 echo set PATH=%%DIST%%\python;%%DIST%%\python\Scripts;%%DIST%%\bin;%%DIST%%\mingit\cmd;%%PATH%%
 echo set PYTHONPATH=%%DIST%%;%%PYTHONPATH%%
+echo.
+echo REM Point Python at certifi's CA bundle - see start.bat for context.
+echo set SSL_CERT_FILE=%%DIST%%\python\Lib\site-packages\certifi\cacert.pem
+echo set REQUESTS_CA_BUNDLE=%%DIST%%\python\Lib\site-packages\certifi\cacert.pem
 echo.
 echo REM Run headless.py
 echo "%%DIST%%\python\python.exe" "%%DIST%%\examples\headless.py"
@@ -433,6 +461,18 @@ echo.
 echo   headless.bat
 echo.
 echo.
+echo BLENDER INTEGRATION
+echo -------------------
+echo The Blender addon is distributed separately - this bundle only
+echo ships server.py, the backend the addon connects to.
+echo.
+echo   1. Download and install the ppf-contact-solver Blender addon
+echo      following the addon's own install instructions.
+echo   2. In Blender, select "Windows Native" from the server type dropdown
+echo   3. Set the "Solver Path" to this directory
+echo   4. Click Connect
+echo.
+echo.
 echo REQUIREMENTS
 echo ------------
 echo - Windows 10/11 ^(64-bit^)
@@ -445,7 +485,9 @@ echo --------
 echo bin/           - Solver binaries and CUDA libraries
 echo python/        - Embedded Python environment
 echo mingit/        - Embedded Git for repository cloning
+echo frontend/      - Python frontend package
 echo examples/      - Example Jupyter notebooks
+echo server.py      - Backend server for Blender addon
 echo config.bat     - Port configuration
 echo start.bat      - JupyterLab launcher
 echo start-jupyterlab.pyw - GUI launcher
@@ -475,6 +517,16 @@ copy "%SRC_DIR%\.github\workflows\scripts\examples.txt" "%DIST_DIR%\examples.txt
 echo   Copied fast-check and utility files
 
 REM ============================================================
+REM Copy server.py (Blender addon connects here; addon itself is
+REM downloaded separately, never bundled into dist)
+REM ============================================================
+echo.
+echo [9.5/9] Copying server.py...
+
+copy "%SRC_DIR%\server.py" "%DIST_DIR%\server.py" >nul
+echo   Copied server.py
+
+REM ============================================================
 REM Summary
 REM ============================================================
 echo.
@@ -493,6 +545,7 @@ echo   python/
 echo   frontend/
 echo   src/
 echo   examples/
+echo   server.py
 echo   start.bat
 echo   start-jupyterlab.pyw
 echo   headless.bat

@@ -6,6 +6,16 @@
 use std::env;
 
 fn main() {
+    // The ``emulated`` feature drops every CUDA / C++ dependency: the
+    // debug test rig drives the Rust pipeline on hosts that have no
+    // CUDA toolkit at all. Skip the make + link steps entirely and let
+    // backend.rs's stubbed FFI fill in.
+    let emulated = env::var("CARGO_FEATURE_EMULATED").is_ok();
+    if emulated {
+        println!("cargo:warning=building with --features emulated; CUDA disabled");
+        return;
+    }
+
     #[cfg(not(target_os = "windows"))]
     {
         use std::process::Command;

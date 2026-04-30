@@ -1,0 +1,82 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 320" role="img" aria-label="SSH (Direct) transport topology: the add-on lives on the Blender workstation while server.py runs directly on a remote Linux host reached over SSH">
+  <title>SSH (Direct) transport topology</title>
+  <desc>
+    A single block diagram showing that in SSH (Direct) and SSH
+    Command modes the add-on stays on the Blender workstation while
+    server.py runs directly on a remote Linux host reached over SSH.
+    There is no Docker daemon and no container. Lifecycle commands
+    (start, stop) ride a paramiko SSH session to the remote shell, and
+    server traffic rides an SSH tunnel to the remote's localhost port
+    that server.py listens on.
+  </desc>
+
+  <defs>
+    <marker id="ss-arrow-b" viewBox="0 0 10 10" refX="9" refY="5"
+            markerWidth="10" markerHeight="10" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#2e6da4" />
+    </marker>
+    <marker id="ss-arrow-p" viewBox="0 0 10 10" refX="9" refY="5"
+            markerWidth="10" markerHeight="10" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#6a3ea1" />
+    </marker>
+  </defs>
+
+  <style>
+    .hdr-title     { font: 700 15px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #1a1a1a; }
+    .hdr-sub       { font: italic 12px -apple-system, sans-serif; fill: #555; }
+    .hdr-addon     { fill: #e9eef7; stroke: #8fa7c7; stroke-width: 1; }
+    .hdr-container { fill: #eef6eb; stroke: #86b36a; stroke-width: 1; }
+    .mode-title    { font: 700 16px -apple-system, sans-serif; fill: #1a1a1a; }
+    .mode-sub      { font: 12px -apple-system, sans-serif; fill: #555; }
+    .arr-ctl       { stroke: #2e6da4; stroke-width: 2; fill: none; }
+    .arr-data      { stroke: #6a3ea1; stroke-width: 2; fill: none; stroke-dasharray: 5 4; }
+    .lbl           { font: 600 12px -apple-system, sans-serif; fill: #1a1a1a; }
+    .lbl-ctl       { font: 600 12px -apple-system, sans-serif; fill: #1f4a75; }
+    .lbl-data      { font: 600 12px -apple-system, sans-serif; fill: #5a3492; }
+    .lbl-mono      { font: 600 11px "Menlo", "Consolas", monospace; fill: #1a1a1a; }
+    .note          { font: 12px -apple-system, sans-serif; fill: #555; }
+    .machine-box   { fill: none; stroke: #aaa; stroke-width: 1.2; stroke-dasharray: 6 4; }
+    .machine-lbl   { font: italic 11px -apple-system, sans-serif; fill: #777; }
+    .legend-box    { fill: #fafafa; stroke: #ddd; stroke-width: 1; }
+  </style>
+
+  <!-- ============ Legend ============ -->
+  <rect x="480" y="14" width="360" height="46" rx="6" class="legend-box" />
+  <line x1="495" y1="32" x2="525" y2="32" class="arr-ctl" marker-end="url(#ss-arrow-b)" />
+  <text x="532" y="36" class="lbl-ctl">lifecycle</text>
+  <text x="532" y="50" class="note">start / stop server</text>
+  <line x1="660" y1="32" x2="690" y2="32" class="arr-data" marker-end="url(#ss-arrow-p)" />
+  <text x="697" y="36" class="lbl-data">server traffic</text>
+  <text x="697" y="50" class="note">SSH tunnel to server.py</text>
+
+  <!-- ============ SSH (Direct) ============ -->
+  <text x="20" y="30" class="mode-title">SSH (Direct)</text>
+  <text x="20" y="50" class="mode-sub">server.py runs directly on a remote Linux host, reached over SSH.</text>
+
+  <rect x="20" y="80" width="260" height="170" rx="8" class="machine-box" />
+  <text x="36" y="100" class="machine-lbl">Blender workstation</text>
+
+  <rect x="300" y="80" width="540" height="170" rx="8" class="machine-box" />
+  <text x="316" y="100" class="machine-lbl">Remote Linux host (SSH reachable)</text>
+
+  <rect x="50"  y="122" width="220" height="70" rx="6" class="hdr-addon" />
+  <text x="160" y="150" text-anchor="middle" class="hdr-title">Blender + add-on</text>
+  <text x="160" y="170" text-anchor="middle" class="hdr-sub">paramiko (SSH)</text>
+
+  <rect x="430" y="122" width="280" height="70" rx="6" class="hdr-container" />
+  <text x="570" y="150" text-anchor="middle" class="hdr-title">server.py</text>
+  <text x="570" y="170" text-anchor="middle" class="lbl-mono">python3 server.py --host 127.0.0.1</text>
+
+  <!-- lifecycle: addon over SSH to remote shell that launches server.py -->
+  <line x1="270" y1="144" x2="430" y2="144" class="arr-ctl" marker-end="url(#ss-arrow-b)" />
+  <text x="350" y="136" text-anchor="middle" class="lbl-mono">ssh exec</text>
+
+  <!-- server traffic: SSH tunnel from addon to server.py port -->
+  <path d="M 270 180 Q 360 232 430 180" class="arr-data" marker-end="url(#ss-arrow-p)" />
+  <text x="350" y="230" text-anchor="middle" class="lbl-data">SSH tunnel (direct-tcpip) to remote localhost:9090</text>
+  <text x="350" y="246" text-anchor="middle" class="note">server.py is bound loopback-only -- the SSH tunnel is the only way in</text>
+
+  <!-- footnote -->
+  <text x="20" y="288" class="note"><tspan class="lbl">SSH Command</tspan> mode is identical at the transport level; only the SSH fields (host, port, user,</text>
+  <text x="20" y="306" class="note">key) are parsed from a pasted <tspan class="lbl-mono">ssh ...</tspan> string instead of entered as fields.</text>
+</svg>

@@ -5,6 +5,8 @@
 
 import os
 import platform
+import sys
+import threading
 import time
 
 from typing import Optional
@@ -13,7 +15,7 @@ import numpy as np
 
 from numba import njit, prange
 
-from ._bvh_ import compute_barycentric_mapping as _compute_barycentric_mapping
+from ._bvh_ import compute_frame_mapping as _compute_frame_mapping
 from ._bvh_ import interpolate_surface as _interpolate_surface
 
 # =============================================================================
@@ -23,7 +25,7 @@ from ._bvh_ import interpolate_surface as _interpolate_surface
 
 @njit(cache=True)
 def _generate_grid_faces(length_split: int, width_split: int, out_faces: np.ndarray):
-    """Generate faces for a grid mesh (used by mobius, cylinder, etc.)."""
+    """Generate faces for a grid mesh wrapped along the length axis (used by Mobius strips)."""
     idx = 0
     for i in range(length_split):
         next_i = (i + 1) % length_split
@@ -291,35 +293,64 @@ def _fix_skinny_triangles(
 
 
 class MeshManager:
-    """Mesh Manager for accessing mesh creation functions"""
+    """Mesh manager for accessing mesh creation functions.
+
+    Example:
+        Reach into the mesh manager via the top-level app object::
+
+            app = App.create("demo")
+            V, F = app.mesh.square(res=64)
+            V, F = app.mesh.icosphere(r=0.5, subdiv_count=4)
+            V, E = app.mesh.line([0, 0, 0], [1, 0, 0], n=32)
+    """
 
     def __init__(self, cache_dir: str):
-        """Initialize the mesh manager"""
+        """Initialize the mesh manager."""
         self._cache_dir = cache_dir
         self._create = CreateManager(cache_dir)
 
     @property
     def create(self) -> "CreateManager":
-        """Get the mesh creation manager"""
+        """Get the mesh creation manager.
+
+        Example:
+            Access the creation manager to build a parametric mesh::
+
+                V, F = app.mesh.create.square(res=64)
+                app.asset.add.tri("sheet", V, F)
+        """
         return self._create
 
     def export(self, V: np.ndarray, F: np.ndarray, path: str):
-        """Export the mesh to a file"""
+        """Export a mesh given by vertices ``V`` and faces ``F`` to a file.
+
+        Example:
+            Save a generated square as an OBJ on disk::
+
+                V, F = app.mesh.square(res=32)
+                app.mesh.export(V, F, "sheet.obj")
+        """
         import trimesh
 
         mesh = trimesh.Trimesh(vertices=V, faces=F, process=False)
         mesh.export(path)
 
     def line(self, _p0: list[float], _p1: list[float], n: int) -> "Rod":
-        """Create a line mesh with a given start and end points and resolution.
+        """Create a line mesh with the given start and end points and resolution.
 
         Args:
-            _p0 (list[float]): a start point of the line
-            _p1 (list[float]): an end point of the line
-            n (int): a resolution of the line
+            _p0 (list[float]): the start point of the line
+            _p1 (list[float]): the end point of the line
+            n (int): the number of segments; the line has ``n + 1`` vertices
 
         Returns:
             Rod: a line mesh, a pair of vertices and edges
+
+        Example:
+            Create a tall vertical rod and register it as an asset::
+
+                V, E = app.mesh.line([0, 0.01, 0], [0.01, 15, 0], 960)
+                app.asset.add.rod("strand", V, E)
         """
         p0, p1 = np.array(_p0), np.array(_p1)
         vert = np.vstack([p0 + (p1 - p0) * i / n for i in range(n + 1)])
@@ -327,15 +358,21 @@ class MeshManager:
         return self.create.rod(vert, edge)
 
     def box(self, width: float = 1, height: float = 1, depth: float = 1) -> "TriMesh":
-        """Create a box mesh
+        """Create a box mesh.
 
         Args:
-            width (float): a width of the box
-            hight (float): a height of the box
-            depth (float): a depth of the box
+            width (float): the width of the box
+            height (float): the height of the box
+            depth (float): the depth of the box
 
         Returns:
             TriMesh: a box mesh, a pair of vertices and triangles
+
+        Example:
+            Build a unit box and subdivide it once::
+
+                V, F = app.mesh.box(width=1, height=1, depth=1).subdivide(n=1)
+                app.asset.add.tri("box", V, F)
         """
         V = np.array(
             [
@@ -370,9 +407,9 @@ class MeshManager:
     def tet_box(
         self, width: float = 1, height: float = 1, depth: float = 1
     ) -> "TetMesh":
-        """Create a box tetrahedral mesh directly without subdivision
+        """Create a box tetrahedral mesh directly without subdivision.
 
-        Unlike box().tetrahedralize(), this creates a minimal tetrahedral mesh
+        Unlike ``box().tetrahedralize()``, this creates a minimal tetrahedral mesh
         with only 8 vertices and 5 tetrahedra, preserving the original box shape
         without any surface subdivision.
 
@@ -383,6 +420,12 @@ class MeshManager:
 
         Returns:
             TetMesh: a tetrahedral box mesh
+
+        Example:
+            Register a minimal tet box (8 verts, 5 tets) as a tet asset::
+
+                V, F, T = app.mesh.tet_box(width=1, height=1, depth=1)
+                app.asset.add.tet("block", V, F, T)
         """
         V = np.array(
             [
@@ -435,18 +478,27 @@ class MeshManager:
         ey: Optional[list[float]] = None,
         gen_uv: bool = True,
     ) -> "TriMesh":
-        """Create a rectangle mesh with a given resolution, width, height, and spanned by the given vectors `ex` and `ey`.
+        """Create a rectangle mesh with the given resolution, width, and height, spanned by the vectors ``ex`` and ``ey``.
 
         Args:
-            res_x (int): resolution of the mesh
-            width (float): a width of the rectangle
-            height (float): a height of the rectangle
-            ex (list[float]): a 3D vector to span the rectangle
-            ey (list[float]): a 3D vector to span the rectangle
+            res_x (int): resolution along the ``ex`` axis
+            width (float): the width of the rectangle
+            height (float): the height of the rectangle
+            ex (list[float] | None): a 3D vector to span the rectangle. Defaults to ``[1, 0, 0]``.
+            ey (list[float] | None): a 3D vector to span the rectangle. Defaults to ``[0, 1, 0]``.
             gen_uv (bool): if True, include UV coordinates in vertices (Nx5), otherwise Nx3
 
         Returns:
             TriMesh: a rectangle mesh, a pair of vertices (Nx5: x,y,z,u,v or Nx3: x,y,z) and triangles
+
+        Example:
+            Create a tall thin ribbon lying in the xz plane::
+
+                V, F = app.mesh.rectangle(
+                    res_x=4, width=0.15, height=12.0,
+                    ex=[1, 0, 0], ey=[0, 0, 1],
+                )
+                app.asset.add.tri("ribbon", V, F)
         """
         if ey is None:
             ey = [0, 1, 0]
@@ -490,17 +542,23 @@ class MeshManager:
         ey: Optional[list[float]] = None,
         gen_uv: bool = True,
     ) -> "TriMesh":
-        """Create a square mesh with a given resolution and size, spanned by the given vectors `ex` and `ey`.
+        """Create a square mesh with the given resolution and size, spanned by the vectors ``ex`` and ``ey``.
 
         Args:
             res (int): resolution of the mesh
-            size (float): a diameter of the square
-            ex (list[float]): a 3D vector to span the square
-            ey (list[float]): a 3D vector to span the square
+            size (float): the side length of the square
+            ex (list[float] | None): a 3D vector to span the square. Defaults to ``[1, 0, 0]``.
+            ey (list[float] | None): a 3D vector to span the square. Defaults to ``[0, 1, 0]``.
             gen_uv (bool): if True, include UV coordinates in vertices (Nx5), otherwise Nx3
 
         Returns:
             TriMesh: a square mesh, a pair of vertices and triangles
+
+        Example:
+            Build a 128-resolution sheet in the xz plane and register it::
+
+                V, F = app.mesh.square(res=128, ex=[1, 0, 0], ey=[0, 0, 1])
+                app.asset.add.tri("sheet", V, F)
         """
         if ey is None:
             ey = [0, 1, 0]
@@ -509,15 +567,21 @@ class MeshManager:
         return self.rectangle(res, size, size, ex, ey, gen_uv)
 
     def circle(self, n: int = 32, r: float = 1, ntri: int = 1024) -> "TriMesh":
-        """Create a circle mesh
+        """Create a circle mesh.
 
         Args:
-            n (int): resolution of the circle
+            n (int): number of boundary segments
             r (float): radius of the circle
             ntri (int): approximate number of triangles filling the circle
 
         Returns:
             TriMesh: a circle mesh, a pair of 2D vertices and triangles
+
+        Example:
+            Produce a circular patch ready for plotting::
+
+                V, F = app.mesh.circle(n=64, r=1, ntri=2048)
+                app.plot.create().tri(V, F)
         """
         pts = []
         for i in range(n):
@@ -527,14 +591,20 @@ class MeshManager:
         return self.create.tri(np.array(pts)).triangulate(ntri)
 
     def icosphere(self, r: float = 1, subdiv_count: int = 3) -> "TriMesh":
-        """Create an icosphere mesh with a given radius and subdivision count.
+        """Create an icosphere mesh with the given radius and subdivision count.
 
         Args:
             r (float): radius of the icosphere
-            subdiv_count (int): subdivision count of the icosphere
+            subdiv_count (int): number of subdivision iterations applied to the base icosahedron
 
         Returns:
             TriMesh: an icosphere mesh, a pair of vertices and triangles
+
+        Example:
+            Create a smooth sphere asset and pin it as a static collider::
+
+                V, F = app.mesh.icosphere(r=0.5, subdiv_count=4)
+                app.asset.add.tri("sphere", V, F)
         """
         # Create icosahedron base
         phi = (1.0 + np.sqrt(5.0)) / 2.0  # golden ratio
@@ -619,7 +689,7 @@ class MeshManager:
         return TriMesh.create(verts, faces, self._cache_dir)
 
     def _from_trimesh(self, trimesh_mesh) -> "TriMesh":
-        """Load a mesh from a trimesh object"""
+        """Load a mesh from a ``trimesh`` object."""
         return TriMesh.create(
             np.asarray(trimesh_mesh.vertices),
             np.asarray(trimesh_mesh.faces),
@@ -627,18 +697,24 @@ class MeshManager:
         )
 
     def cylinder(self, r: float, min_x: float, max_x: float, n: int):
-        """Create a cylinder along x-axis
+        """Create a cylinder along the x-axis.
 
         Args:
-            r (float): Radius of the cylinder
-            min_x (float): Minimum x coordinate
-            max_x (float): Maximum x coordinate
-            n (int): Number of divisions along x-axis
+            r (float): radius of the cylinder
+            min_x (float): minimum x coordinate
+            max_x (float): maximum x coordinate
+            n (int): number of divisions along the x-axis
 
         Returns:
-            tuple: (V, F) where:
-                - V: ndarray of shape (#x3) containing vertex positions
-                - F: ndarray of shape (#x3) containing triangle indices
+            tuple: ``(V, F)`` where:
+                - ``V``: ndarray of shape (N, 3) containing vertex positions
+                - ``F``: ndarray of shape (M, 3) containing triangle indices
+
+        Example:
+            Create a cylinder and plot it directly::
+
+                V, F = app.mesh.cylinder(r=0.5, min_x=-1, max_x=1, n=32)
+                app.plot.create().tri(V, F)
         """
         dx = (max_x - min_x) / n
         ny = int(2.0 * np.pi * r / dx)
@@ -664,18 +740,24 @@ class MeshManager:
         height: float = 2,
         sharpen: float = 1.0,
     ) -> "TriMesh":
-        """Create a cone mesh with a given number of radial, vertical, and bottom resolution, radius, and height.
+        """Create a cone mesh with the given radial, vertical, and bottom resolution, radius, and height.
 
         Args:
-            Nr (int): number of radial resolution
-            Ny (int): number of vertical resolution
-            Nb (int): number of bottom resolution
+            Nr (int): radial resolution
+            Ny (int): vertical resolution
+            Nb (int): bottom resolution
             radius (float): radius of the cone
             height (float): height of the cone
-            sharpen (float): sharpening subdivision factor at the top
+            sharpen (float): exponent applied to the radial parameter, sharpening the tip
 
         Returns:
             TriMesh: a cone mesh, a pair of vertices and triangles
+
+        Example:
+            Generate a pointed cone and register it::
+
+                V, F = app.mesh.cone(radius=0.5, height=2, sharpen=1.5)
+                app.asset.add.tri("cone", V, F)
         """
         V = [[0, 0, height], [0, 0, 0]]
         T = []
@@ -750,15 +832,21 @@ class MeshManager:
         return TriMesh.create(np.array(V), np.array(T), self._cache_dir)
 
     def torus(self, r: float = 1, R: float = 0.25, n: int = 32) -> "TriMesh":
-        """Create a torus mesh with a given radius, major radius, and resolution.
+        """Create a torus mesh with the given major and minor radii and resolution.
 
         Args:
-            r (float): hole radius of the torus
-            R (float): major radius of the torus
-            n (int): resolution of the torus
+            r (float): major radius of the torus (passed as ``major_radius``)
+            R (float): minor radius of the torus (passed as ``minor_radius``)
+            n (int): number of sections used for both the major and minor loops
 
         Returns:
             TriMesh: a torus mesh, a pair of vertices and triangles
+
+        Example:
+            Create a torus to use as a fixed obstacle::
+
+                V, F = app.mesh.torus(r=0.5, R=0.125)
+                app.asset.add.tri("torus", V, F)
         """
         import trimesh.creation
 
@@ -777,19 +865,25 @@ class MeshManager:
         width: float = 1,
         scale: float = 1,
     ) -> "TriMesh":
-        """Creatre a mobius mesh with a given length split, width split, twists, radius, flatness, width, and scale.
+        """Create a Mobius strip mesh with the given length split, width split, twists, radius, flatness, width, and scale.
 
         Args:
-            length_split (int): number of length split
-            width_split (int): number of width split
-            twists (int): number of twists
-            r (float): radius of the mobius
-            flatness (float): flatness of the mobius
-            width (float): width of the mobius
-            scale (float): scale of the mobius
+            length_split (int): number of segments along the length of the strip
+            width_split (int): number of segments across the width of the strip
+            twists (int): number of half-twists in the strip
+            r (float): radius of the strip (distance from center to middle of strip)
+            flatness (float): controls the z-extent of the strip
+            width (float): width of the strip
+            scale (float): overall scale factor applied to the mesh
 
         Returns:
-            TriMesh: a mobius mesh, a pair of vertices and triangles
+            TriMesh: a Mobius strip mesh, a pair of vertices and triangles
+
+        Example:
+            Create a Mobius strip and plot it::
+
+                V, F = app.mesh.mobius(length_split=120, width_split=20, twists=1)
+                app.plot.create().tri(V, F)
         """
         V, F = create_mobius(
             length_split, width_split, twists, r, flatness, width, scale
@@ -797,13 +891,19 @@ class MeshManager:
         return TriMesh.create(V, F, self._cache_dir)
 
     def load_tri(self, path: str) -> "TriMesh":
-        """Load a triangle mesh from a file
+        """Load a triangle mesh from a file.
 
         Args:
-            path (str): a path to the file
+            path (str): path to the mesh file
 
         Returns:
             TriMesh: a triangle mesh, a pair of vertices and triangles
+
+        Example:
+            Load a ribbon mesh from disk and register it as a tri asset::
+
+                V, F = app.mesh.load_tri("fishingknot.ply")
+                app.asset.add.tri("ribbon", V, F)
         """
         import trimesh
 
@@ -811,17 +911,41 @@ class MeshManager:
         return self._from_trimesh(mesh)
 
     def make_cache_dir(self):
+        """Create the cache directory if it does not already exist.
+
+        Example:
+            Ensure the mesh cache directory is present before loading
+            presets or importing files::
+
+                app.mesh.make_cache_dir()
+                V, F = app.mesh.preset("armadillo")
+        """
         if not os.path.exists(self._cache_dir):
             os.makedirs(self._cache_dir)
 
     def preset(self, name: str) -> "TriMesh":
-        """Load a preset mesh
+        """Load a preset mesh, downloading it from a remote source on first use and caching it locally.
 
         Args:
-            name (str): a name of the preset mesh. Available names are `armadillo`, `knot`, and `bunny`.
+            name (str): the name of the preset mesh. Available names are ``armadillo``, ``knot``, and ``bunny``.
 
         Returns:
             TriMesh: a preset mesh, a pair of vertices and triangles
+
+        Raises:
+            ValueError: if ``name`` is not a recognized preset.
+            Exception: if the mesh cannot be downloaded after multiple retries.
+
+        Example:
+            Load the armadillo, decimate it, then tetrahedralize and normalize::
+
+                V, F, T = (
+                    app.mesh.preset("armadillo")
+                    .decimate(19000)
+                    .tetrahedralize()
+                    .normalize()
+                )
+                app.plot.create().tet(V, T)
         """
         import ssl
         import urllib.request
@@ -889,10 +1013,20 @@ class MeshManager:
 
 
 class CreateManager:
-    """A Manger tghat provides mesh creation functions
+    """A manager that provides mesh creation functions.
 
     This manager provides a set of functions to create various
     types of meshes, such as rods, triangles, and tetrahedra.
+
+    Example:
+        Wrap raw numpy arrays into the mesh types expected by the solver::
+
+            V = np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0]])
+            E = np.array([[0, 1], [1, 2]])
+            rod = app.mesh.create.rod(V, E)
+
+            pts = np.array([[0, 0], [1, 0], [1, 1], [0, 1]])
+            tri_mesh = app.mesh.create.tri(pts).triangulate(1024)
 
     """
 
@@ -900,56 +1034,85 @@ class CreateManager:
         self._cache_dir = cache_dir
 
     def rod(self, vert: np.ndarray, edge: np.ndarray) -> "Rod":
-        """Create a rod mesh
+        """Create a rod mesh.
 
         Args:
-            vert (np.ndarray): a list of vertices
-            edge (np.ndarray): a list of edges
+            vert (np.ndarray): array of vertex positions
+            edge (np.ndarray): array of edges
 
         Returns:
             Rod: a rod mesh, a pair of vertices and edges
+
+        Example:
+            Build a custom rod from hand-specified vertices and edges::
+
+                V = np.array([[0, 0, 0], [0.5, 0.2, 0], [1, 0, 0]])
+                E = np.array([[0, 1], [1, 2]], dtype=np.uint32)
+                rod = app.mesh.create.rod(V, E)
+                app.asset.add.rod("strand", *rod)
         """
         return Rod((vert, edge))
 
-    def tri(self, vert: np.ndarray, elm: np.ndarray = np.zeros(0)) -> "TriMesh":
-        """Create a triangle mesh
+    def tri(self, vert: np.ndarray, elm: np.ndarray = None) -> "TriMesh":
+        """Create a triangle mesh.
+
+        When ``elm`` is ``None`` or empty, a closed edge loop over all vertices is
+        auto-generated instead of triangle faces. The resulting mesh's element
+        array then stores edges rather than triangles.
 
         Args:
-            vert (np.ndarray): a list of vertices
-            elm (np.ndarray): a list of elements
+            vert (np.ndarray): array of vertex positions
+            elm (np.ndarray): array of elements (``None`` or empty to auto-generate an edge loop)
 
         Returns:
-            TriMesh: a triangle mesh, a pair of vertices and triangles
+            TriMesh: a triangle (or line-loop) mesh bound to the manager's cache directory
+
+        Example:
+            Make a closed 2D curve and triangulate it into a filled patch::
+
+                pts = np.array(
+                    [[np.cos(t), np.sin(t)] for t in np.linspace(0, 2 * np.pi, 64, endpoint=False)]
+                )
+                V, F = app.mesh.create.tri(pts).triangulate(target=1024)
+                app.plot.create().tri(V, F)
         """
-        if elm.size == 0:
+        if elm is None or elm.size == 0:
             cnt = vert.shape[0]
             elm = np.array([[i, (i + 1) % cnt] for i in range(cnt)])
         return TriMesh((vert, elm)).recompute_hash().set_cache_dir(self._cache_dir)
 
     def tet(self, vert: np.ndarray, elm: np.ndarray, tet: np.ndarray) -> "TetMesh":
-        """Create a tetrahedral mesh
+        """Create a tetrahedral mesh.
 
         Args:
-            vert (np.ndarray): a list of vertices
-            elm (np.ndarray): a list of surface triangle elements
-            tet (np.ndarray): a list of tetrahedra elements
+            vert (np.ndarray): array of vertex positions
+            elm (np.ndarray): array of surface triangle elements
+            tet (np.ndarray): array of tetrahedral elements
 
         Returns:
-            TetMesh: a tetrahedral mesh, a pair of vertices and tetrahedra
+            TetMesh: a tetrahedral mesh containing vertices, surface triangles, and tetrahedra
+
+        Example:
+            Wrap precomputed tet arrays into a TetMesh and register it::
+
+                V, F, T = app.mesh.tet_box(1, 1, 1)
+                tet = app.mesh.create.tet(V, F, T)
+                app.asset.add.tet("block", *tet)
         """
         return TetMesh((vert, elm, tet))
 
 
 def bbox(vert) -> np.ndarray:
-    """Compute a bounding box of a mesh
+    """Compute the axis-aligned bounding box extents of a mesh.
 
-    Given a list of vertices, this function computes a bounding box of the mesh.
+    Given an array of vertices, this function returns the extent of the mesh
+    along each axis.
 
     Args:
-        vert (np.ndarray): a list of vertices
+        vert (np.ndarray): array of vertex positions
 
     Returns:
-        3D array: a bounding box of the mesh, represented as [width, height, depth]
+        np.ndarray: a 3-element array ``[width, height, depth]`` giving the extents along x, y, and z
     """
     width = np.max(vert[:, 0]) - np.min(vert[:, 0])
     height = np.max(vert[:, 1]) - np.min(vert[:, 1])
@@ -958,36 +1121,41 @@ def bbox(vert) -> np.ndarray:
 
 
 def normalize(vert: np.ndarray):
-    """Normalize a set of vertices
+    """Normalize a set of vertices.
 
-    Normalize a set of vertices so that the maximum bounding box size becomes 1.
+    Centers the vertices at the origin and rescales them so that the largest
+    bounding box extent is 1.
 
     Args:
-        vert (np.ndarray): a list of vertices
+        vert (np.ndarray): array of vertex positions
 
-    Return:
-        np.ndarray: a normalized set of vertices
+    Returns:
+        np.ndarray: a new, normalized copy of the vertex array
     """
+    vert = vert.copy()
     vert -= np.mean(vert, axis=0)
     vert /= np.max(bbox(vert))
+    return vert
 
 
 def scale(
     vert: np.ndarray, scale_x: float, scale_y: float, scale_z: float
 ) -> np.ndarray:
-    """Scale a set of vertices
+    """Scale a set of vertices around their centroid.
 
-    Scale a set of vertices with given scaling factors.
+    Scales the vertices around their centroid so that the centroid position
+    is preserved.
 
     Args:
-        vert (np.ndarray): a list of vertices
-        scale_x (float): a scaling factor for the x-axis
-        scale_y (float): a scaling factor for the y-axis
-        scale_z (float): a scaling factor for the z-axis
+        vert (np.ndarray): array of vertex positions
+        scale_x (float): scaling factor for the x-axis
+        scale_y (float): scaling factor for the y-axis
+        scale_z (float): scaling factor for the z-axis
 
-    Return:
-        np.ndarray: a scaled set of vertices
+    Returns:
+        np.ndarray: a new, scaled copy of the vertex array
     """
+    vert = vert.copy()
     mean = np.mean(vert, axis=0)
     vert -= mean
     vert *= np.array([scale_x, scale_y, scale_z])
@@ -996,20 +1164,32 @@ def scale(
 
 
 class Rod(tuple[np.ndarray, np.ndarray]):
-    """A class representing a rod mesh
+    """A class representing a rod mesh.
 
-    This class represents a rod mesh, which is a pair of vertices and edges.
-    The first element of the tuple is a list of vertices, and the second element is a list of edges.
+    A rod mesh is a pair of vertices and edges. The first element of the tuple
+    is the array of vertices and the second element is the array of edges.
+
+    Example:
+        Obtain a rod from the line helper and unpack it::
+
+            rod = app.mesh.line([0, 0, 0], [1, 0, 0], n=16)
+            V, E = rod
+            app.asset.add.rod("strand", V, E)
 
     """
 
     def normalize(self) -> "Rod":
-        """Normalize the rod mesh
+        """Normalize the rod mesh in place so that the maximum bounding box extent is 1.
 
-        It normalizes the rod mesh so that the maximum bounding box size becomes 1.
+        Example:
+            Normalize a freshly built rod and then scale it::
 
+                rod = app.mesh.line([0, 0, 0], [10, 0, 0], n=32).normalize().scale(0.5)
+                V, E = rod
         """
-        normalize(self[0])
+        # normalize() returns a copy; write back in-place since tuple[0] is
+        # a numpy array bound to this tuple subclass.
+        self[0][:] = normalize(self[0])
         return self
 
     def scale(
@@ -1018,43 +1198,62 @@ class Rod(tuple[np.ndarray, np.ndarray]):
         scale_y: Optional[float] = None,
         scale_z: Optional[float] = None,
     ) -> "Rod":
-        """Scale the rod mesh
-
-        Scale the rod mesh with given scaling factors.
+        """Scale the rod mesh in place with the given scaling factors.
 
         Args:
-            scale_x (float): a scaling factor for the x-axis
-            scale_y (float): a scaling factor for the y-axis. If None, it is set to the same value as scale_x.
-            scale_z (float): a scaling factor for the z-axis. If None, it is set to the same value as scale_x.
+            scale_x (float): scaling factor for the x-axis
+            scale_y (float | None): scaling factor for the y-axis. If ``None``, ``scale_x`` is used.
+            scale_z (float | None): scaling factor for the z-axis. If ``None``, ``scale_x`` is used.
 
         Returns:
-            Rod: a scaled rod mesh
+            Rod: this rod with scaled vertices
+
+        Example:
+            Shrink a rod uniformly to a quarter of its original length::
+
+                rod = app.mesh.line([0, 0, 0], [4, 0, 0], n=32).scale(0.25)
+                V, E = rod
         """
         if scale_y is None:
             scale_y = scale_x
         if scale_z is None:
             scale_z = scale_x
-        scale(self[0], scale_x, scale_y, scale_z)
+        self[0][:] = scale(self[0], scale_x, scale_y, scale_z)
         return self
 
 
 class TetMesh(tuple[np.ndarray, np.ndarray, np.ndarray]):
-    """A class representing a tetrahedral mesh
+    """A class representing a tetrahedral mesh.
 
-    This class represents a tetrahedral mesh, which is a pair of vertices, surface triangles, and tetrahedra.
+    A tetrahedral mesh is a triple of vertices, surface triangles, and tetrahedra.
 
     Attributes:
-        surface_map: Optional tuple of (tri_indices, bary_coords) for interpolating back to original surface
+        surface_map: Optional tuple of ``(tri_indices, coefs)`` for reconstructing
+            the original surface via frame-embedding interpolation. ``coefs`` are
+            the three frame coefficients ``(c1, c2, c3)`` per original vertex,
+            where ``c1`` and ``c2`` are affine coordinates in the triangle's edge
+            basis, and ``c3`` is the signed normal offset in absolute world units.
+
+    Example:
+        Tetrahedralize a surface mesh and unpack the result::
+
+            tet = app.mesh.icosphere(r=0.35, subdiv_count=4).tetrahedralize()
+            V, F, T = tet
+            app.asset.add.tet("sphere", V, F, T)
 
     """
 
     def normalize(self) -> "TetMesh":
-        """Normalize the tetrahedral mesh
+        """Return ``self`` after invoking :func:`normalize` on the vertex array.
 
-        It normalizes the tetrahedral mesh so that the maximum bounding box size becomes 1.
+        Example:
+            Normalize the armadillo tet mesh in one chain::
 
+                V, F, T = (
+                    app.mesh.preset("armadillo").decimate(19000).tetrahedralize().normalize()
+                )
         """
-        normalize(self[0])
+        self[0][:] = normalize(self[0])
         return self
 
     def scale(
@@ -1063,17 +1262,21 @@ class TetMesh(tuple[np.ndarray, np.ndarray, np.ndarray]):
         scale_y: Optional[float] = None,
         scale_z: Optional[float] = None,
     ) -> "TetMesh":
-        """Scale the tet mesh
-
-        Scle the tet mesh with given scaling factors.
+        """Scale the tet mesh with the given scaling factors.
 
         Args:
-            scale_x (float): a scaling factor for the x-axis
-            scale_y (float): a scaling factor for the y-axis. If None, it is set to the same value as scale_x.
-            scale_z (float): a scaling factor for the z-axis. If None, it is set to the same value as scale_x.
+            scale_x (float): scaling factor for the x-axis
+            scale_y (float | None): scaling factor for the y-axis. If ``None``, ``scale_x`` is used.
+            scale_z (float | None): scaling factor for the z-axis. If ``None``, ``scale_x`` is used.
 
         Returns:
-            TetMesh: a scaled tet mesh
+            TetMesh: this tet mesh (``self``)
+
+        Example:
+            Squash a tet mesh along the y axis before registering it::
+
+                tet = app.mesh.tet_box(1, 1, 1).scale(1.0, 0.25, 1.0)
+                V, F, T = tet
         """
         if scale_y is None:
             scale_y = scale_x
@@ -1085,37 +1288,61 @@ class TetMesh(tuple[np.ndarray, np.ndarray, np.ndarray]):
     def set_surface_mapping(
         self,
         tri_indices: np.ndarray,
-        bary_coords: np.ndarray,
+        coefs: np.ndarray,
     ) -> "TetMesh":
-        """Set the surface mapping for interpolating back to original surface.
+        """Set the frame-embedding surface mapping used by :meth:`interpolate_surface`.
 
         Args:
-            tri_indices: Triangle indices in tet surface for each original vertex (N,)
-            bary_coords: Barycentric coordinates for each original vertex (N, 3)
+            tri_indices: closest triangle in the tet surface per original vertex, shape ``(N,)``
+            coefs: frame coefficients ``(c1, c2, c3)`` per original vertex, shape ``(N, 3)``
 
         Returns:
-            TetMesh: self with surface mapping set
+            TetMesh: this tet mesh with the surface mapping attached
+
+        Example:
+            Attach a precomputed mapping back onto a tet mesh::
+
+                tet = app.mesh.create.tet(V, F, T).set_surface_mapping(tri_idx, coefs)
+                orig = tet.interpolate_surface()
         """
-        self.surface_map = (tri_indices, bary_coords)
+        self.surface_map = (tri_indices, coefs)
         return self
 
     def has_surface_mapping(self) -> bool:
-        """Check if this TetMesh has surface mapping data."""
+        """Check if this TetMesh has surface mapping data.
+
+        Example:
+            Guard a call to :meth:`interpolate_surface` with this check::
+
+                tet = surface_mesh.tetrahedralize()
+                if tet.has_surface_mapping():
+                    orig = tet.interpolate_surface()
+        """
         return hasattr(self, "surface_map") and self.surface_map is not None
 
     def interpolate_surface(
         self, deformed_vert: Optional[np.ndarray] = None
     ) -> np.ndarray:
-        """Interpolate deformed tet mesh vertices back to original surface vertices.
+        """Reconstruct original-resolution positions from the deformed tet surface.
 
-        Uses the stored barycentric mapping to compute positions of original surface
-        vertices based on the deformed tet mesh surface.
+        Uses the stored frame-embedding mapping ``p' = x0' + c1*b1' + c2*b2' + c3*n_hat'``.
 
         Args:
-            deformed_vert: Deformed tet mesh vertices. If None, uses current vertices.
+            deformed_vert: deformed tet mesh vertices. If ``None``, the current vertices are used.
 
         Returns:
-            Interpolated vertex positions matching original surface vertex count.
+            np.ndarray: reconstructed vertex positions matching the original surface vertex count.
+
+        Raises:
+            ValueError: if no surface mapping has been set on this mesh.
+
+        Example:
+            Recover the original-resolution surface from a deformed tet mesh::
+
+                tet = surface_mesh.tetrahedralize()
+                deformed = tet[0] * 2.0
+                orig_surface = tet.interpolate_surface(deformed)
+                app.plot.create().tri(orig_surface, surface_mesh[1])
         """
         if not self.has_surface_mapping():
             raise ValueError("No surface mapping available.")
@@ -1123,49 +1350,84 @@ class TetMesh(tuple[np.ndarray, np.ndarray, np.ndarray]):
         if deformed_vert is None:
             deformed_vert = self[0]
 
-        tri_indices, bary_coords = self.surface_map
-        surf_tri = self[1]  # Surface triangles of tet mesh
+        tri_indices, coefs = self.surface_map
+        surf_tri = self[1]
 
-        return _interpolate_surface(deformed_vert, surf_tri, tri_indices, bary_coords)
+        return _interpolate_surface(deformed_vert, surf_tri, tri_indices, coefs)
 
 
 class TriMesh(tuple[np.ndarray, np.ndarray]):
-    """A class representing a triangle mesh
+    """A class representing a triangle mesh.
 
-    This class represents a triangle mesh, which is a pair of vertices and triangles.
+    A triangle mesh is a pair of vertices and triangles.
+
+    Example:
+        Create a sphere, decimate it, then tetrahedralize it in one chain::
+
+            tet = (
+                app.mesh.icosphere(r=1.0, subdiv_count=4)
+                .decimate(2000)
+                .tetrahedralize()
+            )
+            V, F, T = tet
 
     """
 
     @staticmethod
     def create(vert: np.ndarray, elm: np.ndarray, cache_dir: str) -> "TriMesh":
-        """Create a triangle mesh and recompute the hash"""
+        """Create a triangle mesh, recompute its hash, and bind the given cache directory.
+
+        Example:
+            Typically invoked automatically by the mesh pipeline. To build
+            a TriMesh directly from raw arrays::
+
+                import numpy as np
+                from frontend._mesh_ import TriMesh
+
+                mesh = TriMesh.create(V, F, cache_dir="/tmp/ppf-cache")
+                V2, F2 = mesh
+        """
         return TriMesh((vert, elm)).recompute_hash().set_cache_dir(cache_dir)
 
     def _make_trimesh(self):
-        """Create a trimesh object"""
+        """Build a ``trimesh.Trimesh`` object from this mesh's vertices and faces."""
         import trimesh
 
         return trimesh.Trimesh(vertices=self[0], faces=self[1], process=False)
 
     def export(self, path):
-        """Export mesh as PLY or OBJ
+        """Export the mesh to a file using ``trimesh``.
+
+        The output format is inferred from the file extension of ``path``
+        (for example ``.ply``, ``.obj``, ``.stl``).
 
         Args:
             path (str): export path
+
+        Example:
+            Save an icosphere as a PLY file::
+
+                app.mesh.icosphere(r=1.0, subdiv_count=3).export("sphere.ply")
         """
         mesh = self._make_trimesh()
         mesh.export(path)
 
     def decimate(self, target_tri: int) -> "TriMesh":
-        """Mesh decimation
+        """Reduce the number of triangles in the mesh to the target count.
 
-        Reduce the number of triangles in the mesh to the target number.
+        Uses quadric decimation via ``trimesh``, followed by a cleanup pass
+        that merges skinny triangles. Results are cached on disk.
 
         Args:
-            target_tri (int): a target number of triangles
+            target_tri (int): target number of triangles (must be less than the current count)
 
         Returns:
             TriMesh: a decimated mesh
+
+        Example:
+            Decimate the armadillo preset down to 19000 triangles::
+
+                tet = app.mesh.preset("armadillo").decimate(19000).tetrahedralize()
         """
         assert target_tri < self[1].shape[0]
         cache_path = self.compute_cache_path(f"decimate__{target_tri}")
@@ -1190,13 +1452,25 @@ class TriMesh(tuple[np.ndarray, np.ndarray]):
             return cached
 
     def subdivide(self, n: int = 1, method: str = "midpoint"):
-        """Mesh subdivision
+        """Subdivide the mesh with the given number of iterations and method.
 
-        Subdivide the mesh with a given number of subdivisions and method.
+        Results are cached on disk.
 
         Args:
-            n (int): a number of subdivisions
-            method (str): a method of subdivision. Available methods are "midpoint" and "loop".
+            n (int): number of subdivision iterations
+            method (str): subdivision method. Available methods are ``"midpoint"`` and ``"loop"``.
+
+        Returns:
+            TriMesh: a subdivided mesh
+
+        Raises:
+            Exception: if the mesh is not a triangle mesh or ``method`` is unknown.
+
+        Example:
+            Subdivide a coarse box once using Loop subdivision::
+
+                V, F = app.mesh.box(1, 1, 1).subdivide(n=1, method="loop")
+                app.plot.create().tri(V, F)
         """
         import trimesh.remesh
 
@@ -1225,7 +1499,7 @@ class TriMesh(tuple[np.ndarray, np.ndarray]):
             return cached
 
     def _compute_area(self, pts: np.ndarray) -> float:
-        """Compute the area of a 2D shape"""
+        """Compute the area of a closed 2D polygon using the shoelace formula."""
         assert pts.shape[1] == 2
         x = pts[:, 0]
         y = pts[:, 1]
@@ -1235,17 +1509,28 @@ class TriMesh(tuple[np.ndarray, np.ndarray]):
         return area
 
     def triangulate(self, target: int = 1024, min_angle: float = 20) -> "TriMesh":
-        """Triangulate a closed line shape with 2D coordinates
+        """Triangulate a closed 2D line shape.
 
-        This function triangulates a closed 2D line shape with a given
-        target number of triangles and minimum angle.
+        The current mesh must be a 2D line mesh (vertices with shape ``(N, 2)``
+        and segment elements of shape ``(M, 2)``). Results are cached on disk.
 
         Args:
-            target (int): a target number of triangles
-            min_angle (float): a minimum angle of the triangles
+            target (int): target number of triangles (used to derive a maximum triangle area)
+            min_angle (float): minimum triangle angle in degrees passed to the triangulator
 
         Returns:
             TriMesh: a triangulated mesh
+
+        Raises:
+            Exception: if the element array is not a line mesh.
+
+        Example:
+            Turn a closed 2D curve into a filled triangle mesh::
+
+                pts = np.array(
+                    [[np.cos(t), np.sin(t)] for t in np.linspace(0, 2 * np.pi, 64, endpoint=False)]
+                )
+                V, F = app.mesh.create.tri(pts).triangulate(target=1024)
         """
         area = 1.6 * self._compute_area(self[0]) / target
         cache_path = self.compute_cache_path(f"triangulate__{area}_{min_angle}")
@@ -1267,79 +1552,168 @@ class TriMesh(tuple[np.ndarray, np.ndarray]):
             return cached
 
     def tetrahedralize(self, *args, **kwargs) -> TetMesh:
-        """Tetrahedralize a surface triangle mesh
+        """Tetrahedralize a surface triangle mesh using fTetWild.
 
-        This function tetrahedralizes a surface triangle mesh using fTetWild.
-        The original surface is preserved via barycentric mapping, allowing
-        interpolation of deformed positions back to the original surface structure.
+        The original surface is preserved via a frame-embedding mapping,
+        allowing interpolation of deformed positions back to the original
+        surface structure. fTetWild is invoked in a subprocess so that other
+        Python threads remain responsive. Results are cached on disk.
 
-        Args:
-            edge_length_fac (float): Tetrahedral edge length as fraction of bbox diagonal (default: 0.05)
-            optimize (bool): Whether to optimize the mesh (default: True)
+        Keyword Args:
+            edge_length_fac (float): tetrahedral edge length as a fraction of the bbox diagonal (default: ``0.05``).
+            optimize (bool): whether to optimize the mesh (default: ``True``).
+            epsilon (float): fTetWild ``epsilon`` tolerance (optional).
+            stop_energy (float): fTetWild stop-energy threshold (optional).
+            num_opt_iter (int): number of optimization iterations (optional).
+            simplify (bool): whether to simplify the input surface (optional).
+            coarsen (bool): whether to coarsen the tet mesh (optional).
+            status_callback (callable | None): called periodically with a status string while the subprocess runs.
+            status_interval (float): polling interval in seconds for ``status_callback`` (default: ``5.0``).
 
         Returns:
-            TetMesh: A tetrahedral mesh with surface mapping. Use `interpolate_surface()`
-                     to get deformed positions in the original surface structure.
+            TetMesh: a tetrahedral mesh with surface mapping attached. Use
+            :meth:`TetMesh.interpolate_surface` to recover deformed positions in
+            the original surface structure.
+
+        Raises:
+            RuntimeError: if the fTetWild subprocess exits with a non-zero status.
+
+        Example:
+            Tetrahedralize a sphere and recover the original surface after
+            simulation via :meth:`TetMesh.interpolate_surface`::
+
+                tet = app.mesh.icosphere(r=0.35, subdiv_count=4).tetrahedralize(
+                    edge_length_fac=0.05
+                )
+                V, F, T = tet
+                app.asset.add.tet("sphere", V, F, T)
         """
+        status_callback = kwargs.pop("status_callback", None)
+        status_interval = float(kwargs.pop("status_interval", 5.0))
         arg_str = "_".join([str(a) for a in args])
         if len(kwargs) > 0:
             arg_str += "_".join([f"{k}={v}" for k, v in kwargs.items()])
         cache_path = self.compute_cache_path(
             f"{self.hash}_tetrahedralize_{arg_str}.npz"
         )
+        # Bumped when the surface-mapping math changes in an incompatible way.
+        # v2: switched from in-plane barycentric weights to frame-embedding
+        # coefs (fixes tet-surface shrink after simulation).
+        _SURFACE_MAP_VERSION = 2
+
         if os.path.exists(cache_path):
+            if status_callback is not None:
+                status_callback("loading cached tetra mesh")
             data = np.load(cache_path)
             tri = data["tri"] if "tri" in data else self[1]
             tet_mesh = TetMesh((data["vert"], tri, data["tet"]))
-            # Restore surface mapping if available
-            if "map_tri_indices" in data:
+            # Restore surface mapping if the cached one matches the current math.
+            cached_ver = int(data["map_version"]) if "map_version" in data else 0
+            if cached_ver == _SURFACE_MAP_VERSION and "map_coefs" in data:
                 tet_mesh.set_surface_mapping(
-                    data["map_tri_indices"], data["map_bary_coords"]
+                    data["map_tri_indices"], data["map_coefs"]
+                )
+            elif "map_tri_indices" in data:
+                # Legacy cache (v1 bary weights or older): recompute the
+                # mapping in-place with the new math rather than dropping it.
+                new_tri_indices, new_coefs = _compute_frame_mapping(
+                    self[0], data["vert"], tri
+                )
+                tet_mesh.set_surface_mapping(new_tri_indices, new_coefs)
+                np.savez(
+                    cache_path,
+                    vert=data["vert"],
+                    tet=data["tet"],
+                    tri=tri,
+                    map_tri_indices=new_tri_indices,
+                    map_coefs=new_coefs,
+                    map_version=_SURFACE_MAP_VERSION,
                 )
             return tet_mesh
         else:
             import pytetwild
 
-            # edge_length_fac: tetrahedral edge length as fraction of bbox diagonal
-            edge_length_fac = kwargs.get("edge_length_fac", 0.05)
-            optimize = kwargs.get("optimize", True)
+            # Whitelist pytetwild kwargs we expose via fTetWild UI overrides;
+            # anything outside this set is dropped to keep the subprocess
+            # script stable against stray keys from callers.
+            _FTETWILD_KWARGS = (
+                "edge_length_fac",
+                "epsilon",
+                "stop_energy",
+                "num_opt_iter",
+                "optimize",
+                "simplify",
+                "coarsen",
+            )
+            ftw_kwargs = {k: kwargs[k] for k in _FTETWILD_KWARGS if k in kwargs}
+            ftw_kwargs.setdefault("edge_length_fac", 0.05)
+            ftw_kwargs.setdefault("optimize", True)
+            kwargs_literal = ", ".join(f"{k}={v!r}" for k, v in ftw_kwargs.items())
 
-            # Suppress verbose C++ output from fTetWild
-            if platform.system() == "Windows":
-                # On Windows embedded Python, output redirection can cause hangs
-                # Just run pytetwild without suppression - verbose but works
-                print("Running pytetwild...")
-                vert, tet = pytetwild.tetrahedralize(  # type: ignore[attr-defined]
-                    self[0], self[1], edge_length_fac=edge_length_fac, optimize=optimize
-                )
-                # Clean up fTetWild temp file
-                if os.path.exists("__tracked_surface.stl"):
-                    os.remove("__tracked_surface.stl")
-                print("Tetrahedralization complete.")
-                print(f"Number of vertices: {len(vert)}")
-                print(f"Number of tetrahedra: {len(tet)}")
-            else:
-                devnull_fd = os.open(os.devnull, os.O_WRONLY)
-                old_stdout_fd = os.dup(1)
-                old_stderr_fd = os.dup(2)
+            # Run fTetWild in a subprocess to avoid holding the GIL.
+            # This allows other Python threads (server connection handlers)
+            # to respond to status queries during tetrahedralization.
+            import subprocess as _sp
+            import tempfile as _tf
+            import pickle as _pk
+
+            with _tf.NamedTemporaryFile(suffix=".npz", delete=False) as _in_f:
+                input_path = _in_f.name
+                np.savez(_in_f, vert=self[0], tri=self[1])
+            output_path = input_path + ".out.npz"
+
+            tet_script = f"""
+import sys, os, numpy as np
+data = np.load({input_path!r})
+V, F = data["vert"], data["tri"]
+import pytetwild
+if sys.platform == "win32":
+    vert, tet = pytetwild.tetrahedralize(V, F, {kwargs_literal})
+else:
+    devnull_fd = os.open(os.devnull, os.O_WRONLY)
+    old1, old2 = os.dup(1), os.dup(2)
+    try:
+        os.dup2(devnull_fd, 1)
+        os.dup2(devnull_fd, 2)
+        vert, tet = pytetwild.tetrahedralize(V, F, {kwargs_literal})
+    finally:
+        os.dup2(old1, 1)
+        os.dup2(old2, 2)
+        os.close(devnull_fd)
+        os.close(old1)
+        os.close(old2)
+if os.path.exists("__tracked_surface.stl"):
+    os.remove("__tracked_surface.stl")
+np.savez({output_path!r}, vert=vert, tet=tet)
+"""
+            proc = _sp.Popen(
+                [sys.executable, "-c", tet_script],
+                stdout=_sp.DEVNULL, stderr=_sp.DEVNULL,
+            )
+            start_time = time.time()
+            while proc.poll() is None:
                 try:
-                    os.dup2(devnull_fd, 1)
-                    os.dup2(devnull_fd, 2)
-                    vert, tet = pytetwild.tetrahedralize(  # type: ignore[attr-defined]
-                        self[0],
-                        self[1],
-                        edge_length_fac=edge_length_fac,
-                        optimize=optimize,
-                    )
-                finally:
-                    os.dup2(old_stdout_fd, 1)
-                    os.dup2(old_stderr_fd, 2)
-                    os.close(devnull_fd)
-                    os.close(old_stdout_fd)
-                    os.close(old_stderr_fd)
-                    # Clean up temporary file created by fTetWild
-                    if os.path.exists("__tracked_surface.stl"):
-                        os.remove("__tracked_surface.stl")
+                    proc.wait(timeout=status_interval)
+                except _sp.TimeoutExpired:
+                    pass
+                if proc.poll() is None and status_callback is not None:
+                    elapsed = time.time() - start_time
+                    status_callback(f"running fTetWild ({elapsed:.0f}s elapsed)")
+
+            if proc.returncode != 0:
+                os.unlink(input_path)
+                if os.path.exists(output_path):
+                    os.unlink(output_path)
+                raise RuntimeError(f"fTetWild subprocess failed (exit code {proc.returncode})")
+
+            # NpzFile keeps the .npz open (a ZipFile handle); on Windows
+            # that blocks the os.unlink below with WinError 32. Use `with`
+            # so the handle is closed before we try to delete the file.
+            with np.load(output_path) as out_data:
+                vert = out_data["vert"]
+                tet = out_data["tet"]
+            os.unlink(input_path)
+            os.unlink(output_path)
 
             # Filter out degenerate tetrahedra (volume < threshold)
             # These cause float32 underflow in the Rust solver
@@ -1355,46 +1729,56 @@ class TriMesh(tuple[np.ndarray, np.ndarray]):
             valid_mask = volumes >= min_volume
             tet = tet[valid_mask]
 
-            # Extract surface triangles from tetrahedra
+            # Extract surface triangles from tetrahedra (vectorized)
             # A surface face is shared by exactly one tetrahedron
-            from collections import Counter
+            n_tets = len(tet)
+            face_combos = np.array([[0, 1, 2], [0, 1, 3], [0, 2, 3], [1, 2, 3]])
+            opp_indices = np.array([3, 2, 1, 0])
 
-            # For each tet face, store (face_indices, opposite_vertex_index)
-            face_indices = [
-                ((0, 1, 2), 3),
-                ((0, 1, 3), 2),
-                ((0, 2, 3), 1),
-                ((1, 2, 3), 0),
-            ]
-            all_faces = []
-            face_to_data = {}  # map sorted face to (original_face, opposite_vertex)
-            for t in tet:
-                for fi, opp_idx in face_indices:
-                    original_face = (t[fi[0]], t[fi[1]], t[fi[2]])
-                    opposite_vert = t[opp_idx]
-                    sorted_face = tuple(sorted(original_face))
-                    all_faces.append(sorted_face)
-                    face_to_data[sorted_face] = (original_face, opposite_vert)
-            face_counts = Counter(all_faces)
+            # Gather face vertices: shape (n_tets, 4, 3) -> (n_tets*4, 3)
+            all_faces = tet[:, face_combos].reshape(-1, 3)
+            # Gather opposite vertices: shape (n_tets*4,)
+            all_opp = tet[:, opp_indices].ravel()
+
+            # Sort each face for uniqueness comparison
+            sorted_faces = np.sort(all_faces, axis=1)
+
+            # Find unique faces and their counts
+            # Encode each sorted face as a single int for fast comparison
+            max_v = int(sorted_faces.max()) + 1
+            face_keys = (
+                sorted_faces[:, 0].astype(np.int64) * max_v * max_v
+                + sorted_faces[:, 1].astype(np.int64) * max_v
+                + sorted_faces[:, 2].astype(np.int64)
+            )
+            _, inverse, counts = np.unique(
+                face_keys, return_inverse=True, return_counts=True
+            )
+
             # Surface faces appear exactly once
-            surface_faces = []
-            for f, count in face_counts.items():
-                if count == 1:
-                    orig, opp_vi = face_to_data[f]
-                    v0, v1, v2 = vert[orig[0]], vert[orig[1]], vert[orig[2]]
-                    v_opp = vert[opp_vi]
-                    # Normal should point AWAY from the opposite vertex
-                    edge1, edge2 = v1 - v0, v2 - v0
-                    normal = np.cross(edge1, edge2)
-                    # Vector from face to opposite vertex
-                    face_center = (v0 + v1 + v2) / 3.0
-                    to_opposite = v_opp - face_center
-                    # If normal points toward opposite vertex, flip winding
-                    if np.dot(normal, to_opposite) > 0:
-                        surface_faces.append((orig[0], orig[2], orig[1]))
-                    else:
-                        surface_faces.append(orig)
-            tri = np.array(surface_faces, dtype=np.int32)
+            surface_mask = counts[inverse] == 1
+            surface_faces_orig = all_faces[surface_mask]
+            surface_opp = all_opp[surface_mask]
+
+            # Check winding: normal should point AWAY from opposite vertex
+            sv0 = vert[surface_faces_orig[:, 0]]
+            sv1 = vert[surface_faces_orig[:, 1]]
+            sv2 = vert[surface_faces_orig[:, 2]]
+            sv_opp = vert[surface_opp]
+
+            edge1 = sv1 - sv0
+            edge2 = sv2 - sv0
+            normals = np.cross(edge1, edge2)
+            face_centers = (sv0 + sv1 + sv2) / 3.0
+            to_opposite = sv_opp - face_centers
+            dots = np.sum(normals * to_opposite, axis=1)
+
+            # Where normal points toward opposite vertex, flip winding
+            needs_flip = dots > 0
+            tri = surface_faces_orig.copy()
+            tri[needs_flip, 1] = surface_faces_orig[needs_flip, 2]
+            tri[needs_flip, 2] = surface_faces_orig[needs_flip, 1]
+            tri = tri.astype(np.int32)
 
             # Reindex vertices to only include used ones
             used_verts = np.unique(np.concatenate([tet.ravel(), tri.ravel()]))
@@ -1404,8 +1788,9 @@ class TriMesh(tuple[np.ndarray, np.ndarray]):
             tet = vert_map[tet]
             tri = vert_map[tri]
 
-            # Compute barycentric mapping from new surface to original surface vertices
-            tri_indices, bary_coords = _compute_barycentric_mapping(self[0], vert, tri)
+            # Compute frame-embedding mapping from tet surface back to original
+            # surface vertices (preserves absolute normal offset).
+            tri_indices, coefs = _compute_frame_mapping(self[0], vert, tri)
 
             np.savez(
                 cache_path,
@@ -1413,14 +1798,24 @@ class TriMesh(tuple[np.ndarray, np.ndarray]):
                 tet=tet,
                 tri=tri,
                 map_tri_indices=tri_indices,
-                map_bary_coords=bary_coords,
+                map_coefs=coefs,
+                map_version=_SURFACE_MAP_VERSION,
             )
             return TetMesh((vert, tri, tet)).set_surface_mapping(
-                tri_indices, bary_coords
+                tri_indices, coefs
             )
 
     def recompute_hash(self) -> "TriMesh":
-        """Recompute the hash of the mesh"""
+        """Recompute the SHA-256 hash of the mesh from its vertex and element arrays.
+
+        Example:
+            Typically invoked automatically after mutating operations. To
+            refresh the hash manually (for example after editing ``mesh[0]``
+            in place)::
+
+                mesh.recompute_hash()
+                cache_path = mesh.compute_cache_path("custom")
+        """
         import hashlib
 
         self.hash = hashlib.sha256(
@@ -1436,16 +1831,39 @@ class TriMesh(tuple[np.ndarray, np.ndarray]):
         return self
 
     def set_cache_dir(self, cache_dir: str) -> "TriMesh":
-        """Set the cache directory of the mesh"""
+        """Set the cache directory used by this mesh.
+
+        Example:
+            Typically invoked automatically by the mesh pipeline. To
+            retarget an existing mesh to a different cache location::
+
+                mesh.set_cache_dir("/tmp/ppf-cache-alt")
+        """
         self.cache_dir = cache_dir
         return self
 
     def compute_cache_path(self, name: str) -> str:
-        """Compute the cache path of the mesh"""
+        """Compute a cache file path derived from the mesh hash and the given tag.
+
+        Example:
+            Typically invoked automatically by the mesh pipeline. To look
+            up where a tagged cache entry would live on disk::
+
+                path = mesh.compute_cache_path("decimate__19000")
+                print(path)
+        """
         return os.path.join(self.cache_dir, f"{self.hash}__{name}.npz")
 
     def save_cache(self, path: str) -> "TriMesh":
-        """Save the mesh to a cache"""
+        """Save the mesh's vertex and triangle arrays to the given ``.npz`` path.
+
+        Example:
+            Typically invoked automatically by operations like
+            :meth:`decimate`. To snapshot a mesh to disk manually::
+
+                path = mesh.compute_cache_path("snapshot")
+                mesh.save_cache(path)
+        """
         np.savez(
             path,
             vert=self[0],
@@ -1454,7 +1872,16 @@ class TriMesh(tuple[np.ndarray, np.ndarray]):
         return self
 
     def load_cache(self, path: str) -> Optional["TriMesh"]:
-        """Load a cached mesh"""
+        """Load a cached mesh from the given path, or return ``None`` if it does not exist.
+
+        Example:
+            Typically invoked automatically by the mesh pipeline. To
+            probe for a cached result before recomputing::
+
+                cached = mesh.load_cache(mesh.compute_cache_path("decimate__19000"))
+                if cached is None:
+                    cached = mesh.decimate(19000)
+        """
         if os.path.exists(path):
             data = np.load(path)
             return TriMesh.create(data["vert"], data["tri"], self.cache_dir)
@@ -1462,12 +1889,14 @@ class TriMesh(tuple[np.ndarray, np.ndarray]):
             return None
 
     def normalize(self) -> "TriMesh":
-        """Normalize the triangle mesh
+        """Return ``self`` after invoking :func:`normalize` on the vertex array.
 
-        This function normalizes the triangle mesh so that the maximum bounding box size becomes 1.
+        Example:
+            Rescale an imported mesh so its largest extent is 1::
 
+                V, F = app.mesh.load_tri("big.ply").normalize()
         """
-        normalize(self[0])
+        self[0][:] = normalize(self[0])
         return self
 
     def scale(
@@ -1476,17 +1905,21 @@ class TriMesh(tuple[np.ndarray, np.ndarray]):
         scale_y: Optional[float] = None,
         scale_z: Optional[float] = None,
     ) -> "TriMesh":
-        """Scale the triangle mesh
-
-        Scale the triangle mesh with given scaling factors.
+        """Scale the triangle mesh with the given scaling factors.
 
         Args:
-            scale_x (float): a scaling factor for the x-axis
-            scale_y (float): a scaling factor for the y-axis. If None, it is set to the same value as scale_x.
-            scale_z (float): a scaling factor for the z-axis. If None, it is set to the same value as scale_x.
+            scale_x (float): scaling factor for the x-axis
+            scale_y (float | None): scaling factor for the y-axis. If ``None``, ``scale_x`` is used.
+            scale_z (float | None): scaling factor for the z-axis. If ``None``, ``scale_x`` is used.
 
         Returns:
-            TriMesh: a scaled triangle mesh
+            TriMesh: this triangle mesh (``self``)
+
+        Example:
+            Flatten a sphere into an oblate shape before registering it::
+
+                V, F = app.mesh.icosphere(r=1.0, subdiv_count=3).scale(1.0, 0.3, 1.0)
+                app.asset.add.tri("pill", V, F)
         """
         if scale_y is None:
             scale_y = scale_x

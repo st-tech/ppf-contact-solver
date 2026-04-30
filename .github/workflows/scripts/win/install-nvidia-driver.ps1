@@ -7,9 +7,10 @@ $ErrorActionPreference = "Continue"
 
 Write-Host "=== Installing NVIDIA Driver Only (No CUDA Toolkit) ==="
 
-# For AWS G6e instances with L4 GPUs, use the data center driver
-# Using NVIDIA Data Center Driver for Linux/Windows (L4 GPU)
-$driverUrl = "https://us.download.nvidia.com/tesla/572.83/572.83-data-center-tesla-desktop-win10-win11-64bit-dch-international.exe"
+# For AWS G6e instances with L4 GPUs, use the Windows Server data center
+# driver. NVIDIA splits client (win10/win11) and Server builds; the EC2
+# AMI is Server, so use the winserver-2022-2025 build.
+$driverUrl = "https://us.download.nvidia.com/tesla/580.88/580.88-data-center-tesla-desktop-winserver-2022-2025-dch-international.exe"
 $driverInstaller = "C:\nvidia_driver.exe"
 
 Write-Host "Downloading NVIDIA driver installer..."
@@ -17,8 +18,21 @@ Write-Host "Downloading NVIDIA driver installer..."
 $webClient = New-Object System.Net.WebClient
 $webClient.DownloadFile($driverUrl, $driverInstaller)
 
-Write-Host "Download complete. File size:"
-(Get-Item $driverInstaller).Length
+# Sanity-check the download size before invoking the installer.
+# WebClient.DownloadFile silently returns whatever bytes arrived if the
+# CDN drops the connection mid-transfer, so a partial 2 MiB stub will
+# happily run through the silent installer and only get caught minutes
+# later by the nvidia-smi verify step (after EC2 minutes have already
+# been billed). The real installer is ~700 MB; reject anything under
+# 200 MiB and fail fast so the dispatcher can retry.
+$downloadedSize = (Get-Item $driverInstaller).Length
+Write-Host "Download complete. File size: $downloadedSize bytes"
+$minSize = 200 * 1024 * 1024  # 200 MiB
+if ($downloadedSize -lt $minSize) {
+    Write-Host "ERROR: downloaded file is $downloadedSize bytes, below the $minSize byte minimum."
+    Write-Host "Likely a truncated download from us.download.nvidia.com (CDN flake) or a stale URL."
+    exit 1
+}
 
 Write-Host "Installing NVIDIA driver silently (this takes a few minutes)..."
 # -s for silent, -noreboot to prevent automatic reboot

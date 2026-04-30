@@ -1,0 +1,185 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1020 380" role="img" aria-label="The add-on's day-to-day workflow as nine numbered steps across three phases: scene setup in Blender, solve on the GPU, and handoff to standalone Blender animation">
+  <title>Day-to-day workflow. Nine steps across three phases</title>
+  <desc>
+    Nine numbered step boxes arranged as a two-row pipeline. Row one
+    covers steps 1 through 5: organize objects into groups (Solid,
+    Shell, Rod, Static); assign material parameters per group
+    (density, Young's modulus, Poisson ratio, bend, shrink, strain
+    limit); set scene parameters (gravity, wind, time step, frame
+    count, air density and friction); add pins and attach operations
+    (Move By, Spin, Scale, Torque, Embedded Move); and optionally
+    add invisible colliders (infinite walls, spheres, bowls). Row
+    two covers steps 6 through 9: optionally snap and merge
+    overlapping meshes across group boundaries; then Transfer and
+    Build (encode geometry and parameters to the solver); then Run
+    and Fetch (solve on the GPU and download frames as PC2 animation
+    on the Blender meshes); and optionally Bake the fetched cache
+    into standard Blender shape keys and fcurves, dropping the
+    ContactSolverCache modifier. Boxes for scene-setup steps are
+    blue, solve steps are orange, and the handoff bake step is
+    green. Optional steps have dashed borders. A single forward
+    arrow links the steps in sequence.
+  </desc>
+
+  <defs>
+    <marker id="wf-arrow" viewBox="0 0 10 10" refX="9" refY="5"
+            markerWidth="10" markerHeight="10" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#2e6da4" />
+    </marker>
+    <marker id="wf-arrow-iter" viewBox="0 0 10 10" refX="9" refY="5"
+            markerWidth="11" markerHeight="11" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#6a3ea1" />
+    </marker>
+  </defs>
+
+  <style>
+    .title       { font: 700 17px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #1a1a1a; }
+    .sub         { font: 13px -apple-system, sans-serif; fill: #555; }
+
+    .band-scene  { fill: #eef3fa; stroke: none; }
+    .band-solve  { fill: #fcf3e2; stroke: none; }
+    .band-hand   { fill: #edf5ea; stroke: none; }
+    .band-lbl    { font: italic 11.5px -apple-system, sans-serif; fill: #777; }
+
+    .box-scene   { fill: #f5f8fc; stroke: #8fa7c7; stroke-width: 1.3; }
+    .box-scene-o { fill: #f5f8fc; stroke: #8fa7c7; stroke-width: 1.3; stroke-dasharray: 5 3; }
+    .box-solve   { fill: #fff8ec; stroke: #d7a95a; stroke-width: 1.3; }
+    .box-hand    { fill: #f2faf0; stroke: #86b36a; stroke-width: 1.3; stroke-dasharray: 5 3; }
+
+    .num-scene   { fill: #8fa7c7; }
+    .num-solve   { fill: #d7a95a; }
+    .num-hand    { fill: #86b36a; }
+    .num-tx      { font: 700 12px -apple-system, sans-serif; fill: #fff; }
+
+    .box-ttl     { font: 700 13px -apple-system, sans-serif; fill: #1a1a1a; }
+    .box-sub     { font: 10.5px -apple-system, sans-serif; fill: #444; }
+    .box-mono    { font: 600 10px "Menlo", "Consolas", monospace; fill: #444; }
+    .opt-tag     { font: italic 10px -apple-system, sans-serif; fill: #888; }
+
+    .arr         { stroke: #2e6da4; stroke-width: 2; fill: none; }
+    .arr-iter    { stroke: #6a3ea1; stroke-width: 2; fill: none; stroke-dasharray: 6 4; }
+    .arr-lbl     { font: 700 11.5px -apple-system, sans-serif; fill: #5a3492; }
+    .note        { font: 11px -apple-system, sans-serif; fill: #555; }
+  </style>
+
+  <!-- Title -->
+  <text x="20" y="30" class="title">The day-to-day loop</text>
+  <text x="20" y="50" class="sub">Steps 1–6 live in Blender, 7–8 run on the solver, 9 hands off to standalone Blender animation. Dashed boxes are optional.</text>
+
+  <!-- Phase labels (top) -->
+  <text x="25"  y="82" class="band-lbl">Scene setup (in Blender)</text>
+
+  <!-- =============== Row 1 (steps 1-5) =============== -->
+  <!-- Box positions: x=25, 225, 425, 625, 825 (each 180 wide, 114 tall, y=96) -->
+
+  <!-- Step 1: Object groups (scene-required) -->
+  <rect x="25" y="96" width="180" height="114" rx="8" class="box-scene" />
+  <circle cx="45" cy="116" r="11" class="num-scene" />
+  <text x="45" y="120" text-anchor="middle" class="num-tx">1</text>
+  <text x="63" y="120" class="box-ttl">Object groups</text>
+  <text x="35" y="146" class="box-sub">Group your meshes by role.</text>
+  <text x="35" y="162" class="box-mono">Solid  /  Shell  /  Rod</text>
+  <text x="35" y="176" class="box-mono">Static (collision only)</text>
+  <text x="35" y="196" class="opt-tag">up to 32 active groups</text>
+
+  <!-- Step 2: Material params -->
+  <rect x="225" y="96" width="180" height="114" rx="8" class="box-scene" />
+  <circle cx="245" cy="116" r="11" class="num-scene" />
+  <text x="245" y="120" text-anchor="middle" class="num-tx">2</text>
+  <text x="263" y="120" class="box-ttl">Material parameters</text>
+  <text x="235" y="146" class="box-sub">Per-group physics.</text>
+  <text x="235" y="162" class="box-mono">density · Young's · Poisson</text>
+  <text x="235" y="176" class="box-mono">bend · shrink · strain limit</text>
+  <text x="235" y="196" class="opt-tag">contact gap / friction too</text>
+
+  <!-- Step 3: Scene params -->
+  <rect x="425" y="96" width="180" height="114" rx="8" class="box-scene" />
+  <circle cx="445" cy="116" r="11" class="num-scene" />
+  <text x="445" y="120" text-anchor="middle" class="num-tx">3</text>
+  <text x="463" y="120" class="box-ttl">Scene parameters</text>
+  <text x="435" y="146" class="box-sub">Global solver settings.</text>
+  <text x="435" y="162" class="box-mono">gravity · wind · time step</text>
+  <text x="435" y="176" class="box-mono">frame count · air density</text>
+  <text x="435" y="196" class="opt-tag">keyframeable via dynamic params</text>
+
+  <!-- Step 4: Pins + operations -->
+  <rect x="625" y="96" width="180" height="114" rx="8" class="box-scene" />
+  <circle cx="645" cy="116" r="11" class="num-scene" />
+  <text x="645" y="120" text-anchor="middle" class="num-tx">4</text>
+  <text x="663" y="120" class="box-ttl">Pins + operations</text>
+  <text x="635" y="146" class="box-sub">Anchor vertices &amp; drive them.</text>
+  <text x="635" y="162" class="box-mono">Move By · Spin · Scale</text>
+  <text x="635" y="176" class="box-mono">Torque · Embedded Move</text>
+  <text x="635" y="196" class="opt-tag">keyframed or time-ranged</text>
+
+  <!-- Step 5: Invisible colliders (optional) -->
+  <rect x="825" y="96" width="180" height="114" rx="8" class="box-scene-o" />
+  <circle cx="845" cy="116" r="11" class="num-scene" />
+  <text x="845" y="120" text-anchor="middle" class="num-tx">5</text>
+  <text x="863" y="120" class="box-ttl">Invisible colliders</text>
+  <text x="998" y="120" text-anchor="end" class="opt-tag">optional</text>
+  <text x="835" y="146" class="box-sub">Parametric boundaries.</text>
+  <text x="835" y="162" class="box-mono">walls · spheres · bowls</text>
+  <text x="835" y="176" class="box-mono">hemispheres · inverted</text>
+  <text x="835" y="196" class="opt-tag">no mesh in the scene</text>
+
+  <!-- Forward arrows row 1 -->
+  <line x1="205" y1="153" x2="225" y2="153" class="arr" marker-end="url(#wf-arrow)" />
+  <line x1="405" y1="153" x2="425" y2="153" class="arr" marker-end="url(#wf-arrow)" />
+  <line x1="605" y1="153" x2="625" y2="153" class="arr" marker-end="url(#wf-arrow)" />
+  <line x1="805" y1="153" x2="825" y2="153" class="arr" marker-end="url(#wf-arrow)" />
+
+  <!-- Row wrap: from end of step 5 curve down-left to start of step 6 -->
+  <path d="M 915 210 L 915 230 L 115 230 L 115 250" class="arr" marker-end="url(#wf-arrow)" />
+
+  <!-- =============== Row 2 (steps 6-9) =============== -->
+  <!-- Row 2 box positions: x=25, 225, 425, 625; y=250 -->
+
+  <!-- Step 6: Snap & Merge (optional) -->
+  <rect x="25" y="250" width="180" height="114" rx="8" class="box-scene-o" />
+  <circle cx="45" cy="270" r="11" class="num-scene" />
+  <text x="45" y="274" text-anchor="middle" class="num-tx">6</text>
+  <text x="63" y="274" class="box-ttl">Snap &amp; Merge</text>
+  <text x="198" y="274" text-anchor="end" class="opt-tag">optional</text>
+  <text x="35" y="300" class="box-sub">Stitch across group boundaries.</text>
+  <text x="35" y="316" class="box-mono">snap source → target surface</text>
+  <text x="35" y="330" class="box-mono">merge with stitch stiffness</text>
+  <text x="35" y="350" class="opt-tag">per-vertex barycentric anchors</text>
+
+  <!-- Step 7: Transfer + Build (solve) -->
+  <rect x="225" y="250" width="180" height="114" rx="8" class="box-solve" />
+  <circle cx="245" cy="270" r="11" class="num-solve" />
+  <text x="245" y="274" text-anchor="middle" class="num-tx">7</text>
+  <text x="263" y="274" class="box-ttl">Transfer + Build</text>
+  <text x="235" y="300" class="box-sub">Encode the scene for the solver.</text>
+  <text x="235" y="316" class="box-mono">mesh + params → solver</text>
+  <text x="235" y="330" class="box-mono">build BVH, constraints</text>
+  <text x="235" y="350" class="opt-tag">"Update Params" for param-only edits</text>
+
+  <!-- Step 8: Run + Fetch -->
+  <rect x="425" y="250" width="180" height="114" rx="8" class="box-solve" />
+  <circle cx="445" cy="270" r="11" class="num-solve" />
+  <text x="445" y="274" text-anchor="middle" class="num-tx">8</text>
+  <text x="463" y="274" class="box-ttl">Run + Fetch</text>
+  <text x="435" y="300" class="box-sub">Solve on GPU, pull frames back.</text>
+  <text x="435" y="316" class="box-mono">PC2 per-frame vertex data</text>
+  <text x="435" y="330" class="box-mono">ContactSolverCache modifier</text>
+  <text x="435" y="350" class="opt-tag">survives Blender quit / reconnect</text>
+
+  <!-- Step 9: Bake (handoff, optional) -->
+  <rect x="625" y="250" width="180" height="114" rx="8" class="box-hand" />
+  <circle cx="645" cy="270" r="11" class="num-hand" />
+  <text x="645" y="274" text-anchor="middle" class="num-tx">9</text>
+  <text x="663" y="274" class="box-ttl">Bake</text>
+  <text x="798" y="274" text-anchor="end" class="opt-tag">optional</text>
+  <text x="635" y="300" class="box-sub">Freeze into plain Blender anim.</text>
+  <text x="635" y="316" class="box-mono">meshes: shape keys + fcurves</text>
+  <text x="635" y="330" class="box-mono">curves: per-CV keyframes</text>
+  <text x="635" y="350" class="opt-tag">cache modifier + .pc2 removed</text>
+
+  <!-- Forward arrows row 2 -->
+  <line x1="205" y1="307" x2="225" y2="307" class="arr" marker-end="url(#wf-arrow)" />
+  <line x1="405" y1="307" x2="425" y2="307" class="arr" marker-end="url(#wf-arrow)" />
+  <line x1="605" y1="307" x2="625" y2="307" class="arr" marker-end="url(#wf-arrow)" />
+
+</svg>

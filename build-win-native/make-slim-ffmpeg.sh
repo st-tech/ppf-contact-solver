@@ -16,7 +16,17 @@ source /etc/profile || true
 set -e
 FFMPEG_DIR="$SCRIPT_DIR/ffmpeg"
 WORK_DIR="$SCRIPT_DIR/temp_ffmpeg"
-FFMPEG_VERSION="7.1"
+
+# Load URL/FILE manifest (single source of truth, scripts/downloads.txt)
+MANIFEST="$SCRIPT_DIR/scripts/downloads.txt"
+if [ ! -f "$MANIFEST" ]; then
+    echo "ERROR: Manifest not found: $MANIFEST" >&2
+    exit 1
+fi
+set -a
+# shellcheck disable=SC1090
+. "$MANIFEST"
+set +a
 
 echo "Script directory: $SCRIPT_DIR"
 echo "FFmpeg directory: $FFMPEG_DIR"
@@ -37,7 +47,7 @@ cd "$WORK_DIR"
 
 # Download and build x264
 echo "Downloading and building x264..."
-git clone --depth 1 https://code.videolan.org/videolan/x264.git
+git clone --depth 1 "${URL_X264_GIT}"
 cd x264
 ./configure \
     --prefix="$WORK_DIR/deps" \
@@ -56,8 +66,8 @@ cd ..
 
 # Download ffmpeg source
 echo "Downloading ffmpeg ${FFMPEG_VERSION}..."
-curl -L "https://ffmpeg.org/releases/ffmpeg-${FFMPEG_VERSION}.tar.xz" -o ffmpeg.tar.xz
-tar xf ffmpeg.tar.xz
+curl -fL "${URL_FFMPEG}" -o "${FILE_FFMPEG}"
+tar xf "${FILE_FFMPEG}"
 cd "ffmpeg-${FFMPEG_VERSION}"
 
 # Configure with minimal options for PNG to MP4

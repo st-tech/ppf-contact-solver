@@ -1,0 +1,47 @@
+# File: scripts/downloads.txt
+# Code: Claude Code
+# Review: Ryoichi Ando (ryoichi.ando@zozo.com)
+# License: Apache v2.0
+#
+# Single source of truth for every external download used by warmup.bat,
+# build.bat, and make-slim-ffmpeg.bat/.sh. Format is plain KEY=VALUE so
+# that both cmd (via scripts\load-downloads.bat) and bash (via
+# `set -a; . scripts/downloads.txt; set +a`) can read it without a parser.
+#
+# To bump a tool version: edit the URL_* and FILE_* lines together, then
+# run scripts\check-downloads.bat to confirm the new pointer is reachable
+# before the next warmup. No URL belongs in any other file.
+
+URL_7ZIP=https://github.com/ip7z/7zip/releases/download/24.08/7z2408-x64.exe
+FILE_7ZIP=7z2408-x64.exe
+
+URL_MINGIT=https://github.com/git-for-windows/git/releases/download/v2.47.1.windows.1/MinGit-2.47.1-64-bit.zip
+FILE_MINGIT=MinGit-2.47.1-64-bit.zip
+
+URL_CUDA=https://developer.download.nvidia.com/compute/cuda/12.8.1/local_installers/cuda_12.8.1_572.61_windows.exe
+FILE_CUDA=cuda_12.8.1_572.61_windows.exe
+
+URL_RUSTUP=https://win.rustup.rs/x86_64
+FILE_RUSTUP=rustup-init.exe
+
+URL_PYTHON=https://www.python.org/ftp/python/3.11.9/python-3.11.9-embed-amd64.zip
+FILE_PYTHON=python-3.11.9-embed-amd64.zip
+
+URL_GET_PIP=https://bootstrap.pypa.io/get-pip.py
+FILE_GET_PIP=get-pip.py
+
+URL_PORTABLE_MSVC=https://gist.github.com/mmozeiko/7f3162ec2988e81e56d5c4e22cde9977/raw/portable-msvc.py
+FILE_PORTABLE_MSVC=portable-msvc.py
+
+URL_EIGEN=https://gitlab.com/libeigen/eigen/-/archive/3.4.0/eigen-3.4.0.zip
+FILE_EIGEN=eigen-3.4.0.zip
+
+URL_MSYS2=https://github.com/msys2/msys2-installer/releases/download/2024-12-08/msys2-base-x86_64-20241208.sfx.exe
+FILE_MSYS2=msys2-base-x86_64-20241208.sfx.exe
+
+URL_FFMPEG=https://ffmpeg.org/releases/ffmpeg-7.1.tar.xz
+FILE_FFMPEG=ffmpeg-7.1.tar.xz
+FFMPEG_VERSION=7.1
+
+# Git repository (cloned, not downloaded as archive)
+URL_X264_GIT=https://code.videolan.org/videolan/x264.git

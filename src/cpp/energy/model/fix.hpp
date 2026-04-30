@@ -16,7 +16,7 @@ __device__ float energy(const Vec3f &x, const Vec3f &y) {
 }
 
 __device__ Vec3f gradient(const Vec3f &x, const Vec3f &y) {
-    return (x - y);
+    return x - y;
 }
 
 __device__ Mat3x3f hessian() { return Mat3x3f::Identity(); }

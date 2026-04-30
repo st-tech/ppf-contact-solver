@@ -1,0 +1,73 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 270" role="img" aria-label="Windows Native transport topology: the Blender add-on launches server.py as a hidden subprocess on the same Windows workstation">
+  <title>Windows Native transport topology</title>
+  <desc>
+    A single block diagram showing that in Windows Native mode the
+    Blender add-on launches server.py as a hidden subprocess on the
+    same Windows workstation. There is no SSH and no Docker; the
+    bundled python.exe runs server.py and the add-on talks to it over
+    a loopback TCP socket.
+  </desc>
+
+  <defs>
+    <marker id="wn-arrow-b" viewBox="0 0 10 10" refX="9" refY="5"
+            markerWidth="10" markerHeight="10" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#2e6da4" />
+    </marker>
+    <marker id="wn-arrow-p" viewBox="0 0 10 10" refX="9" refY="5"
+            markerWidth="10" markerHeight="10" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#6a3ea1" />
+    </marker>
+  </defs>
+
+  <style>
+    .hdr-title     { font: 700 15px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #1a1a1a; }
+    .hdr-sub       { font: italic 12px -apple-system, sans-serif; fill: #555; }
+    .hdr-addon     { fill: #e9eef7; stroke: #8fa7c7; stroke-width: 1; }
+    .hdr-container { fill: #eef6eb; stroke: #86b36a; stroke-width: 1; }
+    .mode-title    { font: 700 16px -apple-system, sans-serif; fill: #1a1a1a; }
+    .mode-sub      { font: 12px -apple-system, sans-serif; fill: #555; }
+    .arr-ctl       { stroke: #2e6da4; stroke-width: 2; fill: none; }
+    .arr-data      { stroke: #6a3ea1; stroke-width: 2; fill: none; stroke-dasharray: 5 4; }
+    .lbl           { font: 600 12px -apple-system, sans-serif; fill: #1a1a1a; }
+    .lbl-ctl       { font: 600 12px -apple-system, sans-serif; fill: #1f4a75; }
+    .lbl-data      { font: 600 12px -apple-system, sans-serif; fill: #5a3492; }
+    .lbl-mono      { font: 600 11px "Menlo", "Consolas", monospace; fill: #1a1a1a; }
+    .note          { font: 12px -apple-system, sans-serif; fill: #555; }
+    .machine-box   { fill: none; stroke: #aaa; stroke-width: 1.2; stroke-dasharray: 6 4; }
+    .machine-lbl   { font: italic 11px -apple-system, sans-serif; fill: #777; }
+    .legend-box    { fill: #fafafa; stroke: #ddd; stroke-width: 1; }
+  </style>
+
+  <!-- ============ Legend ============ -->
+  <rect x="480" y="14" width="360" height="46" rx="6" class="legend-box" />
+  <line x1="495" y1="32" x2="525" y2="32" class="arr-ctl" marker-end="url(#wn-arrow-b)" />
+  <text x="532" y="36" class="lbl-ctl">lifecycle</text>
+  <text x="532" y="50" class="note">subprocess start / stop</text>
+  <line x1="660" y1="32" x2="690" y2="32" class="arr-data" marker-end="url(#wn-arrow-p)" />
+  <text x="697" y="36" class="lbl-data">server traffic</text>
+  <text x="697" y="50" class="note">TCP to server.py</text>
+
+  <!-- ============ Windows Native ============ -->
+  <text x="20" y="30" class="mode-title">Windows Native</text>
+  <text x="20" y="50" class="mode-sub">Add-on launches server.py as a hidden subprocess on the same Windows machine.</text>
+
+  <rect x="20" y="70" width="820" height="170" rx="8" class="machine-box" />
+  <text x="36" y="90" class="machine-lbl">Blender workstation (Windows)</text>
+
+  <rect x="60"  y="110" width="240" height="70" rx="6" class="hdr-addon" />
+  <text x="180" y="138" text-anchor="middle" class="hdr-title">Blender + add-on</text>
+  <text x="180" y="158" text-anchor="middle" class="hdr-sub">Win32 subprocess + socket</text>
+
+  <rect x="560" y="110" width="240" height="70" rx="6" class="hdr-container" />
+  <text x="680" y="138" text-anchor="middle" class="hdr-title">server.py</text>
+  <text x="680" y="158" text-anchor="middle" class="lbl-mono">python.exe server.py :9090</text>
+
+  <!-- lifecycle: addon -> subprocess (CreateProcess, no console) -->
+  <line x1="300" y1="132" x2="560" y2="132" class="arr-ctl" marker-end="url(#wn-arrow-b)" />
+  <text x="430" y="124" text-anchor="middle" class="lbl-mono">CreateProcess (no console window)</text>
+
+  <!-- server traffic: loopback socket -->
+  <path d="M 300 168 Q 430 220 560 168" class="arr-data" marker-end="url(#wn-arrow-p)" />
+  <text x="430" y="217" text-anchor="middle" class="lbl-data">socket to localhost:9090</text>
+  <text x="430" y="233" text-anchor="middle" class="note">no SSH, no Docker -- everything stays on this machine</text>
+</svg>

@@ -3,9 +3,11 @@
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
 # License: Apache v2.0
 
-"""Entry point for the frontend module.
+"""Entry point for the frontend package.
 
-To start the application, simply import the App class from the frontend module.
+Import :class:`App` from this package to start the application; the other
+names listed in ``__all__`` expose the scene, session, mesh, plotting,
+asset, and utility APIs.
 """
 
 __all__ = [

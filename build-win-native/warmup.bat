@@ -37,6 +37,22 @@ set DOWNLOADS=%BUILD_WIN%\downloads
 set RUST_DIR=%BUILD_WIN%\rust
 set CARGO=%RUST_DIR%\bin\cargo.exe
 
+REM Load the URL/FILE manifest (single source of truth, scripts\downloads.txt)
+call "%BUILD_WIN%\scripts\load-downloads.bat"
+if errorlevel 1 (
+    echo ERROR: Failed to load download manifest
+    exit /b 1
+)
+
+REM Pre-flight: every URL in the manifest must be reachable before we start
+REM downloading. Catches upstream rot at the manifest, not 3GB into a fetch.
+call "%BUILD_WIN%\scripts\check-downloads.bat" /nopause
+if errorlevel 1 (
+    echo ERROR: One or more download URLs are unreachable.
+    echo Fix the offending pointer^(s^) in scripts\downloads.txt and re-run.
+    exit /b 1
+)
+
 echo.
 echo Build directory: %BUILD_WIN%
 echo Source directory: %SRC%
@@ -56,12 +72,11 @@ set SEVENZIP=%SEVENZIP_DIR%\7z.exe
 if not exist "%SEVENZIP%" (
     echo === Downloading 7-Zip Portable ===
 
-    set SEVENZIP_URL=https://www.7-zip.org/a/7z2408-x64.exe
-    set SEVENZIP_EXE=%DOWNLOADS%\7z2408-x64.exe
+    set "SEVENZIP_EXE=%DOWNLOADS%\%FILE_7ZIP%"
 
     if not exist "!SEVENZIP_EXE!" (
         echo Downloading 7-Zip...
-        curl.exe -L -o "!SEVENZIP_EXE!" "!SEVENZIP_URL!"
+        curl.exe -fL -o "!SEVENZIP_EXE!" "%URL_7ZIP%"
         if errorlevel 1 (
             echo ERROR: Failed to download 7-Zip
             exit /b 1
@@ -90,13 +105,11 @@ set MINGIT_EXE=%MINGIT_DIR%\cmd\git.exe
 if not exist "%MINGIT_EXE%" (
     echo === Downloading MinGit ===
 
-    set MINGIT_VERSION=2.47.1
-    set MINGIT_URL=https://github.com/git-for-windows/git/releases/download/v!MINGIT_VERSION!.windows.1/MinGit-!MINGIT_VERSION!-64-bit.zip
-    set MINGIT_ZIP=%DOWNLOADS%\MinGit-!MINGIT_VERSION!-64-bit.zip
+    set "MINGIT_ZIP=%DOWNLOADS%\%FILE_MINGIT%"
 
     if not exist "!MINGIT_ZIP!" (
-        echo Downloading MinGit !MINGIT_VERSION!...
-        curl.exe -L -o "!MINGIT_ZIP!" "!MINGIT_URL!"
+        echo Downloading MinGit...
+        curl.exe -fL -o "!MINGIT_ZIP!" "%URL_MINGIT%"
         if errorlevel 1 (
             echo ERROR: Failed to download MinGit
             exit /b 1
@@ -126,14 +139,13 @@ set CUDA_DIR=%BUILD_WIN%\cuda
 set NVCC=%CUDA_DIR%\bin\nvcc.exe
 
 if not exist "%NVCC%" (
-    echo === Downloading CUDA Toolkit 12.8 ===
+    echo === Downloading CUDA Toolkit ===
 
-    set CUDA_URL=https://developer.download.nvidia.com/compute/cuda/12.8.1/local_installers/cuda_12.8.1_572.61_windows.exe
-    set CUDA_EXE=%DOWNLOADS%\cuda_12.8.1_572.61_windows.exe
+    set "CUDA_EXE=%DOWNLOADS%\%FILE_CUDA%"
 
     if not exist "!CUDA_EXE!" (
-        echo Downloading CUDA 12.8.1 (about 3GB, please wait^)...
-        curl.exe -L -o "!CUDA_EXE!" "!CUDA_URL!"
+        echo Downloading CUDA (about 3GB, please wait^)...
+        curl.exe -fL -o "!CUDA_EXE!" "%URL_CUDA%"
         if errorlevel 1 (
             echo ERROR: Failed to download CUDA Toolkit
             exit /b 1
@@ -188,10 +200,10 @@ if errorlevel 1 (
     if not exist "%CARGO%" (
         echo === Installing Rust locally ===
 
-        set RUSTUP_INIT=%DOWNLOADS%\rustup-init.exe
+        set "RUSTUP_INIT=%DOWNLOADS%\%FILE_RUSTUP%"
         if not exist "!RUSTUP_INIT!" (
             echo Downloading rustup-init.exe...
-            curl.exe -L -o "!RUSTUP_INIT!" "https://win.rustup.rs/x86_64"
+            curl.exe -fL -o "!RUSTUP_INIT!" "%URL_RUSTUP%"
             if errorlevel 1 (
                 echo ERROR: Failed to download rustup-init.exe
                 exit /b 1
@@ -221,12 +233,11 @@ REM ============================================================
 if not exist "%PYTHON%" (
     echo === Downloading Embedded Python ===
 
-    set PYTHON_URL=https://www.python.org/ftp/python/3.11.9/python-3.11.9-embed-amd64.zip
-    set PYTHON_ZIP=%DOWNLOADS%\python-3.11.9-embed-amd64.zip
+    set "PYTHON_ZIP=%DOWNLOADS%\%FILE_PYTHON%"
 
     if not exist "!PYTHON_ZIP!" (
-        echo Downloading Python 3.11.9 embedded...
-        curl.exe -L -o "!PYTHON_ZIP!" "!PYTHON_URL!"
+        echo Downloading embedded Python...
+        curl.exe -fL -o "!PYTHON_ZIP!" "%URL_PYTHON%"
         if errorlevel 1 (
             echo ERROR: Failed to download Python
             exit /b 1
@@ -252,8 +263,8 @@ if not exist "%PYTHON%" (
 
     REM Download and install pip
     echo Downloading get-pip.py...
-    set GET_PIP=%PYTHON_DIR%\get-pip.py
-    curl.exe -L -o "!GET_PIP!" "https://bootstrap.pypa.io/get-pip.py"
+    set "GET_PIP=%PYTHON_DIR%\%FILE_GET_PIP%"
+    curl.exe -fL -o "!GET_PIP!" "%URL_GET_PIP%"
     if errorlevel 1 (
         echo ERROR: Failed to download get-pip.py
         exit /b 1
@@ -297,10 +308,10 @@ if not exist "%MSVC_SETUP%" (
     echo.
     echo === Downloading Portable MSVC ===
 
-    set PBT_SCRIPT=%DOWNLOADS%\portable-msvc.py
+    set "PBT_SCRIPT=%DOWNLOADS%\%FILE_PORTABLE_MSVC%"
     if not exist "!PBT_SCRIPT!" (
         echo Downloading portable-msvc.py...
-        curl.exe -L -o "!PBT_SCRIPT!" "https://gist.github.com/mmozeiko/7f3162ec2988e81e56d5c4e22cde9977/raw/portable-msvc.py"
+        curl.exe -fL -o "!PBT_SCRIPT!" "%URL_PORTABLE_MSVC%"
         if errorlevel 1 (
             echo ERROR: Failed to download portable-msvc.py
             exit /b 1
@@ -337,8 +348,13 @@ if errorlevel 1 (
     echo.
     echo === Installing Python packages ===
 
-    REM Core packages from warmup.py python_packages()
-    set PACKAGES=numpy numba plyfile requests gdown trimesh pywavefront matplotlib tqdm pythreejs ipywidgets fast-simplification tabulate triangle
+    REM Core packages from warmup.py python_packages(). certifi is
+    REM listed explicitly so the bundled Python ships a CA bundle even
+    REM if a future warmup pass drops requests as a transitive carrier.
+    REM Without a CA bundle, the verify-on-clean-instance fast-check
+    REM run trips SSLCertVerificationError when an example downloads a
+    REM mesh asset over HTTPS.
+    set PACKAGES=numpy numba plyfile requests certifi gdown trimesh pywavefront matplotlib tqdm pythreejs ipywidgets fast-simplification tabulate triangle
 
     REM Development tools
     set DEV_PACKAGES=ruff black isort

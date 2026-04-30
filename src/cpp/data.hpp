@@ -35,7 +35,6 @@ using Vec2u = Vec2<unsigned>;
 using Vec3u = Vec3<unsigned>;
 using Vec4u = Vec4<unsigned>;
 
-
 template <class T, unsigned R, unsigned C>
 using SMat = Eigen::Matrix<T, R, C, Eigen::ColMajor>;
 template <unsigned R, unsigned C>
@@ -73,9 +72,9 @@ using Mat9x9f = Mat9x9<float>;
 using Mat9x12f = Mat9x12<float>;
 using Mat12x12f = Mat12x12<float>;
 
-
 enum class Model { ARAP, StVK, BaraffWitkin, SNHk };
 enum class Barrier { Cubic, Quad, Log };
+enum class FrictionMode { Min, Max, Mean };
 
 struct VertexNeighbor {
     VecVec<unsigned> face;
@@ -123,6 +122,10 @@ struct EdgeParam {
     float ghat;
     float offset;
     float friction;
+    float strainlimit;
+    float plasticity;
+    float plasticity_threshold;
+    bool bend_rest_from_geometry;
 };
 
 struct FaceParam {
@@ -134,25 +137,38 @@ struct FaceParam {
     float offset;
     float bend;
     float strainlimit;
-    float shrink;
+    float shrink_x;
+    float shrink_y;
+    float pressure;
+    float plasticity;
+    float plasticity_threshold;
+    float bend_plasticity;
+    float bend_plasticity_threshold;
+    bool bend_rest_from_geometry;
 };
 
 struct HingeParam {
     float bend;
     float ghat;
     float offset;
+    float plasticity;
+    float plasticity_threshold;
 };
 
 struct TetParam {
     Model model;
     float mu;
     float lambda;
+    float shrink;
+    float plasticity;
+    float plasticity_threshold;
 };
 
 struct VertexProp {
     float area;
     float volume;
     float mass;
+    float rest_bend_angle;
     unsigned fix_index;
     unsigned pull_index;
     unsigned param_index;
@@ -160,6 +176,7 @@ struct VertexProp {
 
 struct EdgeProp {
     float length;
+    float initial_length;
     float mass;
     bool fixed;
     unsigned param_index;
@@ -174,6 +191,7 @@ struct FaceProp {
 
 struct HingeProp {
     float length;
+    float rest_angle;
     bool fixed;
     unsigned param_index;
 };
@@ -242,9 +260,28 @@ struct PullPair {
     unsigned index;
 };
 
+struct TorqueGroup {
+    unsigned axis_component;
+    unsigned vertex_start;
+    unsigned vertex_count;
+    unsigned hint_vertex;
+};
+
+struct TorqueVertex {
+    float magnitude;
+    unsigned index;
+    unsigned group_id;
+};
+
+struct TorqueGroupResult {
+    Vec3f center;
+    Vec3f axis;
+    float inv_r_perp_sq_sum;
+};
+
 struct Stitch {
-    Vec3u index;
-    float weight;
+    Vec4u index;
+    Vec4f weight;
 };
 
 struct Sphere {
@@ -252,6 +289,7 @@ struct Sphere {
     float ghat;
     float friction;
     float radius;
+    float thickness;
     bool bowl;
     bool reverse;
     bool kinematic;
@@ -261,6 +299,7 @@ struct Floor {
     Vec3f ground;
     float ghat;
     float friction;
+    float thickness;
     Vec3f up;
     bool kinematic;
 };
@@ -289,6 +328,8 @@ struct CollisionMesh {
 struct Constraint {
     Vec<FixPair> fix;
     Vec<PullPair> pull;
+    Vec<TorqueGroup> torque_groups;
+    Vec<TorqueVertex> torque_vertices;
     Vec<Sphere> sphere;
     Vec<Floor> floor;
     Vec<Stitch> stitch;
@@ -319,10 +360,11 @@ struct ParamSet {
     Vec3f gravity;
     Vec3f wind;
     Barrier barrier;
+    FrictionMode friction_mode;
     unsigned csrmat_max_nnz;
     float fix_xz;
     bool disable_contact;
-    bool fitting;
+    bool inactive_momentum;
 };
 
 struct StepResult {
@@ -360,11 +402,23 @@ struct DataSet {
 struct AABB {
     Vec3f min;
     Vec3f max;
+    bool active;
 };
 
 template <unsigned N> struct Proximity {
     SVecu<N> index;
     SVecf<N> value;
+};
+
+#define MAX_INTERSECTION_RECORDS 256
+
+struct IntersectionRecord {
+    unsigned type;       // 0=face-edge, 1=edge-edge, 2=collision-mesh
+    unsigned elem0;      // first element index (face or edge)
+    unsigned elem1;      // second element index (edge)
+    unsigned num_verts0; // vertex count for first element (2 or 3)
+    unsigned num_verts1; // vertex count for second element (2 or 3)
+    float positions[15]; // up to 5 vertices x 3 (x,y,z), packed: elem0 then elem1
 };
 
 #endif

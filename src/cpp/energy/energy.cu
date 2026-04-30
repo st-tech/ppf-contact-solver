@@ -8,6 +8,7 @@
 #include "../utility/utility.hpp"
 #include "model/air_damper.hpp"
 #include "model/arap.hpp"
+#include "model/inflate.hpp"
 #include "model/baraffwitkin.hpp"
 #include "model/dihedral_angle.hpp"
 #include "model/hook.hpp"
@@ -15,13 +16,80 @@
 #include "model/snhk.hpp"
 #include "model/stvk.hpp"
 
+// 3x3 symmetric eigendecomposition for PCA on device.
+// Returns eigenvectors sorted by descending eigenvalue.
+__device__ void eigen_sym3x3(
+    float a00, float a01, float a02,
+    float a11, float a12, float a22,
+    Vec3f evals, Mat3x3f &evecs) {
+
+    // Eigenvalues via Cardano's formula for symmetric 3x3
+    float q = (a00 + a11 + a22) / 3.0f;
+    float p2 = (a00 - q) * (a00 - q) + (a11 - q) * (a11 - q) +
+               (a22 - q) * (a22 - q) + 2.0f * (a01 * a01 + a02 * a02 + a12 * a12);
+    float p = sqrtf(fmaxf(p2 / 6.0f, 0.0f));
+
+    float lam0, lam1, lam2;
+    if (p < 1e-12f) {
+        // Matrix is (near) scalar multiple of identity
+        lam0 = a00; lam1 = a11; lam2 = a22;
+    } else {
+        float inv_p = 1.0f / p;
+        // B = (A - qI) / p
+        float b00 = (a00 - q) * inv_p, b01 = a01 * inv_p, b02 = a02 * inv_p;
+        float b11 = (a11 - q) * inv_p, b12 = a12 * inv_p;
+        float b22 = (a22 - q) * inv_p;
+        float det_b = b00 * (b11 * b22 - b12 * b12)
+                    - b01 * (b01 * b22 - b12 * b02)
+                    + b02 * (b01 * b12 - b11 * b02);
+        float r = fminf(1.0f, fmaxf(-1.0f, det_b * 0.5f));
+        float phi = acosf(r) / 3.0f;
+        lam0 = q + 2.0f * p * cosf(phi);
+        lam2 = q + 2.0f * p * cosf(phi + 2.0943951f); // 2π/3
+        lam1 = 3.0f * q - lam0 - lam2;
+    }
+
+    // Sort descending
+    if (lam1 > lam0) { float t = lam0; lam0 = lam1; lam1 = t; }
+    if (lam2 > lam0) { float t = lam0; lam0 = lam2; lam2 = t; }
+    if (lam2 > lam1) { float t = lam1; lam1 = lam2; lam2 = t; }
+    evals = Vec3f(lam0, lam1, lam2);
+
+    // Eigenvectors via cross product of rows of (A - λI)
+    float vals[3] = {lam0, lam1, lam2};
+    for (int c = 0; c < 3; ++c) {
+        float l = vals[c];
+        Vec3f r0(a00 - l, a01, a02);
+        Vec3f r1(a01, a11 - l, a12);
+        Vec3f r2(a02, a12, a22 - l);
+        Vec3f v = r0.cross(r1);
+        float vn = v.norm();
+        if (vn < 1e-8f) { v = r0.cross(r2); vn = v.norm(); }
+        if (vn < 1e-8f) { v = r1.cross(r2); vn = v.norm(); }
+        if (vn > 1e-8f) {
+            evecs.col(c) = v / vn;
+        } else {
+            evecs.col(c) = Vec3f::Unit(c);
+        }
+    }
+
+    // Gram-Schmidt to ensure orthogonality
+    Vec3f e0 = evecs.col(0).normalized();
+    Vec3f e1 = evecs.col(1) - e0 * e0.dot(evecs.col(1));
+    e1.normalize();
+    Vec3f e2 = e0.cross(e1);
+    evecs.col(0) = e0;
+    evecs.col(1) = e1;
+    evecs.col(2) = e2;
+}
+
 namespace energy {
 
-__device__ void
-embed_vertex_force_hessian(const DataSet &data, const Vec<Vec3f> &eval_x,
-                           const Vec<Vec3f> &velocity, const Vec<Vec3f> &target,
-                           Vec<float> &force, Vec<Mat3x3f> &diag_hess, float dt,
-                           const ParamSet &param, unsigned i) {
+__device__ void embed_vertex_force_hessian(
+    const DataSet &data, const Vec<Vec3f> &eval_x, const Vec<Vec3f> &velocity,
+    const Vec<Vec3f> &target, Vec<float> &force, Vec<Mat3x3f> &diag_hess,
+    float dt, const ParamSet &param,
+    const Vec<TorqueGroupResult> &torque_result, unsigned i) {
 
     float mass = data.prop.vertex[i].mass;
     float area = data.prop.vertex[i].area;
@@ -31,7 +99,7 @@ embed_vertex_force_hessian(const DataSet &data, const Vec<Vec3f> &eval_x,
     const Vec3f normal = utility::compute_vertex_normal(data, eval_x, i);
 
     Vec3f wind = Vec3f::Zero();
-    if (!param.fitting) {
+    if (!param.inactive_momentum) {
         wind = utility::get_wind_weight(param.time) * param.wind;
     }
 
@@ -56,6 +124,31 @@ embed_vertex_force_hessian(const DataSet &data, const Vec<Vec3f> &eval_x,
         }
     }
 
+    for (unsigned j = 0; j < data.constraint.torque_vertices.size; ++j) {
+        if (i == data.constraint.torque_vertices[j].index) {
+            float mag = data.constraint.torque_vertices[j].magnitude;
+            unsigned gid = data.constraint.torque_vertices[j].group_id;
+
+            // Read pre-computed centroid and PCA axis from pre-pass
+            Vec3f center = torque_result[gid].center;
+            Vec3f axis = torque_result[gid].axis;
+
+            Vec3f r = y - center;
+            Vec3f r_perp = r - axis * axis.dot(r);
+            // F_i = axis × r_perp_i * magnitude / Σ|r_perp_j|²
+            // ensures total torque = magnitude and zero net linear force
+            float scale = mag * torque_result[gid].inv_r_perp_sq_sum;
+            Vec3f torque_force = axis.cross(r_perp) * scale;
+            f -= torque_force;
+            // Symmetric Hessian approximation so Newton converges for
+            // the torque term regardless of iteration count.
+            // ∂(axis×r_perp)/∂y has a skew part (unusable) and a
+            // symmetric magnitude part scale*(I - axis⊗axis).
+            Mat3x3f P = Mat3x3f::Identity() - axis * axis.transpose();
+            H += scale * P;
+        }
+    }
+
     if (!pulled) {
         f += mass * momentum::gradient(dt, y, target[i]);
         H += mass * momentum::hessian(dt);
@@ -66,8 +159,8 @@ embed_vertex_force_hessian(const DataSet &data, const Vec<Vec3f> &eval_x,
         H += (param.isotropic_air_friction / (dt * dt)) * Mat3x3f::Identity();
     }
 
-    if (param.fix_xz && y[1] > float(param.fix_xz)) {
-        float t = fmin(1.0f, y[1] - float(param.fix_xz));
+    if (param.fix_xz && y[1] > param.fix_xz) {
+        float t = fmin(1.0f, y[1] - param.fix_xz);
         Vec3f n(0.0f, 1.0f, 0.0f);
         Mat3x3f P = Mat3x3f::Identity() - n * n.transpose();
         f += P * t * mass * (y - x) / (dt * dt);
@@ -157,6 +250,13 @@ __device__ void embed_face_force_hessian(const DataSet &data,
         utility::atomic_embed_force<3>(face, dedx, force);
         utility::atomic_embed_hessian<3>(face, d2edx2, hess);
     }
+
+    if (face_param.pressure > 0.0f) {
+        utility::atomic_embed_force<3>(
+            face, inflate::face_gradient(face_param.pressure, x0, x1, x2), force);
+        utility::atomic_embed_hessian<3>(
+            face, inflate::face_hessian(face_param.pressure, x0, x1, x2), hess);
+    }
 }
 
 __device__ void embed_tet_force_hessian(const DataSet &data,
@@ -217,7 +317,9 @@ __device__ void embed_hinge_force_hessian(const DataSet &data,
         Vec4u hinge = data.mesh.mesh.hinge[i];
         Mat3x4f dedx;
         Mat12x12f d2edx2;
-        dihedral_angle::face_compute_force_hessian(eval_x, hinge, dedx, d2edx2);
+        dihedral_angle::face_compute_force_hessian(eval_x, hinge,
+                                                   prop.rest_angle, dedx,
+                                                   d2edx2);
         utility::atomic_embed_force<4>(hinge, stiff_k * dedx, force);
         utility::atomic_embed_hessian<4>(hinge, stiff_k * d2edx2, hess);
     }
@@ -231,10 +333,8 @@ embed_rod_bend_force_hessian(const DataSet &data, const Vec<Vec3f> &eval_x,
         data.mesh.neighbor.vertex.face.count(i) == 0) {
         unsigned edge_idx_0 = data.mesh.neighbor.vertex.edge(i, 0);
         unsigned edge_idx_1 = data.mesh.neighbor.vertex.edge(i, 1);
-        const EdgeParam &edge_param_0 =
-            data.param_arrays.edge[data.prop.edge[edge_idx_0].param_index];
-        const EdgeParam &edge_param_1 =
-            data.param_arrays.edge[data.prop.edge[edge_idx_1].param_index];
+        const EdgeParam &edge_param_0 = data.param_arrays.edge[data.prop.edge[edge_idx_0].param_index];
+        const EdgeParam &edge_param_1 = data.param_arrays.edge[data.prop.edge[edge_idx_1].param_index];
         float bend_0 = edge_param_0.bend;
         float bend_1 = edge_param_1.bend;
         float bend = 0.5f * (bend_0 + bend_1);
@@ -249,26 +349,88 @@ embed_rod_bend_force_hessian(const DataSet &data, const Vec<Vec3f> &eval_x,
             Vec3f x0 = eval_x[j];
             Vec3f x1 = eval_x[i];
             Vec3f x2 = eval_x[k];
-            Mat3x3f dedx = dihedral_angle::strand_gradient(x0, x1, x2);
-            Vec9f vec_dedx = Map<Vec9f>(dedx.data());
-            Mat9x9f d2edx2 = vec_dedx * vec_dedx.transpose();
+            float rest_angle = data.prop.vertex[i].rest_bend_angle;
+            Mat3x3f dedx;
+            Mat9x9f d2edx2;
+            dihedral_angle::strand_compute_force_hessian(
+                x0, x1, x2, rest_angle, dedx, d2edx2);
             utility::atomic_embed_force<3>(element, stiff_k * dedx, force);
             utility::atomic_embed_hessian<3>(element, stiff_k * d2edx2, hess);
         }
     }
 }
 
-void embed_momentum_force_hessian(const DataSet &data, const Vec<Vec3f> &eval_x,
+void compute_torque_groups(const DataSet &data,
+                           const Vec<Vec3f> &eval_x,
+                           Vec<TorqueGroupResult> &result) {
+    DISPATCH_START(data.constraint.torque_groups.size)
+    [data, eval_x, result] __device__(unsigned g) mutable {
+        const auto &grp = data.constraint.torque_groups[g];
+        unsigned vs = grp.vertex_start;
+        unsigned vn = grp.vertex_count;
+
+        // Mass-weighted centroid (center of gravity)
+        Vec3f center = Vec3f::Zero();
+        float total_mass = 0.0f;
+        for (unsigned k = vs; k < vs + vn; ++k) {
+            unsigned idx = data.constraint.torque_vertices[k].index;
+            float m = data.prop.vertex[idx].mass;
+            center += eval_x[idx] * m;
+            total_mass += m;
+        }
+        if (total_mass > 1e-12f) {
+            center *= 1.0f / total_mass;
+        }
+
+        // 3x3 covariance matrix
+        float c00 = 0, c01 = 0, c02 = 0, c11 = 0, c12 = 0, c22 = 0;
+        for (unsigned k = vs; k < vs + vn; ++k) {
+            Vec3f d = eval_x[data.constraint.torque_vertices[k].index] - center;
+            c00 += d[0] * d[0]; c01 += d[0] * d[1]; c02 += d[0] * d[2];
+            c11 += d[1] * d[1]; c12 += d[1] * d[2]; c22 += d[2] * d[2];
+        }
+        float inv_n = 1.0f / (float)vn;
+        c00 *= inv_n; c01 *= inv_n; c02 *= inv_n;
+        c11 *= inv_n; c12 *= inv_n; c22 *= inv_n;
+
+        // Eigendecompose
+        Vec3f evals;
+        Mat3x3f evecs;
+        eigen_sym3x3(c00, c01, c02, c11, c12, c22, evals, evecs);
+
+        result[g].center = center;
+        Vec3f ax = evecs.col(grp.axis_component).normalized();
+        // Resolve sign ambiguity using hint vertex: orient axis so
+        // dot(axis, hint_vertex - centroid) > 0
+        Vec3f hint_dir = eval_x[grp.hint_vertex] - center;
+        if (ax.dot(hint_dir) < 0.0f) ax = -ax;
+        result[g].axis = ax;
+
+        // Compute Σ|r_perp_i|² for torque normalization so total torque = magnitude
+        float r_perp_sq_sum = 0.0f;
+        for (unsigned k = vs; k < vs + vn; ++k) {
+            Vec3f r = eval_x[data.constraint.torque_vertices[k].index] - center;
+            Vec3f r_perp = r - ax * ax.dot(r);
+            r_perp_sq_sum += r_perp.squaredNorm();
+        }
+        result[g].inv_r_perp_sq_sum = (r_perp_sq_sum > 1e-12f) ? 1.0f / r_perp_sq_sum : 0.0f;
+    } DISPATCH_END;
+}
+
+void embed_momentum_force_hessian(const DataSet &data,
+                                  const Vec<Vec3f> &eval_x,
                                   const Vec<Vec3f> &velocity, float dt,
                                   const Vec<Vec3f> &target, Vec<float> &force,
                                   Vec<Mat3x3f> &diag_hess,
-                                  const ParamSet &param) {
+                                  const ParamSet &param,
+                                  const Vec<TorqueGroupResult> &torque_result) {
     DISPATCH_START(data.vertex.curr.size)
     [data, eval_x, velocity, dt, target, force, diag_hess,
-     param] __device__(unsigned i) mutable {
+     param, torque_result] __device__(unsigned i) mutable {
         if (data.prop.vertex[i].fix_index == 0) {
             energy::embed_vertex_force_hessian(data, eval_x, velocity, target,
-                                               force, diag_hess, dt, param, i);
+                                               force, diag_hess, dt, param,
+                                               torque_result, i);
         }
     } DISPATCH_END;
 }
@@ -345,45 +507,56 @@ void embed_stitch_force_hessian(const DataSet &data, const Vec<Vec3f> &eval_x,
         DISPATCH_START(seam_count)
         [data, eval_x, force, fixed_out, param] __device__(unsigned i) mutable {
             const Stitch &stitch = data.constraint.stitch[i];
-            Vec3u index(stitch.index[0], stitch.index[1], stitch.index[2]);
-            const Vec3f &x0 = eval_x[index[0]];
-            const Vec3f &x1 = eval_x[index[1]];
-            const Vec3f &x2 = eval_x[index[2]];
-            float ghat_0 =
-                data.param_arrays.vertex[data.prop.vertex[index[0]].param_index]
-                    .ghat;
-            float ghat_1 =
-                data.param_arrays.vertex[data.prop.vertex[index[1]].param_index]
-                    .ghat;
-            float ghat_2 =
-                data.param_arrays.vertex[data.prop.vertex[index[2]].param_index]
-                    .ghat;
-            float w[] = {1.0f, 1.0f - stitch.weight, stitch.weight};
-            float l0 = (w[0] * ghat_0 + w[1] * ghat_1 + w[2] * ghat_2) / 2.0f;
-            float s(1.0f / 3.0f);
-            const Vec3f cog = s * x0 + s * x1 + s * x2;
-            Vec3f z0 = w[0] * (x0 - cog);
-            Vec3f z1 = w[1] * (x1 - cog) + w[2] * (x2 - cog);
-            Vec3f t = z0 - z1;
-            float l = fmin(0.01f, t.norm());
+            Vec4u index(stitch.index[0], stitch.index[1], stitch.index[2], stitch.index[3]);
+            float ws = stitch.weight[0]; // source weight (always 1.0)
+            float w1 = stitch.weight[1], w2 = stitch.weight[2], w3 = stitch.weight[3];
+
+            const Vec3f &xs = eval_x[index[0]]; // source vertex
+            // Barycentric target: w1*t0 + w2*t1 + w3*t2
+            Vec3f target = eval_x[index[1]] * w1
+                          + eval_x[index[2]] * w2
+                          + eval_x[index[3]] * w3;
+
+            // Rest length from contact gaps
+            float ghat_s = data.param_arrays.vertex[data.prop.vertex[index[0]].param_index].ghat;
+            float ghat_t = w1 * data.param_arrays.vertex[data.prop.vertex[index[1]].param_index].ghat
+                         + w2 * data.param_arrays.vertex[data.prop.vertex[index[2]].param_index].ghat
+                         + w3 * data.param_arrays.vertex[data.prop.vertex[index[3]].param_index].ghat;
+            float l0 = (ghat_s + ghat_t) / 2.0f;
+
+            Vec3f t = ws * (xs - target);
+            float l = t.norm();
+            if (l < 1e-10f) return;
             Vec3f n = t / l;
-            Mat3x9f dtdx;
-            dtdx << w[0] * Mat3x3f::Identity(), -w[1] * Mat3x3f::Identity(),
-                -w[2] * Mat3x3f::Identity();
+
+            // Gradient: dt/dx for 4 vertices (3x12 matrix)
+            // dt/dx_s = ws * I, dt/dx_t0 = -ws*w1*I, dt/dx_t1 = -ws*w2*I, dt/dx_t2 = -ws*w3*I
+            using Mat3x12f = Eigen::Matrix<float, 3, 12>;
+            using Vec12f = Eigen::Vector<float, 12>;
+            using Mat12x12f = Eigen::Matrix<float, 12, 12>;
+            Mat3x12f dtdx;
+            dtdx << ws * Mat3x3f::Identity(),
+                    -ws * w1 * Mat3x3f::Identity(),
+                    -ws * w2 * Mat3x3f::Identity(),
+                    -ws * w3 * Mat3x3f::Identity();
+
             Vec3f dedt = (l / l0 - 1.0f) * n;
-            Vec9f g = dtdx.transpose() * n;
+            Vec12f g = dtdx.transpose() * n;
             float r = (l - l0) / l;
             float c0 = fmaxf(0.0f, 1.0f - r) / l0;
             float c1 = fmaxf(0.0f, r / l0);
-            Mat3x3f gradient;
-            gradient.col(0) = w[0] * dedt;
-            gradient.col(1) = -w[1] * dedt;
-            gradient.col(2) = -w[2] * dedt;
-            Mat9x9f hessian =
+
+            Eigen::Matrix<float, 3, 4> gradient;
+            gradient.col(0) = ws * dedt;
+            gradient.col(1) = -ws * w1 * dedt;
+            gradient.col(2) = -ws * w2 * dedt;
+            gradient.col(3) = -ws * w3 * dedt;
+            Mat12x12f hessian =
                 c0 * g * g.transpose() + c1 * dtdx.transpose() * dtdx;
-            utility::atomic_embed_force<3>(
+
+            utility::atomic_embed_force<4>(
                 index, param.stitch_stiffness * gradient, force);
-            utility::atomic_embed_hessian<3>(
+            utility::atomic_embed_hessian<4>(
                 index, param.stitch_stiffness * hessian, fixed_out);
         } DISPATCH_END;
     }

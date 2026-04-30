@@ -29,6 +29,11 @@ default_args = {
 
 
 def update_default_args(args: dict):
+    """Fill missing entries in ``args`` with values from :data:`default_args`.
+
+    Args:
+        args (dict): The arguments dictionary to populate in place.
+    """
     for key, value in default_args.items():
         if key not in args:
             args[key] = value
@@ -39,7 +44,19 @@ Rasterizer = SoftwareRenderer
 
 
 class MitsubaRenderer:
+    """Path-traced mesh renderer backed by the Mitsuba 3 executable.
+
+    Requires the ``mitsuba`` command-line tool to be available on ``PATH`` and
+    the ``mitsuba`` Python package to be importable at render time.
+    """
+
     def __init__(self, args: Optional[dict] = None):
+        """Initialize the renderer and validate that Mitsuba is available.
+
+        Args:
+            args (Optional[dict]): Optional configuration merged with
+                :data:`default_args`. See ``default_args`` for recognized keys.
+        """
         if args is None:
             args = {}
         assert shutil.which("mitsuba") is not None
@@ -47,6 +64,7 @@ class MitsubaRenderer:
         self._args = args
 
     def __del__(self):
+        """Remove the temporary PLY file written during rendering, if any."""
         if os.path.exists(self._args["tmp_path"]):
             os.remove(self._args["tmp_path"])
 
@@ -58,6 +76,20 @@ class MitsubaRenderer:
         face: np.ndarray,
         path: str,
     ):
+        """Render the mesh to an image file using Mitsuba.
+
+        The mesh is exported to a temporary PLY file and then loaded into a
+        Mitsuba scene with a directional light, a constant emitter, and a
+        back wall. Line segments are not rendered; a notice is printed if
+        ``seg`` is non-empty.
+
+        Args:
+            vert (np.ndarray): The vertices (Nx3) of the mesh.
+            color (np.ndarray): Per-vertex colors (Nx3) in [0, 1].
+            seg (np.ndarray): Line segment indices (Sx2); not drawn.
+            face (np.ndarray): Triangle face indices (Fx3).
+            path (str): Output image file path.
+        """
         import mitsuba as mi  # type: ignore[import-not-found]
 
         mi.set_variant(self._args["variant"])
@@ -142,6 +174,12 @@ class MitsubaRenderer:
     def _export_ply(
         self, path: str, vertex: np.ndarray, color: np.ndarray, face: np.ndarray
     ):
+        """Write the mesh to ``path`` as a binary little-endian PLY file.
+
+        Per-vertex RGB colors are stored as float properties named ``red``,
+        ``green``, and ``blue`` so that Mitsuba can sample them via the
+        ``mesh_attribute`` plugin as ``vertex_color``.
+        """
         with open(path, "wb") as ply_file:
             ply_file.write(b"ply\n")
             ply_file.write(b"format binary_little_endian 1.0\n")

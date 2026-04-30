@@ -10,7 +10,6 @@ used by both intersection and proximity detection modules.
 """
 
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
 
 import numpy as np
@@ -20,7 +19,7 @@ from numba import njit, prange
 
 @njit(cache=True, inline="always")
 def dot3(a: np.ndarray, b: np.ndarray) -> float:
-    """Dot product of two 3D vectors. Avoids scipy BLAS dependency."""
+    """Return the dot product of two 3D vectors without calling into BLAS."""
     return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
 
 
@@ -28,7 +27,7 @@ def dot3(a: np.ndarray, b: np.ndarray) -> float:
 def _point_to_bbox_dist_sq(
     point: np.ndarray, bbox_min: np.ndarray, bbox_max: np.ndarray
 ) -> float:
-    """Compute squared distance from point to AABB."""
+    """Return the squared distance from a point to an AABB (0 if inside)."""
     dist_sq = 0.0
     for i in range(3):
         if point[i] < bbox_min[i]:
@@ -44,7 +43,7 @@ def _point_to_bbox_dist_sq(
 def bbox_overlap(
     min1: np.ndarray, max1: np.ndarray, min2: np.ndarray, max2: np.ndarray
 ) -> bool:
-    """Check if two AABBs overlap."""
+    """Return True if the two AABBs overlap (touching counts as overlap)."""
     for i in range(3):  # noqa: SIM110
         if min1[i] > max2[i] or min2[i] > max1[i]:
             return False
@@ -141,7 +140,11 @@ def _build_bvh_structure(
     node_elem_count: np.ndarray,
     node_depth: np.ndarray,
 ) -> int:
-    """Build BVH tree structure only (no bbox computation)."""
+    """Build the BVH tree topology by midpoint splitting of Morton-sorted elements.
+
+    Only populates the tree's child and leaf-range arrays; bounding
+    boxes are filled in by later phases. Returns the total node count.
+    """
     # Work stack: (node_idx, start, end, depth)
     stack = np.empty((128, 4), dtype=np.int32)
     stack_ptr = 0
@@ -269,7 +272,14 @@ def _build_bvh_flat(
     bboxes_max: np.ndarray,
     max_leaf_size: int = 8,
 ):
-    """Build a flattened BVH structure using Morton code ordering."""
+    """Build a flat BVH over elements ordered by 30-bit Morton codes.
+
+    Returns a tuple of arrays describing the node layout plus the
+    Morton-sorted element indices: (node_bbox_min, node_bbox_max,
+    node_left, node_right, node_elem_start, node_elem_count,
+    sorted_indices). Leaf nodes have node_elem_start >= 0; internal
+    nodes have node_elem_start == -1 and valid node_left/node_right.
+    """
     n_elems = len(centroids)
     if n_elems == 0:
         return (
@@ -362,12 +372,18 @@ def _query_bvh_single(
     node_tri_count: np.ndarray,
     tri_indices_flat: np.ndarray,
 ):
-    """Query BVH for closest point using iterative traversal with stack."""
+    """Query BVH for the closest triangle to a point.
+
+    Iterative traversal with an explicit node-index stack; the nearer child
+    is pushed last so it is popped first. Returns (best_dist_sq, best_tri,
+    best_bary) where best_bary are the barycentric coordinates of the
+    closest point on best_tri.
+    """
     best_dist_sq = np.inf
     best_tri = 0
     best_bary = np.array([1.0, 0.0, 0.0])
 
-    # Stack for iterative traversal (node_idx, skip flag)
+    # Stack of node indices for iterative traversal
     stack = np.zeros(64, dtype=np.int32)
     stack_ptr = 0
     stack[stack_ptr] = 0  # Start with root node
@@ -427,8 +443,14 @@ def _query_bvh_single(
     return best_dist_sq, best_tri, best_bary
 
 
+# Triangle is considered degenerate when ||b1 x b2|| falls below this.
+# Chosen well below any legitimate fTetWild triangle area so we only fall
+# back in truly pathological cases.
+_FRAME_DEGEN_EPS = 1e-20
+
+
 @njit(parallel=True, cache=True)
-def _query_bvh_parallel(
+def _query_and_build_frame_parallel(
     points: np.ndarray,
     verts: np.ndarray,
     tris: np.ndarray,
@@ -440,12 +462,22 @@ def _query_bvh_parallel(
     node_tri_count: np.ndarray,
     tri_indices_flat: np.ndarray,
     out_tri_indices: np.ndarray,
-    out_bary_coords: np.ndarray,
+    out_coefs: np.ndarray,
 ):
-    """Query BVH for multiple points in parallel."""
+    """Find closest triangle per point and solve c = B0^-1 (p - x0).
+
+    Frame B0 = [b1 | b2 | b3] where b1 = x1-x0, b2 = x2-x0, and b3 is
+    the unit normal (b1 x b2)/||b1 x b2||. Because b3 is orthogonal to
+    b1 and b2, the 3x3 solve decouples:
+      c3 = (p - x0) . b3
+      [c1, c2] = ((b1, b2) Gram)^-1 [(p - x0).b1, (p - x0).b2]
+    with Gram determinant = ||b1 x b2||^2. For degenerate triangles
+    (||b1 x b2||^2 below _FRAME_DEGEN_EPS) the coefficients are set to
+    zero.
+    """
     n_points = len(points)
     for i in prange(n_points):
-        _, best_tri, best_bary = _query_bvh_single(
+        _, best_tri, _ = _query_bvh_single(
             points[i],
             verts,
             tris,
@@ -458,49 +490,90 @@ def _query_bvh_parallel(
             tri_indices_flat,
         )
         out_tri_indices[i] = best_tri
-        out_bary_coords[i, 0] = best_bary[0]
-        out_bary_coords[i, 1] = best_bary[1]
-        out_bary_coords[i, 2] = best_bary[2]
+
+        t0 = tris[best_tri, 0]
+        t1 = tris[best_tri, 1]
+        t2 = tris[best_tri, 2]
+        x0x = verts[t0, 0]
+        x0y = verts[t0, 1]
+        x0z = verts[t0, 2]
+        b1x = verts[t1, 0] - x0x
+        b1y = verts[t1, 1] - x0y
+        b1z = verts[t1, 2] - x0z
+        b2x = verts[t2, 0] - x0x
+        b2y = verts[t2, 1] - x0y
+        b2z = verts[t2, 2] - x0z
+
+        nx = b1y * b2z - b1z * b2y
+        ny = b1z * b2x - b1x * b2z
+        nz = b1x * b2y - b1y * b2x
+        n_sq = nx * nx + ny * ny + nz * nz
+
+        if n_sq < _FRAME_DEGEN_EPS:
+            out_coefs[i, 0] = 0.0
+            out_coefs[i, 1] = 0.0
+            out_coefs[i, 2] = 0.0
+            continue
+
+        dx = points[i, 0] - x0x
+        dy = points[i, 1] - x0y
+        dz = points[i, 2] - x0z
+
+        db1 = dx * b1x + dy * b1y + dz * b1z
+        db2 = dx * b2x + dy * b2y + dz * b2z
+        b1b1 = b1x * b1x + b1y * b1y + b1z * b1z
+        b2b2 = b2x * b2x + b2y * b2y + b2z * b2z
+        b1b2 = b1x * b2x + b1y * b2y + b1z * b2z
+
+        out_coefs[i, 0] = (b2b2 * db1 - b1b2 * db2) / n_sq
+        out_coefs[i, 1] = (b1b1 * db2 - b1b2 * db1) / n_sq
+        # c3 = (p - x0) . n̂ = (p - x0) . n / ||n||
+        inv_nlen = 1.0 / np.sqrt(n_sq)
+        out_coefs[i, 2] = (dx * nx + dy * ny + dz * nz) * inv_nlen
 
 
-def compute_barycentric_mapping(
+def compute_frame_mapping(
     orig_vert: np.ndarray,
     new_vert: np.ndarray,
     new_tri: np.ndarray,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Compute barycentric mapping from new surface mesh to original surface vertices.
+    """Embed each original vertex in the local frame of its closest new-mesh triangle.
 
-    For each original surface vertex, find the closest point on the new surface mesh
-    and compute its barycentric coordinates within the containing triangle.
-    Uses a custom AABB-BVH with Numba JIT and parallel processing for performance.
+    For each point p in orig_vert, find the closest triangle T on
+    (new_vert, new_tri) and store coefficients c = B0^-1 (p - x0), where
+    B0 = [b1 | b2 | b3]:
+        b1 = x1 - x0,  b2 = x2 - x0,  b3 = (b1 x b2) / ||b1 x b2||.
+    c1, c2 are affine coords in the edge basis (they scale with the
+    triangle) and c3 is a signed offset along the unit normal (in absolute
+    world units). At runtime p' = x0' + c1*(x1' - x0') + c2*(x2' - x0') +
+    c3 * n_hat' preserves the original normal offset regardless of
+    triangle scaling, avoiding the shrink artifact of a pure barycentric
+    projection.
 
     Args:
-        orig_vert: Original surface vertices (N, 3)
-        new_vert: New surface vertices from tetrahedralization (P, 3)
-        new_tri: New surface triangles from tetrahedralization (Q, 3)
+        orig_vert: Points to embed (N, 3).
+        new_vert: Target mesh vertices (P, 3).
+        new_tri: Target mesh triangles (Q, 3).
 
     Returns:
-        tri_indices: Triangle index in new mesh for each original vertex (N,)
-        bary_coords: Barycentric coordinates for each original vertex (N, 3)
+        tri_indices: Closest triangle index per input point (N,).
+        coefs: Frame coefficients (c1, c2, c3) per input point (N, 3).
     """
     n_orig = len(orig_vert)
 
-    # Ensure contiguous float64 arrays
     orig_vert = np.ascontiguousarray(orig_vert, dtype=np.float64)
     new_vert = np.ascontiguousarray(new_vert, dtype=np.float64)
     new_tri = np.ascontiguousarray(new_tri, dtype=np.int32)
 
-    # Compute triangle bounding boxes and centroids
     v0 = new_vert[new_tri[:, 0]]
     v1 = new_vert[new_tri[:, 1]]
     v2 = new_vert[new_tri[:, 2]]
 
-    tri_verts = np.stack([v0, v1, v2], axis=1)  # (n_tris, 3, 3)
+    tri_verts = np.stack([v0, v1, v2], axis=1)
     tri_bboxes_min = tri_verts.min(axis=1)
     tri_bboxes_max = tri_verts.max(axis=1)
     tri_centroids = tri_verts.mean(axis=1)
 
-    # Build flattened BVH
     (
         node_bbox_min,
         node_bbox_max,
@@ -511,12 +584,10 @@ def compute_barycentric_mapping(
         tri_indices_flat,
     ) = _build_bvh_flat(tri_centroids, tri_bboxes_min, tri_bboxes_max)
 
-    # Output arrays
     tri_indices = np.zeros(n_orig, dtype=np.int32)
-    bary_coords = np.zeros((n_orig, 3), dtype=np.float64)
+    coefs = np.zeros((n_orig, 3), dtype=np.float64)
 
-    # Query all points in parallel
-    _query_bvh_parallel(
+    _query_and_build_frame_parallel(
         orig_vert,
         new_vert,
         new_tri,
@@ -528,10 +599,10 @@ def compute_barycentric_mapping(
         node_tri_count,
         tri_indices_flat,
         tri_indices,
-        bary_coords,
+        coefs,
     )
 
-    return tri_indices, bary_coords
+    return tri_indices, coefs
 
 
 @njit(parallel=True, cache=True)
@@ -539,54 +610,80 @@ def _interpolate_surface_parallel(
     deformed_vert: np.ndarray,
     surf_tri: np.ndarray,
     tri_indices: np.ndarray,
-    bary_coords: np.ndarray,
+    coefs: np.ndarray,
     out: np.ndarray,
 ):
-    """Interpolate surface positions in parallel."""
+    """Reconstruct positions from frame coefs: p' = x0' + c1*b1' + c2*b2' + c3*n̂'."""
     n = len(tri_indices)
     for i in prange(n):
         ti = tri_indices[i]
-        t0, t1, t2 = surf_tri[ti, 0], surf_tri[ti, 1], surf_tri[ti, 2]
-        b0, b1, b2 = bary_coords[i, 0], bary_coords[i, 1], bary_coords[i, 2]
-        for j in range(3):
-            out[i, j] = (
-                b0 * deformed_vert[t0, j]
-                + b1 * deformed_vert[t1, j]
-                + b2 * deformed_vert[t2, j]
-            )
+        t0 = surf_tri[ti, 0]
+        t1 = surf_tri[ti, 1]
+        t2 = surf_tri[ti, 2]
+        c0 = coefs[i, 0]
+        c1 = coefs[i, 1]
+        c2 = coefs[i, 2]
+
+        x0x = deformed_vert[t0, 0]
+        x0y = deformed_vert[t0, 1]
+        x0z = deformed_vert[t0, 2]
+        b1x = deformed_vert[t1, 0] - x0x
+        b1y = deformed_vert[t1, 1] - x0y
+        b1z = deformed_vert[t1, 2] - x0z
+        b2x = deformed_vert[t2, 0] - x0x
+        b2y = deformed_vert[t2, 1] - x0y
+        b2z = deformed_vert[t2, 2] - x0z
+
+        nx = b1y * b2z - b1z * b2y
+        ny = b1z * b2x - b1x * b2z
+        nz = b1x * b2y - b1y * b2x
+        n_sq = nx * nx + ny * ny + nz * nz
+
+        if n_sq < _FRAME_DEGEN_EPS:
+            # Degenerate deformed triangle: drop the normal term rather than
+            # emit NaN. c3 was stored relative to the rest triangle's normal
+            # direction, which no longer exists.
+            out[i, 0] = x0x + c0 * b1x + c1 * b2x
+            out[i, 1] = x0y + c0 * b1y + c1 * b2y
+            out[i, 2] = x0z + c0 * b1z + c1 * b2z
+        else:
+            inv_nlen = 1.0 / np.sqrt(n_sq)
+            out[i, 0] = x0x + c0 * b1x + c1 * b2x + c2 * nx * inv_nlen
+            out[i, 1] = x0y + c0 * b1y + c1 * b2y + c2 * ny * inv_nlen
+            out[i, 2] = x0z + c0 * b1z + c1 * b2z + c2 * nz * inv_nlen
 
 
 def interpolate_surface(
     deformed_vert: np.ndarray,
     surf_tri: np.ndarray,
     tri_indices: np.ndarray,
-    bary_coords: np.ndarray,
+    coefs: np.ndarray,
 ) -> np.ndarray:
-    """Interpolate deformed tet mesh vertices back to original surface vertices.
+    """Reconstruct embedded point positions from a deformed host mesh.
 
-    Uses the stored barycentric mapping to compute positions of original surface
-    vertices based on the deformed tet mesh surface. Parallelized with Numba.
+    Applies the frame-embedding reconstruction p' = x0' + c1*b1' + c2*b2'
+    + c3*n_hat' per input point using the mapping produced by
+    compute_frame_mapping. Parallelized with Numba.
 
     Args:
-        deformed_vert: Deformed tet mesh vertices (P, 3)
-        surf_tri: Surface triangles of tet mesh (Q, 3)
-        tri_indices: Triangle index for each original vertex (N,)
-        bary_coords: Barycentric coordinates for each original vertex (N, 3)
+        deformed_vert: Deformed host mesh vertices (P, 3).
+        surf_tri: Host mesh triangles (Q, 3).
+        tri_indices: Closest triangle index per embedded point (N,).
+        coefs: Frame coefficients (c1, c2, c3) per embedded point (N, 3).
 
     Returns:
-        Interpolated vertex positions matching original surface vertex count (N, 3)
+        Reconstructed point positions (N, 3).
     """
     n_orig = len(tri_indices)
 
-    # Ensure contiguous arrays
     deformed_vert = np.ascontiguousarray(deformed_vert, dtype=np.float64)
     surf_tri = np.ascontiguousarray(surf_tri, dtype=np.int32)
     tri_indices = np.ascontiguousarray(tri_indices, dtype=np.int32)
-    bary_coords = np.ascontiguousarray(bary_coords, dtype=np.float64)
+    coefs = np.ascontiguousarray(coefs, dtype=np.float64)
 
     out = np.zeros((n_orig, 3), dtype=np.float64)
     _interpolate_surface_parallel(
-        deformed_vert, surf_tri, tri_indices, bary_coords, out
+        deformed_vert, surf_tri, tri_indices, coefs, out
     )
     return out
 
@@ -597,13 +694,13 @@ def interpolate_surface(
 
 
 def extract_unique_edges(F: np.ndarray) -> np.ndarray:
-    """Extract unique edges from triangle faces.
+    """Extract unique undirected edges from triangle faces.
 
     Args:
-        F: Triangle faces (M, 3)
+        F: Triangle faces (M, 3).
 
     Returns:
-        edges: Unique edges (K, 2) with vertex indices sorted per edge
+        Unique edges (K, 2) with the two vertex indices sorted per edge.
     """
     if len(F) == 0:
         return np.zeros((0, 2), dtype=np.int32)
@@ -696,12 +793,15 @@ def extract_edges_with_tri_map(F: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """Extract unique edges and map each edge to its parent triangle(s).
 
     Args:
-        F: Triangle faces (M, 3)
+        F: Triangle faces (M, 3).
 
     Returns:
-        edges: Unique edges (K, 2)
-        edge_to_tri: For each edge, indices of triangles containing it (K, 2).
-                     Second index is -1 if edge belongs to only one triangle.
+        edges: Unique edges (K, 2).
+        edge_to_tri: For each edge, up to two indices of triangles
+            containing it (K, 2). The second index is -1 for boundary
+            edges that belong to only one triangle. For non-manifold
+            edges shared by three or more triangles, only the first two
+            encountered are recorded.
     """
     if len(F) == 0:
         return np.zeros((0, 2), dtype=np.int32), np.zeros((0, 2), dtype=np.int32)
@@ -736,7 +836,7 @@ def extract_edges_with_tri_map(F: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
 
 
 class ElementBVH:
-    """Container for BVH data of a single element type."""
+    """Container holding the flat BVH arrays for a single element type."""
 
     def __init__(
         self,
@@ -773,16 +873,22 @@ class MeshBVH:
         on_flatten: Optional[Callable[[], None]] = None,
         on_build: Optional[Callable[[], None]] = None,
     ):
-        """Build BVHs for mesh elements.
+        """Build BVHs for the triangle, edge, and point elements of a mesh.
+
+        Triangle, edge, and point BVHs are each built only if the
+        corresponding element set is non-empty. When tris is provided but
+        edges is None, both edges and edge_to_tri are derived from tris
+        via extract_edges_with_tri_map.
 
         Args:
-            verts: Vertices (N, 3)
-            tris: Triangle faces (M, 3), optional
-            edges: Edge segments (K, 2), optional. If None and tris provided,
-                   edges are extracted from triangles.
-            edge_to_tri: Mapping from edges to parent triangles (K, 2), optional.
-            on_flatten: Callback called after flatten phase completes.
-            on_build: Callback called after build phase completes.
+            verts: Vertices (N, 3).
+            tris: Triangle faces (M, 3), optional.
+            edges: Edge segments (K, 2), optional. If None and tris is
+                provided, edges are extracted from tris.
+            edge_to_tri: Mapping from edges to parent triangles (K, 2),
+                optional. Ignored if edges is None.
+            on_flatten: Callback invoked after the flatten phase completes.
+            on_build: Callback invoked after the build phase completes.
         """
         self.verts = np.ascontiguousarray(verts, dtype=np.float64)
         self.n_verts = len(verts)
@@ -821,34 +927,30 @@ class MeshBVH:
         if on_flatten is not None:
             on_flatten()
 
-        # Build BVHs in parallel (tree building is sequential, so parallelizing helps)
+        # Build the three BVHs (tri / edge / point). We used to dispatch
+        # them across a ``ThreadPoolExecutor(max_workers=3)``, but each
+        # ``_build_bvh_from_data`` calls ``parallel=True`` numba kernels
+        # (``_compute_morton_codes``, ``_compute_leaf_bboxes``); having
+        # three Python threads concurrently invoke parallel-njit code is
+        # exactly the access pattern numba's workqueue threading layer
+        # aborts on with "Concurrent access has been detected" (it's
+        # safe under TBB, but TBB has no macOS arm64 wheel).
+        #
+        # Running sequentially is the right fix: the inner numba code
+        # is already parallel, so the outer Python-level fan-out only
+        # adds at most 3x speedup on a thread-pool that contends with
+        # the inner workers anyway. Cleaner state, no platform-conditional
+        # threading layer, no random aborts.
         self.tri_bvh: Optional[ElementBVH] = None
         self.edge_bvh: Optional[ElementBVH] = None
         self.point_bvh: Optional[ElementBVH] = None
 
-        with ThreadPoolExecutor(max_workers=3) as executor:
-            futures = []
-            if tri_data is not None:
-                futures.append(
-                    ("tri", executor.submit(self._build_bvh_from_data, *tri_data))
-                )
-            if edge_data is not None:
-                futures.append(
-                    ("edge", executor.submit(self._build_bvh_from_data, *edge_data))
-                )
-            if point_data is not None:
-                futures.append(
-                    ("point", executor.submit(self._build_bvh_from_data, *point_data))
-                )
-
-            for name, future in futures:
-                result = future.result()
-                if name == "tri":
-                    self.tri_bvh = result
-                elif name == "edge":
-                    self.edge_bvh = result
-                else:
-                    self.point_bvh = result
+        if tri_data is not None:
+            self.tri_bvh = self._build_bvh_from_data(*tri_data)
+        if edge_data is not None:
+            self.edge_bvh = self._build_bvh_from_data(*edge_data)
+        if point_data is not None:
+            self.point_bvh = self._build_bvh_from_data(*point_data)
 
         if on_build is not None:
             on_build()
@@ -881,7 +983,7 @@ class MeshBVH:
     def _build_bvh_from_data(
         self, centroids: np.ndarray, bboxes_min: np.ndarray, bboxes_max: np.ndarray
     ) -> ElementBVH:
-        """Build BVH from pre-flattened data."""
+        """Build an ElementBVH from pre-flattened centroids and per-element bboxes."""
         bvh_data = _build_bvh_flat(centroids, bboxes_min, bboxes_max)
         return ElementBVH(
             bvh_data[0],

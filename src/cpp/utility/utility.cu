@@ -3,6 +3,7 @@
 // Review: Ryoichi Ando (ryoichi.ando@zozo.com)
 // License: Apache v2.0
 
+#include "../kernels/reduce.hpp"
 #include "dispatcher.hpp"
 #include "utility.hpp"
 #include <limits>
@@ -233,12 +234,12 @@ void compute_svd(DataSet data, Vec<Vec3f> curr, Vec<Svd3x2> svd,
     auto svd_data = svd.data;
     auto inv_rest2x2 = data.inv_rest2x2.data;
     DISPATCH_START(shell_face_count)
-    [mesh_face, curr_data, svd_data,
-     inv_rest2x2] __device__(unsigned i) mutable {
+    [mesh_face, curr_data, svd_data, inv_rest2x2] __device__(unsigned i) mutable {
         Vec3u face = mesh_face[i];
         Mat3x3f x;
         x << curr_data[face[0]], curr_data[face[1]], curr_data[face[2]];
-        const Mat3x2f F = utility::compute_deformation_grad(x, inv_rest2x2[i]);
+        const Mat3x2f F =
+            utility::compute_deformation_grad(x, inv_rest2x2[i]);
         svd_data[i] = utility::svd3x2(F);
     } DISPATCH_END;
 }

@@ -1,0 +1,142 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 460" role="img" aria-label="Example timeline: sphere radius holds 1.0 until frame 60, then linearly shrinks to 0.5 at frame 120, compared against a dashed line showing what would happen without the Hold keyframe">
+  <title>Example: shrink a sphere starting at frame 60</title>
+  <desc>
+    A line graph of sphere radius versus frame number. The x axis
+    spans frames 1 to 120 with tick labels at 1, 30, 60, 90, and
+    120. The y axis spans radius 0.5 to 1.0 with tick labels at
+    0.5, 0.75, and 1.0. Three keyframe markers are drawn: Frame 1
+    Initial at radius 1.0; Frame 60 Hold at radius 1.0; Frame 120
+    Value at radius 0.5. The actual animation curve is a solid blue
+    line that stays flat at radius 1.0 from frame 1 through frame
+    60 (the Hold plateau), then ramps linearly down to radius 0.5
+    at frame 120. Overlaid on the same axes is a dashed gray line
+    that shows what the radius would do without the Frame 60 Hold
+    keyframe, a single linear interpolation from 1.0 at frame 1
+    down to 0.5 at frame 120, so the sphere would start shrinking
+    immediately at frame 1 instead of holding its initial size.
+    Labels point to the plateau, the ramp, and the comparison line
+    to make the difference explicit.
+  </desc>
+
+  <defs>
+    <marker id="sx-arrow" viewBox="0 0 10 10" refX="9" refY="5"
+            markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#555" />
+    </marker>
+  </defs>
+
+  <style>
+    .title       { font: 700 17px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #1a1a1a; }
+    .sub         { font: 13px -apple-system, sans-serif; fill: #555; }
+
+    .axis        { stroke: #666; stroke-width: 1.3; fill: none; }
+    .grid        { stroke: #e4e4e4; stroke-width: 1; fill: none; }
+    .tick-lbl    { font: 11.5px -apple-system, sans-serif; fill: #444; }
+    .axis-lbl    { font: 700 12px -apple-system, sans-serif; fill: #1a1a1a; }
+
+    .curve-main  { stroke: #2e6da4; stroke-width: 3; fill: none; stroke-linejoin: round; stroke-linecap: round; }
+    .curve-alt   { stroke: #999; stroke-width: 2; fill: none; stroke-dasharray: 6 5; stroke-linecap: round; }
+
+    .kf-dot      { fill: #c73838; stroke: #7a1a1a; stroke-width: 1.5; }
+    .kf-dot-hold { fill: #e6a820; stroke: #7a5a00; stroke-width: 1.5; }
+
+    .kf-lbl      { font: 700 12px -apple-system, sans-serif; fill: #1a1a1a; }
+    .kf-sub      { font: 11px -apple-system, sans-serif; fill: #555; }
+    .kf-mono     { font: 600 11px "Menlo", "Consolas", monospace; fill: #1a1a1a; }
+
+    .note-main   { font: 700 12px -apple-system, sans-serif; fill: #1f4a75; }
+    .note-alt    { font: 700 12px -apple-system, sans-serif; fill: #555; }
+    .note        { font: 11px -apple-system, sans-serif; fill: #555; }
+
+    .legend-box  { fill: #fafafa; stroke: #ddd; stroke-width: 1; }
+    .leadline    { stroke: #888; stroke-width: 1; stroke-dasharray: 3 3; fill: none; }
+  </style>
+
+  <!-- Title -->
+  <text x="20" y="30" class="title">Example: shrink a sphere starting at frame 60</text>
+  <text x="20" y="50" class="sub">How the three keyframes (frame 1 Initial · frame 60 Hold · frame 120 Radius=0.5) produce the plateau-then-ramp curve.</text>
+
+  <!-- ============ Plot area ============ -->
+  <!-- Plot x: [80, 820] maps to frames [0, 120]. Frame N → x = 80 + 6N.
+       Plot y: radius R → y = 450 - 320R.
+       R=1.0 → y=130, R=0.75 → y=210, R=0.5 → y=290. -->
+
+  <!-- Faint horizontal grid lines -->
+  <line x1="80" y1="130" x2="820" y2="130" class="grid" />
+  <line x1="80" y1="210" x2="820" y2="210" class="grid" />
+  <line x1="80" y1="290" x2="820" y2="290" class="grid" />
+
+  <!-- Vertical grid at key frames -->
+  <line x1="86"  y1="90" x2="86"  y2="330" class="grid" />
+  <line x1="440" y1="90" x2="440" y2="330" class="grid" />
+  <line x1="800" y1="90" x2="800" y2="330" class="grid" />
+
+  <!-- Axes -->
+  <line x1="80" y1="330" x2="820" y2="330" class="axis" />
+  <line x1="80" y1="90"  x2="80"  y2="330" class="axis" />
+
+  <!-- X ticks + labels -->
+  <line x1="86"  y1="330" x2="86"  y2="334" class="axis" />
+  <text x="86"  y="348" text-anchor="middle" class="tick-lbl">1</text>
+  <line x1="260" y1="330" x2="260" y2="334" class="axis" />
+  <text x="260" y="348" text-anchor="middle" class="tick-lbl">30</text>
+  <line x1="440" y1="330" x2="440" y2="334" class="axis" />
+  <text x="440" y="348" text-anchor="middle" class="tick-lbl">60</text>
+  <line x1="620" y1="330" x2="620" y2="334" class="axis" />
+  <text x="620" y="348" text-anchor="middle" class="tick-lbl">90</text>
+  <line x1="800" y1="330" x2="800" y2="334" class="axis" />
+  <text x="800" y="348" text-anchor="middle" class="tick-lbl">120</text>
+  <text x="450" y="370" text-anchor="middle" class="axis-lbl">Frame</text>
+
+  <!-- Y ticks + labels -->
+  <line x1="76" y1="130" x2="80" y2="130" class="axis" />
+  <text x="72" y="134" text-anchor="end" class="tick-lbl">1.0</text>
+  <line x1="76" y1="210" x2="80" y2="210" class="axis" />
+  <text x="72" y="214" text-anchor="end" class="tick-lbl">0.75</text>
+  <line x1="76" y1="290" x2="80" y2="290" class="axis" />
+  <text x="72" y="294" text-anchor="end" class="tick-lbl">0.5</text>
+  <text x="30" y="210" text-anchor="middle" class="axis-lbl" transform="rotate(-90 30 210)">Radius</text>
+
+  <!-- ============ Comparison overlay (without Hold) ============ -->
+  <line x1="86" y1="130" x2="800" y2="290" class="curve-alt" />
+  <text x="250" y="185" class="note-alt">without Hold →</text>
+  <text x="250" y="200" class="note">linear ramp over all 119 frames</text>
+
+  <!-- ============ Actual animation curve ============ -->
+  <!-- Plateau frames 1→60 at R=1.0 -->
+  <line x1="86"  y1="130" x2="440" y2="130" class="curve-main" />
+  <!-- Ramp frames 60→120 from R=1.0 to R=0.5 -->
+  <line x1="440" y1="130" x2="800" y2="290" class="curve-main" />
+
+  <!-- Annotations on the main curve -->
+  <text x="263" y="120" text-anchor="middle" class="note-main">Hold plateau: radius stays at 1.0</text>
+  <text x="650" y="195" class="note-main">linear ramp</text>
+  <text x="650" y="211" class="note">1.0 → 0.5 over 60 frames</text>
+
+  <!-- ============ Keyframe markers ============ -->
+
+  <!-- K1: Frame 1 Initial -->
+  <circle cx="86" cy="130" r="6" class="kf-dot" />
+  <line x1="86" y1="124" x2="120" y2="85" class="leadline" />
+  <text x="124" y="78" class="kf-lbl">Frame 1 <tspan class="kf-sub">(Initial)</tspan></text>
+  <text x="124" y="92" class="kf-mono">Radius = 1.0</text>
+
+  <!-- K2: Frame 60 Hold -->
+  <circle cx="440" cy="130" r="6" class="kf-dot-hold" />
+  <line x1="440" y1="124" x2="440" y2="78" class="leadline" />
+  <text x="440" y="72" text-anchor="middle" class="kf-lbl">Frame 60 <tspan class="kf-sub">(Hold ✓)</tspan></text>
+  <text x="440" y="88" text-anchor="middle" class="note">re-emits previous value</text>
+
+  <!-- K3: Frame 120 Radius=0.5 -->
+  <circle cx="800" cy="290" r="6" class="kf-dot" />
+  <line x1="800" y1="296" x2="800" y2="320" class="leadline" />
+  <text x="800" y="394" text-anchor="middle" class="kf-lbl">Frame 120</text>
+  <text x="800" y="410" text-anchor="middle" class="kf-mono">Radius = 0.5</text>
+
+  <!-- ============ Legend ============ -->
+  <rect x="540" y="84" width="350" height="46" rx="6" class="legend-box" />
+  <line x1="554" y1="102" x2="590" y2="102" class="curve-main" />
+  <text x="600" y="106" class="note-main">with Hold at frame 60</text>
+  <line x1="554" y1="120" x2="590" y2="120" class="curve-alt" />
+  <text x="600" y="124" class="note-alt">without Hold (comparison)</text>
+</svg>

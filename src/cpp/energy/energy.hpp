@@ -11,12 +11,17 @@
 
 namespace energy {
 
+void compute_torque_groups(const DataSet &data,
+                           const Vec<Vec3f> &eval_x,
+                           Vec<TorqueGroupResult> &result);
+
 void embed_momentum_force_hessian(const DataSet &data,
                                   const Vec<Vec3f> &eval_x,
                                   const Vec<Vec3f> &velocity, float dt,
                                   const Vec<Vec3f> &target, Vec<float> &force,
                                   Vec<Mat3x3f> &fixed_hess,
-                                  const ParamSet &param);
+                                  const ParamSet &param,
+                                  const Vec<TorqueGroupResult> &torque_result);
 
 void embed_elastic_force_hessian(const DataSet &data, const Vec<Vec3f> &eval_x,
                                  Vec<float> &force, FixedCSRMat &fixed_hess,

@@ -13,13 +13,12 @@ namespace contact {
 
 void initialize(const DataSet &data, const ParamSet &param);
 
-unsigned embed_contact_force_hessian(const DataSet &data,
-                                     const Vec<Vec3f> &eval_x, Vec<float> force,
-                                     const FixedCSRMat &fixed_hess_in,
-                                     FixedCSRMat &fixed_out,
-                                     DynCSRMat &hess_out, unsigned &max_nnz_row,
-                                     float &dyn_consumed, float dt,
-                                     const ParamSet &param);
+unsigned
+embed_contact_force_hessian(const DataSet &data, const Vec<Vec3f> &eval_x,
+                            Vec<float> force, const FixedCSRMat &fixed_hess_in,
+                            FixedCSRMat &fixed_out, DynCSRMat &hess_out,
+                            unsigned &max_nnz_row, float &dyn_consumed,
+                            float dt, const ParamSet &param);
 
 unsigned embed_constraint_force_hessian(const DataSet &data,
                                         const Vec<Vec3f> &eval_x,
@@ -40,6 +39,15 @@ Vec<AABB> &get_edge_aabb();
 Vec<AABB> &get_vertex_aabb();
 Vec<AABB> &get_collision_mesh_face_aabb();
 Vec<AABB> &get_collision_mesh_edge_aabb();
+
+// Intersection record accessors
+unsigned get_intersection_count();
+const IntersectionRecord *get_intersection_records();
+
+// Collision active flag pointers (null if collision windows not initialized)
+const bool *get_vert_collision_active();
+const bool *get_edge_collision_active();
+const bool *get_face_collision_active();
 
 } // namespace contact
 

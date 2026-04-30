@@ -53,10 +53,10 @@ jobs:
           echo "Examples: belt cards codim curtain domino"
 
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Configure AWS credentials via OIDC
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
@@ -110,7 +110,7 @@ jobs:
       - name: Create EC2 key pair
         id: keypair
         run: |
-          KEY_NAME="win-batch-1-${{ steps.ids.outputs.TIMESTAMP }}"
+          KEY_NAME="win-batch-1-${{ steps.ids.outputs.TIMESTAMP }}-${{ github.run_id }}"
           echo "::add-mask::$KEY_NAME"
           echo "KEY_NAME=$KEY_NAME" >> $GITHUB_OUTPUT
 
@@ -471,7 +471,7 @@ jobs:
 
       - name: Upload artifact
         if: success() || failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ci-win-batch-1
           path: ci
@@ -501,7 +501,7 @@ jobs:
       - name: Re-authenticate for cleanup
         if: always()
         continue-on-error: true
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
@@ -560,10 +560,10 @@ jobs:
           echo "Examples: drape fishingknot fitting friction"
 
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Configure AWS credentials via OIDC
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
@@ -617,7 +617,7 @@ jobs:
       - name: Create EC2 key pair
         id: keypair
         run: |
-          KEY_NAME="win-batch-2-${{ steps.ids.outputs.TIMESTAMP }}"
+          KEY_NAME="win-batch-2-${{ steps.ids.outputs.TIMESTAMP }}-${{ github.run_id }}"
           echo "::add-mask::$KEY_NAME"
           echo "KEY_NAME=$KEY_NAME" >> $GITHUB_OUTPUT
 
@@ -951,7 +951,7 @@ jobs:
 
       - name: Upload artifact
         if: success() || failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ci-win-batch-2
           path: ci
@@ -981,7 +981,7 @@ jobs:
       - name: Re-authenticate for cleanup
         if: always()
         continue-on-error: true
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
@@ -1040,10 +1040,10 @@ jobs:
           echo "Examples: hang needle noodle ribbon"
 
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Configure AWS credentials via OIDC
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
@@ -1097,7 +1097,7 @@ jobs:
       - name: Create EC2 key pair
         id: keypair
         run: |
-          KEY_NAME="win-batch-3-${{ steps.ids.outputs.TIMESTAMP }}"
+          KEY_NAME="win-batch-3-${{ steps.ids.outputs.TIMESTAMP }}-${{ github.run_id }}"
           echo "::add-mask::$KEY_NAME"
           echo "KEY_NAME=$KEY_NAME" >> $GITHUB_OUTPUT
 
@@ -1431,7 +1431,7 @@ jobs:
 
       - name: Upload artifact
         if: success() || failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ci-win-batch-3
           path: ci
@@ -1461,7 +1461,7 @@ jobs:
       - name: Re-authenticate for cleanup
         if: always()
         continue-on-error: true
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
@@ -1520,10 +1520,10 @@ jobs:
           echo "Examples: roller stack trampoline trapped"
 
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Configure AWS credentials via OIDC
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
@@ -1577,7 +1577,7 @@ jobs:
       - name: Create EC2 key pair
         id: keypair
         run: |
-          KEY_NAME="win-batch-4-${{ steps.ids.outputs.TIMESTAMP }}"
+          KEY_NAME="win-batch-4-${{ steps.ids.outputs.TIMESTAMP }}-${{ github.run_id }}"
           echo "::add-mask::$KEY_NAME"
           echo "KEY_NAME=$KEY_NAME" >> $GITHUB_OUTPUT
 
@@ -1911,7 +1911,7 @@ jobs:
 
       - name: Upload artifact
         if: success() || failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ci-win-batch-4
           path: ci
@@ -1941,7 +1941,7 @@ jobs:
       - name: Re-authenticate for cleanup
         if: always()
         continue-on-error: true
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
@@ -2000,10 +2000,10 @@ jobs:
           echo "Examples: twist five-twist woven yarn"
 
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Configure AWS credentials via OIDC
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
@@ -2057,7 +2057,7 @@ jobs:
       - name: Create EC2 key pair
         id: keypair
         run: |
-          KEY_NAME="win-batch-5-${{ steps.ids.outputs.TIMESTAMP }}"
+          KEY_NAME="win-batch-5-${{ steps.ids.outputs.TIMESTAMP }}-${{ github.run_id }}"
           echo "::add-mask::$KEY_NAME"
           echo "KEY_NAME=$KEY_NAME" >> $GITHUB_OUTPUT
 
@@ -2391,7 +2391,7 @@ jobs:
 
       - name: Upload artifact
         if: success() || failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ci-win-batch-5
           path: ci
@@ -2421,7 +2421,7 @@ jobs:
       - name: Re-authenticate for cleanup
         if: always()
         continue-on-error: true
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}

@@ -16,10 +16,6 @@ Write-Host "Configuring SSH on port $SSHPort"
 Write-Host "Disabling Windows Firewall (relying on AWS security groups)..."
 Set-NetFirewallProfile -Profile Domain,Public,Private -Enabled False
 
-# Enable Long Path support
-Write-Host "Enabling Long Path support..."
-Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem' -Name LongPathsEnabled -Value 1
-
 # Check if OpenSSH Server is installed (pre-installed on Windows Server 2025)
 Write-Host "Checking OpenSSH Server status..."
 $sshCapability = Get-WindowsCapability -Online | Where-Object Name -like 'OpenSSH.Server*'

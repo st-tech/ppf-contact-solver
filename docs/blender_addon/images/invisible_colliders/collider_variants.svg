@@ -1,0 +1,194 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 420" role="img" aria-label="The five invisible-collider shape variants (Wall, Sphere, Sphere+Invert, Sphere+Hemisphere, Sphere+Invert+Hemisphere), drawn side by side with their viewport arrow glyphs, so you can see which side of the shape dynamic geometry stays on">
+  <title>Invisible collider shape variants</title>
+  <desc>
+    Five side-by-side shape schematics matching the viewport overlay
+    the add-on draws for each collider configuration. First panel: a
+    Wall, drawn as a flat plane patch with faint dashed outlines
+    indicating it extends to infinity, and a single blue arrow
+    pointing along the Normal away from the plane. Second panel: a
+    default Sphere, a circle with six outward-pointing arrows at the
+    ±X, ±Y, ±Z cardinal points. Third panel: a Sphere with Invert
+    checked, the same circle but with six inward-pointing arrows
+    converging toward the center. Fourth panel: a Hemisphere without
+    Invert, the lower half of a sphere plus a cylindrical extension
+    rising from the equator to infinity, with outward arrows on both
+    parts. Fifth panel: Hemisphere with Invert, the same bowl shape
+    with arrows pointing inward; objects dropped from above land
+    inside the bowl. A caption under each panel states "dynamic
+    geometry stays on the arrow side", and a row of short labels
+    summarises each variant as outside, inside, capsule, or bowl.
+  </desc>
+
+  <defs>
+    <marker id="cv-out" viewBox="0 0 10 10" refX="9" refY="5"
+            markerWidth="9" markerHeight="9" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#2e6da4" />
+    </marker>
+    <marker id="cv-in" viewBox="0 0 10 10" refX="9" refY="5"
+            markerWidth="9" markerHeight="9" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#8a3a8a" />
+    </marker>
+  </defs>
+
+  <style>
+    .title       { font: 700 17px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #1a1a1a; }
+    .sub         { font: 13px -apple-system, sans-serif; fill: #555; }
+
+    .panel-ttl   { font: 700 14px -apple-system, sans-serif; fill: #1a1a1a; }
+    .panel-opt   { font: 600 11px "Menlo", "Consolas", monospace; fill: #444; }
+    .panel-cap   { font: 12px -apple-system, sans-serif; fill: #1a1a1a; }
+    .panel-hi    { font: 700 12px -apple-system, sans-serif; fill: #1f4a75; }
+    .panel-hi2   { font: 700 12px -apple-system, sans-serif; fill: #6a2a6a; }
+
+    .frame       { fill: none; stroke: #d0d0d0; stroke-width: 1; }
+    .shape       { fill: none; stroke: #6a7a8a; stroke-width: 1.8; }
+    .shape-f     { fill: #f3f6f9; stroke: #6a7a8a; stroke-width: 1.8; }
+    .shape-dash  { fill: none; stroke: #9eaab8; stroke-width: 1.3; stroke-dasharray: 4 3; }
+
+    .arr-out     { stroke: #2e6da4; stroke-width: 2; fill: none; }
+    .arr-in      { stroke: #8a3a8a; stroke-width: 2; fill: none; }
+
+    .hatch       { fill: #eceff3; }
+    .note        { font: 11px -apple-system, sans-serif; fill: #555; }
+  </style>
+
+  <!-- Title -->
+  <text x="20" y="30" class="title">Invisible colliders: where the arrows point, and which side is "free"</text>
+  <text x="20" y="50" class="sub">In every variant, dynamic geometry stays on the arrow side. The opposite side is projected back across the surface.</text>
+
+  <!-- 5 panels across. Width=190, gap=8, total=5×190+4×8=982. Start x=10 -->
+  <!-- Panel positions: 10, 208, 406, 604, 802 -->
+  <!-- Panel frame y=72 to y=372 -->
+
+  <!-- ============ Panel 1: Wall ============ -->
+  <rect x="10" y="72" width="190" height="300" rx="8" class="frame" />
+  <text x="105" y="94" text-anchor="middle" class="panel-ttl">Wall</text>
+  <text x="105" y="110" text-anchor="middle" class="panel-opt">(no options)</text>
+
+  <!-- Wall: perspective plane patch with dashed extensions + upward normal arrow -->
+  <!-- centered around x=105, y=220 -->
+  <!-- Plane patch (parallelogram) -->
+  <polygon points="45,260 165,260 145,290 65,290" class="hatch" />
+  <polygon points="45,260 165,260 145,290 65,290" class="shape" />
+  <!-- dashed infinite extension -->
+  <line x1="25" y1="260" x2="45" y2="260" class="shape-dash" />
+  <line x1="165" y1="260" x2="185" y2="260" class="shape-dash" />
+  <line x1="25" y1="260" x2="45" y2="290" class="shape-dash" />
+  <line x1="185" y1="260" x2="160" y2="298" class="shape-dash" />
+
+  <!-- Normal arrow -->
+  <line x1="105" y1="260" x2="105" y2="175" class="arr-out" marker-end="url(#cv-out)" />
+  <text x="115" y="210" class="panel-hi">Normal</text>
+
+  <!-- Caption -->
+  <text x="105" y="330" text-anchor="middle" class="panel-cap">Free side:</text>
+  <text x="105" y="348" text-anchor="middle" class="panel-hi">arrow side (+N)</text>
+  <text x="105" y="365" text-anchor="middle" class="note">opposite is projected back</text>
+
+  <!-- ============ Panel 2: Sphere (default) ============ -->
+  <rect x="208" y="72" width="190" height="300" rx="8" class="frame" />
+  <text x="303" y="94" text-anchor="middle" class="panel-ttl">Sphere</text>
+  <text x="303" y="110" text-anchor="middle" class="panel-opt">(default)</text>
+
+  <!-- Sphere: circle + 6 outward arrows -->
+  <!-- Center x=303, y=220, radius=50 -->
+  <circle cx="303" cy="220" r="50" class="shape" />
+  <!-- 4 cardinal arrows (up, down, left, right) -->
+  <line x1="303" y1="220" x2="303" y2="160" class="arr-out" marker-end="url(#cv-out)" />
+  <line x1="303" y1="220" x2="303" y2="280" class="arr-out" marker-end="url(#cv-out)" />
+  <line x1="303" y1="220" x2="243" y2="220" class="arr-out" marker-end="url(#cv-out)" />
+  <line x1="303" y1="220" x2="363" y2="220" class="arr-out" marker-end="url(#cv-out)" />
+  <!-- 2 diagonal (depth-axis) arrows -->
+  <line x1="303" y1="220" x2="261" y2="262" class="arr-out" marker-end="url(#cv-out)" />
+  <line x1="303" y1="220" x2="345" y2="178" class="arr-out" marker-end="url(#cv-out)" />
+
+  <!-- Caption -->
+  <text x="303" y="330" text-anchor="middle" class="panel-cap">Free side:</text>
+  <text x="303" y="348" text-anchor="middle" class="panel-hi">outside</text>
+  <text x="303" y="365" text-anchor="middle" class="note">arrows point outward</text>
+
+  <!-- ============ Panel 3: Sphere + Invert ============ -->
+  <rect x="406" y="72" width="190" height="300" rx="8" class="frame" />
+  <text x="501" y="94" text-anchor="middle" class="panel-ttl">Sphere</text>
+  <text x="501" y="110" text-anchor="middle" class="panel-opt">Invert ✓</text>
+
+  <!-- Circle with hatched interior + 6 inward arrows -->
+  <circle cx="501" cy="220" r="50" class="shape-f" />
+  <!-- arrows start from outside edge and point inward to center -->
+  <line x1="501" y1="150" x2="501" y2="210" class="arr-in" marker-end="url(#cv-in)" />
+  <line x1="501" y1="290" x2="501" y2="230" class="arr-in" marker-end="url(#cv-in)" />
+  <line x1="431" y1="220" x2="491" y2="220" class="arr-in" marker-end="url(#cv-in)" />
+  <line x1="571" y1="220" x2="511" y2="220" class="arr-in" marker-end="url(#cv-in)" />
+  <line x1="451" y1="170" x2="493" y2="212" class="arr-in" marker-end="url(#cv-in)" />
+  <line x1="551" y1="270" x2="509" y2="228" class="arr-in" marker-end="url(#cv-in)" />
+
+  <!-- Caption -->
+  <text x="501" y="330" text-anchor="middle" class="panel-cap">Free side:</text>
+  <text x="501" y="348" text-anchor="middle" class="panel-hi2">inside (containment)</text>
+  <text x="501" y="365" text-anchor="middle" class="note">arrows point toward center</text>
+
+  <!-- ============ Panel 4: Sphere + Hemisphere ============ -->
+  <rect x="604" y="72" width="190" height="300" rx="8" class="frame" />
+  <text x="699" y="94" text-anchor="middle" class="panel-ttl">Sphere</text>
+  <text x="699" y="110" text-anchor="middle" class="panel-opt">Hemisphere ✓</text>
+
+  <!-- Bottom half circle + cylinder extending up -->
+  <!-- Half circle: center x=699, y=240, r=50, lower half -->
+  <path d="M 649 240 A 50 50 0 0 0 749 240" class="shape" fill="none" />
+  <!-- Cylinder sides going up -->
+  <line x1="649" y1="240" x2="649" y2="155" class="shape" />
+  <line x1="749" y1="240" x2="749" y2="155" class="shape" />
+  <!-- Cylinder top as dashed (open) -->
+  <line x1="649" y1="155" x2="749" y2="155" class="shape-dash" />
+  <!-- Dashed continuation upward (infinite capsule) -->
+  <line x1="649" y1="155" x2="649" y2="138" class="shape-dash" />
+  <line x1="749" y1="155" x2="749" y2="138" class="shape-dash" />
+
+  <!-- Arrows pointing outward on bottom half -->
+  <line x1="699" y1="240" x2="699" y2="300" class="arr-out" marker-end="url(#cv-out)" />
+  <line x1="684" y1="280" x2="660" y2="294" class="arr-out" marker-end="url(#cv-out)" />
+  <line x1="714" y1="280" x2="738" y2="294" class="arr-out" marker-end="url(#cv-out)" />
+  <!-- Arrows pointing outward on cylinder sides -->
+  <line x1="649" y1="200" x2="615" y2="200" class="arr-out" marker-end="url(#cv-out)" />
+  <line x1="749" y1="200" x2="783" y2="200" class="arr-out" marker-end="url(#cv-out)" />
+  <line x1="649" y1="175" x2="615" y2="175" class="arr-out" marker-end="url(#cv-out)" />
+  <line x1="749" y1="175" x2="783" y2="175" class="arr-out" marker-end="url(#cv-out)" />
+
+  <!-- Caption -->
+  <text x="699" y="330" text-anchor="middle" class="panel-cap">Free side:</text>
+  <text x="699" y="348" text-anchor="middle" class="panel-hi">outside (capsule up)</text>
+  <text x="699" y="365" text-anchor="middle" class="note">equator-and-above is infinite capsule</text>
+
+  <!-- ============ Panel 5: Sphere + Invert + Hemisphere ============ -->
+  <rect x="802" y="72" width="190" height="300" rx="8" class="frame" />
+  <text x="897" y="94" text-anchor="middle" class="panel-ttl">Sphere</text>
+  <text x="897" y="110" text-anchor="middle" class="panel-opt">Invert + Hemisphere ✓</text>
+
+  <!-- Bowl: bottom half circle + cylinder, filled -->
+  <path d="M 847 240 L 847 155 L 847 138" class="shape-dash" />
+  <path d="M 947 240 L 947 155 L 947 138" class="shape-dash" />
+  <path d="M 847 240 A 50 50 0 0 0 947 240 L 947 155 L 847 155 Z" class="shape-f" />
+  <!-- cylinder sides solid -->
+  <line x1="847" y1="240" x2="847" y2="155" class="shape" />
+  <line x1="947" y1="240" x2="947" y2="155" class="shape" />
+  <!-- open top (dashed) -->
+  <line x1="847" y1="155" x2="947" y2="155" class="shape-dash" />
+
+  <!-- Inward arrows on bottom half -->
+  <line x1="897" y1="285" x2="897" y2="240" class="arr-in" marker-end="url(#cv-in)" />
+  <line x1="867" y1="277" x2="882" y2="252" class="arr-in" marker-end="url(#cv-in)" />
+  <line x1="927" y1="277" x2="912" y2="252" class="arr-in" marker-end="url(#cv-in)" />
+  <!-- Inward arrows on cylinder sides -->
+  <line x1="830" y1="200" x2="847" y2="200" class="arr-in" marker-end="url(#cv-in)" />
+  <line x1="964" y1="200" x2="947" y2="200" class="arr-in" marker-end="url(#cv-in)" />
+  <line x1="830" y1="175" x2="847" y2="175" class="arr-in" marker-end="url(#cv-in)" />
+  <line x1="964" y1="175" x2="947" y2="175" class="arr-in" marker-end="url(#cv-in)" />
+
+  <!-- Caption -->
+  <text x="897" y="330" text-anchor="middle" class="panel-cap">Free side:</text>
+  <text x="897" y="348" text-anchor="middle" class="panel-hi2">inside (bowl)</text>
+  <text x="897" y="365" text-anchor="middle" class="note">catches falling objects from above</text>
+
+  <!-- Footer hint -->
+  <text x="20" y="402" class="note">Shaded fill marks the "solid" side (geometry is pushed off it). Dashed outlines mean the surface continues to infinity.</text>
+</svg>

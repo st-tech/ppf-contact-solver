@@ -1,0 +1,30 @@
+# Sphinx build output
+_build/
+.doctrees/
+
+# Auto-generated from blender_addon/ops/api.py at build time
+blender_addon/integrations/python_api_reference.rst
+
+# Auto-generated from blender_addon/mcp/handlers/*.py and blender_handlers.py at build time
+blender_addon/integrations/mcp_reference.rst
+
+# Auto-generated from frontend/_param_.py and src/*.{cu,rs} at build time
+jupyterlab_api/simulation_parameters.rst
+jupyterlab_api/material_parameters.rst
+jupyterlab_api/log_channels.rst
+
+# Local Python virtualenv for building docs
+.venv/
+
+# Python bytecode (from conf.py etc.)
+__pycache__/
+*.py[cod]
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+
+# capture.sh artifacts under blender_addon/images/
+# (working crops, baselines, per-run manifests)
+.scratch/
+blender_addon/images/**/manifest.json

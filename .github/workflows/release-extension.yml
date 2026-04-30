@@ -1,0 +1,202 @@
+# File: release-extension.yml
+# Code: Claude Code
+# Review: Ryoichi Ando (ryoichi.ando@zozo.com)
+# License: Apache v2.0
+
+name: Release Blender Extension
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run (build only, no release)'
+        required: true
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+jobs:
+  release-extension:
+    name: Build and Release Blender Extension
+    runs-on: ubuntu-latest
+
+    env:
+      # Blender 5.x headless build used only for `--command extension`.
+      # Pin to a specific patch release; bump when needed.
+      BLENDER_SERIES: "5.0"
+      BLENDER_VERSION: "5.0.0"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Resolve manifest version and release tag
+        id: vt
+        run: |
+          VERSION=$(grep -E '^version[[:space:]]*=' blender_addon/blender_manifest.toml \
+            | head -n1 \
+            | sed -E 's/version[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/')
+          if [ -z "$VERSION" ]; then
+            echo "ERROR: failed to read version from blender_addon/blender_manifest.toml"
+            exit 1
+          fi
+          STAMP=$(TZ='Asia/Tokyo' date '+%Y_%m_%d_%H%M')
+          TAG="addon-$(echo "$STAMP" | tr '_' '-')"
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+          echo "STAMP=$STAMP" >> $GITHUB_OUTPUT
+          echo "TAG=$TAG" >> $GITHUB_OUTPUT
+          echo "Repository       : ${{ github.repository }}"
+          echo "Manifest version : $VERSION"
+          echo "Release tag      : $TAG"
+          echo "Zip stamp        : $STAMP"
+
+      - name: Cache Blender
+        id: blender-cache
+        uses: actions/cache@v5
+        with:
+          path: blender
+          key: blender-${{ env.BLENDER_VERSION }}-linux-x64
+
+      - name: Install Blender ${{ env.BLENDER_VERSION }}
+        if: steps.blender-cache.outputs.cache-hit != 'true'
+        run: |
+          ARCHIVE="blender-${BLENDER_VERSION}-linux-x64.tar.xz"
+          URL="https://download.blender.org/release/Blender${BLENDER_SERIES}/${ARCHIVE}"
+          echo "Downloading $URL"
+          curl -fL --retry 3 -o "$ARCHIVE" "$URL"
+          mkdir -p blender
+          tar -xf "$ARCHIVE" --strip-components=1 -C blender
+          rm "$ARCHIVE"
+
+      - name: Verify Blender
+        run: |
+          ./blender/blender --version
+          ./blender/blender --command extension --help >/dev/null
+
+      - name: Stage addon source from HEAD
+        run: |
+          mkdir -p staged-addon
+          # `git archive` only includes tracked files, so .gitignore'd paths
+          # and __pycache__ are excluded automatically.
+          git archive --format=tar HEAD blender_addon \
+            | tar -x --strip-components=1 -C staged-addon
+          # Defensive: drop any __pycache__ that might sneak in.
+          find staged-addon -type d -name __pycache__ -exec rm -rf {} +
+          test -f staged-addon/blender_manifest.toml
+          echo "Staged contents:"
+          find staged-addon -maxdepth 2 -mindepth 1 | sort
+
+      - name: Build extension zip
+        run: |
+          mkdir -p packages
+          ZIP="packages/ppf_contact_solver_${{ steps.vt.outputs.STAMP }}.zip"
+          ./blender/blender --command extension build \
+            --source-dir staged-addon \
+            --output-filepath "$ZIP"
+          ls -lh "$ZIP"
+
+      - name: Validate extension zip
+        run: |
+          ZIP="packages/ppf_contact_solver_${{ steps.vt.outputs.STAMP }}.zip"
+          ./blender/blender --command extension validate "$ZIP"
+
+      - name: Generate index.json
+        run: |
+          ./blender/blender --command extension server-generate \
+            --repo-dir packages --html
+          test -f packages/index.json
+          echo "--- generated index.json ---"
+          cat packages/index.json
+
+      - name: Rewrite archive_url to release asset URL
+        run: |
+          TAG="${{ steps.vt.outputs.TAG }}"
+          STAMP="${{ steps.vt.outputs.STAMP }}"
+          ZIP_NAME="ppf_contact_solver_${STAMP}.zip"
+          DOWNLOAD_URL="https://github.com/${{ github.repository }}/releases/download/${TAG}/${ZIP_NAME}"
+          python3 - "$DOWNLOAD_URL" <<'PY'
+          import json, sys
+          url = sys.argv[1]
+          with open("packages/index.json") as f:
+              data = json.load(f)
+          rewritten = 0
+          for entry in data.get("data", []):
+              if entry.get("id") == "ppf_contact_solver":
+                  entry["archive_url"] = url
+                  rewritten += 1
+          if rewritten == 0:
+              print("ERROR: no ppf_contact_solver entry found in index.json", file=sys.stderr)
+              sys.exit(1)
+          with open("packages/index.json", "w") as f:
+              json.dump(data, f, indent=2)
+          print(f"Rewrote archive_url for {rewritten} entry(ies) -> {url}")
+          PY
+          echo "--- final index.json ---"
+          cat packages/index.json
+
+      - name: Upload dry-run artifact
+        if: ${{ inputs.dry_run }}
+        uses: actions/upload-artifact@v6
+        with:
+          name: extension-${{ steps.vt.outputs.TAG }}
+          path: packages/
+          retention-days: 7
+
+      - name: Create dated release (immutable history)
+        if: ${{ ! inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${{ steps.vt.outputs.TAG }}"
+          VERSION="${{ steps.vt.outputs.VERSION }}"
+          STAMP="${{ steps.vt.outputs.STAMP }}"
+          ZIP="packages/ppf_contact_solver_${STAMP}.zip"
+          gh release create "$TAG" \
+            --title "Blender Add-on $VERSION ($TAG)" \
+            --notes "manifest version: $VERSION" \
+            "$ZIP#Blender Extension Zip"
+          echo "Created dated release $TAG"
+
+      - name: Update addon-latest release with index.json
+        if: ${{ ! inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # `addon-latest` is a fixed mutable tag whose release holds only
+          # `index.json`. Its asset is replaced in-place each run, giving
+          # users a permanent URL:
+          #   https://github.com/${{ github.repository }}/releases/download/addon-latest/index.json
+          # The `archive_url` inside that index.json points at the immutable
+          # dated release, so historical snapshots stay installable.
+          if gh release view addon-latest >/dev/null 2>&1; then
+            echo "addon-latest exists; replacing index.json asset in place."
+            gh release upload addon-latest packages/index.json --clobber
+            gh release edit addon-latest \
+              --notes "Latest addon distribution. Tracks the most recent addon-* dated release. Updated $(TZ='Asia/Tokyo' date '+%Y-%m-%d %H:%M %Z')."
+          else
+            echo "addon-latest does not exist; creating."
+            # Drop any dangling tag from a previously deleted release so the
+            # new release attaches to the current commit, not whatever the
+            # tag was pointing at before.
+            gh api -X DELETE "repos/${{ github.repository }}/git/refs/tags/addon-latest" 2>/dev/null || true
+            gh release create addon-latest \
+              --target "${{ github.sha }}" \
+              --title "Blender Add-on" \
+              --notes "Latest add-on distribution. Tracks the most recent addon-* dated release. Created $(TZ='Asia/Tokyo' date '+%Y-%m-%d %H:%M %Z')." \
+              "packages/index.json#Blender Extensions index"
+          fi
+          echo "Stable repo URL: https://github.com/${{ github.repository }}/releases/download/addon-latest/index.json"
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "## Extension Release Summary"
+          echo "- Repository       : ${{ github.repository }}"
+          echo "- Manifest version : ${{ steps.vt.outputs.VERSION }}"
+          echo "- Tag              : ${{ steps.vt.outputs.TAG }}"
+          echo "- Dry run          : ${{ inputs.dry_run }}"
+          echo "- Blender used     : ${{ env.BLENDER_VERSION }}"

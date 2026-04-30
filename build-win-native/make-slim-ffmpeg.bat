@@ -26,17 +26,22 @@ if exist "%FFMPEG_DIR%\ffmpeg.exe" (
 REM Create downloads directory if needed
 if not exist "%DOWNLOADS%" mkdir "%DOWNLOADS%"
 
+REM Load the URL/FILE manifest (single source of truth, scripts\downloads.txt)
+call "%BUILD_WIN%\scripts\load-downloads.bat"
+if errorlevel 1 (
+    echo ERROR: Failed to load download manifest
+    exit /b 1
+)
+
 REM Download and install MSYS2 if not present
 if not exist "%MSYS2_DIR%\usr\bin\bash.exe" (
     echo === Downloading MSYS2 ===
 
-    set MSYS2_VERSION=20241208
-    set MSYS2_URL=https://github.com/msys2/msys2-installer/releases/download/2024-12-08/msys2-base-x86_64-!MSYS2_VERSION!.sfx.exe
-    set MSYS2_SFX=%DOWNLOADS%\msys2-base-x86_64-!MSYS2_VERSION!.sfx.exe
+    set "MSYS2_SFX=%DOWNLOADS%\%FILE_MSYS2%"
 
     if not exist "!MSYS2_SFX!" (
         echo Downloading MSYS2...
-        curl.exe -L -o "!MSYS2_SFX!" "!MSYS2_URL!"
+        curl.exe -fL -o "!MSYS2_SFX!" "%URL_MSYS2%"
         if errorlevel 1 (
             echo ERROR: Failed to download MSYS2
             exit /b 1

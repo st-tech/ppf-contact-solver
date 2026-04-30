@@ -3,7 +3,7 @@
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
 # License: Apache v2.0
 
-"""Check for violations of dynamic vertices against invisible colliders (walls and spheres)."""
+"""Check dynamic vertices for violations against invisible colliders (walls and spheres)."""
 
 import warnings
 
@@ -20,18 +20,19 @@ def _check_wall_violation_single(
     wall_pos: np.ndarray,
     wall_normal: np.ndarray,
 ) -> bool:
-    """Check if a single vertex violates wall constraint.
+    """Check whether a single vertex violates a wall constraint.
 
-    A vertex violates the wall if it's on the wrong side of the plane
-    (opposite to the normal direction).
+    A vertex violates the wall when it lies on the side opposite the
+    wall's outer normal (i.e. its signed distance to the plane is
+    negative).
 
     Args:
-        vertex: Vertex position (3,)
-        wall_pos: A point on the wall plane (3,)
-        wall_normal: Outer normal of the wall (3,)
+        vertex: Vertex position, shape (3,).
+        wall_pos: A point on the wall plane, shape (3,).
+        wall_normal: Unit outer normal of the wall, shape (3,).
 
     Returns:
-        True if vertex violates the wall constraint
+        True if the vertex violates the wall constraint.
     """
     # Signed distance from vertex to plane
     # Positive means vertex is on the normal side (correct side)
@@ -53,14 +54,17 @@ def _check_wall_violations_parallel(
     """Check all vertices against a single wall in parallel.
 
     Args:
-        vertices: All vertices (N, 3)
-        is_pinned: Boolean array indicating pinned vertices (N,)
-        wall_pos: A point on the wall plane (3,)
-        wall_normal: Outer normal of the wall (3,)
-        violations: Output array for violation flags (N,)
+        vertices: All vertices, shape (N, 3).
+        is_pinned: Boolean array marking pinned vertices, shape (N,).
+            Pinned vertices are skipped.
+        wall_pos: A point on the wall plane, shape (3,).
+        wall_normal: Unit outer normal of the wall, shape (3,).
+        violations: Output buffer, shape (N,). Entries corresponding to
+            violating vertices are set to True; other entries are left
+            unchanged.
 
     Returns:
-        Number of violations found
+        Total number of True entries in ``violations`` after the check.
     """
     n_verts = len(vertices)
 
@@ -71,9 +75,14 @@ def _check_wall_violations_parallel(
         ):
             violations[i] = True
 
-    # Parallel reduction for counting
+    # Sequential count: a second ``prange`` here would create a back-
+    # to-back parallel region within the same function call, which the
+    # workqueue threading layer (numba's only option on macOS arm64
+    # without TBB) flags as "concurrent access" and aborts the process.
+    # The counting step is O(n) trivial work, so the loss of
+    # parallelism is irrelevant at any realistic mesh size.
     count = 0
-    for i in prange(n_verts):
+    for i in range(n_verts):
         if violations[i]:
             count += 1
     return count
@@ -87,9 +96,24 @@ def _check_sphere_violation(
     is_inverted: bool,
     is_hemisphere: bool,
 ) -> bool:
-    """Check if a single vertex violates sphere constraint using squared distance.
+    """Check whether a single vertex violates a sphere constraint.
 
-    This version avoids sqrt for the check, only computing it when needed.
+    Uses squared distance to avoid a square root. For a hemisphere, the
+    effective center is lifted to the vertex's y-level whenever the
+    vertex is above the sphere center, so the top of the hemisphere
+    acts as an open cylinder.
+
+    Args:
+        vertex: Vertex position, shape (3,).
+        sphere_center: Sphere center, shape (3,).
+        sphere_radius_sq: Squared sphere radius.
+        is_inverted: If True, the collider is the interior of the
+            sphere (vertex must stay inside).
+        is_hemisphere: If True, only the bottom half of the sphere is
+            active (bowl shape).
+
+    Returns:
+        True if the vertex violates the sphere constraint.
     """
     # For hemisphere, if vertex is above center.y, project center to vertex's y-level
     if is_hemisphere and vertex[1] > sphere_center[1]:
@@ -129,16 +153,21 @@ def _check_sphere_violations_parallel(
     """Check all vertices against a single sphere in parallel.
 
     Args:
-        vertices: All vertices (N, 3)
-        is_pinned: Boolean array indicating pinned vertices (N,)
-        sphere_center: Center of sphere (3,)
-        sphere_radius: Radius of sphere
-        is_inverted: If True, collision is with inside of sphere
-        is_hemisphere: If True, top half is open (bowl shape)
-        violations: Output array for violation flags (N,)
+        vertices: All vertices, shape (N, 3).
+        is_pinned: Boolean array marking pinned vertices, shape (N,).
+            Pinned vertices are skipped.
+        sphere_center: Sphere center, shape (3,).
+        sphere_radius: Sphere radius.
+        is_inverted: If True, the collider is the interior of the
+            sphere (vertex must stay inside).
+        is_hemisphere: If True, only the bottom half of the sphere is
+            active (bowl shape).
+        violations: Output buffer, shape (N,). Entries corresponding to
+            violating vertices are set to True; other entries are left
+            unchanged.
 
     Returns:
-        Number of violations found
+        Total number of True entries in ``violations`` after the check.
     """
     n_verts = len(vertices)
     sphere_radius_sq = sphere_radius * sphere_radius
@@ -150,9 +179,11 @@ def _check_sphere_violations_parallel(
         ):
             violations[i] = True
 
-    # Parallel reduction for counting
+    # Sequential count (see _check_wall_violations_parallel for the
+    # rationale: a second ``prange`` here trips workqueue's
+    # concurrent-access detector on macOS arm64).
     count = 0
-    for i in prange(n_verts):
+    for i in range(n_verts):
         if violations[i]:
             count += 1
     return count
@@ -164,16 +195,24 @@ def check_wall_violations(
     pinned_vertices: Optional[set[int]] = None,
     verbose: bool = False,
 ) -> list[tuple[int, int, float]]:
-    """Check for wall constraint violations.
+    """Check vertices against a list of static wall colliders.
+
+    Walls with more than one keyframe entry (kinematic walls) are
+    skipped; those are handled elsewhere. For static walls, only the
+    initial keyframe position is used.
 
     Args:
-        vertices: Vertex positions (N, 3)
-        walls: List of Wall objects with position and normal
-        pinned_vertices: Set of pinned vertex indices to skip
-        verbose: If True, print violation details
+        vertices: Vertex positions, shape (N, 3).
+        walls: List of wall objects. Each wall must expose a
+            ``get_entry()`` method returning a sequence of keyframes
+            and a ``normal`` attribute.
+        pinned_vertices: Optional set of vertex indices to skip.
+        verbose: If True, print a per-wall violation count.
 
     Returns:
-        List of (vertex_index, wall_index, signed_distance) tuples for violations
+        List of ``(vertex_index, wall_index, signed_distance)`` tuples,
+        one entry per violating (vertex, wall) pair. ``signed_distance``
+        is negative for vertices on the wrong side of the wall.
     """
     if not walls:
         return []
@@ -221,9 +260,7 @@ def check_wall_violations(
                     all_violations.append((vi, wall_idx, float(signed_dist)))
 
             if verbose:
-                warnings.warn(
-                    f"Wall {wall_idx}: {count} vertex violations", stacklevel=1
-                )
+                print(f"  Wall {wall_idx}: {count} vertex violations")
 
     return all_violations
 
@@ -234,17 +271,27 @@ def check_sphere_violations(
     pinned_vertices: Optional[set[int]] = None,
     verbose: bool = False,
 ) -> list[tuple[int, int, float]]:
-    """Check for sphere constraint violations.
+    """Check vertices against a list of static sphere colliders.
+
+    Spheres with more than one keyframe entry (kinematic spheres) are
+    skipped; those are handled elsewhere. For static spheres, only the
+    initial keyframe state is used.
 
     Args:
-        vertices: Vertex positions (N, 3)
-        spheres: List of Sphere objects
-        pinned_vertices: Set of pinned vertex indices to skip
-        verbose: If True, print violation details
+        vertices: Vertex positions, shape (N, 3).
+        spheres: List of sphere objects. Each sphere must expose a
+            ``get_entry()`` method returning a sequence of
+            ``(position, radius, ...)`` keyframes, along with
+            ``is_inverted`` and ``is_hemisphere`` attributes.
+        pinned_vertices: Optional set of vertex indices to skip.
+        verbose: If True, print a per-sphere violation count.
 
     Returns:
-        List of (vertex_index, sphere_index, distance_to_surface) tuples for violations.
-        Positive distance means inside sphere, negative means outside.
+        List of ``(vertex_index, sphere_index, distance_to_surface)``
+        tuples, one entry per violating (vertex, sphere) pair.
+        ``distance_to_surface`` is computed as ``radius - distance`` to
+        the (possibly hemisphere-adjusted) center, so it is positive
+        when the vertex is inside the sphere and negative when outside.
     """
     if not spheres:
         return []
@@ -306,10 +353,7 @@ def check_sphere_violations(
                 if is_hemisphere:
                     mode.append("hemisphere")
                 mode_str = f" ({', '.join(mode)})" if mode else ""
-                warnings.warn(
-                    f"Sphere {sphere_idx}{mode_str}: {count} vertex violations",
-                    stacklevel=1,
-                )
+                print(f"  Sphere {sphere_idx}{mode_str}: {count} vertex violations")
 
     return all_violations
 
@@ -321,17 +365,20 @@ def check_invisible_collider_violations(
     pinned_vertices: Optional[set[int]] = None,
     verbose: bool = False,
 ) -> tuple[list[tuple[int, int, float]], list[tuple[int, int, float]]]:
-    """Check for all invisible collider violations.
+    """Check vertices against both wall and sphere invisible colliders.
 
     Args:
-        vertices: Vertex positions (N, 3)
-        walls: List of Wall objects
-        spheres: List of Sphere objects
-        pinned_vertices: Set of pinned vertex indices to skip
-        verbose: If True, print violation details
+        vertices: Vertex positions, shape (N, 3).
+        walls: List of wall objects (see :func:`check_wall_violations`).
+        spheres: List of sphere objects (see
+            :func:`check_sphere_violations`).
+        pinned_vertices: Optional set of vertex indices to skip.
+        verbose: If True, print per-collider violation counts.
 
     Returns:
-        Tuple of (wall_violations, sphere_violations)
+        A tuple ``(wall_violations, sphere_violations)`` as produced by
+        :func:`check_wall_violations` and
+        :func:`check_sphere_violations` respectively.
     """
     wall_violations = check_wall_violations(vertices, walls, pinned_vertices, verbose)
     sphere_violations = check_sphere_violations(vertices, spheres, pinned_vertices, verbose)

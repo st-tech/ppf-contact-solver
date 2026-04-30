@@ -1,0 +1,282 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 560" role="img" aria-label="Snap is a set-level operation. Two panels compare an edge-matching case where the right edge of patch A meets the left edge of patch B with every edge-vertex paired and stitched, against a misaligned case where only one corner of A lines up with one corner of B and so only that single stitch pair is recorded.">
+  <title>Snap is a set-level operation, not a single-vertex operation</title>
+  <desc>
+    Two side-by-side panels sharing a common title. The left panel
+    labeled "Edges aligned" shows two 4 by 4 grid patches drawn as
+    cloth-like mesh wireframes, with patch A in blue on the left
+    and patch B in green on the right, positioned so A's right
+    edge and B's left edge sit at the same four row heights. Four
+    short red dashed lines connect each of the four A-right-edge
+    vertices to the matching B-left-edge vertex. A badge reads 4
+    out of 4 edge pairs recorded. The left caption reads "Both
+    seam edges run through the same four row heights, so every
+    edge-vertex pairs with a counterpart and the seam stitches
+    cleanly." The right panel labeled "Edges misaligned" shows the
+    same two patches but with patch B shifted down so its top row
+    sits at the same height as A's bottom row only. The rest of
+    A's right edge is too far above any B-vertex. A single red
+    dashed line connects A's bottom-right corner to B's top-left
+    corner. A badge reads 1 out of 4 edge pairs recorded. The
+    right caption reads "Only that single corner falls within the
+    contact gap. The other three A-edge vertices find no
+    counterpart; the seam stays open even after snap plus merge."
+    A central vertical dashed divider separates the two panels. A
+    footer note warns that snap is a geometric alignment step, not
+    a topology repair; authors should make sure the seam
+    vertex layouts agree before calling snap.
+  </desc>
+
+  <style>
+    .title       { font: 700 20px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #1a1a1a; }
+    .subtitle    { font: italic 13px -apple-system, sans-serif; fill: #555; }
+
+    .col-title   { font: 700 16px -apple-system, sans-serif; fill: #1a1a1a; }
+    .col-sub     { font: italic 12px -apple-system, sans-serif; fill: #666; }
+
+    .panel-ok    { fill: #f5faf4; stroke: #9cc093; stroke-width: 1.3; }
+    .panel-warn  { fill: #fbf5ec; stroke: #d4b36a; stroke-width: 1.3; }
+
+    .divider     { stroke: #bbb; stroke-width: 1; stroke-dasharray: 4 4; }
+
+    .wire-a      { stroke: #2e6da4; stroke-width: 1; fill: none; opacity: 0.55; }
+    .wire-b      { stroke: #4a8f42; stroke-width: 1; fill: none; opacity: 0.55; }
+
+    .vert-a      { fill: #2e6da4; stroke: #1e4a75; stroke-width: 1; }
+    .vert-b      { fill: #4a8f42; stroke: #2e6b28; stroke-width: 1; }
+
+    .stitch      { stroke: #c93b3b; stroke-width: 2; stroke-dasharray: 5 3; fill: none; }
+
+    .legend-tx   { font: 600 11.5px -apple-system, sans-serif; fill: #1a1a1a; }
+    .legend-sub  { font: 11px -apple-system, sans-serif; fill: #555; }
+
+    .count-badge { font: 700 22px -apple-system, sans-serif; }
+    .count-ok    { fill: #2e6b28; }
+    .count-warn  { fill: #a05a28; }
+
+    .callout     { stroke: #a02828; stroke-width: 1.2; fill: none; }
+    .callout-tx  { font: 700 12px -apple-system, sans-serif; fill: #a02828; }
+
+    .caption     { font: 12.5px -apple-system, sans-serif; fill: #333; }
+    .caption-em  { font: 600 12.5px -apple-system, sans-serif; fill: #1a1a1a; }
+
+    .footer      { font: 11.5px -apple-system, sans-serif; fill: #555; font-style: italic; }
+
+    .patch-lbl   { font: 700 13px -apple-system, sans-serif; fill: #1a1a1a; }
+  </style>
+
+  <!-- Top title band -->
+  <text x="500" y="30" text-anchor="middle" class="title">Snap is a set operation, not a single-vertex operation</text>
+  <text x="500" y="52" text-anchor="middle" class="subtitle">Seam stitching pairs every A-edge vertex already within the contact gap of a B-edge vertex, and nothing else.</text>
+
+  <!-- ==============================================
+       Left panel: edges aligned (the happy path)
+       ============================================== -->
+  <rect x="20" y="72" width="470" height="430" class="panel-ok" rx="6" />
+  <text x="255" y="100" text-anchor="middle" class="col-title">Edges aligned</text>
+  <text x="255" y="120" text-anchor="middle" class="col-sub">seam vertices of A and B sit at the same row heights</text>
+
+  <!-- Patch A (blue) 4x4. Grid origin (100, 215); spacing 35.
+       Columns: 100, 135, 170, 205.  Rows: 215, 250, 285, 320. -->
+  <g class="wire-a">
+    <!-- horizontal -->
+    <line x1="100" y1="215" x2="205" y2="215" />
+    <line x1="100" y1="250" x2="205" y2="250" />
+    <line x1="100" y1="285" x2="205" y2="285" />
+    <line x1="100" y1="320" x2="205" y2="320" />
+    <!-- vertical -->
+    <line x1="100" y1="215" x2="100" y2="320" />
+    <line x1="135" y1="215" x2="135" y2="320" />
+    <line x1="170" y1="215" x2="170" y2="320" />
+    <line x1="205" y1="215" x2="205" y2="320" />
+  </g>
+  <g>
+    <!-- A vertices -->
+    <circle cx="100" cy="215" r="4.5" class="vert-a" />
+    <circle cx="135" cy="215" r="4.5" class="vert-a" />
+    <circle cx="170" cy="215" r="4.5" class="vert-a" />
+    <circle cx="205" cy="215" r="4.5" class="vert-a" />
+    <circle cx="100" cy="250" r="4.5" class="vert-a" />
+    <circle cx="135" cy="250" r="4.5" class="vert-a" />
+    <circle cx="170" cy="250" r="4.5" class="vert-a" />
+    <circle cx="205" cy="250" r="4.5" class="vert-a" />
+    <circle cx="100" cy="285" r="4.5" class="vert-a" />
+    <circle cx="135" cy="285" r="4.5" class="vert-a" />
+    <circle cx="170" cy="285" r="4.5" class="vert-a" />
+    <circle cx="205" cy="285" r="4.5" class="vert-a" />
+    <circle cx="100" cy="320" r="4.5" class="vert-a" />
+    <circle cx="135" cy="320" r="4.5" class="vert-a" />
+    <circle cx="170" cy="320" r="4.5" class="vert-a" />
+    <circle cx="205" cy="320" r="4.5" class="vert-a" />
+  </g>
+  <text x="152" y="350" text-anchor="middle" class="patch-lbl" style="fill:#1e4a75">patch A</text>
+
+  <!-- Patch B (green). Grid origin (260, 215); spacing 35.
+       Columns: 260, 295, 330, 365.  Rows: 215, 250, 285, 320. -->
+  <g class="wire-b">
+    <line x1="260" y1="215" x2="365" y2="215" />
+    <line x1="260" y1="250" x2="365" y2="250" />
+    <line x1="260" y1="285" x2="365" y2="285" />
+    <line x1="260" y1="320" x2="365" y2="320" />
+    <line x1="260" y1="215" x2="260" y2="320" />
+    <line x1="295" y1="215" x2="295" y2="320" />
+    <line x1="330" y1="215" x2="330" y2="320" />
+    <line x1="365" y1="215" x2="365" y2="320" />
+  </g>
+  <g>
+    <circle cx="260" cy="215" r="4.5" class="vert-b" />
+    <circle cx="295" cy="215" r="4.5" class="vert-b" />
+    <circle cx="330" cy="215" r="4.5" class="vert-b" />
+    <circle cx="365" cy="215" r="4.5" class="vert-b" />
+    <circle cx="260" cy="250" r="4.5" class="vert-b" />
+    <circle cx="295" cy="250" r="4.5" class="vert-b" />
+    <circle cx="330" cy="250" r="4.5" class="vert-b" />
+    <circle cx="365" cy="250" r="4.5" class="vert-b" />
+    <circle cx="260" cy="285" r="4.5" class="vert-b" />
+    <circle cx="295" cy="285" r="4.5" class="vert-b" />
+    <circle cx="330" cy="285" r="4.5" class="vert-b" />
+    <circle cx="365" cy="285" r="4.5" class="vert-b" />
+    <circle cx="260" cy="320" r="4.5" class="vert-b" />
+    <circle cx="295" cy="320" r="4.5" class="vert-b" />
+    <circle cx="330" cy="320" r="4.5" class="vert-b" />
+    <circle cx="365" cy="320" r="4.5" class="vert-b" />
+  </g>
+  <text x="312" y="350" text-anchor="middle" class="patch-lbl" style="fill:#2e6b28">patch B</text>
+
+  <!-- Stitch lines along the seam: A's right column to B's left column. -->
+  <g>
+    <line x1="205" y1="215" x2="260" y2="215" class="stitch" />
+    <line x1="205" y1="250" x2="260" y2="250" class="stitch" />
+    <line x1="205" y1="285" x2="260" y2="285" class="stitch" />
+    <line x1="205" y1="320" x2="260" y2="320" class="stitch" />
+  </g>
+
+  <!-- "Seam" label -->
+  <text x="232" y="200" text-anchor="middle" class="callout-tx" style="fill:#a02828">seam</text>
+
+  <!-- Pair count badge (left) -->
+  <text x="410" y="280" text-anchor="end" class="count-badge count-ok">4 / 4</text>
+  <text x="410" y="299" text-anchor="end" class="legend-sub">edge pairs</text>
+  <text x="410" y="314" text-anchor="end" class="legend-sub">recorded</text>
+
+  <!-- Legend -->
+  <circle cx="40" cy="400" r="4.5" class="vert-a" />
+  <text x="54" y="404" class="legend-tx">A (one cloth patch)</text>
+  <circle cx="40" cy="420" r="4.5" class="vert-b" />
+  <text x="54" y="424" class="legend-tx">B (the other patch)</text>
+  <line x1="30" y1="440" x2="52" y2="440" class="stitch" />
+  <text x="60" y="444" class="legend-tx">snap stitch pair</text>
+
+  <!-- Left caption -->
+  <text x="40" y="472" class="caption-em">A's right edge and B's left edge sit at the same row heights.</text>
+  <text x="40" y="489" class="caption">Snap records all 4 edge pairs in one pass; merge keeps the</text>
+  <text x="40" y="504" class="caption">seam joined during the solve.</text>
+
+  <!-- Divider -->
+  <line x1="500" y1="85" x2="500" y2="500" class="divider" />
+
+  <!-- ==============================================
+       Right panel: edges misaligned
+       ============================================== -->
+  <rect x="510" y="72" width="470" height="430" class="panel-warn" rx="6" />
+  <text x="745" y="100" text-anchor="middle" class="col-title">Edges misaligned</text>
+  <text x="745" y="120" text-anchor="middle" class="col-sub">seam vertices of A and B don't sit at matching heights</text>
+
+  <!-- Patch A (blue). Grid origin (590, 165); spacing 32.
+       Columns: 590, 622, 654, 686. Rows: 165, 197, 229, 261. -->
+  <g class="wire-a">
+    <line x1="590" y1="165" x2="686" y2="165" />
+    <line x1="590" y1="197" x2="686" y2="197" />
+    <line x1="590" y1="229" x2="686" y2="229" />
+    <line x1="590" y1="261" x2="686" y2="261" />
+    <line x1="590" y1="165" x2="590" y2="261" />
+    <line x1="622" y1="165" x2="622" y2="261" />
+    <line x1="654" y1="165" x2="654" y2="261" />
+    <line x1="686" y1="165" x2="686" y2="261" />
+  </g>
+  <g>
+    <circle cx="590" cy="165" r="4.5" class="vert-a" />
+    <circle cx="622" cy="165" r="4.5" class="vert-a" />
+    <circle cx="654" cy="165" r="4.5" class="vert-a" />
+    <circle cx="686" cy="165" r="4.5" class="vert-a" />
+    <circle cx="590" cy="197" r="4.5" class="vert-a" />
+    <circle cx="622" cy="197" r="4.5" class="vert-a" />
+    <circle cx="654" cy="197" r="4.5" class="vert-a" />
+    <circle cx="686" cy="197" r="4.5" class="vert-a" />
+    <circle cx="590" cy="229" r="4.5" class="vert-a" />
+    <circle cx="622" cy="229" r="4.5" class="vert-a" />
+    <circle cx="654" cy="229" r="4.5" class="vert-a" />
+    <circle cx="686" cy="229" r="4.5" class="vert-a" />
+    <circle cx="590" cy="261" r="4.5" class="vert-a" />
+    <circle cx="622" cy="261" r="4.5" class="vert-a" />
+    <circle cx="654" cy="261" r="4.5" class="vert-a" />
+    <circle cx="686" cy="261" r="4.5" class="vert-a" />
+  </g>
+  <text x="638" y="153" text-anchor="middle" class="patch-lbl" style="fill:#1e4a75">patch A</text>
+
+  <!-- Patch B (green). Offset so only B(0,0) lands at the height of A(3,3).
+       Grid origin (740, 261); spacing 32.  Columns: 740, 772, 804, 836. Rows: 261, 293, 325, 357. -->
+  <g class="wire-b">
+    <line x1="740" y1="261" x2="836" y2="261" />
+    <line x1="740" y1="293" x2="836" y2="293" />
+    <line x1="740" y1="325" x2="836" y2="325" />
+    <line x1="740" y1="357" x2="836" y2="357" />
+    <line x1="740" y1="261" x2="740" y2="357" />
+    <line x1="772" y1="261" x2="772" y2="357" />
+    <line x1="804" y1="261" x2="804" y2="357" />
+    <line x1="836" y1="261" x2="836" y2="357" />
+  </g>
+  <g>
+    <circle cx="740" cy="261" r="4.5" class="vert-b" />
+    <circle cx="772" cy="261" r="4.5" class="vert-b" />
+    <circle cx="804" cy="261" r="4.5" class="vert-b" />
+    <circle cx="836" cy="261" r="4.5" class="vert-b" />
+    <circle cx="740" cy="293" r="4.5" class="vert-b" />
+    <circle cx="772" cy="293" r="4.5" class="vert-b" />
+    <circle cx="804" cy="293" r="4.5" class="vert-b" />
+    <circle cx="836" cy="293" r="4.5" class="vert-b" />
+    <circle cx="740" cy="325" r="4.5" class="vert-b" />
+    <circle cx="772" cy="325" r="4.5" class="vert-b" />
+    <circle cx="804" cy="325" r="4.5" class="vert-b" />
+    <circle cx="836" cy="325" r="4.5" class="vert-b" />
+    <circle cx="740" cy="357" r="4.5" class="vert-b" />
+    <circle cx="772" cy="357" r="4.5" class="vert-b" />
+    <circle cx="804" cy="357" r="4.5" class="vert-b" />
+    <circle cx="836" cy="357" r="4.5" class="vert-b" />
+  </g>
+  <text x="788" y="378" text-anchor="middle" class="patch-lbl" style="fill:#2e6b28">patch B</text>
+
+  <!-- The single stitch pair: A(3,3) (686, 261) to B(0,0) (740, 261). -->
+  <line x1="686" y1="261" x2="740" y2="261" class="stitch" />
+
+  <!-- Callout for the single pair, placed safely below the seam. -->
+  <path d="M 680 320 Q 693 290 708 265" class="callout" />
+  <text x="635" y="335" class="callout-tx">only pair recorded</text>
+
+  <!-- Highlight the three unstitched A-edge vertices (top three in A's right column) -->
+  <g>
+    <!-- A's other three right-edge verts at (686, 165), (686, 197), (686, 229) -->
+    <path d="M 698 158 L 710 158 L 710 236 L 698 236" stroke="#a05a28" stroke-width="1.2" fill="none" />
+    <text x="718" y="185" class="callout-tx" style="fill:#a05a28; font-size:11px">3 A-edge</text>
+    <text x="718" y="199" class="callout-tx" style="fill:#a05a28; font-size:11px">vertices</text>
+    <text x="718" y="213" class="callout-tx" style="fill:#a05a28; font-size:11px">with no</text>
+    <text x="718" y="227" class="callout-tx" style="fill:#a05a28; font-size:11px">B match</text>
+  </g>
+
+  <!-- Pair count badge (right) -->
+  <text x="945" y="430" text-anchor="end" class="count-badge count-warn">1 / 4</text>
+  <text x="945" y="449" text-anchor="end" class="legend-sub">edge pairs</text>
+  <text x="945" y="464" text-anchor="end" class="legend-sub">recorded</text>
+
+  <!-- Legend (right) -->
+  <circle cx="530" cy="440" r="4.5" class="vert-a" />
+  <text x="544" y="444" class="legend-tx">A</text>
+  <circle cx="530" cy="460" r="4.5" class="vert-b" />
+  <text x="544" y="464" class="legend-tx">B</text>
+
+  <!-- Right caption -->
+  <text x="530" y="490" class="caption-em">Only A's bottom-right vertex shares a row with B.</text>
+  <text x="530" y="505" class="caption">One stitch lands; the other three A-edge vertices stay unattached.</text>
+
+  <!-- Footer note -->
+  <text x="500" y="540" text-anchor="middle" class="footer">Snap is a geometric alignment step, not a topology repair. Make sure the seam vertex layouts agree before calling snap.</text>
+</svg>

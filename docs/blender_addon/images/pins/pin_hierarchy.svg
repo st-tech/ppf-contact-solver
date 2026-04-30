@@ -1,0 +1,227 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 540" role="img" aria-label="Pin structure on the left (Group contains Pins, each Pin stacks Operations). Center modes on the right (Centroid, Fixed, Max Towards, and Vertex pivots for Spin and Scale operations), each shown as a small schematic with the vertex cluster and the resolved pivot marker">
+  <title>Pin structure and Spin/Scale center modes</title>
+  <desc>
+    Two-panel reference. Left panel shows a group tree: a root node
+    labeled Cloth (Shell) containing three pins: ShoulderPins with
+    a Spin operation and an Embedded Move operation, CollarPins with
+    a Move By operation, and WaistPins with a Torque operation that
+    is marked as exclusive with Move By, Spin, and Scale but may
+    coexist with Embedded Move. A legend below lists the five
+    available operation types. Right panel shows the four Center
+    dropdown options for Spin and Scale. Each option is drawn as a
+    small schematic of seven vertex dots (a pin's vertex set) with a
+    red pivot marker placed according to the center mode. Centroid
+    places the pivot at the mean of the vertex positions. Fixed
+    places the pivot at a user-entered world-space coordinate shown
+    offset to the side of the cluster. Max Towards places the pivot
+    at the centroid of the vertices farthest along a user-given
+    direction arrow. Vertex places the pivot on one specific vertex
+    of the mesh which then deforms with the mesh.
+  </desc>
+
+  <defs>
+    <marker id="ph-arrow" viewBox="0 0 10 10" refX="9" refY="5"
+            markerWidth="9" markerHeight="9" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#2e6da4" />
+    </marker>
+  </defs>
+
+  <style>
+    .title       { font: 700 17px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #1a1a1a; }
+    .sub         { font: 13px -apple-system, sans-serif; fill: #555; }
+
+    .col-title   { font: 700 15px -apple-system, sans-serif; fill: #1a1a1a; }
+    .col-sub     { font: italic 12px -apple-system, sans-serif; fill: #555; }
+
+    .tree-line   { stroke: #889; stroke-width: 1.2; fill: none; }
+
+    .grp-box     { fill: #fbf6e4; stroke: #c9a63a; stroke-width: 1.3; }
+    .pin-box     { fill: #f8f0f4; stroke: #b080a0; stroke-width: 1.2; }
+    .op-box      { fill: #eef6eb; stroke: #86b36a; stroke-width: 1.2; }
+    .tq-box      { fill: #ffe8e0; stroke: #d07050; stroke-width: 1.2; }
+
+    .lbl         { font: 700 12.5px -apple-system, sans-serif; fill: #1a1a1a; }
+    .lbl-mono    { font: 600 11.5px "Menlo", "Consolas", monospace; fill: #1a1a1a; }
+    .lbl-sub     { font: 10.5px -apple-system, sans-serif; fill: #555; font-style: italic; }
+
+    .tag         { font: 700 10px -apple-system, sans-serif; fill: #7a2a00; }
+
+    .schem-box   { fill: #fafbfd; stroke: #bbb; stroke-width: 1; }
+    .schem-ttl   { font: 700 13.5px -apple-system, sans-serif; fill: #1a1a1a; }
+    .schem-cap   { font: 11.5px -apple-system, sans-serif; fill: #444; }
+
+    .vert        { fill: #4a4a4a; }
+    .vert-hi     { fill: #c73838; stroke: #7a1a1a; stroke-width: 1.3; }
+    .pivot       { stroke: #c73838; stroke-width: 2.2; fill: none; }
+    .pivot-lbl   { font: 700 10.5px -apple-system, sans-serif; fill: #a02a2a; }
+    .dir-arr     { stroke: #2e6da4; stroke-width: 1.8; fill: none; }
+    .dir-lbl     { font: 700 10.5px -apple-system, sans-serif; fill: #1f4a75; }
+
+    .legend-box  { fill: #fafafa; stroke: #ddd; stroke-width: 1; }
+    .legend-ttl  { font: 700 11.5px -apple-system, sans-serif; fill: #1a1a1a; }
+    .note        { font: 11px -apple-system, sans-serif; fill: #555; }
+  </style>
+
+  <!-- Title -->
+  <text x="20" y="30" class="title">Pin structure, and where Spin / Scale pivot</text>
+  <text x="20" y="50" class="sub">Left: how pins and operations nest inside a group. Right: where the Center dropdown places the pivot for Spin and Scale.</text>
+
+  <!-- ==================== LEFT: Tree ==================== -->
+  <text x="20" y="88" class="col-title">Group → Pins → Operations</text>
+  <text x="20" y="106" class="col-sub">Same nesting as the UI: pins live in a group, operations stack on a pin.</text>
+
+  <!-- Group root -->
+  <rect x="20" y="120" width="180" height="36" rx="6" class="grp-box" />
+  <text x="32" y="139" class="lbl">Group:  Cloth</text>
+  <text x="32" y="152" class="lbl-mono">type = SHELL</text>
+
+  <!-- Tree lines from group -->
+  <path d="M 40 156 L 40 200" class="tree-line" />
+  <path d="M 40 200 L 70 200" class="tree-line" />
+  <path d="M 40 156 L 40 310" class="tree-line" />
+  <path d="M 40 310 L 70 310" class="tree-line" />
+  <path d="M 40 156 L 40 400" class="tree-line" />
+  <path d="M 40 400 L 70 400" class="tree-line" />
+
+  <!-- Pin 1: ShoulderPins -->
+  <rect x="70" y="182" width="180" height="36" rx="6" class="pin-box" />
+  <text x="82" y="201" class="lbl">Pin:  ShoulderPins</text>
+  <text x="82" y="214" class="lbl-sub">Duration=off · Pull=off</text>
+
+  <!-- Ops under ShoulderPins -->
+  <path d="M 90 218 L 90 250" class="tree-line" />
+  <path d="M 90 250 L 120 250" class="tree-line" />
+  <path d="M 90 218 L 90 280" class="tree-line" />
+  <path d="M 90 280 L 120 280" class="tree-line" />
+
+  <rect x="120" y="236" width="180" height="28" rx="6" class="op-box" />
+  <text x="132" y="254" class="lbl-mono">Spin  (ω = 360°/s)</text>
+
+  <rect x="120" y="266" width="180" height="28" rx="6" class="op-box" />
+  <text x="132" y="284" class="lbl-mono">Embedded Move</text>
+
+  <!-- Pin 2: CollarPins -->
+  <rect x="70" y="292" width="180" height="36" rx="6" class="pin-box" />
+  <text x="82" y="311" class="lbl">Pin:  CollarPins</text>
+  <text x="82" y="324" class="lbl-sub">Duration=on @ 90</text>
+
+  <!-- Ops under CollarPins -->
+  <path d="M 90 328 L 90 360" class="tree-line" />
+  <path d="M 90 360 L 120 360" class="tree-line" />
+
+  <rect x="120" y="346" width="180" height="28" rx="6" class="op-box" />
+  <text x="132" y="364" class="lbl-mono">Move By  (Δ = 0, 0, -0.3 m)</text>
+
+  <!-- Pin 3: WaistPins (Torque) -->
+  <rect x="70" y="382" width="180" height="36" rx="6" class="pin-box" />
+  <text x="82" y="401" class="lbl">Pin:  WaistPins</text>
+  <text x="82" y="414" class="lbl-sub">Pull=on (soft pull)</text>
+
+  <!-- Op under WaistPins -->
+  <path d="M 90 418 L 90 450" class="tree-line" />
+  <path d="M 90 450 L 120 450" class="tree-line" />
+
+  <rect x="120" y="436" width="180" height="28" rx="6" class="tq-box" />
+  <text x="132" y="454" class="lbl-mono">Torque  (axis = PC3)</text>
+  <text x="290" y="452" text-anchor="end" class="tag" opacity="0">exclusive</text>
+
+  <!-- Exclusivity note -->
+  <rect x="20" y="478" width="440" height="40" rx="6" class="legend-box" />
+  <text x="32" y="493" class="legend-ttl">Operation types  ·  Torque is exclusive with Move By / Spin / Scale</text>
+  <text x="32" y="510" class="note">Move By  ·  Spin  ·  Scale  ·  Torque  ·  Embedded Move (auto-added on first Make Pin Keyframe)</text>
+
+  <!-- ==================== RIGHT: Center modes ==================== -->
+  <text x="510" y="88" class="col-title">Center modes for Spin and Scale</text>
+  <text x="510" y="106" class="col-sub">The Center dropdown (and its companion field) chooses where the pivot lands.</text>
+
+  <!-- 2x2 grid. Panel size: 235 wide × 190 tall. Positions: 510/755, 120/320 -->
+
+  <!-- Panel A: Centroid -->
+  <rect x="510" y="120" width="230" height="190" rx="8" class="schem-box" />
+  <text x="520" y="141" class="schem-ttl">Centroid</text>
+  <text x="520" y="156" class="schem-cap">(no companion field)</text>
+
+  <!-- 7 vertex dots clustered around (625, 220) -->
+  <circle cx="600" cy="210" r="3" class="vert" />
+  <circle cx="620" cy="200" r="3" class="vert" />
+  <circle cx="640" cy="205" r="3" class="vert" />
+  <circle cx="655" cy="220" r="3" class="vert" />
+  <circle cx="615" cy="230" r="3" class="vert" />
+  <circle cx="635" cy="240" r="3" class="vert" />
+  <circle cx="605" cy="245" r="3" class="vert" />
+  <!-- Pivot X at mean (~625, 222) -->
+  <line x1="617" y1="214" x2="633" y2="230" class="pivot" />
+  <line x1="617" y1="230" x2="633" y2="214" class="pivot" />
+  <text x="650" y="225" class="pivot-lbl">pivot</text>
+
+  <text x="520" y="288" class="schem-cap">Pivot = mean of pin vertex positions.</text>
+  <text x="520" y="302" class="schem-cap">Moves with the cluster.</text>
+
+  <!-- Panel B: Fixed -->
+  <rect x="755" y="120" width="230" height="190" rx="8" class="schem-box" />
+  <text x="765" y="141" class="schem-ttl">Fixed</text>
+  <text x="765" y="156" class="schem-cap">XYZ coordinate field + Pick from Selected</text>
+
+  <!-- Cluster -->
+  <circle cx="825" cy="210" r="3" class="vert" />
+  <circle cx="845" cy="200" r="3" class="vert" />
+  <circle cx="865" cy="205" r="3" class="vert" />
+  <circle cx="880" cy="220" r="3" class="vert" />
+  <circle cx="840" cy="230" r="3" class="vert" />
+  <circle cx="860" cy="240" r="3" class="vert" />
+  <circle cx="830" cy="245" r="3" class="vert" />
+  <!-- Pivot offset from cluster -->
+  <line x1="945" y1="190" x2="961" y2="206" class="pivot" />
+  <line x1="945" y1="206" x2="961" y2="190" class="pivot" />
+  <text x="925" y="186" text-anchor="end" class="pivot-lbl">pivot (x, y, z)</text>
+
+  <text x="765" y="288" class="schem-cap">Pivot = a fixed world-space coordinate.</text>
+  <text x="765" y="302" class="schem-cap">Does not move with the cluster.</text>
+
+  <!-- Panel C: Max Towards -->
+  <rect x="510" y="320" width="230" height="190" rx="8" class="schem-box" />
+  <text x="520" y="341" class="schem-ttl">Max Towards</text>
+  <text x="520" y="356" class="schem-cap">unit direction vector</text>
+
+  <!-- Cluster -->
+  <circle cx="580" cy="420" r="3" class="vert" />
+  <circle cx="605" cy="415" r="3" class="vert" />
+  <circle cx="635" cy="410" r="3" class="vert" />
+  <circle cx="665" cy="413" r="3" class="vert" />
+  <circle cx="590" cy="440" r="3" class="vert" />
+  <circle cx="620" cy="440" r="3" class="vert" />
+  <circle cx="645" cy="438" r="3" class="vert" />
+
+  <!-- Direction arrow showing "towards" -->
+  <line x1="540" y1="450" x2="700" y2="400" class="dir-arr" marker-end="url(#ph-arrow)" />
+  <text x="540" y="465" class="dir-lbl">direction</text>
+
+  <!-- Pivot at centroid of "furthest" verts (upper-right of cluster) -->
+  <line x1="657" y1="405" x2="673" y2="421" class="pivot" />
+  <line x1="657" y1="421" x2="673" y2="405" class="pivot" />
+  <text x="685" y="418" class="pivot-lbl">pivot</text>
+
+  <text x="520" y="488" class="schem-cap">Pivot = centroid of vertices furthest</text>
+  <text x="520" y="502" class="schem-cap">in the given direction.</text>
+
+  <!-- Panel D: Vertex -->
+  <rect x="755" y="320" width="230" height="190" rx="8" class="schem-box" />
+  <text x="765" y="341" class="schem-ttl">Vertex</text>
+  <text x="765" y="356" class="schem-cap">vertex index (Edit-mode picker)</text>
+
+  <!-- Cluster with one vert highlighted -->
+  <circle cx="830" cy="420" r="3" class="vert" />
+  <circle cx="855" cy="412" r="3" class="vert" />
+  <circle cx="880" cy="405" r="3" class="vert" />
+  <circle cx="905" cy="415" r="3" class="vert" />
+  <circle cx="845" cy="440" r="3" class="vert" />
+  <circle cx="870" cy="445" r="3" class="vert" />
+  <circle cx="895" cy="438" r="3" class="vert" />
+  <!-- Highlighted vertex (pivot) -->
+  <circle cx="870" cy="445" r="5.5" class="vert-hi" />
+  <circle cx="870" cy="445" r="10" class="pivot" />
+  <text x="885" y="462" class="pivot-lbl">pivot vertex</text>
+
+  <text x="765" y="488" class="schem-cap">Pivot = one specific mesh vertex.</text>
+  <text x="765" y="502" class="schem-cap">Deforms along with the mesh.</text>
+</svg>

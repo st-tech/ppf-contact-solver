@@ -11,20 +11,52 @@ import numpy as np
 
 
 class Extra:
-    """Extra class. Use this to perform extra operations."""
+    """Collection of auxiliary helpers that do not belong to any manager.
+
+    Example:
+        Access the helpers via :attr:`App.extra` to sparse-clone an
+        external dataset and load one of its stitch meshes::
+
+            import os
+            from frontend import App, get_cache_dir
+
+            app = App.create("fitting")
+            dest = os.path.join(get_cache_dir(), "Codim-IPC")
+            app.extra.sparse_clone(
+                "https://github.com/ipc-sim/Codim-IPC",
+                dest,
+                ["Projects/FEMShell/input/dress_knife"],
+            )
+            stage = os.path.join(dest, "Projects/FEMShell/input/dress_knife/stage.obj")
+            V, F, S = app.extra.load_CIPC_stitch_mesh(stage)
+    """
 
     def load_CIPC_stitch_mesh(
         self, path: str
     ) -> tuple[np.ndarray, np.ndarray, tuple[np.ndarray, np.ndarray]]:
-        """Load a stitch mesh data in the CIPC paper repository.
+        """Load a stitch mesh in the format used by the CIPC paper repository.
 
         Args:
-            path (str): The path to the stitch mesh data.
+            path (str): Path to the stitch mesh file.
 
         Returns:
-            tuple[np.ndarray, np.ndarray, tuple[np.ndarray, np.ndarray]]: A tuple
-            containing the vertices (#x3), faces (#x3), and stitch data (index #x3 and weight #x2).
-            The weight encodes the liner interpolation between the last two vertices.
+            tuple[np.ndarray, np.ndarray, tuple[np.ndarray, np.ndarray]]: A
+            tuple ``(vertices, faces, (stitch_index, stitch_weight))`` where
+            vertices have shape ``(#, 3)``, faces have shape ``(#, 3)`` with
+            zero-based indices, and each stitch entry has shape ``(#, 4)``.
+            The weight row ``[1.0, 1 - w, w, 0.0]`` encodes linear
+            interpolation between the second and third stitch vertices.
+
+        Example:
+            Load a CIPC-format stitch mesh and register the pieces as
+            triangle and stitch assets::
+
+                from frontend import App
+
+                app = App.create("fitting")
+                V, F, S = app.extra.load_CIPC_stitch_mesh("dress_stage.obj")
+                app.asset.add.tri("dress", V, F)
+                app.asset.add.stitch("glue", S)
         """
         vertices = []
         faces = []
@@ -45,8 +77,8 @@ class Extra:
                 elif parts[0] == "stitch" and len(parts) == 5:
                     idx0, idx1, idx2 = int(parts[1]), int(parts[2]), int(parts[3])
                     w = float(parts[4])
-                    stitch_ind.append([idx0, idx1, idx2])
-                    stitch_w.append([1 - w, w])
+                    stitch_ind.append([idx0, idx1, idx2, idx2])
+                    stitch_w.append([1.0, 1 - w, w, 0.0])
         return (
             np.array(vertices),
             np.array(faces) - 1,
@@ -56,16 +88,35 @@ class Extra:
     def sparse_clone(
         self, url: str, dest: str, paths: list[str], delete_exist: bool = False
     ):
-        """Fetch a git repository with sparse-checkout
+        """Fetch a git repository using sparse-checkout.
+
+        Clones ``url`` into ``dest`` if needed, then adds each entry in
+        ``paths`` to the sparse-checkout set and checks it out. Already
+        present paths are left untouched.
 
         Args:
-            url (str): The URL to the git repository.
-            dest (str): The destination directory to clone the repository.
-            paths (list[str]): The list of paths to fetch.
-            delete_exist (bool): If True, delete the existing repository.
+            url (str): URL of the git repository.
+            dest (str): Destination directory for the clone.
+            paths (list[str]): Repository-relative paths to fetch.
+            delete_exist (bool): If True, delete ``dest`` before cloning.
 
         Raises:
-            FileNotFoundError: If git is not installed on the system.
+            FileNotFoundError: If ``git`` cannot be found on ``PATH``.
+
+        Example:
+            Fetch only the FEMShell input subdirectories from the
+            upstream CIPC repository into the ppf-cts cache::
+
+                import os
+                from frontend import App, get_cache_dir
+
+                app = App.create("fitting")
+                dest = os.path.join(get_cache_dir(), "Codim-IPC")
+                app.extra.sparse_clone(
+                    "https://github.com/ipc-sim/Codim-IPC",
+                    dest,
+                    ["Projects/FEMShell/input/dress_knife"],
+                )
         """
         # Check if git is available
         if shutil.which("git") is None:

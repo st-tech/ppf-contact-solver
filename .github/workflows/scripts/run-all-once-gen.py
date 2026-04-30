@@ -102,10 +102,10 @@ jobs:
           echo "Examples: {examples_list}"
 
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Configure AWS credentials via OIDC
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{{{ secrets.AWS_ROLE_ARN }}}}
           aws-region: ${{{{ env.AWS_REGION }}}}
@@ -462,7 +462,7 @@ jobs:
 
       - name: Upload artifact
         if: success() || failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ci-batch-{idx}
           path: ci
@@ -492,7 +492,7 @@ jobs:
       - name: Re-authenticate for cleanup
         if: always()
         continue-on-error: true
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{{{ secrets.AWS_ROLE_ARN }}}}
           aws-region: ${{{{ env.AWS_REGION }}}}
