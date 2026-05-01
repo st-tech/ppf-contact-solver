@@ -288,6 +288,12 @@ jobs:
             "powershell -Command \"if (Test-Path 'C:\\ppf-contact-solver') { Remove-Item -Recurse -Force 'C:\\ppf-contact-solver' }; New-Item -ItemType Directory -Path 'C:\\ppf-contact-solver' -Force; Expand-Archive -Path 'C:\\source.zip' -DestinationPath 'C:\\ppf-contact-solver' -Force; Remove-Item 'C:\\source.zip'\""
           kill $TUNNEL_PID 2>/dev/null || true
 
+      - name: Re-authenticate AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
       - name: Run warmup.bat
         run: |
           echo "Running warmup.bat..."
@@ -344,6 +350,12 @@ jobs:
             "cmd /c 'cd C:\\ppf-contact-solver\\build-win-native\\dist && headless.bat /nopause'"
           kill $TUNNEL_PID 2>/dev/null || true
 
+      - name: Re-authenticate AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
       - name: Run fast-check-all.bat on bundle
         run: |
           echo "Running fast-check-all.bat on bundle..."
@@ -392,6 +404,12 @@ jobs:
             "powershell -Command \"Remove-Item -Recurse -Force 'C:\\ppf-contact-solver\\build-win-native\\dist\\local' -ErrorAction SilentlyContinue; Remove-Item -Recurse -Force 'C:\\ppf-contact-solver\\build-win-native\\dist\\cache' -ErrorAction SilentlyContinue; Remove-Item -Recurse -Force 'C:\\ppf-contact-solver\\build-win-native\\dist\\export' -ErrorAction SilentlyContinue; Get-ChildItem -Path 'C:\\ppf-contact-solver\\build-win-native\\dist' -Recurse -Directory -Filter '__pycache__' | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue; Get-ChildItem -Path 'C:\\ppf-contact-solver\\build-win-native\\dist' -Recurse -Include '*.pyc','*.pyo' | Remove-Item -Force -ErrorAction SilentlyContinue\""
           kill $TUNNEL_PID 2>/dev/null || true
 
+      - name: Re-authenticate AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
       - name: Create release archive
         run: |
           echo "Creating release archive..."
@@ -406,6 +424,12 @@ jobs:
             -o ServerAliveInterval=60 -o ServerAliveCountMax=10 -i /tmp/ec2key Administrator@localhost \
             "powershell -Command \"Compress-Archive -Path 'C:\\ppf-contact-solver\\build-win-native\\dist\\*' -DestinationPath 'C:\\ppf-contact-solver-${VERSION}-win64.zip' -Force\""
           kill $TUNNEL_PID 2>/dev/null || true
+
+      - name: Re-authenticate AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
 
       - name: Download release archive
         run: |
@@ -622,6 +646,12 @@ jobs:
           kill $TUNNEL_PID 2>/dev/null || true
           echo "Bundle verification PASSED - no external DLL dependencies detected"
 
+      - name: Re-authenticate AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
       - name: Run fast-check-all.bat on clean environment
         run: |
           echo "Running fast-check-all.bat on clean environment..."
@@ -636,6 +666,13 @@ jobs:
             "cmd /c 'cd C:\\bundle && fast-check-all.bat /nopause'"
           kill $TUNNEL_PID 2>/dev/null || true
           echo "All example notebooks PASSED on clean environment"
+
+      - name: Re-authenticate AWS credentials
+        if: always()
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
 
       - name: Download verification test log
         if: always()
