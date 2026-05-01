@@ -169,7 +169,19 @@ def _get_runtime_usage():
 # Git / path helpers
 # ---------------------------------------------------------------------------
 
+_GIT_BRANCH_CACHE: str | None = None
+
+
 def get_git_branch():
+    # Cached for the server's lifetime: the branch can't change under
+    # us, and on Windows concurrent ``subprocess.check_output(["git",
+    # ...])`` calls from multiple TCMD handler threads deadlock on
+    # ``communicate()`` (handle-inheritance race), leaving the request
+    # path hung. Mint once on first call, reuse forever.
+    global _GIT_BRANCH_CACHE
+    if _GIT_BRANCH_CACHE is not None:
+        return _GIT_BRANCH_CACHE
+    branch = "unknown"
     try:
         branch_file = os.path.join(
             os.path.dirname(os.path.abspath(__file__)),
@@ -177,22 +189,35 @@ def get_git_branch():
         )
         if os.path.exists(branch_file):
             with open(branch_file, "r") as f:
-                git_branch = f.read().strip()
-                if git_branch:
-                    return git_branch
+                v = f.read().strip()
+                if v:
+                    _GIT_BRANCH_CACHE = v
+                    return v
     except Exception:
         pass
+    # Skip git invocation entirely when there's no .git dir next to
+    # server.py (Windows native bundle layout). Avoids spawning a
+    # process that can hang and pollutes the log with "fatal: not a
+    # git repository" on every call.
+    repo_dir = os.path.dirname(os.path.abspath(__file__))
+    if not os.path.isdir(os.path.join(repo_dir, ".git")):
+        _GIT_BRANCH_CACHE = branch
+        return branch
     try:
-        git_branch = subprocess.check_output(
+        v = subprocess.check_output(
             ["git", "branch", "--show-current"],
-            cwd=os.path.dirname(os.path.abspath(__file__)),
+            cwd=repo_dir,
             text=True,
+            stdin=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=5,
         ).strip()
-        if not git_branch:
-            git_branch = "unknown"
+        if v:
+            branch = v
     except Exception:
-        git_branch = "unknown"
-    return git_branch
+        pass
+    _GIT_BRANCH_CACHE = branch
+    return branch
 
 
 def make_root(id_name):
