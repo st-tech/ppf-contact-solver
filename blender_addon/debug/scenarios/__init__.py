@@ -59,6 +59,7 @@ from . import bl_chain_param_repeat
 from . import bl_chain_abort_recovery
 from . import bl_chain_reconnect
 from . import bl_chain_data_evolution
+from . import bl_chain_server_restart_after_run
 from . import bl_pc2_migration
 from . import bl_ngon_rejection
 from . import bl_upload_id_desync_recovery
@@ -150,6 +151,7 @@ REGISTRY = {
     "bl_chain_abort_recovery": bl_chain_abort_recovery,
     "bl_chain_reconnect": bl_chain_reconnect,
     "bl_chain_data_evolution": bl_chain_data_evolution,
+    "bl_chain_server_restart_after_run": bl_chain_server_restart_after_run,
     "bl_pc2_migration": bl_pc2_migration,
     "bl_ngon_rejection": bl_ngon_rejection,
 

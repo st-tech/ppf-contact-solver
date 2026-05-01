@@ -198,19 +198,13 @@ def kill_local_server_on_port(port: int) -> int:
 
     killed = 0
     for pid in pids:
-        try:
-            wmic = subprocess.run(
-                ["wmic", "process", "where", f"ProcessId={pid}",
-                 "get", "Name,CommandLine", "/format:list"],
-                capture_output=True, text=True, timeout=5,
-            )
-        except (subprocess.SubprocessError, FileNotFoundError):
-            # Without wmic we can't verify what the PID is — refuse to
-            # taskkill blindly; let the caller handle the orphan another
-            # way (or fail to bind and raise a clearer error).
+        info = _describe_pid(pid)
+        if info is None:
+            # Couldn't introspect the PID at all (no wmic, no powershell,
+            # taskkill not on PATH). Skip it — the caller's bind attempt
+            # will surface the conflict.
             continue
-        info = wmic.stdout.strip() or f"PID {pid}"
-        blob = wmic.stdout.lower()
+        blob = info.lower()
         if "python" not in blob or "server.py" not in blob:
             raise PortInUseByForeignProcess(port, pid, info)
         try:
@@ -222,6 +216,108 @@ def kill_local_server_on_port(port: int) -> int:
         except (subprocess.SubprocessError, FileNotFoundError):
             pass
     return killed
+
+
+def _describe_pid(pid: int) -> str | None:
+    """Return a short description of *pid* (Name + CommandLine) so the
+    reaper can verify it before taskkill. wmic was retired on recent
+    Windows builds; fall back to PowerShell's CIM bridge there. Returns
+    None when neither tool can be found.
+    """
+    try:
+        wmic = subprocess.run(
+            ["wmic", "process", "where", f"ProcessId={pid}",
+             "get", "Name,CommandLine", "/format:list"],
+            capture_output=True, text=True, timeout=5,
+        )
+        out = wmic.stdout.strip()
+        if out:
+            return out
+    except (subprocess.SubprocessError, FileNotFoundError):
+        pass
+    try:
+        ps = subprocess.run(
+            [
+                "powershell", "-NoProfile", "-Command",
+                f"Get-CimInstance Win32_Process -Filter 'ProcessId = {pid}' "
+                "| Select-Object Name,CommandLine | Format-List",
+            ],
+            capture_output=True, text=True, timeout=10,
+        )
+        out = ps.stdout.strip()
+        if out:
+            return out
+    except (subprocess.SubprocessError, FileNotFoundError):
+        pass
+    return None
+
+
+def spawn_win_native_server(root, port):
+    """Spawn a fresh win_native ``server.py`` subprocess and return the Popen.
+
+    Used by both initial connect and the Stop/Start cycle on the win_native
+    backend. ``connect_win_native`` is the one-shot init path; this helper
+    is what ``WinNativeBackend.start_server`` calls to relaunch after a
+    user-issued Stop.
+
+    Reaps any squatter on ``port`` first so the new bind wins the race.
+
+    Returns:
+        A ``subprocess.Popen`` for the freshly-launched server, or ``None``
+        when ``PPF_WIN_NATIVE_NO_SPAWN`` is set (test/CI mode).
+
+    Raises:
+        FileNotFoundError: if ``server.py`` or the embedded Python is missing.
+        PortInUseByForeignProcess: if *port* is held by a non-server.py process.
+    """
+    root = root.rstrip("/\\")
+    server_py = os.path.join(root, "server.py")
+    if not os.path.exists(server_py):
+        raise FileNotFoundError(f"server.py not found: {server_py}")
+
+    if os.environ.get("PPF_WIN_NATIVE_NO_SPAWN"):
+        return None
+
+    kill_local_server_on_port(port)
+
+    build_dir = os.path.join(root, "build-win-native")
+    if os.path.exists(os.path.join(build_dir, "python", "python.exe")):
+        python_exe = os.path.join(build_dir, "python", "python.exe")
+        extra_paths = [
+            os.path.join(build_dir, "python"),
+            os.path.join(root, "target", "release"),
+            os.path.join(root, "src", "cpp", "build", "lib"),
+            os.path.join(build_dir, "cuda", "bin"),
+        ]
+        cuda_path = os.path.join(build_dir, "cuda")
+    elif os.path.exists(os.path.join(root, "python", "python.exe")):
+        python_exe = os.path.join(root, "python", "python.exe")
+        extra_paths = [
+            os.path.join(root, "python"),
+            os.path.join(root, "bin"),
+            os.path.join(root, "target", "release"),
+        ]
+        cuda_path = None
+    else:
+        raise FileNotFoundError(
+            f"Embedded Python not found in {build_dir} or {root}"
+        )
+
+    env = os.environ.copy()
+    env["PATH"] = ";".join(extra_paths + [env.get("PATH", "")])
+    env["PYTHONPATH"] = root + ";" + env.get("PYTHONPATH", "")
+    if cuda_path and os.path.exists(cuda_path):
+        env["CUDA_PATH"] = cuda_path
+
+    creation_flags = subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0
+    return subprocess.Popen(
+        [python_exe, server_py, "--port", str(port)],
+        cwd=root,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        creationflags=creation_flags,
+    )
 
 
 def connect_win_native(root, port):
@@ -247,77 +343,14 @@ def connect_win_native(root, port):
             before retrying — the addon refuses to terminate unrelated
             third-party listeners.
     """
-    root = root.rstrip("/\\")
-    server_py = os.path.join(root, "server.py")
-    if not os.path.exists(server_py):
-        raise FileNotFoundError(f"server.py not found: {server_py}")
-
     # Test/CI mode: when ``PPF_WIN_NATIVE_NO_SPAWN`` is set, an external
     # process (typically the debug rig's orchestrator) has already
     # started server.py on ``port``. Skip the embedded-Python detection
     # and the Popen, and return ConnectionInfo with ``process=None`` so
     # WinNativeBackend treats the connection as metadata-only -- the
     # same shape connect_local has on Linux.
-    if os.environ.get("PPF_WIN_NATIVE_NO_SPAWN"):
-        connection_info = ConnectionInfo()
-        connection_info.type = "win_native"
-        connection_info.current_directory = root
-        connection_info.remote_root = root
-        connection_info.instance = "win_native"
-        connection_info.server_running = True
-        connection_info.container = ""
-        connection_info.server_port = port
-        return connection_info, None
-
-    # Reap any orphan server.py squatting on this port (e.g. left over
-    # from a previous Blender session whose disconnect was missed).
-    # Without this, Popen below silently loses the bind race and the
-    # addon ends up wired to the orphan instead of the new server.
-    kill_local_server_on_port(port)
-
-    # Detect layout: dev (build-win-native/) vs bundle (python/ in root)
-    build_dir = os.path.join(root, "build-win-native")
-    if os.path.exists(os.path.join(build_dir, "python", "python.exe")):
-        # Dev layout — embedded Python in build-win-native/
-        python_exe = os.path.join(build_dir, "python", "python.exe")
-        extra_paths = [
-            os.path.join(build_dir, "python"),
-            os.path.join(root, "target", "release"),
-            os.path.join(root, "src", "cpp", "build", "lib"),
-            os.path.join(build_dir, "cuda", "bin"),
-        ]
-        cuda_path = os.path.join(build_dir, "cuda")
-    elif os.path.exists(os.path.join(root, "python", "python.exe")):
-        # Bundle layout — python/ and bin/ in root
-        python_exe = os.path.join(root, "python", "python.exe")
-        extra_paths = [
-            os.path.join(root, "python"),
-            os.path.join(root, "bin"),
-            os.path.join(root, "target", "release"),
-        ]
-        cuda_path = None
-    else:
-        raise FileNotFoundError(
-            f"Embedded Python not found in {build_dir} or {root}"
-        )
-
-    # Build environment
-    env = os.environ.copy()
-    env["PATH"] = ";".join(extra_paths + [env.get("PATH", "")])
-    env["PYTHONPATH"] = root + ";" + env.get("PYTHONPATH", "")
-    if cuda_path and os.path.exists(cuda_path):
-        env["CUDA_PATH"] = cuda_path
-
-    # Launch server.py
-    creation_flags = subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0
-    process = subprocess.Popen(
-        [python_exe, server_py, "--port", str(port)],
-        cwd=root,
-        env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        creationflags=creation_flags,
-    )
+    process = spawn_win_native_server(root, port)
+    root = root.rstrip("/\\")
 
     connection_info = ConnectionInfo()
     connection_info.type = "win_native"

@@ -282,9 +282,21 @@ class EffectExecutor:
         the user has not built yet and must click Build explicitly.
         Corrupt pickles propagate the unpickling error upward rather
         than silently falling through to a rebuild.
+
+        Also rehydrates ``state.frame`` from the on-disk ``vert_*.bin``
+        count. ``state.frame`` is the live solver counter, only ever
+        advanced by ``SolverFrameUpdated`` events from the monitor; on
+        a fresh server process it starts at 0. Without this rehydrate,
+        a client that reconnects to a project with completed frames
+        sees ``frame=0`` in the response — the Blender addon's Fetch
+        button stays disabled because its poll requires ``frame > 0``,
+        even though the same response carries a ``scene_info`` with
+        "Simulated Frames: 180" (read directly from disk by
+        ``_get_scene_info``).
         """
         from .state import Build
         from dataclasses import replace
+        from .monitor import _count_frames
 
         new_app = AppState.load(name, root)
         if new_app is None:
@@ -293,13 +305,15 @@ class EffectExecutor:
         logging.info(f"App loaded from pickle for name: {name}")
 
         self._engine._app = new_app
+        disk_frame = _count_frames(root)
         with self._engine._lock:
             s = self._engine._state
-            if s.name == name and s.build != Build.BUILT:
+            if s.name == name:
                 is_resumable = new_app.resumable()
-                self._engine._state = replace(
-                    s, build=Build.BUILT, resumable=is_resumable
-                )
+                updates = {"resumable": is_resumable, "frame": disk_frame}
+                if s.build != Build.BUILT:
+                    updates["build"] = Build.BUILT
+                self._engine._state = replace(s, **updates)
 
     def _delete_project(self, root: str) -> None:
         if root and os.path.exists(root):

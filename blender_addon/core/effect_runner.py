@@ -496,8 +496,22 @@ class EffectRunner:
         if not self._backend:
             return
 
-        # Win_native servers are launched during connect
+        # Win_native: connect spawns the initial server.py, then Stop/Start
+        # cycles re-spawn it here. Without this re-spawn, ServerStopped
+        # leaves _process=None and the next ServerLaunched dispatch is a
+        # lie — _do_query silently fails (channel refuses), no ServerPolled
+        # follows, solver stays NO_DATA, and the UI shows "Waiting for
+        # Data" with stale Scene Info because the response cache was last
+        # written before the stop.
         if self._backend.backend_type == "win_native":
+            try:
+                self._backend.start_server()
+            except Exception as e:
+                self._engine.dispatch(ErrorOccurred(
+                    error=f"Failed to start server: {e}",
+                    source="launch_server",
+                ))
+                return
             self._engine.dispatch(ServerLaunched())
             return
 
@@ -621,6 +635,14 @@ class EffectRunner:
         # cmd.exe and the backend has the handle already.
         if self._backend.backend_type == "win_native":
             self._backend.stop_server()
+            # The cache is keyed off "what the server last said." Once
+            # the server is gone, every cached field (data="READY",
+            # frame=N, scene_info, ...) is stale. Leaving them around
+            # makes the UI display a Scene Info collapsible and a frame
+            # count for a server that no longer holds that state — and,
+            # if the user clicks Start again, those stale fields keep
+            # showing until a fresh ServerPolled lands.
+            self._response_cache.clear()
             self._engine.dispatch(ServerStopped())
             return
         self._backend.exec_command("pkill -f server.py", shell=True)
@@ -630,6 +652,7 @@ class EffectRunner:
             if not alive:
                 break
             time.sleep(0.25)
+        self._response_cache.clear()
         self._engine.dispatch(ServerStopped())
 
     def _do_send_data(self, remote_path: str, data: bytes) -> None:

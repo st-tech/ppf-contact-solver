@@ -658,6 +658,15 @@ class WinNativeBackend:
             # tries to bind.
             pass
 
+    def start_server(self) -> None:
+        """Re-launch ``server.py`` after a Stop. No-op if the process is
+        already alive (Start clicked twice) or in test mode where an
+        external orchestrator owns the server."""
+        if self.is_alive():
+            return
+        from .connection import spawn_win_native_server
+        self._process = spawn_win_native_server(self._directory, self._port)
+
     def disconnect(self) -> None:
         self.stop_server()
 

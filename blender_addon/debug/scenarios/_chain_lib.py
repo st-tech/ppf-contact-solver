@@ -50,6 +50,9 @@ STEP_NAMES = (
     "verify_pc2",                # asserts find_pc2_for(plane) is non-empty
     "verify_no_pc2",             # asserts no PC2 file (post-clear)
     "verify_resumable",          # asserts solver=RESUMABLE
+    "verify_response_cache_empty",  # asserts com.response is empty (post-stop)
+    "verify_frame_rehydrated",   # asserts state.frame > 0 (post-restart, after run)
+    "verify_fetch_enabled",      # asserts SOLVER_OT_FetchData.poll is True
 )
 
 
@@ -433,8 +436,13 @@ def step_reconnect(h):
 
 def step_stop_server(h):
     h.dh.com.stop_server()
+    # Wait for the worker-thread side of stop to actually finish
+    # (ServerStopped dispatched -> server=UNKNOWN, _response_cache
+    # cleared). Accepting STOPPING here would return mid-tear-down,
+    # before the cache clear, and any verify step that follows would
+    # race the worker.
     h.wait_until(
-        lambda s: s.server.name in ("STOPPED", "STOPPING", "UNKNOWN"),
+        lambda s: s.server.name == "UNKNOWN",
         timeout=15.0, label="stop_server",
     )
     s = h.dh.facade.engine.state
@@ -474,6 +482,63 @@ def step_verify_resumable(h):
     return {"solver": s.solver.name}
 
 
+def step_verify_response_cache_empty(h):
+    # Stop must wipe the cached server response. Without this the UI
+    # keeps rendering the pre-stop scene_info / data="READY" / frame=N
+    # next to a "Waiting for Data" status, which is the visible half
+    # of the win_native Stop -> Start regression.
+    cache = h.dh.facade.runner._response_cache
+    response = h.dh.com.response
+    assert cache.empty, f"_response_cache still has keys: {sorted(cache.last_response)}"
+    assert not response, f"com.response still populated: {sorted(response)}"
+    return {"cache_empty": True}
+
+
+def step_verify_frame_rehydrated(h):
+    # Must come after a restart that follows a real run: state.frame
+    # is the live solver counter and starts at 0 on each new server
+    # process. The server-side _load_app is supposed to seed it from
+    # the on-disk vert_*.bin count so the very first response after
+    # restart already carries the right frame total. Without that,
+    # the addon's Fetch button stays disabled (its poll requires
+    # frame > 0) even though the simulation finished and the data is
+    # there to fetch.
+    h.dh.force_frame_query(expected_frames=1, timeout=15.0)
+    s = h.dh.facade.engine.state
+    response = h.dh.com.response
+    response_frame = int(response.get("frame", 0) or 0)
+    assert s.frame > 0, (
+        f"state.frame={s.frame} after restart -- _load_app didn't "
+        f"rehydrate from disk (response.frame={response_frame})"
+    )
+    assert response_frame > 0, (
+        f"response.frame={response_frame} after restart"
+    )
+    return {"state_frame": s.frame, "response_frame": response_frame}
+
+
+def step_verify_fetch_enabled(h):
+    # End-to-end signal that the user can actually click "Fetch All
+    # Animation" again after a Stop -> Start cycle. Mirrors the
+    # operator's own poll() so a regression in any input it reads
+    # (status, frame, busy flag, server_running) shows up here.
+    solver_ui = __import__(
+        h.dh.pkg + ".ui.solver",
+        fromlist=["SOLVER_OT_FetchData"],
+    )
+    enabled = bool(solver_ui.SOLVER_OT_FetchData.poll(bpy.context))
+    s = h.dh.facade.engine.state
+    response = h.dh.com.response
+    assert enabled, (
+        f"Fetch operator poll returned False "
+        f"(status={s.solver.name}, frame={s.frame}, "
+        f"response_frame={response.get('frame')}, "
+        f"connected={h.dh.com.is_connected()}, "
+        f"server_running={h.dh.com.is_server_running()})"
+    )
+    return {"fetch_enabled": True}
+
+
 STEP_CATALOG = {
     "connect": step_connect,
     "transfer": step_transfer,
@@ -494,6 +559,9 @@ STEP_CATALOG = {
     "verify_pc2": step_verify_pc2,
     "verify_no_pc2": step_verify_no_pc2,
     "verify_resumable": step_verify_resumable,
+    "verify_response_cache_empty": step_verify_response_cache_empty,
+    "verify_frame_rehydrated": step_verify_frame_rehydrated,
+    "verify_fetch_enabled": step_verify_fetch_enabled,
 }
 
 
