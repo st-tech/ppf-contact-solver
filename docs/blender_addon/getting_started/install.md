@@ -31,6 +31,13 @@ our static extensions repository so Blender can install and auto-update the
 add-on for you. A manual zip install is also documented below for offline or
 development use.
 
+<figure style="text-align: center; margin: 1.5rem 0;">
+
+[![Windows Setup](../images/tutorials/windows-opt.jpg)](https://zozo.box.com/s/jhs75ddc3oihrl4bw4fa00hpi2dsjdrs){target="_blank" rel="noopener"}
+
+<figcaption>Windows Setup: an end-to-end install walkthrough on Windows.</figcaption>
+</figure>
+
 ### Option A: Add as a Remote Repository (recommended)
 
 This route gets you auto-updates: when a new add-on release is published,

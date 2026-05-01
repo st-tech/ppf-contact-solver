@@ -8,6 +8,12 @@
 
 </figure>
 <figure>
+<figcaption><strong>Windows Setup</strong><span>Install and configure the add-on on Windows.</span></figcaption>
+
+[![Windows Setup](images/tutorials/windows-opt.jpg)](https://zozo.box.com/s/jhs75ddc3oihrl4bw4fa00hpi2dsjdrs){target="_blank" rel="noopener"}
+
+</figure>
+<figure>
 <figcaption><strong>Fitting Cloth</strong><span>Drape cloth onto a target form so it conforms to the shape.</span></figcaption>
 
 [![Fitting Cloth](images/tutorials/fitting-opt.jpg)](https://zozo.box.com/s/i6kr5jlha7tbrq1452c43t4l6bugmozd){target="_blank" rel="noopener"}
@@ -101,6 +107,12 @@
 <figcaption><strong>Wind Effect</strong><span>Drive cloth motion with a directional wind force.</span></figcaption>
 
 [![Wind Effect](images/tutorials/wind-opt.jpg)](https://zozo.box.com/s/2l66jmdotnoig6ks9405fq6n77gm4kdq){target="_blank" rel="noopener"}
+
+</figure>
+<figure>
+<figcaption><strong>Snap and Merge</strong><span>Snap nearby vertices together and merge them into a single mesh.</span></figcaption>
+
+[![Snap and Merge](images/tutorials/snap-merge-opt.jpg)](https://zozo.box.com/s/ndqjlf67cdo2dv3xjynqftitg3244a1z){target="_blank" rel="noopener"}
 
 </figure>
 </div>
