@@ -181,7 +181,7 @@ def kill_local_server_on_port(port: int) -> int:
         return 0
     port_token = f":{port}"
     pids: set[int] = set()
-    for line in netstat.stdout.splitlines():
+    for line in (netstat.stdout or "").splitlines():
         if "LISTENING" not in line or port_token not in line:
             continue
         parts = line.split()
