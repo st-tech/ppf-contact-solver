@@ -96,6 +96,7 @@ from . import bl_copy_paste_cross_type_material
 # poll only checked the protocol-version and the cached server
 # response.
 from . import bl_transfer_disabled_during_run
+from . import bl_transfer_skip_delete_when_no_data
 
 
 REGISTRY = {
@@ -199,6 +200,7 @@ REGISTRY = {
 
     # Operator-poll regression for Transfer-during-Run.
     "bl_transfer_disabled_during_run": bl_transfer_disabled_during_run,
+    "bl_transfer_skip_delete_when_no_data": bl_transfer_skip_delete_when_no_data,
 }
 
 

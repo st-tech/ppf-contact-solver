@@ -451,6 +451,34 @@ class SOLVER_OT_Transfer(TransferRequestMixin, AsyncOperator):
             self.report({"ERROR"}, error)
             return {"CANCELLED"}
         status = com.info.status
+        # Skip the "Deleting Remote Data..." round-trip when the cached
+        # server response already says NO_DATA. The delete-cycle was a
+        # blanket precaution for the legacy case where RemoteStatus said
+        # NO_DATA but stale data.pickle / app_state still sat on disk —
+        # the protocol-0.03 server reports ``data="NO_DATA"`` straight
+        # off the filesystem (has_data && has_param in select_project),
+        # so trusting it here saves a round-trip plus a misleading
+        # status banner. ``remote_root`` must already be populated; if
+        # not, fall back to the delete cycle which establishes it.
+        response = com.info.response
+        if (response and response.get("data") == "NO_DATA"
+                and com.connection.remote_root):
+            self.report({"INFO"}, "No remote data to delete; uploading scene.")
+            try:
+                data, param, data_hash, param_hash = prepare_upload(context)
+            except ValueError as e:
+                self.report({"ERROR"}, str(e))
+                com.error = str(e)
+                return {"CANCELLED"}
+            com.animation.clear()
+            com.build_pipeline(
+                data=data, param=param,
+                data_hash=data_hash, param_hash=param_hash,
+                message="Uploading scene...",
+            )
+            self._mode = "pipeline"
+            self.setup_modal(context)
+            return {"RUNNING_MODAL"}
         if status in (
             RemoteStatus.READY,
             RemoteStatus.RESUMABLE,
@@ -461,10 +489,6 @@ class SOLVER_OT_Transfer(TransferRequestMixin, AsyncOperator):
                 "Remote data already exists. Deleting it before transfer.",
             )
         else:
-            # RemoteStatus can say NO_DATA while stale data.pickle / app_state
-            # still exist on disk under the project root. Always start with a
-            # delete cycle so mesh + param payloads are rebuilt from the same
-            # clean remote project state.
             self.report({"INFO"}, "Clearing remote project state before transfer.")
         self.request_delete()
         self.setup_modal(context)
