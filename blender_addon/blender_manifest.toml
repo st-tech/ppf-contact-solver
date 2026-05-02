@@ -5,7 +5,7 @@
 
 schema_version = "1.0.0"
 id = "ppf_contact_solver"
-version = "1.0.0"
+version = "1.0.1"
 name = "ZOZO's Contact Solver"
 tagline = "A contact solver for physics-based simulations"
 maintainer = "Ryoichi Ando <ryoichi.ando@zozo.com>"
