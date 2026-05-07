@@ -3,6 +3,19 @@
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
 # License: Apache v2.0
 
+"""Public entry point for session lifecycle classes.
+
+This module owns ``SessionManager``, ``Session``, ``FixedSession``,
+``SessionInfo``, and the ``fixed_session_to_cbor_dict`` helper. The
+dynamic-parameter holder is in ``_session_param_``; the
+inspection / export / log / get classes plus formatting helpers are
+in ``_session_inspect_``.
+
+Everything is re-exported here for backward compatibility (older code,
+tests, and Blender integration import names directly from
+``frontend._session_``).
+"""
+
 import asyncio
 import copy
 import os
@@ -15,355 +28,26 @@ import time
 
 from typing import TYPE_CHECKING, Any, Optional
 
-import numpy as np
-
 from tqdm.auto import tqdm
 
-from ._param_ import ParamHolder, app_param
-from ._parse_ import CppRustDocStringParser
+from . import _rust  # type: ignore[attr-defined]
+
 from ._scene_ import FixedScene
+from ._session_inspect_ import (
+    CONSOLE_STYLE,
+    SessionExport,
+    SessionGet,
+    SessionLog,
+    SessionOutput,
+    Zippable,
+    display_log,
+)
+from ._session_param_ import ParamManager
 from ._utils_ import Utils, get_export_base_path
+
 
 if TYPE_CHECKING:
     from ._plot_ import Plot
-
-RECOVERABLE_FIXED_SESSION_NAME = "fixed_session.pickle"
-
-CONSOLE_STYLE = """
-    <style>
-        .no-scroll {
-            overflow: hidden;
-            white-space: pre-wrap;
-            font-family: monospace;
-        }
-    </style>
-    """
-
-
-class ParamManager:
-    """Class to manage simulation parameters.
-
-    Example:
-        Configure the standard simulation parameters for a session before
-        building it::
-
-            session = app.session.create(scene)
-            (
-                session.param.set("frames", 120)
-                             .set("dt", 0.01)
-                             .set("fps", 30)
-            )
-            session = session.build()
-    """
-
-    def __init__(self):
-        """Initialize the ParamManager."""
-        self._key = None
-        self._param = ParamHolder(app_param())
-        self._default_param = self._param.copy()
-        self._time = 0.0
-        self._dyn_param = {}
-
-    def copy(self) -> "ParamManager":
-        """Copy the ParamManager object.
-
-        Returns:
-            ParamManager: The copied ParamManager object.
-
-        Example:
-            Snapshot the current parameters before tweaking one of them::
-
-                baseline = session.param.copy()
-                session.param.set("dt", 0.005)
-        """
-        return copy.deepcopy(self)
-
-    def set(self, key: str, value: Optional[Any] = None) -> "ParamManager":
-        """Set a parameter value.
-
-        If ``value`` is ``None``, the parameter is set to ``True``.
-
-        Args:
-            key (str): The parameter key. Must not contain an underscore;
-                use ``-`` instead.
-            value (Any, optional): The parameter value. Defaults to ``None``
-                (interpreted as ``True``).
-
-        Returns:
-            ParamManager: The updated ParamManager object.
-
-        Raises:
-            ValueError: If ``key`` contains an underscore or does not exist.
-
-        Example:
-            Chain several ``.set`` calls to configure a session. Keys use
-            hyphens, never underscores::
-
-                (
-                    session.param.set("frames", 250)
-                                 .set("dt", 0.01)
-                                 .set("fps", 30)
-                                 .set("min-newton-steps", 32)
-                                 .set("gravity", [0, 0, 0])
-                )
-        """
-        if "_" in key:
-            raise ValueError("Key cannot contain underscore. Use '-' instead.")
-        elif key not in self._param.key_list():
-            raise ValueError(f"Key {key} does not exist")
-        else:
-            if value is None:
-                value = True
-            self._param.set(key, value)
-        return self
-
-    def clear_all(self):
-        """Clear all parameters to their default values.
-
-        Example:
-            Reset every parameter back to its default before configuring a
-            new run::
-
-                session.param.clear_all()
-                session.param.set("frames", 60).set("dt", 0.01)
-        """
-        self._param = self._default_param.copy()
-        self._dyn_param = {}
-
-    def clear(self, key: str) -> "ParamManager":
-        """Reset a parameter to its default value and drop any dynamic entries for it.
-
-        Args:
-            key (str): The parameter key.
-
-        Returns:
-            ParamManager: The updated ParamManager object.
-
-        Example:
-            Revert a single parameter back to its default after trying an
-            override::
-
-                session.param.set("dt", 0.001)
-                session.param.clear("dt")
-        """
-        self._param.set(key, self._default_param.get(key))
-        if key in self._dyn_param:
-            del self._dyn_param[key]
-        return self
-
-    def dyn(self, key: str) -> "ParamManager":
-        """Select the current dynamic parameter key and reset the internal time cursor.
-
-        Args:
-            key (str): The dynamic parameter key.
-
-        Returns:
-            ParamManager: The updated ParamManager object.
-
-        Raises:
-            ValueError: If ``key`` does not exist.
-
-        Example:
-            Flip gravity between t=1s and t=2s, then restore it::
-
-                g = session.param.get("gravity")
-                (session.param.dyn("gravity")
-                              .time(1.0).hold()
-                              .time(1.5).change([-x for x in g])
-                              .time(2.0).change(g))
-        """
-        if key not in self._param.key_list():
-            raise ValueError(f"Key {key} does not exist")
-        else:
-            self._time = 0.0
-            self._key = key
-        return self
-
-    def change(self, value: Any) -> "ParamManager":
-        """Change the value of the dynamic parameter at the current time.
-
-        Args:
-            value (Any): The new value of the dynamic parameter. May be a
-                scalar, bool, or list/tuple of floats, depending on the key.
-
-        Returns:
-            ParamManager: The updated ParamManager object.
-
-        Raises:
-            ValueError: If no dynamic key is currently selected.
-
-        Example:
-            Slow playback to 10% after the third second via a dynamic key::
-
-                (
-                    session.param.dyn("playback")
-                                 .time(2.99).hold()
-                                 .time(3.0).change(0.1)
-                )
-        """
-        if self._key is None:
-            raise ValueError("Key is not set")
-        else:
-            if self._key in self._dyn_param:
-                self._dyn_param[self._key].append((self._time, value))
-            else:
-                initial_val = self._param.get(self._key)
-                self._dyn_param[self._key] = [
-                    (0.0, initial_val),
-                    (self._time, value),
-                ]
-            return self
-
-    def hold(self) -> "ParamManager":
-        """Hold the current value of the dynamic parameter at the current time.
-
-        Returns:
-            ParamManager: The updated ParamManager object.
-
-        Raises:
-            ValueError: If no dynamic key is currently selected.
-
-        Example:
-            Keep playback steady until t=2.99s, then drop it at t=3.0s::
-
-                (
-                    session.param.dyn("playback")
-                                 .time(2.99).hold()
-                                 .time(3.0).change(0.1)
-                )
-        """
-        if self._key is None:
-            raise ValueError("Key is not set")
-        else:
-            if self._key in self._dyn_param:
-                last_val = self._dyn_param[self._key][-1][1]
-                self.change(last_val)
-            else:
-                val = self._param.get(self._key)
-                self.change(val)
-        return self
-
-    def export(self, path: str):
-        """Export the parameters to ``param.toml`` (and ``dyn_param.txt`` when present).
-
-        In fast-check mode, ``frames`` is forced to ``1``.
-
-        Args:
-            path (str): The path to the export directory.
-
-        Example:
-            Write the parameters alongside a session directory for inspection
-            or external launching::
-
-                session.param.export(fixed_session.info.path)
-        """
-        # Force frames=1 in fast check mode
-        if Utils.is_fast_check():
-            self._param.set("frames", 1)
-
-        if len(self._param.key_list()):
-            with open(os.path.join(path, "param.toml"), "w") as f:
-                f.write("[param]\n")
-                for key, val in self._param.items():
-                    key = key.replace("-", "_")
-                    if val is not None:
-                        if isinstance(val, str):
-                            f.write(f'{key} = "{val}"\n')
-                        elif isinstance(val, bool):
-                            if val:
-                                f.write(f"{key} = true\n")
-                            else:
-                                f.write(f"{key} = false\n")
-                        elif hasattr(val, "__len__") and not isinstance(val, str):
-                            items = ", ".join(str(float(x)) for x in val)
-                            f.write(f"{key} = [{items}]\n")
-                        else:
-                            f.write(f"{key} = {val}\n")
-                    else:
-                        f.write(f"{key} = false\n")
-        if len(self._dyn_param.keys()):
-            with open(os.path.join(path, "dyn_param.txt"), "w") as f:
-                for key, vals in self._dyn_param.items():
-                    f.write(f"[{key}]\n")
-                    for entry in vals:
-                        time, val = entry
-                        if isinstance(val, (list, tuple)):
-                            items = " ".join(str(float(x)) for x in val)
-                            f.write(f"{time} {items}\n")
-                        elif isinstance(val, float):
-                            f.write(f"{time} {val}\n")
-                        elif isinstance(val, bool):
-                            f.write(f"{time} {float(val)}\n")
-                        else:
-                            raise ValueError(
-                                f"Value must be float, bool, or list. {val} is given."
-                            )
-
-    def time(self, time: float) -> "ParamManager":
-        """Advance the current time cursor for the dynamic parameter.
-
-        Args:
-            time (float): The new current time. Must be strictly greater than
-                the previous value.
-
-        Returns:
-            ParamManager: The updated ParamManager object.
-
-        Raises:
-            ValueError: If ``time`` is not strictly increasing.
-
-        Example:
-            Advance the cursor between two dynamic-value updates::
-
-                (
-                    session.param.dyn("playback")
-                                 .time(1.0).hold()
-                                 .time(2.0).change(0.5)
-                )
-        """
-        if time <= self._time:
-            raise ValueError("Time must be increasing")
-        else:
-            self._time = time
-        return self
-
-    def get(self, key: Optional[str] = None) -> Any:
-        """Get the value of a parameter.
-
-        Args:
-            key (Optional[str]): The parameter key. Must be specified.
-
-        Returns:
-            Any: The value of the parameter.
-
-        Raises:
-            ValueError: If ``key`` is ``None``.
-
-        Example:
-            Read the current gravity vector so a dynamic override can flip
-            its sign later::
-
-                g = session.param.get("gravity")
-                print(g)
-        """
-        if key is None:
-            raise ValueError("Key must be specified")
-        else:
-            return self._param.get(key)
-
-    def items(self):
-        """Get all parameter items.
-
-        Returns:
-            ItemsView: The parameter items.
-
-        Example:
-            Inspect every parameter currently configured on the session::
-
-                for key, value in session.param.items():
-                    print(f"{key} = {value}")
-        """
-        return self._param.items()
 
 
 class SessionManager:
@@ -425,8 +109,7 @@ class SessionManager:
                 app.session.create(scene, name="run-A")
                 session = app.session.select("run-A")
         """
-        if name not in self._sessions:
-            raise ValueError(f"Session {name} does not exist")
+        _rust.scene_validate_session_exists(name in self._sessions, name)
         return self._sessions[name]
 
     def create(self, scene: FixedScene, name: str = "") -> "Session":
@@ -461,17 +144,15 @@ class SessionManager:
         """
         assert isinstance(scene, FixedScene), "Scene must be a FixedScene object"
         if scene.has_violations:
-            messages = scene.get_violation_messages()
-            raise Exception(f"Cannot create session: {'; '.join(messages)}. ")
+            raise Exception(
+                _rust.session_violations_message(scene.get_violation_messages())
+            )
         autogenerated = None
         if name == "":
-            base_name = "session"
-            name = base_name
-            counter = 0
-            while name in self._sessions:
-                counter += 1
-                name = f"{base_name}-{counter}"
-            autogenerated = counter
+            name, counter = _rust.session_autogenerate_name(
+                list(self._sessions.keys()), "session"
+            )
+            autogenerated = int(counter)
         session = Session(
             self._app_name,
             self._app_root,
@@ -602,803 +283,6 @@ class SessionInfo:
                 print(session.info.path)
         """
         return self._path
-
-
-class Zippable:
-    def __init__(self, dirpath: str):
-        self._dirpath = dirpath
-
-    def zip(self):
-        """Zip the directory.
-
-        No-op when running in a CI environment (as detected by
-        :meth:`Utils.ci_name`).
-        """
-        ci_name = Utils.ci_name()
-        if ci_name is not None:
-            print("CI detected. Skipping zipping.")
-        else:
-            path = f"{self._dirpath}.zip"
-            if os.path.exists(path):
-                os.remove(path)
-            print(f"zipping to {path}")
-            shutil.make_archive(self._dirpath, "zip", self._dirpath)
-            print("done")
-
-
-class SessionExport:
-    """Class to handle session export operations.
-
-    Example:
-        Export every simulated frame and zip the output directory::
-
-            session.start(blocking=True)
-            session.export.animation().zip()
-    """
-
-    def __init__(self, fixed_session: "FixedSession"):
-        """Initialize the SessionExport class.
-
-        Args:
-            fixed_session (FixedSession): The fixed session object.
-        """
-        self._fixed_session = fixed_session
-        self._session = fixed_session.session
-
-    def shell_command(
-        self,
-        param: ParamManager,
-    ) -> str:
-        """Generate a platform-specific launcher script for the solver.
-
-        On Windows, writes a ``command.bat`` file; on Linux/macOS, writes a
-        ``command.sh`` script (marked executable).
-
-        Args:
-            param (ParamManager): The simulation parameters.
-
-        Returns:
-            str: The path to the generated launcher script.
-
-        Example:
-            Regenerate the solver launcher alongside a session (useful for
-            re-running from the command line)::
-
-                path = session.export.shell_command(session.session.param)
-                print(path)
-        """
-        param.export(self._fixed_session.info.path)
-
-        # Platform-specific solver path and script generation
-        if platform.system() == "Windows":  # Windows
-            program_path = os.path.join(
-                self._session.proj_root, "target", "release", "ppf-contact-solver.exe"
-            )
-            lib_path = os.path.join(
-                self._session.proj_root, "src", "cpp", "build", "lib"
-            )
-            # Generate batch file with PATH set for DLLs
-            command = f"""@echo off
-set SOLVER_PATH={program_path}
-set LIB_PATH={lib_path}
-
-REM CUDA_PATH should be set by start.bat or the environment
-set PATH=%LIB_PATH%;%CUDA_PATH%\\bin;%PATH%
-
-if not exist "%SOLVER_PATH%" (
-    echo Error: Solver does not exist at %SOLVER_PATH% >&2
-    exit /b 1
-)
-
-"%SOLVER_PATH%" --path {self._fixed_session.info.path} --output {self._fixed_session.output.path} %*
-"""
-            path = os.path.join(self._fixed_session.info.path, "command.bat")
-            with open(path, "w") as f:
-                f.write(command)
-        else:  # Linux/Mac
-            program_path = os.path.join(
-                self._session.proj_root, "target", "release", "ppf-contact-solver"
-            )
-            # Generate shell script that checks for solver existence at runtime
-            command = f"""#!/bin/bash
-SOLVER_PATH="{program_path}"
-
-if [ ! -f "$SOLVER_PATH" ]; then
-    echo "Error: Solver does not exist at $SOLVER_PATH" >&2
-    exit 1
-fi
-
-"$SOLVER_PATH" --path {self._fixed_session.info.path} --output {self._fixed_session.output.path} "$@"
-"""
-            path = os.path.join(self._fixed_session.info.path, "command.sh")
-            with open(path, "w") as f:
-                f.write(command)
-            if platform.system() != "Windows":  # chmod not needed on Windows
-                os.chmod(path, 0o755)
-        return path
-
-    def animation(
-        self,
-        path: str = "",
-        ext="ply",
-        include_static: bool = True,
-        clear: bool = False,
-        options: Optional[dict] = None,
-    ) -> Zippable:
-        """Export the animation frames.
-
-        If no frames are available yet, waits for the simulation if it is
-        running, otherwise returns early. When ``ffmpeg`` is available and
-        rendered PNGs are produced, also encodes an ``frame.mp4`` video in
-        the export directory.
-
-        Args:
-            path (str): The path to the export directory. If empty, a default
-                path is used.
-            ext (str, optional): The file extension. Defaults to ``"ply"``.
-            include_static (bool, optional): Whether to include the static
-                mesh. Defaults to ``True``.
-            clear (bool, optional): Whether to clear the existing files.
-                Defaults to ``False``.
-            options (dict, optional): Additional arguments passed to the
-                renderer.
-
-        Returns:
-            Zippable: A handle to the export directory that can be zipped.
-
-        Example:
-            Export every frame as PLY and zip the result::
-
-                session.start(blocking=True)
-                session.export.animation().zip()
-        """
-        if options is None:
-            options = {}
-        options = self._fixed_session.update_options(options)
-        ci_name = Utils.ci_name()
-        if path == "":
-            if ci_name is not None:
-                path = os.path.join(self._fixed_session.info.path, "preview")
-            else:
-                scene = self._session.fixed_scene
-                assert scene is not None
-                path = os.path.join(
-                    get_export_base_path(),
-                    self._fixed_session.session.app_name,
-                    self._fixed_session.info.name,
-                )
-
-        # Check if frames are available
-        latest_frame = self._fixed_session.get.latest_frame()
-        if latest_frame == 0:
-            if self._fixed_session.is_running():
-                print(
-                    "No frames available yet. Waiting for simulation to generate frames..."
-                )
-                # Wait for frames to become available
-                while self._fixed_session.is_running() and self._fixed_session.get.latest_frame() == 0:
-                    time.sleep(1)
-                latest_frame = self._fixed_session.get.latest_frame()
-                if latest_frame == 0:
-                    print("Simulation finished but no frames were generated.")
-                    print(
-                        "Please ensure the simulation ran successfully and generated output frames."
-                    )
-                    return Zippable(
-                        path if os.path.exists(path) else self._fixed_session.info.path
-                    )
-            else:
-                print("No animation frames available to export.")
-                print(
-                    "Please run the simulation first using session.start() to generate frames."
-                )
-                return Zippable(
-                    path if os.path.exists(path) else self._fixed_session.info.path
-                )
-
-        # Only print export message in CI mode
-        if ci_name is not None:
-            print(f"Exporting animation to {path}")
-        if os.path.exists(path):
-            if clear:
-                shutil.rmtree(path)
-        else:
-            os.makedirs(path)
-
-        for i in tqdm(range(latest_frame), desc="export"):
-            self.frame(
-                os.path.join(path, f"frame_{i}.{ext}"),
-                i,
-                include_static,
-                options,
-                delete_exist=clear,
-            )
-
-        # Check if any PNG images were rendered before attempting video creation
-        png_files = [f for f in os.listdir(path) if f.endswith(".png")]
-        # Look for ffmpeg in multiple locations
-        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        ffmpeg_candidates = [
-            os.path.join(project_root, "bin", "ffmpeg"),  # Linux/Docker
-            os.path.join(project_root, "bin", "ffmpeg.exe"),  # Windows bundled (dist/)
-            os.path.join(
-                project_root, "build-win-native", "ffmpeg", "ffmpeg.exe"
-            ),  # Windows dev
-        ]
-        ffmpeg_path = next((p for p in ffmpeg_candidates if os.path.isfile(p)), None)
-        if ffmpeg_path is None:
-            ffmpeg_path = shutil.which("ffmpeg")
-        if ffmpeg_path is not None and png_files:
-            vid_name = "frame.mp4"
-            command = f'"{ffmpeg_path}" -hide_banner -loglevel error -y -r 60 -i frame_%d.{ext}.png -pix_fmt yuv420p -c:v libx264 {vid_name}'
-            subprocess.run(command, shell=True, cwd=path)
-            if Utils.in_jupyter_notebook():
-                from IPython.display import Video, display
-
-                display(Video(os.path.join(path, vid_name), embed=True))
-
-            if ci_name is not None:
-                for file in png_files:
-                    os.remove(os.path.join(path, file))
-
-        return Zippable(path)
-
-    def frame(
-        self,
-        path: str = "",
-        frame: Optional[int] = None,
-        include_static: bool = True,
-        options: Optional[dict] = None,
-        delete_exist: bool = False,
-    ) -> "FixedSession":
-        """Export a specific frame.
-
-        Args:
-            path (str): The path to the export file.
-            frame (Optional[int], optional): The frame number. If ``None``,
-                the latest available frame is used. Defaults to ``None``.
-            include_static (bool, optional): Whether to include the static
-                mesh. Defaults to ``True``.
-            options (dict, optional): Additional arguments passed to the
-                renderer.
-            delete_exist (bool, optional): Whether to delete the existing
-                file. Defaults to ``False``.
-
-        Returns:
-            FixedSession: The owning fixed session object.
-
-        Example:
-            Export just the latest frame as an OBJ file::
-
-                session.export.frame("latest.obj")
-        """
-
-        if options is None:
-            options = {}
-        options = self._fixed_session.update_options(options)
-        if self._fixed_session.fixed_scene is None:
-            raise ValueError("Scene must be initialized")
-        else:
-            fixed_scene = self._fixed_session.session.fixed_scene
-            if not fixed_scene:
-                raise ValueError("Fixed scene is not initialized")
-            else:
-                vert = fixed_scene.vertex(True)
-                if frame is not None:
-                    result = self._fixed_session.get.vertex(frame)
-                    if result is not None:
-                        vert, _ = result
-                else:
-                    result = self._fixed_session.get.vertex()
-                    if result is not None:
-                        vert, _ = result
-                color = self._fixed_session.fixed_scene.color(vert, options)
-                fixed_scene.export(
-                    vert, color, path, include_static, options, delete_exist
-                )
-        return self._fixed_session
-
-
-class SessionOutput:
-    """Class to handle session output operations.
-
-    Example:
-        Locate the solver output directory for a built session (used by
-        exporters and log readers)::
-
-            print(session.output.path)
-    """
-
-    def __init__(self, session: "FixedSession"):
-        """Initialize the SessionOutput class.
-
-        Args:
-            session (FixedSession): The fixed session object.
-        """
-        self._session = session
-
-    @property
-    def path(self) -> str:
-        """Get the path to the output directory.
-
-        Example:
-            Locate the solver output directory for post-processing::
-
-                session = session.build().start(blocking=True)
-                output_dir = session.output.path
-        """
-        return os.path.join(self._session.info.path, "output")
-
-
-class SessionLog:
-    """Class to handle session log retrieval operations."""
-
-    def __init__(self, fixed_session: "FixedSession") -> None:
-        src_path = os.path.join(fixed_session.session.proj_root, "src")
-        self._fixed_session = fixed_session
-        self._log = CppRustDocStringParser.get_logging_docstrings(src_path)
-
-    def names(self) -> list[str]:
-        """Get the list of log names.
-
-        Returns:
-            list[str]: The list of log names.
-
-        Example:
-            List every log channel the solver can emit, then confirm a
-            channel of interest is present::
-
-                names = session.get.log.names()
-                assert "time-per-frame" in names
-        """
-        return list(self._log.keys())
-
-    def _tail_file(self, path: str, n_lines: Optional[int] = None) -> list[str]:
-        """Get the last n lines of a file.
-
-        Args:
-            path (str): The path to the file.
-            n_lines (Optional[int], optional): The number of lines. Defaults to None.
-
-        Returns:
-            list[str]: The last n lines of the file.
-        """
-        if os.path.exists(path):
-            with open(path) as f:
-                lines = f.readlines()
-                lines = [line.rstrip("\n") for line in lines]
-                if n_lines is not None:
-                    return lines[-n_lines:]
-                else:
-                    return lines
-        return []
-
-    def stdout(self, n_lines: Optional[int] = None) -> list[str]:
-        """Get the last n lines of the stdout log file.
-
-        Args:
-            n_lines (Optional[int], optional): The number of lines. Defaults to None.
-
-        Returns:
-            list[str]: The last n lines of the stdout log file.
-
-        Example:
-            Print the last 8 lines of solver stdout for a quick health
-            check::
-
-                for line in session.get.log.stdout(n_lines=8):
-                    print(line)
-        """
-        return self._tail_file(
-            os.path.join(self._fixed_session.info.path, "stdout.log"), n_lines
-        )
-
-    def stderr(self, n_lines: Optional[int] = None) -> list[str]:
-        """Get the last n lines of the stderr log file.
-
-        Args:
-            n_lines (Optional[int], optional): The number of lines. Defaults to None.
-
-        Returns:
-            list[str]: The last n lines of the stderr log file.
-
-        Example:
-            Surface any solver errors without loading the full log::
-
-                for line in session.get.log.stderr(n_lines=20):
-                    print(line)
-        """
-        return self._tail_file(
-            os.path.join(self._fixed_session.info.path, "error.log"), n_lines
-        )
-
-    def numbers(self, name: str):
-        """Get the list of (x, y) number pairs recorded for a given log.
-
-        Args:
-            name (str): The name of the log.
-
-        Returns:
-            Optional[list[list[float | int]]]: The list of number pairs, or
-            ``None`` if the log name is unknown or the backing file does not
-            exist. Integer-valued entries are returned as ``int``.
-
-        Example:
-            Average wall-clock time per video frame::
-
-                pairs = session.get.log.numbers("time-per-frame")
-                avg_ms = sum(n for _, n in pairs) / len(pairs)
-        """
-
-        def float_or_int(var):
-            var = float(var)
-            if var.is_integer():
-                return int(var)
-            else:
-                return var
-
-        if name not in self._log:
-            return None
-        filename = self._log[name]["filename"]
-        path = os.path.join(self._fixed_session.info.path, "output", "data", filename)
-        entries = []
-        if os.path.exists(path):
-            with open(path) as f:
-                lines = f.readlines()
-                for line in lines:
-                    entry = line.split(" ")
-                    entries.append([float_or_int(entry[0]), float_or_int(entry[1])])
-            return entries
-        else:
-            return None
-
-    def number(self, name: str):
-        """Get the latest value from a log.
-
-        Args:
-            name (str): The name of the log.
-
-        Returns:
-            Optional[float | int]: The latest recorded value, or ``None`` if
-            unavailable.
-
-        Example:
-            Read the most recent Newton iteration count::
-
-                latest = session.get.log.number("newton-steps")
-                print(latest)
-        """
-        entries = self.numbers(name)
-        if entries:
-            return entries[-1][1]
-        else:
-            return None
-
-    def summary(self):
-        """Get a summary of the session log using the latest values of key metrics.
-
-        Returns:
-            dict: A dictionary mapping metric name to a formatted latest value.
-            When ``max-sigma`` is positive, a ``"stretch"`` entry is also
-            included as a percentage.
-
-        Example:
-            Print a compact summary of the solver's current status::
-
-                print(session.get.log.summary())
-        """
-        time_per_frame = convert_time(self.number("time-per-frame"))
-        time_per_step = convert_time(self.number("time-per-step"))
-        n_contact = convert_integer(self.number("num-contact"))
-        n_newton = convert_integer(self.number("newton-steps"))
-        max_sigma = self.number("max-sigma")
-        n_pcg = convert_integer(self.number("pcg-iter"))
-        result = {
-            "time-per-frame": time_per_frame,
-            "time-per-step": time_per_step,
-            "num-contact": n_contact,
-            "newton-steps": n_newton,
-            "pcg-iter": n_pcg,
-        }
-        if max_sigma is not None and max_sigma > 0.0:
-            result["stretch"] = f"{100.0 * (max_sigma - 1.0):.2f}%"
-        return result
-
-    def average_summary(self):
-        """Get averages for log-backed metrics only.
-
-        Returns:
-            dict: A dictionary containing averaged statistics. Metrics without a
-            corresponding existing ``.out`` file are omitted.
-
-        Example:
-            Print the run-averaged metrics after a simulation has finished::
-
-                print(session.get.log.average_summary())
-        """
-
-        def average(name: str):
-            entries = self.numbers(name)
-            if not entries:
-                return None
-            values = [entry[1] for entry in entries]
-            if not values:
-                return None
-            return sum(values) / len(values)
-
-        def maximum(name: str):
-            entries = self.numbers(name)
-            if not entries:
-                return None
-            values = [entry[1] for entry in entries]
-            if not values:
-                return None
-            return max(values)
-
-        result = {}
-        time_per_frame = average("time-per-frame")
-        if time_per_frame is not None:
-            result["time-per-frame"] = convert_time(time_per_frame)
-
-        time_per_step = average("time-per-step")
-        if time_per_step is not None:
-            result["time-per-step"] = convert_time(time_per_step)
-
-        n_contact = maximum("num-contact")
-        if n_contact is not None:
-            result["num-contact (max)"] = convert_integer(round(n_contact))
-
-        n_newton = average("newton-steps")
-        if n_newton is not None:
-            result["newton-steps"] = f"{n_newton:.2f}"
-
-        n_pcg = average("pcg-iter")
-        if n_pcg is not None:
-            result["pcg-iter"] = f"{n_pcg:.2f}"
-
-        max_sigma = average("max-sigma")
-        if max_sigma is not None and max_sigma > 0.0:
-            result["stretch"] = f"{100.0 * (max_sigma - 1.0):.2f}%"
-
-        return result
-
-
-class SessionGet:
-    """Class to handle session data retrieval operations.
-
-    Example:
-        Pull the most recent vertex buffer and a log channel from a running
-        or completed session::
-
-            vert, frame = session.get.vertex()
-            per_frame_ms = session.get.log.numbers("time-per-frame")
-    """
-
-    def __init__(self, fixed_session: "FixedSession"):
-        """Initialize the SessionGet class.
-
-        Args:
-            fixed_session (FixedSession): The fixed session object.
-        """
-        self._fixed_session = fixed_session
-        self._log = SessionLog(fixed_session)
-
-    @property
-    def log(self) -> SessionLog:
-        """Get the session log object.
-
-        Example:
-            Fetch the list of emitted log channels::
-
-                session = session.build().start(blocking=True)
-                channels = session.get.log.names()
-        """
-        return self._log
-
-    def vertex_frame_count(self) -> int:
-        """Get the highest frame index that has an exported vertex buffer.
-
-        Returns:
-            int: The highest frame index found in ``output/vert_*.bin``, or
-            ``0`` if none exist.
-
-        Example:
-            Wait until at least one frame is on disk before replaying::
-
-                while session.get.vertex_frame_count() == 0:
-                    time.sleep(0.5)
-        """
-        path = os.path.join(self._fixed_session.info.path, "output")
-        max_frame = 0
-        if os.path.exists(path):
-            files = os.listdir(path)
-            for file in files:
-                if file.startswith("vert") and file.endswith(".bin"):
-                    frame = int(file.split("_")[1].split(".")[0])
-                    max_frame = max(max_frame, frame)
-        return max_frame
-
-    def latest_frame(self) -> int:
-        """Get the latest frame number.
-
-        Returns:
-            int: The latest frame number.
-
-        Example:
-            Poll the most recent frame index while the solver runs::
-
-                frame = session.get.latest_frame()
-                print(f"solver is on frame {frame}")
-        """
-        path = os.path.join(self._fixed_session.info.path, "output")
-        if os.path.exists(path):
-            files = os.listdir(path)
-            frames = []
-            for file in files:
-                if file.startswith("vert") and file.endswith(".bin"):
-                    frame = int(file.split("_")[1].split(".")[0])
-                    frames.append(frame)
-            if len(frames) > 0:
-                return sorted(frames)[-1]
-        return 0
-
-    def saved(self) -> list[int]:
-        """Get the list of saved frame numbers.
-
-        Returns:
-            list[int]: The list of saved frame numbers.
-
-        Example:
-            Resume from the newest saved state if any exist::
-
-                saved = session.get.saved()
-                if saved:
-                    session.resume(max(saved))
-        """
-        result = []
-        output_path = os.path.join(self._fixed_session.info.path, "output")
-        if os.path.exists(output_path):
-            for file in os.listdir(output_path):
-                if file.startswith("state_") and file.endswith(".bin.gz"):
-                    try:
-                        frame = int(file.split("_")[1].split(".")[0])
-                    except (IndexError, ValueError):
-                        continue
-                    result.append(frame)
-        return result
-
-    def vertex(self, n: Optional[int] = None) -> Optional[tuple[np.ndarray, int]]:
-        """Get the vertex data for a specific frame.
-
-        Args:
-            n (Optional[int], optional): The frame number. If ``None``, the
-                latest frame is returned. Defaults to ``None``.
-
-        Returns:
-            Optional[tuple[np.ndarray, int]]: A tuple ``(vertices, frame)``
-            where ``vertices`` has shape ``(N, 3)`` and dtype ``float32``, or
-            ``None`` if no data is available.
-
-        Example:
-            Read the latest exported vertex buffer from disk::
-
-                result = session.get.vertex()
-                if result is not None:
-                    vert, frame = result
-                    print(vert.shape, frame)
-        """
-        path = os.path.join(self._fixed_session.info.path, "output")
-        if os.path.exists(path):
-            if n is None:
-                files = os.listdir(path)
-                frames = []
-                for file in files:
-                    if file.startswith("vert") and file.endswith(".bin"):
-                        try:
-                            frame = int(file.split("_")[1].split(".")[0])
-                        except (IndexError, ValueError):
-                            continue
-                        frames.append(frame)
-                if len(frames) > 0:
-                    frames = sorted(frames)
-                    last_frame = frames[-1]
-                    path = os.path.join(path, f"vert_{last_frame}.bin")
-                    try:
-                        with open(path, "rb") as f:
-                            data = f.read()
-                            vert = np.frombuffer(data, dtype=np.float32).reshape(-1, 3)
-                        return (
-                            vert,
-                            last_frame,
-                        )
-                    except ValueError:
-                        return None
-            else:
-                try:
-                    path = os.path.join(path, f"vert_{n}.bin")
-                    if os.path.exists(path):
-                        with open(path, "rb") as f:
-                            data = f.read()
-                            vert = np.frombuffer(data, dtype=np.float32).reshape(-1, 3)
-                        return (vert, n)
-                except ValueError:
-                    pass
-        return None
-
-    def command(self) -> Optional[str]:
-        """Get the path to the solver launcher script.
-
-        On Windows this points at ``command.bat``; elsewhere at
-        ``command.sh``.
-
-        Returns:
-            Optional[str]: The path to the launcher script if it exists,
-            ``None`` otherwise.
-
-        Example:
-            Print the launcher path so it can be re-run from a shell::
-
-                path = session.get.command()
-                if path:
-                    print(path)
-        """
-        if platform.system() == "Windows":  # Windows
-            command_path = os.path.join(self._fixed_session.info.path, "command.bat")
-        else:
-            command_path = os.path.join(self._fixed_session.info.path, "command.sh")
-        if os.path.exists(command_path):
-            return command_path
-        return None
-
-    def param_summary(self) -> list[str]:
-        """Get the parameter summary from the param_summary.txt file.
-
-        Returns:
-            list[str]: The lines from the parameter summary file, or empty list if file doesn't exist.
-
-        Example:
-            Print the parameter summary captured by the solver at launch::
-
-                for line in session.get.param_summary():
-                    print(line)
-        """
-        summary_path = os.path.join(self._fixed_session.info.path, "param_summary.txt")
-        if os.path.exists(summary_path):
-            with open(summary_path) as f:
-                return [line.rstrip("\n") for line in f.readlines()]
-        return []
-
-    def nvidia_smi(self) -> None:
-        """Read and print the exported nvidia-smi outputs.
-
-        Reads both nvidia-smi.txt and nvidia-smi-q.txt from the nvidia-smi directory
-        and prints their concatenated contents.
-
-        Example:
-            Inspect the GPU state captured at the start of a run::
-
-                session.get.nvidia_smi()
-        """
-        nvidia_smi_dir = os.path.join(self._fixed_session.info.path, "nvidia-smi")
-        nvidia_smi_path = os.path.join(nvidia_smi_dir, "nvidia-smi.txt")
-        nvidia_smi_q_path = os.path.join(nvidia_smi_dir, "nvidia-smi-q.txt")
-
-        output = ""
-
-        if os.path.exists(nvidia_smi_path):
-            with open(nvidia_smi_path) as f:
-                output += f.read()
-                output += "\n" + "=" * 80 + "\n\n"
-        else:
-            output += "nvidia-smi.txt not found\n\n"
-
-        if os.path.exists(nvidia_smi_q_path):
-            with open(nvidia_smi_q_path) as f:
-                output += f.read()
-        else:
-            output += "nvidia-smi-q.txt not found\n"
-
-        print(output)
 
 
 class FixedSession:
@@ -1561,18 +445,6 @@ class FixedSession:
         # Fall back to Utils.busy() for cases where process was started externally
         return Utils.busy()
 
-    def running(self) -> bool:
-        """Alias for :meth:`is_running`.
-
-        Example:
-            Shorthand form for polling solver state::
-
-                session.start()
-                while session.running():
-                    time.sleep(1)
-        """
-        return self.is_running()
-
     def run(self, blocking: Optional[bool] = None) -> "FixedSession":
         """Idempotent launcher: ensure the solver is running.
 
@@ -1615,62 +487,7 @@ class FixedSession:
         Returns:
             str or None: Single most critical error message, or None if no specific error found
         """
-        all_lines = log_lines + err_lines
-
-        error_patterns = [
-            (
-                "cuda: no device found",
-                "No CUDA device found",
-            ),
-            (
-                "### ccd failed",
-                "Continuous Collision Detection failed",
-            ),
-            (
-                "### cg failed",
-                "Linear solver failed",
-            ),
-            (
-                "### intersection detected",
-                "Intersection detected",
-            ),
-            (
-                "Error: reduce buffer size is too small",
-                "Insufficient GPU memory",
-            ),
-            (
-                "stack overflow",
-                "BVH traversal stack overflow",
-            ),
-            (
-                "Overflow detected",
-                "Numerical overflow",
-            ),
-            (
-                "e.squarednorm() > sqr(offset)",
-                "Contact offset too large: a rod vertex is within offset distance "
-                "of a triangle face. Reduce contact-offset or increase separation.",
-            ),
-        ]
-
-        for line in all_lines:
-            line_lower = line.lower().strip()
-            for pattern, message in error_patterns:
-                if pattern.lower() in line_lower:
-                    return message
-
-        # Check for panic/assertion with surrounding context
-        for i, line in enumerate(all_lines):
-            if "panicked at" in line or "assertion failed" in line.lower():
-                context_lines = []
-                # Include up to 3 lines before and after for context
-                for j in range(max(0, i - 3), min(len(all_lines), i + 4)):
-                    stripped = all_lines[j].strip()
-                    if stripped:
-                        context_lines.append(stripped)
-                return "\n".join(context_lines)
-
-        return None
+        return _rust.analyze_solver_error(list(log_lines), list(err_lines))
 
     def delete(self):
         """Delete the session.
@@ -1680,8 +497,7 @@ class FixedSession:
 
                 session.delete()
         """
-        if os.path.exists(self.info.path):
-            shutil.rmtree(self.info.path)
+        _rust.delete_session_dir(self.info.path)
 
     def _check_ready(self):
         """Check if the session is ready."""
@@ -1703,12 +519,11 @@ class FixedSession:
                 if app.ci:
                     assert session.finished()
         """
-        finished_path = os.path.join(self.output.path, "finished.txt")
         error = self.get.log.stderr()
         if len(error) > 0:
             for line in error:
                 print(line)
-        return os.path.exists(finished_path)
+        return _rust.marker_exists(self.output.path, "finished.txt")
 
     def initialize_finished(self) -> bool:
         """Check if the session initialization has finished.
@@ -1725,12 +540,11 @@ class FixedSession:
                 while not session.initialize_finished():
                     time.sleep(1)
         """
-        initialize_finish_path = os.path.join(self.output.path, "initialize_finish.txt")
         error = self.get.log.stderr()
         if len(error) > 0:
             for line in error:
                 print(line)
-        return os.path.exists(initialize_finish_path)
+        return _rust.marker_exists(self.output.path, "initialize_finish.txt")
 
     def resume(
         self,
@@ -1758,17 +572,13 @@ class FixedSession:
         if self._param is None:
             print("Session is not yet started")
             return self
-        if frame == -1:
-            saved = self.get.saved()
-            if len(saved) > 0:
-                frame = max(saved)
-            else:
+        target = _rust.select_resume_frame(self.get.saved(), int(frame))
+        if target is None:
+            if frame == -1:
                 return self
-        if frame > 0:
-            return self.start(force, blocking, frame)
-        else:
             print(f"No saved state found: frame: {frame}")
             return self
+        return self.start(force, blocking, int(target))
 
     def start(
         self,
@@ -1812,15 +622,12 @@ class FixedSession:
         """
         Utils.check_gpu()
 
-        driver_version = Utils.get_driver_version()
-        min_driver_version = 520
-        if driver_version:
-            if driver_version < min_driver_version:
-                raise ValueError(
-                    f"Driver version is {driver_version}. It must be newer than {min_driver_version}"
-                )
-        else:
-            raise ValueError("Driver version could not be detected.")
+        # Driver version check + error message templating live in Rust;
+        # detection (`nvidia-smi --query-gpu=driver_version`) stays in
+        # Python because it shells out.
+        err = _rust.validate_driver_version(Utils.get_driver_version(), 520)
+        if err is not None:
+            raise ValueError(err)
 
         nvidia_smi_dir = os.path.join(self.info.path, "nvidia-smi")
         os.makedirs(nvidia_smi_dir, exist_ok=True)
@@ -1870,7 +677,7 @@ class FixedSession:
 
         if self._cmd_path:
             if load == 0:
-                export_path = os.path.join(
+                export_path = _rust.export_base_path_for(
                     get_export_base_path(),
                     self._session.app_name,
                     self.info.name,
@@ -1878,12 +685,9 @@ class FixedSession:
                 if os.path.exists(export_path):
                     shutil.rmtree(export_path)
 
-            err_path = os.path.join(self.info.path, "error.log")
-            log_path = os.path.join(self.info.path, "stdout.log")
-            if platform.system() == "Windows":  # Windows
-                command = f'"{self._cmd_path}" --load {load}'
-            else:
-                command = f"bash {self._cmd_path} --load {load}"
+            log_path, err_path = _rust.stdout_error_log_paths(self.info.path)
+            which = "windows" if platform.system() == "Windows" else "unix"
+            command = _rust.solver_subprocess_command(self._cmd_path, load, which)
             with open(log_path, "w") as stdout_file, open(err_path, "w") as stderr_file:
                 if platform.system() == "Windows":  # Windows
                     self._process = subprocess.Popen(
@@ -1921,42 +725,25 @@ class FixedSession:
                     rc = process.poll() if process is not None else None
                     if rc is None or rc == 0:
                         # Clean exit (or process not yet observable but
-                        # is_running() reported false — give it the benefit
-                        # of the doubt rather than raise on stale state).
+                        # is_running() reported false; give it the
+                        # benefit of the doubt rather than raise on
+                        # stale state).
                         return self
-                    if os.path.exists(err_path):
-                        with open(err_path) as f:
-                            err_lines = f.readlines()
-                    else:
-                        err_lines = []
-                    if os.path.exists(log_path):
-                        with open(log_path) as f:
-                            log_lines = f.readlines()
-                    else:
-                        log_lines = []
+                    err_lines = _rust.read_lines_with_newlines(err_path)
+                    log_lines = _rust.read_lines_with_newlines(log_path)
                     error_message = self._analyze_solver_error(log_lines, err_lines)
                     if error_message:
                         raise ValueError(error_message)
                     elif err_lines:
-                        raise ValueError(f"Solver failed: {''.join(err_lines[:5])}")
+                        raise ValueError(_rust.solver_failed_short_message(err_lines))
                     else:
-                        raise ValueError(
-                            f"Solver failed to start (rc={rc})"
-                        )
+                        raise ValueError(_rust.solver_failed_to_start_message(rc))
             if blocking:
                 while not os.path.exists(log_path) and not os.path.exists(err_path):
                     time.sleep(1)
                 if process.poll() is not None:
-                    if os.path.exists(log_path):
-                        with open(log_path) as f:
-                            log_lines = f.readlines()
-                    else:
-                        log_lines = []
-                    if os.path.exists(err_path):
-                        with open(err_path) as f:
-                            err_lines = f.readlines()
-                    else:
-                        err_lines = []
+                    log_lines = _rust.read_lines_with_newlines(log_path)
+                    err_lines = _rust.read_lines_with_newlines(err_path)
                     display_log(log_lines)
                     display_log(err_lines)
 
@@ -1972,16 +759,8 @@ class FixedSession:
                             break
                         time.sleep(1)
                     if not self.initialize_finished():
-                        if os.path.exists(log_path):
-                            with open(log_path) as f:
-                                log_lines = f.readlines()
-                        else:
-                            log_lines = []
-                        if os.path.exists(err_path):
-                            with open(err_path) as f:
-                                err_lines = f.readlines()
-                        else:
-                            err_lines = []
+                        log_lines = _rust.read_lines_with_newlines(log_path)
+                        err_lines = _rust.read_lines_with_newlines(err_path)
                         display_log(log_lines)
                         display_log(err_lines)
 
@@ -2004,18 +783,13 @@ class FixedSession:
                             pbar.update(frame - last_frame)
                             last_frame = frame
                         time.sleep(1)
-                if os.path.exists(err_path):
-                    with open(err_path) as f:
-                        err_lines = f.readlines()
-                else:
-                    err_lines = []
+                err_lines = _rust.read_lines_with_newlines(err_path)
                 if len(err_lines) > 0:
                     print("*** Solver FAILED ***")
                 else:
                     print("*** Solver finished ***")
                 n_logs = 32
-                with open(log_path) as f:
-                    log_lines = f.readlines()
+                log_lines = _rust.read_lines_with_newlines(log_path)
                 print(">>> Log:")
                 for line in log_lines[-n_logs:]:
                     print(line.rstrip())
@@ -2026,16 +800,16 @@ class FixedSession:
                     print(f">>> Error log path: {err_path}")
 
             fixed_scene = self.fixed_scene
-            max_strain_limit = 0.0
-            if fixed_scene is not None:
-                vals = [
+            vals = (
+                [
                     x
                     for x in fixed_scene.tri_param.get("strain-limit", [])
                     if isinstance(x, float)
                 ]
-                if vals:
-                    max_strain_limit = max(vals)
-            self._default_opts["max-area"] = 1.0 + max_strain_limit
+                if fixed_scene is not None
+                else []
+            )
+            self._default_opts["max-area"] = 1.0 + _rust.max_strain_limit_default_zero(vals)
         else:
             raise ValueError("Command path is not set. Call build() first.")
         return self
@@ -2082,7 +856,7 @@ class FixedSession:
                 path = session.save_and_quit_file_path()
                 print(os.path.exists(path))
         """
-        return os.path.join(self.info.path, "output", "save_and_quit")
+        return _rust.save_and_quit_file_path(self.info.path)
 
     def save_and_quit(self):
         """Save the session and quit the solver.
@@ -2094,10 +868,7 @@ class FixedSession:
                 while session.is_running():
                     time.sleep(1)
         """
-        open(
-            self.save_and_quit_file_path(),
-            "w",
-        ).close()
+        _rust.touch_save_and_quit(self.info.path)
 
     def _save_and_quit_button(self, description: str = "Save and Quit"):
         """Create a save-and-quit button.
@@ -2336,19 +1107,19 @@ class FixedSession:
                 try:
                     if fixed_scene is not None:
                         # Wait for at least one frame to be ready
-                        frame_count = self.get.vertex_frame_count()
+                        frame_count = self.get.latest_frame()
                         if frame_count == 0:
                             print(
                                 "Waiting for simulation to generate at least one frame..."
                             )
-                            while self.get.vertex_frame_count() == 0:
+                            while self.get.latest_frame() == 0:
                                 if not self.is_running():
                                     print(
                                         "Simulation finished but no frames were generated."
                                     )
                                     return self
                                 time.sleep(0.5)
-                            frame_count = self.get.vertex_frame_count()
+                            frame_count = self.get.latest_frame()
                             print(f"Found {frame_count} frame(s). Loading animation...")
 
                         vert_list = []
@@ -2389,7 +1160,7 @@ class FixedSession:
                             button.description = "Reloading..."
                             try:
                                 # Reload frames from disk
-                                new_frame_count = self.get.vertex_frame_count()
+                                new_frame_count = self.get.latest_frame()
                                 if new_frame_count > len(vert_list):
                                     for i in range(len(vert_list), new_frame_count):
                                         result = self.get.vertex(i)
@@ -2454,8 +1225,7 @@ class FixedSession:
             assert save_and_quit_button is not None
 
             stop = False
-            log_path = os.path.join(self.info.path, "stdout.log")
-            err_path = os.path.join(self.info.path, "error.log")
+            log_path, err_path = _rust.stdout_error_log_paths(self.info.path)
             if os.path.exists(log_path):
 
                 def live_stream(self):
@@ -2473,29 +1243,21 @@ class FixedSession:
 
                     while not stop:
                         # Read last n_lines from log file (cross-platform)
-                        if os.path.exists(log_path):
-                            with open(log_path) as f:
-                                lines = f.readlines()
-                                tail_lines = (
-                                    lines[-n_lines:] if len(lines) > n_lines else lines
-                                )
-                                tail_output = "".join(tail_lines).strip()
-                        else:
-                            tail_output = ""
+                        # via Rust; the helper handles the missing-file
+                        # case and the lines[-n:] + strip() squash.
+                        tail_output = _rust.read_log_tail_joined(log_path, n_lines)
                         log_widget.value = (
                             CONSOLE_STYLE
                             + f"<pre style='no-scroll'>{tail_output}</pre>"
                         )
                         if not self.is_running():
                             log_widget.value += "<p style='color: red;'>Terminated.</p>"
-                            if os.path.exists(err_path):
-                                with open(err_path) as file:
-                                    lines = file.readlines()
-                                if len(lines) > 0:
-                                    log_widget.value += "<p style='color: red;'>"
-                                    for line in lines:
-                                        log_widget.value += line + "\n"
-                                    log_widget.value += "</p>"
+                            lines = _rust.read_lines_with_newlines(err_path)
+                            if len(lines) > 0:
+                                log_widget.value += "<p style='color: red;'>"
+                                for line in lines:
+                                    log_widget.value += line + "\n"
+                                log_widget.value += "</p>"
 
                             button.disabled = True
                             terminate_button.disabled = True
@@ -2726,14 +1488,11 @@ class Session:
                 fixed_session.start(blocking=True)
         """
         self._fixed_session = FixedSession(self)
-        # Use app name with counter suffix if autogenerated
-        if self._autogenerated is not None:
-            if self._autogenerated == 0:
-                symlink_name = self._app_name
-            else:
-                symlink_name = f"{self._app_name}-{self._autogenerated}"
-        else:
-            symlink_name = self._name
+        symlink_name = _rust.session_build_symlink_name(
+            self._app_name,
+            self._name,
+            self._autogenerated,
+        )
         self._save_fixed_session(self._fixed_session, symlink_name)
         return self._fixed_session
 
@@ -2741,16 +1500,23 @@ class Session:
         self, fixed_session: FixedSession, name: Optional[str] = None
     ):
         """Save the fixed session to a recoverable file and create a symlink."""
-        session_path = os.path.join(
-            fixed_session.info.path, RECOVERABLE_FIXED_SESSION_NAME
+        from . import _cbor_bridge_ as _cbor
+
+        _, session_path = _rust.session_fixed_dir_layout(
+            self._app_root, fixed_session.info.name
         )
+        # Native CBOR envelope: structured fields the user can inspect
+        # with any CBOR reader, plus a ``pickle_blob`` for the deep
+        # ``Session`` / ``ParamHolder`` / ``FixedScene`` graph that
+        # has no schema-level CBOR representation today.
+        pickled = pickle.dumps(fixed_session)
+        payload = fixed_session_to_cbor_dict(fixed_session, pickled)
         with open(session_path, "wb") as f:
-            pickle.dump(fixed_session, f)
+            f.write(_cbor.dumps_envelope(_cbor.KIND_FIXED_SESSION, payload))
 
         if name:
-            symlink_dir = os.path.join(self._data_dirpath, "symlinks")
-            os.makedirs(symlink_dir, exist_ok=True)
-            symlink_path = os.path.join(symlink_dir, name)
+            symlink_path = _rust.session_symlink_target_path(self._data_dirpath, name)
+            os.makedirs(os.path.dirname(symlink_path), exist_ok=True)
 
             if os.path.islink(symlink_path):
                 os.unlink(symlink_path)
@@ -2766,114 +1532,43 @@ class Session:
                     f.write(fixed_session.info.path)
 
 
-def display_log(lines: list[str]):
-    """Display the log lines.
+def fixed_session_to_cbor_dict(
+    fixed_session: "FixedSession", pickle_blob: bytes
+) -> dict:
+    """Build the native CBOR map payload for a recoverable fixed session.
 
-    Args:
-        lines (list[str]): The log lines.
+    Inspectable metadata (name, on-disk paths, basic param state)
+    sits at the top level so a generic CBOR reader can identify a
+    saved session without unpickling. ``pickle_blob`` carries the
+    full ``Session`` / ``ParamHolder`` / ``FixedScene`` graph for
+    rehydration in :meth:`App.recover`.
     """
-    lines = [line.rstrip("\n") for line in lines]
-    if Utils.in_jupyter_notebook():
-        import ipywidgets as widgets
+    params: dict[str, Any] = {}
+    try:
+        for key, val in fixed_session.session.param.items():
+            # Only keep CBOR-friendly scalar metadata; complex values
+            # (arrays, schedule tuples) survive via ``pickle_blob``.
+            if isinstance(val, (bool, int, float, str, type(None))):
+                params[str(key)] = val
+    except Exception:
+        # Param introspection is metadata-only; failing here would
+        # block the whole save. The pickle_blob still carries the
+        # authoritative state.
+        params = {}
 
-        from IPython.display import display
+    info = fixed_session.info
+    output_path = ""
+    try:
+        output_path = fixed_session.output.path
+    except Exception:
+        output_path = ""
 
-        log_widget = widgets.HTML()
-        text = "\n".join(lines)
-        log_widget.value = CONSOLE_STYLE + f"<pre style='no-scroll'>{text}</pre>"
-        display(log_widget)
-    else:
-        for line in lines:
-            print(line)
+    return {
+        "info_name": info.name,
+        "info_path": info.path,
+        "output_path": output_path,
+        "cmd_path": getattr(fixed_session, "_cmd_path", "") or "",
+        "params": params,
+        "pickle_blob": pickle_blob,
+    }
 
-
-def convert_time(time) -> str:
-    if time is None:
-        return "N/A"
-    elif time < 1_000:
-        return f"{int(time)}ms"
-    elif time < 60_000:
-        return f"{time / 1_000:.2f}s"
-    else:
-        return f"{time / 60_000:.2f}m"
-
-
-def convert_integer(number) -> str:
-    if number is None:
-        return "N/A"
-    elif number < 1000:
-        return str(number)
-    elif number < 1_000_000:
-        return f"{number / 1_000:.2f}k"
-    elif number < 1_000_000_000:
-        return f"{number / 1_000_000:.2f}M"
-    else:
-        return f"{number / 1_000_000_000:.2f}B"
-
-
-def read_average_summary_from_disk(session_root: str) -> dict:
-    """Read averaged simulation stats from .out files on disk.
-
-    Standalone function usable without a FixedSession — uses the same
-    docstring parser and metric definitions as SessionLog.average_summary().
-
-    Args:
-        session_root: Path to the session directory (containing output/data/*.out).
-
-    Returns:
-        dict with formatted stats (same format as SessionLog.average_summary).
-    """
-    data_dir = os.path.join(session_root, "output", "data")
-    if not os.path.isdir(data_dir):
-        return {}
-
-    # Discover log name → filename mapping from source code
-    src_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src")
-    from ._parse_ import CppRustDocStringParser
-    log_map = CppRustDocStringParser.get_logging_docstrings(src_path)
-
-    def _read_values(name: str):
-        if name not in log_map:
-            return None
-        path = os.path.join(data_dir, log_map[name]["filename"])
-        if not os.path.exists(path):
-            return None
-        values = []
-        with open(path) as f:
-            for line in f:
-                parts = line.strip().split()
-                if len(parts) >= 2:
-                    try:
-                        values.append(float(parts[1]))
-                    except ValueError:
-                        pass
-        return values if values else None
-
-    def _avg(name):
-        v = _read_values(name)
-        return sum(v) / len(v) if v else None
-
-    def _max(name):
-        v = _read_values(name)
-        return max(v) if v else None
-
-    result = {}
-    val = _avg("time-per-frame")
-    if val is not None:
-        result["time-per-frame"] = convert_time(val)
-    val = _avg("time-per-step")
-    if val is not None:
-        result["time-per-step"] = convert_time(val)
-    val = _max("num-contact")
-    if val is not None:
-        result["num-contact (max)"] = convert_integer(round(val))
-    val = _avg("newton-steps")
-    if val is not None:
-        result["newton-steps"] = f"{val:.2f}"
-    val = _avg("pcg-iter")
-    if val is not None:
-        result["pcg-iter"] = f"{val:.2f}"
-    val = _avg("max-sigma")
-    if val is not None and val > 0.0:
-        result["stretch"] = f"{100.0 * (val - 1.0):.2f}%"
-    return result

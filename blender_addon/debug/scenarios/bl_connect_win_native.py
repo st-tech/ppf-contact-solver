@@ -3,17 +3,17 @@
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
 # License: Apache v2.0
 #
-# Phase-2: Windows-only counterpart to bl_connect_local. Sets the
-# addon's backend to WIN_NATIVE and points it at the worker's debug
-# server. Requires ``PPF_WIN_NATIVE_NO_SPAWN=1`` in the environment so
-# the addon's connect_win_native skips its embedded-Python detection
-# and server.py Popen; the rig has already started the server.
+# Windows-only counterpart to bl_connect_local. Sets the addon's
+# backend to WIN_NATIVE and points it at the worker's debug server.
+# Requires ``PPF_WIN_NATIVE_NO_SPAWN=1`` in the environment so the
+# addon's connect_win_native skips its embedded-Python detection and
+# ppf-cts-server.exe Popen; the rig has already started the server.
 
 from __future__ import annotations
 
-import os
 
 from . import _runner as r
+from . import REPO_ROOT_POSIX
 
 
 NEEDS_BLENDER = True
@@ -66,9 +66,7 @@ except Exception as exc:
 
 def build_driver(ctx: r.ScenarioContext) -> str:
     """Return the Python source the bootstrap will exec inside Blender."""
-    repo_root = os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "..", "..", "..")
-    )
+    repo_root = REPO_ROOT_POSIX
     return (
         _DRIVER_TEMPLATE
         .replace("<<LOCAL_PATH_REPR>>", repr(repo_root))

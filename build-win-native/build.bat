@@ -35,7 +35,10 @@ echo.
 REM Get parent directory (SRC_DIR)
 for %%I in ("%BUILD_WIN%\..") do set SRC_DIR=%%~fI
 
-set CPP_DIR=%SRC_DIR%\src\cpp
+REM CUDA driver lives at crates\ppf-cts-solver\; its src\cpp tree
+REM (and the build\ output produced by nvcc) sits alongside the Rust
+REM source.
+set CPP_DIR=%SRC_DIR%\crates\ppf-cts-solver\src\cpp
 set OUT_DIR=%CPP_DIR%\build
 set LIB_DIR=%OUT_DIR%\lib
 set DEPS=%BUILD_WIN%\deps
@@ -51,6 +54,28 @@ if not exist "%CUDA_DIR%\bin\nvcc.exe" (
     exit /b 1
 )
 echo Using local CUDA from %CUDA_PATH%
+
+REM Embedded Python from warmup.bat. Used by step [4/5] to install the
+REM PyO3 wheel so the frontend's `import _ppf_cts_py` resolves.
+set PYTHON_EXE=%BUILD_WIN%\python\python.exe
+if not exist "%PYTHON_EXE%" (
+    echo ERROR: Embedded Python not found at %PYTHON_EXE%
+    echo Please run warmup.bat first.
+    exit /b 1
+)
+
+REM Full Python install (with libs\python3.lib + include\), needed only
+REM as the maturin interpreter for the PyO3 build because the embedded
+REM Python distribution from python.org strips libs/include. The
+REM resulting abi3-py38 wheel still loads in the embedded Python at
+REM runtime. Installed by warmup.bat via the regular python.org
+REM installer at python_full\.
+set PYTHON_FULL_EXE=%BUILD_WIN%\python_full\python.exe
+if not exist "%PYTHON_FULL_EXE%" (
+    echo ERROR: Full Python not found at %PYTHON_FULL_EXE%
+    echo Please run warmup.bat first ^(it installs python_full alongside the embedded python^).
+    exit /b 1
+)
 
 REM Use local Rust if installed by warmup.bat
 if exist "%RUST_DIR%\bin\cargo.exe" (
@@ -177,11 +202,85 @@ if errorlevel 1 (
     echo ERROR: Rust build failed
     exit /b 1
 )
+
+REM Workspace default-members only includes ppf-cts-solver (binary
+REM ppf-contact-solver.exe), so ppf-cts-server isn't built by the
+REM line above. The Blender addon's Windows Native launcher
+REM (blender_addon/core/connection.py:spawn_win_native_server) spawns
+REM target\release\ppf-cts-server.exe whenever the user picks
+REM "Windows Native" mode in the addon UI, so build it explicitly so
+REM the bundle ships with both binaries.
+echo Building ppf-cts-server...
+cargo build --release -p ppf-cts-server
+if errorlevel 1 (
+    echo ERROR: ppf-cts-server build failed
+    exit /b 1
+)
+if not exist "%SRC_DIR%\target\release\ppf-cts-server.exe" (
+    echo ERROR: target\release\ppf-cts-server.exe not found after build
+    exit /b 1
+)
 echo   [DONE] Rust build complete
 
 echo.
 echo ============================================================
-echo [4/4] Creating Launcher Scripts
+echo [4/5] Installing _ppf_cts_py PyO3 wheel
+echo ============================================================
+echo.
+
+REM `frontend/__init__.py` does `import _ppf_cts_py as _rust` at the top
+REM level, so every Python entry point (fast-check, jupyter notebooks,
+REM the build-worker subprocess that ppf-cts-server spawns) requires
+REM the wheel to be installed in the embedded Python. The Linux/macOS
+REM build-all.sh runs the same step against $HOME/.local/share/ppf-cts/venv.
+REM
+REM Build with python_full (regular CPython installer, has libs and
+REM include/), pip install the resulting abi3 wheel into the embedded
+REM Python (which strips libs/ so it can't link directly).
+"%PYTHON_FULL_EXE%" -m pip show maturin >nul 2>&1
+if errorlevel 1 (
+    echo Installing maturin into python_full...
+    "%PYTHON_FULL_EXE%" -m pip install --no-warn-script-location maturin
+    if errorlevel 1 (
+        echo ERROR: maturin install failed
+        exit /b 1
+    )
+)
+echo Building _ppf_cts_py wheel via maturin build --release...
+cd /d "%SRC_DIR%\crates\ppf-cts-py"
+REM Push python_full to the front of PATH and set PYO3_PYTHON
+REM explicitly. PyO3's build script picks an interpreter from
+REM whichever is found first on PATH if PYO3_PYTHON isn't set, and
+REM `--interpreter` alone doesn't override that — the embedded
+REM python (which is on PATH from the launcher fragment above) lacks
+REM libs\python3.lib so its link step fails.
+set "PATH=%BUILD_WIN%\python_full;%PATH%"
+set "PYO3_PYTHON=%PYTHON_FULL_EXE%"
+"%PYTHON_FULL_EXE%" -m maturin build --release --interpreter "%PYTHON_FULL_EXE%"
+if errorlevel 1 (
+    echo ERROR: maturin build failed
+    exit /b 1
+)
+echo Installing _ppf_cts_py wheel into embedded Python...
+REM maturin emits the wheel under <workspace>/target/wheels/. We force
+REM reinstall so a stale wheel from a prior build is replaced.
+for /f "delims=" %%w in ('dir /b /o-d "%SRC_DIR%\target\wheels\ppf_cts_py-*.whl" 2^>nul') do (
+    "%PYTHON_EXE%" -m pip install --no-warn-script-location --force-reinstall "%SRC_DIR%\target\wheels\%%w"
+    if errorlevel 1 (
+        echo ERROR: pip install of %%w failed
+        exit /b 1
+    )
+    goto wheel_installed
+)
+echo ERROR: maturin produced no wheel under target\wheels\
+exit /b 1
+:wheel_installed
+cd /d "%SRC_DIR%"
+echo   [DONE] _ppf_cts_py installed
+
+echo.
+echo ============================================================
+echo [5/5] Creating Launcher Scripts
 echo ============================================================
 echo.
 
@@ -198,7 +297,7 @@ echo.
 echo set CUDA_PATH=%%BUILD_WIN%%\cuda
 echo.
 echo REM Set PATH to include binaries from their source locations
-echo set PATH=%%BUILD_WIN%%\python;%%BUILD_WIN%%\python\Scripts;%%SRC%%\target\release;%%SRC%%\src\cpp\build\lib;%%CUDA_PATH%%\bin;%%PATH%%
+echo set PATH=%%BUILD_WIN%%\python;%%BUILD_WIN%%\python\Scripts;%%SRC%%\target\release;%%SRC%%\crates\ppf-cts-solver\src\cpp\build\lib;%%CUDA_PATH%%\bin;%%PATH%%
 echo set PYTHONPATH=%%SRC%%;%%PYTHONPATH%%
 echo.
 echo REM Set Jupyter/IPython config to build-win-native relative paths
@@ -234,7 +333,7 @@ echo src = os.path.dirname^(script_dir^)
 echo.
 echo python_exe = os.path.join^(script_dir, "python", "pythonw.exe"^)
 echo bin_dir = os.path.join^(src, "target", "release"^)
-echo lib_dir = os.path.join^(src, "src", "cpp", "build", "lib"^)
+echo lib_dir = os.path.join^(src, "crates", "ppf-cts-solver", "src", "cpp", "build", "lib"^)
 echo cuda_path = os.path.join^(script_dir, "cuda"^)
 echo cuda_bin = os.path.join^(cuda_path, "bin"^)
 echo.

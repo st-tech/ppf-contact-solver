@@ -182,12 +182,13 @@ def register():
 
     state_ops.register()
 
-    # Make 'from zozo_contact_solver import solver' work in scripts
-    import sys
-
-    from . import api
-
-    sys.modules["zozo_contact_solver"] = api
+    # Note: do not inject ``sys.modules["zozo_contact_solver"] = api``
+    # here. Blender 5 extensions cannot register top-level Python
+    # modules outside their own extension id (else two extensions
+    # would collide on the global name), and the validator flags it
+    # as a policy violation. User scripts should import from the
+    # extension's package path:
+    # ``from bl_ext.user_default.ppf_contact_solver.ops.api import solver``.
 
     print(f"Registered {len(_generated_classes)} zozo_contact_solver.* operators")
 
@@ -203,10 +204,6 @@ def unregister():
         state_ops.unregister()
     except Exception:
         pass
-
-    import sys
-
-    sys.modules.pop("zozo_contact_solver", None)
 
     for cls in reversed(_generated_classes):
         try:

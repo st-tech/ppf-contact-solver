@@ -13,9 +13,9 @@
 #
 #   $TMPDIR/ppf-debug/<run-id>/
 #       worker-NN/
-#           server/   server.py CWD; progress.log + server.log land here
+#           server/   ppf-cts-server CWD; progress.log + server.log land here
 #           project/  PPF_CTS_DATA_ROOT shadow; data.pickle / vert_*.bin
-#           probe/    Blender-side probe artifacts (Phase 2)
+#           probe/    Blender-side probe artifacts (Blender-driven scenarios)
 #           scenario.log
 #       report.json
 
@@ -26,7 +26,6 @@ import multiprocessing as mp
 import os
 import secrets
 import shutil
-import signal
 import socket
 import subprocess
 import sys
@@ -46,7 +45,12 @@ import scenarios  # noqa: E402
 REPO_ROOT = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", "..")
 )
-SERVER_PY = os.path.join(REPO_ROOT, "server.py")
+SERVER_BIN = os.path.join(
+    REPO_ROOT,
+    "target",
+    "release",
+    "ppf-cts-server.exe" if os.name == "nt" else "ppf-cts-server",
+)
 # The debug server runs the **real** ``frontend`` Python module, so it
 # needs numpy / scipy / numba / pythreejs / pytetwild ... installed.
 # These are pre-installed in the project ``.venv``. Falls back to
@@ -59,6 +63,40 @@ else:
     DEFAULT_PYTHON = os.path.join(REPO_ROOT, ".venv", "bin", "python")
 if not os.path.isfile(DEFAULT_PYTHON):
     DEFAULT_PYTHON = sys.executable
+
+
+# ---------------------------------------------------------------------------
+# Addon-side cbor2 prep
+# ---------------------------------------------------------------------------
+
+def ensure_addon_cbor2(*, python: str = DEFAULT_PYTHON,
+                       timeout: float = 60.0) -> tuple[bool, str]:
+    """Make sure ``blender_addon/lib/cbor2/__init__.py`` exists.
+
+    The Rust-migration encoder calls ``cbor2.dumps`` on every Transfer
+    click, and the addon resolves it through ``core.module.import_module``
+    against ``blender_addon/lib/``. Production users get the wheel via
+    ``blender_manifest.toml``'s install flow; the test rig sideloads the
+    addon by junction so the wheel never lands on disk. Pip-install
+    cbor2 into the addon's lib/ once before any worker spawns Blender.
+    Idempotent: skips when the dir already exists.
+    """
+    addon_lib = os.path.join(REPO_ROOT, "blender_addon", "lib")
+    if os.path.isdir(os.path.join(addon_lib, "cbor2")):
+        return True, "cbor2 already present in blender_addon/lib"
+    os.makedirs(addon_lib, exist_ok=True)
+    try:
+        result = subprocess.run(
+            [python, "-m", "pip", "install", "--target", addon_lib,
+             "--no-warn-script-location", "cbor2"],
+            timeout=timeout,
+            capture_output=True,
+            text=True,
+        )
+    except subprocess.TimeoutExpired as e:
+        return False, f"cbor2 install timed out after {timeout}s\n{e}"
+    output = (result.stdout or "") + (result.stderr or "")
+    return result.returncode == 0, output
 
 
 # ---------------------------------------------------------------------------
@@ -188,18 +226,38 @@ def _provision_worker(run_root: str, slot: int) -> WorkerSpec:
 
 def _spawn_server(spec: WorkerSpec, *, python: str,
                   knobs: dict[str, str]) -> subprocess.Popen:
-    """Launch ``server.py --debug --port <port>`` with the worker's CWD
-    and PPF_CTS_DATA_ROOT shadow. Returns the Popen handle so the
-    orchestrator can wait/kill it."""
+    """Launch the Rust ``ppf-cts-server`` binary (built with
+    ``--features emulated``) with the worker's CWD and
+    PPF_CTS_DATA_ROOT shadow. Returns the Popen handle so the
+    orchestrator can wait/kill it.
+
+    ``python`` is unused now that the server is a native binary; the
+    parameter is kept so the existing CLI ``--python`` knob still
+    parses, and so callers don't need to thread a different argument
+    through the orchestrator entry points."""
+    del python  # native binary; no interpreter
+    if not os.path.isfile(SERVER_BIN):
+        raise FileNotFoundError(
+            f"ppf-cts-server binary not found at {SERVER_BIN!r}. "
+            "Build with `cargo build --release -p ppf-cts-server "
+            "--features emulated` first."
+        )
     env = os.environ.copy()
     env["PPF_CTS_DATA_ROOT"] = spec.project_dir
+    # The Rust server spawns a python build worker that imports
+    # ``frontend``. The orchestrator runs under the project venv (which
+    # has ``frontend`` on its sys.path), so point the server's worker
+    # at the same interpreter; otherwise it falls through to a bare
+    # ``python3`` and ``ModuleNotFoundError: No module named 'frontend'``.
+    if os.path.isfile(DEFAULT_PYTHON):
+        env.setdefault("PPF_CTS_BUILD_PYTHON", DEFAULT_PYTHON)
     env.update(knobs)
     stdout_path = os.path.join(spec.server_dir, "stdout.log")
     stderr_path = os.path.join(spec.server_dir, "stderr.log")
     stdout = open(stdout_path, "wb")
     stderr = open(stderr_path, "wb")
     proc = subprocess.Popen(
-        [python, SERVER_PY, "--debug", "--port", str(spec.server_port)],
+        [SERVER_BIN, "--port", str(spec.server_port), "--debug"],
         cwd=spec.server_dir,
         env=env,
         stdout=stdout,
@@ -313,11 +371,14 @@ def run_one(scenario_name: str, *, slot: int, run_root: str,
                 server_progress=_read_text(os.path.join(spec.server_dir, "progress.log")),
             )
 
-        # The shadow PPF_CTS_DATA_ROOT plus a "git-debug" subdir matches
-        # what the server emulator's _make_fake_root produces. Scenarios
-        # need the absolute project root so they can stat files later.
+        # The Rust ppf-cts-server stores uploads at
+        # ``<PPF_CTS_DATA_ROOT>/<name>`` (see crates/ppf-cts-server/src/
+        # wire.rs::handle_tcmd's root synthesis). Scenarios need the same
+        # absolute path so they can stat ``data.pickle`` etc. after the
+        # upload lands. The Rust path resolver lays files out flat
+        # under the data root, so we mirror that layout here.
         project_name = f"slot{slot:02d}"
-        project_root = os.path.join(spec.project_dir, "git-debug", project_name)
+        project_root = os.path.join(spec.project_dir, project_name)
         os.makedirs(project_root, exist_ok=True)
 
         ctx = r.ScenarioContext(
@@ -397,7 +458,7 @@ def run_one(scenario_name: str, *, slot: int, run_root: str,
 
 
 # ---------------------------------------------------------------------------
-# Public entry: run a list of scenarios sequentially (Phase 1 = single proc)
+# Public entry: run a list of scenarios, optionally in parallel
 # ---------------------------------------------------------------------------
 
 def _pool_task(task: dict) -> dict:
@@ -427,12 +488,11 @@ def run_many(scenario_names: list[str], *,
     repeated and / or parallelized. Returns the aggregated report dict
     (also written to ``report_path`` if given).
 
-    With ``parallel=1`` the runner is sequential (Phase 1 behavior). For
-    ``parallel>1`` the runs are dispatched via a ``multiprocessing.Pool``
-    of size ``parallel``; each pool worker provisions its own slot, so
-    isolation is identical to the sequential path. Port allocation uses
-    bind-to-zero in the orchestrator before forking, so collisions are
-    impossible across slots."""
+    With ``parallel=1`` the runner is sequential. For ``parallel>1`` the
+    runs are dispatched via a ``multiprocessing.Pool`` of size ``parallel``;
+    each pool worker provisions its own slot, so isolation is identical to
+    the sequential path. Port allocation uses bind-to-zero in the
+    orchestrator before forking, so collisions are impossible across slots."""
     run_id = _new_run_id()
     run_root = _run_root(run_id)
     print(f"[orchestrator] run_id={run_id} root={run_root} "
@@ -442,6 +502,27 @@ def run_many(scenario_names: list[str], *,
     # frontend's parallel njit code is broken on this host (e.g. the
     # workqueue layer crashes on "Concurrent access"); aborting now
     # gives a clear error instead of a 60s build timeout per worker.
+    # Make sure cbor2 is on disk under blender_addon/lib/ so the addon
+    # can import it on the first Transfer click; the Extensions install
+    # path that resolves the manifest's wheels list isn't exercised by
+    # the test rig (it junctions the addon source).
+    print("[orchestrator] ensuring blender_addon/lib/cbor2 is present...")
+    cbor_ok, cbor_log = ensure_addon_cbor2(python=python)
+    if not cbor_ok:
+        print("[orchestrator] cbor2 install FAILED:")
+        print(cbor_log[-2000:])
+        return {
+            "run_id": run_id, "run_root": run_root,
+            "parallel": parallel, "repeat": repeat,
+            "total": 0, "passed": 0, "failed": 1,
+            "results": [{
+                "slot": -1, "scenario": "<cbor2 install>",
+                "status": "fail", "duration_s": 0.0,
+                "violations": ["cbor2 install into blender_addon/lib/ failed"],
+                "notes": [cbor_log[-1500:]],
+            }],
+        }
+
     print("[orchestrator] precompiling numba kernels...")
     ok, numba_log = precompile_numba(python=python)
     if not ok:
@@ -463,24 +544,42 @@ def run_many(scenario_names: list[str], *,
         }
     print("[orchestrator] numba precompile OK")
 
-    # Build the full task list: one entry per (scenario, repeat) pair.
-    tasks: list[dict] = []
+    # Build the task list, partitioning serial-only scenarios from the
+    # parallel-eligible ones. Scenarios opt out of parallel by setting
+    # ``NOT_PARALLELIZABLE = True`` on the module (typically because
+    # they hold cross-cycle solver/server state that the host load can
+    # disturb, or they race the live-fetch apply queue under
+    # multi-worker dispatch). Serial entries run after the parallel
+    # batch finishes so the parallel speedup still applies to the
+    # majority of scenarios.
+    parallel_tasks: list[dict] = []
+    serial_tasks: list[dict] = []
     slot = 0
     for _ in range(max(1, repeat)):
         for name in scenario_names:
-            tasks.append({
+            mod = scenarios.get(name)
+            serial_only = bool(getattr(mod, "NOT_PARALLELIZABLE", False))
+            task = {
                 "slot": slot,
                 "scenario": name,
                 "run_root": run_root,
                 "python": python,
                 "knobs": knobs or {},
                 "timeout": timeout,
-            })
+            }
+            if serial_only:
+                serial_tasks.append(task)
+            else:
+                parallel_tasks.append(task)
             slot += 1
 
     results: list[dict] = []
-    if parallel <= 1 or len(tasks) <= 1:
-        for task in tasks:
+    use_parallel = parallel > 1 and len(parallel_tasks) > 1
+    if not use_parallel:
+        # Sequential path: parallel and serial sets collapse into one
+        # list, original-order. Used when ``parallel<=1`` or the
+        # parallel set is degenerate (0 or 1 task).
+        for task in parallel_tasks + serial_tasks:
             print(f"[orchestrator] slot {task['slot']:02d} -> {task['scenario']}",
                   flush=True)
             r_dict = _pool_task(task)
@@ -494,7 +593,21 @@ def run_many(scenario_names: list[str], *,
         # half-initialized state from the parent.
         ctx = mp.get_context("spawn")
         with ctx.Pool(processes=parallel) as pool:
-            for r_dict in pool.imap_unordered(_pool_task, tasks):
+            for r_dict in pool.imap_unordered(_pool_task, parallel_tasks):
+                print(f"[orchestrator] slot {r_dict['slot']:02d} "
+                      f"<- {r_dict['scenario']} {r_dict['status']} "
+                      f"({r_dict.get('duration_s', 0):.1f}s)",
+                      flush=True)
+                results.append(r_dict)
+        # Serial postlude: NOT_PARALLELIZABLE scenarios get a clean
+        # single-worker host without the parallel batch's load.
+        if serial_tasks:
+            print(f"[orchestrator] serial postlude: "
+                  f"{len(serial_tasks)} scenario(s)", flush=True)
+            for task in serial_tasks:
+                print(f"[orchestrator] slot {task['slot']:02d} -> "
+                      f"{task['scenario']} (serial)", flush=True)
+                r_dict = _pool_task(task)
                 print(f"[orchestrator] slot {r_dict['slot']:02d} "
                       f"<- {r_dict['scenario']} {r_dict['status']} "
                       f"({r_dict.get('duration_s', 0):.1f}s)",
@@ -541,7 +654,7 @@ def run_many(scenario_names: list[str], *,
 def _cli(argv: list[str]) -> int:
     import argparse
     parser = argparse.ArgumentParser(
-        description="Run Phase-1 debug scenarios in isolated workers.",
+        description="Run debug scenarios in isolated workers.",
     )
     parser.add_argument(
         "scenarios", nargs="*",

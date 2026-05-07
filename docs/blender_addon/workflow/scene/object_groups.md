@@ -54,7 +54,7 @@ and default material parameters.
 
 | Type       | Description                       | Default model    | Available models                           |
 | ---------- | --------------------------------- | ---------------- | ------------------------------------------ |
-| **Shell**  | Thin surfaces (cloth, fabric)     | Baraff-Witkin    | Baraff-Witkin, Stable NeoHookean, ARAP     |
+| **Shell**  | Thin surfaces (cloth, fabric)     | Baraff-Witkin    | Baraff-Witkin, ARAP                        |
 | **Solid**  | Volumetric bodies                 | ARAP             | Stable NeoHookean, ARAP                    |
 | **Rod**    | 1D structures (ropes, wires)      | ARAP             | ARAP only                                  |
 | **Static** | Non-deforming collision objects   | N/A              | N/A                                        |
@@ -74,11 +74,11 @@ viewport instead of filled faces. For a Bezier curve, the spline is
 resampled along its arc length into rod vertices when transferred.
 
 ```{figure} ../../images/object_groups/group_type_matrix.svg
-:alt: Reference matrix with four columns. Shell (green swatch), Solid (red), Rod (yellow), Static (blue). Rows: accepted object types (Shell/Solid/Static: mesh; Rod: mesh + Bezier curves); default material model (Baraff-Witkin for Shell, ARAP for Solid and Rod, none for Static); available material models (Shell offers Baraff-Witkin, Stable NeoHookean, ARAP; Solid offers Stable NeoHookean and ARAP; Rod offers ARAP only; Static none); density unit (kg/m² for Shell, kg/m³ for Solid, kg/m for Rod); Young's Modulus (Shell/Solid/Rod, not Static); Poisson's Ratio (Shell and Solid); Bend Stiffness (Shell, with Rod inheriting it); Shrink (Shell anisotropic X/Y, Solid uniform, Rod/Static none); Strain Limit (Shell and Rod); Inflate (Shell only); Friction and Contact Gap (all four); pin storage (Blender vertex groups for Shell/Solid, internal _pin_name custom property on curves for Rod, none for Static which uses a Transform sub-box instead); default overlay color (green, red, yellow, blue).
+:alt: Reference matrix with four columns. Shell (green swatch), Solid (red), Rod (yellow), Static (blue). Rows: accepted object types (Shell/Solid/Static: mesh; Rod: mesh + Bezier curves); default material model (Baraff-Witkin for Shell, ARAP for Solid and Rod, none for Static); available material models (Shell offers Baraff-Witkin and ARAP; Solid offers Stable NeoHookean and ARAP; Rod offers ARAP only; Static none); density unit (kg/m² for Shell, kg/m³ for Solid, kg/m for Rod); Young's Modulus (Shell/Solid/Rod, not Static); Poisson's Ratio (Shell and Solid); Bend Stiffness (Shell, with Rod inheriting it); Shrink (Shell anisotropic X/Y, Solid uniform, Rod/Static none); Strain Limit (Shell and Rod); Inflate (Shell only); Friction and Contact Gap (all four); pin storage (Blender vertex groups for Shell/Solid, internal _pin_name custom property on curves for Rod, none for Static which uses a Transform sub-box instead); default overlay color (green, red, yellow, blue).
 :width: 840px
 
 What each type accepts, models, and exposes. Green check marks mark
-features available in that column; gray em-dashes mark features that
+features available in that column; a gray "n/a" marks features that
 are not applicable. **Static** is the thinnest column because the
 solver only uses it for collision: no material model and no
 parameters beyond **Friction** and **Contact Gap**. The **Material
@@ -289,7 +289,7 @@ are assigned with `group.add`, and every operation on a group returns
 the group itself for easy chaining.
 
 ```python
-from zozo_contact_solver import solver
+from bl_ext.user_default.ppf_contact_solver.ops.api import solver
 
 # Create groups of each type.
 cloth = solver.create_group("Cloth", "SHELL")

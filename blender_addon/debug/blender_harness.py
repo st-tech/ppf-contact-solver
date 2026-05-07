@@ -3,9 +3,9 @@
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
 # License: Apache v2.0
 #
-# Per-worker Blender process management. Used by Phase-2 scenarios that
-# need to drive the actual addon UI through its operators rather than
-# just talking to the server on the wire.
+# Per-worker Blender process management. Used by scenarios that drive
+# the actual addon UI through its operators rather than just talking to
+# the server on the wire.
 #
 # Each worker that opts into Blender gets its own:
 #   - Blender process (headless: --background, no audio)
@@ -27,7 +27,7 @@ import socket
 import subprocess
 import sys
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -169,7 +169,7 @@ def _start():
 
         # Driver runs on the same main-thread tick. exec_globals exposes
         # the resolved package and a result dict the driver can populate.
-        with open(DRIVER_PATH) as f:
+        with open(DRIVER_PATH, encoding="utf-8") as f:
             driver_src = f.read()
         exec_globals = {{
             "pkg": pkg,
@@ -280,12 +280,16 @@ def spawn(spec: BlenderSpec) -> subprocess.Popen:
     # Driver source landed on disk so the bootstrap can exec() it. We
     # don't inline driver code into the bootstrap because it can be
     # large and contain literals that escape format-string handling.
-    with open(spec.driver_path, "w") as f:
+    # ``encoding="utf-8"`` is mandatory: scenarios contain em-dashes
+    # and other non-ASCII glyphs in comments, and the orchestrator's
+    # Python on Windows defaults to cp1252; without this the bootstrap
+    # (which reads back as utf-8) chokes on byte 0x97.
+    with open(spec.driver_path, "w", encoding="utf-8") as f:
         f.write(spec.driver_source)
 
     # Drop the bootstrap onto disk so Blender's --python flag can find it.
     bootstrap_path = os.path.join(spec.workspace, "bootstrap.py")
-    with open(bootstrap_path, "w") as f:
+    with open(bootstrap_path, "w", encoding="utf-8") as f:
         f.write(_bootstrap_source(spec))
 
     # We deliberately do NOT override BLENDER_USER_RESOURCES: that env
@@ -297,6 +301,14 @@ def spawn(spec: BlenderSpec) -> subprocess.Popen:
     env = os.environ.copy()
     env["PPF_DEBUG_PROBE"] = "1"
     env["PPF_DEBUG_PROBE_DIR"] = spec.probe_dir
+    # Tell the addon's WIN_NATIVE backend to skip its own
+    # ``ppf-cts-server.exe`` spawn: the orchestrator already started a
+    # rig-owned server for this worker, and the addon would otherwise
+    # try to relaunch one (and likely race the existing port binding).
+    # The bl_connect_win_native scenario documents this as a hard
+    # requirement; setting it here so individual scenarios don't have
+    # to opt in.
+    env.setdefault("PPF_WIN_NATIVE_NO_SPAWN", "1")
 
     # Blender's ``--background`` mode skips the event loop, so any code
     # we register via ``bpy.app.timers.register`` never runs. The
@@ -332,23 +344,48 @@ def spawn(spec: BlenderSpec) -> subprocess.Popen:
 
 
 def wait_for_result(spec: BlenderSpec, proc: subprocess.Popen, *,
-                    timeout: float = 120.0) -> dict:
-    """Block until ``spec.result_path`` is written or Blender exits.
+                    timeout: float = 120.0,
+                    post_write_drain: float = 35.0) -> dict:
+    """Block until ``spec.result_path`` is written and Blender exits.
 
-    Returns the parsed result dict. Raises ``TimeoutError`` if neither
-    happens within ``timeout``."""
+    Returns the parsed result dict. Raises ``TimeoutError`` if the
+    result file does not appear within ``timeout``.
+
+    Once the result file appears, waits up to ``post_write_drain``
+    seconds for the Blender process to exit. The bootstrap writes the
+    result file BEFORE registering its drain-then-quit timer that lets
+    the FramePump modal flush queued PC2 frames to disk; if the host
+    side proceeded the moment the file appeared (the prior behavior),
+    its diff subprocess could ``os.listdir`` the addon data dir before
+    any PC2 had been written. Waiting for proc exit guarantees the
+    modal has finished. The bound (35s) is one second above the
+    bootstrap's 30s drain deadline; if Blender hangs past it we still
+    return the parsed result and let the orchestrator's tree-kill
+    cleanup handle the stuck process.
+    """
     import json
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if os.path.exists(spec.result_path):
             # Wait a beat for the writer to finish flushing.
+            parsed: dict | None = None
             for _ in range(20):
                 try:
                     with open(spec.result_path) as f:
-                        return json.load(f)
+                        parsed = json.load(f)
+                    break
                 except (OSError, ValueError):
                     time.sleep(0.05)
-            return {"errors": ["result file unreadable"]}
+            if parsed is None:
+                return {"errors": ["result file unreadable"]}
+            # Now wait for the process to exit so the modal-driven PC2
+            # writes are guaranteed flushed before the caller proceeds.
+            exit_deadline = time.monotonic() + post_write_drain
+            while time.monotonic() < exit_deadline:
+                if proc.poll() is not None:
+                    break
+                time.sleep(0.1)
+            return parsed
         if proc.poll() is not None:
             # Blender exited without writing -- collect diagnostics.
             return {
@@ -392,18 +429,47 @@ def _kill_tree(proc: subprocess.Popen, *, timeout: float) -> None:
                 pass
         return
     import signal
+    # ``killpg`` is the fast path: signal every descendant of the
+    # session we created with ``start_new_session=True``. On macOS we
+    # occasionally see ``PermissionError(EPERM)`` here mid-run, even
+    # for our own child, after Blender's children have rebound their
+    # session. ``ESRCH`` (ProcessLookupError) means the leader already
+    # exited; both cases fall back to a per-process ``proc.terminate``
+    # + ``proc.kill`` so a single weird shutdown can't crash the
+    # whole multiprocessing pool.
     try:
         os.killpg(proc.pid, signal.SIGTERM)
-    except ProcessLookupError:
+    except (ProcessLookupError, PermissionError):
+        try:
+            proc.terminate()
+        except (ProcessLookupError, PermissionError, OSError):
+            pass
+        try:
+            proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            try:
+                proc.kill()
+            except (ProcessLookupError, PermissionError, OSError):
+                pass
+            try:
+                proc.wait(timeout=2.0)
+            except subprocess.TimeoutExpired:
+                pass
         return
     try:
         proc.wait(timeout=timeout)
     except subprocess.TimeoutExpired:
         try:
             os.killpg(proc.pid, signal.SIGKILL)
-        except ProcessLookupError:
+        except (ProcessLookupError, PermissionError):
+            try:
+                proc.kill()
+            except (ProcessLookupError, PermissionError, OSError):
+                pass
+        try:
+            proc.wait(timeout=2.0)
+        except subprocess.TimeoutExpired:
             pass
-        proc.wait(timeout=2.0)
 
 
 def shutdown(proc: subprocess.Popen, *, timeout: float = 10.0) -> None:

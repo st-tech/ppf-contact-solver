@@ -236,8 +236,8 @@ class OBJECT_OT_AddObjectsToGroup(Operator):
                     continue
 
                 # Reject N-gons (polygons with > 4 vertices). The solver
-                # operates on triangles + quads only; the encoder used to
-                # silently fan-triangulate N-gons, which broke vertex-
+                # operates on triangles + quads only, and silently
+                # fan-triangulating N-gons here would break vertex-
                 # group / pin / UV correspondence. Make the user
                 # triangulate explicitly so the geometry they see in
                 # the viewport is the geometry the solver runs on.

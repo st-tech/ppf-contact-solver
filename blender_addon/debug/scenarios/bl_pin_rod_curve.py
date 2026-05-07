@@ -27,6 +27,7 @@ import os
 
 from . import _driver_lib as dl
 from . import _runner as r
+from . import REPO_ROOT_POSIX
 
 
 NEEDS_BLENDER = True
@@ -112,10 +113,10 @@ try:
     bpy.context.view_layer.objects.active = curve_obj
     bpy.ops.object.add_objects_to_group(group_index=0)
 
-    # Curve pin registration: bypass MutationService (it explicitly
-    # rejects non-mesh) and call the underlying writer directly.
-    api_mod = __import__(pkg + ".ops.api", fromlist=["_raw_create_pin"])
-    api_mod._raw_create_pin(rod_group._uuid, curve_obj.name, "AllPin")
+    # Curve pin registration: bypass core.mutation.create_pin (which
+    # explicitly rejects non-mesh) and call the underlying writer directly.
+    mutation_mod = __import__(pkg + ".core.mutation", fromlist=["_raw_create_pin"])
+    mutation_mod._raw_create_pin(rod_group._uuid, curve_obj.name, "AllPin")
 
     encoder_mesh = __import__(pkg + ".core.encoder.mesh",
                               fromlist=["encode_obj", "compute_data_hash"])
@@ -123,11 +124,12 @@ try:
                                 fromlist=["compute_param_hash"])
 
     # ----- A: inspect encode_obj output before transferring -------
-    # encode_obj returns pickled bytes; unpickle to introspect the
-    # group's object_info dict and confirm rod connectivity (edge
-    # array present, face key absent) for the CURVE in the ROD group.
+    # encode_obj returns CBOR-enveloped bytes (legacy saves are
+    # pickle); decode_addon_blob sniffs the format. Unpickling the
+    # CBOR envelope directly hits ``UnpicklingError: invalid load
+    # key, '\xa3'``.
     raw_data = encoder_mesh.encode_obj(bpy.context)
-    decoded = pickle.loads(raw_data)
+    decoded = dh.decode_addon_blob(raw_data)
     rod_entry = None
     for entry in decoded:
         if entry.get("type") == "ROD":
@@ -141,8 +143,12 @@ try:
                 break
     edge_arr = rod_obj_info.get("edge") if rod_obj_info else None
     has_face_key = (rod_obj_info is not None and "face" in rod_obj_info)
-    edge_count = int(edge_arr.shape[0]) if edge_arr is not None else 0
+    # CBOR decode hands back plain Python lists (no .shape); pickle
+    # decode hands back numpy arrays. ``len`` works for both so we
+    # don't have to branch.
+    edge_count = len(edge_arr) if edge_arr is not None else 0
     pin_arr = rod_obj_info.get("pin", []) if rod_obj_info else []
+    vert_field = rod_obj_info.get("vert") if rod_obj_info else None
     dh.record(
         "A_encoded_as_edges",
         rod_obj_info is not None
@@ -154,10 +160,7 @@ try:
             "edge_count": edge_count,
             "has_face_key": has_face_key,
             "pin_indices": list(pin_arr) if pin_arr is not None else [],
-            "vertex_count": (
-                int(rod_obj_info["vert"].shape[0])
-                if rod_obj_info and "vert" in rod_obj_info else 0
-            ),
+            "vertex_count": len(vert_field) if vert_field is not None else 0,
         },
     )
 
@@ -270,9 +273,7 @@ _DRIVER_TEMPLATE = dl.DRIVER_LIB + _DRIVER_BODY
 
 
 def build_driver(ctx: r.ScenarioContext) -> str:
-    repo_root = os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "..", "..", "..")
-    )
+    repo_root = REPO_ROOT_POSIX
     return (
         _DRIVER_TEMPLATE
         .replace("<<LOCAL_PATH>>", repo_root)

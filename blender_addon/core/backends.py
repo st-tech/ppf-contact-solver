@@ -17,7 +17,6 @@
 from __future__ import annotations
 
 import json
-import os
 import socket
 import subprocess
 from typing import Any, Callable, Protocol, runtime_checkable
@@ -25,9 +24,6 @@ from typing import Any, Callable, Protocol, runtime_checkable
 from .protocol import (
     DEFAULT_CHUNK_SIZE,
     HEADER_TEXT_CMD,
-    HEADER_JSON_DATA,
-    PROTOCOL_VERSION,
-    _shutdown_write,
     format_traffic,
     socket_data_send,
     socket_data_receive,
@@ -151,7 +147,17 @@ def _query_via_channel(
     project_name: str,
     chunk_size: int,
 ) -> tuple[dict, bool]:
-    """Send a text-command query over a channel and parse the JSON response."""
+    """Send a text-command query over a channel and parse the JSON response.
+
+    Wire format (TCMD, protocol 0.04): ``b"TCMD"`` header (4 bytes),
+    then a big-endian u32 payload-length prefix, then exactly that many
+    payload bytes (the ``--key value`` argument string). The server
+    reads the length, then exactly that many bytes, so we never need
+    ``shutdown(SHUT_WR)`` to signal end of input. The previous wire did
+    rely on the half-close, which on Windows tokio failed to deliver
+    EOF to the server's AsyncRead and pinned every query in FIN_WAIT_2
+    until the server's task pool drained.
+    """
     if project_name is None:
         return {}, False
 
@@ -164,21 +170,24 @@ def _query_via_channel(
     channel = None
     try:
         channel = channel_opener()
+        payload = flattened.encode()
         channel.sendall(HEADER_TEXT_CMD)
-        data = flattened.encode()
+        channel.sendall(len(payload).to_bytes(4, "big"))
         total_sent = 0
-        while total_sent < len(data):
-            sent = channel.send(data[total_sent : total_sent + chunk_size])
+        while total_sent < len(payload):
+            sent = channel.send(payload[total_sent : total_sent + chunk_size])
             if sent == 0:
                 raise RuntimeError("Socket connection broken during send")
             total_sent += sent
-        _shutdown_write(channel)
+        # No half-close: server already knows the exact payload length
+        # from the prefix and is expected to write the response and
+        # then fully close, which is observable on every platform.
         response_data = b""
         while True:
-            data = channel.recv(chunk_size)
-            if not data:
+            chunk = channel.recv(chunk_size)
+            if not chunk:
                 break
-            response_data += data
+            response_data += chunk
         if not response_data:
             raise Exception("Empty JSON response.")
         response = json.loads(response_data.decode())
@@ -554,6 +563,30 @@ class LocalBackend:
     def disconnect(self) -> None:
         pass
 
+    def stop_server(self) -> None:
+        """Local backend doesn't own the server subprocess.
+
+        ``connect_local`` only builds a ``ConnectionInfo``; the server
+        on ``localhost:port`` was started elsewhere (the test rig
+        orchestrator, a manual launcher, etc). Stop is therefore a
+        bookkeeping no-op: ``effect_runner._do_stop_server`` clears
+        the response cache and dispatches ``ServerStopped`` after
+        this returns. Anyone needing to terminate the squatter on the
+        port should do so out-of-band; if it's still listening when
+        the next connect tries to bind, ``PortInUseByForeignProcess``
+        surfaces the conflict.
+        """
+        return
+
+    def start_server(self) -> None:
+        """Symmetric no-op so Stop/Start cycles don't AttributeError.
+
+        ``ServerLaunched`` is dispatched by the caller anyway; the
+        external server (rig orchestrator, dev shell) is responsible
+        for keeping it up.
+        """
+        return
+
     def is_alive(self) -> bool:
         return True
 
@@ -631,13 +664,16 @@ class WinNativeBackend:
     def stop_server(self) -> None:
         """Terminate the local server subprocess but keep the backend alive.
 
-        Primary route is the Popen handle. After an addon reload (handle
-        dropped) or a connect that lost its bind race to an orphan
-        ``server.py`` squatting on the port (handle is for a dead spawn),
-        the handle is unusable and terminating it is a no-op. Fall back
-        to the shared port reaper so "Stop Server" actually stops the
-        live process. Foreign processes on the port are ignored here —
-        we don't reap unrelated third-party listeners on a stop request.
+        Uses the Popen handle the addon owns. After an addon reload the
+        handle is dropped and stop becomes a no-op; that's fine, the
+        next bind attempt will surface any remaining squatter via
+        :class:`PortInUseByForeignProcess` rather than the addon trying
+        to identify and kill foreign processes.
+
+        When ``_process`` is None we don't own the server (attach mode
+        after a Blender restart re-used the previous session's server,
+        or test/CI mode). Stop is a no-op in that case: the addon
+        refuses to kill processes it didn't spawn.
         """
         if self._process and self._process.poll() is None:
             self._process.terminate()
@@ -646,22 +682,13 @@ class WinNativeBackend:
             except subprocess.TimeoutExpired:
                 self._process.kill()
         self._process = None
-        from .connection import (
-            PortInUseByForeignProcess,
-            kill_local_server_on_port,
-        )
-        try:
-            kill_local_server_on_port(self._port)
-        except PortInUseByForeignProcess:
-            # Something we don't own holds the port. Disconnect should
-            # not crash on that — surface only if a subsequent connect
-            # tries to bind.
-            pass
 
     def start_server(self) -> None:
-        """Re-launch ``server.py`` after a Stop. No-op if the process is
-        already alive (Start clicked twice) or in test mode where an
-        external orchestrator owns the server."""
+        """Re-launch ``ppf-cts-server.exe`` after a Stop. No-op if the
+        process is already alive (Start clicked twice) or in test mode
+        where an external orchestrator owns the server. ``spawn_win_native_server``
+        also returns None when a ppf-cts-server is already on the port
+        (attach mode), so ``_process`` legitimately stays None there."""
         if self.is_alive():
             return
         from .connection import spawn_win_native_server
@@ -671,7 +698,14 @@ class WinNativeBackend:
         self.stop_server()
 
     def is_alive(self) -> bool:
-        return self._process is not None and self._process.poll() is None
+        # Owned process: cheap poll on the Popen handle.
+        if self._process is not None:
+            return self._process.poll() is None
+        # Attach mode (and test mode): we don't own the process, so
+        # poll the port instead. A successful TCMD probe is the
+        # liveness signal the rest of the backend cares about.
+        from .connection import _probe_ppf_cts_server
+        return _probe_ppf_cts_server(self._port)
 
 
 # ---------------------------------------------------------------------------

@@ -7,9 +7,9 @@
     object types (Shell/Solid/Static accept mesh only, Rod accepts mesh
     plus Bezier curves); default material model
     (Baraff-Witkin for Shell, ARAP for Solid and Rod, none for Static);
-    available material models (Shell: Baraff-Witkin, Stable NeoHookean,
-    ARAP; Solid: Stable NeoHookean, ARAP; Rod: ARAP only; Static:
-    none); density units (kg/m² for Shell, kg/m³ for Solid, kg/m for
+    available material models (Shell: Baraff-Witkin, ARAP; Solid:
+    Stable NeoHookean, ARAP; Rod: ARAP only; Static: none); density
+    units (kg/m² for Shell, kg/m³ for Solid, kg/m for
     Rod); Young's modulus; Poisson's ratio (Shell and Solid only);
     Bend Stiffness (Shell and Rod, using the same shared `bend`
     property); Shrink (anisotropic X/Y
@@ -128,7 +128,7 @@
   <!-- Row 3: Available material models (y=228) -->
   <text x="28" y="247" class="row-lbl">Available material models</text>
   <text x="220" y="247" class="cell-mono">Baraff-Witkin</text>
-  <text x="220" y="259" class="cell-mono">Stable NeoHookean, ARAP</text>
+  <text x="220" y="259" class="cell-mono">ARAP</text>
   <text x="400" y="247" class="cell-mono">Stable NeoHookean</text>
   <text x="400" y="259" class="cell-mono">ARAP</text>
   <text x="580" y="247" class="cell-mono">ARAP</text>

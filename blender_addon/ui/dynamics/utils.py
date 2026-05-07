@@ -4,7 +4,7 @@
 # License: Apache v2.0
 
 from ...models.groups import get_addon_data
-from ..state import ObjectGroup, decode_vertex_group_identifier
+from ..state import ObjectGroup
 
 
 def get_group_from_index(scene, group_index: int) -> ObjectGroup | None:

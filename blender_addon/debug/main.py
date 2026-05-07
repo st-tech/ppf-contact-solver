@@ -169,7 +169,7 @@ def cmd_resources(args):
 
 
 def cmd_runtests(args):
-    """Spawn the Phase-1 orchestrator and forward results.
+    """Spawn the orchestrator and forward results.
 
     Imported lazily so ``main.py`` keeps working even when the scenarios
     package fails to import (e.g. during local development of new
@@ -308,7 +308,7 @@ def main():
 
     p_run = sub.add_parser(
         "runtests",
-        help="Run Phase-1 debug scenarios against an isolated emulated server.",
+        help="Run debug scenarios against an isolated emulated server.",
     )
     p_run.add_argument(
         "scenarios", nargs="*",

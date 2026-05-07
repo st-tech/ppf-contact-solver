@@ -24,17 +24,18 @@ transport topology. The trust boundaries that matter for security are:
 | Boundary | What crosses it | Protection |
 | -------- | --------------- | ---------- |
 | Blender workstation -> remote solver host | SSH session (paramiko) | SSH key auth + SSH encryption |
-| SSH session -> `server.py` on remote | `direct-tcpip` channel to the remote's `localhost:<server_port>` | Stays inside the SSH tunnel; not a separate network hop |
+| SSH session -> `ppf-cts-server` on remote | `direct-tcpip` channel to the remote's `localhost:<server_port>` | Stays inside the SSH tunnel; not a separate network hop |
 | Blender workstation <-> local solver | UNIX loopback TCP socket | No encryption; no encryption needed (never leaves the host) |
 | Blender workstation <-> local MCP server | UNIX loopback TCP socket on port `9633` | Bound to `localhost` only |
 
 The important consequence: when you run Docker-over-SSH or plain SSH,
 the solver's TCP socket never crosses an untrusted network directly.
 paramiko opens a `direct-tcpip` channel to `localhost:<server_port>`
-*on the remote*. By default `server.py` binds to `127.0.0.1` (loopback
-only) on the remote in plain SSH, Local, and Windows Native modes, so
-the SSH tunnel is the only way in. In Docker-family modes the add-on
-launches `server.py` with `--host 0.0.0.0` *inside the container*
+*on the remote*. By default `ppf-cts-server` binds to `127.0.0.1`
+(loopback only) on the remote in plain SSH, Local, and Windows Native
+modes, so the SSH tunnel is the only way in. In Docker-family modes
+the add-on launches `ppf-cts-server` with `--host 0.0.0.0` *inside the
+container*
 because docker `-p HOST:CONTAINER` forwards traffic to the container's
 external interface (eth0), not loopback; external reachability of the
 container is then controlled by the host-side `-p` mapping (see below).
@@ -98,19 +99,19 @@ the tunnel-through-your-own-`ssh` pattern is the supported escape hatch.
 
 ## Network Exposure of the Solver Port
 
-`server.py` listens on TCP. Where that TCP socket is reachable from
-depends on how the backend is deployed, not on the add-on:
+`ppf-cts-server` listens on TCP. Where that TCP socket is reachable
+from depends on how the backend is deployed, not on the add-on:
 
-- **Plain SSH / SSH Command.** `server.py` runs in the remote user's
-  shell and the add-on launches it with `--host 127.0.0.1`, so the
-  socket is loopback-only on the remote. The add-on reaches it through
-  the SSH session's `direct-tcpip` channel; nothing else on the network
-  can connect, regardless of host firewall. If you need the port
-  reachable from the remote's wider network for some other tool, you
-  must rebind it yourself (e.g. by relaunching `server.py --host 0.0.0.0`
-  outside the add-on).
+- **Plain SSH / SSH Command.** `ppf-cts-server` runs in the remote
+  user's shell and the add-on launches it with `--host 127.0.0.1`, so
+  the socket is loopback-only on the remote. The add-on reaches it
+  through the SSH session's `direct-tcpip` channel; nothing else on the
+  network can connect, regardless of host firewall. If you need the
+  port reachable from the remote's wider network for some other tool,
+  you must rebind it yourself (e.g. by relaunching
+  `ppf-cts-server --host 0.0.0.0` outside the add-on).
 - **Docker / Docker over SSH.** Inside the container the add-on
-  launches `server.py --host 0.0.0.0` because docker `-p HOST:CONTAINER`
+  launches `ppf-cts-server --host 0.0.0.0` because docker `-p HOST:CONTAINER`
   forwards traffic to the container's external interface (eth0), not
   loopback. External reachability of the *host* is then controlled by
   the `-p` mapping you choose: the container must publish the server
@@ -241,7 +242,7 @@ disk.
 4. Point the add-on at `localhost:2222`, leaving the weak host-key
    policy applied only to loopback.
 5. On the remote, verify the server port is not reachable from the
-   outside. With plain SSH the add-on now binds `server.py` to
+   outside. With plain SSH the add-on now binds `ppf-cts-server` to
    `127.0.0.1` so loopback-only is the default; confirm with
    `ss -tlnp | grep 9090` (you should see `127.0.0.1:9090`, not
    `0.0.0.0:9090`).

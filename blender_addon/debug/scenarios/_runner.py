@@ -3,7 +3,7 @@
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
 # License: Apache v2.0
 #
-# Shared helpers for Phase 1 protocol-level scenarios.
+# Shared helpers for protocol-level scenarios.
 #
 # A ScenarioContext carries the per-worker configuration (server host/port,
 # project name, paths). Each scenario gets one and uses ``ProtoClient``
@@ -13,12 +13,11 @@
 from __future__ import annotations
 
 import json
-import os
 import pickle
 import socket
 import time
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any
 
 
 HEADER_TEXT_CMD = b"TCMD"
@@ -74,14 +73,25 @@ class ProtoClient:
         ``args`` must include ``name``. Other keys map 1:1 to the
         ``--key value`` flags the production server's text-command parser
         understands. Returns the parsed response dict; raises on socket
-        error."""
+        error.
+
+        Wire is protocol 0.04: ``b"TCMD"`` header, then a big-endian
+        u32 payload-length prefix, then the payload bytes. The previous
+        wire relied on ``shutdown(SHUT_WR)`` as the end-of-input
+        signal, which Windows tokio failed to deliver as ``Ok(0)`` to
+        AsyncRead and pinned every query in FIN_WAIT_2; the production
+        addon was switched to length-prefix and the server now rejects
+        the old shape (the first 4 payload bytes get parsed as a
+        ~750 MB length and trip MAX_TCMD_BYTES). Mirror the same wire
+        here so the debug rig stays compatible."""
         if "name" not in args:
             raise ValueError("text_cmd requires a 'name' key")
         flat = " ".join(f"--{k} {v}" for k, v in args.items())
+        payload = flat.encode()
         with self._connect() as s:
             s.sendall(HEADER_TEXT_CMD)
-            s.sendall(flat.encode())
-            s.shutdown(socket.SHUT_WR)
+            s.sendall(len(payload).to_bytes(4, "big"))
+            s.sendall(payload)
             buf = b""
             while True:
                 chunk = s.recv(65536)
@@ -152,8 +162,8 @@ def make_minimal_param(frames: int = 6, fps: int = 30) -> bytes:
 
 
 def make_minimal_data() -> bytes:
-    """Stand-in data.pickle. Phase 1 doesn't validate its contents; the
-    fake build only cares that the file exists and unpickles."""
+    """Stand-in data.pickle. The fake build only cares that the file
+    exists and unpickles; contents are not validated."""
     return pickle.dumps({
         "vertices": [],
         "tris": [],

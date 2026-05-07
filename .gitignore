@@ -1,11 +1,100 @@
+target
+/tests
+bin/
 requirements.txt
-__pycache__/
+
+# Blender autosave / crash artifacts
+*.blend1
+*.blend2
+*.blend@
+.clangd
+.clang-format
+*.lock
+!Cargo.lock
+.cargo*
+*.dylib
+*.so
+*.a
+*.o
+*.d
+*.obj
+*.whl
+cache
+.nfs*
 .DS_Store
-uv.lock
-Cargo.lock
-target/
-blender_addon/lib/
-.ipynb_checkpoints/
-.virtual_documents/
+*.npy
+npy/*
+npm*
+*.tmp
+__pycache__
+.clangd.swp
+.vscode
+eigsys/eigen2
+eigsys/eigen3
+eigsys/svd_shifted
+eigsys/bench3
+examples/asset
+examples/data
+examples/**/.*
+examples/export
+examples/_*
+# `frontend.extra.sparse_clone` populates this with shallow clones of
+# external repos (Codim-IPC, etc.) on first run of the fitting/drape
+# notebooks. It's bulky and host-local; never sync from local repo,
+# always preserve on the remote.
+examples/cache
+frontend/**/.*
+_skipped.node
+docs/_*
+!docs/_static
+!docs/_static/**
+!docs/_templates
+!docs/_templates/**
+docs/global_parameters.rst
+docs/object_parameters.rst
+docs/logs.rst
+!docs/requirements.txt
+private/vast-dev
+private/log
+blender_addon/lib
+dev/node_modules
+*.log
 report.json
-src/cpp/kernels/tests/
+src/cpp/kernels/tests/test_exclusive_scan
+src/cpp/kernels/tests/test_reduce
+src/cpp/build
+# CUDA build artifacts under any crate. The legacy `src/cpp/build`
+# pattern above stays for older checkouts that still carry it; this
+# glob matches the `crates/<name>/src/cpp/build/` location used now.
+**/src/cpp/build
+build-win-native/python
+build-win-native/deps
+build-win-native/.*
+build-win-native/downloads
+build-win-native/rust
+build-win-native/start.bat
+build-win-native/start-jupyterlab.pyw
+build-win-native/ppf-cts
+build-win-native/*.pem
+build-win-native/*.ps1
+build-win-native/*.json
+build-win-native/*.zip
+build-win-native/ci
+build-win-native/temp_ffmpeg
+build-win-native/ffmpeg
+build-win-native/msys64
+# Embedded toolchain dirs warmup.bat builds on Windows hosts. They
+# only exist on the Windows build tree, never in the local repo.
+# Listed here so `rsync --filter=':- .gitignore' --delete` preserves
+# them; a missing entry here = `--delete` wipes them and recovery
+# requires re-running warmup.bat (20-30 min, ~10GB of downloads).
+build-win-native/cuda
+build-win-native/dist
+build-win-native/mingit
+build-win-native/7zip
+build-win-native/msvc
+build-win-native/jupyter
+build-win-native/fast_check
+build-win-native/python_full
+.claude/
+.venv/

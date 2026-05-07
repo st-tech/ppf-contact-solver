@@ -8,7 +8,9 @@ blender_addon/integrations/python_api_reference.rst
 # Auto-generated from blender_addon/mcp/handlers/*.py and blender_handlers.py at build time
 blender_addon/integrations/mcp_reference.rst
 
-# Auto-generated from frontend/_param_.py and src/*.{cu,rs} at build time
+# Auto-generated from crates/ppf-cts-core/src/datamodel/params.rs and
+# crates/**/*.{cu,rs,cpp} at build time via the maturin-built _ppf_cts_py
+# extension (see docs/generate_frontend_params_reference.py).
 jupyterlab_api/simulation_parameters.rst
 jupyterlab_api/material_parameters.rst
 jupyterlab_api/log_channels.rst

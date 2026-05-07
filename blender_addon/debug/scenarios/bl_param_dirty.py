@@ -15,7 +15,7 @@
 #   - ``SOLVER_OT_UpdateParams.poll`` is *always* True when the base
 #     connection / status guards are satisfied -- the button does not
 #     compare hashes itself, so a stale client-side cache cannot grey
-#     it out (the source of the bug fixed in this commit set).
+#     it out.
 #   - ``SOLVER_OT_Run.execute`` recomputes ``compute_param_hash`` at
 #     click time and refuses with an ERROR ("Click Update Params
 #     before running") whenever the fresh hash differs from
@@ -40,6 +40,7 @@ import os
 
 from . import _driver_lib as dl
 from . import _runner as r
+from . import REPO_ROOT_POSIX
 
 
 NEEDS_BLENDER = True
@@ -183,9 +184,7 @@ _DRIVER_TEMPLATE = dl.DRIVER_LIB + _DRIVER_BODY
 
 
 def build_driver(ctx: r.ScenarioContext) -> str:
-    repo_root = os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "..", "..", "..")
-    )
+    repo_root = REPO_ROOT_POSIX
     return (
         _DRIVER_TEMPLATE
         .replace("<<LOCAL_PATH>>", repo_root)

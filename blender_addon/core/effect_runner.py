@@ -20,7 +20,7 @@ import os
 import pickle
 import threading
 import time
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import numpy
 
@@ -58,7 +58,6 @@ from .events import (
     FetchComplete,
     FetchFailed,
     FetchMapComplete,
-    FrameFetched,
     PollTick,
     ProgressUpdated,
     ReceiveDataComplete,
@@ -73,6 +72,57 @@ from .protocol import DEFAULT_CHUNK_SIZE
 
 if TYPE_CHECKING:
     from .engine import Engine
+
+
+def _decode_vertex_map_cbor(blob: bytes) -> dict:
+    """Decode a ``map.pickle`` CBOR envelope into ``dict[str, ndarray]``.
+
+    Producer is ``frontend/_cbor_bridge_.dumps_envelope("VertexMap", ...)``.
+    Numpy arrays cross the wire as nested Python lists; we cast back to int64.
+    """
+    from .module import get_cbor2
+
+    cbor2 = get_cbor2()
+    env = cbor2.loads(blob)
+    if not isinstance(env, dict) or env.get("kind") != "VertexMap":
+        raise ValueError(
+            f"map.pickle envelope kind mismatch: got {env.get('kind') if isinstance(env, dict) else type(env)!r}"
+        )
+    payload = env.get("payload")
+    if not isinstance(payload, dict):
+        raise ValueError("VertexMap payload must be a map")
+    return {k: numpy.asarray(v, dtype=numpy.int64) for k, v in payload.items()}
+
+
+def _decode_surface_map_cbor(blob: bytes) -> dict:
+    """Decode a ``surface_map.pickle`` CBOR envelope.
+
+    Producer is ``frontend/_cbor_bridge_.dumps_envelope("SurfaceMap", ...)``.
+    The inner shape stays ``{"version": 2, "maps": {uuid: (tri, coefs, surf_tri)}}``;
+    we just rehydrate the inner numpy arrays.
+    """
+    from .module import get_cbor2
+
+    cbor2 = get_cbor2()
+    env = cbor2.loads(blob)
+    if not isinstance(env, dict) or env.get("kind") != "SurfaceMap":
+        raise ValueError(
+            f"surface_map.pickle envelope kind mismatch: "
+            f"got {env.get('kind') if isinstance(env, dict) else type(env)!r}"
+        )
+    payload = env.get("payload")
+    if not isinstance(payload, dict):
+        raise ValueError("SurfaceMap payload must be a map")
+    maps_in = payload.get("maps", {}) or {}
+    rehydrated: dict = {}
+    for name, entry in maps_in.items():
+        tri_indices, coefs, surf_tri = entry
+        rehydrated[name] = (
+            numpy.asarray(tri_indices, dtype=numpy.int64),
+            numpy.asarray(coefs, dtype=numpy.float64),
+            numpy.asarray(surf_tri, dtype=numpy.int64),
+        )
+    return {"version": payload.get("version"), "maps": rehydrated}
 
 
 class EffectRunner:
@@ -359,18 +409,26 @@ class EffectRunner:
                 continue
             fn, args = job
             is_poll = (fn == self._do_query and (not args or not args[0]))
+            is_stop = fn == self._do_stop_server
             try:
                 fn(*args)
-                # After each command (not poll), auto-query for fresh
-                # status — unless another command was queued during this
-                # one. In that case, the pending command will auto-query
-                # itself; slipping a status poll in between lets the
-                # server's pre-command state race ahead of the command
-                # reply and (e.g. for upload → build pipelines) trip
-                # the solver-terminal check in the outer ServerPolled
-                # handler, snapping activity back to IDLE before the
-                # queued command ever runs.
-                if not is_poll and self._backend and self._project_name:
+                # After each command (not poll, not stop), auto-query
+                # for fresh status — unless another command was queued
+                # during this one. In that case, the pending command
+                # will auto-query itself; slipping a status poll in
+                # between lets the server's pre-command state race
+                # ahead of the command reply and (e.g. for upload →
+                # build pipelines) trip the solver-terminal check in
+                # the outer ServerPolled handler, snapping activity
+                # back to IDLE before the queued command ever runs.
+                # Stop is special: ``_do_stop_server`` already
+                # dispatched ``ServerStopped`` (server=UNKNOWN), and
+                # an auto-poll right after would re-contact the
+                # process we just told to die — on local-backend the
+                # server is still up (orchestrator owned, or kill not
+                # yet propagated), so the poll succeeds and flips
+                # server back to RUNNING. Skip the auto-poll on stop.
+                if not is_poll and not is_stop and self._backend and self._project_name:
                     with self._io_lock:
                         has_pending_cmd = bool(self._cmd_queue)
                     if not has_pending_cmd:
@@ -414,6 +472,12 @@ class EffectRunner:
             remote_root = ""
             if hasattr(backend, 'current_directory'):
                 remote_root = backend.current_directory
+            print(
+                f"DEBUG_CONNECT backend_type={backend_type} "
+                f"config_path={config.get('path')!r} "
+                f"current_directory={remote_root!r}",
+                flush=True,
+            )
         except Exception as e:
             # Reset any partial backend so the next attempt starts clean.
             if self._backend is not None:
@@ -450,25 +514,29 @@ class EffectRunner:
     def _do_validate_path(self) -> None:
         if not self._backend:
             return
-        server_py = os.path.join(self._backend.current_directory, "server.py")
-        # win_native runs the Blender addon on Windows, where the backend's
-        # exec_command goes through cmd.exe — bash `if [ -f ]` fails there.
-        # Hit the local filesystem directly instead.
-        if self._backend.backend_type == "win_native":
-            if not os.path.isfile(server_py):
+        directory = self._backend.current_directory
+        # The launcher invokes the Rust binary at
+        # target/release/ppf-cts-server (.exe on Windows). For the
+        # Local + win_native backends we probe the local filesystem
+        # directly; for SSH / Docker we go through ``exec_command``.
+        is_local = self._backend.backend_type in ("local", "win_native")
+        bin_name = "ppf-cts-server.exe" if os.name == "nt" else "ppf-cts-server"
+        server_bin = os.path.join(directory, "target", "release", bin_name)
+        if is_local:
+            if not os.path.isfile(server_bin):
                 self._engine.dispatch(ErrorOccurred(
-                    error=f"Remote path not found ({server_py}).",
+                    error=f"Remote path not found ({server_bin}).",
                     source="validate_path",
                 ))
             return
         result = self._backend.exec_command(
-            f"if [ -f {server_py} ]; then echo FOUND; else echo NOT_FOUND; fi",
+            f"if [ -f {server_bin} ]; then echo FOUND; else echo NOT_FOUND; fi",
             shell=True, cwd="/",
         )
         output = "\n".join(result.get("stdout", []))
         if result["exit_code"] != 0 or "NOT_FOUND" in output:
             self._engine.dispatch(ErrorOccurred(
-                error=f"Remote path not found ({server_py}).",
+                error=f"Remote path not found ({server_bin}).",
                 source="validate_path",
             ))
 
@@ -496,8 +564,8 @@ class EffectRunner:
         if not self._backend:
             return
 
-        # Win_native: connect spawns the initial server.py, then Stop/Start
-        # cycles re-spawn it here. Without this re-spawn, ServerStopped
+        # Win_native: connect spawns the initial ppf-cts-server.exe, then
+        # Stop/Start cycles re-spawn it here. Without this re-spawn, ServerStopped
         # leaves _process=None and the next ServerLaunched dispatch is a
         # lie — _do_query silently fails (channel refuses), no ServerPolled
         # follows, solver stays NO_DATA, and the UI shows "Waiting for
@@ -540,7 +608,6 @@ class EffectRunner:
                         f"Please expose the port with '-p {port}:{port}' when starting the container."
                     )
 
-        venv_path = "$HOME/.local/share/ppf-cts/venv"
         server_log = os.path.join(directory, "server.log")
         progress_file = os.path.join(directory, "progress.log")
         script_path = "/tmp/start_server.sh"
@@ -548,7 +615,7 @@ class EffectRunner:
         # Clear progress.log
         self._backend.exec_command(f"rm -f {progress_file}", shell=True)
 
-        # server.py defaults to binding 127.0.0.1. That is what we want
+        # ppf-cts-server defaults to binding 127.0.0.1. That is what we want
         # for SSH (Direct) and Local: paramiko's direct-tcpip channel
         # terminates at the remote's loopback, and Local connects to
         # localhost on the same kernel. Inside a container, however,
@@ -558,14 +625,29 @@ class EffectRunner:
         in_container = bool(getattr(self._backend, "_container", ""))
         host_flag = "--host 0.0.0.0 " if in_container else ""
 
-        # Detect venv
-        result = self._backend.exec_command(f"test -d {venv_path}", shell=True)
-        if result["exit_code"] == 0:
-            activate_cmd = f"source {venv_path}/bin/activate && python3 server.py {host_flag}--port {port}"
-        else:
-            activate_cmd = f"python3 server.py {host_flag}--port {port}"
+        # The Rust ppf-cts-server binary writes ``progress.log`` markers
+        # (SERVER_STARTING / SERVER_READY) and speaks protocol 0.03; build
+        # it with ``cargo build --release -p ppf-cts-server``.
+        rust_bin = os.path.join(directory, "target", "release", "ppf-cts-server")
+        server_cmd = f"{rust_bin} {host_flag}--port {port}"
 
-        script = f'#!/bin/bash\ncd "{directory}"\nnohup bash -c "{activate_cmd}" > "{server_log}" 2>&1 &\n'
+        # Activate the project venv so the build worker subprocess
+        # (spawned by ppf-cts-server) resolves `python3` to one with
+        # `_ppf_cts_py` installed. Without this, a non-login SSH shell
+        # falls through to the system python, which doesn't carry the
+        # PyO3 wheel and the build fails with
+        # `ModuleNotFoundError: No module named '_ppf_cts_py'`.
+        # Convention: $HOME/.local/share/ppf-cts/venv.
+        # Falls through silently when the venv is absent (Docker /
+        # win-native paths use embedded Python set up differently).
+        venv_activate = '$HOME/.local/share/ppf-cts/venv/bin/activate'
+        activate_clause = (
+            f'[ -f {venv_activate} ] && source {venv_activate}; '
+        )
+        script = (
+            f'#!/bin/bash\ncd "{directory}"\n'
+            f'nohup bash -c "{activate_clause}{server_cmd}" > "{server_log}" 2>&1 &\n'
+        )
         self._backend.exec_command(f"cat <<'EOF' > {script_path}\n{script}EOF\n", shell=True)
         self._backend.exec_command(f"chmod +x {script_path}", shell=True)
         result = self._backend.exec_command(script_path, shell=True)
@@ -631,21 +713,31 @@ class EffectRunner:
     def _do_stop_server(self) -> None:
         if not self._backend:
             return
-        # win_native owns the server subprocess directly; pkill isn't on
-        # cmd.exe and the backend has the handle already.
-        if self._backend.backend_type == "win_native":
+        # The cache is keyed off "what the server last said." Once
+        # the server is gone, every cached field (data="READY",
+        # frame=N, scene_info, ...) is stale. Leaving them around
+        # makes the UI display a Scene Info collapsible and a frame
+        # count for a server that no longer holds that state — and,
+        # if the user clicks Start again, those stale fields keep
+        # showing until a fresh ServerPolled lands.
+        # win_native + local backends both own the server subprocess
+        # directly; their stop_server() handles termination + waiting.
+        # SSH/Docker backends drive the same shape via exec_command in
+        # their own stop_server overrides.
+        if self._backend.backend_type in ("win_native", "local"):
             self._backend.stop_server()
-            # The cache is keyed off "what the server last said." Once
-            # the server is gone, every cached field (data="READY",
-            # frame=N, scene_info, ...) is stale. Leaving them around
-            # makes the UI display a Scene Info collapsible and a frame
-            # count for a server that no longer holds that state — and,
-            # if the user clicks Start again, those stale fields keep
-            # showing until a fresh ServerPolled lands.
             self._response_cache.clear()
             self._engine.dispatch(ServerStopped())
             return
-        self._backend.exec_command("pkill -f server.py", shell=True)
+        # SSH / Docker remote: match the Rust server binary by name so
+        # pkill targets the actual listener. Without this the loop
+        # would spin for its full grace and the addon would think stop
+        # succeeded only because it dispatched ServerStopped at the
+        # end.
+        self._backend.exec_command(
+            "pkill -f ppf-cts-server",
+            shell=True,
+        )
         # Wait for server to actually stop
         for _ in range(5):
             response, alive = self._backend.query({}, self._project_name or "", self._chunk_size)
@@ -769,16 +861,23 @@ class EffectRunner:
             return
         map_path = os.path.join(root, "session", "map.pickle")
         map_data = self._backend.receive_data(map_path, self._project_name, chunk_size=self._chunk_size)
-        anim_map = pickle.loads(map_data)
+        # Format-sniff between pickle (first byte 0x80) and CBOR map
+        # (first byte 0xa0-0xb7). Producer: ``frontend/_scene_.py:export_fixed``.
+        if map_data and map_data[0] != 0x80:
+            anim_map = _decode_vertex_map_cbor(map_data)
+        else:
+            anim_map = pickle.loads(map_data)
 
         surface_map = {}
         try:
             smap_path = os.path.join(root, "session", "surface_map.pickle")
             smap_data = self._backend.receive_data(smap_path, self._project_name, chunk_size=self._chunk_size)
-            payload = pickle.loads(smap_data)
-            # Wire format v2: {"version": 2, "maps": {uuid: (tri_indices, coefs, surf_tri)}}.
-            # Legacy format was a bare dict of bary tuples; reject it so the
-            # client doesn't silently apply the wrong reconstruction math.
+            if smap_data and smap_data[0] != 0x80:
+                payload = _decode_surface_map_cbor(smap_data)
+            else:
+                payload = pickle.loads(smap_data)
+            # Require wire format v2: {"version": 2, "maps": {uuid: (tri_indices, coefs, surf_tri)}}.
+            # Anything else is rejected so the client cannot apply the wrong reconstruction math.
             if (
                 isinstance(payload, dict)
                 and payload.get("version") == 2

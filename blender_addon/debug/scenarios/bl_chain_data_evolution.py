@@ -8,6 +8,12 @@ from . import _runner as r
 
 NEEDS_BLENDER = True
 
+# Chain scenarios hold the solver/server boundary across multiple
+# cycles; under parallel host load the cumulative timing slack runs
+# out and reconnect races trip. Always run serially after the
+# parallel batch.
+NOT_PARALLELIZABLE = True
+
 SEQUENCE = (
     "connect", "transfer", "verify_idle",
     "run", "fetch", "verify_pc2", "clear_animation",

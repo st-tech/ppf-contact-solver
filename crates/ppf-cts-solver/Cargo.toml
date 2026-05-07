@@ -1,0 +1,72 @@
+# File: crates/ppf-cts-solver/Cargo.toml
+# Code: Claude Code and Codex
+# Review: Ryoichi Ando (ryoichi.ando@zozo.com)
+# License: Apache v2.0
+#
+# CUDA solver driver. The package name follows the workspace's
+# `ppf-cts-*` convention; the produced binary keeps the historical
+# `ppf-contact-solver` name (set via `[[bin]]` below) because launcher
+# scripts, Windows build batch files, and the gh-actions runners invoke
+# the produced executable by that name.
+#
+# Build paths in build.rs are relative to this crate dir, so `src/cpp`
+# and `../../eigsys/eig-hpp` are the resolved locations of the C++
+# sources and the shared eigen header pack respectively.
+
+[package]
+name = "ppf-cts-solver"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# Decouple the binary name from the package name so the produced
+# executable stays `ppf-contact-solver`. Launcher templates emitted by
+# ppf-cts-core::datamodel::session::scripts, build-win-native/*.bat,
+# and .github/workflows/scripts/win/ all hardcode that name.
+[[bin]]
+name = "ppf-contact-solver"
+path = "src/main.rs"
+
+[dependencies]
+# Shared with the rest of the workspace via [workspace.dependencies].
+bincode.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+log.workspace = true
+log4rs.workspace = true
+nalgebra.workspace = true
+rayon.workspace = true
+ppf-cts-core = { path = "../ppf-cts-core" }
+ppf-cts-formats = { path = "../ppf-cts-formats" }
+
+# Driver-only dependencies kept on direct version pins. clap matches
+# ppf-cts-server's v4 so the workspace pulls a single major and the
+# unmaintained ``atty`` crate (clap 3's terminal-detection dep,
+# RUSTSEC GHSA-g98v-hv3f-hcfr) is no longer in the dep graph.
+libc = "0.2.142"
+flate2 = "1.0.25"
+more-asserts = "0.2.2"
+clap = { version = "4.5", features = ["derive"] }
+bytemuck = "1.13.1"
+git_info = "^0.1.2"
+toml = "0.8.19"
+chrono = "0.4"
+num-traits = "0.2.19"
+
+[build-dependencies]
+num_cpus = "1.16.0"
+
+[features]
+default = []
+# CUDA-free build path used by the debug test rig. Skips the C++/CUDA
+# library compile in build.rs and stubs the extern "C" kernel calls in
+# backend.rs with Rust-side kinematics. Lets us exercise the real Rust
+# pipeline (encoder roundtrip, constraint construction, vert_*.bin
+# format, frame timing) on hosts without CUDA. See blender_addon/debug/
+# TEST_RIG.md for the fidelity test that uses this. Cascades to
+# ppf-cts-core's workspace-level `emulated` feature so this driver and
+# ppf-cts-server can't drift independently.
+emulated = ["ppf-cts-core/emulated"]
+
+[lints]
+workspace = true

@@ -825,8 +825,8 @@ class SOLVER_OT_BakeAllSingleFrame(Operator):
         scene = context.scene
         depsgraph = context.evaluated_depsgraph_get()
 
-        # Phase 1: capture current evaluated pose for every bakeable object.
-        # STATIC groups are included — UI-op motion produces PC2 caches
+        # Capture the current evaluated pose for every bakeable object.
+        # STATIC groups are included; UI-op motion produces PC2 caches
         # that must be cleaned up with the same teardown path.
         captured = {}
         failed = []
@@ -851,7 +851,7 @@ class SOLVER_OT_BakeAllSingleFrame(Operator):
                 else:
                     captured[uid] = ("CURVE", _capture_curve_pose(eval_obj.data))
 
-        # Phase 2: teardown + apply captured pose at frame 1.
+        # Tear down existing caches and apply the captured pose at frame 1.
         from ...core.uuid_registry import resolve_assigned as _resolve2
         scene.frame_set(1)
         count = 0

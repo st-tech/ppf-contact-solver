@@ -33,11 +33,12 @@ backend instead, even though the GPU is local.
 ## Setup
 
 1. Set **Server Type** to `Local`.
-2. Fill **Path** with the solver checkout (the directory that
-   contains `server.py`).
+2. Fill **Path** with the directory that contains the
+   `ppf-cts-server` binary (typically `target/release/` inside your
+   solver checkout).
 3. Set **Project Name** on the main panel.
-4. Click **Connect**. The add-on checks that `server.py` exists at the
-   path you gave it.
+4. Click **Connect**. The add-on checks that `ppf-cts-server` exists
+   at the path you gave it.
 5. Click **Start Server**. The panel waits a few seconds for the server
    to report that it is ready.
 
@@ -61,10 +62,10 @@ you do not need to do anything.
 
 | Field | Description |
 | ----- | ----------- |
-| Path | Filesystem path to the solver checkout. Default `~/ppf-contact-solver`. |
+| Path | Directory containing the `ppf-cts-server` binary. Default `~/ppf-contact-solver`. |
 
-The local `server.py` port is fixed at `9090` in Local mode; the panel
-does not expose a Server Port field here (it is only editable in
+The local `ppf-cts-server` port is fixed at `9090` in Local mode; the
+panel does not expose a Server Port field here (it is only editable in
 Docker-family modes).
 
 ## Dependencies
@@ -75,16 +76,18 @@ SSH and Docker modes.
 
 ## Troubleshooting
 
-- **"Remote path not found (.../server.py)"** - the path you entered does
-  not contain `server.py`. Point it at the checkout root, not the `build/`
-  or `src/` subdirectory.
+- **"Remote path not found (.../ppf-cts-server)"** - the path you
+  entered does not contain the `ppf-cts-server` binary. Point it at the
+  directory holding the binary (typically `target/release/`), not the
+  checkout root or a source subdirectory.
 - **Server startup timed out.** - the solver launched but did not report
   readiness within 16 seconds. Check `server.log` inside the solver
   directory; the panel also prints the last 20 lines when the timeout
   fires.
-- **Port already in use.** - another solver (or a stale `server.py`) is
-  already bound to the port. Click **Stop Server** first, or change the
-  Server Port.
+- **Port already in use.** - another solver (or a stale `ppf-cts-server`
+  process) is already bound to the port. Click **Stop Server** first, use
+  the **Force Terminate Process** button shown next to the port-in-use
+  error, or change the Server Port.
 
 :::{admonition} Under the hood
 :class: toggle
@@ -92,10 +95,10 @@ SSH and Docker modes.
 **Launch script**
 
 Local mode launches the server with a bash script (`nohup`, `source
-.../bin/activate`, `python3`). That is the same launch path the SSH and Docker
-backends use. The script is `bash`-only, which is why Local mode is
-Linux-only; Windows goes through the Windows Native backend and macOS
-is not supported (the solver requires CUDA).
+.../bin/activate`, `./target/release/ppf-cts-server`). That is the same
+launch path the SSH and Docker backends use. The script is `bash`-only,
+which is why Local mode is Linux-only; Windows goes through the Windows
+Native backend and macOS is not supported (the solver requires CUDA).
 
 **Shared port field**
 
@@ -107,15 +110,16 @@ historical reasons, even on Local connections.
 
 Local mode reuses the same launch script as the SSH and Docker
 backends: it sources `$HOME/.local/share/ppf-cts/venv/bin/activate` if
-that file exists, otherwise it falls back to system `python3`. The
-solver's own install scripts are responsible for creating the venv;
-the add-on never creates or modifies it.
+that file exists. The Rust server spawns a Python build worker that
+imports the `_ppf_cts_py` PyO3 module from that venv. The solver's
+own install scripts are responsible for creating the venv; the add-on
+never creates or modifies it.
 
 **File transfer fast path**
 
 On local connections, file transfers copy directly on disk instead of
-going through the solver TCP socket: no pickle overhead, and much
-faster than the SSH or Docker paths. The trade-off is cosmetic: the
-panel does not display a bandwidth figure while a local transfer is
-in progress. That is expected on this backend.
+going through the solver TCP socket: no CBOR-over-TCP overhead, and
+much faster than the SSH or Docker paths. The trade-off is cosmetic:
+the panel does not display a bandwidth figure while a local transfer
+is in progress. That is expected on this backend.
 :::

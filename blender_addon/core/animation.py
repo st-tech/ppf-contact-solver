@@ -3,8 +3,6 @@
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
 # License: Apache v2.0
 
-import bpy  # pyright: ignore
-
 from mathutils import Vector  # pyright: ignore
 
 from ..models.groups import decode_vertex_group_identifier, get_addon_data, iterate_active_object_groups

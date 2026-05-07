@@ -29,6 +29,7 @@ from __future__ import annotations
 import os
 
 from . import _runner as r
+from . import REPO_ROOT_POSIX
 
 
 NEEDS_BLENDER = True
@@ -183,9 +184,7 @@ except Exception as exc:
 
 
 def build_driver(ctx: r.ScenarioContext) -> str:
-    repo_root = os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "..", "..", "..")
-    )
+    repo_root = REPO_ROOT_POSIX
     return (
         _DRIVER_TEMPLATE
         .replace("<<LOCAL_PATH>>", repo_root)

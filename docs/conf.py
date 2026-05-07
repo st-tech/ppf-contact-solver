@@ -47,6 +47,10 @@ autodoc_mock_imports = [
     "pythreejs",
     "IPython",
     "pytetwild",
+    # PyO3 cdylib built by `maturin develop --release` from
+    # crates/ppf-cts-py/. Not present in the docs venv; autodoc still
+    # introspects the surrounding Python wrappers via mocking.
+    "_ppf_cts_py",
 ]
 
 source_suffix = {

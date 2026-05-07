@@ -231,13 +231,11 @@ def _check_uuid_consistency(context) -> str:
 class TransferRequestMixin:
     """Shared request methods for transfer operators.
 
-    The old pattern (separate data_send then param_send then build) is
-    retired; both files now ship through a single ``upload_atomic``
-    transaction so the server can't observe a mismatched (data, param)
-    pair mid-build. Upload sites call ``core.encoder.prepare_upload``
-    to get ``(data, param, data_hash, param_hash)`` from a single
-    canonical compute that also stamps the local cache, then dispatch
-    via ``com.build_pipeline`` or ``com.upload_only``.
+    Data and param ship together through a single ``upload_atomic``
+    transaction so the server cannot observe a mismatched (data, param)
+    pair mid-build. Upload sites call ``core.encoder.prepare_upload`` for
+    ``(data, param, data_hash, param_hash)`` (which also stamps the local
+    cache), then dispatch via ``com.build_pipeline`` or ``com.upload_only``.
     """
 
     def request_delete(self):
@@ -451,15 +449,7 @@ class SOLVER_OT_Transfer(TransferRequestMixin, AsyncOperator):
             self.report({"ERROR"}, error)
             return {"CANCELLED"}
         status = com.info.status
-        # Skip the "Deleting Remote Data..." round-trip when the cached
-        # server response already says NO_DATA. The delete-cycle was a
-        # blanket precaution for the legacy case where RemoteStatus said
-        # NO_DATA but stale data.pickle / app_state still sat on disk —
-        # the protocol-0.03 server reports ``data="NO_DATA"`` straight
-        # off the filesystem (has_data && has_param in select_project),
-        # so trusting it here saves a round-trip plus a misleading
-        # status banner. ``remote_root`` must already be populated; if
-        # not, fall back to the delete cycle which establishes it.
+        # Skip the delete round-trip when the server already reports NO_DATA and remote_root is known.
         response = com.info.response
         if (response and response.get("data") == "NO_DATA"
                 and com.connection.remote_root):
@@ -468,7 +458,7 @@ class SOLVER_OT_Transfer(TransferRequestMixin, AsyncOperator):
                 data, param, data_hash, param_hash = prepare_upload(context)
             except ValueError as e:
                 self.report({"ERROR"}, str(e))
-                com.error = str(e)
+                com.set_error(str(e))
                 return {"CANCELLED"}
             com.animation.clear()
             com.build_pipeline(
@@ -537,7 +527,7 @@ class SOLVER_OT_Transfer(TransferRequestMixin, AsyncOperator):
                     data, param, data_hash, param_hash = prepare_upload(context)
                 except ValueError as e:
                     self.report({"ERROR"}, str(e))
-                    com.error = str(e)
+                    com.set_error(str(e))
                     self.cleanup_modal(context)
                     redraw_all_areas(context)
                     return {"CANCELLED"}
@@ -988,12 +978,17 @@ class SOLVER_OT_DeleteRemoteData(AsyncOperator):
         if response is None:
             return False
         data_stat = response.get("data", None)
-        # status.in_progress() covers the local-side window right after
-        # Run/Resume/Fetch is clicked — is_running(response) only flips
-        # once the remote echoes BUSY, which can lag by a tick or two.
+        # Positive check: enable only when the cached server response
+        # affirmatively reports READY. The earlier `!= "NO_DATA"` form
+        # also passed when the cache was empty (response cleared on
+        # disconnect, no poll back yet) or the field was missing, which
+        # left the button live during the reconnect window before the
+        # first poll lands. status.in_progress() covers the local-side
+        # window right after Run/Resume/Fetch is clicked; is_running
+        # only flips once the remote echoes BUSY, which can lag a tick.
         return (
             not com.busy()
-            and data_stat != "NO_DATA"
+            and data_stat == "READY"
             and com.is_connected()
             and com.is_server_running()
             and com.info.status.ready()

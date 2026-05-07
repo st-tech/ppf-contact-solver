@@ -16,12 +16,12 @@ list, generated directly from the source, see the
 ## Import
 
 ```python
-from zozo_contact_solver import solver
+from bl_ext.user_default.ppf_contact_solver.ops.api import solver
 ```
 
-The add-on publishes the `zozo_contact_solver` package at registration
-time, so this import works regardless of where the add-on lives on
-disk. Every example below assumes it is already imported.
+The add-on registers under Blender's extension namespace, so this
+import works regardless of where the add-on lives on disk. Every
+example below assumes it is already imported.
 
 ## Scene Parameters
 

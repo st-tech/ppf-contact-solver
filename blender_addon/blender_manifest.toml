@@ -5,7 +5,7 @@
 
 schema_version = "1.0.0"
 id = "ppf_contact_solver"
-version = "1.0.1"
+version = "1.0.2"
 name = "ZOZO's Contact Solver"
 tagline = "A contact solver for physics-based simulations"
 maintainer = "Ryoichi Ando <ryoichi.ando@zozo.com>"
@@ -14,4 +14,28 @@ website = "https://github.com/st-tech/ppf-contact-solver"
 blender_version_min = "5.0.0"
 license = [
   "Apache-2.0",
+]
+
+# Bundled wheels (https://docs.blender.org/manual/en/latest/advanced/extensions/python_wheels.html).
+# cbor2 is the encoder for every Transfer click after the Rust
+# migration; bundling it lets the addon ship a scene out of the box
+# without first prompting for an Install Modules click. paramiko /
+# docker stay on-the-fly via ui/install_ops.py because they're only
+# pulled in when the user picks the SSH or Docker backend.
+#
+# Two Python ABIs cover the supported Blender versions: 5.0 (LTS,
+# Python 3.11) and 5.1+ (Python 3.13). Blender picks the matching
+# wheel for each install at extension-enable time.
+wheels = [
+  "./wheels/cbor2-6.0.1-cp311-cp311-macosx_11_0_arm64.whl",
+  "./wheels/cbor2-6.0.1-cp311-cp311-manylinux_2_28_x86_64.whl",
+  "./wheels/cbor2-6.0.1-cp311-cp311-win_amd64.whl",
+  "./wheels/cbor2-6.0.1-cp313-cp313-macosx_11_0_arm64.whl",
+  "./wheels/cbor2-6.0.1-cp313-cp313-manylinux_2_28_x86_64.whl",
+  "./wheels/cbor2-6.0.1-cp313-cp313-win_amd64.whl",
+]
+platforms = [
+  "macos-arm64",
+  "linux-x64",
+  "windows-x64",
 ]

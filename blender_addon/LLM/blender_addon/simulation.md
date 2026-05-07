@@ -49,7 +49,7 @@ NOTE: Everything reachable from the Scene Configuration panel is also reachable 
 The same workflow is available from Python. Import `solver` and read or write through `solver.param`, `solver.create_group(...)`, `solver.add_wall(...)`, and friends:
 
 ```python
-from zozo_contact_solver import solver
+from bl_ext.user_default.ppf_contact_solver.ops.api import solver
 
 solver.param.gravity = (0, 0, -9.8)
 cloth = solver.create_group("Cloth", "SHELL")
@@ -261,7 +261,7 @@ If **Fetch** finds a **session ID mismatch** at reconnect, the remote project on
 The same workflow is available from Python:
 
 ```python
-from zozo_contact_solver import solver
+from bl_ext.user_default.ppf_contact_solver.ops.api import solver
 
 # The core loop.
 solver.transfer_data()

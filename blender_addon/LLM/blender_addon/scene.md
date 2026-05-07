@@ -141,7 +141,7 @@ Figure: Delete All Groups sits in the panel's header row, paired with Create Gro
 The same workflow is available from Python. The API mirrors the UI one-for-one: groups are created through `solver.create_group`, objects are assigned with `group.add`, and every operation on a group returns the group itself for easy chaining.
 
 ```python
-from zozo_contact_solver import solver
+from bl_ext.user_default.ppf_contact_solver.ops.api import solver
 
 # Create groups of each type.
 cloth = solver.create_group("Cloth", "SHELL")
@@ -267,7 +267,7 @@ Static objects are valid endpoints for Snap and Merge. The common case is snappi
 Create a Static group the same way as any other:
 
 ```python
-from zozo_contact_solver import solver
+from bl_ext.user_default.ppf_contact_solver.ops.api import solver
 
 floor = solver.create_group("Floor", type="STATIC")
 floor.add("Ground")

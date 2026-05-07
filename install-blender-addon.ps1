@@ -101,6 +101,28 @@ if ($Uninstall) {
     exit 0
 }
 
+# Fetch the cbor2 wheels declared in blender_manifest.toml. They are
+# gitignored; without them Blender will refuse to enable the extension
+# because the wheel paths in the manifest won't resolve. fetch.py is
+# idempotent: re-runs are no-ops when the local files already match
+# the pinned sha256 digests.
+$PythonBin = $env:PPF_PYTHON_BIN
+if (-not $PythonBin) {
+    if (Get-Command python -ErrorAction SilentlyContinue) {
+        $PythonBin = "python"
+    } elseif (Get-Command python3 -ErrorAction SilentlyContinue) {
+        $PythonBin = "python3"
+    } else {
+        Write-Error "No python/python3 found in PATH (needed by blender_addon\wheels\fetch.py)"
+        exit 1
+    }
+}
+& $PythonBin (Join-Path $AddonSource "wheels\fetch.py")
+if ($LASTEXITCODE -ne 0) {
+    Write-Error "blender_addon\wheels\fetch.py failed (exit $LASTEXITCODE)"
+    exit 1
+}
+
 if (-not (Test-Path $ExtDir)) {
     New-Item -ItemType Directory -Path $ExtDir -Force | Out-Null
 }

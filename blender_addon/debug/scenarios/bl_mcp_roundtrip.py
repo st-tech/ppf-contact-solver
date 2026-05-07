@@ -44,7 +44,6 @@
 
 from __future__ import annotations
 
-import os
 
 from . import _driver_lib as dl
 from . import _runner as r

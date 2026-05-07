@@ -9,32 +9,20 @@ import json
 import socket
 import subprocess
 
-PROTOCOL_VERSION = "0.03"
+# Must match crates/ppf-cts-server/src/lib.rs:PROTOCOL_VERSION.
+# A mismatch trips transitions.py's strict-equality protocol check.
+#
+# 0.04: TCMD requests carry a 4-byte big-endian length prefix between
+# the b"TCMD" header and the payload, replacing the prior wire that
+# relied on shutdown(SHUT_WR) as the end-of-input signal. Windows
+# tokio did not deliver that half-close to the server's AsyncRead, so
+# the server hung in its read loop and connections piled up in
+# FIN_WAIT_2 until the server stopped responding entirely.
+PROTOCOL_VERSION = "0.04"
 HEADER_TEXT_CMD = b"TCMD"
 HEADER_BINARY_DATA = b"BDAT"
 HEADER_JSON_DATA = b"JSON"
 DEFAULT_CHUNK_SIZE = 32 * 1024
-
-
-def open_server_channel(connection):
-    """Open a socket or SSH channel to the server, depending on connection type.
-
-    For SSH: returns a paramiko channel (must be closed by caller).
-    For docker/local: returns a connected socket (must be closed by caller).
-    """
-    if connection.type == "ssh":
-        transport = connection.instance.get_transport()
-        return transport.open_channel(
-            kind="direct-tcpip",
-            dest_addr=("localhost", connection.server_port),
-            src_addr=("localhost", 0),
-        )
-    elif connection.type in ("docker", "local"):
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.connect(("localhost", connection.server_port))
-        return s
-    else:
-        raise ValueError(f"Unsupported connection type: {connection.type}")
 
 
 def _shutdown_write(channel):
@@ -127,68 +115,6 @@ def exec_command(command, connection, shell=False, cwd=None):
         "stdout": output.splitlines(),
         "stderr": error_output.splitlines(),
     }
-
-
-def send_query(args, connection, project_name, chunk_size=DEFAULT_CHUNK_SIZE):
-    """Send a query to the remote server and return the response dict.
-
-    Args:
-        args: Dict of query arguments (e.g. ``{"request": "build"}``).
-        connection: A ConnectionInfo instance.
-        project_name: The project name to include in the query.
-        chunk_size: Network chunk size in bytes.
-
-    Returns:
-        A tuple ``(response, server_running)`` where *response* is the parsed
-        JSON dict and *server_running* is a bool indicating whether the server
-        responded successfully.
-    """
-    if args is None:
-        args = {}
-    response = {}
-    server_running = False
-
-    if connection.instance:
-        if project_name is None:
-            return response, server_running
-        else:
-            args["name"] = project_name
-
-        flattened = ""
-        for key, value in args.items():
-            flattened += f"--{key} {value} "
-
-        channel = None
-        try:
-            channel = open_server_channel(connection)
-            channel.sendall(HEADER_TEXT_CMD)
-            data = flattened.encode()
-            total_sent = 0
-            while total_sent < len(data):
-                sent = channel.send(
-                    data[total_sent : total_sent + chunk_size]
-                )
-                if sent == 0:
-                    raise RuntimeError("Socket connection broken during send")
-                total_sent += sent
-            _shutdown_write(channel)
-            response_data = b""
-            while True:
-                data = channel.recv(chunk_size)
-                if not data:
-                    break
-                response_data += data
-            if not response_data:
-                raise Exception("Empty JSON response.")
-            response = json.loads(response_data.decode())
-            server_running = True
-        except Exception:
-            server_running = False
-        finally:
-            if channel:
-                channel.close()
-
-    return response, server_running
 
 
 def socket_data_send(

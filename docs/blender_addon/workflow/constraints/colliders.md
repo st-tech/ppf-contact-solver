@@ -201,7 +201,7 @@ The resulting sub-panel. The sphere has three keyframes: **Frame 1
 (Initial)**, **Frame 60** (Hold), and **Frame 120** (Radius → 0.500,
 currently selected). Because frame 60 holds the previous radius (1.0),
 the solver keeps the sphere at 1.0 through frame 60 and then linearly
-interpolates from 1.0 to 0.5 across frames 60–120.
+interpolates from 1.0 to 0.5 across frames 60-120.
 ```
 
 Without the **Hold** at frame 60 the solver would linearly interpolate
@@ -246,7 +246,7 @@ to persist them.
 The same workflow is available from Python:
 
 ```python
-from zozo_contact_solver import solver
+from bl_ext.user_default.ppf_contact_solver.ops.api import solver
 
 # A floor (wall facing up) with 0.5 friction.
 floor = solver.add_wall([0, 0, 0], [0, 0, 1])
@@ -269,7 +269,15 @@ solver.clear_invisible_colliders()
 ```
 
 Both builders are chainable. `time(frame)` advances the keyframe cursor
-(frames must strictly increase), `hold()` emits a hold keyframe, and
-`move_to`, `move_by`, `radius`, `transform_to` emit value keyframes.
+(frames must strictly increase) and `hold()` emits a hold keyframe.
+The value-keyframe methods differ by collider type:
+
+- **Wall** exposes `move_to(position)` (absolute world-space position)
+  and `move_by(delta)` (offset from the previous keyframe). Walls do
+  not have a radius, and `transform_to` is sphere-only.
+- **Sphere** exposes `move_to(position)`, `radius(r)` (keyframe a new
+  radius), and `transform_to(position, radius)` (keyframe both
+  together). Sphere builders do not expose `move_by`.
+
 `param.contact_gap` and `param.friction` set the collider's per-contact
 values without keyframing them.

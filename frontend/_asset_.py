@@ -5,6 +5,8 @@
 
 import numpy as np
 
+from . import _rust  # type: ignore[attr-defined]
+
 
 class AssetManager:
     """Registry for mesh data assets.
@@ -12,6 +14,12 @@ class AssetManager:
     Holds uploaded meshes keyed by name and exposes an
     :class:`AssetUploader` for registering new assets and an
     :class:`AssetFetcher` for retrieving them.
+
+    Storage lives in a Rust-backed ``_ppf_cts_py.AssetRegistry``
+    that holds owning references to the user's numpy arrays so dtypes
+    survive a roundtrip exactly: an ``np.float64`` vertex buffer reads
+    back as ``np.float64``, an ``np.int32`` face buffer reads back as
+    ``np.int32``.
 
     Example:
         Access the manager via :attr:`App.asset` to register a mesh,
@@ -28,7 +36,7 @@ class AssetManager:
 
     def __init__(self):
         """Initialize the asset manager with an empty registry."""
-        self._mesh: dict[str, tuple] = {}
+        self._registry = _rust.AssetRegistry()
         self._add = AssetUploader(self)
         self._fetch = AssetFetcher(self)
 
@@ -49,7 +57,7 @@ class AssetManager:
                 app.asset.add.tri("sheet", V, F)
                 assert "sheet" in app.asset.list()
         """
-        return list(self._mesh.keys())
+        return list(self._registry.list())
 
     def remove(self, name: str) -> bool:
         """Remove an asset from the manager.
@@ -72,11 +80,7 @@ class AssetManager:
                 app.asset.remove("sheet")
                 app.asset.add.tri("sheet", V, F)
         """
-        if name in self._mesh:
-            del self._mesh[name]
-            return True
-        else:
-            return False
+        return self._registry.remove(name)
 
     def clear(self):
         """Remove all assets from the manager.
@@ -92,21 +96,25 @@ class AssetManager:
                 V, F, T = app.mesh.preset("armadillo").tetrahedralize()
                 app.asset.add.tet("body", V, F, T)
         """
-        self._mesh = {}
+        self._registry.clear()
 
-    @property
-    def mesh(self) -> dict[str, tuple]:
-        """The underlying name-to-mesh-tuple dictionary.
-
-        Example:
-            Peek at the raw registry to inspect what has been uploaded::
-
-                app = App.create("demo")
-                V, F = app.mesh.square(res=32)
-                app.asset.add.tri("sheet", V, F)
-                print(list(app.asset.mesh.keys()))
+    def __getstate__(self) -> dict:
+        """Pickle state. Snapshots the Rust registry into a plain
+        ``dict[name, {"kind": str, "arrays": dict[str, ndarray]}]`` via
+        :meth:`_ppf_cts_py.AssetRegistry.snapshot` so the wrapper
+        roundtrips through ``pickle`` / ``copy.deepcopy``.
         """
-        return self._mesh
+        return {"snapshot": dict(self._registry.snapshot())}
+
+    def __setstate__(self, state: dict) -> None:
+        """Rehydrate the registry from :meth:`__getstate__` output via
+        :meth:`_ppf_cts_py.AssetRegistry.restore`."""
+        self._registry = _rust.AssetRegistry()
+        self._add = AssetUploader(self)
+        self._fetch = AssetFetcher(self)
+        snapshot = state.get("snapshot", {})
+        if snapshot:
+            self._registry.restore(snapshot)
 
     @property
     def add(self) -> "AssetUploader":
@@ -180,9 +188,7 @@ class AssetUploader:
                 F = np.array([[0, 1, 2]], dtype=np.uint32)
                 app.asset.add.check_bounds(V, F)
         """
-        max_ind = np.max(E)
-        if max_ind >= V.shape[0]:
-            raise Exception(f"E contains index {max_ind} out of bounds ({V.shape[0]})")
+        _rust.check_bounds(E, V.shape[0])
 
     def tri(self, name: str, V: np.ndarray, F: np.ndarray):
         """Upload a triangle mesh to the asset manager.
@@ -211,23 +217,18 @@ class AssetUploader:
                 V, F = app.mesh.icosphere(r=0.5, subdiv_count=4)
                 app.asset.add.tri("sphere", V, F)
         """
-        if V.shape[1] not in (3, 5):
-            raise Exception("V must have 3 or 5 columns")
-        elif F.shape[1] != 3:
-            raise Exception("F must have 3 columns")
-        if name in self._manager.mesh:
-            raise Exception(f"name '{name}' already exists")
+        _rust.check_tri_v_cols(V)
+        _rust.check_cols(F, "F", 3)
+        if V.shape[1] == 5:
+            # Extract xyz and UV coordinates
+            V_xyz = V[:, :3].copy()
+            V_uv = V[:, 3:5].copy()
+            self.check_bounds(V_xyz, F)
+            self._manager._registry.add_tri(name, V_xyz, F, V_uv)
         else:
-            if V.shape[1] == 5:
-                # Extract xyz and UV coordinates
-                V_xyz = V[:, :3].copy()
-                V_uv = V[:, 3:5].copy()
-                self.check_bounds(V_xyz, F)
-                self._manager.mesh[name] = ("tri", V_xyz, F, V_uv)
-            else:
-                self.check_bounds(V, F)
-                # Copy so later caller mutation doesn't reach the manager.
-                self._manager.mesh[name] = ("tri", V.copy(), F, None)
+            self.check_bounds(V, F)
+            # Copy so later caller mutation doesn't reach the manager.
+            self._manager._registry.add_tri(name, V.copy(), F, None)
 
     def tet(self, name: str, V: np.ndarray, F: np.ndarray, T: np.ndarray):
         """Upload a tetrahedral mesh to the asset manager.
@@ -253,18 +254,12 @@ class AssetUploader:
                 V, F, T = app.mesh.icosphere(r=0.25, subdiv_count=4).tetrahedralize()
                 app.asset.add.tet("sphere", V, F, T)
         """
-        if V.shape[1] != 3:
-            raise Exception("V must have 3 columns")
-        elif F.shape[1] != 3:
-            raise Exception("F must have 3 columns")
-        elif T.shape[1] != 4:
-            raise Exception("T must have 4 columns")
-        if name in self._manager.mesh:
-            raise Exception(f"name '{name}' already exists")
-        else:
-            self.check_bounds(V, F)
-            self.check_bounds(V, T)
-            self._manager.mesh[name] = ("tet", V, F, T)
+        _rust.check_cols(V, "V", 3)
+        _rust.check_cols(F, "F", 3)
+        _rust.check_cols(T, "T", 4)
+        self.check_bounds(V, F)
+        self.check_bounds(V, T)
+        self._manager._registry.add_tet(name, V, F, T)
 
     def rod(self, name: str, V: np.ndarray, E: np.ndarray):
         """Upload a rod mesh to the asset manager.
@@ -290,11 +285,8 @@ class AssetUploader:
                 E = np.array([[i, i + 1] for i in range(len(V) - 1)], dtype=np.uint32)
                 app.asset.add.rod("strand", V, E)
         """
-        if name in self._manager.mesh:
-            raise Exception(f"name '{name}' already exists")
-        else:
-            self.check_bounds(V, E)
-            self._manager.mesh[name] = ("rod", V, E)
+        self.check_bounds(V, E)
+        self._manager._registry.add_rod(name, V, E)
 
     def stitch(self, name: str, stitch: tuple[np.ndarray, np.ndarray]):
         """Upload a stitch asset to the asset manager.
@@ -321,14 +313,9 @@ class AssetUploader:
                 app.asset.add.stitch("glue", S)
         """
         Ind, W = stitch
-        if Ind.shape[1] != 4:
-            raise Exception("Ind must have 4 columns")
-        elif W.shape[1] != 4:
-            raise Exception("W must have 4 columns")
-        if name in self._manager.mesh:
-            raise Exception(f"name '{name}' already exists")
-        else:
-            self._manager.mesh[name] = ("stitch", Ind, W)
+        _rust.check_cols(Ind, "Ind", 4)
+        _rust.check_cols(W, "W", 4)
+        self._manager._registry.add_stitch(name, Ind, W)
 
 
 class AssetFetcher:
@@ -374,11 +361,7 @@ class AssetFetcher:
                 app.asset.add.tri("sheet", V, F)
                 assert app.asset.fetch.get_type("sheet") == "tri"
         """
-        result = self._manager.mesh.get(name, None)
-        if result is None:
-            raise Exception(f"Asset {name} does not exist")
-        else:
-            return result[0]
+        return self._manager._registry.get_type(name)
 
     def get(self, name: str) -> dict[str, np.ndarray]:
         """Return the raw arrays stored for an asset.
@@ -412,27 +395,7 @@ class AssetFetcher:
                 data = app.asset.fetch.get("sheet")
                 print(data["V"].shape, data["F"].shape)
         """
-        result = {}
-        if name not in self._manager.mesh:
-            raise Exception(f"Asset {name} does not exist")
-        else:
-            mesh = self._manager.mesh[name]
-            if mesh[0] == "tri":
-                result["V"] = mesh[1]
-                result["F"] = mesh[2]
-                if len(mesh) > 3 and mesh[3] is not None:
-                    result["UV"] = mesh[3]
-            elif mesh[0] == "tet":
-                result["V"] = mesh[1]
-                result["F"] = mesh[2]
-                result["T"] = mesh[3]
-            elif mesh[0] == "rod":
-                result["V"] = mesh[1]
-                result["E"] = mesh[2]
-            elif mesh[0] == "stitch":
-                result["Ind"] = mesh[1]
-                result["W"] = mesh[2]
-            return result
+        return self._manager._registry.get(name)
 
     def tri(self, name: str) -> tuple[np.ndarray, np.ndarray]:
         """Return the vertex and face arrays of a triangle mesh asset.
@@ -460,14 +423,7 @@ class AssetFetcher:
                 V, F = app.asset.fetch.tri("sheet")
                 app.plot.create().tri(V, F)
         """
-        if name not in self._manager.mesh:
-            raise Exception(f"Tri {name} does not exist")
-        elif self._manager.mesh[name][0] != "tri":
-            raise Exception(f"Tri {name} is not a valid")
-        else:
-            mesh = self._manager.mesh[name]
-            assert mesh[0] == "tri"
-            return mesh[1], mesh[2]
+        return self._manager._registry.get_tri(name)
 
     def tet(self, name: str) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Return the arrays of a tetrahedral mesh asset.
@@ -495,14 +451,7 @@ class AssetFetcher:
                 V, F, T = app.asset.fetch.tet("ball")
                 app.plot.create().tet(V, T)
         """
-        if name not in self._manager.mesh:
-            raise Exception(f"Tet {name} does not exist")
-        elif self._manager.mesh[name][0] != "tet":
-            raise Exception(f"Tet {name} is not a valid")
-        else:
-            mesh = self._manager.mesh[name]
-            assert mesh[0] == "tet"
-            return mesh[1], mesh[2], mesh[3]
+        return self._manager._registry.get_tet(name)
 
     def rod(self, name: str) -> tuple[np.ndarray, np.ndarray]:
         """Return the vertex and edge arrays of a rod mesh asset.
@@ -531,14 +480,7 @@ class AssetFetcher:
                 app.asset.add.rod("strand", V, E)
                 V, E = app.asset.fetch.rod("strand")
         """
-        if name not in self._manager.mesh:
-            raise Exception(f"Rod {name} does not exist")
-        elif self._manager.mesh[name][0] != "rod":
-            raise Exception(f"Rod {name} is not a valid")
-        else:
-            mesh = self._manager.mesh[name]
-            assert mesh[0] == "rod"
-            return mesh[1], mesh[2]
+        return self._manager._registry.get_rod(name)
 
     def stitch(self, name: str) -> tuple[np.ndarray, np.ndarray]:
         """Return the index and weight arrays of a stitch asset.
@@ -566,11 +508,4 @@ class AssetFetcher:
                 app.asset.add.stitch("glue", S)
                 Ind, W = app.asset.fetch.stitch("glue")
         """
-        if name not in self._manager.mesh:
-            raise Exception(f"Stitch {name} does not exist")
-        elif self._manager.mesh[name][0] != "stitch":
-            raise Exception(f"Stitch {name} is not a valid")
-        else:
-            mesh = self._manager.mesh[name]
-            assert mesh[0] == "stitch"
-            return mesh[1], mesh[2]
+        return self._manager._registry.get_stitch(name)

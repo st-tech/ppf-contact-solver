@@ -1,0 +1,24 @@
+# File: crates/ppf-cts-formats/Cargo.toml
+# Code: Claude Code
+# Review: Ryoichi Ando (ryoichi.ando@zozo.com)
+# License: Apache v2.0
+#
+# Wire + persistence formats shared between the Blender addon (CBOR
+# producer), the Rust server (CBOR consumer + persistence), and
+# the PyO3 frontend bindings. All cross-language payloads carry an
+# `Envelope<T>` so we can refuse mismatched schema versions explicitly.
+
+[package]
+name = "ppf-cts-formats"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+ciborium.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

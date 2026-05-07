@@ -160,17 +160,17 @@ One-line definitions for the terms that appear across the rest of the documentat
 **MCP tool**
 : A JSON-RPC method exposed by the MCP server and dispatched with `tools/call`. Goes through the same validation layer as the sidebar buttons.
 
-**Protocol 0.02**
-: The current wire protocol version between the add-on and `server.py`. The server advertises its version on connect; mismatches surface as a protocol-version-mismatch status and refuse to proceed.
+**Protocol 0.04**
+: The current wire protocol version between the add-on and the `ppf-cts-server` binary. TCMD requests carry a 4-byte big-endian length prefix between the `TCMD` header and the payload, and a heartbeat probe on the poll tick re-confirms server liveness without forcing the user to reconnect. CBOR envelopes for parameter and mesh payloads follow the schema defined in the `ppf-cts-formats` crate (`envelope.rs` + `kinds/`), shared by both ends. The server advertises its version on connect; mismatches surface as a protocol-version-mismatch status and refuse to proceed.
 
 **Python API (add-on)**
-: The `zozo_contact_solver` module imported from Blender's text editor or a notebook. Covers the same validation layer as the sidebar and the MCP server.
+: The addon's Python API exposed as `bl_ext.user_default.ppf_contact_solver.ops.api`, imported from Blender's text editor or a notebook. Covers the same validation layer as the sidebar and the MCP server.
 
 **`run_python_script`**
 : MCP tool that evaluates arbitrary Python inside Blender. Exists for operations the add-on does not yet expose as first-class tools.
 
-**`server.py`**
-: The solver process launched on the remote side (or as a local subprocess for Windows Native) that listens for work over TCP on the configured port (default 9090).
+**`ppf-cts-server`**
+: The Rust solver binary launched on the remote side (or as a local subprocess for Windows Native) that listens for work over TCP on the configured port (default 9090).
 
 **Session ID**
 : Per-connection identifier the server assigns at start. Persisted with the `.blend` on save so a reopened file can detect whether the remote has been reset since the file was saved.

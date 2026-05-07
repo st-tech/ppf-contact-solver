@@ -16,6 +16,16 @@ RUN apt-get update && \
   apt-get install -y python3 python3-venv && \
   python3 warmup.py --skip-confirmation && \
   /root/.cargo/bin/cargo build && \
+  # Build + install the PyO3 extension `_ppf_cts_py` into the venv.
+  # frontend/__init__.py hard-imports it, so any image that runs
+  # examples/headless.py needs the wheel present.
+  /root/.local/share/ppf-cts/venv/bin/pip install --upgrade maturin && \
+  PATH=/root/.cargo/bin:$PATH /root/.local/share/ppf-cts/venv/bin/maturin build --release \
+    --manifest-path crates/ppf-cts-py/Cargo.toml \
+    --interpreter /root/.local/share/ppf-cts/venv/bin/python \
+    --out /tmp/wheels && \
+  /root/.local/share/ppf-cts/venv/bin/pip install /tmp/wheels/*.whl && \
+  rm -rf /tmp/wheels && \
   rm -rf /root/${PROJ_NAME}
 
 WORKDIR /root
@@ -56,14 +66,19 @@ RUN apt-get update && \
 
 # Copy only necessary files from builder
 COPY --from=builder /root/${PROJ_NAME}/target/release/ppf-contact-solver /root/${PROJ_NAME}/target/release/ppf-contact-solver
-COPY --from=builder /root/${PROJ_NAME}/target/release/build/ppf-contact-solver-*/out/lib/*.so /usr/local/lib/
+COPY --from=builder /root/${PROJ_NAME}/target/release/build/ppf-cts-solver-*/out/lib/*.so /usr/local/lib/
 COPY --from=builder /root/${PROJ_NAME}/*.py /root/${PROJ_NAME}/
 COPY --from=builder /root/${PROJ_NAME}/Cargo.toml /root/${PROJ_NAME}/
 COPY --from=builder /root/${PROJ_NAME}/LICENSE /root/${PROJ_NAME}/
 COPY --from=builder /root/${PROJ_NAME}/examples /root/${PROJ_NAME}/examples
 COPY --from=builder /root/${PROJ_NAME}/blender_addon /root/${PROJ_NAME}/blender_addon
 COPY --from=builder /root/${PROJ_NAME}/frontend /root/${PROJ_NAME}/frontend
-COPY --from=builder /root/${PROJ_NAME}/src /root/${PROJ_NAME}/src
+# frontend/_session_inspect_.py:_harvest_log_docstrings walks these
+# two source roots to discover log channel names from `// Name:`
+# docstrings; without them session.get.log.names() returns [] and
+# notebooks like drape.ipynb fail at `assert "time-per-frame" in logs`.
+COPY --from=builder /root/${PROJ_NAME}/crates/ppf-cts-solver/src /root/${PROJ_NAME}/crates/ppf-cts-solver/src
+COPY --from=builder /root/${PROJ_NAME}/crates/ppf-cts-core/src /root/${PROJ_NAME}/crates/ppf-cts-core/src
 COPY --from=builder /root/${PROJ_NAME}/.git/branch_name.txt /root/${PROJ_NAME}/.git/branch_name.txt
 COPY --from=builder /root/${PROJ_NAME}/.github/workflows/scripts/examples.txt /root/${PROJ_NAME}/examples.txt
 COPY --from=builder /root/${PROJ_NAME}/bin/ffmpeg /root/${PROJ_NAME}/bin/ffmpeg

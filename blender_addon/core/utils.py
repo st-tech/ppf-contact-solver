@@ -4,10 +4,9 @@
 # License: Apache v2.0
 
 import bpy  # pyright: ignore
-import numpy as np
 
-from ..models.groups import decode_vertex_group_identifier, get_addon_data, iterate_active_object_groups
-from .transform import inv_world_matrix, world_matrix, zup_to_yup
+from ..models.groups import decode_vertex_group_identifier, iterate_active_object_groups
+from .transform import world_matrix
 
 
 def get_category_name():

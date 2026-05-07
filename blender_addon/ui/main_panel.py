@@ -57,12 +57,45 @@ from .debug_ops import (
 from .addon_ops import classes as addon_classes
 from .jupyter_ops import classes as jupyter_classes
 from .solver_control_ops import (
+    SOLVER_OT_ForceTerminatePort,
     SOLVER_OT_SaveAndQuit,
     SOLVER_OT_ShowConsole,
     SOLVER_OT_Terminate,
     SOLVER_OT_UpdateStatus,
     classes as solver_control_classes,
 )
+
+
+# Tiny TTL cache for the port-error probe in the panel draw. The panel
+# can redraw many times per second; a TCP probe on every paint would be
+# wasteful even at sub-millisecond cost. ``_PROBE_TTL_S`` keeps the
+# answer fresh enough that the user sees the stale-error suppression
+# kick in within a frame or two of attaching.
+_PROBE_TTL_S = 1.5
+_probe_cache: dict[int, tuple[float, bool]] = {}
+
+
+def _our_server_responding_in_error(error_msg: str) -> bool:
+    """True when the panel's port-in-use error names a port that now
+    answers a ppf-cts-server TCMD ping. Used to suppress the stale
+    error + Force Terminate button after the spawn path's attach branch
+    takes over.
+    """
+    import re
+    import time
+
+    m = re.search(r"\bPort\s+(\d+)", error_msg)
+    if not m:
+        return False
+    port = int(m.group(1))
+    now = time.monotonic()
+    cached = _probe_cache.get(port)
+    if cached and (now - cached[0]) < _PROBE_TTL_S:
+        return cached[1]
+    from ..core.connection import _probe_ppf_cts_server
+    ours = _probe_ppf_cts_server(port, timeout=0.5)
+    _probe_cache[port] = (now, ours)
+    return ours
 
 
 class MAIN_OT_ProjectNameFromFile(bpy.types.Operator):
@@ -203,11 +236,14 @@ class MAIN_PT_RemotePanel(Panel):
                 col.prop(props, "win_native_path")
                 win_path = props.win_native_path.strip().rstrip("/\\")
                 if win_path:
-                    server_py = os.path.join(win_path, "server.py")
-                    if os.path.exists(server_py):
+                    candidates = [
+                        os.path.join(win_path, "target", "release", "ppf-cts-server.exe"),
+                        os.path.join(win_path, "bin", "ppf-cts-server.exe"),
+                    ]
+                    if any(os.path.exists(p) for p in candidates):
                         col.label(text="Solver path valid", icon="CHECKMARK")
                     else:
-                        col.label(text="server.py not found", icon="ERROR")
+                        col.label(text="ppf-cts-server.exe not found", icon="ERROR")
             elif props.server_type == "LOCAL":
                 col.prop(props, "local_path")
             elif props.server_type in ["CUSTOM", "COMMAND"]:
@@ -276,7 +312,26 @@ class MAIN_PT_RemotePanel(Panel):
             layout.label(text=message, icon=com.info.status.icon)
         error = com.error
         if error:
-            layout.label(text=error, icon="ERROR")
+            # Recovery hatch for "Port N is in use" — surfaces only when
+            # the error wording matches PortInUseByForeignProcess so the
+            # button isn't a foot-gun that's always visible. Clicking it
+            # walks the process tree and force-kills the squatter.
+            #
+            # Defense in depth: when the message implicates a port, probe
+            # it live before showing. If our own ppf-cts-server is now
+            # responding there (e.g. the user clicked Connect a second
+            # time and the spawn path's attach branch took over), the
+            # error is stale — suppress the label AND the button so we
+            # don't tempt the user into killing our own running server.
+            err_lower = error.lower()
+            is_port_error = "in use" in err_lower and "port" in err_lower
+            stale_port_error = is_port_error and _our_server_responding_in_error(error)
+            if not stale_port_error:
+                layout.label(text=error, icon="ERROR")
+                if is_port_error:
+                    layout.operator(
+                        SOLVER_OT_ForceTerminatePort.bl_idname, icon="X",
+                    )
 
         server_error = com.server_error
         if server_error:

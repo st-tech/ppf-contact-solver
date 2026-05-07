@@ -1,13 +1,13 @@
 # Blender Python API reference
 
-This document mirrors the auto-generated `python_api_reference.rst` found at `docs/blender_addon/integrations/python_api_reference.rst`. It catalogs every public class, method, property, and attribute on the ZOZO Contact Solver Python surface so an LLM can script the add-on after `from zozo_contact_solver import solver`.
+This document mirrors the auto-generated `python_api_reference.rst` found at `docs/blender_addon/integrations/python_api_reference.rst`. It catalogs every public class, method, property, and attribute on the ZOZO Contact Solver Python surface so an LLM can script the add-on after `from bl_ext.user_default.ppf_contact_solver.ops.api import solver`.
 
 If you reached this file as MCP resource `llm://python_api_reference`, its sibling resources (`llm://index`, `llm://overview`, `llm://parameters`, and so on) cover the surrounding concepts. Call `resources/list` once and pick the matching URI; the full resource surface (URI scheme, list/read examples, error handling) is documented under the **Resources** section of `llm://integrations`.
 
 ## Import and basic use
 
 ```python
-from zozo_contact_solver import solver
+from bl_ext.user_default.ppf_contact_solver.ops.api import solver
 
 # Scene parameters
 solver.param.gravity = (0, 0, -9.8)
@@ -47,7 +47,7 @@ Top-level entry point for the ZOZO Contact Solver.
 Available as `solver` when imported via:
 
 ```python
-from zozo_contact_solver import solver
+from bl_ext.user_default.ppf_contact_solver.ops.api import solver
 ```
 
 Scene parameters are accessed via `param` (a `SceneParam` proxy). Groups, pins, and invisible colliders are created via the methods below.

@@ -112,8 +112,10 @@ try:
     )
 
     # ----- C: encoded param.pickle carries the timeline ------
+    # encode_param now returns CBOR (envelope-wrapped); fall back to
+    # pickle on legacy saves via decode_addon_blob's first-byte sniff.
     param_bytes = dh.encoder_param.encode_param(bpy.context)
-    data = pickle.loads(param_bytes)
+    data = dh.decode_addon_blob(param_bytes)
 
     ic = data.get("invisible_colliders")
     walls = ic.get("walls") if ic else None

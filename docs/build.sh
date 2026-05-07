@@ -2,7 +2,7 @@
 # Build the full docs site from scratch.
 #
 #   - Bootstraps a local virtualenv under docs/.venv on first run.
-#   - Regenerates the Blender Python API reference from blender_addon/ops/api.py
+#   - Regenerates the Blender Python API reference from blender_addon/ops/api/ package
 #     (fails loudly if any @blender_api symbol is missing a docstring).
 #   - Runs sphinx-build, which pulls in the frontend package via autodoc.
 set -euo pipefail
@@ -14,7 +14,7 @@ STAMP="$VENV/.requirements.stamp"
 
 # Pick a Python >= 3.10 interpreter. The frontend package (pulled in by
 # autodoc) uses PEP 604 "X | Y" union syntax, which 3.9 rejects at import
-# time — and macOS's /usr/bin/python3 is still 3.9.
+# time, and macOS's /usr/bin/python3 is still 3.9.
 find_python() {
     for candidate in python3.13 python3.12 python3.11 python3.10 python3; do
         if command -v "$candidate" >/dev/null 2>&1; then
@@ -41,8 +41,21 @@ if [ ! -f "$STAMP" ] || [ "$REQS" -nt "$STAMP" ]; then
     echo "==> Installing docs requirements"
     "$VENV/bin/pip" install --quiet --upgrade pip
     "$VENV/bin/pip" install --quiet -r "$REQS"
+    "$VENV/bin/pip" install --quiet maturin
     touch "$STAMP"
 fi
+
+# Build _ppf_cts_py into the docs venv so generate_frontend_params_reference.py
+# can import frontend._param_ / frontend._parse_ (both wrap the PyO3
+# extension). `maturin develop --release` builds ppf-cts-py + its
+# workspace deps (ppf-cts-core, ppf-cts-formats); ppf-cts-solver and
+# its CUDA backend are not pulled in.
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+echo "==> Building _ppf_cts_py extension into docs venv"
+# maturin discovers the target Python via VIRTUAL_ENV; export it
+# explicitly so the develop step lands the cdylib in $VENV/lib/.../site-packages
+# regardless of whether the caller has the venv activated.
+( cd "$REPO_ROOT/crates/ppf-cts-py" && VIRTUAL_ENV="$VENV" "$VENV/bin/maturin" develop --release --quiet )
 
 echo "==> Regenerating Blender Python API reference"
 "$VENV/bin/python" "$SCRIPT_DIR/generate_blender_api_reference.py"
@@ -60,7 +73,7 @@ echo "==> Running sphinx-build"
 # -W --keep-going: treat warnings as errors but keep building so every
 # problem is reported in one pass.  This is what traces docstring-level
 # issues (napoleon parse errors, malformed ``Example:`` code blocks,
-# unknown directives) through to a failing exit code — otherwise the
+# unknown directives) through to a failing exit code; otherwise the
 # build would succeed silently and the broken page would ship.
 "$VENV/bin/sphinx-build" -W --keep-going -b html "$SCRIPT_DIR" "$SCRIPT_DIR/_build"
 

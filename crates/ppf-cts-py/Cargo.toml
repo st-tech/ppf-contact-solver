@@ -1,0 +1,33 @@
+# File: crates/ppf-cts-py/Cargo.toml
+# Code: Claude Code
+# Review: Ryoichi Ando (ryoichi.ando@zozo.com)
+# License: Apache v2.0
+#
+# PyO3 bindings. Compiled as a cdylib by maturin into the Python
+# extension module `_ppf_cts_py`. The pure-Python `frontend` package
+# eventually re-exports from here so JupyterLab notebooks see the same
+# names they always did.
+#
+# abi3-py38: one wheel works for any CPython >= 3.8.
+
+[package]
+name = "ppf-cts-py"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "_ppf_cts_py"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+ppf-cts-core = { path = "../ppf-cts-core" }
+ppf-cts-formats = { path = "../ppf-cts-formats" }
+pyo3 = { version = "0.24.1", features = ["abi3-py38", "extension-module"] }
+numpy = "0.24"
+# Same major as the `numpy` crate's internal ndarray version; needed
+# to construct (n, 3) arrays for return-by-reshape.
+ndarray.workspace = true
+
+[lints]
+workspace = true

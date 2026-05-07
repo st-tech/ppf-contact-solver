@@ -5,7 +5,6 @@
 #
 # MCP server start/stop operators.
 
-import bpy  # pyright: ignore
 from bpy.types import Operator  # pyright: ignore
 
 from ..core.utils import redraw_all_areas

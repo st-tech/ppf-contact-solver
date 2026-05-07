@@ -10,36 +10,27 @@ from typing import Optional
 
 import numpy as np
 
+from . import _rust  # type: ignore[attr-defined]
+
 from ._rasterizer_ import SoftwareRenderer
 from ._utils_ import get_cache_dir
 
-# SoftwareRenderer is always available (uses numpy + numba, works on all platforms)
-
-default_args = {
-    "variant": "cuda_ad_rgb",
-    "max_depth": 12,
-    "width": 640,
-    "height": 480,
-    "fov": 20,
-    "camera": None,
-    "up": [0, 1, 0],
-    "sample_count": 64,
-    "tmp_path": os.path.join(get_cache_dir(), "tmp_mesh.ply"),
-}
-
+# SoftwareRenderer dispatches to the Rust rasterizer kernel.
 
 def update_default_args(args: dict):
-    """Fill missing entries in ``args`` with values from :data:`default_args`.
+    """Fill missing entries in ``args`` with the renderer defaults.
+
+    The default-args literal lives in
+    :func:`_ppf_cts_py.render_default_args`. ``args`` is mutated in
+    place: every missing key is filled in.
 
     Args:
         args (dict): The arguments dictionary to populate in place.
     """
-    for key, value in default_args.items():
-        if key not in args:
-            args[key] = value
+    _rust.render_default_args(args, os.path.join(get_cache_dir(), "tmp_mesh.ply"))
 
 
-# Rasterizer is the main rendering class (pure numpy + numba, works on all platforms)
+# Rasterizer is the main rendering class; dispatches to the Rust kernel.
 Rasterizer = SoftwareRenderer
 
 
@@ -119,10 +110,10 @@ class MitsubaRenderer:
             origin = self._args["camera"]["origin"]
             target = self._args["camera"]["target"]
         else:
-            rat = width / height
-            target = (bounds / 2) + np.min(vert, axis=0)
-            origin = target + np.max(bounds) * 0.5 * rat * np.array([0, 1, 5])
-            target, origin = target.tolist(), origin.tolist()
+            origin, target = _rust.mitsuba_auto_camera(
+                np.ascontiguousarray(vert, dtype=np.float32), int(width), int(height)
+            )
+            origin, target = list(origin), list(target)
         scene = mi.load_dict(
             {
                 "type": "scene",
@@ -180,28 +171,12 @@ class MitsubaRenderer:
         ``green``, and ``blue`` so that Mitsuba can sample them via the
         ``mesh_attribute`` plugin as ``vertex_color``.
         """
-        with open(path, "wb") as ply_file:
-            ply_file.write(b"ply\n")
-            ply_file.write(b"format binary_little_endian 1.0\n")
-            ply_file.write(f"element vertex {vertex.shape[0]}\n".encode())
-            ply_file.write(b"property float x\n")
-            ply_file.write(b"property float y\n")
-            ply_file.write(b"property float z\n")
-            ply_file.write(b"property float red\n")
-            ply_file.write(b"property float green\n")
-            ply_file.write(b"property float blue\n")
-            ply_file.write(f"element face {face.shape[0]}\n".encode())
-            ply_file.write(b"property list uchar int vertex_indices\n")
-            ply_file.write(b"end_header\n")
-            for i in range(vertex.shape[0]):
-                assert vertex[i].shape == (3,)
-                assert color[i].shape == (3,)
-                ply_file.write(vertex[i].astype(np.float32).tobytes())
-                ply_file.write(color[i].astype(np.float32).tobytes())
-            for i in range(face.shape[0]):
-                assert face[i].shape == (3,)
-                ply_file.write(np.array([3], dtype=np.uint8).tobytes())
-                ply_file.write(face[i].astype(np.int32).tobytes())
+        _rust.write_ply_binary(
+            path,
+            np.ascontiguousarray(vertex, dtype=np.float32),
+            np.ascontiguousarray(color[:, :3], dtype=np.float32),
+            np.ascontiguousarray(face, dtype=np.int32),
+        )
 
 
 if __name__ == "__main__":

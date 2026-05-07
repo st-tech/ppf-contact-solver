@@ -3,21 +3,31 @@
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
 # License: Apache v2.0
 #
-# Phase 1 scenario registry. Each scenario module exports a ``run(ctx) -> dict``
+# Scenario registry. Each scenario module exports a ``run(ctx) -> dict``
 # function that returns ``{"status": "pass"|"fail", "violations": [...]}``.
 #
-# Scenarios are protocol-level: they talk to the debug server via the same
-# JSON-over-TCP wire the addon's communicator uses, so production code on
-# the server side (transitions, monitor, response generation, atomic upload)
-# is exercised end-to-end. Phase 2 will add Blender-driven counterparts
-# that exercise the addon UI through the same lifecycle.
+# Two flavors live here. Protocol-level scenarios talk to the debug server
+# via the same JSON-over-TCP wire the addon's communicator uses, so server
+# code (transitions, monitor, response generation, atomic upload) is
+# exercised end-to-end without a Blender process. Blender-driven scenarios
+# (the ``bl_*`` modules) launch a real Blender with the addon loaded and
+# drive its UI through the same lifecycle.
 
+import os
 import sys
+
+
+REPO_ROOT_POSIX: str = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..", "..", "..")
+).replace("\\", "/")
+"""Repo root with forward-slash separators. Driver string-substitution
+on Windows would otherwise emit backslash escapes."""
 
 from . import server_smoke
 from . import upload_id_changes
 from . import bl_connect_local
 from . import bl_connect_win_native
+from . import bl_rust_binary_protocol
 
 # Pin fidelity matrix. Each scenario builds a scene with one pin op
 # (or composed ops), runs through the full pipeline, and diffs the
@@ -66,7 +76,7 @@ from . import bl_upload_id_desync_recovery
 from . import bl_mesh_cache_self_heal
 from . import bl_live_frame_end_tracking
 from . import bl_fetch_failed_watchdog
-from . import bl_async_op_cancelled_redraws
+from . import bl_server_unknown_recovery
 from . import bl_profile_load_batch
 from . import bl_pin_rod_curve
 from . import bl_static_op_anim
@@ -98,6 +108,15 @@ from . import bl_copy_paste_cross_type_material
 from . import bl_transfer_disabled_during_run
 from . import bl_transfer_skip_delete_when_no_data
 
+# UX progress bars: live solver progress during simulation, and the
+# fetch-animation download/apply progress sequence.
+from . import bl_progress_simulating
+from . import bl_progress_fetching
+
+# Realtime Statistics: the live ``summary`` dict the addon panel
+# renders inside the "Realtime Statistics" box during a sim.
+from . import bl_realtime_stats_shown
+
 
 REGISTRY = {
     # Server-only protocol checks. These don't require a build, so
@@ -112,6 +131,7 @@ REGISTRY = {
     # Rust binary (--features emulated) -> vert_*.bin -> fetch.
     "bl_connect_local": bl_connect_local,
     "bl_connect_win_native": bl_connect_win_native,
+    "bl_rust_binary_protocol": bl_rust_binary_protocol,
 
     # Pin-op fidelity matrix. Each scenario cross-checks the Rust
     # solver's per-frame pin trajectory against frontend.FixedScene
@@ -156,13 +176,14 @@ REGISTRY = {
     "bl_pc2_migration": bl_pc2_migration,
     "bl_ngon_rejection": bl_ngon_rejection,
 
-    # Tier 1: bug-fix-driven coverage (commits ea4303cb, 92546e18, a8766a08,
-    # ff0d20ca, ...).
+    # Tier 1: bug-fix-driven coverage (upload-id desync, mesh cache
+    # self-heal, live frame_end tracking, fetch watchdog, server unknown
+    # recovery, profile load batching).
     "bl_upload_id_desync_recovery": bl_upload_id_desync_recovery,
     "bl_mesh_cache_self_heal": bl_mesh_cache_self_heal,
     "bl_live_frame_end_tracking": bl_live_frame_end_tracking,
     "bl_fetch_failed_watchdog": bl_fetch_failed_watchdog,
-    "bl_async_op_cancelled_redraws": bl_async_op_cancelled_redraws,
+    "bl_server_unknown_recovery": bl_server_unknown_recovery,
     "bl_profile_load_batch": bl_profile_load_batch,
 
     # Tier 2: feature-coverage gaps. Each scenario authors a specific
@@ -201,6 +222,13 @@ REGISTRY = {
     # Operator-poll regression for Transfer-during-Run.
     "bl_transfer_disabled_during_run": bl_transfer_disabled_during_run,
     "bl_transfer_skip_delete_when_no_data": bl_transfer_skip_delete_when_no_data,
+
+    # UX progress bars.
+    "bl_progress_simulating": bl_progress_simulating,
+    "bl_progress_fetching": bl_progress_fetching,
+
+    # Realtime Statistics box.
+    "bl_realtime_stats_shown": bl_realtime_stats_shown,
 }
 
 

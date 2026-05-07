@@ -5,7 +5,6 @@
 #
 # Status enums, dataclasses, and utilities extracted from core/client.py.
 
-import threading
 import time
 
 from dataclasses import dataclass, field
@@ -109,14 +108,6 @@ class RemoteStatus(Enum):
         return icons.get(self, "INFO_LARGE")
 
 
-# NOTE: is_running / is_simulating have been removed.  Use
-# ``core.derived.is_server_busy_from_response`` (server is doing
-# anything) or ``core.derived.is_sim_running_from_response`` (narrow:
-# actively simulating) instead, or the AppState-aware
-# ``core.derived.is_sim_running(state)`` when a state snapshot is in
-# scope.
-
-
 @dataclass
 class ConnectionInfo:
     type: str
@@ -125,8 +116,6 @@ class ConnectionInfo:
     instance: Any
     server_running: bool
     container: str
-    thread: threading.Thread | None
-    server_thread: threading.Thread | None
     server_port: int
 
     def __init__(self):
@@ -156,35 +145,6 @@ class CommunicatorInfo:
     def clear_traffic(self):
         self.traffic = ""
         self.progress = 0.0
-
-
-@dataclass
-class CommunicatorLocks:
-    """Domain-specific locks for the Communicator.
-
-    Each lock protects a group of related fields:
-        task: _task, _interrupt
-        status: _com (CommunicatorInfo -- progress, status, errors, response)
-        connection: _connection (ConnectionInfo)
-        animation: _animation, _fetched
-        data: _data, _exec_output
-
-    When acquiring multiple locks, always use alphabetical order
-    to prevent deadlocks: animation -> connection -> data -> status -> task
-    """
-
-    task: threading.RLock
-    status: threading.RLock
-    connection: threading.RLock
-    animation: threading.RLock
-    data: threading.RLock
-
-    def __init__(self):
-        self.task = threading.RLock()
-        self.status = threading.RLock()
-        self.connection = threading.RLock()
-        self.animation = threading.RLock()
-        self.data = threading.RLock()
 
 
 @dataclass

@@ -7,7 +7,7 @@
     over SSH. Lifecycle commands ride docker exec on the SSH session
     and server traffic rides an SSH tunnel to the container's
     published port on the remote's localhost; the port publish on the
-    container is what makes the tunnel actually reach server.py.
+    container is what makes the tunnel actually reach ppf-cts-server.
   </desc>
 
   <defs>
@@ -50,7 +50,7 @@
   <text x="532" y="50" class="note">start/stop/exec, port check</text>
   <line x1="660" y1="32" x2="690" y2="32" class="arr-data" marker-end="url(#ds-arrow-p)" />
   <text x="697" y="36" class="lbl-data">server traffic</text>
-  <text x="697" y="50" class="note">SSH tunnel to server.py</text>
+  <text x="697" y="50" class="note">SSH tunnel to ppf-cts-server</text>
 
   <!-- ============ Docker over SSH ============ -->
   <text x="20" y="30" class="mode-title">Docker over SSH</text>
@@ -72,7 +72,7 @@
 
   <rect x="590" y="122" width="220" height="70" rx="6" class="hdr-container" />
   <text x="700" y="150" text-anchor="middle" class="hdr-title">container</text>
-  <text x="700" y="170" text-anchor="middle" class="lbl-mono">server.py :PORT</text>
+  <text x="700" y="170" text-anchor="middle" class="lbl-mono">ppf-cts-server :PORT</text>
 
   <!-- port pill, attached under the container -->
   <rect x="595" y="202" width="210" height="22" rx="11" class="port-pill" />
@@ -87,10 +87,10 @@
   <!-- server traffic: SSH tunnel from addon to container's published localhost port -->
   <path d="M 270 180 Q 430 252 590 180" class="arr-data" marker-end="url(#ds-arrow-p)" />
   <text x="430" y="250" text-anchor="middle" class="lbl-data">SSH tunnel (direct-tcpip) to remote localhost:&lt;port&gt;</text>
-  <text x="430" y="266" text-anchor="middle" class="note">arrives at server.py through the port the container publishes</text>
+  <text x="430" y="266" text-anchor="middle" class="note">arrives at ppf-cts-server through the port the container publishes</text>
 
   <!-- footnote -->
   <text x="20" y="308" class="note"><tspan class="lbl">Docker over SSH Command</tspan> is identical at the transport level; only the SSH fields (host, port, user, key)</text>
   <text x="20" y="326" class="note">are parsed from a pasted <tspan class="lbl-mono">ssh ...</tspan> string instead of entered as fields.</text>
-  <text x="20" y="350" class="note">The container must publish the server port; without <tspan class="lbl-mono">-p &lt;port&gt;:&lt;port&gt;</tspan> the SSH tunnel cannot reach <tspan class="lbl-mono">server.py</tspan>.</text>
+  <text x="20" y="350" class="note">The container must publish the server port; without <tspan class="lbl-mono">-p &lt;port&gt;:&lt;port&gt;</tspan> the SSH tunnel cannot reach <tspan class="lbl-mono">ppf-cts-server</tspan>.</text>
 </svg>

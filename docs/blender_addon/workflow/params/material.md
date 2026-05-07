@@ -42,10 +42,12 @@ and so on.
 The rows you see inside **Material Params**, top to bottom:
 
 1. **Model** (when applicable): dropdown to pick the material model.
-   **Shell** groups can choose Baraff-Witkin, Stable NeoHookean, or
-   ARAP; **Solid** groups pick between Stable NeoHookean and ARAP;
-   **Rod** groups are locked to ARAP; **Static** groups have no model
-   row.
+   **Shell** groups can choose Baraff-Witkin or ARAP; **Solid** groups
+   pick between Stable NeoHookean and ARAP; **Rod** groups are locked
+   to ARAP; **Static** groups have no model row. Older `.blend` files
+   that stored Stable NeoHookean on a **Shell** group still load: the
+   `shell_model` enum keeps the slot for `.blend` index stability and
+   the transfer step coerces that selection to ARAP at encode time.
 2. **Density**: the material's density in type-appropriate units (kg/m²
    for **Shell**, kg/m³ for **Solid**, kg/m for **Rod**).
 3. **Young's Modulus**: stiffness. See the note below for how the solver
@@ -155,7 +157,7 @@ These apply regardless of type.
 
 | UI label                             | Python / TOML key                 | Default | Description                                                              |
 | ------------------------------------ | --------------------------------- | ------- | ------------------------------------------------------------------------ |
-| **Friction**                         | `friction`                        | 0.0     | Coulomb friction coefficient at contacts (0 – 1).                        |
+| **Friction**                         | `friction`                        | 0.5     | Coulomb friction coefficient at contacts (0 – 1).                        |
 | **Contact Gap**                      | `contact_gap`                     | 0.001   | Absolute contact gap distance, in Blender units.                         |
 | **Contact Offset**                   | `contact_offset`                  | 0.0     | Absolute contact offset, in Blender units.                               |
 | **Use Group Bounding Box Diagonal**  | `use_group_bounding_box_diagonal` | `True`  | When true, contact distances are ratios of the group's bbox diagonal.    |
@@ -191,11 +193,11 @@ for which pair you should be editing.
 
 | UI label                 | Python / TOML key      | Default          | Description                                                    |
 | ------------------------ | ---------------------- | ---------------- | -------------------------------------------------------------- |
-| **Model**                | `shell_model`          | `BARAFF_WITKIN`  | Material model. One of `BARAFF_WITKIN`, `STABLE_NEOHOOKEAN`, `ARAP`. |
+| **Model**                | `shell_model`          | `BARAFF_WITKIN`  | Material model. One of `BARAFF_WITKIN`, `ARAP`.                |
 | **Density (kg/m²)**      | `shell_density`        | 1.0              | Areal density, kg/m².                                          |
 | **Young's Modulus (Pa/ρ)** | `shell_young_modulus`  | 1000.0         | Young's modulus (see note below). Accepted range 0 – 10 M.     |
 | **Poisson's Ratio**      | `shell_poisson_ratio`  | 0.35             | Poisson ratio, 0 – 0.4999.                                     |
-| **Bend Stiffness**       | `bend`                 | 100.0            | Bending stiffness, 0 – 100.                                    |
+| **Bend Stiffness**       | `bend`                 | 10.0             | Bending stiffness. Min 0, soft max 100.                        |
 | **Shrink X**             | `shrink_x`             | 1.0              | Anisotropic warp scale (min 0.1). < 1 shrinks, > 1 extends.    |
 | **Shrink Y**             | `shrink_y`             | 1.0              | Anisotropic weft scale (min 0.1). < 1 shrinks, > 1 extends.    |
 | **Enable Strain Limit**  | `enable_strain_limit`  | `False`          | Turns on non-physical strain clamp (good for stiff cloth).     |
@@ -314,7 +316,7 @@ Example values:
 **Shell** groups expose two plasticity sections: **Plasticity** (stretch)
 and **Bend Plasticity** (hinge/rod-joint rest angle). Each has its own
 theta rate and threshold; bend plasticity also lets you pick the
-rest-angle source (flat, initial geometry, or current frame).
+rest-angle source (Flat / Straight, or From Initial Geometry).
 ```
 
 ### Velocity Overwrite
@@ -429,7 +431,14 @@ own default is used. In this example **Edge Length Factor** and
 
 **Rod** groups expose the same **Bend Stiffness** field as **Shell**;
 it writes into the single `bend` property on the group, so both types
-read and serialize it identically.
+read and serialize it identically. Switching a group's type to **Rod**
+resets `bend` to `1.0` (the rod-tuned default); switching back to or
+creating a **Shell** group leaves the global default of `10.0`.
+
+**Rest Angle** is exposed under **Bend Plasticity** for rods as well as
+shells: pick **Flat / Straight** to keep the analytic rest angle (shell
+hinge θ₀ = 0, rod θ₀ = π), or **From Initial Geometry** to take the
+rest angle from the input pose.
 
 :::{note}
 **Young's modulus behaves non-conventionally.** The solver divides the
@@ -591,7 +600,7 @@ attribute. Changes from Python appear in the panel immediately and vice
 versa.
 
 ```python
-from zozo_contact_solver import solver
+from bl_ext.user_default.ppf_contact_solver.ops.api import solver
 
 cloth = solver.create_group("Cloth", "SHELL")
 cloth.param.shell_density       = 0.5

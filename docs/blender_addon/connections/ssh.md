@@ -1,24 +1,24 @@
 # 🌐 SSH (Direct)
 
 The solver runs **directly** on a remote Linux host reached over SSH,
-with no Docker layer in between. For a containerised solver on a remote
+with no Docker layer in between. For a containerized solver on a remote
 host, see [Docker over SSH](docker_over_ssh.md). Two UI modes are
 available here: **Custom** (explicit fields) and **Command** (parsed
 from a raw `ssh ...` string). Both produce the same connection; once
 connected, the rest of the UI behaves identically.
 
 ```{figure} ../images/connections/ssh_topology.svg
-:alt: Block diagram split into two boxes. The left box (Blender workstation) holds only the add-on. The right box (remote Linux host) holds server.py running directly as a python3 process bound to 127.0.0.1; there is no Docker daemon and no container. A blue solid arrow labelled ssh exec carries lifecycle commands; a purple dashed arrow labelled SSH tunnel (direct-tcpip) to remote localhost:9090 carries server traffic.
+:alt: Block diagram split into two boxes. The left box (Blender workstation) holds only the add-on. The right box (remote Linux host) holds ppf-cts-server running directly as a native binary bound to 127.0.0.1; there is no Docker daemon and no container. A blue solid arrow labeled ssh exec carries lifecycle commands; a purple dashed arrow labeled SSH tunnel (direct-tcpip) to remote localhost:9090 carries server traffic.
 :width: 760px
 
 Where each piece lives, and how the add-on reaches it. Blue solid
 arrows carry lifecycle commands (start / stop). Purple dashed arrows
-carry the TCP connection to `server.py`, which rides an SSH tunnel
-into the remote's loopback port. The add-on launches `server.py` with
-`--host 127.0.0.1`, so the SSH tunnel is the only path in -- nothing
+carry the TCP connection to `ppf-cts-server`, which rides an SSH tunnel
+into the remote's loopback port. The add-on launches `ppf-cts-server`
+with `--host 127.0.0.1`, so the SSH tunnel is the only path in: nothing
 else on the remote's network can reach the solver port. For the
-containerised variant where `server.py` runs inside a Docker container
-on the remote, see [Docker over SSH](docker_over_ssh.md).
+containerized variant where `ppf-cts-server` runs inside a Docker
+container on the remote, see [Docker over SSH](docker_over_ssh.md).
 ```
 
 :::{warning}
@@ -59,9 +59,9 @@ plus the shared **Project Name** field. **Connect** is highlighted.
 | Port | `22` | SSH port. |
 | User | `""` | Remote user. Leave empty to use SSH config's `User`. |
 | SSH Key | `~/.ssh/id_ed25519` or `~/.ssh/id_rsa` | Private key file. |
-| Remote Path | `/root/ppf-contact-solver` | Remote solver directory (must contain `server.py`). |
+| Remote Path | `/root/ppf-contact-solver` | Remote solver directory (must contain the `ppf-cts-server` binary). |
 
-The remote `server.py` port is fixed at `9090` in SSH modes; the panel
+The remote `ppf-cts-server` port is fixed at `9090` in SSH modes; the panel
 does not expose a Server Port field here (it is only editable in
 Docker-family modes).
 
@@ -174,9 +174,9 @@ defaults without overriding explicit blocks. If the config file is
 missing or the alias is not found, the alias text is used as the
 hostname verbatim. Only the six keywords listed in
 {ref}`Supported ssh_config options <supported-ssh-config-options>` are
-read; the parser tokenises each non-comment line on whitespace or `=`,
+read; the parser tokenizes each non-comment line on whitespace or `=`,
 matches the first word case-insensitively, and drops the line if the
-keyword isn't one it recognises.
+keyword isn't one it recognizes.
 
 **Host-key policy**
 

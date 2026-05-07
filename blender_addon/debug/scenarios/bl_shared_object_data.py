@@ -44,6 +44,7 @@ import os
 
 from . import _driver_lib as dl
 from . import _runner as r
+from . import REPO_ROOT_POSIX
 
 
 NEEDS_BLENDER = True
@@ -63,7 +64,7 @@ SERVER_PORT = <<SERVER_PORT>>
 
 def _project_root_for(probe_dir, name):
     workspace = os.path.dirname(probe_dir)
-    return os.path.join(workspace, "project", "git-debug", name)
+    return os.path.join(workspace, "project", name)
 
 
 def _make_canonical(name, kind, location):
@@ -176,8 +177,10 @@ try:
         canonical_uuids_by_name[obj.name] = uuid_registry.get_or_create_object_uuid(obj)
 
     # ----- A: encoder collapses duplicates onto canonicals -------
+    # encode_obj now returns CBOR (envelope-wrapped); legacy pickle
+    # saves still load through the same sniff helper.
     encoded_blob = encoder_mesh.encode_obj(bpy.context)
-    encoded_data = pickle.loads(encoded_blob)
+    encoded_data = dh.decode_addon_blob(encoded_blob)
     canonical_entries = []
     ref_entries = []
     for group in encoded_data:
@@ -230,7 +233,10 @@ try:
     remote_refs = []
     if os.path.isfile(data_pickle_path):
         with open(data_pickle_path, "rb") as f:
-            remote_data = pickle.load(f)
+            remote_blob = f.read()
+        # Server stores the addon's upload bytes verbatim, so this is
+        # the same CBOR-or-pickle envelope encode_obj produced.
+        remote_data = dh.decode_addon_blob(remote_blob)
         for group in remote_data:
             for obj_info in group.get("object", []):
                 if "mesh_ref" in obj_info:
@@ -349,9 +355,7 @@ _DRIVER_TEMPLATE = dl.DRIVER_LIB + _DRIVER_BODY
 
 
 def build_driver(ctx: r.ScenarioContext) -> str:
-    repo_root = os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "..", "..", "..")
-    )
+    repo_root = REPO_ROOT_POSIX
     return (
         _DRIVER_TEMPLATE
         .replace("<<LOCAL_PATH>>", repo_root)

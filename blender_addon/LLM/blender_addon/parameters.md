@@ -191,7 +191,7 @@ NOTE: Scene profiles do not touch object groups, pins, or merge pairs. Those liv
 The same workflow is available from Python. The settings are reachable through `solver.param`. Assignments are immediate; they don't require a transfer, but do require `update_params()` before the solver actually sees the new values on the next run.
 
 ```python
-from zozo_contact_solver import solver
+from bl_ext.user_default.ppf_contact_solver.ops.api import solver
 
 solver.param.gravity = (0, 0, -9.8)
 solver.param.frame_count = 180
@@ -521,7 +521,7 @@ Only the keys you include are applied; missing keys keep their current value on 
 The same workflow is available from Python. Every field in the **Material Params** box is reachable through each group's `.param` attribute. Changes from Python appear in the panel immediately and vice versa.
 
 ```python
-from zozo_contact_solver import solver
+from bl_ext.user_default.ppf_contact_solver.ops.api import solver
 
 cloth = solver.create_group("Cloth", "SHELL")
 cloth.param.shell_density       = 0.5
@@ -623,7 +623,7 @@ Only these five parameters are keyframeable. Others (step size, CG tolerance, an
 The same workflow is available from Python. The `solver.param.dyn(...)` builder drives the same dynamic-parameter list that the sub-panel shows. Every builder method returns `self`, so you chain them freely: `time(f)` moves the cursor to frame `f` (must be strictly increasing), and the next `hold()` or `change(...)` attaches a keyframe at that frame. For wind, `change(direction, strength=...)` encodes both.
 
 ```python
-from zozo_contact_solver import solver
+from bl_ext.user_default.ppf_contact_solver.ops.api import solver
 
 # Flip gravity at frame 60.
 solver.param.dyn("gravity").time(60).hold().time(61).change((0, 0, 9.8))

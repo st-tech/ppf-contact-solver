@@ -3,23 +3,11 @@
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
 # License: Apache v2.0
 #
-# Backward-compatible facade that wraps the new event-driven Engine.
-#
-# The existing codebase accesses the communicator singleton via::
-#
-#     from ..core.client import communicator as com
-#     com.connect_ssh(...)
-#     com.info.status
-#     com.is_connected()
-#
-# This module provides ``engine`` and ``runner`` singletons plus a
-# ``CommunicatorFacade`` that exposes the same public API as the old
-# ``Communicator`` but delegates to the Engine internally.
-#
-# Migration strategy:
-# 1. New code imports ``engine``/``runner`` directly and dispatches events.
-# 2. Old code continues using ``communicator`` via the facade -- no changes needed.
-# 3. Once all callers are migrated, the facade can be removed.
+# Module-level singletons (``engine``, ``runner``) plus the
+# ``CommunicatorFacade`` exposed as ``communicator``. Operator and UI code
+# call methods on the facade; each method translates the call into an event
+# dispatched to the Engine, and property accessors read back from
+# ``engine.state``.
 
 from __future__ import annotations
 
@@ -77,11 +65,11 @@ runner = _this._runner_instance
 # ---------------------------------------------------------------------------
 
 class CommunicatorFacade:
-    """Drop-in replacement for the old ``Communicator`` class.
+    """Public API used by operators and UI code.
 
     Every public method translates the call into an ``Event`` dispatched to
-    the ``Engine``.  Property accessors read from ``engine.state`` and map
-    back to the legacy types (``CommunicatorInfo``, ``RemoteStatus``, etc.).
+    the ``Engine``. Property accessors read from ``engine.state`` and map
+    back to ``CommunicatorInfo`` / ``RemoteStatus`` / etc.
     """
 
     def __init__(self, eng: Engine, rnr: EffectRunner) -> None:

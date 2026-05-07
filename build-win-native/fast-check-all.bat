@@ -27,7 +27,7 @@ if exist "%SRC%\frontend" (
     set EXAMPLES_DIR=%SRC%\examples
     set FAST_CHECK_DIR=%BUILD_WIN%\fast_check
     set INJECT_SCRIPT=%BUILD_WIN%\inject_fast_check.py
-    set BIN_DIR=%SRC%\src\cpp\build\lib
+    set BIN_DIR=%SRC%\crates\ppf-cts-solver\src\cpp\build\lib
     set MINGIT_DIR=%BUILD_WIN%\mingit\cmd
     set PYTHONPATH=%SRC%
     REM Find examples.txt - first try source location, then local directory

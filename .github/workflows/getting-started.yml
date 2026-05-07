@@ -35,6 +35,18 @@ jobs:
       - name: build
         run: ~/.cargo/bin/cargo build --release
 
+      - name: build + install ppf-cts-py wheel
+        # The frontend hard-imports `_ppf_cts_py`; without the maturin
+        # build the headless run fails at import time. Mirrors the step
+        # in blender.yml.
+        run: |
+          source "$HOME/.cargo/env"
+          source ~/.local/share/ppf-cts/venv/bin/activate
+          pip install --upgrade maturin
+          cd crates/ppf-cts-py
+          maturin develop --release
+          python -c "import _ppf_cts_py as m; print('schema_version', m.schema_version())"
+
       - name: run headless
         run: |
           echo "getting-started" > frontend/.CI

@@ -8,13 +8,14 @@ automation scripts, CI runners) drive Blender and the solver through a
 Streamable HTTP JSON-RPC surface instead of scripting the UI.
 
 ```{figure} ../images/integrations/entry_points.svg
-:alt: Layered block diagram. Top row shows three client categories: AI agents and automation, the human operator clicking in the Blender sidebar, and the Python user scripting the add-on from Blender's text editor or a notebook. Second row shows the three protocol surfaces each client lands on: the MCP Streamable HTTP server on localhost:9633 (with a pill warning "localhost only, do not expose"); Blender operators identified by their bl_idname; and the zozo_contact_solver Python module that forwards unknown attributes to the matching operator. All three protocol boxes funnel into a single shared add-on core row labeled scene.zozo_contact_solver, described as the place where pins, merges, colliders, and every scene mutation run through the same validation. Below that, one wide transport row stands in for the five connection types (Local, SSH, Docker, Docker over SSH, Windows Native), feeding into server.py :PORT at the very bottom.
+:alt: Layered block diagram. Top row shows three client categories: AI agents and automation, the human operator clicking in the Blender sidebar, and the Python user scripting the add-on from Blender's text editor or a notebook. Second row shows the three protocol surfaces each client lands on: the MCP Streamable HTTP server on localhost:9633 (with a pill warning "localhost only, do not expose"); Blender operators identified by their bl_idname; and the add-on's Python API (exposed under bl_ext.user_default.ppf_contact_solver.ops.api) that forwards unknown attributes to the matching operator. All three protocol boxes funnel into a single shared add-on core row labeled scene.zozo_contact_solver, described as the place where pins, merges, colliders, and every scene mutation run through the same validation. Below that, one wide transport row stands in for the five connection types (Local, SSH, Docker, Docker over SSH, Windows Native), feeding into ppf-cts-server :PORT at the very bottom.
 :width: 820px
 
 The MCP server sits beside two sibling entry points: the Blender
-sidebar and the `zozo_contact_solver` Python module. All three cover
+sidebar and the add-on's Python API (exposed under
+`bl_ext.user_default.ppf_contact_solver.ops.api`). All three cover
 the same surface, land on the same validation layer, and share the
-same transport to `server.py`. An agent calling `tools/call` hits the
+same transport to `ppf-cts-server`. An agent calling `tools/call` hits the
 same operator a human hits by clicking the button. The "localhost
 only" pill on the MCP box is the single security boundary this stack
 relies on; see [Security](#security) below.
@@ -32,21 +33,23 @@ relies on; see [Security](#security) below.
 
 ## Starting the Server
 
-Main panel → **MCP Settings** → **Start**.
+Main panel → **MCP Server** → **Start MCP Server on Local**.
 
 ```{figure} ../images/integrations/mcp_row.png
 :alt: MCP Server section inside the Solver panel
 :width: 500px
 
-The MCP Server section, expanded. **Start** launches the HTTP server on
-the port shown to the right; while running, this button swaps to
-**Stop** and the port field becomes read-only.
+The MCP Server section, expanded. **Start MCP Server on Local** launches
+the HTTP server on the port shown to the right; while running, this
+button swaps to **Stop MCP Server** and the port field becomes
+read-only. The collapsed header reads `MCP Server (Stopped)` or
+`MCP Server (Running :<port>)` to reflect the current state.
 ```
 
 The server binds to the **MCP Port** on `localhost` (default `9633`).
 If the port is busy, it tries `port+1`, `port+2`, … up to `port+9`
-and prints the chosen port to the Blender console. **Stop** shuts the
-HTTP listener down and drains the task queue.
+and prints the chosen port to the Blender console. **Stop MCP Server**
+shuts the HTTP listener down and drains the task queue.
 
 :::{warning}
 The server binds to `localhost` only. Do **not** port-forward it or bind
@@ -63,7 +66,7 @@ Once the server is running, point your MCP client at
 http://localhost:9633/mcp
 ```
 
-using the **Streamable HTTP** transport (protocol version `2024-11-05`).
+using the **Streamable HTTP** transport (protocol version `2025-06-18`).
 If the default port was busy and the add-on fell back to `9634`, `9635`,
 and so on, use the port printed to the Blender console.
 
@@ -114,7 +117,7 @@ Rules of the road:
 
 | Property     | Value                                                             |
 | ------------ | ----------------------------------------------------------------- |
-| Version      | `2024-11-05`                                                      |
+| Version      | `2025-06-18`                                                      |
 | Transport    | Streamable HTTP on a single `/mcp` endpoint                       |
 | Requests     | `POST /mcp` with a JSON-RPC message                               |
 | Server push  | `GET /mcp` with `Accept: text/event-stream` (one-shot init event) |
@@ -167,8 +170,8 @@ surface.
 ## Calling a Tool over HTTP
 
 If you are integrating from something that is not the bundled CLI, drive the
-HTTP transport directly. The server is stateless — every request is
-self-contained JSON-RPC; there is no session token to manage.
+HTTP transport directly. The server is stateless: every request is
+self-contained JSON-RPC, with no session token to manage.
 
 ```bash
 HDR_ACCEPT='Accept: application/json, text/event-stream'
@@ -178,7 +181,7 @@ HDR_JSON='Content-Type: application/json'
 curl -s -X POST http://localhost:9633/mcp \
   -H "$HDR_JSON" -H "$HDR_ACCEPT" \
   -d '{"jsonrpc":"2.0","id":1,"method":"initialize",
-       "params":{"protocolVersion":"2024-11-05","capabilities":{},
+       "params":{"protocolVersion":"2025-06-18","capabilities":{},
                  "clientInfo":{"name":"example","version":"0"}}}'
 
 # 2. Call a tool.
@@ -193,12 +196,20 @@ POST bodies over 10 MB are rejected with HTTP 413.
 
 ## Resources
 
-The MCP server exposes one resource via `resources/list` and
+The MCP server exposes two resource families via `resources/list` and
 `resources/read`:
 
-| URI                       | Content                                                         |
-| ------------------------- | --------------------------------------------------------------- |
+| URI                       | Content                                                                   |
+| ------------------------- | ------------------------------------------------------------------------- |
 | `blender://scene/current` | Live JSON snapshot of the current Blender scene. Refreshed on every read. |
+| `llm://index`             | Top-level router listing every other `llm://` resource.                   |
+| `llm://<topic>`           | One markdown topic from the bundled LLM doc set under `blender_addon/LLM/`. |
+
+The `llm://` URIs are enumerated dynamically at every `resources/list`
+call. Use `llm://index` first to see the available topics. Bare names
+without a slash resolve under the `blender_addon` section, so
+`llm://overview` reads `LLM/blender_addon/overview.md` from the
+installed add-on.
 
 ### Enumerating Resources
 

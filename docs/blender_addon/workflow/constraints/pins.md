@@ -350,7 +350,7 @@ When a pin covers **every** vertex of an object and a movement operation
 object's rest shape is carried along by the pin: the solver treats the
 transformed positions as the new rest configuration rather than trying
 to restore the original pose. If the pin is later released via
-**Duration** / **Active For** (or `solver.unpin(frame=...)`), the
+**Duration** / **Active For** (or `pin.unpin(frame=...)`), the
 simulation continues from the deformed shape as its rest pose; vertices
 do not snap back to where they started. This is how you "pose" a garment
 into a new resting configuration before letting it fall freely.
@@ -360,7 +360,7 @@ into a new resting configuration before letting it fall freely.
 | UI label                      | Python / TOML key                   | Description                                                   |
 | ----------------------------- | ----------------------------------- | ------------------------------------------------------------- |
 | **Include**                   | `included`                          | Pin is active for the current solve.                          |
-| **Duration** / **Active For** | `use_pin_duration` / `pin_duration` | Release the pin at the given frame (`solver.unpin(frame=...)`). |
+| **Duration** / **Active For** | `use_pin_duration` / `pin_duration` | Release the pin at the given frame (`pin.unpin(frame=...)`).    |
 | **Pull** / **Strength**       | `use_pull` / `pull_strength`        | Replace the hard pin with a soft pull force.                  |
 
 ## Operations Reference
@@ -394,7 +394,7 @@ chain operations onto it. All operation factories accept `frame_start`,
 center-mode inputs by keyword.
 
 ```python
-from zozo_contact_solver import solver
+from bl_ext.user_default.ppf_contact_solver.ops.api import solver
 
 cloth = solver.create_group("Cloth", "SHELL")
 cloth.add("Shirt")

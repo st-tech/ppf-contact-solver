@@ -10,7 +10,6 @@
 
 import os
 
-from ..models.defaults import DEFAULT_SERVER_PORT
 from .client import communicator as com
 
 
@@ -19,65 +18,11 @@ from .client import communicator as com
 # ---------------------------------------------------------------------------
 
 
-def connect_ssh(
-    host, port, username, key_path, path, container=None, server_port=DEFAULT_SERVER_PORT
-):
-    """Initiate SSH connection."""
-    if com.is_connected():
-        raise RuntimeError("Already connected")
-    com.connect_ssh(
-        host=host,
-        port=port,
-        username=username,
-        key_path=key_path,
-        path=path,
-        container=container,
-        server_port=server_port,
-    )
-
-
-def connect_docker(container, path, server_port=DEFAULT_SERVER_PORT):
-    """Initiate Docker connection."""
-    if com.is_connected():
-        raise RuntimeError("Already connected")
-    com.connect_docker(container, path, server_port=server_port)
-
-
-def connect_local(path, server_port=DEFAULT_SERVER_PORT):
-    """Initiate local connection."""
-    if com.is_connected():
-        raise RuntimeError("Already connected")
-    com.connect_local(path, server_port=server_port)
-
-
 def disconnect():
     """Disconnect current connection."""
     if not com.is_connected():
         raise RuntimeError("Not connected")
     com.disconnect()
-
-
-# ---------------------------------------------------------------------------
-# Server lifecycle
-# ---------------------------------------------------------------------------
-
-
-def start_server():
-    """Start remote server."""
-    if not com.is_connected():
-        raise RuntimeError("Not connected")
-    if com.is_server_running():
-        raise RuntimeError("Server already running")
-    com.start_server()
-
-
-def stop_server():
-    """Stop remote server."""
-    if not com.is_connected():
-        raise RuntimeError("Not connected")
-    if not com.is_server_running():
-        raise RuntimeError("Server not running")
-    com.stop_server()
 
 
 # ---------------------------------------------------------------------------

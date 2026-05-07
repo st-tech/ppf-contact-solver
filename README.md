@@ -312,7 +312,7 @@ You can also drive the entire pipeline from a Python script inside Blender's scr
 
 ```python
 import bpy
-from zozo_contact_solver import solver
+from bl_ext.user_default.ppf_contact_solver.ops.api import solver
 
 # Reset any prior state.
 solver.clear()

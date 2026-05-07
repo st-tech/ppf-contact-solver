@@ -1,8 +1,9 @@
 # ZOZO's Contact Solver - Blender Addon
 
-A Blender 5.0+ addon for physics-based contact simulation. Connects to a remote (or local) solver backend, transfers scene geometry and material parameters, runs simulations, and fetches animation results back into Blender.
+A Blender 5.0+ addon for physics-based contact simulation. Spawns the `ppf-cts-server` Rust binary (locally or on a remote host) and talks to it over TCP, transferring scene geometry and material parameters as CBOR envelopes (schema in `crates/ppf-cts-formats`), driving simulations, and fetching animation results back into Blender.
 
 **Package ID:** `ppf_contact_solver`
+**Add-on Version:** 1.0.2 (see `blender_manifest.toml`)
 **License:** Apache-2.0
 **GitHub:** https://github.com/st-tech/ppf-contact-solver
 
@@ -12,37 +13,104 @@ A Blender 5.0+ addon for physics-based contact simulation. Connects to a remote 
 
 ```
 blender_addon/
-├── __init__.py              # Entry point: register/unregister, reload server, group migration
-├── blender_manifest.toml    # Blender extension metadata (schema 1.0.0)
-├── debug/                   # CLI tools for MCP/debug interaction (not part of addon)
-│   ├── __init__.py          # Package docstring
+├── __init__.py              # Entry point: register/unregister, save/load hooks, deferred timers
+├── blender_manifest.toml    # Blender extension metadata (schema 1.0.0, v1.0.2)
+├── wheels/                  # Bundled cbor2 wheels (cp311 + cp313, all three platforms)
+├── debug/                   # CLI tools and headless test rig (not part of the runtime addon)
 │   ├── client.py            # Transport + control primitives
 │   ├── output.py            # Shared response-printing helpers
 │   ├── main.py              # General CLI (status, tools, call, exec, reload, ...)
-│   └── perf.py              # Profiler CLI (enable, disable, reset, report, sample)
+│   ├── perf.py              # Profiler CLI (enable, disable, reset, report, sample)
+│   ├── orchestrator.py      # Multi-host parallel test runner
+│   ├── emulator.py          # Headless Blender harness for the test rig
+│   ├── blender_harness.py   # Test rig glue
+│   ├── probe.py             # Server-state probe used by scenarios
+│   └── scenarios/           # Test scenarios driven by main.py runtests
 ├── example_profile.toml     # Connection profile presets (SSH, Docker, local, Windows)
 ├── example_material_profile.toml  # Material presets (Flag, Cotton, Silk, Denim, Rubber, Steel, Rope, Static)
 ├── example_scene_profile.toml     # Scene presets (Default, Windy, HighRes, SlowMotion, ZeroGravity)
-├── core/                    # Communication, encoding, protocol, utilities
-│   ├── transform.py         # Coordinate transforms (Z-up ↔ Y-up): _swap_axes, world_matrix, etc.
-│   ├── encoder/             # Data serialization (mesh, params, pins, dynamics)
+├── core/                    # Engine, effect runner, encoder, transport, transforms, services
+│   ├── facade.py            # CommunicatorFacade (the public ``communicator`` singleton)
+│   ├── engine.py            # Event loop driving the pure transition() function
+│   ├── transitions.py       # Pure state-transition function (no I/O, no bpy)
+│   ├── effects.py           # Effect dataclasses emitted by transitions
+│   ├── effect_runner.py     # Executes effects: backends, sockets, animation buffer, polling
+│   ├── events.py            # Event dataclasses dispatched into the engine
+│   ├── state.py             # AppState dataclass (Phase / Activity / Server / Solver)
+│   ├── client.py            # Re-exports + apply_animation, stitch helpers
+│   ├── status.py            # RemoteStatus enum, ConnectionInfo, CommunicatorInfo dataclasses
+│   ├── protocol.py          # Wire constants + socket send/receive helpers
+│   ├── connection.py        # Backend connect helpers (SSH/Docker/local/win_native)
+│   ├── backends.py          # Backend objects used by EffectRunner
+│   ├── transform.py         # Coordinate transforms (Z-up ↔ Y-up)
+│   ├── encoder/             # CBOR encoders (mesh, params, pins, dynamics, colliders)
+│   ├── pc2.py               # PC2 file I/O + MESH_CACHE modifier helpers
+│   ├── frame_pump.py        # Modal-operator timer driving apply_animation + cache heal
+│   ├── manifest.py          # Project manifest write/reconcile
+│   ├── migrate.py           # Legacy → UUID-based group migration
+│   ├── session.py           # Session-id helpers
+│   ├── uuid_registry.py     # Persistent object UUIDs surviving renames
+│   ├── reload_server.py     # TCP reload server (port 8765)
+│   ├── module.py            # On-the-fly install of paramiko / docker into lib/
+│   ├── ssh_config.py        # ~/.ssh/config resolution
+│   ├── numpy_mesh_utils.py  # NumPy mesh extraction / triangulation
+│   ├── curve_rod.py         # Bezier/NURBS/Poly curve sampling and fitting
+│   ├── async_op.py          # AsyncOperator + Pipeline base classes for modals
+│   ├── animation.py         # Pin-keyframe save/restore
+│   ├── profile.py           # TOML profile load/apply for connection/scene/material
 │   └── ...
 ├── ui/                      # Blender panels, operators, property groups
-│   ├── state.py             # State/SSHState/SceneRoot PropertyGroups, registration
-│   ├── state_types.py       # Collection-item PropertyGroups (keyframes, colliders, pins, etc.)
+│   ├── state.py             # State / SSHState / SceneRoot PropertyGroups, registration
+│   ├── state_types.py       # Collection-item PropertyGroups
 │   ├── object_group.py      # ObjectGroup PropertyGroup (material params, overlays)
-│   └── dynamics/            # Scene config, group/pin management, overlay rendering
-│       ├── overlay.py           # Draw callbacks, cache management, registration
-│       ├── overlay_geometry.py  # Geometry generation, GPU batch building
-│       └── overlay_labels.py    # Text/label rendering (blf)
-├── ops/                     # High-level API, dynamic operator generation
+│   ├── main_panel.py        # MAIN_PT_RemotePanel (Backend Communicator)
+│   ├── solver.py            # SSH_PT_SolverPanel and Transfer/Run/Resume/Fetch/UpdateParams
+│   ├── solver_control_ops.py# Show Console, Terminate, Save & Quit, Update Status, Force Terminate Process
+│   ├── connection_ops.py    # Connect/Disconnect/Abort/Start/Stop/Profile operators
+│   ├── debug_ops.py         # Shell exec, data send/receive tests, git, compile, log
+│   ├── install_ops.py       # ssh.install_paramiko / ssh.install_docker
+│   ├── jupyter_ops.py       # JupyterLab notebook export/open/delete
+│   ├── mcp_ops.py           # mcp.start_server / mcp.stop_server
+│   ├── addon_ops.py         # Reload-server start/stop/trigger
+│   ├── console.py           # Persistent timer driving console + MCP task processing
+│   ├── capture.py           # Viewport capture helpers
+│   ├── perf.py              # In-addon performance profiler
+│   └── dynamics/            # Scene config, group/pin/static/velocity/collision-window ops, overlays
+│       ├── overlay.py       # Draw callbacks, cache management, registration
+│       ├── overlay_geometry/# Geometry generation + GPU batch builders
+│       └── overlay_labels.py# Text/label rendering (blf)
+├── ops/                     # Operator system + Python API
+│   ├── zozo_contact_solver.py # Dynamic generation of one operator per MCP handler
+│   ├── state_ops.py         # zozo_contact_solver.set generic property setter
+│   └── api/                 # Public Python API (package)
+│       ├── __init__.py      # solver singleton + Solver/Group/Pin/Wall/Sphere aliases
+│       ├── solver.py        # _Solver
+│       ├── group.py         # _Group, _ParamProxy
+│       ├── pin.py           # _Pin
+│       ├── dynamics.py      # _SceneProxy, _DynParamBuilder
+│       └── collider.py      # _InvisibleWallBuilder, _InvisibleSphereBuilder, _ColliderParamProxy
 ├── models/                  # Data access helpers, defaults, console
+│   ├── groups.py            # Group helpers, namespace constant, defaults
+│   ├── defaults.py          # DEFAULT_SERVER_PORT, DEFAULT_MCP_PORT, DEFAULT_RELOAD_PORT
 │   ├── collection_utils.py  # Shared helpers: keyframe sorting, index safety, unique naming
-│   └── ...
+│   ├── console.py           # Console singleton
+│   └── git_utils.py         # Branch lookup
 ├── mesh_ops/                # Snap and merge operators
-├── mcp/                     # MCP (Model Context Protocol) HTTP server + handlers
-│   └── handlers/            # Categorized handler submodules
-└── lib/                     # Vendored dependencies (paramiko, invoke, cryptography, etc.)
+├── mcp/                     # MCP (Model Context Protocol) Streamable HTTP server + handlers
+│   ├── mcp_server.py        # Server lifecycle (start/stop, port fallback)
+│   ├── http_handler.py      # POST/GET/DELETE /mcp request handler
+│   ├── sessions.py          # Mcp-Session-Id state
+│   ├── integration.py       # Wires task_system into Blender main thread
+│   ├── decorators.py        # @mcp_handler / @<category>_handler registration
+│   ├── tool_schemas.py      # Cached JSON-schema generation
+│   ├── llm_resources.py     # MCP resources for LLM.md + LLM/blender_addon/*.md
+│   ├── server_utils.py      # CORS / origin validation helpers
+│   ├── task_system.py       # HTTP-thread → main-thread bridge
+│   ├── blender_handlers.py  # Generic Blender introspection handlers
+│   └── handlers/            # Categorized handlers (connection, group, scene, ...)
+├── LLM.md                   # LLM-friendly documentation index (this file's sibling)
+├── LLM/blender_addon/       # Per-topic LLM-friendly markdown
+└── lib/                     # Vendored dependencies (paramiko, invoke, cryptography, cbor2, ...)
 ```
 
 ### Registration Order
@@ -50,10 +118,16 @@ blender_addon/
 `state` -> `main_panel` -> `solver` -> `dynamics` -> `mesh_ops` -> `console` -> `zozo_contact_solver`
 
 On register, `__init__.py` also:
-1. Starts a `ReloadServer` (TCP port 8765) for hot-reload during development
-2. Schedules a 1-second timer to clean up group UUIDs and normalize group names
+1. Starts the persistent engine timer (`ensure_engine_timer()`) so the event loop ticks on Blender's main thread.
+2. Schedules a 1-second deferred timer (`cleanup_group_names`) that ensures every active group has a UUID and replaces messy names like `"Group Group N"` with `"Group N"`.
+3. Registers UUID rename detection (`core.uuid_registry`).
+4. Installs `save_pre`, `save_post`, `load_pre`, `load_post`, `render_init`, `render_pre` handlers (PC2 migration, manifest reconcile, session-id persistence, render warnings, disconnect on file load).
+5. Registers an `atexit` hook that disconnects the communicator on Blender shutdown so a Windows-native `ppf-cts-server.exe` subprocess does not outlive its parent and orphan the listening port.
+6. Registers the `frame_pump` modal operator that drives `apply_animation` and the MESH_CACHE self-heal.
+7. Schedules a 1-second deferred timer that, after a hot-reload, restarts the reload server and the MCP server if they were running.
+8. Calls `mark_addon_ready(True)` last so the engine tick is gated behind a fully-set-up state.
 
-Unregistration is reversed. MCP server cleanup (`cleanup_mcp_server()`) happens before component unregistration.
+Unregistration is reversed. MCP server cleanup (`cleanup_mcp_server()`) runs before component unregistration. The `ReloadServer` is stopped by the unregister path, and one-shot deferred timers are cancelled before any class teardown to prevent ticks against a freed module namespace. Partial registration triggers an automatic rollback `unregister()` so a half-initialized addon does not poison the next reload.
 
 ### Addon Namespace
 
@@ -116,35 +190,38 @@ Parametric collision boundaries that constrain simulation geometry without being
 | **WALL** | position (XYZ), normal (XYZ) | Infinite plane. Objects must stay on the normal-facing side. |
 | **SPHERE** | position (XYZ), radius | Sphere boundary. Options: `invert` (collision on inside), `hemisphere` (bowl shape, top half open). |
 
-Both support: `contact_gap`, `friction`, and animation keyframes (position changes, radius changes for spheres) with hold for step functions. Saved/loaded as part of scene profiles. Encoded into `param.pickle` under `"invisible_colliders"` key. The decoder creates `Wall`/`Sphere` objects via the frontend API before scene build.
+Both support: `contact_gap`, `friction`, and animation keyframes (position changes, radius changes for spheres) with hold for step functions. Saved/loaded as part of scene profiles. Encoded into the param CBOR envelope (saved on disk as `param.pickle` for back-compat) under the `"invisible_colliders"` key. The decoder, the in-process Python `frontend` package running inside `ppf-cts-server`, creates `Wall`/`Sphere` objects via the frontend API before scene build.
 
 ### Simulation Workflow
 
-1. **Connect** to remote solver (SSH/Docker/Local/Windows)
-2. **Start server** on remote (`server.py --port <port>`)
-3. **Transfer** mesh geometry and parameters (`encode_obj` + `encode_param`, pickled)
-4. **Build** solver data structures
-5. **Run** simulation (validates mesh hash first)
-6. **Fetch** animation frames back to Blender (downloads `map.pickle`, `surface_map.pickle`, `vert_N.bin`)
-7. Optionally **resume** or update parameters mid-simulation
+1. **Connect** to a solver host (SSH / Docker / Local / Windows Native).
+2. **Start server**: launches `ppf-cts-server --port <port>`. On Windows Native, an existing server on the port is auto-attached instead of erroring.
+3. **Transfer** mesh + parameters (`encode_obj` + `encode_param` produce CBOR envelopes per `crates/ppf-cts-formats`; `prepare_upload()` is the single source of truth for what goes up the wire).
+4. **Build** solver data structures (atomic `upload_atomic` request streams `data.pickle` and `param.pickle` then triggers the build).
+5. **Run** simulation (the client compares its `prepare_upload` hashes against the server-echoed hashes to detect drift since the last upload).
+6. **Fetch** animation frames back to Blender (downloads `map.pickle`, `surface_map.pickle`, then `vert_N.bin`).
+7. Optionally **resume** or **Update Params** mid-simulation; **Save & Quit** persists state, **Terminate** aborts cleanly.
 
 ### Coordinate System
 
 Blender uses Z-up; the solver uses Y-up. Conversion: `(x, y, z)` -> `[x, z, -y]`.
 
-Functions (all in `core/transform.py`, re-exported by `core/utils.py` and `core/encoder/__init__.py`): `_swap_axes(v)` for directions only, `_to_solver(v)` for positions (axis swap: `[x, z, -y]`), `_normalize_and_scale(direction, strength)`, `zup_to_yup()` returns 4x4 matrix `[[1,0,0,0],[0,0,1,0],[0,-1,0,0],[0,0,0,1]]`, `world_matrix(obj)` = `zup_to_yup @ obj.matrix_world`, `inv_world_matrix(obj)`.
+Functions (all in `core/transform.py`; `core/utils.py` re-exports `world_matrix`, `core/encoder/__init__.py` re-exports `_swap_axes` / `_to_solver` / `_normalize_and_scale`): `_swap_axes(v)` for directions only, `_to_solver(v)` for positions (axis swap: `[x, z, -y]`), `_normalize_and_scale(direction, strength)`, `zup_to_yup()` returns the 4x4 matrix `[[1,0,0,0],[0,0,1,0],[0,-1,0,0],[0,0,0,1]]`, `world_matrix(obj)` = `zup_to_yup @ obj.matrix_world`, `inv_world_matrix(obj)`.
 
 **Solver space convention:** The solver stores vertices in untranslated space (rotation+scale only), with object translation stored separately as displacement. All encoded absolute positions (pin animation, operation centers, centroids) must be in this untranslated space. Use `world_matrix().to_3x3().to_4x4()` for vertex-derived positions, or subtract `world_matrix().to_translation()` from `_to_solver()` results for global coordinates.
 
 ### Communication Protocol
 
-- Protocol version: `0.02` (constant `PROTOCOL_VERSION`)
-- Transport: TCP socket with chunked binary transfer (default chunk size 32KB)
-- Headers: `TCMD` (text command query), `BDAT` (binary data, unused), `JSON` (JSON-prefixed binary)
-- Data serialization: Python pickle for mesh/param data
-- Status polling: `send_query(args)` sends flattened `--key value` text, receives JSON response
-- Data send: JSON header + raw binary chunks, waits for `"OK\n"` confirmation
-- Data receive: JSON header, then JSON metadata `{size: int}`, then binary chunks
+- Protocol version: `0.04` (constant `PROTOCOL_VERSION` in `core/protocol.py`; must match `crates/ppf-cts-server/src/lib.rs:PROTOCOL_VERSION`).
+- Transport: TCP socket with chunked binary transfer (default chunk size 32KB).
+- Headers: `TCMD` (text command query, length-prefixed in 0.04), `BDAT` (reserved), `JSON` (JSON-prefixed binary).
+- Wire format change in 0.04: TCMD requests now carry a 4-byte big-endian length prefix between the `b"TCMD"` header and the payload, replacing the prior wire that relied on `shutdown(SHUT_WR)` as the end-of-input signal. Windows tokio did not deliver that half-close to the server's `AsyncRead`, so the server hung in its read loop and connections piled up in `FIN_WAIT_2`. A 0.04 client paired with a 0.03 server (or vice versa) is rejected by the strict-equality check in `core/transitions.py`.
+- Heartbeat recovery: if a poll/heartbeat round trip returns an empty response while the addon's status is `ABORTING` or `BUILDING`, the state machine treats it as a benign no-op and resets so those long-running activities can recover without a hard error.
+- Data serialization: CBOR envelopes for mesh/param data, with the schema defined in `crates/ppf-cts-formats` (`envelope.rs` + `kinds/`); the addon emits them via `core/encoder/cbor_encode.py` and `ppf-cts-server` decodes them. On-disk filenames stay `data.pickle` / `param.pickle` for back-compat with existing project layouts.
+- Status polling: text command `--key value` payloads sent via `socket_data_send` / `socket_data_receive`; the server returns a JSON response that always carries `protocol_version` and (for 0.03+) `upload_id`.
+- Data send: JSON header + raw binary chunks, waits for `"OK\n"` confirmation.
+- Data receive: JSON header, then JSON metadata `{size: int}`, then binary chunks.
+- Atomic upload: `socket_upload_atomic` sends a single `upload_atomic` request that ships `data.pickle` and `param.pickle` back-to-back; the server confirms with `OK` once both payloads are in place.
 
 ### Connection Types
 
@@ -162,57 +239,64 @@ Functions (all in `core/transform.py`, re-exported by `core/utils.py` and `core/
 
 ## Module Details
 
-### `core/` - Communication & Encoding
+### `core/` - Engine, Effects, Encoding, Transport
 
-#### `client.py` - Central Communicator
+The runtime is event-driven. UI operators dispatch `Event` dataclasses into the `Engine`; the engine drains its queue on each Blender main-thread tick, runs every event through the pure `transition()` function, and hands the resulting `Effect` list to `EffectRunner` for execution. State is mutated only on the main thread inside `tick()`, so the business logic needs no locks; a single `_NonReentrantLock` protects `_state` for thread-safe reads from UI panel `draw()` callbacks and from worker threads.
 
-**Singleton:** `communicator = Communicator()` (module-level instance)
+#### `facade.py` - CommunicatorFacade
 
-The `Communicator` class manages all remote operations in a background daemon thread. It uses 5 domain-specific `RLock`s (alphabetical acquire order to prevent deadlocks): `animation`, `connection`, `data`, `status`, `task`.
+**Singletons:** `engine`, `runner`, and `communicator` (a `CommunicatorFacade` wrapping the engine). The `communicator` import path stays stable so operators and UI code call the same methods as before; each call now translates into an event dispatched to the engine and processed immediately via `tick()`.
 
-**Connection methods** (all use internal `_queue_connection_task()` helper for lock management):
-- `connect_ssh(host, port, username, key_path, path, container, server_port=9090, keepalive_interval=30)`
-- `connect_docker(container, path, server_port=9090)`
-- `connect_local(path, server_port=9090)`
-- `connect_win_native(path, port)` - auto-detects dev vs bundle layout for Python/CUDA paths
-- `disconnect()` - dispatches to type-specific disconnect
+**Connection methods:**
+- `connect_ssh(host, port, username, key_path, path, container=None, server_port=DEFAULT_SERVER_PORT, keepalive_interval=30)`
+- `connect_docker(container, path, server_port=DEFAULT_SERVER_PORT)`
+- `connect_local(path, server_port=DEFAULT_SERVER_PORT)`
+- `connect_win_native(path, port)` - auto-detects dev vs bundle layout for Python/CUDA paths; on a Blender restart, attaches to a still-running `ppf-cts-server.exe` on the port instead of erroring
+- `disconnect()` - emits `DisconnectRequested`
 
-**Solver control:**
-- `build()` - queries `{"request": "build"}`
-- `run(context)` - clears fetched frames, queries `{"request": "start"}`
-- `resume(context)` - queries `{"request": "resume"}`
-- `fetch(context)` - downloads `map.pickle`, `surface_map.pickle`, then `vert_N.bin` per frame
-- `terminate()` - queries `{"request": "terminate"}`, polls until not running
-- `save_and_quit()` - queries `{"request": "save_and_quit"}`
-- `abort()` - sets interrupt flag, clears animation frames
+**Solver control:** `build()`, `run(context)`, `resume(context)`, `fetch(context)`, `terminate()`, `save_and_quit()`, `abort()`. Each emits the matching `*Requested` event. `abort()` also issues a synchronous `cancel_build` query when the current activity is `BUILDING` so a stuck build returns control to the user before the abort transition runs.
 
-**Server lifecycle:**
-- `start_server()` - creates shell script activating venv, runs `nohup python3 server.py --port <port>`, monitors `progress.log` for `SERVER_READY` marker (16s timeout)
-- `stop_server()` - runs `pkill -f server.py`, polls until stopped
+**Atomic upload:** `build_pipeline(data, param, data_hash, param_hash, message)` and `upload_only(...)` ship the two payloads back-to-back with the matching client-side hashes; the server echoes the hashes on every status response so `SOLVER_OT_Run` and `SOLVER_OT_UpdateParams` can detect drift since the last upload.
 
-**Data transfer** (both use `open_server_channel()` from protocol.py for SSH/socket abstraction):
-- `data_send(remote_path, data, message)` - local: direct file write; remote: socket with `socket_data_send()`
-- `data_receive(remote_path, message)` - local: direct file read; remote: socket with `socket_data_receive()`
+**Status accessors:** `info` returns a derived `CommunicatorInfo` (status mapped to `RemoteStatus` from `AppState`), `connection` returns a partially-populated `ConnectionInfo`, `response` returns the cached last server response for UI display only, and `session_id` / `last_saved_session_id()` expose the current and persisted session ids.
 
-**Task processing:** Background daemon thread runs `_process_task()` in a loop. Supported task names: `connect_ssh`, `connect_docker`, `connect_local`, `connect_win_native`, `disconnect_*`, `start_server`, `stop_server`, `exec`, `query`, `build`, `run`, `resume`, `fetch`, `data_send`, `data_receive`.
+#### `engine.py` - Event Loop
 
-**Status update (`_update_status`):** Maps server response status strings to `RemoteStatus` enum. Auto-fetches latest animation frame during simulation. Detects simulation completion, failure, and protocol version mismatch.
+`Engine` owns an `AppState` and a thread-safe `queue.Queue` of pending events. `dispatch(event)` is callable from any thread; `tick(runner)` runs on the main thread, drains the queue, and for each event runs `state, effects = transition(state, event)` then `runner.execute(effect)` for every emitted effect. `_NonReentrantLock` deliberately crashes if the same thread re-enters the lock, surfacing what would otherwise be a silent deadlock.
 
-**Animation application:** `apply_animation()` (module-level) pops one frame at a time, writes vertex/CV data to PC2 files. Frame numbering: Blender frames 1..N map to remote frames 0..N-1 (PC2 index = blender_frame - 1). MESH_CACHE modifier uses `frame_start=1.0` and is moved to first modifier position. Curves use `frame_change_post` handler with `frame_idx = current - 1`. Encoder sends `frames = N-1` so remote produces `vert_0.bin..vert_(N-1).bin`. `frame_end` is set to the latest fetched Blender frame as frames arrive. Snap overlay reads PC2 files directly (no depsgraph access).
+#### `transitions.py` - Pure State-Transition Function
 
-**File change monitoring:** Disconnects automatically if the Blender file path changes.
+`transition(state, event) -> (new_state, effects)`. No I/O, no locks, no `bpy` calls; fully unit-testable. Handles protocol-version checks (`PROTOCOL_VERSION` strict equality), upload-id staleness, server-side reset detection, ABORTING / BUILDING recovery on empty heartbeat responses, and every connection / build / run / fetch / terminate / save-and-quit transition. This module is the single source of truth for addon-side state changes; the server-side state machine in `crates/ppf-cts-core/src/transitions/` is independent and observes different events.
+
+#### `effects.py` and `effect_runner.py`
+
+`effects.py` defines the `Effect` dataclass hierarchy (`DoConnect`, `DoQuery`, `DoUpload`, `DoFetch`, `DoStartServer`, `DoStopServer`, `DoLog`, etc.). `effect_runner.py` executes them: it owns the active backend object, the animation buffer (with its own lock), the polling loop, the response cache, and the worker that pulls bytes off a socket. Failures dispatch follow-up events back into the engine.
+
+#### `events.py` and `state.py`
+
+`events.py` defines `Event` dataclasses (`ConnectRequested`, `BuildRequested`, `RunRequested`, `FetchRequested`, `BuildPipelineRequested`, `UploadOnlyRequested`, `PollTick`, `Connected`, `ConnectionLost`, etc.). `state.py` defines `AppState` plus the four sub-enums it composes: `Phase` (OFFLINE/CONNECTING/ONLINE), `Activity` (IDLE/BUILDING/SENDING/RECEIVING/ABORTING/...), `Server` (STOPPED/LAUNCHING/RUNNING/STOPPING), `Solver` (NO_DATA/READY/RUNNING/COMPLETE/RESUMABLE/FAILED). `to_remote_status()` collapses these four axes into the flat `RemoteStatus` enum that UI code consumes.
+
+#### `client.py` - Animation Helpers + Re-Exports
+
+Re-exports `communicator` and the public dataclasses for backward compatibility, then implements the main-thread animation path:
+
+- `apply_animation()` pops one frame at a time, writes vertex/CV data to PC2 files. Frame numbering: Blender frames 1..N map to remote frames 0..N-1 (PC2 index = blender_frame - 1). MESH_CACHE modifier uses `frame_start=1.0` and is moved to first modifier position. Curves use `frame_change_post` handler with `frame_idx = current - 1`. Encoder sends `frames = N-1` so the remote produces `vert_0.bin..vert_(N-1).bin`. `frame_end` is set to the latest fetched Blender frame as frames arrive. Snap overlay reads PC2 files directly (no depsgraph access).
+- `apply_stitch_constraints(obj, map_vert, context)` averages stitched vertex positions per group; ROD groups are skipped because every rod edge is loose.
+- `heal_mesh_caches_if_stale()` rebuilds the MESH_CACHE modifier when a PC2 file has more frames than the modifier knows about (driven by `core/frame_pump.py` from a modal-operator timer context).
+
+`apply_animation` is invoked from the `frame_pump` modal because Blender 5.x rejects ID writes from arbitrary timer contexts (especially when a reload is initiated from the debug-server TCP handler).
 
 #### `protocol.py` - Wire Protocol
 
-**Constants:** `PROTOCOL_VERSION = "0.02"`, `HEADER_TEXT_CMD = b"TCMD"`, `HEADER_BINARY_DATA = b"BDAT"`, `HEADER_JSON_DATA = b"JSON"`, `DEFAULT_CHUNK_SIZE = 32 * 1024`
+**Constants:** `PROTOCOL_VERSION = "0.04"`, `HEADER_TEXT_CMD = b"TCMD"`, `HEADER_BINARY_DATA = b"BDAT"`, `HEADER_JSON_DATA = b"JSON"`, `DEFAULT_CHUNK_SIZE = 32 * 1024`.
 
 **Functions:**
-- `open_server_channel(connection)` - factory that returns a connected socket (local/docker) or SSH channel depending on connection type; used by `send_query`, `_data_send`, `_data_receive`
 - `format_traffic(bytes_per_second) -> str` - formats as "B/s", "KB/s", or "MB/s"
 - `exec_command(command, connection, shell=False, cwd=None) -> {exit_code, stdout[], stderr[]}` - dispatches to SSH channel / Docker exec_run / subprocess based on connection type
-- `send_query(args, connection, project_name, chunk_size) -> (response_dict, server_running)` - sends `TCMD` + flattened args, reads JSON response via `open_server_channel`
 - `socket_data_send(sock, request_data, data, chunk_size, progress_callback, interrupt_callback, bps_calculator)` - sends `JSON` header + binary chunks, waits for "OK"
+- `socket_upload_atomic(sock, request_data, data, param, ...)` - sends a single `upload_atomic` request followed by `data.pickle` and `param.pickle` back-to-back; the server confirms with `OK` once both payloads land
 - `socket_data_receive(sock, request_data, chunk_size, progress_callback, interrupt_callback, bps_calculator) -> bytes` - sends `JSON` header, reads metadata `{size}`, then binary chunks
+- `_shutdown_write(channel)` - shutdown helper that handles both paramiko channels (`shutdown_write()`) and regular sockets (`shutdown(SHUT_WR)`)
 
 #### `status.py` - State Enums & Dataclasses
 
@@ -221,11 +305,10 @@ The `Communicator` class manages all remote operations in a background daemon th
 Methods: `in_progress()` (7 states), `abortable()` (4 states), `ready()` (not in 4 error states), `icon` property (maps to Blender icon names).
 
 **Dataclasses:**
-- `ConnectionInfo` - type, current_directory, remote_root, instance, server_running, container, thread, server_thread, server_port
-- `CommunicatorInfo` - status, message, error, server_error, response, progress (0-1), traffic
-- `CommunicatorLocks` - task, status, connection, animation, data (all RLock)
-- `AnimationData` - map (object->vertex mapping), frame (list of (frame_num, vertices)), surface_map, total_frames, applied_frames
-- `BytesPerSecondCalculator` - sliding window (3s) throughput calculator
+- `ConnectionInfo` - type, current_directory, remote_root, instance, server_running, container, server_port (defaults to `DEFAULT_SERVER_PORT`).
+- `CommunicatorInfo` - status, message, error, server_error, violations, response, progress (0-1), traffic. The `info` property on `CommunicatorFacade` returns a fresh derived snapshot per call.
+- `AnimationData` - map (object->vertex mapping), frame (list of (frame_num, vertices)), surface_map, total_frames, applied_frames. Lives on the `EffectRunner`'s animation buffer; `communicator.animation` returns a copy guarded by the buffer's own lock.
+- `BytesPerSecondCalculator` - sliding window (3s) throughput calculator.
 
 #### `transform.py` - Coordinate Transforms
 
@@ -237,18 +320,18 @@ All Blender (Z-up) to solver (Y-up) coordinate conversion functions, consolidate
 - `world_matrix(obj) -> Matrix` - combined `zup_to_yup @ obj.matrix_world`
 - `inv_world_matrix(obj) -> Matrix` - inverse of world_matrix
 
-Re-exported by `core/utils.py` (matrix functions) and `core/encoder/__init__.py` (vector functions) for backward compatibility.
+`core/utils.py` re-exports `world_matrix`. `core/encoder/__init__.py` re-exports `_swap_axes`, `_to_solver`, `_normalize_and_scale`.
 
 #### `encoder/` - Data Serialization
 
-**`encode_obj(context) -> bytes`** (pickle): Per active group, per included object:
+**`encode_obj(context) -> bytes`** (CBOR envelope, schema `crates/ppf-cts-formats`): Per active group, per included object:
 - ROD: edges array only
 - Others: extract to NumPy, apply world transform, triangulate (faces + UV)
 - Detects stitch edges (loose edges not in any face) -> `(Ind[#,4], W[#,2])` format
 - STATIC objects: extracts per-frame animation (positions at each keyframe)
 - Other objects: collects pin vertex indices
 
-**`encode_param(context) -> bytes`** (pickle): Dict with keys:
+**`encode_param(context) -> bytes`** (CBOR envelope, schema `crates/ppf-cts-formats`): Dict with keys:
 - `scene`: dt, min-newton-steps, air-density, air-friction, gravity[3], wind[3], frames, fps, csrmat-max-nnz, isotropic-air-friction, auto-save, line-search-max-t, constraint-ghat, cg-max-iter, cg-tol, include-face-mass, disable-contact, inactive-momentum, stitch-stiffness
 - `group`: list of (params_dict, object_names) per group. Params: model, density, young-mod, poiss-rat, friction, contact-gap, contact-offset, bend, shrink (solid), shrink-x, shrink-y, strain-limit, pressure, length-factor, velocity
 - `pin_config`: {obj_name: {vertex_idx: {unpin_time, pull_strength, operations[], embedded_move_index, pin_anim, pin_group_id}}}
@@ -257,18 +340,23 @@ Re-exported by `core/utils.py` (matrix functions) and `core/encoder/__init__.py`
 - `invisible_colliders` (optional): dict with `"walls"` and `"spheres"` lists. Each wall: `{position, normal, contact_gap, friction, keyframes: [{time, position}]}`. Each sphere: `{position, radius, hemisphere, invert, contact_gap, friction, keyframes: [{time, position, radius}]}`. Encoded by `_encode_invisible_colliders()`. The decoder creates `Wall`/`Sphere` objects via `scene.add.invisible.wall()` / `.sphere()` before `scene.build()`.
 
 **Other functions:**
-- `compute_mesh_hash(context) -> dict` - topology hash per group for validation
-- `compute_average_edge_length(group) -> float`
-- `compute_group_bounding_box_diagonal(group) -> float`
-- `detect_stitch_edges(mesh) -> (Ind, W) | None`
+- `compute_mesh_hash(context) -> dict` - topology hash per group, used by `SOLVER_OT_Run` / `SOLVER_OT_FetchData` to detect topology changes since the last transfer.
+- `compute_group_bounding_box_diagonal(group) -> float` - drives the `use_group_bounding_box_diagonal` ratio-based contact gap/offset.
+- `detect_stitch_edges(mesh) -> (Ind, W) | None` - finds loose edges not in any face and returns the cross-stitch index/weight pair.
+- `compute_data_hash(context) -> str` and `compute_param_hash(context) -> str` - quick fingerprints of the encoded CBOR bytes; the server echoes them on every status response so the client can detect drift between the live scene and the last upload.
+- `prepare_upload(context, want_data=True, want_param=True) -> (data, param, data_hash, param_hash)` - single source of truth for what gets sent up the wire; ensures the upload-time hash and the click-time drift hash use the same algorithm.
 
 #### `connection.py` - Connection Backends
 
 - `connect_ssh(host, port, username, key_path, path, container, keepalive_interval, server_port, exec_fn) -> ConnectionInfo` - uses paramiko SSHClient with compress=True, validates Docker container if specified
 - `connect_docker(container, path, server_port) -> ConnectionInfo` - uses docker.from_env(), starts container if not running
 - `connect_local(path, server_port) -> ConnectionInfo`
-- `connect_win_native(root, port) -> (ConnectionInfo, subprocess.Popen)` - auto-detects dev layout (`build-win-native/python/`) vs bundle layout (`root/python/`), sets PATH/PYTHONPATH/CUDA_PATH, launches subprocess
-- `validate_remote_path(path, exec_fn)` - checks `server.py` exists at path
+- `_probe_ppf_cts_server(port, timeout=1.5) -> bool` - sends a length-prefixed TCMD ping and confirms the response is JSON containing `protocol_version`. Used to distinguish a live `ppf-cts-server` from any other listener on the same port.
+- `_port_is_in_use(port) -> bool` - cheap loopback probe used before spawning a new server.
+- `spawn_win_native_server(root, port) -> subprocess.Popen | None` - returns `None` when an existing `ppf-cts-server` answers the probe on `port` (attach mode), and raises `PortInUseByForeignProcess` when something else holds the port. Spawns `ppf-cts-server.exe` with `stdout` and `stderr` redirected to `<root>/server.log`; piping to `subprocess.PIPE` would wedge the server because the OS pipe buffer fills, blocking the tokio worker that emitted the log line. Auto-detects dev layout (`build-win-native/python/`) vs bundle layout (`root/python/` plus `root/bin/`), sets `PATH`/`PYTHONPATH`/`CUDA_PATH`. Honors `PPF_WIN_NATIVE_NO_SPAWN` for the headless test rig.
+- `connect_win_native(root, port) -> (ConnectionInfo, subprocess.Popen | None)` - the one-shot init path that wraps `spawn_win_native_server` and populates a `ConnectionInfo`. Returns `(info, None)` when attaching to an existing server.
+
+The expected binary path on the remote is `target/release/ppf-cts-server` (or `bin/ppf-cts-server.exe` in the Windows bundle layout).
 
 #### `async_op.py` - Modal Operator Base
 
@@ -347,7 +435,7 @@ State is split across three files for maintainability:
 
 | Property | Type | Default | Description |
 |----------|------|---------|-------------|
-| `step_size` | FloatProperty | 0.001 | Simulation step size (0.001-0.01) |
+| `step_size` | FloatProperty | 0.01 | Simulation step size (0.001-0.01) |
 | `min_newton_steps` | IntProperty | 1 | Minimum Newton iterations (1-64) |
 | `air_density` | FloatProperty | 0.001 | Air density kg/m^3 (0-0.01) |
 | `air_friction` | FloatProperty | 0.2 | Air friction ratio (0-1) |
@@ -446,21 +534,22 @@ Panel `MAIN_PT_RemotePanel` in VIEW_3D sidebar. Displays:
 
 #### `ui/solver.py` - Solver Panel & Operators
 
-Defines `TransferRequestMixin` (shared by `SOLVER_OT_Transfer` and `DEBUG_OT_TransferWithoutBuild`) with `request_data_send`, `request_param_send`, `request_delete` methods. Both `request_data_send` and `request_param_send` catch `ValueError` from encoding and surface it in the Blender UI via `self.report({"ERROR"}, ...)` and `com.error`.
+Panel `SSH_PT_SolverPanel`. The `TransferRequestMixin` is shared by transfer operators and exposes `request_delete()` (queries `{"request": "delete"}`). Data and parameter payloads ship together through a single `upload_atomic` transaction so the server cannot observe a mismatched `(data, param)` pair mid-build; upload sites call `core.encoder.prepare_upload(context)` for the `(data, param, data_hash, param_hash)` tuple, then dispatch via `com.build_pipeline(...)` or `com.upload_only(...)`. Encode-time `ValueError` is reported through `self.report({"ERROR"}, ...)` and surfaces on `com.error`.
 
-Panel `SSH_PT_SolverPanel`. Key operators:
+Key operators:
 
 | Operator | bl_idname | Timeout | Description |
 |----------|-----------|---------|-------------|
-| Transfer | `solver.transfer` | 300s | Multi-stage: delete existing -> send mesh -> send params -> build |
-| Run | `solver.run` | 86400s (24h) | Validates mesh hash, clears animation, starts simulation |
+| Transfer | `solver.transfer` | 300s | Atomic upload + build via `BuildPipelineRequested` |
+| Run | `solver.run` | 86400s (24h) | Compares hashes against the server-echoed values, clears animation, starts simulation |
 | Resume | `solver.resume` | 86400s | Resumes paused simulation |
 | UpdateParams | `solver.update_params` | 120s | Re-sends parameters and rebuilds |
 | ClearAnimation | `solver.clear_animation` | - | Clears simulation keyframes, preserves pin keyframes |
 | FetchData | `solver.fetch_remote_data` | 600s | Downloads animation, validates mesh hash |
 | DeleteRemoteData | `solver.delete_remote_data` | 60s | Queries `{"request": "delete"}` |
+| MigratePC2Folder | `solver.migrate_pc2_folder` | - | Migrates the legacy PC2 cache directory layout |
 
-**Mesh hash validation:** Before Run and Fetch, `compute_mesh_hash()` is compared against stored hash to detect topology changes since last transfer.
+**Drift detection:** `SOLVER_OT_Run` and `SOLVER_OT_UpdateParams` recompute `compute_data_hash` / `compute_param_hash` against the live scene and compare against the server-echoed hashes from the last upload to decide whether the user has drifted from what the server holds.
 
 #### `ui/connection_ops.py` - Connection Operators
 
@@ -482,6 +571,7 @@ Panel `SSH_PT_SolverPanel`. Key operators:
 - `solver.terminate` - terminates simulation
 - `solver.save_quit` - save and quit gracefully
 - `solver.update_status` - refreshes server status
+- `solver.force_terminate_port` - **Force Terminate Process** button. Recovery hatch when a previous Stop/Disconnect cycle left a `ppf-cts-server.exe` (or another squatter) bound to the solver port and the next Connect attempt surfaces `Port N is in use`. Resolves the live port via `com.info.server_port` (falls back to `DEFAULT_SERVER_PORT`), looks up the listening PID with `lsof -ti tcp:N` (POSIX) or `netstat -ano` (Windows), and walks the process tree on Windows so child processes the server spawned (e.g. the CUDA solver subprocess) also go away. The button is rendered next to the stale-port error in `MAIN_PT_RemotePanel`; a short TTL cache (`_PROBE_TTL_S`) suppresses the error and hides the button automatically once the spawn path's attach branch claims the port.
 
 #### `ui/debug_ops.py`
 
@@ -587,6 +677,7 @@ All parameters shown directly (no outer collapsible box):
 | CreatePinVertexGroup | `object.create_pin_vertex_group` | Creates vertex group from EDIT mode selection, prompts for name |
 | AddPinVertexGroup | `object.add_pin_vertex_group` | Adds existing vertex group from dropdown |
 | RemovePinVertexGroup | `object.remove_pin_vertex_group` | Removes pin from list |
+| RenamePinVertexGroup | `object.rename_pin_vertex_group` | Renames the underlying vertex group, updating pin references |
 | SelectPinVertices | `object.select_pin_vertices` | Selects pin vertices in EDIT mode |
 | DeselectPinVertices | `object.deselect_pin_vertices` | Deselects pin vertices |
 | MakePinKeyframe | `object.make_pin_keyframe` | Keyframes vertex positions, auto-adds EMBEDDED_MOVE operation, saves pin keyframes |
@@ -597,12 +688,17 @@ All parameters shown directly (no outer collapsible box):
 | PickCenterFromSelected | `object.pick_center_from_selected` | Sets ABSOLUTE center from centroid of selected vertices in Edit Mode (for SPIN or SCALE) |
 | PickVertexCenter | `object.pick_vertex_center` | Sets VERTEX center from a single selected vertex in Edit Mode (for SPIN or SCALE) |
 
-#### `dynamics/overlay.py`, `overlay_geometry.py`, `overlay_labels.py` - 3D Viewport Overlays
+#### `dynamics/overlay.py`, `overlay_geometry/`, `overlay_labels.py` - 3D Viewport Overlays
 
-Split across three files:
-- **`overlay.py`**: Cache management (`_overlay_cache`), draw callback dispatch, `apply_object_overlays()`, registration
-- **`overlay_geometry.py`**: All geometry generation (`_generate_*` primitives) and GPU batch building (`_build_*_batches`), `DirectionPreviewManager`
-- **`overlay_labels.py`**: Text/label rendering via `blf`
+Split across `overlay.py` (top-level dispatch) and the `overlay_geometry/` package:
+- **`overlay.py`**: Cache management (`_overlay_cache`), draw callback dispatch, `apply_object_overlays()`, registration.
+- **`overlay_geometry/primitives.py`**: Reusable shapes (`_line_to_tris`, circles, arrows).
+- **`overlay_geometry/pins.py`**: Pin point batches.
+- **`overlay_geometry/operations.py`**: SPIN / SCALE / MOVE_BY / TORQUE batches.
+- **`overlay_geometry/colliders.py`**: Wall and sphere collider batches.
+- **`overlay_geometry/previews.py`**: `DirectionPreviewManager` for gravity / wind preview arrows.
+- **`overlay_geometry/violations.py`**: Highlights for solver-reported violations.
+- **`overlay_labels.py`**: Text / label rendering via `blf`.
 
 Registered as POST_VIEW and POST_PIXEL draw handlers.
 
@@ -646,26 +742,28 @@ Three-layer architecture:
 #### `ops/zozo_contact_solver.py` - Dynamic Operator Generation
 
 At registration time:
-1. Imports `blender_handlers` and `solver_handlers` to trigger handler registration
-2. Gets handler registry from `get_handler_registry()`
+1. Imports `mcp.blender_handlers` and every module under `mcp.handlers/` (connection, console, debug, group, remote, scene, simulation, plus dyn_params and object_ops loaded transitively) to trigger handler registration.
+2. Gets handler registry from `get_handler_registry()`.
 3. For each handler, calls `_build_operator_class(name, handler_info)`:
-   - Extracts parameter info via `inspect.signature()` and `get_type_hints()`
-   - Creates `bl_idname = "zozo_contact_solver.{name}"`, `bl_label`, `bl_description` from schema
-   - Generates Blender properties: int->IntProperty, float->FloatProperty, bool->BoolProperty, others->StringProperty (JSON-encoded)
-   - `execute()` method extracts properties, JSON-decodes complex types, calls handler wrapper
-4. Registers `state_ops` operators
-5. Injects `api` module into `sys.modules["zozo_contact_solver"]` so `from zozo_contact_solver import solver` works
+   - Extracts parameter info via `inspect.signature()` and `get_type_hints()`.
+   - Creates `bl_idname = "zozo_contact_solver.{name}"`, `bl_label`, `bl_description` from the registered schema.
+   - Generates Blender properties: int->IntProperty, float->FloatProperty, bool->BoolProperty, others->StringProperty (JSON-encoded).
+   - `execute()` method extracts properties, JSON-decodes complex types, and calls the handler wrapper.
+4. Registers `state_ops` operators.
+5. The addon's Python API is exposed at `bl_ext.user_default.ppf_contact_solver.ops.api`; user scripts use `from bl_ext.user_default.ppf_contact_solver.ops.api import solver`. The Blender 5 extension policy disallows extensions from registering top-level Python module names, so the add-on does not inject `api` into `sys.modules["zozo_contact_solver"]`.
 
-#### `ops/api.py` - High-Level Python API
+#### `ops/api/` - High-Level Python API (Package)
+
+The public Python API is a package whose modules carry one class each: `solver.py` (`_Solver` + `solver` singleton), `group.py` (`_Group`, `_ParamProxy`), `pin.py` (`_Pin`), `dynamics.py` (`_SceneProxy`, `_DynParamBuilder`), `collider.py` (`_InvisibleWallBuilder`, `_InvisibleSphereBuilder`, `_ColliderParamProxy`). `__init__.py` re-exports both the underscore names (for the runtime) and capitalized aliases (`Solver`, `Group`, `Pin`, `SceneParam`, `GroupParam`, `ColliderParam`, `DynParam`, `Wall`, `Sphere`) used by the docs generator and as type-hint targets.
 
 **`_Solver` class** (top-level, exposed as `solver`):
 - `param` (class var) -> `_SceneProxy` for `solver.param.frame_count = 180`
 - `create_group(name="", type="SOLID") -> _Group`
-- `get_group(uuid) -> _Group`, `get_groups() -> list[_Group]`
-- `delete_all_groups()`, `clear()` (comprehensive reset including scene defaults)
+- `get_group(group_uuid) -> _Group`, `get_groups() -> list[_Group]`
+- `delete_all_groups()`, `clear()` (comprehensive reset including scene defaults, MESH_CACHE modifiers, and overlays)
 - `snap(object_a, object_b)`, `add_merge_pair(a, b)`, `remove_merge_pair(a, b)`, `get_merge_pairs()`, `clear_merge_pairs()`
 - `add_wall(position, normal) -> _InvisibleWallBuilder`, `add_sphere(position, radius) -> _InvisibleSphereBuilder`
-- `get_invisible_colliders()`, `clear_invisible_colliders()`
+- `get_invisible_colliders() -> list[(type, name)]`, `clear_invisible_colliders()`
 - `__getattr__(name)` -> delegates to `bpy.ops.zozo_contact_solver.<name>()`
 
 **`_Group` class:**
@@ -796,10 +894,6 @@ Each decorator:
 
 **Custom exceptions:** `MCPError`, `ValidationError(MCPError)`, `ConnectionError(MCPError)`.
 
-#### `mcp/mcp_server.py`
-
-`BlenderMCPServer` class: HTTP server in daemon thread. `start(port)` checks port availability, tries fallback ports (port to port+9), configures SO_REUSEADDR. `stop()` signals shutdown event, closes socket, waits for thread (5s), waits for port release (exponential backoff).
-
 #### `mcp/http_handler.py`
 
 `MCPRequestHandler(BaseHTTPRequestHandler)` implements the MCP Streamable HTTP transport; every request flows through a single `/mcp` endpoint (other paths return 404):
@@ -847,9 +941,14 @@ Thread-safe bridge: HTTP thread posts tasks via `post_mcp_task(task_type, args) 
 
 ---
 
-### `lib/` - Vendored Dependencies
+### `lib/` and `wheels/` - Bundled Dependencies
 
-Pre-bundled Python packages (not addon source code):
+Two separate sources of bundled Python code:
+
+- `wheels/` ships **cbor2** as platform wheels picked up by Blender's extension wheel mechanism (declared in `blender_manifest.toml`). Two Python ABIs cover the supported Blender versions: 5.0 LTS (Python 3.11) and 5.1+ (Python 3.13), times three platforms (`macos-arm64`, `linux-x64`, `windows-x64`), for six wheels total. cbor2 is bundled because it is the encoder for every Transfer click, so the add-on can ship a scene out of the box without first prompting for Install Modules.
+- `lib/` is the on-the-fly install target for the SSH and Docker stacks (paramiko / docker), which `core/module.py` populates lazily when the user picks one of those backends, plus a few prebuilt copies committed for offline installs.
+
+Approximate versions in `lib/` (committed):
 
 | Package | Version | Purpose |
 |---------|---------|---------|
@@ -860,13 +959,20 @@ Pre-bundled Python packages (not addon source code):
 | cffi | 2.0.0 | C foreign function interface (used by cryptography, bcrypt, pynacl) |
 | pynacl | 1.6.2 | libsodium bindings / Ed25519 (used by paramiko) |
 | pycparser | 3.0 | C language parser (cffi dependency) |
+| docker | 7.1.0 | Docker SDK (used by Docker / Docker-over-SSH backends) |
+| requests | 2.33.1 | HTTP client (docker / Jupyter REST) |
+| urllib3 | 2.6.3 | Low-level HTTP (requests dependency) |
+| charset_normalizer | 3.4.7 | Charset detection (requests dependency) |
+| idna | 3.13 | IDNA / Unicode hostnames (requests dependency) |
+| certifi | 2026.4.22 | CA bundle (requests dependency) |
+| cbor2 | 6.0.1 | CBOR encoder for the wire schema (also shipped via `wheels/`) |
 
 ---
 
 ## Python Scripting API
 
 ```python
-from zozo_contact_solver import solver
+from bl_ext.user_default.ppf_contact_solver.ops.api import solver
 
 # Scene parameters
 solver.param.frame_count = 180
@@ -997,11 +1103,10 @@ frame = 1
 
 ### Thread Safety
 
-The Communicator uses 5 domain-specific `RLock`s with alphabetical acquire order to prevent deadlocks:
-1. `animation` - protects `_animation`, `_fetched`
-2. `connection` - protects `_connection`
-3. `data` - protects `_data`, `_exec_output`
-4. `status` - protects `_com` (progress, status, errors, response)
-5. `task` - protects `_task`, `_interrupt`
+State mutations are confined to Blender's main thread inside `Engine.tick()`, so the business logic in `transitions.py` is lock-free and unit-testable. A small set of explicit locks remains:
 
-MCP task system uses a separate `threading.Lock` for the task queue, with tasks posted from the HTTP server thread and processed in the Blender main thread via timer callback.
+- `Engine._lock` (a `_NonReentrantLock` over `threading.Lock`) protects `_state` for cross-thread reads from UI panels and worker threads. The wrapper crashes loudly on same-thread re-entry to surface what would otherwise be a silent deadlock.
+- `Engine._queue` is a `queue.Queue`, safe for `dispatch()` from any thread; events are drained on the main-thread tick.
+- `EffectRunner` owns the animation buffer lock (`_anim_lock`) so `apply_animation` and `take_one_animation_frame` see consistent frame state.
+- The reload server runs in its own thread and posts reload requests by stopping/starting addon registration on the main thread.
+- The MCP HTTP server thread posts tasks to `task_system.post_mcp_task`, processed in the Blender main thread via a persistent timer callback.

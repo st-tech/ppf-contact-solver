@@ -3,38 +3,76 @@
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
 # License: Apache v2.0
 
-[package]
-name = "ppf-contact-solver"
+[workspace]
+# Edition 2021 implies resolver = 2 for workspaces with a [package],
+# but in a virtual workspace cargo defaults to resolver = 1 unless
+# stated explicitly. Pin it here so feature unification stays on the
+# modern (per-target) resolver every member already assumed.
+resolver = "2"
+members = [
+    "crates/ppf-cts-formats",
+    "crates/ppf-cts-core",
+    "crates/ppf-cts-py",
+    "crates/ppf-cts-server",
+    "crates/ppf-cts-solver",
+]
+# `cargo build --release` at the workspace root builds the two binary
+# crates: the CUDA solver driver (binary: `ppf-contact-solver`, package:
+# `ppf-cts-solver`) and the tokio-based solver host (`ppf-cts-server`).
+# build-win-native/build.bat and the Linux build paths both rely on
+# `cargo build --release` at root producing both binaries in
+# `target/release/`. ppf-cts-core and ppf-cts-formats are libraries
+# (built transitively as deps); ppf-cts-py is a PyO3 cdylib that needs
+# `maturin develop --release` from `crates/ppf-cts-py/` to install the
+# wheel into the active Python venv. See `build-all.sh` at the repo
+# root for one-shot.
+default-members = [
+    "crates/ppf-cts-solver",
+    "crates/ppf-cts-server",
+]
+# eigsys/eig-rust stays on its own (separate Cargo.toml outside this
+# workspace) because its nalgebra major version diverges from ours and
+# pulling it in would force a coordinated bump. The explicit `exclude`
+# stops cargo's auto-discovery from ever folding it back in.
+exclude = ["eigsys/eig-rust"]
+
+[workspace.package]
 version = "0.1.0"
 edition = "2021"
+license = "Apache-2.0"
 
-[dependencies]
-libc = "0.2.142"
-serde = "1.0"
-bincode = "1.3.3"
-flate2 = "1.0.25"
-log4rs = "1.2.0"
+[workspace.dependencies]
+# Pinned here so every workspace crate uses identical versions.
+serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0.95"
+# CBOR codec. ciborium replaces the abandoned serde_cbor (last
+# release 2021); both produce CBOR-spec bytes so the Python cbor2
+# 6.x consumer accepts either. We use the unified Value type for
+# opaque pass-through fields and into_writer / from_reader for the
+# typed envelope round-trip.
+ciborium = "0.2"
+bincode = "1.3.3"
+nalgebra = { version = "0.33", features = ["serde-serialize"] }
+ndarray = "0.16"
+rayon = "1.10"
+tokio = { version = "1.40", features = ["full"] }
+tokio-util = { version = "0.7", features = ["rt"] }
 log = "0.4"
-nalgebra = { version = "0.32", features = ["serde-serialize"] }
-more-asserts = "0.2.2"
-clap = { version = "3.1.12", features = ["derive"] }
-bytemuck = "1.13.1"
-rand = "0.9.3"
-git_info = "^0.1.2"
-rayon = "1.5.3"
-toml = "0.8.19"
-chrono = "0.4"
+log4rs = "1.2"
+thiserror = "1.0"
+anyhow = "1.0"
 
-[build-dependencies]
-num_cpus = "1.16.0"
+[workspace.lints.clippy]
+# Keep the clippy noise actionable. We don't enable
+# `unsafe_op_in_unsafe_fn` because PyO3 0.22's `#[pyfunction]` macro
+# expands to internal `unsafe` calls without `unsafe {}` blocks,
+# producing one warning per binding (~600+ false positives). Re-enable
+# after PyO3 catches up to the Rust 2024 idiom.
+needless_pass_by_value = "warn"
+redundant_clone = "warn"
+uninlined_format_args = "warn"
 
-[features]
-default = []
-# CUDA-free build path used by the debug test rig. Skips the C++/CUDA
-# library compile in build.rs and stubs the extern "C" kernel calls in
-# backend.rs with Rust-side kinematics. Lets us exercise the real Rust
-# pipeline (encoder roundtrip, constraint construction, vert_*.bin
-# format, frame timing) on hosts without CUDA. See blender_addon/debug/
-# TEST_RIG.md for the fidelity test that uses this.
-emulated = []
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"

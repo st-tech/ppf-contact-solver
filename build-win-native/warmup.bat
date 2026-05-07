@@ -295,6 +295,70 @@ if errorlevel 1 (
 )
 
 REM ============================================================
+REM Install Full Python (with libs\python3.lib + include\) via NuGet
+REM ============================================================
+REM
+REM The embedded Python distribution from python.org strips libs/ and
+REM include/, so it can't be used as the maturin interpreter for the
+REM PyO3 wheel: PyO3's link step needs python3.lib, which only ships
+REM with the dev-headers payload of a regular CPython install.
+REM
+REM Pull a fully portable CPython via the official NuGet `python`
+REM package (https://www.nuget.org/packages/python). Unlike the
+REM python.org MSI installer, NuGet's package writes nothing to the
+REM Windows registry, py launcher, or %LOCALAPPDATA%\Programs\Python
+REM — it's a self-contained zip that lands at <out>\python\tools\
+REM with python.exe + libs\python3.lib + include\Python.h alongside.
+REM We move tools\ to python_full\ and it's purely a build-time tool
+REM here; bundle.bat does NOT include python_full\ in dist (only the
+REM stripped embedded python\ ships with releases).
+set PYTHON_FULL_DIR=%BUILD_WIN%\python_full
+set PYTHON_FULL=%PYTHON_FULL_DIR%\python.exe
+if not exist "%PYTHON_FULL%" (
+    echo === Installing Full Python 3.11.9 to %PYTHON_FULL_DIR% ^(NuGet, portable, no system pollution^) ===
+    set "NUGET_EXE=%DOWNLOADS%\nuget.exe"
+    if not exist "!NUGET_EXE!" (
+        echo Downloading nuget.exe...
+        curl.exe -fL -o "!NUGET_EXE!" "https://dist.nuget.org/win-x86-commandline/latest/nuget.exe"
+        if errorlevel 1 (
+            echo ERROR: Failed to download nuget.exe
+            exit /b 1
+        )
+    )
+    REM Stage NuGet output under nuget_tmp\ so we don't collide with
+    REM the existing embedded `python\` directory (NuGet defaults to
+    REM <out>\python\ when -ExcludeVersion is set).
+    set "NUGET_TMP=%BUILD_WIN%\nuget_tmp"
+    if exist "!NUGET_TMP!" rmdir /s /q "!NUGET_TMP!"
+    echo Running NuGet install python -Version 3.11.9...
+    "!NUGET_EXE!" install python -Version 3.11.9 -OutputDirectory "!NUGET_TMP!" -ExcludeVersion -Verbosity quiet
+    if errorlevel 1 (
+        echo ERROR: NuGet python install failed
+        exit /b 1
+    )
+    if not exist "!NUGET_TMP!\python\tools\python.exe" (
+        echo ERROR: NuGet package layout unexpected; tools\python.exe missing
+        exit /b 1
+    )
+    move "!NUGET_TMP!\python\tools" "%PYTHON_FULL_DIR%" >nul
+    if errorlevel 1 (
+        echo ERROR: Failed to move NuGet python\tools to %PYTHON_FULL_DIR%
+        exit /b 1
+    )
+    rmdir /s /q "!NUGET_TMP!"
+    if not exist "%PYTHON_FULL%" (
+        echo ERROR: NuGet python install completed but %PYTHON_FULL% not present
+        exit /b 1
+    )
+    echo Full Python installed ^(NuGet portable^).
+)
+"%PYTHON_FULL%" --version
+if errorlevel 1 (
+    echo ERROR: Full Python check failed
+    exit /b 1
+)
+
+REM ============================================================
 REM Install Portable MSVC (no admin required)
 REM Uses: https://gist.github.com/mmozeiko/7f3162ec2988e81e56d5c4e22cde9977
 REM ============================================================
@@ -354,7 +418,12 @@ if errorlevel 1 (
     REM Without a CA bundle, the verify-on-clean-instance fast-check
     REM run trips SSLCertVerificationError when an example downloads a
     REM mesh asset over HTTPS.
-    set PACKAGES=numpy numba plyfile requests certifi gdown trimesh pywavefront matplotlib tqdm pythreejs ipywidgets fast-simplification tabulate triangle
+    REM cbor2: required by frontend/_cbor_bridge_.py for the CBOR
+    REM envelope codec the addon now uses to encode meshes/params.
+    REM psutil: pulled in by frontend (BUILD_WORKER) and by the response
+    REM builder's runtime utilization probe (CPU%/RAM%) on machines
+    REM without nvidia-smi.
+    set PACKAGES=numpy numba plyfile requests certifi gdown trimesh pywavefront matplotlib tqdm pythreejs ipywidgets fast-simplification tabulate triangle cbor2 psutil
 
     REM Development tools
     set DEV_PACKAGES=ruff black isort

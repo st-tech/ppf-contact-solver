@@ -52,6 +52,18 @@ def import_module(name):
     return module
 
 
+def get_cbor2():
+    """Resolve cbor2 from ``blender_addon/lib/`` when sideloaded, falling
+    back to a plain import for the wheel-installed path (Extensions UI)
+    and standalone harnesses (pytest, build_worker.py, the test rig)."""
+    try:
+        return import_module("cbor2")
+    except (ImportError, FileNotFoundError):
+        import cbor2
+
+        return cbor2
+
+
 def module_exists(packages):
     """
     Check if a list of modules exist.

@@ -83,8 +83,8 @@ def _disconnect_on_load(*_args):
 
 def _disconnect_at_exit():
     """atexit hook: disconnect on Blender shutdown so a Windows-native
-    server.py subprocess doesn't outlive its parent and become an
-    orphan squatting on its port. Blender doesn't expose a quit_pre
+    ppf-cts-server.exe subprocess doesn't outlive its parent and become
+    an orphan squatting on its port. Blender doesn't expose a quit_pre
     handler, so atexit is the only reliable seam to drive a clean
     disconnect on exit.
     """

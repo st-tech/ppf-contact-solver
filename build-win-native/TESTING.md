@@ -43,11 +43,11 @@ From your local machine, create and transfer the source archive:
 
 ```bash
 # On your local machine (includes uncommitted changes)
-cd /home/ubuntu/dev
+cd ~/ppf-contact-solver
 zip -rq /tmp/repo.zip . -x '.git/*' -x 'target/*' -x 'build-win-native/downloads/*' \
     -x 'build-win-native/python/*' -x 'build-win-native/rust/*' -x 'build-win-native/msvc/*' \
     -x 'build-win-native/cuda/*' -x 'build-win-native/7zip/*' -x 'build-win-native/mingit/*' \
-    -x 'build-win-native/dist/*' -x 'src/cpp/build/*'
+    -x 'build-win-native/dist/*' -x 'crates/ppf-cts-solver/src/cpp/build/*'
 
 # Transfer to the build instance
 scp /tmp/repo.zip win-build:C:/source.zip
@@ -104,12 +104,21 @@ This performs:
 1. Downloads Eigen 3.4.0 (if not present)
 2. Sets up MSVC environment (from portable installation)
 3. Builds CUDA library (`libsimbackend_cuda.dll`) using nvcc directly
-4. Builds Rust binary (`ppf-contact-solver.exe`) using Cargo
+4. Builds the Rust workspace via `cargo build --release`, producing
+   `ppf-cts-server.exe` (the Rust solver host the addon spawns and
+   talks to over a CBOR socket; defined by the `ppf-cts-server`
+   crate) and `ppf-contact-solver.exe` (the CUDA solver driver
+   binary, defined by the `ppf-cts-solver` crate; binary name is
+   pinned via `[[bin]]` so launchers keep working). The library
+   crates `ppf-cts-core` (data model, state machine, numeric kernels)
+   and `ppf-cts-formats` (the CBOR wire schema shared with the addon)
+   build transitively.
 5. Creates launcher scripts
 
 Build outputs:
-- `src\cpp\build\lib\libsimbackend_cuda.dll` - CUDA backend
-- `target\release\ppf-contact-solver.exe` - Main solver binary
+- `crates\ppf-cts-solver\src\cpp\build\lib\libsimbackend_cuda.dll` - CUDA backend DLL
+- `target\release\ppf-cts-server.exe` - Rust solver host (current addon target)
+- `target\release\ppf-contact-solver.exe` - CUDA solver driver binary
 
 ### 1.5 Create the Bundle
 
@@ -119,7 +128,7 @@ bundle.bat /nopause
 ```
 
 This creates a self-contained distribution in `build-win-native\dist\` containing:
-- `target\release\ppf-contact-solver.exe` - Solver binary
+- `target\release\ppf-contact-solver.exe` - legacy CUDA driver binary (the Blender addon's `WIN_NATIVE` backend separately spawns `ppf-cts-server.exe`, which `bundle.bat` does not yet copy)
 - `bin\` - DLLs (libsimbackend_cuda.dll, cudart64_12.dll)
 - `python\` - Embedded Python environment
 - `mingit\` - MinGit for repository cloning

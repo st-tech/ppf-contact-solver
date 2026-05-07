@@ -18,7 +18,7 @@ ZOZO's Contact Solver (https://github.com/st-tech/ppf-contact-solver) is a GPU-a
 - **A solver backend.** Any one of: a solver checkout on the same machine (simplest), an SSH-reachable Linux host, a Docker container, or a Windows workstation. The solver itself requires an NVIDIA GPU with CUDA 12.x. See Connections for the full matrix and GPU requirements. The add-on is just a client and runs fine on any machine Blender runs on (including macOS).
 - **(Optional) paramiko / docker-py.** Needed only for SSH and Docker connections. You do not need to install them yourself. When you pick an SSH or Docker server type without the module present, the main panel surfaces an **Install Paramiko** / **Install Docker-Py** button that installs into the add-on's vendored `lib/` directory.
 
-NOTE: The solver binary itself is not shipped with the add-on. You build or deploy it separately at the path you point the connection at. The add-on only looks for a `server.py` entry point there.
+NOTE: The solver binary itself is not shipped with the add-on. You build or deploy it separately at the path you point the connection at. The add-on only looks for the `ppf-cts-server` binary there.
 
 ### Install the add-on
 
@@ -103,11 +103,11 @@ Before touching the add-on, lay out the two objects the sim needs: a **subdivide
 
 ### Register the objects with the add-on
 
-1. **Pick a connection type.** In the **Backend Communicator** panel, choose `Local` if the solver lives on this machine. It has the fewest moving parts. Fill **Local Path** with the solver checkout (the folder containing `server.py`) and set **Project Name** to something short. For other backends see Connections and the per-backend pages (local, ssh, docker, windows).
+1. **Pick a connection type.** In the **Backend Communicator** panel, choose `Local` if the solver lives on this machine. It has the fewest moving parts. Fill **Local Path** with the solver checkout (the folder containing the built `ppf-cts-server` binary, typically under `target/release/`) and set **Project Name** to something short. For other backends see Connections and the per-backend pages (local, ssh, docker, windows).
 
    Figure: step 1, pick **Local** from the **Type** dropdown, fill the **Path** and **Project Name** fields, then click the highlighted **Connect** button.
 
-2. **Connect, then start the server.** Click **Connect**. The status line flips to *Connected* when the handshake completes. Click **Start Server on Remote**. The add-on launches `server.py` on the remote in the background and waits up to 16 seconds for it to come up. Status advances to *Waiting for data* once the server answers.
+2. **Connect, then start the server.** Click **Connect**. The status line flips to *Connected* when the handshake completes. Click **Start Server on Remote**. The add-on launches `ppf-cts-server` on the remote in the background and waits up to 16 seconds for it to come up. Status advances to *Waiting for data* once the server answers.
 
 3. **Create the Cloth group (Shell).** In the **Dynamics Groups** panel, click **Create Group**, set **Object Type** to **Shell**, and rename it *Cloth*. Select the plane in the 3D viewport, then click **Add Selected Objects** in the group. The add-on tints the plane green (the Shell overlay color) as confirmation.
 

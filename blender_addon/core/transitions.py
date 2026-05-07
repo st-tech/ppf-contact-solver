@@ -15,6 +15,16 @@
 # The function returns a list of ``Effect`` objects that describe what the
 # system should *do* in response to the transition.  The ``EffectRunner``
 # (effect_runner.py) is responsible for actually executing them.
+#
+# This is the ADDON-side state machine operating on ``AppState`` (Phase /
+# Activity / Server / Solver as observed from the Blender side). It is
+# distinct from the SERVER-side state machine in
+# ``crates/ppf-cts-core/src/transitions/``, which operates on ``ServerState``
+# (Build / Data / Solver as tracked by the solver host). The two state
+# machines run on different processes, observe different events, and emit
+# different effect sets; they share no types and must not be merged.
+# If you change addon-visible state semantics here, also review the server
+# transitions for any cross-side invariants (e.g. handshake order).
 
 from __future__ import annotations
 
@@ -43,7 +53,6 @@ from .events import (
     FetchFailed,
     FetchMapComplete,
     FetchRequested,
-    FrameFetched,
     PollTick,
     ProgressUpdated,
     QueryRequested,
@@ -73,7 +82,6 @@ from .effects import (
     DoFetchMap,
     DoLaunchServer,
     DoLog,
-    DoPollAfter,
     DoQuery,
     DoReceiveData,
     DoRedrawUI,
@@ -270,6 +278,23 @@ def transition(state: AppState, event: Event) -> tuple[AppState, list[Effect]]:
             if state.solver in (Solver.RUNNING, Solver.STARTING, Solver.SAVING,
                                 Solver.BUILDING):
                 return state, [DoQuery()]
+            # Heartbeat probe: when we're connected but the engine
+            # thinks the server is UNKNOWN (a transient query failure
+            # during Run/Build dispatched ServerLost), let an empty
+            # background poll re-confirm liveness. _do_query only
+            # dispatches ServerLost for *user-initiated* requests, so
+            # an empty heartbeat that fails stays silent and an
+            # empty heartbeat that succeeds flips server back to
+            # RUNNING via _interpret_response. Without this branch the
+            # addon stays stuck at "Waiting for Server Start..." with
+            # a live server until the user manually disconnects and
+            # reconnects.
+            if (
+                state.phase == Phase.ONLINE
+                and state.server == Server.UNKNOWN
+                and state.activity == Activity.IDLE
+            ):
+                return state, [DoQuery()]
             return state, []
 
         # ── Build ──────────────────────────────────────────
@@ -310,6 +335,10 @@ def transition(state: AppState, event: Event) -> tuple[AppState, list[Effect]]:
                     activity=Activity.IDLE,
                     frame=0,
                     error="",
+                    # Drain up to 3 in-flight stale polls before
+                    # accepting a non-BUSY/SAVING response as a real
+                    # finish. See the post-poll guard for the rationale.
+                    starting_poll_guard=3,
                 ),
                 [DoClearAnimation(), DoClearInterrupt(),
                  DoQuery({"request": "start"})],
@@ -323,7 +352,7 @@ def transition(state: AppState, event: Event) -> tuple[AppState, list[Effect]]:
             # waiters from false-positive on the pre-save tail.
             return (
                 replace(state, solver=Solver.STARTING, progress=0.0,
-                        frame=0, error=""),
+                        frame=0, error="", starting_poll_guard=3),
                 [DoClearInterrupt(), DoQuery({"request": "resume"})],
             )
 
@@ -618,10 +647,24 @@ def _interpret_response(
     """
     effects: list[Effect] = []
 
-    # Empty response means server is not running
+    # Empty response means we lost contact with the server. Treat the
+    # same as ServerLost: clear solver and any in-flight activity so
+    # the UI doesn't sit in ABORTING / BUILDING / SENDING forever after
+    # the server stops responding mid-operation. The previous form set
+    # only ``server=Server.UNKNOWN`` and left activity alone, which
+    # surfaced as "Status: Aborting…" stuck indefinitely after a
+    # mid-simulation server crash or kill.
     if not r:
         return (
-            replace(state, server=Server.UNKNOWN),
+            replace(
+                state,
+                server=Server.UNKNOWN,
+                solver=Solver.NO_DATA,
+                activity=Activity.IDLE,
+                progress=0.0,
+                message="",
+                active_upload_id="",
+            ),
             [DoLog("Empty server response.")],
         )
 
@@ -660,14 +703,23 @@ def _interpret_response(
     info_msg = r.get("info", "")
     root = r.get("root", state.remote_root)
     frame = int(r.get("frame", 0))
+    # ``initialized`` reflects whether the running solver has finished
+    # its in-process initialize() call (the server flips it on observing
+    # ``initialize_finish.txt``). When true we promote the local solver
+    # state to RUNNING immediately rather than waiting for the first
+    # advance to complete, so the status banner does not sit at
+    # "Initializing" for the entire first frame under heavy contact load.
+    # Defaults to False so a server that does not report the field falls
+    # back to the frame-based check below.
+    initialized = bool(r.get("initialized", False))
     # Only accept progress from the response when the solver is active;
     # stale/zero values from idle responses would flicker the progress bar.
     raw_progress = r.get("progress")
     progress = float(raw_progress) if raw_progress and raw_progress > 0 else None
 
-    # Error-only response: server.py's handle_text_command exception path
+    # Error-only response: the server's error-only response path
     # sends ``{error, protocol_version, upload_id: "", status: ""}``.
-    # This is NOT a status update — the server hit an unexpected failure
+    # This is NOT a status update; the server hit an unexpected failure
     # (e.g. select_project raised on a malformed project dir) and is
     # reporting it out-of-band. Surface the error and preserve current
     # solver/activity so the client doesn't misinterpret an empty status
@@ -690,7 +742,11 @@ def _interpret_response(
 
     # Determine solver phase from server status string
     if status_str == "BUSY":
-        solver = Solver.RUNNING if frame >= 1 else Solver.STARTING
+        solver = (
+            Solver.RUNNING
+            if initialized or frame >= 1
+            else Solver.STARTING
+        )
     elif status_str == "SAVE_AND_QUIT":
         solver = Solver.SAVING
     elif status_str in _STATUS_MAP:
@@ -723,17 +779,37 @@ def _interpret_response(
     # plus ``solver in (READY, RESUMABLE)`` as "run done" fires too
     # early — the bl_chain_reconnect (applied=9, total=0) regression.
     #
-    # We discard such polls. The legitimate ways out of STARTING are:
+    # We discard such polls only while ``starting_poll_guard > 0``
+    # (decremented per poll, seeded to 3 by RunRequested /
+    # ResumeRequested). After the guard drains, accept the response
+    # so a fast-finish run — solver advances BUSY → READY between two
+    # addon polls — surfaces as READY/RESUMABLE instead of getting
+    # locked at STARTING+frame=0 forever (the bl_pin_* regressions).
+    #
+    # Legitimate non-stale exits out of STARTING:
     #   - ``status="BUSY"`` (server is working) → solver advances.
     #   - SAVE_AND_QUIT request mid-start → solver=SAVING.
     #   - explicit ``error`` (start rejected) → honor the downgrade.
-    # Anything else while STARTING is the stale-poll race; preserve
-    # STARTING and frame=0 until the next poll/response advances us.
+    # The guard fires only when the response is none of those AND we
+    # still have stale polls to drain.
     if state.solver == Solver.STARTING \
             and solver not in (Solver.STARTING, Solver.RUNNING, Solver.SAVING) \
-            and not error_msg:
+            and not error_msg \
+            and state.starting_poll_guard > 0:
         solver = Solver.STARTING
         frame = 0
+        # Decrement so the next stale poll inches the counter down to
+        # zero; once drained, the next non-BUSY/SAVING poll exits
+        # STARTING normally.
+        starting_poll_guard_after = state.starting_poll_guard - 1
+    else:
+        # Any other path out of STARTING (or any transition while not
+        # in STARTING) clears the counter so a future RunRequested
+        # starts with a fresh drain budget.
+        starting_poll_guard_after = (
+            0 if state.solver != Solver.STARTING or solver != Solver.STARTING
+            else state.starting_poll_guard
+        )
 
     # Log error and mark as failed when server reports an error.
     #
@@ -865,6 +941,7 @@ def _interpret_response(
             progress=0.0,
             frame=frame,
             version_ok=True,
+            starting_poll_guard=starting_poll_guard_after,
         )
         return new_state, effects
 
@@ -889,6 +966,7 @@ def _interpret_response(
         server_data_hash=server_data_hash,
         server_param_hash=server_param_hash,
         active_upload_id=new_active_upload_id,
+        starting_poll_guard=starting_poll_guard_after,
     )
 
     return new_state, effects

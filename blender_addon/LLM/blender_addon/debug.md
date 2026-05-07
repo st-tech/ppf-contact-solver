@@ -87,7 +87,7 @@ The `exec` path goes through MCP's `run_python_script` tool if available and fal
 
 `use_shell=True` evaluates the command through the remote side's default shell (pipes, glob expansion, environment variables). Set `use_shell=False` only when the command is a single executable with explicit argv and you want to skip shell interpolation for safety.
 
-The companion `execute_server_command(server_script)` is a **narrower** tool: it runs a server-side Python/solver script the remote `server.py` already understands, rather than a free-form shell command, so it is the right entry point for anything the server itself exposes as a subcommand. Use `execute_shell_command` when you need the host shell, `execute_server_command` when the solver already has a built-in for it.
+The companion `execute_server_command(server_script)` is a **narrower** tool: it sends a `--key value` argument string as a TCMD query to the running `ppf-cts-server` (the same wire path that drives Build / Run / Fetch), rather than a free-form shell command, so it is the right entry point for anything the server already exposes as a subcommand on its TCMD surface. Use `execute_shell_command` when you need the host shell, `execute_server_command` when the solver already has a built-in for it.
 
 Both tools need an active, non-busy connection (see Connections: backends) and fail fast if the server is mid-transfer or mid-run.
 

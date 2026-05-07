@@ -4,24 +4,22 @@
 # License: Apache v2.0
 #
 # MCP handlers for scene-level setup: invisible colliders, merge pairs,
-# and snap-to-vertices.  Thin adapters over ``core.mutation.service``:
-# validate input via schema, translate ``MutationError`` into
-# ``MCPError``, return a result dict.  All business logic and locking
-# is in the service; this file is a one-line-per-call translation.
-
-from typing import Optional
+# and snap-to-vertices.  Thin adapters over ``core.mutation``: validate
+# input via schema, translate ``MutationError`` into ``MCPError``,
+# return a result dict.  All business logic and locking is in the
+# mutation module; this file is a one-line-per-call translation.
 
 import bpy  # pyright: ignore
 
 from ..decorators import MCPError, mcp_handler
-from ...core.mutation import MutationError, service
+from ...core import mutation
 
 
 def _call(fn, *args, **kwargs):
-    """Run a MutationService call, surfacing MutationError as MCPError."""
+    """Run a core.mutation call, surfacing MutationError as MCPError."""
     try:
         return fn(*args, **kwargs)
-    except MutationError as e:
+    except mutation.MutationError as e:
         raise MCPError(str(e))
 
 
@@ -38,7 +36,7 @@ def add_invisible_wall(position: list[float], normal: list[float]):
         position: Wall origin in Blender world space [x, y, z].
         normal: Outward-facing normal vector [x, y, z].
     """
-    _call(service.add_invisible_wall, position, normal)
+    _call(mutation.add_invisible_wall, position, normal)
     return "Invisible wall added"
 
 
@@ -57,7 +55,7 @@ def add_invisible_sphere(
         invert: If true, acts as an inverted sphere (contact from inside).
         hemisphere: If true, only the upper half acts as a collider.
     """
-    _call(service.add_invisible_sphere, position, radius, invert=invert, hemisphere=hemisphere)
+    _call(mutation.add_invisible_sphere, position, radius, invert=invert, hemisphere=hemisphere)
     return "Invisible sphere added"
 
 
@@ -107,7 +105,7 @@ def remove_invisible_collider(index: int):
 @mcp_handler
 def clear_invisible_colliders():
     """Remove every invisible collider from the scene."""
-    _call(service.clear_invisible_colliders)
+    _call(mutation.clear_invisible_colliders)
     return "All invisible colliders cleared"
 
 
@@ -143,7 +141,7 @@ def add_merge_pair(object_a: str, object_b: str):
     """
     name_a, uuid_a = _resolve_name_to_uuid(object_a)
     name_b, uuid_b = _resolve_name_to_uuid(object_b)
-    _call(service.add_merge_pair, name_a, name_b)
+    _call(mutation.add_merge_pair, name_a, name_b)
     return {
         "message": f"Merge pair added: {name_a} <-> {name_b}",
         "object_a": name_a,
@@ -163,7 +161,7 @@ def remove_merge_pair(object_a: str, object_b: str):
     """
     name_a, uuid_a = _resolve_name_to_uuid(object_a)
     name_b, uuid_b = _resolve_name_to_uuid(object_b)
-    _call(service.remove_merge_pair, name_a, name_b)
+    _call(mutation.remove_merge_pair, name_a, name_b)
     return {
         "message": f"Merge pair removed: {name_a} <-> {name_b}",
         "object_a": name_a,
@@ -193,7 +191,7 @@ def list_merge_pairs():
 @mcp_handler
 def clear_merge_pairs():
     """Remove every merge pair from the scene."""
-    _call(service.clear_merge_pairs)
+    _call(mutation.clear_merge_pairs)
     return "All merge pairs cleared"
 
 
@@ -212,7 +210,7 @@ def snap_to_vertices(object_a: str, object_b: str):
     """
     name_a, uuid_a = _resolve_name_to_uuid(object_a)
     name_b, uuid_b = _resolve_name_to_uuid(object_b)
-    _call(service.snap_to_vertices, name_a, name_b)
+    _call(mutation.snap_to_vertices, name_a, name_b)
     return {
         "message": f"Snapped {name_a} to {name_b}",
         "object_a": name_a,

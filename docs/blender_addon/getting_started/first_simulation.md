@@ -33,7 +33,7 @@ a static collider for it to drape over.
 3. **Add the cloth plane, well clear of the sphere.** **Add → Mesh →
    Plane**, scale it up (or pass `size=2.4` in the redo panel), and
    move it up along **Z** so it sits **above** the sphere with a clear
-   gap; a few centimetres is plenty. The solver rejects self-
+   gap; a few centimeters is plenty. The solver rejects self-
    intersecting rest geometry, so the plane must not touch the sphere
    in frame 1.
 
@@ -77,8 +77,8 @@ a static collider for it to drape over.
 1. **Pick a connection type.** In the **Backend Communicator** panel,
    choose `Local` if the solver lives on this machine. It has the
    fewest moving parts. Fill **Path** with the solver checkout (the
-   folder containing `server.py`) and set **Project
-   Name** to something short. For other backends see
+   folder whose `target/release/` contains `ppf-cts-server`) and set
+   **Project Name** to something short. For other backends see
    [Connections](../connections/index.md) and the per-backend pages
    ([local](../connections/local.md), [ssh](../connections/ssh.md),
    [docker](../connections/docker.md),
@@ -94,11 +94,13 @@ a static collider for it to drape over.
    ```
 
 2. **Connect, then start the server.** Click **Connect**. The status
-   line flips to *Waiting for Server Start...* when the handshake
+   line changes to *Waiting for Server Start...* when the handshake
    completes. Click **Start Server on Remote**. The add-on launches
-   `server.py` on the remote in the background and waits up to 60
-   seconds for it to come up. Status advances to *Waiting for Data*
-   once the server answers.
+   `ppf-cts-server` on the remote in the background and waits for it
+   to answer. Status advances to *Waiting for Data* once the server
+   responds. If the port is already in use, the add-on auto-attaches
+   to the existing `ppf-cts-server` process; if a foreign process owns
+   it, click **Force Terminate Process** to release the port.
 
 3. **Create the Cloth group (Shell).** In the **Dynamics Groups**
    panel, click **Create Group**, set **Object Type** to **Shell**, and
@@ -139,17 +141,20 @@ a static collider for it to drape over.
 
 5. **Transfer.** In the **Solver** panel, click **Transfer**. This
    encodes the mesh and parameters, uploads both, and triggers the
-   remote **build** stage. The status line walks through *Uploading
-   Mesh Data, Uploading Parameters, Building, Ready*.
+   remote build stage. The status line advances through
+   *Uploading scene...*, *Building Scene...*, then *Ready to Run*.
 
-6. **Run.** Click **Run**. The status flips to *Simulation Running...*.
-   Realtime statistics appear; an **Abort** button lets you stop it
-   early. Frames are fetched incrementally as they complete.
+6. **Run.** Click **Run**. The status reads *Initializing...* while
+   the solver populates its in-process state, then changes to
+   *Simulation Running...* once the server reports it has finished
+   initialization. Realtime statistics appear, and a **Terminate**
+   button stops the run early. Frames are fetched incrementally as
+   they complete.
 
    :::{note}
    If **Run** is grayed out and you see *Clear local animation before
    running*, click **Clear Local Animation** first. Previous simulation
-   output lingers on the objects until you do.
+   output stays attached to the objects until you do.
    :::
 
 7. **Fetch and play back.** When the sim finishes, click **Fetch All

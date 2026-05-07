@@ -1,14 +1,14 @@
 # Integrations: MCP and Python API
 
-This document condenses the Blender add-on integration surfaces: the bundled MCP Streamable HTTP server (for external agents and automation), rules for MCP-driven scene setup, and the in-Blender `zozo_contact_solver` Python module. All three are sibling entry points that land on the same validation layer and share the same transport to `server.py`.
+This document condenses the Blender add-on integration surfaces: the bundled MCP Streamable HTTP server (for external agents and automation), rules for MCP-driven scene setup, and the addon's Python API exposed as `bl_ext.user_default.ppf_contact_solver.ops.api`. All three are sibling entry points that land on the same validation layer and share the same transport to `ppf-cts-server`.
 
 ## MCP server
 
 The add-on bundles a Model Context Protocol (https://modelcontextprotocol.io/) server that exposes nearly every operation (connecting to hosts, creating groups, running a simulation, capturing the viewport, running arbitrary Python) as MCP tools. External agents (Claude Desktop, IDE plugins, automation scripts, CI runners) drive Blender and the solver through a Streamable HTTP JSON-RPC surface instead of scripting the UI.
 
-Layered block diagram of entry points: AI agents/automation, the human operator in the Blender sidebar, and the Python user all land on three protocol surfaces (the MCP Streamable HTTP server on localhost:9633 with a "localhost only, do not expose" warning; Blender operators by `bl_idname`; and the `zozo_contact_solver` Python module which forwards unknown attributes to the matching operator). All three funnel into a shared add-on core at `scene.zozo_contact_solver` where pins, merges, colliders, and every scene mutation run through the same validation. A single wide transport row represents the five connection types (Local, SSH, Docker, Docker over SSH, Windows Native), feeding into `server.py :PORT`.
+Layered block diagram of entry points: AI agents/automation, the human operator in the Blender sidebar, and the Python user all land on three protocol surfaces (the MCP Streamable HTTP server on localhost:9633 with a "localhost only, do not expose" warning; Blender operators by `bl_idname`; and the addon's Python API at `bl_ext.user_default.ppf_contact_solver.ops.api`, which forwards unknown attributes to the matching operator). All three funnel into a shared add-on core at `scene.zozo_contact_solver` where pins, merges, colliders, and every scene mutation run through the same validation. A single wide transport row represents the five connection types (Local, SSH, Docker, Docker over SSH, Windows Native), feeding into `ppf-cts-server :PORT`.
 
-The MCP server sits beside two sibling entry points: the Blender sidebar and the `zozo_contact_solver` Python module. All three cover the same surface, land on the same validation layer, and share the same transport to `server.py`. An agent calling `tools/call` hits the same operator a human hits by clicking the button. The "localhost only" pill on the MCP box is the single security boundary this stack relies on; see Security below.
+The MCP server sits beside two sibling entry points: the Blender sidebar and the addon's Python API exposed as `bl_ext.user_default.ppf_contact_solver.ops.api`. All three cover the same surface, land on the same validation layer, and share the same transport to `ppf-cts-server`. An agent calling `tools/call` hits the same operator a human hits by clicking the button. The "localhost only" pill on the MCP box is the single security boundary this stack relies on; see Security below.
 
 ### What MCP gives you
 
@@ -410,10 +410,10 @@ TIP: This section is a tutorial-style walkthrough. For the full method-by-method
 ### Import
 
 ```python
-from zozo_contact_solver import solver
+from bl_ext.user_default.ppf_contact_solver.ops.api import solver
 ```
 
-The add-on publishes the `zozo_contact_solver` package at registration time, so this import works regardless of where the add-on lives on disk. Every example below assumes it is already imported.
+The add-on registers its operators under the `bl_ext.user_default.ppf_contact_solver` extension namespace, so this import works regardless of where the add-on lives on disk. Every example below assumes it is already imported.
 
 ### Scene parameters
 

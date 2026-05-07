@@ -24,9 +24,11 @@ jobs:
 
     env:
       # Blender 5.x headless build used only for `--command extension`.
-      # Pin to a specific patch release; bump when needed.
-      BLENDER_SERIES: "5.0"
-      BLENDER_VERSION: "5.0.0"
+      # Pinned to match blender.yml's BLENDER_VERSION so the release zip
+      # is built and validated against the exact Blender ABI the rig
+      # exercises. Bump in lockstep with blender.yml when needed.
+      BLENDER_SERIES: "5.1"
+      BLENDER_VERSION: "5.1.1"
 
     steps:
       - name: Checkout repository
@@ -89,6 +91,14 @@ jobs:
           test -f staged-addon/blender_manifest.toml
           echo "Staged contents:"
           find staged-addon -maxdepth 2 -mindepth 1 | sort
+
+      - name: Fetch addon wheels into staged source
+        # Pulls cbor2 wheels from PyPI into the staged tree before the
+        # zip is built. The wheels are gitignored so `git archive` above
+        # didn't ship them; `blender_manifest.toml` references them by
+        # path, and the published extension would fail to enable
+        # without them present in the zip.
+        run: python3 staged-addon/wheels/fetch.py
 
       - name: Build extension zip
         run: |

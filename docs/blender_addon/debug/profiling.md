@@ -137,7 +137,7 @@ top = next(
     None,
 )
 if top is None:
-    raise RuntimeError("ppf-contact-solver addon does not appear to be loaded")
+    raise RuntimeError("ppf_contact_solver addon does not appear to be loaded")
 
 perf = importlib.import_module(top + ".ui.perf")
 perf.enable()

@@ -342,7 +342,7 @@ transfer, but do require `update_params()` before the solver actually
 sees the new values on the next run.
 
 ```python
-from zozo_contact_solver import solver
+from bl_ext.user_default.ppf_contact_solver.ops.api import solver
 
 solver.param.gravity = (0, 0, -9.8)
 solver.param.frame_count = 180

@@ -20,7 +20,8 @@
 :::{note}
 The solver binary itself is not shipped with the add-on. You build or deploy
 it separately at the path you point the connection at. The add-on only looks
-for a `server.py` entry point there.
+for the `ppf-cts-server` binary (`ppf-cts-server.exe` on Windows Native) at
+that path.
 :::
 
 ## Install the Add-on

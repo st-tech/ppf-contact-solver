@@ -3,6 +3,12 @@ run-name: Docker Build
 
 on:
   workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run (build + smoke-test only, do not push)'
+        required: true
+        type: boolean
+        default: false
 
 env:
   REGISTRY: ghcr.io
@@ -39,4 +45,14 @@ jobs:
           ${{ env.REGISTRY }}/${{ github.repository }}-compiled:latest \
           /bin/sh -c "cd /root/ppf-contact-solver && /root/.local/share/ppf-cts/venv/bin/python warmup.py fast_check && /root/.local/share/ppf-cts/venv/bin/python warmup.py clear_all"
     - name: Push Compiled Image
+      # Skipped on dry runs and on any *-private repo: the private
+      # mirror runs this workflow to validate the build + smoke tests
+      # end-to-end without publishing, so only the public repo writes
+      # the latest tag to GHCR.
+      if: ${{ !inputs.dry_run && !endsWith(github.repository, '-private') }}
       run: docker push ${{ env.REGISTRY }}/${{ github.repository }}-compiled:latest
+    - name: Push skipped (private repo)
+      if: ${{ endsWith(github.repository, '-private') }}
+      run: |
+        echo "Push skipped: ${{ github.repository }} ends with '-private'."
+        echo "Build + smoke tests passed; the public repo handles GHCR publishing."

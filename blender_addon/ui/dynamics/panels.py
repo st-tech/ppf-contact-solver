@@ -11,7 +11,7 @@ from bpy.types import Panel  # pyright: ignore
 
 from ...core.utils import get_category_name
 from ...models.groups import get_addon_data, has_addon_data, pair_supports_cross_stitch
-from ..state import decode_vertex_group_identifier, iterate_active_object_groups
+from ..state import iterate_active_object_groups
 from .utils import get_assigned_by_selection_uuid
 
 # Icons by ObjectGroup.object_type — hoisted out of DYNAMICS_PT_Groups.draw

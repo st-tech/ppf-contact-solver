@@ -69,14 +69,24 @@ detect_version_from_binary() {
     | sed -nE 's/^Blender ([0-9]+)\.([0-9]+).*/\1.\2/p'
 }
 
-BLENDER_VERSION="$(detect_version_from_existing || true)"
-if [ -z "$BLENDER_VERSION" ] && [ -n "${PPF_BLENDER_BIN:-}" ]; then
+# Prefer the version a real binary reports when PPF_BLENDER_BIN is
+# set: a stale `<version>/` directory left over from an earlier setup
+# (e.g. 5.0/ when only 5.1 is now installed) would otherwise win the
+# scan and the addon would land in the wrong tree. Without
+# PPF_BLENDER_BIN, fall back to the newest version dir under
+# `BLENDER_BASE` so an interactive install (Blender already booted at
+# least once) keeps working.
+BLENDER_VERSION=""
+if [ -n "${PPF_BLENDER_BIN:-}" ]; then
   BLENDER_VERSION="$(detect_version_from_binary "$PPF_BLENDER_BIN" || true)"
   if [ -z "$BLENDER_VERSION" ]; then
     echo "Could not parse version from PPF_BLENDER_BIN=$PPF_BLENDER_BIN"
     exit 1
   fi
-  echo "Cold-start: derived Blender version $BLENDER_VERSION from $PPF_BLENDER_BIN"
+  echo "Using Blender version $BLENDER_VERSION (from PPF_BLENDER_BIN)"
+fi
+if [ -z "$BLENDER_VERSION" ]; then
+  BLENDER_VERSION="$(detect_version_from_existing || true)"
 fi
 
 if [ -z "$BLENDER_VERSION" ]; then
@@ -125,6 +135,24 @@ if [ "$UNINSTALL" = true ]; then
   fi
   exit 0
 fi
+
+# Fetch the cbor2 wheels declared in blender_manifest.toml. They are
+# gitignored; without them Blender will refuse to enable the extension
+# because the wheel paths in the manifest won't resolve. fetch.py is
+# idempotent: re-runs are no-ops when the local files already match
+# the pinned sha256 digests.
+PYTHON_BIN="${PPF_PYTHON_BIN:-}"
+if [ -z "$PYTHON_BIN" ]; then
+  if command -v python3 >/dev/null 2>&1; then
+    PYTHON_BIN=python3
+  elif command -v python >/dev/null 2>&1; then
+    PYTHON_BIN=python
+  else
+    echo "ERROR: no python3/python found in PATH (needed by blender_addon/wheels/fetch.py)"
+    exit 1
+  fi
+fi
+"$PYTHON_BIN" "$ADDON_SOURCE/wheels/fetch.py"
 
 mkdir -p "$EXT_DIR"
 

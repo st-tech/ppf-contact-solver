@@ -3,14 +3,10 @@
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
 # License: Apache v2.0
 #
-# This module re-exports the event-driven CommunicatorFacade as the
-# ``communicator`` singleton.  All operator and UI code imports from here
-# and sees the same API as before — no import changes needed anywhere.
-#
-# The old 1200-line Communicator class with its _process_task() loop,
-# _update_status() polling, and manual lock management has been removed.
-# State transitions now go through the pure transition() function
-# (core/transitions.py), tested with 49 unit tests.
+# Re-exports the event-driven ``CommunicatorFacade`` as the ``communicator``
+# singleton, plus the helpers operators and UI code call directly. State
+# transitions go through the pure ``transition()`` function in
+# ``core/transitions.py``.
 
 import os
 
@@ -40,7 +36,7 @@ from .status import (
     ConnectionInfo,
     RemoteStatus,
 )
-from .utils import inv_world_matrix
+from .transform import inv_world_matrix
 
 
 def _apply_matrix_np(mat, positions):
@@ -252,6 +248,16 @@ def _write_mesh_frame_to_pc2(obj, map_vert, blender_frame, n_verts_override=None
 # apply_animation — called from main-thread timer
 # ---------------------------------------------------------------------------
 
+# Per-tick cap on apply work during a "Fetch All" batch. The FramePump
+# modal fires every 0.1s; processing one frame per tick lets the main
+# thread yield between frames so tag_redraw can paint and the progress
+# bar advances visibly. Without a cap the worker thread refills the
+# queue as fast as the consumer drains it and the loop never exits,
+# blocking redraws for the entire fetch. Live sim (total==0) bypasses
+# this cap to drain everything inline and avoid viewport flicker.
+_BATCH_FRAMES_PER_TICK = 1
+
+
 def _get_curve_cv_count(obj):
     """Return total CV count for a curve in Blender's modifier layout."""
     total = 0
@@ -308,17 +314,24 @@ def _apply_single_frame(context, n, vert, map_by_uuid, surface_map_by_uuid,
         _validate_mesh_mapping(uid, obj, map, surface_map, vert)
         if surface_map is not None:
             # Frame-embedding reconstruction: p' = x0' + c1*b1' + c2*b2' + c3*n̂'.
-            # Preserves the original vertex's absolute normal offset from the
-            # tet triangle — the pure-barycentric combination (c1*v1+...) drops
-            # that offset and causes subtle shrinkage after simulation.
+            # The surface_map's coefs were computed on the local-space tet
+            # produced by fTetWild, so c3 is in local-space length units.
+            # Convert each triangle corner to local space FIRST, then apply
+            # the formula; otherwise non-uniform world scales (Blender object
+            # scale != 1) make `c3 * n̂_world` use a unit normal in world
+            # while c3 still carries local units, producing a constant
+            # rest-pose offset that surfaces as a sharp surface jump on the
+            # first fetched frame (PC2 frame 0 is gap-filled with the actual
+            # rest mesh, hiding the rest-pose error; frame 1 onward expose
+            # it).
             tri_indices_arr, coefs_arr, surf_tri_arr = surface_map
             n_verts = len(obj.data.vertices)
             ti = numpy.asarray(tri_indices_arr[:n_verts])
             c = numpy.asarray(coefs_arr[:n_verts], dtype=numpy.float64)
             tris = numpy.asarray(surf_tri_arr)[ti]
-            v0 = vert[map[tris[:, 0]]]
-            v1 = vert[map[tris[:, 1]]]
-            v2 = vert[map[tris[:, 2]]]
+            v0 = _apply_matrix_np(mat, vert[map[tris[:, 0]]])
+            v1 = _apply_matrix_np(mat, vert[map[tris[:, 1]]])
+            v2 = _apply_matrix_np(mat, vert[map[tris[:, 2]]])
             b1 = v1 - v0
             b2 = v2 - v0
             n = numpy.cross(b1, b2)
@@ -329,13 +342,12 @@ def _apply_single_frame(context, n, vert, map_by_uuid, surface_map_by_uuid,
             inv_nlen = numpy.zeros_like(n_sq)
             inv_nlen[safe] = 1.0 / numpy.sqrt(n_sq[safe])
             n_hat = n * inv_nlen[:, None]
-            interpolated = (
+            map_vert = (
                 v0
                 + c[:, 0:1] * b1
                 + c[:, 1:2] * b2
                 + c[:, 2:3] * n_hat
             )
-            map_vert = _apply_matrix_np(mat, interpolated)
         else:
             n_verts = len(obj.data.vertices)
             map_vert = _apply_matrix_np(mat, vert[map[:n_verts]])
@@ -414,16 +426,21 @@ def heal_mesh_caches_if_stale():
 
 
 def apply_animation():
-    """Drain every queued animation frame, writing vertex/CV data to PC2.
+    """Drain queued animation frames, writing vertex/CV data to PC2.
 
     One call handles both live simulation (``total==0``) and batch fetch
-    (``total>0``) — the only difference is which events get dispatched
-    at the end:
+    (``total>0``):
 
-    - During batch fetch: dispatch ``ProgressUpdated(0.5 + 0.5*applied/total)``
-      so the progress bar fills 0.5 → 1.0 across ticks, and
-      ``AllFramesApplied`` on full drain.
-    - During live sim: no events dispatched; frames flow as they arrive.
+    - During batch fetch: apply at most ``_BATCH_FRAMES_PER_TICK`` frames
+      then yield, so the FramePump modal can return PASS_THROUGH and the
+      progress bar repaint between ticks. Without this cap the worker
+      thread refills the queue as fast as the consumer drains it and
+      the main thread stays inside this function for the entire fetch,
+      blocking redraws. Dispatches
+      ``ProgressUpdated(0.5 + 0.5*applied/total)`` so the bar fills
+      0.5 → 1.0 across ticks, and ``AllFramesApplied`` on full drain.
+    - During live sim: drain everything in one call to avoid viewport
+      flicker; no progress events dispatched (frames flow as they arrive).
 
     Must be driven from PPF_OT_FramePump.modal (a modal-operator timer
     context) — Blender 5.x denies the State / modifier / scene.frame_*
@@ -446,6 +463,7 @@ def apply_animation():
         # call) cannot make the timeline go backward, which surfaced as
         # ``advanced_first10: [3, 2, 4, ...]`` on macOS CI.
         first_apply_in_run = len(state.fetched_frame) == 0
+        applied_this_tick = 0
 
         while True:
             frame, map_by_uuid, surface_map_by_uuid, applied, total = (
@@ -500,6 +518,12 @@ def apply_animation():
             )
             max_blender_frame = max(max_blender_frame, bf)
             state.add_fetched_frame(n)
+            applied_this_tick += 1
+            # Yield the main thread between batches during a Fetch All
+            # so the progress bar can repaint. Live sim (total==0) keeps
+            # draining to avoid viewport flicker.
+            if total > 0 and applied_this_tick >= _BATCH_FRAMES_PER_TICK:
+                break
 
         if max_blender_frame > 0:
             context.scene.frame_start = 1

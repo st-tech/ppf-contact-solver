@@ -5,7 +5,6 @@
 
 import hashlib
 import json
-import pickle
 
 import bpy  # pyright: ignore
 import numpy as np
@@ -195,6 +194,14 @@ def _encode_group_params(context, groups, state, fps):
             model = group.solid_model
         elif group.object_type == "SHELL":
             model = group.shell_model
+            # Stable NeoHookean is a volumetric model; the UI dropped
+            # it from the SHELL picker. A `.blend` saved before that
+            # change can still hold the old enum value, in which case
+            # Blender keeps it on the property even though the items
+            # list no longer offers it. Coerce to ARAP so the upload
+            # carries a model the solver can build a SHELL group with.
+            if model == "STABLE_NEOHOOKEAN":
+                model = "ARAP"
         elif group.object_type == "ROD":
             model = group.rod_model
         else:
@@ -414,13 +421,13 @@ def _encode_cross_stitch(context):
 
 
 def _build_param_dict(context) -> dict:
-    """Assemble the parameter dict that ``encode_param`` pickles.
+    """Assemble the parameter dict that ``encode_param`` serializes.
 
-    Factored out so ``compute_param_hash`` can derive a stable
-    fingerprint from the same source-of-truth dict without paying
-    the pickle cost. Both call sites must see identical content; the
-    "Update Params" button's enabled state depends on the fingerprint
-    matching what the server computed on the last upload.
+    Factored out so ``compute_param_hash`` and ``encode_param_with_hash``
+    can derive a stable fingerprint from the same source-of-truth dict.
+    Both call sites must see identical content; the "Update Params"
+    button's enabled state depends on the fingerprint matching what the
+    server computed on the last upload.
     """
     scene = context.scene
     state = get_addon_data(scene).state
@@ -459,50 +466,33 @@ def _build_param_dict(context) -> dict:
 
 
 def encode_param(context) -> bytes:
-    return pickle.dumps(_build_param_dict(context))
+    # CBOR envelope on the wire. See blender_addon/core/encoder/cbor_encode.py.
+    from .cbor_encode import dumps_envelope
+    return dumps_envelope("Param", _build_param_dict(context))
 
 
-def _canonicalize_for_hash(value):
-    """Walk the param dict and produce a hash-stable tree.
+def encode_param_with_hash(context) -> tuple[bytes, str]:
+    """Encode the param tree and hash the encoded bytes in one pass.
 
-    - dict: emit (key, value) pairs sorted by key after recursive
-      canonicalization of values. This is what makes the hash
-      independent of dict insertion order.
-    - tuple / list: recurse element-wise. We deliberately do NOT
-      collapse tuples and lists into the same shape; the encoder uses
-      tuples for fixed-arity vec3 / quat fields and lists for
-      variable-length keyframe streams, and a change between the two
-      should count as a real edit.
-    - bytes: hex-encode so json.dumps doesn't refuse them.
-    - numpy scalar / ndarray: cast to plain Python types for stable
-      reprs across numpy versions.
-    - everything else (int, float, bool, str, None): emit as-is.
+    Avoids the build-twice cost of ``encode_param`` + ``compute_param_hash``
+    and the canonical-JSON walk that dominated runtime on scenes with
+    large keyframe streams. ``_build_param_dict`` produces a fixed
+    dict-insertion order and ``cbor2.dumps`` preserves it, so the
+    SHA-256 of the bytes is stable across runs.
     """
-    if isinstance(value, dict):
-        return [(k, _canonicalize_for_hash(value[k])) for k in sorted(value)]
-    if isinstance(value, tuple):
-        return ("__t__", [_canonicalize_for_hash(v) for v in value])
-    if isinstance(value, list):
-        return [_canonicalize_for_hash(v) for v in value]
-    if isinstance(value, (bytes, bytearray)):
-        return value.hex()
-    if isinstance(value, np.ndarray):
-        return _canonicalize_for_hash(value.tolist())
-    if isinstance(value, np.generic):
-        return value.item()
-    return value
+    from .cbor_encode import dumps_envelope
+    tree = _build_param_dict(context)
+    encoded = dumps_envelope("Param", tree)
+    return encoded, hashlib.sha256(encoded).hexdigest()
 
 
 def compute_param_hash(context) -> str:
     """Stable hash of the current parameter set.
 
-    Returns a hex-encoded SHA-256 over a canonical (sorted-keys,
-    tuple/list-aware) JSON serialization of ``_build_param_dict``.
-    Quick: skips pickling entirely. Same hash means the upload would
-    produce a byte-identical ``param.pickle`` modulo dict insertion
-    order (which encode_param's source happens to fix today, but the
-    hash doesn't depend on that).
+    Hashes the same CBOR bytes that ``encode_param`` produces, so the
+    upload-time hash and the click-time drift hash always agree.
     """
-    canonical = _canonicalize_for_hash(_build_param_dict(context))
-    payload = json.dumps(canonical, separators=(",", ":")).encode()
-    return hashlib.sha256(payload).hexdigest()
+    from .cbor_encode import dumps_envelope
+    return hashlib.sha256(
+        dumps_envelope("Param", _build_param_dict(context))
+    ).hexdigest()

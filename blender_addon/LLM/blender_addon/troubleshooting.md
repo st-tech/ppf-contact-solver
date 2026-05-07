@@ -1,6 +1,6 @@
 # Troubleshooting
 
-This file condenses `docs/blender_addon/troubleshooting.md` into a self-contained lookup of common errors, grouped by subject. Each entry is a short `You see / Why / Fix` triple. Status strings in quotes are exact copies of what the panel shows; backticks mark log lines from the Blender system console or remote `server.log` / `progress.log`.
+This file condenses `docs/blender_addon/troubleshooting.md` into a self-contained lookup of common errors, grouped by subject. Each entry is a short `You see / Why / Fix` triple. Status strings in quotes are exact copies of what the panel shows; backticks mark log lines from the Blender system console or the remote `server.log` / `progress.log` files written by `ppf-cts-server`.
 
 ## Installation and Dependencies
 
@@ -18,16 +18,16 @@ This file condenses `docs/blender_addon/troubleshooting.md` into a self-containe
 
 ## Connection: Local
 
-### "Remote path not found (.../server.py)"
+### "Remote path not found (.../ppf-cts-server)"
 
 - You see: this in the status line after **Connect**.
-- Why: the path does not contain `server.py`.
-- Fix: point **Local Path** at the checkout root, not a `build/` or `src/` subdirectory.
+- Why: the path does not contain the built `ppf-cts-server` binary.
+- Fix: point **Local Path** at the checkout root that has `target/release/ppf-cts-server`, not a `src/` subdirectory.
 
 ### Port already in use
 
 - You see: **Start Server** fails, log shows the port is taken.
-- Why: a stale `server.py` from an earlier session, or another solver, is still bound.
+- Why: a stale `ppf-cts-server` process from an earlier session, or another solver, is still bound.
 - Fix: click **Stop Server** first, or change **Server Port**. On the host, `ss -tlnp | grep <port>` names the process.
 
 ## Connection: SSH / SSH Command
@@ -84,19 +84,19 @@ Note: the add-on accepts unknown host keys silently (paramiko `AutoAddPolicy`). 
 
 - You see: this error at connect time on the Windows Native backend.
 - Why: the path field is blank.
-- Fix: set **Win Native Path** to the solver root (the directory that contains `server.py`, not its parent).
+- Fix: set **Win Native Path** to the solver root (the directory that contains the `ppf-cts-server.exe` binary, either at the root for bundle layouts or under `target\release\` for dev builds).
 
-### server.py not found under the solver root
+### ppf-cts-server.exe not found under the solver root
 
 - You see: connect fails immediately with this path in the message.
 - Why: the root points one level too high or too low.
-- Fix: verify the directory contains `server.py`. On dev host `win-build` that is `C:\ppf-contact-solver`.
+- Fix: verify the directory contains `ppf-cts-server.exe` (under `target\release\` for dev builds, at the root for bundle layouts).
 
 ### "Embedded Python not found"
 
-- You see: connect fails after `server.py` is located.
+- You see: connect fails after `ppf-cts-server.exe` is located.
 - Why: neither the dev layout (`build-win-native\python\python.exe`) nor the bundle layout (`python\python.exe`) resolved.
-- Fix: rebuild the dev tree, or download and unpack the shipped bundle zip next to `server.py`.
+- Fix: rebuild the dev tree, or download and unpack the shipped bundle zip next to `ppf-cts-server.exe`.
 
 ### CUDA DLL load errors
 
@@ -125,14 +125,14 @@ Note: **Save** overwrites the currently selected entry and rewrites the whole fi
 ### Status stuck on "Waiting for server start..."
 
 - You see: status never advances past this string.
-- Why: you connected but have not clicked **Start Server**, or `server.py` exited before finishing boot.
+- Why: you connected but have not clicked **Start Server**, or `ppf-cts-server` exited before finishing boot.
 - Fix: click **Start Server**. If it then times out, see next entry.
 
 ### "Server startup timed out."
 
 - You see: this plus the last 20 lines of `server.log` pasted into the panel.
 - Why: 16 seconds elapsed without the server writing a ready-marker, and no `ERROR` or `FAILED` line appeared.
-- Fix: tail `progress.log` and `server.log` on the remote. Usual causes: missing venv at `$HOME/.local/share/ppf-cts/venv`, missing CUDA driver, port collision on the bound port, corrupted checkout.
+- Fix: tail `progress.log` and `server.log` on the remote. Usual causes: missing CUDA driver, port collision on the bound port, corrupted checkout, or a missing build worker Python at `$HOME/.local/share/ppf-cts/venv`.
 
 ### "Server startup failed" with a log line
 
@@ -143,20 +143,20 @@ Note: **Save** overwrites the currently selected entry and rewrites the whole fi
 ### "Failed to launch server"
 
 - You see: launch never reaches the wait phase.
-- Why: the generated shell script did not start (permission denied, read-only working directory, missing `python3`).
-- Fix: check the remote path is writable (the script writes `server.log` and a PID file there) and `python3` resolves via the venv or on `$PATH`.
+- Why: the generated shell script did not start (permission denied, read-only working directory, missing or unbuilt `ppf-cts-server` binary).
+- Fix: check the remote path is writable (the script writes `server.log` and a PID file there) and confirm `target/release/ppf-cts-server` exists and is executable on the remote.
 
 ### Status: "Protocol version mismatch"
 
 - You see: this exact status.
-- Why: the server reports a wire version other than `0.02`.
+- Why: the server reports a wire version other than `0.04`.
 - Fix: rebuild the solver from a revision that matches the add-on, or update the add-on.
 
-### "Remote path not found (.../server.py)."
+### "Remote path not found (.../ppf-cts-server)."
 
 - You see: this message the instant **Connect** returns.
-- Why: post-connect path check found no `server.py` at the configured directory.
-- Fix: fix **Remote Path** / **Local Path** / **Docker Path** / **Win Native Path** to point at the directory that actually contains `server.py`.
+- Why: post-connect path check found no `ppf-cts-server` binary at the configured directory.
+- Fix: fix **Remote Path** / **Local Path** / **Docker Path** / **Win Native Path** to point at the directory that actually contains the built `ppf-cts-server` binary (typically the checkout root with `target/release/ppf-cts-server`).
 
 ## Scene Setup: Object Groups
 

@@ -9,7 +9,7 @@ import time
 
 import numpy as np
 
-from .._bvh_ import compute_frame_mapping, interpolate_surface
+from .._bvh_ import frame_mapping, interpolate_surface
 
 
 def _create_test_mesh(n_verts_per_side: int = 10):
@@ -42,7 +42,7 @@ def test_basic_functionality():
     verts, tris = _create_test_mesh(5)
     query_points = verts.copy()
 
-    tri_indices, coefs = compute_frame_mapping(query_points, verts, tris)
+    tri_indices, coefs = frame_mapping(query_points, verts, tris)
 
     # A vertex that lies on the tet surface has zero normal offset.
     max_c3 = np.abs(coefs[:, 2]).max()
@@ -69,7 +69,7 @@ def test_round_trip_offset():
     query_points = verts.copy()
     query_points[:, 2] += rng.uniform(-0.05, 0.05, size=len(verts))
 
-    tri_indices, coefs = compute_frame_mapping(query_points, verts, tris)
+    tri_indices, coefs = frame_mapping(query_points, verts, tris)
     interpolated = interpolate_surface(verts, tris, tri_indices, coefs)
     max_error = np.abs(interpolated - query_points).max()
     assert max_error < 1e-9, f"Off-surface round-trip error: {max_error}"
@@ -87,7 +87,7 @@ def test_rigid_motion():
     query_points = verts.copy()
     query_points[:, 2] += rng.uniform(-0.05, 0.05, size=len(verts))
 
-    tri_indices, coefs = compute_frame_mapping(query_points, verts, tris)
+    tri_indices, coefs = frame_mapping(query_points, verts, tris)
 
     # Rigid: 30deg rot about z, then translate.
     th = np.pi / 6
@@ -137,7 +137,7 @@ def test_shrink_regression():
     query_points = verts.copy()
     query_points[:, 2] += offset  # pure normal offset on a flat mesh
 
-    tri_indices, coefs = compute_frame_mapping(query_points, verts, tris)
+    tri_indices, coefs = frame_mapping(query_points, verts, tris)
 
     # c3 should equal the offset exactly (normal is +z, unit-length).
     assert np.allclose(coefs[:, 2], offset, atol=1e-12), (
@@ -172,7 +172,7 @@ def test_degenerate_triangle():
     tris = np.array([[0, 1, 2]], dtype=np.int32)
     query = np.array([[0.5, 0.3, 0.1]], dtype=np.float64)
 
-    tri_idx, coefs = compute_frame_mapping(query, verts, tris)
+    tri_idx, coefs = frame_mapping(query, verts, tris)
     assert np.all(np.isfinite(coefs)), "NaN/inf in degenerate coefs"
     assert np.allclose(coefs, 0.0), f"Degenerate coefs should be zero, got {coefs}"
 
@@ -195,10 +195,10 @@ def test_performance():
     query_points[:, 2] = query_points[:, 2] * 0.4 - 0.1
 
     # Warm-up
-    _ = compute_frame_mapping(query_points[:10], verts, tris)
+    _ = frame_mapping(query_points[:10], verts, tris)
 
     t0 = time.perf_counter()
-    tri_indices, coefs = compute_frame_mapping(query_points, verts, tris)
+    tri_indices, coefs = frame_mapping(query_points, verts, tris)
     t1 = time.perf_counter()
 
     print(f"    Mapping {n_queries} points: {(t1-t0)*1000:.2f}ms")
@@ -219,13 +219,13 @@ def test_edge_cases():
 
     # Point at vertex: round-trip exact.
     query = np.array([[0, 0, 0]], dtype=np.float64)
-    tri_idx, coefs = compute_frame_mapping(query, verts, tris)
+    tri_idx, coefs = frame_mapping(query, verts, tris)
     interpolated = interpolate_surface(verts, tris, tri_idx, coefs)
     assert np.allclose(interpolated[0], [0, 0, 0]), "Wrong interpolation at vertex"
 
     # Point above triangle plane: c3 should equal the normal-distance.
     query = np.array([[0.25, 0.25, 0.1]], dtype=np.float64)
-    tri_idx, coefs = compute_frame_mapping(query, verts, tris)
+    tri_idx, coefs = frame_mapping(query, verts, tris)
     assert abs(coefs[0, 2] - 0.1) < 1e-12, (
         f"Expected c3=0.1 for point 0.1 above xy-plane, got {coefs[0, 2]}"
     )
@@ -233,7 +233,7 @@ def test_edge_cases():
     # Point outside triangle (in-plane): the in-plane coords extrapolate,
     # and the round-trip is exact on the rest mesh.
     query = np.array([[2.0, 2.0, 0.0]], dtype=np.float64)
-    tri_idx, coefs = compute_frame_mapping(query, verts, tris)
+    tri_idx, coefs = frame_mapping(query, verts, tris)
     interpolated = interpolate_surface(verts, tris, tri_idx, coefs)
     assert np.allclose(interpolated[0], query[0]), (
         f"Extrapolation round-trip failed: {interpolated[0]}"
@@ -253,7 +253,7 @@ def test_deformation():
     rng = np.random.default_rng(3)
     new_verts = orig_verts + rng.standard_normal(orig_verts.shape) * 0.01
 
-    tri_indices, coefs = compute_frame_mapping(orig_verts, new_verts, tris)
+    tri_indices, coefs = frame_mapping(orig_verts, new_verts, tris)
 
     deformed_new = new_verts.copy()
     deformed_new[:, 2] += 0.5
@@ -264,6 +264,88 @@ def test_deformation():
     assert abs(z_diff - 0.5) < 0.1, f"Unexpected Z displacement: {z_diff}"
 
     print("    Deformation interpolation: PASS")
+
+
+def test_non_uniform_world_scale():
+    """Coefs computed in local space MUST be applied in local space.
+
+    The Blender addon calls ``interpolate_surface`` (or its inline numpy
+    twin) with simulator-output verts that live in solver-world space:
+    ``world = matrix_world @ local`` where ``matrix_world`` may have a
+    non-uniform 3x3 (each Blender object can be scaled independently
+    along x/y/z, e.g. (0.331, 0.090, 0.163)). The frame embedding stores
+    ``c3`` in local-length units; reconstructing with world-space
+    triangle corners feeds the formula ``v0_w + c1*b1_w + c2*b2_w +
+    c3*n̂_w`` where ``n̂_w`` is a unit normal in world space, but ``c3``
+    is still in local units. The result is a constant rest-pose offset
+    that surfaces as a sharp first-frame surface jump (PC2 frame 0 is
+    gap-filled with the actual rest mesh, hiding the rest-pose error
+    until frame 1 arrives).
+
+    The fix is to apply the inverse world matrix to each triangle
+    corner before running the formula, so the entire reconstruction
+    happens in local space, matching the units the coefs were stored
+    in. This test asserts both directions: world-space reconstruction
+    is wrong under non-uniform scale, and local-space reconstruction
+    recovers the original Blender vertex exactly.
+    """
+    print("  Testing non-uniform world scale handling...")
+
+    # Local-space tet (a flat mesh; some Blender verts sit slightly off
+    # the surface so c3 != 0).
+    verts_local, tris = _create_flat_mesh(6)
+    rng = np.random.default_rng(7)
+    query_local = verts_local.copy()
+    query_local[:, 2] += rng.uniform(-0.1, 0.1, size=len(verts_local))
+
+    # Coefs computed against local tet (same as the production path).
+    tri_indices, coefs = frame_mapping(query_local, verts_local, tris)
+
+    # Non-uniform world transform with a Y/Z axis swap (mimics Blender's
+    # ZupToYup * matrix_world for an object with scale (0.33, 0.09, 0.16)
+    # and a translation).
+    L = np.array([
+        [0.33, 0.0, 0.0],
+        [0.0, 0.0, 0.16],
+        [0.0, -0.09, 0.0],
+    ])
+    t = np.array([0.0, 0.74, 0.14])
+    verts_world = verts_local @ L.T + t
+
+    inv_L = np.linalg.inv(L)
+    inv_t = -inv_L @ t
+
+    # Wrong path: feed world verts through interpolate_surface, then
+    # apply inv-world to convert the world reconstruction back to local.
+    rec_world = interpolate_surface(verts_world, tris, tri_indices, coefs)
+    rec_local_via_world = rec_world @ inv_L.T + inv_t
+    err_world_path = np.abs(rec_local_via_world - query_local).max()
+
+    # Right path: convert world tet verts to local space first, then
+    # reconstruct directly in local. This is what the addon's apply
+    # path now does.
+    verts_local_back = verts_world @ inv_L.T + inv_t
+    rec_local = interpolate_surface(verts_local_back, tris, tri_indices, coefs)
+    err_local_path = np.abs(rec_local - query_local).max()
+
+    # The wrong path must fail visibly under non-uniform scale (the
+    # smallest scale 0.09 amplifies c3 by ~11x). The right path must
+    # round-trip to numerical precision.
+    assert err_world_path > 0.01, (
+        f"Non-uniform-scale regression: world-path error {err_world_path} "
+        "should be substantial; if this is small the test mesh isn't "
+        "exercising c3 properly."
+    )
+    assert err_local_path < 1e-6, (
+        f"Local-path reconstruction error too large: {err_local_path}"
+    )
+
+    print(
+        f"    World-path err (expected large): {err_world_path:.4f}: PASS"
+    )
+    print(
+        f"    Local-path err (expected ~0):    {err_local_path:.2e}: PASS"
+    )
 
 
 def run_tests() -> bool:
@@ -281,6 +363,7 @@ def run_tests() -> bool:
         test_performance()
         test_edge_cases()
         test_deformation()
+        test_non_uniform_world_scale()
         print("\nAll BVH tests PASSED!")
         return True
     except AssertionError as e:

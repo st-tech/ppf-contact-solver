@@ -24,7 +24,7 @@ test_data = None
 
 
 class DEBUG_OT_ExecuteServer(AsyncOperator):
-    """Execute the server.py script."""
+    """Send a query through the solver server."""
 
     bl_idname = "debug.execute_server"
     bl_label = "Exec Command via Server"
@@ -205,7 +205,7 @@ class DEBUG_OT_TransferWithoutBuild(TransferRequestMixin, AsyncOperator):
                 data, param, data_hash, param_hash = prepare_upload(context)
             except ValueError as e:
                 self.report({"ERROR"}, str(e))
-                com.error = str(e)
+                com.set_error(str(e))
                 redraw_all_areas(context)
                 return {"CANCELLED"}
             com.upload_only(
@@ -250,7 +250,7 @@ class DEBUG_OT_TransferWithoutBuild(TransferRequestMixin, AsyncOperator):
                     data, param, data_hash, param_hash = prepare_upload(context)
                 except ValueError as e:
                     self.report({"ERROR"}, str(e))
-                    com.error = str(e)
+                    com.set_error(str(e))
                     self.cleanup_modal(context)
                     redraw_all_areas(context)
                     return {"CANCELLED"}

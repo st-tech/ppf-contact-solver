@@ -56,6 +56,7 @@ import os
 
 from . import _driver_lib as dl
 from . import _runner as r
+from . import REPO_ROOT_POSIX
 
 
 NEEDS_BLENDER = True
@@ -115,8 +116,8 @@ try:
     pc2_mod = __import__(pkg + ".core.pc2",
                          fromlist=["object_pc2_key", "get_pc2_path",
                                    "MODIFIER_NAME", "_curve_cache"])
-    api_mod = __import__(pkg + ".ops.api",
-                         fromlist=["_raw_create_pin"])
+    mutation_mod = __import__(pkg + ".core.mutation",
+                              fromlist=["_raw_create_pin"])
 
     # =========================================================
     # Subtest A: MESH bake uses shape keys
@@ -302,7 +303,7 @@ try:
     bpy.context.view_layer.objects.active = curve_obj
     bpy.ops.object.add_objects_to_group(group_index=rod_group_index)
 
-    api_mod._raw_create_pin(rod_group._uuid, curve_obj.name, "AllPin")
+    mutation_mod._raw_create_pin(rod_group._uuid, curve_obj.name, "AllPin")
 
     data_bytes_b, param_bytes_b = dh.encode_payload()
     dh.connect_local(local_path=LOCAL_PATH, server_port=SERVER_PORT,
@@ -459,9 +460,7 @@ _DRIVER_TEMPLATE = dl.DRIVER_LIB + _DRIVER_BODY
 
 
 def build_driver(ctx: r.ScenarioContext) -> str:
-    repo_root = os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "..", "..", "..")
-    )
+    repo_root = REPO_ROOT_POSIX
     return (
         _DRIVER_TEMPLATE
         .replace("<<LOCAL_PATH>>", repo_root)

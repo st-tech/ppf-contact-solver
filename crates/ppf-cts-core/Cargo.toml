@@ -1,0 +1,49 @@
+# File: crates/ppf-cts-core/Cargo.toml
+# Code: Claude Code
+# Review: Ryoichi Ando (ryoichi.ando@zozo.com)
+# License: Apache v2.0
+#
+# Pure data model + state machine + numeric kernels. No PyO3, no tokio,
+# no I/O; those live in ppf-cts-py and ppf-cts-server respectively.
+# This crate must be testable on its own with `cargo test -p
+# ppf-cts-core` so the algorithmic core stays decoupled from the
+# binding and runtime layers.
+
+[package]
+name = "ppf-cts-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+nalgebra.workspace = true
+ndarray.workspace = true
+rayon.workspace = true
+thiserror.workspace = true
+tokio-util.workspace = true
+sysinfo = { version = "0.32", default-features = false, features = ["system"] }
+wide = "0.7"
+
+[dev-dependencies]
+tempfile = "3.13"
+criterion = "0.5"
+proptest = "1"
+
+[features]
+default = []
+# Workspace-level source of truth for the `emulated` flag. The root
+# `ppf-contact-solver` crate gates its C++/CUDA build path on it, and
+# `ppf-cts-server` gates the in-process kinematic emulator path on it.
+# Both crates declare `emulated = ["ppf-cts-core/emulated"]` so a single
+# toggle here cascades everywhere; this prevents the two definitions
+# from drifting out of sync. Defining it here is useful even though
+# ppf-cts-core has no `#[cfg(feature = "emulated")]` of its own today.
+emulated = []
+
+[[bench]]
+name = "rasterizer"
+harness = false
+
+[lints]
+workspace = true

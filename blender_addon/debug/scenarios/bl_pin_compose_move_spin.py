@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 from . import _pin_fidelity_common as _common
-from . import _runner as r
 
 NEEDS_BLENDER = True
 

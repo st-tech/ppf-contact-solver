@@ -94,12 +94,10 @@ def build_chain_driver(ctx, *, project_name, mesh_name, sequence):
     mesh name (so concurrent workers don't collide on object names),
     and the sequence of step keys."""
     import json
-    import os
     from . import _driver_lib as _dl
+    from . import REPO_ROOT_POSIX
 
-    repo_root = os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "..", "..", "..")
-    )
+    repo_root = REPO_ROOT_POSIX
     body = _CHAIN_DRIVER_TEMPLATE
     body = body.replace("<<LOCAL_PATH>>", repo_root)
     body = body.replace("<<SERVER_PORT>>", str(ctx.server_port))
@@ -321,19 +319,23 @@ def step_clear_animation(h):
 
 def step_save_and_quit(h):
     h.dh.com.run()
-    saw_running = False
-    save_dispatched = False
+    # Dispatch save_and_quit immediately after run(): a fast CUDA sim
+    # can finish in well under one addon poll interval (~200ms), so a
+    # gate like "wait until s.frame >= 1 then dispatch" loses the
+    # race and the solver completes before the save_and_quit file is
+    # ever written. The save_and_quit path is exercised regardless of
+    # which frame the solver happens to be on when it picks up the
+    # sentinel: the resulting state_<n>.bin.gz captures whatever
+    # frame index the solver had reached, and the resume leg in the
+    # follow-up step picks up from that checkpoint.
+    h.dh.facade.engine.dispatch(h.dh.events.SaveAndQuitRequested())
+    save_dispatched = True
     deadline = time.time() + 90.0
     while time.time() < deadline:
         h.dh.facade.engine.dispatch(h.dh.events.PollTick())
         h.dh.facade.tick()
         s = h.dh.facade.engine.state
-        if s.solver.name == "RUNNING":
-            saw_running = True
-        if saw_running and not save_dispatched and s.frame >= 1:
-            h.dh.facade.engine.dispatch(h.dh.events.SaveAndQuitRequested())
-            save_dispatched = True
-        if save_dispatched and s.solver.name in ("RESUMABLE", "FAILED"):
+        if s.solver.name in ("RESUMABLE", "FAILED"):
             break
         time.sleep(0.2)
     assert save_dispatched
@@ -382,11 +384,20 @@ def step_abort_midbuild(h):
 
 
 def step_abort_during_run(h):
-    # Run-time abort: kick a run, dispatch AbortRequested while solver
-    # is RUNNING, settle to IDLE.
+    # Run-time abort: kick a run, dispatch AbortRequested immediately,
+    # settle to IDLE. Same fast-finish race as save_and_quit: a CUDA
+    # sim that completes inside one addon poll interval would never
+    # be observed in RUNNING (the bounded stale-poll guard accepts the
+    # next non-BUSY response), and a `saw_running == True` gate would
+    # sit through the full 60s deadline waiting for a state the addon
+    # never enters. Dispatching AbortRequested right after run() still
+    # exercises the abort path: the server processes the abort whether
+    # the solver is mid-run or already finished, and the addon's
+    # activity transitions to IDLE either way.
     h.dh.com.run()
     saw_running = False
-    aborted = False
+    h.dh.facade.engine.dispatch(h.dh.events.AbortRequested())
+    aborted = True
     deadline = time.time() + 60.0
     while time.time() < deadline:
         h.dh.facade.engine.dispatch(h.dh.events.PollTick())
@@ -394,10 +405,7 @@ def step_abort_during_run(h):
         s = h.dh.facade.engine.state
         if s.solver.name == "RUNNING":
             saw_running = True
-        if saw_running and not aborted:
-            h.dh.facade.engine.dispatch(h.dh.events.AbortRequested())
-            aborted = True
-        if aborted and s.activity.name == "IDLE":
+        if s.activity.name == "IDLE":
             break
         time.sleep(0.1)
     assert aborted

@@ -5,7 +5,6 @@
 
 import hashlib
 import json
-import pickle
 
 import bpy  # pyright: ignore
 import numpy as np
@@ -463,21 +462,39 @@ def _encode_obj_inner(context, scene, state, data, curr_frame):
 
 
 def encode_obj(context) -> bytes:
-    return pickle.dumps(_build_obj_data(context, persist_topology_hash=True))
+    # Producer emits CBOR with the schema-version envelope from
+    # crates/ppf-cts-formats/src/envelope.rs. The on-disk filename
+    # stays `data.pickle` for back-compat with existing project layouts.
+    from .cbor_encode import dumps_envelope
+    return dumps_envelope("Scene", _build_obj_data(context, persist_topology_hash=True))
+
+
+def encode_obj_with_hash(context) -> tuple[bytes, str]:
+    """Encode the scene data tree and hash the encoded bytes in one pass.
+
+    Builds ``_build_obj_data`` once, encodes to CBOR, and computes the
+    SHA-256 of the resulting bytes. Cheaper than calling ``encode_obj``
+    plus ``compute_data_hash`` because the data tree is built only once
+    and the hash runs on the already-produced wire bytes (vs pickling
+    the tree a second time). The on-wire bytes are deterministic
+    because ``_build_obj_data`` produces a fixed dict-insertion order
+    and ``cbor2.dumps`` preserves that order.
+    """
+    from .cbor_encode import dumps_envelope
+    tree = _build_obj_data(context, persist_topology_hash=True)
+    encoded = dumps_envelope("Scene", tree)
+    return encoded, hashlib.sha256(encoded).hexdigest()
 
 
 def compute_data_hash(context) -> str:
     """SHA-256 fingerprint of the encoded scene data.
 
-    Pickle-derived because the data tree carries large numpy vertex
-    arrays; canonicalizing those through the json route the param hash
-    uses would dominate the runtime. Pickle output is deterministic for
-    fixed dict-insertion order and stable numpy versions, which the
-    encoder maintains.
-
+    Hashes the same CBOR bytes that ``encode_obj`` produces, so the
+    upload-time hash and the click-time drift hash always agree.
     Side-effect-free: does NOT stamp ``state.mesh_hash_json`` (only the
     upload path should do that). Raises ``ValueError`` for the same
     duplicate-assignment / encoding errors ``encode_obj`` raises.
     """
-    data = _build_obj_data(context, persist_topology_hash=False)
-    return hashlib.sha256(pickle.dumps(data, protocol=4)).hexdigest()
+    from .cbor_encode import dumps_envelope
+    tree = _build_obj_data(context, persist_topology_hash=False)
+    return hashlib.sha256(dumps_envelope("Scene", tree)).hexdigest()

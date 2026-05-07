@@ -46,6 +46,7 @@ import os
 
 from . import _driver_lib as dl
 from . import _runner as r
+from . import REPO_ROOT_POSIX
 
 
 NEEDS_BLENDER = True
@@ -115,7 +116,10 @@ try:
         s = dh.facade.engine.state
         if s.solver.name == "RUNNING":
             saw_running = True
-        if saw_running and s.solver.name in ("FAILED", "READY", "RESUMABLE"):
+        # Drop the saw_running gate: a sub-second CUDA run can transition
+        # STARTING -> FAILED/READY between two addon polls and never be
+        # observed in RUNNING. Break on any terminal state directly.
+        if s.solver.name in ("FAILED", "READY", "RESUMABLE"):
             break
         time.sleep(0.2)
     final_solver = dh.facade.engine.state.solver.name
@@ -232,9 +236,7 @@ def _resolve_fail_at_frame(ctx: r.ScenarioContext) -> int:
 
 
 def build_driver(ctx: r.ScenarioContext) -> str:
-    repo_root = os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "..", "..", "..")
-    )
+    repo_root = REPO_ROOT_POSIX
     return (
         _DRIVER_TEMPLATE
         .replace("<<LOCAL_PATH>>", repo_root)

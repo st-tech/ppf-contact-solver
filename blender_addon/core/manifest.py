@@ -195,7 +195,6 @@ def _collect_active_uuids() -> set[str]:
     import bpy  # pyright: ignore
     try:
         from ..models.groups import (
-            get_addon_data,
             has_addon_data,
             iterate_active_object_groups,
         )
@@ -215,9 +214,8 @@ def _collect_active_uuids() -> set[str]:
 def _current_addon_version() -> str:
     """Addon version as a dotted string (e.g. '1.0.0'), or '' on failure.
 
-    Reads the manifest TOML at the addon root. We don't fall back to the
-    legacy bl_info dict, since the manifest is the source of truth in
-    Blender 5+.
+    Reads the manifest TOML at the addon root, which is the source of
+    truth for the addon version under Blender 5+.
     """
     try:
         import tomllib  # Python 3.11+, ships with Blender 5

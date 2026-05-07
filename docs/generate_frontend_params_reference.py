@@ -6,13 +6,15 @@ Emits three auto-generated pages under ``docs/jupyterlab_api/``:
 * ``simulation_parameters.rst`` from :func:`frontend._param_.app_param`
 * ``material_parameters.rst`` from :func:`frontend._param_.object_param`
 * ``log_channels.rst`` from the ``//``-comment blocks parsed out of
-  ``src/`` ``.cu`` / ``.rs`` sources by
+  ``crates/`` ``.cu`` / ``.rs`` / ``.cpp`` sources by
   :meth:`frontend._parse_.CppRustDocStringParser.get_logging_docstrings`
 
-The two ``_param_.py`` / ``_parse_.py`` modules are loaded directly via
-``importlib`` so the frontend package ``__init__`` (which pulls in numba,
-psutil, pythreejs, etc.) is never imported. Only numpy-free stdlib code
-runs here, which keeps the docs venv lean.
+Both ``_param_.py`` and ``_parse_.py`` now wrap the maturin-built
+``_ppf_cts_py`` PyO3 extension (the parameter defaults live in
+``crates/ppf-cts-core/src/datamodel/params.rs``; the log-channel scanner
+in ``crates/ppf-cts-core/src/parsers.rs``). ``docs/build.sh`` runs
+``maturin develop --release`` from ``crates/ppf-cts-py/`` into the docs
+venv before invoking this script, so the imports below resolve cleanly.
 
 Run from anywhere::
 
@@ -21,30 +23,15 @@ Run from anywhere::
 
 from __future__ import annotations
 
-import importlib.util
 import sys
-import types
 from pathlib import Path
+from types import ModuleType
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DOCS_DIR = REPO_ROOT / "docs"
 OUT_DIR = DOCS_DIR / "jupyterlab_api"
-FRONTEND_DIR = REPO_ROOT / "frontend"
-SRC_DIR = REPO_ROOT / "src"
-
-
-def _load_module(name: str, path: Path) -> types.ModuleType:
-    spec = importlib.util.spec_from_file_location(name, path)
-    if spec is None or spec.loader is None:
-        print(
-            f"generate_frontend_params_reference: cannot load {path}",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
+CRATES_DIR = REPO_ROOT / "crates"
 
 
 def _escape_rst(text: str) -> str:
@@ -66,7 +53,7 @@ def _render_param_table(name: str, rows: list[tuple[str, str]]) -> list[str]:
     return out
 
 
-def _render_global(param_mod: types.ModuleType) -> str:
+def _render_global(param_mod: ModuleType) -> str:
     params = param_mod.app_param()
     title = "⚙️ Simulation Parameters"
     lines: list[str] = [
@@ -95,7 +82,7 @@ def _render_global(param_mod: types.ModuleType) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
-def _render_objects(param_mod: types.ModuleType) -> str:
+def _render_objects(param_mod: ModuleType) -> str:
     obj_types = ("tri", "tet", "rod")
     all_params = {t: param_mod.object_param(t) for t in obj_types}
 
@@ -149,23 +136,23 @@ def _render_objects(param_mod: types.ModuleType) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
-def _render_logs(parse_mod: types.ModuleType) -> str:
-    if not SRC_DIR.is_dir():
+def _render_logs(parse_mod: ModuleType) -> str:
+    if not CRATES_DIR.is_dir():
         print(
-            f"generate_frontend_params_reference: missing src/ at {SRC_DIR}",
+            f"generate_frontend_params_reference: missing crates/ at {CRATES_DIR}",
             file=sys.stderr,
         )
         sys.exit(1)
     entries = parse_mod.CppRustDocStringParser.get_logging_docstrings(
-        str(SRC_DIR)
+        str(CRATES_DIR)
     )
     title = "📡 Log Channels"
     lines: list[str] = [
         title,
         "=" * (len(title) + 4),
         "",
-        ".. This file is auto-generated from ``src/`` ``.cu`` / ``.rs`` "
-        "sources.",
+        ".. This file is auto-generated from ``crates/`` ``.cu`` / "
+        "``.rs`` / ``.cpp`` sources.",
         ".. Regenerate via: python docs/generate_frontend_params_reference.py",
         "",
         "Named log streams emitted by the solver "
@@ -191,8 +178,21 @@ def _render_logs(parse_mod: types.ModuleType) -> str:
 
 
 def main() -> int:
-    param_mod = _load_module("_param_doc", FRONTEND_DIR / "_param_.py")
-    parse_mod = _load_module("_parse_doc", FRONTEND_DIR / "_parse_.py")
+    # Bind directly to the maturin-built `_ppf_cts_py` extension. The
+    # Python wrappers in `frontend/_param_.py` and `frontend/_parse_.py`
+    # are thin pass-throughs to these same symbols, but importing
+    # `frontend.*` here would trigger `frontend/__init__.py`, which
+    # pulls in pythreejs / numba / etc.; we don't want those weights
+    # in the docs venv. Source of truth is still the Rust crate.
+    import _ppf_cts_py as ext  # noqa: PLC0415
+
+    class param_mod:  # noqa: N801 — mimics module shape for renderers below
+        app_param = staticmethod(ext.app_param_dict)
+        object_param = staticmethod(ext.object_param_dict)
+
+    class parse_mod:  # noqa: N801
+        class CppRustDocStringParser:
+            get_logging_docstrings = staticmethod(ext.get_logging_docstrings)
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     outputs: list[tuple[Path, str]] = [

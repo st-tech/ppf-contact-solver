@@ -1,7 +1,11 @@
-# File: stack.yml
+# File: aws-template.yml
 # Code: Claude Code and Codex
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
 # License: Apache v2.0
+#
+# Per-example template. example-gen.py reads examples.txt and writes
+# one workflow file per name, substituting stack. Edit this
+# template (not the generated yamls) and re-run example-gen.py.
 
 name: stack.ipynb
 
@@ -49,6 +53,7 @@ jobs:
           echo "Branch: ${{ github.ref_name }}"
           echo "Instance Type: ${{ github.event.inputs.instance_type }}"
           echo "Region: ${{ github.event.inputs.region }}"
+          echo "Example: stack"
 
       - name: Checkout repository
         uses: actions/checkout@v5
@@ -327,7 +332,60 @@ jobs:
           echo "Running cargo build --release..."
           cargo build --release
 
+          # Build the Rust ppf-cts-server (workspace member). The
+          # line above only builds the root `ppf-contact-solver`
+          # package; ppf-cts-server is a separate workspace member.
+          # The Blender addon launcher
+          # (blender_addon/core/connection.py) looks for it under
+          # target/release/ when PPF_USE_RUST_SERVER=1 is set, so
+          # build it now and smoke-check --help.
+          echo "Running cargo build --release -p ppf-cts-server..."
+          cargo build --release -p ppf-cts-server
+          if [ ! -f target/release/ppf-cts-server ]; then
+            echo "ERROR: target/release/ppf-cts-server not found after build"
+            exit 1
+          fi
+          ./target/release/ppf-cts-server --help >/dev/null
+          echo "ppf-cts-server --help OK"
+
           echo "Cargo build completed"
+          ENDSSH
+
+          kill $TUNNEL_PID 2>/dev/null || true
+
+      - name: Build + install ppf-cts-py wheel into remote venv
+        # Mirror blender.yml's maturin step: build the PyO3 extension
+        # `_ppf_cts_py` and install it editable into the remote venv at
+        # ~/.local/share/ppf-cts/venv. Without this the frontend
+        # dispatchers fail at import time because frontend/__init__.py
+        # hard-imports `_ppf_cts_py`. warmup.py creates the venv but
+        # does not build the wheel; cargo build alone only builds the
+        # workspace target/ binaries, not the Python extension.
+        run: |
+          echo "Building and installing ppf-cts-py wheel on remote..."
+          INSTANCE_ID=$(cat /tmp/instance_id.txt)
+
+          aws ec2-instance-connect open-tunnel \
+            --instance-id "$INSTANCE_ID" \
+            --local-port 2222 &
+          TUNNEL_PID=$!
+          sleep 5
+
+          ssh -i /tmp/ec2key -p 2222 \
+            -o StrictHostKeyChecking=no \
+            -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 \
+            -o ServerAliveCountMax=10 \
+            ubuntu@localhost << 'ENDSSH'
+          set -e
+          cd ${WORKDIR}
+          source "$HOME/.cargo/env"
+          source ~/.local/share/ppf-cts/venv/bin/activate
+          pip install --upgrade maturin
+          cd crates/ppf-cts-py
+          maturin develop --release
+          python -c "import _ppf_cts_py as m; print('schema_version', m.schema_version()); print('process_name', m.process_name())"
+          echo "ppf-cts-py installed"
           ENDSSH
 
           kill $TUNNEL_PID 2>/dev/null || true

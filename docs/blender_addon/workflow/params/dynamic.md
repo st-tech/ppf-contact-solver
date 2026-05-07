@@ -140,13 +140,13 @@ tolerance, and so on) have to stay constant across the simulation.
 The same workflow is available from Python. The
 `solver.param.dyn(...)` builder drives the same dynamic-parameter list
 that the sub-panel shows. Every builder method returns `self`, so you
-chain them freely -- `time(f)` moves the cursor to frame `f` (must be
+chain them freely. `time(f)` moves the cursor to frame `f` (must be
 strictly increasing), and the next `hold()` or `change(...)` attaches a
 keyframe at that frame. For wind, `change(direction, strength=...)`
 encodes both.
 
 ```python
-from zozo_contact_solver import solver
+from bl_ext.user_default.ppf_contact_solver.ops.api import solver
 
 # Flip gravity at frame 60.
 solver.param.dyn("gravity").time(60).hold().time(61).change((0, 0, 9.8))

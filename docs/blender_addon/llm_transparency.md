@@ -38,7 +38,7 @@ verified by a semi-automated test suite that exercises it end to end.
 
 ## Code Quality and Testing
 
-Code quality is kept in check through an automated test suite, and
+Code quality is verified through an automated test suite, and
 the coding agents themselves are a significant help in writing and
 maintaining those tests. That said, exhaustively hunting down every
 edge-case bug (which would be possible with more effort) is not a

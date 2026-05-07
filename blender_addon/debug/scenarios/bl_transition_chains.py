@@ -45,6 +45,7 @@ import os
 
 from . import _driver_lib as dl
 from . import _runner as r
+from . import REPO_ROOT_POSIX
 
 
 NEEDS_BLENDER = True
@@ -205,19 +206,20 @@ try:
 
     def s08_save_and_quit_midrun():
         dh.com.run()
-        saw_running = False
-        save_dispatched = False
+        # Dispatch save_and_quit immediately after run(): a fast CUDA
+        # sim can finish in well under one poll interval (~200ms), and
+        # any gate that waits for `s.frame >= 1` would lose the race
+        # and never write the sentinel before the solver completes.
+        # The save/resume path is exercised regardless of which frame
+        # the solver had reached when it picked up the sentinel.
+        dh.facade.engine.dispatch(dh.events.SaveAndQuitRequested())
+        save_dispatched = True
         deadline = time.time() + 90.0
         while time.time() < deadline:
             dh.facade.engine.dispatch(dh.events.PollTick())
             dh.facade.tick()
             s = dh.facade.engine.state
-            if s.solver.name == "RUNNING":
-                saw_running = True
-            if saw_running and not save_dispatched and s.frame >= 1:
-                dh.facade.engine.dispatch(dh.events.SaveAndQuitRequested())
-                save_dispatched = True
-            if save_dispatched and s.solver.name in ("RESUMABLE", "FAILED"):
+            if s.solver.name in ("RESUMABLE", "FAILED"):
                 break
             time.sleep(0.2)
         assert save_dispatched, "save_and_quit was never dispatched"
@@ -384,9 +386,7 @@ _DRIVER_TEMPLATE = dl.DRIVER_LIB + _DRIVER_BODY
 
 
 def build_driver(ctx: r.ScenarioContext) -> str:
-    repo_root = os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "..", "..", "..")
-    )
+    repo_root = REPO_ROOT_POSIX
     return (
         _DRIVER_TEMPLATE
         .replace("<<LOCAL_PATH>>", repo_root)

@@ -16,16 +16,16 @@ The add-on talks to a solver process over one of several transports. Pick the on
 | **Docker over SSH Command** | Docker-over-SSH configured from a shell `ssh ...` command | Docker |
 | **Windows Native** | Solver runs as a Windows subprocess using a bundled Python + CUDA | Windows |
 
-All types share the same server-side protocol (TCP, version `0.02`) and the same UI flow in the panel: **Connect** -> **Start Server** -> transfer data -> **Run** -> **Fetch**.
+All types share the same server-side protocol (TCP, version `0.04`) and the same UI flow in the panel: **Connect** -> **Start Server** -> transfer data -> **Run** -> **Fetch**.
 
-Figure: Five stacked block diagrams showing where each piece lives for the five connection types, with blue solid arrows for lifecycle commands (start / stop / exec / port check) and purple dashed arrows for the TCP connection to `server.py`. The three Docker sub-modes are broken out separately in Docker.
+Figure: Five stacked block diagrams showing where each piece lives for the five connection types, with blue solid arrows for lifecycle commands (start / stop / exec / port check) and purple dashed arrows for the TCP connection to the solver. The three Docker sub-modes are broken out separately in Docker.
 
 ### What happens when you connect
 
 Starting a solver session is two button presses:
 
-1. **Connect** opens the transport to wherever the solver lives (a local process, an SSH session, or a Docker container) and checks that a `server.py` is actually present at the path you configured. If the check fails, the connection is dropped and an error is reported.
-2. **Start Server** launches `server.py` on the remote side and waits up to **16 seconds** for it to report that it is ready to accept work. If the server prints an error during startup, the panel reports the error immediately; if it simply never becomes ready, you get a timeout and a tail of its log.
+1. **Connect** opens the transport to wherever the solver lives (a local process, an SSH session, or a Docker container) and checks that the `ppf-cts-server` binary is actually present at the path you configured. If the check fails, the connection is dropped and an error is reported.
+2. **Start Server** launches `ppf-cts-server` on the remote side and waits up to **16 seconds** for it to report that it is ready to accept work. If the server prints an error during startup, the panel reports the error immediately; if it simply never becomes ready, you get a timeout and a tail of its log.
 
 The panel stays responsive while this happens, the actual work runs on a background thread and the UI polls it several times a second.
 
@@ -37,7 +37,7 @@ TIP: **Save the connection once it works.** As soon as you have a successful **C
 
 | Port | Role | Default |
 | ---- | ---- | ------- |
-| Server | Solver TCP listener (`server.py`) | `9090` |
+| Server | Solver TCP listener (`ppf-cts-server`) | `9090` |
 | MCP | MCP Streamable HTTP server (for AI integration) | `9633` |
 
 Only the server port crosses the transport boundary; MCP is local to the machine running Blender. The server port is configurable per connection.
@@ -52,14 +52,14 @@ The panel does not freeze while Connect or Start Server is running. Work happens
 
 **Connect step**
 
-Connect opens the configured transport (SSH session, Docker client, or a local subprocess) and verifies that `server.py` is present at the configured path. If that verification fails, the transport is torn down before the error is reported.
+Connect opens the configured transport (SSH session, Docker client, or a local subprocess) and verifies that the `ppf-cts-server` binary is present at the configured path. If that verification fails, the transport is torn down before the error is reported.
 
 **Start Server step**
 
-On Unix-family backends (Local, SSH, Docker, Docker over SSH) the add-on launches the server via a small script that activates `$HOME/.local/share/ppf-cts/venv` if it exists and then runs:
+On Unix-family backends (Local, SSH, Docker, Docker over SSH) the add-on launches the server via a small script that runs:
 
 ```sh
-nohup python3 server.py --port <port> > server.log 2>&1 &
+nohup ./target/release/ppf-cts-server --port <port> > server.log 2>&1 &
 ```
 
 The UI waits up to **16 seconds** for the server to announce it is ready. If a line containing `ERROR` or `FAILED` appears first, the wait aborts with that message; on plain timeout, the panel prints the last 20 lines of `server.log`.
@@ -87,9 +87,9 @@ The solver runs on the same **Linux** machine as Blender. This is the simplest b
 ### Setup
 
 1. Set **Server Type** to `Local`.
-2. Fill **Local Path** with the solver checkout (the directory that contains `server.py`).
+2. Fill **Local Path** with the solver checkout (the directory that contains the built `ppf-cts-server` binary, typically under `target/release/`).
 3. Set **Project Name** on the main panel.
-4. Click **Connect**. The add-on checks that `server.py` exists at the path you gave it.
+4. Click **Connect**. The add-on checks that the `ppf-cts-server` binary exists at the path you gave it.
 5. Click **Start Server**. The panel waits a few seconds for the server to report that it is ready.
 
 Figure: Backend Communicator with **Server Type** set to `Local`. Only **Path** and **Project Name** show up; no SSH, Docker, or Windows-native fields. **Connect** is highlighted.
@@ -101,7 +101,7 @@ TIP: If you ran the solver's installer, it may have created a Python virtual env
 | Field | Description |
 | ----- | ----------- |
 | Local Path | Filesystem path to the solver checkout. Default `~/ppf-contact-solver`. |
-| Server Port | TCP port for `server.py`. Default `9090`; range 1024-65535. |
+| Server Port | TCP port for `ppf-cts-server`. Default `9090`; range 1024-65535. |
 
 ### Dependencies
 
@@ -109,15 +109,15 @@ Local mode requires neither `paramiko` nor `docker-py`. The main panel's **Insta
 
 ### Troubleshooting
 
-- **"Remote path not found (.../server.py)"** - the path you entered does not contain `server.py`. Point it at the checkout root, not the `build/` or `src/` subdirectory.
+- **"Remote path not found (.../ppf-cts-server)"** - the path you entered does not contain the built `ppf-cts-server` binary. Point it at the checkout root that has `target/release/ppf-cts-server`, not the `src/` subdirectory.
 - **Server startup timed out.** - the solver launched but did not report readiness within 16 seconds. Check `server.log` inside the solver directory; the panel also prints the last 20 lines when the timeout fires.
-- **Port already in use.** - another solver (or a stale `server.py`) is already bound to the port. Click **Stop Server** first, or change the Server Port.
+- **Port already in use.** - another solver (or a stale `ppf-cts-server` process) is already bound to the port. Click **Stop Server** first, or change the Server Port.
 
 UNDER THE HOOD:
 
 **Launch script**
 
-Local mode launches the server with a bash script (`nohup`, `source .../bin/activate`, `python3`). That is the same launch path the SSH and Docker backends use. The script is `bash`-only, which is why Local mode is Linux-only; Windows goes through the Windows Native backend and macOS is not supported (the solver requires CUDA).
+Local mode launches the `ppf-cts-server` binary with a small bash script (`nohup`, then the binary). That is the same launch path the SSH and Docker backends use. The script is `bash`-only, which is why Local mode is Linux-only; Windows goes through the Windows Native backend and macOS is not supported (the solver requires CUDA).
 
 **Shared port field**
 
@@ -155,8 +155,8 @@ Figure: Backend Communicator with **Server Type** set to `SSH`. **Host**, **Port
 | Port | `22` | SSH port. |
 | Username | `""` | Remote user. Leave empty to use SSH config's `User`. |
 | Key Path | `~/.ssh/id_ed25519` or `~/.ssh/id_rsa` | Private key file. |
-| Remote Path | `/root/ppf-contact-solver` | Remote solver directory (must contain `server.py`). |
-| Server Port | `9090` | Port on the remote host where `server.py` listens. |
+| Remote Path | `/root/ppf-contact-solver` | Remote solver directory (must contain the built `ppf-cts-server` binary). |
+| Server Port | `9090` | Port on the remote host where `ppf-cts-server` listens. |
 
 Aliases from your `~/.ssh/config` are resolved automatically, including entries pulled in via `Include` directives. If the alias's config supplies a hostname, port, user, or identity file, you can leave those fields blank in the panel and they will be filled in at connect time.
 
@@ -226,7 +226,7 @@ Keep the terminal that holds the tunnel open for as long as you want the connect
 Two users on the same solver box collide on the **Server Port** (default `9090`): each Blender client expects the server it starts to be the one listening on that port. To share a box safely:
 
 - Give each user (or each concurrent project) a different **Server Port** in their connection profile (e.g. `9090`, `9091`, `9092`, ...). The server binds whatever the client asks for, so non-overlapping ports let independent simulations run side by side on one GPU.
-- Pick a distinct **Remote Path** per user as well. The remote path is where `server.py` lives *and* where the solver writes per-run data; two clients sharing a path will stomp each other's checkpoints and PC2 files.
+- Pick a distinct **Remote Path** per user as well. The remote path is where `ppf-cts-server` lives *and* where the solver writes per-run data; two clients sharing a path will stomp each other's checkpoints and PC2 files.
 - Remember the box's GPU is shared. Concurrent sims contend for VRAM and CUDA streams, so two heavy scenes on one GPU each run slower than they would alone. Stagger large runs when throughput matters.
 
 The session ID stamped on PC2 files and the remote project directory (see Sessions and recovery) keeps each client from accidentally fetching another user's frames as long as the **Remote Path** is distinct.
@@ -274,7 +274,7 @@ The solver runs inside a Docker container. Three UI modes cover the possible loc
 | **Docker over SSH** | Remote | A Docker daemon on an SSH-reachable host |
 | **Docker over SSH Command** | Remote | Same as above, SSH fields parsed from an `ssh ...` string |
 
-Figure: Two stacked block diagrams showing the Docker local topology (add-on, daemon, and container all on one workstation) and the Docker over SSH topology (add-on on the workstation, daemon and container on a remote Linux host reached through one SSH session). Blue solid arrows carry lifecycle commands; purple dashed arrows carry the TCP connection to `server.py`. The container must publish the server port in both rows.
+Figure: Two stacked block diagrams showing the Docker local topology (add-on, daemon, and container all on one workstation) and the Docker over SSH topology (add-on on the workstation, daemon and container on a remote Linux host reached through one SSH session). Blue solid arrows carry lifecycle commands; purple dashed arrows carry the TCP connection to the solver. The container must publish the server port in both rows.
 
 ### When to use it
 
@@ -286,8 +286,8 @@ Figure: Two stacked block diagrams showing the Docker local topology (add-on, da
 
 1. Set **Server Type** to `Docker`.
 2. Fill **Container** with the container name (default `ppf-dev`).
-3. Fill **Docker Path** with the working directory inside the container (default `/root/ppf-contact-solver`, containing `server.py`).
-4. Set **Server Port** to the TCP port `server.py` listens on inside the container.
+3. Fill **Docker Path** with the working directory inside the container (default `/root/ppf-contact-solver`, containing the built `ppf-cts-server` binary).
+4. Set **Server Port** to the TCP port `ppf-cts-server` listens on inside the container.
 5. Click **Connect**. If the container exists but is stopped, the add-on starts it for you. A missing container is reported as an error.
 
 Figure: Backend Communicator with **Server Type** set to `Docker`. **Container**, **Container Path**, and **Docker Port** replace the SSH fields. The **Install Docker-Py** banner appears when the vendored module is missing. **Connect** is highlighted.
@@ -297,8 +297,8 @@ Figure: Backend Communicator with **Server Type** set to `Docker`. **Container**
 | Field | Description |
 | ----- | ----------- |
 | Container | Docker container name. Must already exist. |
-| Docker Path | Working directory inside the container (contains `server.py`). |
-| Server Port | Port inside the container where `server.py` listens. |
+| Docker Path | Working directory inside the container (contains the built `ppf-cts-server` binary). |
+| Server Port | Port inside the container where `ppf-cts-server` listens. |
 
 ### Setup - Docker over SSH
 
@@ -325,7 +325,7 @@ Docker-over-SSH modes also require paramiko; install both if the remote-containe
 
 - **`Container 'X' does not exist.`** - the name is wrong or the container was removed on the remote. Run `docker ps -a` on the remote to see what is actually there.
 - **`Error starting container 'X'`** - the daemon returned a non-zero exit or the user lacks `docker` group membership on the remote.
-- **Server startup timed out.** - the container started but `server.py` did not become ready within 16 seconds. Check `server.log` inside the directory set in **Container Path**; the panel prints the last 20 lines automatically.
+- **Server startup timed out.** - the container started but `ppf-cts-server` did not become ready within 16 seconds. Check `server.log` inside the directory set in **Container Path**; the panel prints the last 20 lines automatically.
 - **`docker-py` not found** - click **Install Docker** on the main panel and wait for the background installer to finish.
 
 UNDER THE HOOD:
@@ -354,7 +354,7 @@ Fix this on the container side by re-running `docker run -p 9090:9090` (or editi
 
 **Server startup path**
 
-Both Docker modes use the same Unix server-launch path as the SSH and Local backends (see Connections - Under the hood): a small script inside the container launches `server.py` on the configured port and the UI waits up to 16 s for readiness.
+Both Docker modes use the same Unix server-launch path as the SSH and Local backends (see Connections - Under the hood): a small script inside the container launches `ppf-cts-server` on the configured port and the UI waits up to 16 s for readiness.
 
 ## Windows Native
 
@@ -368,10 +368,10 @@ The solver runs directly as a Windows subprocess using a bundled Python interpre
 
 ### Setup
 
-1. Set **Server Type** to `Win Native`.
-2. Set **Win Native Path** to the root of your solver install. This is the directory that contains `server.py` plus either a shipped `python\` subfolder (redistributable bundle) or a `build-win-native\python\` subfolder (developer build).
+1. Set **Server Type** to `Windows Native`.
+2. Set **Win Native Path** to the root of your solver install. This is the directory that contains the built `ppf-cts-server.exe` binary (under `target\release\` for a developer build, or directly at the root in the redistributable bundle layout) plus either a shipped `python\` subfolder (redistributable bundle) or a `build-win-native\python\` subfolder (developer build) for the build worker.
 3. Set **Server Port** (default `9090`).
-4. Click **Connect**. The add-on verifies `server.py` is where it should be, picks up the right Python runtime, and launches the solver as a hidden subprocess.
+4. Click **Connect**. The add-on verifies `ppf-cts-server.exe` is where it should be, picks up the right Python runtime for the build worker, and launches the solver as a hidden subprocess.
 5. The server is launched as part of the connect step, so once **Connect** reports success the server is already running. Pressing **Start Server** afterwards is a no-op on this backend.
 
 Figure: Backend Communicator with **Server Type** set to `Windows Native`. Only **Solver Path** and **Project Name** appear, with no SSH or Docker fields. **Connect** is highlighted.
@@ -380,12 +380,12 @@ Figure: Backend Communicator with **Server Type** set to `Windows Native`. Only 
 
 | Field | Description |
 | ----- | ----------- |
-| Win Native Path | Root directory containing `server.py` plus either `python\` (bundle) or `build-win-native\python\` (dev). |
-| Server Port | TCP port for `server.py`. Default `9090`. |
+| Win Native Path | Root directory containing `ppf-cts-server.exe` (under `target\release\` for dev builds, at the root for bundles) plus either `python\` (bundle) or `build-win-native\python\` (dev) for the build worker. |
+| Server Port | TCP port for `ppf-cts-server.exe`. Default `9090`. |
 
 ### Troubleshooting
 
-- **`server.py not found: <root>\server.py`** - the root points at the wrong directory. It must be the solver checkout root, not the `python\` subdirectory.
+- **`ppf-cts-server.exe not found in <root>`** - the root points at the wrong directory. It must be the solver checkout root (so that `target\release\ppf-cts-server.exe` resolves), or the bundle root that ships the binary directly.
 - **`Embedded Python not found ...`** - the add-on could not find a Python runtime under the root. Either rebuild the dev tree, or download and unpack the bundle zip.
 - **CUDA DLL load errors** - on the shipped bundle, the solver relies on the system CUDA runtime. Install a matching CUDA version, or switch to the developer build which ships its own CUDA.
 
@@ -399,27 +399,26 @@ Connect picks one of two layouts by looking for `python.exe`:
 
 ```text
 <root>/
-  server.py
   build-win-native/
     python/python.exe
     cuda/bin/*.dll
-  target/release/          # Rust solver binaries
-  src/cpp/build/lib/
+  target/release/
+    ppf-cts-server.exe       # Rust solver binary
+  src/cpp/build/lib/         # native shared libraries
 ```
 
-Used when you built the solver from source. The Python interpreter is `build-win-native\python\python.exe`, `CUDA_PATH` is set to `build-win-native\cuda`, and the launcher prepends, in order, `build-win-native\python`, `build-win-native\cuda\bin`, `target\release`, and `src\cpp\build\lib` to `PATH`.
+Used when you built the solver from source. The Python interpreter for the build worker is `build-win-native\python\python.exe`, `CUDA_PATH` is set to `build-win-native\cuda`, and the launcher prepends, in order, `build-win-native\python`, `target\release`, `src\cpp\build\lib`, and `build-win-native\cuda\bin` to `PATH`.
 
 #### Bundle layout
 
 ```text
 <root>/
-  server.py
+  ppf-cts-server.exe         # Rust solver binary at the root
   python/python.exe
-  bin/                     # native shared libraries
-  target/release/
+  bin/                       # native shared libraries
 ```
 
-Used by a shipped redistributable. The Python interpreter is `root\python\python.exe`, `CUDA_PATH` is not set (CUDA is expected on the system `PATH`), and the launcher prepends `root\python`, `root\bin`, and `root\target\release`.
+Used by a shipped redistributable. The Python interpreter for the build worker is `root\python\python.exe`, `CUDA_PATH` is not set (CUDA is expected on the system `PATH`), and the launcher prepends `root\python`, `root\bin`, and `root\target\release` to `PATH`.
 
 If neither interpreter is present, connect fails with:
 
@@ -430,16 +429,28 @@ If neither interpreter is present, connect fails with:
 The subprocess inherits your current environment with a few additions:
 
 - `PATH` is prepended with the layout-specific directories above; the existing `PATH` is appended so system tools still work.
-- `PYTHONPATH` begins with `<root>` so `server.py` can import its own modules.
+- `PYTHONPATH` begins with `<root>` so the build worker can import the bundled `frontend` package.
 - `CUDA_PATH` is added on the dev layout only.
 
 **Launch flags**
 
-The solver is launched as `python.exe server.py --port <port>` with no visible console window, so nothing appears behind Blender.
+The solver is launched as `ppf-cts-server.exe --port <port>` with no visible console window, so nothing appears behind Blender.
+
+**Log redirection**
+
+The subprocess's stdout and stderr are redirected to `<root>\server.log` (open append). A `subprocess.PIPE` end the add-on never drains would fill the small Windows OS pipe buffer once the server's log4rs console appender produced enough output, blocking the tokio worker thread that wrote it and wedging the server. Routing both streams to a real file avoids that.
+
+**Attach to an existing server**
+
+If a `ppf-cts-server.exe` is already listening on the configured port (for example because Blender was restarted while the previous session's server is still alive), Connect probes it with a real protocol-0.04 TCMD ping. A matching response means the add-on attaches to the running process instead of trying to spawn a second copy. A foreign process on the port surfaces as `PortInUseByForeignProcess`; clear it via the **Force Terminate Process** button described below.
+
+**Force Terminate Process button**
+
+When Connect reports `Port N is in use`, the panel surfaces a **Force Terminate Process** button. It looks up the PID listening on the configured server port and force-kills it (walking the process tree on Windows so child solver subprocesses go too). This is the recovery hatch for the case where a previous Stop / Disconnect cycle left a `ppf-cts-server.exe` (or some other squatter) bound to the port. The panel suppresses the stale error message once a fresh probe confirms a `ppf-cts-server` is responding on that port again.
 
 **Shutdown**
 
-On disconnect (or **Stop Server**), the add-on asks the subprocess to terminate and waits up to 5 seconds; if it is still alive, it is killed. The Unix `pkill -f server.py` path is not used; the backend holds the Windows process handle directly.
+On disconnect (or **Stop Server**), the add-on asks the subprocess to terminate and waits up to 5 seconds; if it is still alive, it is killed. The Unix `pkill -f ppf-cts-server` path is not used; the backend holds the Windows process handle directly.
 
 **Why Start Server is a no-op**
 
@@ -559,7 +570,7 @@ The same TOML machinery drives **scene profiles** and **material profiles** else
 Three MCP tools run commands against whichever host the active connection points at:
 
 - `execute_shell_command(shell_command, use_shell=True)`: free-form shell command on the solver host (Local: the Blender machine; SSH and Docker: the remote host or its container; Windows Native: the Windows solver host). Use this when no dedicated tool covers the task.
-- `execute_server_command(server_script)`: a server-side script the remote `server.py` already understands. Narrower than the shell tool; reach for it when the solver exposes the subcommand.
+- `execute_server_command(server_script)`: a `--key value` argument string sent as a TCMD query to the running `ppf-cts-server`. Narrower than the shell tool; reach for it when the solver exposes the subcommand on its TCMD surface.
 - `git_pull_remote()`, `compile_project()`, `install_paramiko()`, `install_docker()`: dedicated wrappers for the most common remote operations. Prefer these over re-typing the shell command.
 
 All of these require an active, non-busy connection. They fail fast while a transfer or run is in progress. See Debug tooling for the full shell-command semantics and `use_shell` flag.

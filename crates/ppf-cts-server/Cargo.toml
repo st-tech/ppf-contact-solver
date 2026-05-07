@@ -1,0 +1,77 @@
+# File: crates/ppf-cts-server/Cargo.toml
+# Code: Claude Code
+# Review: Ryoichi Ando (ryoichi.ando@zozo.com)
+# License: Apache v2.0
+#
+# Tokio engine host for the contact solver. Owns the runtime, wire
+# protocol (TCMD/JSON/BDAT, protocol_version 0.03), monitor task,
+# and effects executor. Bound to ppf-cts-core for the pure state
+# machine.
+
+[package]
+name = "ppf-cts-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "ppf-cts-server"
+path = "src/main.rs"
+
+[dependencies]
+ppf-cts-core = { path = "../ppf-cts-core" }
+ppf-cts-formats = { path = "../ppf-cts-formats" }
+tokio.workspace = true
+tokio-util.workspace = true
+serde.workspace = true
+# `preserve_order` makes `serde_json::Map` use IndexMap, so the
+# response's `scene_info` (and every other Map we build) keeps the
+# server's insertion order on the wire. The addon panel iterates
+# `scene_info.items()` and expects a fixed reader-friendly order
+# ("Vertices", "Triangles", ...); alphabetical sorting would shuffle
+# the rows.
+serde_json = { workspace = true, features = ["preserve_order"] }
+log.workspace = true
+log4rs.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+parking_lot = "0.12"
+uuid = { version = "1.10", features = ["v4"] }
+clap = { version = "4.5", features = ["derive"] }
+# `EffectExecutor::execute` is `async fn`; `async-trait` provides
+# the desugaring for `dyn EffectExecutor` (native async-fn-in-trait
+# is not yet object-safe in stable Rust as of 1.75, and this crate
+# uses `Arc<dyn EffectExecutor>` extensively).
+async-trait = "0.1"
+# Hardware probe (CPU brand string + total RAM). GPU is queried via
+# nvidia-smi subprocess because sysinfo does not surface GPU info.
+sysinfo = "0.32"
+
+[target.'cfg(unix)'.dependencies]
+# SIGTERM delivery to the build worker subprocess. tokio::process
+# only exposes `kill()` (SIGKILL); cooperative cancel needs SIGTERM
+# so the worker's signal handler can unwind Python frames cleanly.
+libc = "0.2"
+
+[dev-dependencies]
+tempfile = "3.13"
+
+[build-dependencies]
+# Bake the docstring-harvested log channel map into the binary via
+# `build.rs`. The runtime harvester in main.rs is still the primary
+# source; this is the fallback when the binary ships without the src/
+# tree next to it (Windows native bundle, stripped release archives).
+# Both paths call the same parser, so the channel set can never
+# drift.
+ppf-cts-core = { path = "../ppf-cts-core", default-features = false }
+
+[features]
+default = []
+# When set, the server hosts the in-process kinematic emulator instead
+# of launching the real CUDA solver. Cascades from ppf-cts-core's
+# workspace-level `emulated` feature so the root solver crate and
+# this crate can't drift out of sync.
+emulated = ["ppf-cts-core/emulated"]
+
+[lints]
+workspace = true

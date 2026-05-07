@@ -30,8 +30,10 @@ All of these run on the Windows box (`ssh win-build`). The host side
 needs none of them — the scripts are SSH-ed in.
 
 1. **Build done.** `build.bat` has run and produced
-   `target/release/ppf-contact-solver.exe` +
-   `src/cpp/build/lib/libsimbackend_cuda.dll`.
+   `target/release/ppf-cts-server.exe` (the Rust solver host the addon
+   spawns and talks to over the CBOR socket) +
+   `crates/ppf-cts-solver/src/cpp/build/lib/libsimbackend_cuda.dll`
+   (the CUDA backend DLL the server loads).
 2. **(Bundle tests)** `bundle.bat` has run and populated
    `build-win-native/dist/`.
 3. **(E2E tests)** Blender 5.0 at
@@ -133,11 +135,6 @@ ssh win-build 'set T2_ROOT=C:\ppf-contact-solver\build-win-native\dist && set T2
   won't run on its own in background mode, so the E2E harness calls
   `facade.tick()` manually inside a loop.
 
-- **server.py requires the `server/` package.** `server.py` at the
-  repo root is a thin launcher — the state machine lives in `server/`.
-  `bundle.bat` was missing a robocopy step for this; fixed in
-  24a9372d.
-
 ## Cleanup
 
 The unit test creates a disposable subdirectory at
@@ -161,7 +158,7 @@ Regression coverage for the fixes landed in **24a9372d**:
 | `core/backends.py:WinNativeBackend.stop_server` new method | ✓ | ✓ |
 | `core/connection.py:connect_win_native` layout autodetect (dev vs bundle) | ✓ | ✓ |
 | `ui/connection_ops.py` port threading | — | ✓ (via T2_PORT) |
-| `src/cpp/main/main.cu` invalidate_inactive_aabbs linkage fix | — (just lets `build.bat` succeed) | — |
+| `crates/ppf-cts-solver/src/cpp/main/main.cu` invalidate_inactive_aabbs linkage fix | — (just lets `build.bat` succeed) | — |
 | `build-win-native/bundle.bat` `server/` package copy | indirectly (bundle run fails without) | indirectly |
 
 If either test starts failing, check the table above to scope the

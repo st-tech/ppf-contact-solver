@@ -18,7 +18,7 @@ from bpy.props import (  # pyright: ignore
 from bpy.types import PropertyGroup  # pyright: ignore
 
 from ..models.groups import OBJECT_GROUP_DEFAULTS, get_object_type, get_vertex_group_items
-from .state_types import AssignedObject, PinVertexGroupItem, PinOperation
+from .state_types import AssignedObject, PinVertexGroupItem
 
 # Blender requires Python to keep a reference to EnumProperty `items` strings
 # returned by a callable; otherwise the C side reads freed memory and the
@@ -286,10 +286,17 @@ class ObjectGroup(PropertyGroup):
     )
     shell_model: EnumProperty(  # pyright: ignore
         name="Model",
+        # Blender stores ``EnumProperty`` values as the integer ``number``
+        # field. Explicit numbers below freeze each identifier to its slot
+        # so older ``.blend`` files keep loading as the same identifier
+        # even though ``STABLE_NEOHOOKEAN`` is no longer a valid choice
+        # for shell groups. The empty visible name suppresses the entry
+        # from the dropdown; ``core/encoder/params.py`` coerces any
+        # remaining ``STABLE_NEOHOOKEAN`` upload to ``ARAP``.
         items=[
-            ("STABLE_NEOHOOKEAN", "Stable NeoHookean", "Stable NeoHookean model"),
-            ("ARAP", "ARAP", "As-Rigid-As-Possible model"),
-            ("BARAFF_WITKIN", "Baraff-Witkin", "Baraff-Witkin model"),
+            ("STABLE_NEOHOOKEAN", "", "", "NONE", 0),
+            ("ARAP", "ARAP", "As-Rigid-As-Possible model", "NONE", 1),
+            ("BARAFF_WITKIN", "Baraff-Witkin", "Baraff-Witkin model", "NONE", 2),
         ],
         default=OBJECT_GROUP_DEFAULTS["shell_model"],
     )

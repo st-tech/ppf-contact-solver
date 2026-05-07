@@ -1,10 +1,10 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 270" role="img" aria-label="Docker (local) transport topology: the Blender add-on, the Docker daemon, and the container running server.py all live on the Blender workstation">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 270" role="img" aria-label="Docker (local) transport topology: the Blender add-on, the Docker daemon, and the container running ppf-cts-server all live on the Blender workstation">
   <title>Docker (local) transport topology</title>
   <desc>
     A single block diagram showing that in Docker (local) mode the
     Blender add-on, the Docker daemon, and the container running
-    server.py all live on the Blender workstation. The add-on drives
-    the daemon with docker-py and reaches server.py with a plain TCP
+    ppf-cts-server all live on the Blender workstation. The add-on drives
+    the daemon with docker-py and reaches ppf-cts-server with a plain TCP
     socket to localhost on the port the container publishes.
   </desc>
 
@@ -46,7 +46,7 @@
   <text x="532" y="50" class="note">start/stop/exec</text>
   <line x1="660" y1="32" x2="690" y2="32" class="arr-data" marker-end="url(#dl-arrow-p)" />
   <text x="697" y="36" class="lbl-data">server traffic</text>
-  <text x="697" y="50" class="note">TCP to server.py</text>
+  <text x="697" y="50" class="note">TCP to ppf-cts-server</text>
 
   <!-- ============ Docker (local) ============ -->
   <text x="20" y="30" class="mode-title">Docker (local)</text>
@@ -65,7 +65,7 @@
 
   <rect x="590" y="110" width="220" height="70" rx="6" class="hdr-container" />
   <text x="700" y="138" text-anchor="middle" class="hdr-title">container</text>
-  <text x="700" y="158" text-anchor="middle" class="lbl-mono">server.py :PORT</text>
+  <text x="700" y="158" text-anchor="middle" class="lbl-mono">ppf-cts-server :PORT</text>
 
   <!-- lifecycle: addon -> daemon -> container -->
   <line x1="270" y1="132" x2="320" y2="132" class="arr-ctl" marker-end="url(#dl-arrow-b)" />
@@ -76,5 +76,5 @@
   <!-- server traffic: addon -> container directly (bypasses daemon) -->
   <path d="M 270 168 Q 430 216 590 168" class="arr-data" marker-end="url(#dl-arrow-p)" />
   <text x="430" y="213" text-anchor="middle" class="lbl-data">socket to localhost:&lt;port&gt;</text>
-  <text x="430" y="229" text-anchor="middle" class="note">reaches server.py via the port the container publishes</text>
+  <text x="430" y="229" text-anchor="middle" class="note">reaches ppf-cts-server via the port the container publishes</text>
 </svg>

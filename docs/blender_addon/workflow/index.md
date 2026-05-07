@@ -95,7 +95,7 @@ write through `solver.param`, `solver.create_group(...)`,
 `solver.add_wall(...)`, and friends:
 
 ```python
-from zozo_contact_solver import solver
+from bl_ext.user_default.ppf_contact_solver.ops.api import solver
 
 solver.param.gravity = (0, 0, -9.8)
 cloth = solver.create_group("Cloth", "SHELL")

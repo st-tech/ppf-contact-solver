@@ -3,7 +3,7 @@
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
 # License: Apache v2.0
 #
-# Upload-id desync recovery (commit ea4303cb).
+# Upload-id desync recovery.
 #
 # The pipeline pins ``state.active_upload_id`` to the server's reported
 # upload_id on the first poll after a build is dispatched. If a later
@@ -33,6 +33,7 @@ import os
 
 from . import _driver_lib as dl
 from . import _runner as r
+from . import REPO_ROOT_POSIX
 
 
 NEEDS_BLENDER = True
@@ -61,6 +62,9 @@ try:
                               fromlist=["compute_data_hash"])
     encoder_params = __import__(pkg + ".core.encoder.params",
                                 fromlist=["compute_param_hash"])
+    protocol_mod = __import__(pkg + ".core.protocol",
+                              fromlist=["PROTOCOL_VERSION"])
+    PROTOCOL_VERSION = protocol_mod.PROTOCOL_VERSION
 
     plane = dh.reset_scene_to_pinned_plane(name="DesyncMesh")
     dh.save_blend(PROBE_DIR, "desync.blend")
@@ -108,7 +112,7 @@ try:
             active_upload_id=pinned_uid,
         )
     synthetic_response = {
-        "protocol_version": "0.03",
+        "protocol_version": PROTOCOL_VERSION,
         "upload_id": foreign_uid,
         "status": "NO_BUILD",
         "error": "",
@@ -186,9 +190,7 @@ _DRIVER_TEMPLATE = dl.DRIVER_LIB + _DRIVER_BODY
 
 
 def build_driver(ctx: r.ScenarioContext) -> str:
-    repo_root = os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "..", "..", "..")
-    )
+    repo_root = REPO_ROOT_POSIX
     return (
         _DRIVER_TEMPLATE
         .replace("<<LOCAL_PATH>>", repo_root)

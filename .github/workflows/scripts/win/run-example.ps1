@@ -8,7 +8,7 @@ $ErrorActionPreference = "Continue"
 $Example = "EXAMPLE_PLACEHOLDER"
 
 # Set up environment like start.bat does (use local CUDA from build-win-native)
-$env:PATH = "C:\ppf-contact-solver\target\release;C:\ppf-contact-solver\src\cpp\build\lib;C:\ppf-contact-solver\build-win-native\cuda\bin;C:\ppf-contact-solver\build-win-native\python;C:\ppf-contact-solver\build-win-native\python\Scripts;C:\ppf-contact-solver\build-win-native\mingit\cmd;" + $env:PATH
+$env:PATH = "C:\ppf-contact-solver\target\release;C:\ppf-contact-solver\crates\ppf-cts-solver\src\cpp\build\lib;C:\ppf-contact-solver\build-win-native\cuda\bin;C:\ppf-contact-solver\build-win-native\python;C:\ppf-contact-solver\build-win-native\python\Scripts;C:\ppf-contact-solver\build-win-native\mingit\cmd;" + $env:PATH
 $env:PYTHONPATH = "C:\ppf-contact-solver;" + $env:PYTHONPATH
 
 cd C:\ppf-contact-solver

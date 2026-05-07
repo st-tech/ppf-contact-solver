@@ -5,8 +5,6 @@
 
 import os
 import pickle
-import platform
-import shutil
 
 from typing import Optional
 
@@ -18,7 +16,7 @@ from ._scene_ import SceneManager
 from ._session_ import FixedSession, ParamManager, SessionManager
 from ._utils_ import Utils
 
-RECOVERABLE_FIXED_SESSION_NAME = "fixed_session.pickle"
+from . import _rust  # type: ignore[attr-defined]
 
 
 def _suppress_stale_widget_errors():
@@ -152,8 +150,7 @@ class App:
                 src_dir = os.path.join(App.get_proj_root(), "src")
                 print(os.path.isdir(src_dir))
         """
-        frontend_dir = os.path.dirname(os.path.abspath(__file__))
-        return os.path.dirname(frontend_dir)
+        return _rust.scene_project_root_from_frontend_file(os.path.abspath(__file__))
 
     @staticmethod
     def get_default_param() -> ParamManager:
@@ -274,81 +271,28 @@ class App:
                 session = App.recover("drape")
                 print(session.finished())
         """
-        symlink_path = os.path.join(App.get_data_dirpath(), "symlinks", name)
-        session_dir = None
+        from . import _cbor_bridge_ as _cbor
 
-        if os.path.islink(symlink_path):
-            session_dir = os.readlink(symlink_path)
-        elif os.path.exists(symlink_path + ".txt"):
-            # Windows fallback: read path from text file
-            with open(symlink_path + ".txt") as f:
-                session_dir = f.read().strip()
+        def _load_fixed_session(p: str) -> FixedSession:
+            with open(p, "rb") as f:
+                blob = f.read()
+            if _cbor.is_cbor(blob):
+                # ``loads_pickle_blob`` handles both the current
+                # dict-shaped payload and the older raw-bytes
+                # envelopes left on disk by earlier builds.
+                pickled = _cbor.loads_pickle_blob(blob, _cbor.KIND_FIXED_SESSION)
+                return pickle.loads(pickled)
+            return pickle.loads(blob)
 
-        if session_dir:
-            pickle_path = os.path.join(session_dir, RECOVERABLE_FIXED_SESSION_NAME)
-            if os.path.exists(pickle_path):
-                with open(pickle_path, "rb") as f:
-                    return pickle.load(f)
-            else:
-                raise Exception(
-                    f"No recoverable fixed session found at named location: {name}"
-                )
-        else:
-            # Try to find in git-{branch}/name/session/ directory
-            fallback_path = os.path.join(App.get_data_dirpath(), name, "session")
-            pickle_path = os.path.join(fallback_path, RECOVERABLE_FIXED_SESSION_NAME)
-            if os.path.exists(pickle_path):
-                with open(pickle_path, "rb") as f:
-                    return pickle.load(f)
-            else:
-                raise Exception(f"No session found with name: {name}")
+        data_dir = App.get_data_dirpath()
+        pickle_path = _rust.recover_session_path(name, data_dir)
+        return _load_fixed_session(pickle_path)
 
     @staticmethod
     def get_data_dirpath():
-        import subprocess
-
-        frontend_dir = os.path.dirname(os.path.abspath(__file__))
-        base_dir = os.path.dirname(frontend_dir)
-
-        try:
-            branch_file = os.path.join(base_dir, ".git", "branch_name.txt")
-            if os.path.exists(branch_file):
-                with open(branch_file) as f:
-                    git_branch = f.read().strip()
-                    if git_branch:
-                        if platform.system() == "Windows":  # Windows
-                            return os.path.join(
-                                base_dir, "local", "share", "ppf-cts", f"git-{git_branch}"
-                            )
-                        else:
-                            return os.path.expanduser(
-                                os.path.join(
-                                    "~", ".local", "share", "ppf-cts", f"git-{git_branch}"
-                                )
-                            )
-        except Exception as _:
-            pass
-
-        try:
-            git_branch = subprocess.check_output(
-                ["git", "branch", "--show-current"],
-                cwd=base_dir,
-                text=True,
-                stderr=subprocess.DEVNULL,
-            ).strip()
-            if not git_branch:
-                git_branch = "unknown"
-        except (subprocess.CalledProcessError, FileNotFoundError):
-            git_branch = "unknown"
-
-        if platform.system() == "Windows":  # Windows
-            return os.path.join(
-                base_dir, "local", "share", "ppf-cts", f"git-{git_branch}"
-            )
-        else:
-            return os.path.expanduser(
-                os.path.join("~", ".local", "share", "ppf-cts", f"git-{git_branch}")
-            )
+        return _rust.get_data_dirpath(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        )
 
     def __init__(self, name: str, renew: bool, cache_dir: str = ""):
         """Initialize the App.
@@ -364,28 +308,42 @@ class App:
         """
         self._extra = Extra()
         self._name = name
-        if self.ci:
-            self._root = Utils.get_ci_dir()
-        else:
-            self._root = os.path.join(self.get_data_dirpath(), name)
-        self._path = os.path.join(self._root, "app.pickle")
+        # Keep `App.get_data_dirpath` patchable from tests (the CBOR
+        # roundtrip suite monkeypatches it onto a tmp path), so resolve
+        # the data dir through the bound method first and feed the
+        # result into the bundled Rust path resolver only for the
+        # non-data-dir fields.
+        data_dirpath = self.get_data_dirpath()
+        ci_dir = Utils.get_ci_dir() if self.ci else None
+        self._root = ci_dir if ci_dir else os.path.join(data_dirpath, name)
         proj_root = App.get_proj_root()
+        self._path = _rust.app_pickle_path(name, data_dirpath, ci_dir)
         if cache_dir:
             self._cache_dir = cache_dir
         else:
-            if platform.system() == "Windows":  # Windows - use project-relative cache
-                frontend_dir = os.path.dirname(os.path.realpath(__file__))
-                base_dir = os.path.dirname(frontend_dir)
-                self._cache_dir = os.path.join(base_dir, "cache", "ppf-cts")
-            else:
-                self._cache_dir = os.path.expanduser(os.path.join("~", ".cache", "ppf-cts"))
+            self._cache_dir = _rust.default_cache_dir(
+                os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+            )
         if not os.path.exists(self._cache_dir):
             os.makedirs(self._cache_dir)
 
         if os.path.exists(self._path) and not renew:
+            from . import _cbor_bridge_ as _cbor
+
             with open(self._path, "rb") as f:
+                blob = f.read()
+            if _cbor.is_cbor(blob):
+                # ``loads_pickle_blob`` accepts both the current
+                # dict-shaped payload (with ``pickle_blob`` field) and
+                # the older raw-bytes payload left on disk by
+                # earlier App.save versions.
+                pickled = _cbor.loads_pickle_blob(blob, _cbor.KIND_APP_STATE)
                 (self._asset, self._scene, self._mesh, self._session, self._plot) = (
-                    pickle.load(f)
+                    pickle.loads(pickled)
+                )
+            else:
+                (self._asset, self._scene, self._mesh, self._session, self._plot) = (
+                    pickle.loads(blob)
                 )
         else:
             os.makedirs(self._root, exist_ok=True)
@@ -595,12 +553,32 @@ class App:
                 app.asset.add.tri("sheet", V, F)
                 app.save()
         """
+        from . import _cbor_bridge_ as _cbor
+
+        # Native CBOR envelope: structured fields the user can inspect
+        # with any CBOR reader, plus a ``pickle_blob`` carrying the
+        # deep manager graph (no schema-level CBOR shape today).
+        pickled = pickle.dumps(
+            (self.asset, self._scene, self._mesh, self._session, self._plot),
+        )
+        payload = self._to_cbor_dict(pickled)
         with open(self._path, "wb") as f:
-            pickle.dump(
-                (self.asset, self._scene, self._mesh, self._session, self._plot),
-                f,
-            )
+            f.write(_cbor.dumps_envelope(_cbor.KIND_APP_STATE, payload))
         return self
+
+    def _to_cbor_dict(self, pickle_blob: bytes) -> dict:
+        """Build the native CBOR map payload written by :meth:`save`.
+
+        Inspectable metadata (project name, on-disk root) lives at the
+        top of the map; ``pickle_blob`` carries the manager graph for
+        rehydration in :meth:`__init__`.
+        """
+        return _rust.app_to_cbor_dict(
+            self._name,
+            self._root,
+            list(self._asset.list()),
+            pickle_blob,
+        )
 
     def clear_cache(self) -> "App":
         """Remove all files and subdirectories under the cache directory.
@@ -614,13 +592,7 @@ class App:
                 app = App.create("drape")
                 app.clear_cache()
         """
-        if os.path.exists(self._cache_dir) and os.path.isdir(self._cache_dir):
-            for item in os.listdir(self._cache_dir):
-                item_path = os.path.join(self._cache_dir, item)
-                if os.path.isdir(item_path):
-                    shutil.rmtree(item_path)
-                else:
-                    os.remove(item_path)
+        _rust.clear_cache_dir(self._cache_dir)
         return self
 
     @staticmethod

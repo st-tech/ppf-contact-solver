@@ -26,6 +26,7 @@ import os
 
 from . import _driver_lib as dl
 from . import _runner as r
+from . import REPO_ROOT_POSIX
 
 
 NEEDS_BLENDER = True
@@ -71,10 +72,19 @@ try:
     dh.build_and_wait(data_bytes, param_bytes, message="save-resume:build")
     dh.log(f"built solver={dh.facade.engine.state.solver.name}")
 
-    # Run, then dispatch save_and_quit while solver is still RUNNING.
+    # Run, then dispatch save_and_quit immediately. A fast CUDA sim
+    # can finish in less than one addon poll interval (~200ms), so a
+    # gate like "wait until s.frame >= 1 then dispatch" loses the race
+    # and the sim completes before the save_and_quit sentinel is ever
+    # written. Dispatching right after run() exercises the save/resume
+    # path regardless of which frame the solver happens to be on when
+    # it picks up the sentinel; the resulting state_<n>.bin.gz captures
+    # whatever frame index the solver had reached.
     dh.com.run()
     saw_running = False
-    save_dispatched = False
+    dh.facade.engine.dispatch(dh.events.SaveAndQuitRequested())
+    save_dispatched = True
+    dh.log("save_and_quit dispatched immediately after run()")
     deadline = __import__('time').time() + 90.0
     while __import__('time').time() < deadline:
         dh.facade.engine.dispatch(dh.events.PollTick())
@@ -82,16 +92,7 @@ try:
         s = dh.facade.engine.state
         if s.solver.name == "RUNNING":
             saw_running = True
-        # Threshold of 1 leaves at least 17 frames of work for the
-        # resume leg to complete, well clear of the natural-completion
-        # boundary where save_state would be a no-op.
-        if saw_running and not save_dispatched and s.frame >= 1:
-            dh.facade.engine.dispatch(dh.events.SaveAndQuitRequested())
-            save_dispatched = True
-            dh.log(f"save_and_quit dispatched at frame={s.frame}")
-        if save_dispatched and s.solver.name in ("RESUMABLE", "FAILED"):
-            break
-        if s.solver.name == "FAILED":
+        if s.solver.name in ("RESUMABLE", "FAILED"):
             break
         __import__('time').sleep(0.2)
     dh.log(f"after_save solver={dh.facade.engine.state.solver.name} "
@@ -163,9 +164,7 @@ _DRIVER_TEMPLATE = dl.DRIVER_LIB + _DRIVER_BODY
 
 
 def build_driver(ctx: r.ScenarioContext) -> str:
-    repo_root = os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "..", "..", "..")
-    )
+    repo_root = REPO_ROOT_POSIX
     return (
         _DRIVER_TEMPLATE
         .replace("<<LOCAL_PATH>>", repo_root)

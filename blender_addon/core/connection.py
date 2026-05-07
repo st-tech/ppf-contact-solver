@@ -144,141 +144,143 @@ def connect_local(path, server_port):
 
 
 class PortInUseByForeignProcess(Exception):
-    """A non-server.py process is bound to the port the addon wants.
+    """A process is bound to the port the addon wants.
 
-    Raised by :func:`kill_local_server_on_port` so callers (connect,
-    stop_server) can decide how to react. Connect refuses; stop swallows.
-    Killing an unrelated third-party process here would be unsafe.
+    Raised when the addon's bind attempt fails because the port is
+    already taken. The addon does not try to identify or kill the
+    squatter; the user must stop it manually before retrying.
     """
 
-    def __init__(self, port: int, pid: int, info: str):
-        super().__init__(
-            f"Port {port} is held by PID {pid} ({info}); "
-            "stop that process before starting the solver server."
-        )
+    def __init__(self, port: int, detail: str = ""):
+        msg = f"Port {port} is in use"
+        if detail:
+            msg += f" ({detail})"
+        msg += "; stop the process holding it before starting the solver server."
+        super().__init__(msg)
         self.port = port
-        self.pid = pid
-        self.info = info
+        self.detail = detail
 
 
-def kill_local_server_on_port(port: int) -> int:
-    """Reap any orphan ``server.py`` listening on *port* on this host.
+def _port_is_in_use(port: int) -> bool:
+    """Return True iff the port is bound on the loopback interface.
 
-    Returns the number of processes killed (0 if the port was free).
-    Raises :class:`PortInUseByForeignProcess` when the port is held by
-    something that is **not** a ``python.exe`` running ``server.py``.
-
-    Best-effort: returns 0 silently if ``netstat`` / ``wmic`` /
-    ``taskkill`` aren't on PATH; the caller's subsequent bind attempt
-    will surface the conflict naturally.
+    Uses a non-blocking bind probe. Avoids netstat/wmic/PowerShell
+    introspection that's flaky on locked-down or modern Windows hosts.
     """
+    import socket as _socket
+
+    s = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
     try:
-        netstat = subprocess.run(
-            ["netstat", "-ano", "-p", "tcp"],
-            capture_output=True, text=True, timeout=5,
-        )
-    except (subprocess.SubprocessError, FileNotFoundError):
-        return 0
-    port_token = f":{port}"
-    pids: set[int] = set()
-    for line in (netstat.stdout or "").splitlines():
-        if "LISTENING" not in line or port_token not in line:
-            continue
-        parts = line.split()
-        # Confirm the port match was on the local-address column (a
-        # remote-address column ending with ":{port}" would be a false
-        # positive — though LISTENING rows have 0.0.0.0:0 there in
-        # practice, this is cheap insurance).
-        if len(parts) < 2 or not parts[1].endswith(port_token):
-            continue
-        try:
-            pids.add(int(parts[-1]))
-        except ValueError:
-            continue
-
-    killed = 0
-    for pid in pids:
-        info = _describe_pid(pid)
-        if info is None:
-            # Couldn't introspect the PID at all (no wmic, no powershell,
-            # taskkill not on PATH). Skip it — the caller's bind attempt
-            # will surface the conflict.
-            continue
-        blob = info.lower()
-        if "python" not in blob or "server.py" not in blob:
-            raise PortInUseByForeignProcess(port, pid, info)
-        try:
-            subprocess.run(
-                ["taskkill", "/PID", str(pid), "/F", "/T"],
-                capture_output=True, timeout=5,
-            )
-            killed += 1
-        except (subprocess.SubprocessError, FileNotFoundError):
-            pass
-    return killed
+        s.setsockopt(_socket.SOL_SOCKET, _socket.SO_REUSEADDR, 1)
+        s.bind(("127.0.0.1", port))
+    except OSError:
+        return True
+    finally:
+        s.close()
+    return False
 
 
-def _describe_pid(pid: int) -> str | None:
-    """Return a short description of *pid* (Name + CommandLine) so the
-    reaper can verify it before taskkill. wmic was retired on recent
-    Windows builds; fall back to PowerShell's CIM bridge there. Returns
-    None when neither tool can be found.
+def _probe_ppf_cts_server(port: int, timeout: float = 1.5) -> bool:
+    """True if a ppf-cts-server is alive on *port*.
+
+    Sends a minimal TCMD ping (length-prefixed empty-args header) and
+    requires the response to be valid JSON containing
+    ``protocol_version``. That field is on every response shape, so the
+    check distinguishes our server from arbitrary other listeners
+    (e.g. a Jupyter notebook server that someone parked on 9090).
+
+    Used by the win_native connect path so a Blender restart can
+    re-attach to a still-running server from the previous session
+    instead of failing with PortInUseByForeignProcess.
     """
+    import json as _json
+    import socket as _socket
+
+    payload = b"--name __probe__"
     try:
-        wmic = subprocess.run(
-            ["wmic", "process", "where", f"ProcessId={pid}",
-             "get", "Name,CommandLine", "/format:list"],
-            capture_output=True, text=True, timeout=5,
-        )
-        out = wmic.stdout.strip()
-        if out:
-            return out
-    except (subprocess.SubprocessError, FileNotFoundError):
-        pass
+        s = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
+        s.settimeout(timeout)
+        try:
+            s.connect(("127.0.0.1", port))
+            s.sendall(b"TCMD")
+            s.sendall(len(payload).to_bytes(4, "big"))
+            s.sendall(payload)
+            buf = b""
+            while True:
+                chunk = s.recv(8192)
+                if not chunk:
+                    break
+                buf += chunk
+                # Cap so a chatty foreign listener can't keep us reading
+                # forever; our real responses are well under this.
+                if len(buf) > 64 * 1024:
+                    return False
+        finally:
+            s.close()
+    except OSError:
+        return False
+    if not buf:
+        return False
     try:
-        ps = subprocess.run(
-            [
-                "powershell", "-NoProfile", "-Command",
-                f"Get-CimInstance Win32_Process -Filter 'ProcessId = {pid}' "
-                "| Select-Object Name,CommandLine | Format-List",
-            ],
-            capture_output=True, text=True, timeout=10,
-        )
-        out = ps.stdout.strip()
-        if out:
-            return out
-    except (subprocess.SubprocessError, FileNotFoundError):
-        pass
-    return None
+        resp = _json.loads(buf.decode("utf-8"))
+    except (UnicodeDecodeError, _json.JSONDecodeError):
+        return False
+    return isinstance(resp, dict) and "protocol_version" in resp
 
 
 def spawn_win_native_server(root, port):
-    """Spawn a fresh win_native ``server.py`` subprocess and return the Popen.
+    """Spawn a fresh win_native ``ppf-cts-server.exe`` subprocess and return the Popen.
 
     Used by both initial connect and the Stop/Start cycle on the win_native
     backend. ``connect_win_native`` is the one-shot init path; this helper
     is what ``WinNativeBackend.start_server`` calls to relaunch after a
     user-issued Stop.
 
-    Reaps any squatter on ``port`` first so the new bind wins the race.
-
     Returns:
-        A ``subprocess.Popen`` for the freshly-launched server, or ``None``
-        when ``PPF_WIN_NATIVE_NO_SPAWN`` is set (test/CI mode).
+        A ``subprocess.Popen`` for the freshly-launched server, ``None``
+        when ``PPF_WIN_NATIVE_NO_SPAWN`` is set (test/CI mode), OR ``None``
+        when a ppf-cts-server is already alive on *port* (attach mode,
+        e.g. Blender restart while the previous session's server lingers).
 
     Raises:
-        FileNotFoundError: if ``server.py`` or the embedded Python is missing.
-        PortInUseByForeignProcess: if *port* is held by a non-server.py process.
+        FileNotFoundError: if ``ppf-cts-server.exe`` or the embedded Python is missing.
+        PortInUseByForeignProcess: if *port* is bound by something that
+            isn't a ppf-cts-server we recognize.
     """
     root = root.rstrip("/\\")
-    server_py = os.path.join(root, "server.py")
-    if not os.path.exists(server_py):
-        raise FileNotFoundError(f"server.py not found: {server_py}")
 
+    # Test/CI mode: an external orchestrator (e.g. the headless debug
+    # rig) already started the server. Bail out before any path probes
+    # so we don't fail on a missing binary the rig will provide.
     if os.environ.get("PPF_WIN_NATIVE_NO_SPAWN"):
         return None
 
-    kill_local_server_on_port(port)
+    # If a ppf-cts-server is already running on the port (Blender was
+    # restarted while the previous session's server kept going), attach
+    # to it instead of erroring out. The user's Linux/macOS workflow
+    # does this implicitly because the server is started outside the
+    # addon; on Windows the addon owns the spawn, so we have to
+    # recognize the attach case explicitly. The probe sends a real
+    # protocol-0.04 TCMD ping and checks the JSON response, so a
+    # foreign squatter (e.g. some other tool parked on 9090) still
+    # surfaces as PortInUseByForeignProcess below.
+    if _port_is_in_use(port):
+        if _probe_ppf_cts_server(port):
+            return None
+        raise PortInUseByForeignProcess(port)
+
+    # The existence probe hits the ``ppf-cts-server.exe`` binary in
+    # either the dev layout or a bundled ``bin/``. Only required when we
+    # actually need to spawn; the attach path above already returned.
+    candidates = [
+        os.path.join(root, "target", "release", "ppf-cts-server.exe"),
+        os.path.join(root, "bin", "ppf-cts-server.exe"),
+    ]
+    if not any(os.path.exists(p) for p in candidates):
+        raise FileNotFoundError(
+            "ppf-cts-server.exe not found in any of: "
+            + ", ".join(candidates)
+        )
 
     build_dir = os.path.join(root, "build-win-native")
     if os.path.exists(os.path.join(build_dir, "python", "python.exe")):
@@ -310,45 +312,73 @@ def spawn_win_native_server(root, port):
         env["CUDA_PATH"] = cuda_path
 
     creation_flags = subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0
-    return subprocess.Popen(
-        [python_exe, server_py, "--port", str(port)],
-        cwd=root,
-        env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        creationflags=creation_flags,
-    )
+
+    # Rust ppf-cts-server binary. We look in the dev layout first,
+    # then the bundled ``bin/`` so a Windows native bundle can ship the
+    # binary alongside the embedded Python.
+    candidates = [
+        os.path.join(root, "target", "release", "ppf-cts-server.exe"),
+        os.path.join(root, "bin", "ppf-cts-server.exe"),
+    ]
+    rust_bin = next((p for p in candidates if os.path.exists(p)), None)
+    if rust_bin is None:
+        raise FileNotFoundError(
+            "Rust ppf-cts-server.exe not found in "
+            f"{candidates}. Build with `cargo build --release -p ppf-cts-server`."
+        )
+    # Redirect to a real file, NOT subprocess.PIPE. With PIPE the addon
+    # owns the read end and never drains it; on Windows the OS pipe
+    # buffer is only a few KB, and once the server's log4rs console
+    # appender fills it, every subsequent write blocks the tokio worker
+    # thread that emitted it. After enough activity (the 21 rapid polls
+    # _do_terminate fires are usually what tips it over) every worker
+    # ends up blocked in a write syscall, the runtime stops scheduling
+    # new tasks, and the server appears wedged: connections accept but
+    # never get a response, CPU is 0, all threads in Wait state.
+    log_path = os.path.join(root, "server.log")
+    log_fp = open(log_path, "ab")
+    try:
+        return subprocess.Popen(
+            [rust_bin, "--port", str(port)],
+            cwd=root,
+            env=env,
+            stdout=log_fp,
+            stderr=subprocess.STDOUT,
+            creationflags=creation_flags,
+        )
+    finally:
+        log_fp.close()
 
 
 def connect_win_native(root, port):
     """Connect using Windows native build.
 
-    The *root* path must be the project root directory where ``server.py``
-    is located.  The function auto-detects the Python/CUDA environment from
-    either ``build-win-native/`` (dev layout) or bundled ``python/`` + ``bin/``
-    (dist layout).
+    The *root* path must be the project root directory where
+    ``ppf-cts-server.exe`` is located. The function auto-detects the
+    Python/CUDA environment from either ``build-win-native/`` (dev layout)
+    or bundled ``python/`` + ``bin/`` (dist layout).
 
     Args:
-        root: Project root directory (where server.py lives).
+        root: Project root directory (where ppf-cts-server.exe lives).
         port: Port for the solver server.
 
     Returns:
         A tuple of (ConnectionInfo, subprocess.Popen).
 
     Raises:
-        FileNotFoundError: if ``server.py`` is not at *root* or the
+        FileNotFoundError: if ``ppf-cts-server.exe`` is not at *root* or the
             embedded Python is missing.
         PortInUseByForeignProcess: if *port* is bound by a process that
-            isn't an addon-spawned ``server.py``. Stop that process
-            before retrying — the addon refuses to terminate unrelated
+            isn't an addon-spawned ``ppf-cts-server.exe``. Stop that process
+            before retrying; the addon refuses to terminate unrelated
             third-party listeners.
     """
     # Test/CI mode: when ``PPF_WIN_NATIVE_NO_SPAWN`` is set, an external
     # process (typically the debug rig's orchestrator) has already
-    # started server.py on ``port``. Skip the embedded-Python detection
-    # and the Popen, and return ConnectionInfo with ``process=None`` so
-    # WinNativeBackend treats the connection as metadata-only -- the
-    # same shape connect_local has on Linux.
+    # started ppf-cts-server.exe on ``port``. Skip the embedded-Python
+    # detection and the Popen, and return ConnectionInfo with
+    # ``process=None`` so WinNativeBackend treats the connection as
+    # metadata-only, the same shape connect_local has on Linux.
     process = spawn_win_native_server(root, port)
     root = root.rstrip("/\\")
 
@@ -390,32 +420,3 @@ def disconnect_local(connection):
         connection: A ConnectionInfo for a local connection.
     """
     connection.clear()
-
-
-def validate_remote_path(path, exec_fn):
-    """Validate that required remote paths exist.
-
-    Args:
-        path: The remote working directory (``connection.current_directory``).
-        exec_fn: Callable with the same signature as ``protocol.exec_command``.
-
-    Raises:
-        Exception: If a required path is not found or the command fails.
-    """
-    server_script_path = os.path.join(path, "server.py")
-    check_list = [
-        (server_script_path, "-f"),
-    ]
-    for check_path, kind in check_list:
-        if check_path:
-            result = exec_fn(
-                f"if [ {kind} {check_path} ]; then echo FOUND; else echo NOT_FOUND; fi",
-                shell=True,
-                cwd="/",
-            )
-            exit_code = result["exit_code"]
-            output = result["stdout"]
-            if exit_code != 0 or not output:
-                raise Exception("Error: Command execution failed.")
-            if "NOT_FOUND" in output:
-                raise Exception(f"Remote path not found ({check_path}).")

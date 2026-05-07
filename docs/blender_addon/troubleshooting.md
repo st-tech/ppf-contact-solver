@@ -66,15 +66,15 @@ with `docker run -p <port>:<port>` (or update `compose.yaml`).
 
 ## Connection: Windows Native
 
-### "Solver path is not set" / "server.py not found under the solver root"
+### "Solver path is not set" / "ppf-cts-server.exe not found under the solver root"
 
-Set **Solver Path** to the directory that contains `server.py`.
+Set **Solver Path** to the directory that contains `ppf-cts-server.exe`.
 
 ### "Embedded Python not found"
 
 Neither the dev layout (`build-win-native\python\python.exe`) nor the
 bundle layout (`python\python.exe`) resolved. Rebuild the dev tree, or
-unpack the shipped bundle zip next to `server.py`.
+unpack the shipped bundle zip next to `ppf-cts-server.exe`.
 
 ### CUDA DLL load errors
 
@@ -82,11 +82,12 @@ unpack the shipped bundle zip next to `server.py`.
 expects CUDA on the system `PATH`; install a matching CUDA runtime, or
 switch to the developer build (which ships its own).
 
-### "Remote path not found (.../server.py)"
+### "Remote path not found (.../ppf-cts-server)"
 
 The post-connect path check failed. Point **Remote Path** / **Path** /
-**Container Path** / **Solver Path** at the directory containing
-`server.py`, not its parent or a `build/` subdirectory.
+**Container Path** / **Solver Path** at the directory containing the
+`ppf-cts-server` binary (`ppf-cts-server.exe` on Windows), not its
+parent or a `build/` subdirectory.
 
 ## Connection profiles
 
@@ -112,9 +113,9 @@ lost on round-trip. Keep a backup if comments matter.
 
 ### Status stuck on "Waiting for server start..."
 
-You connected but did not click **Start Server on Remote**, or `server.py` exited
-before booting. Click **Start Server on Remote**; if it then times out, see the
-next entry.
+You connected but did not click **Start Server on Remote**, or
+`ppf-cts-server` exited before booting. Click **Start Server on
+Remote**; if it then times out, see the next entry.
 
 ### "Server startup timed out"
 
@@ -124,6 +125,18 @@ last 20 lines of `server.log`. Usual causes:
 - venv missing at `$HOME/.local/share/ppf-cts/venv`
 - CUDA driver missing or mismatched
 - the bound port is already in use (change **Server Port**)
+
+### "Port N is in use"
+
+Something is already bound to the configured **Server Port**. On
+Windows Native, the add-on first probes the port: if it answers a
+ppf-cts-server protocol ping, the add-on attaches to that running
+server instead of erroring out (this is what lets you restart Blender
+without losing the server). If the holder is not a ppf-cts-server, the
+panel surfaces the error and shows a **Force Terminate Process**
+button. Clicking it walks the process tree and force-kills the
+listener on that port. If the squatter is not yours, change
+**Server Port** to a free port instead.
 
 ### "Server startup failed" with a log line
 
@@ -139,7 +152,7 @@ and confirm `python3` resolves via the venv or `$PATH`.
 
 ### Status: "Protocol version mismatch"
 
-The server's wire version does not match the add-on (`0.02`). Rebuild
+The server's wire version does not match the add-on (`0.04`). Rebuild
 the solver from a matching revision, or update the add-on.
 
 ## Object groups and pins

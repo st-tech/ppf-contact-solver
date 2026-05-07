@@ -55,6 +55,7 @@ import subprocess
 import sys
 
 from . import _runner as r
+from . import REPO_ROOT_POSIX
 
 
 _DRIVER_TEMPLATE = """
@@ -63,6 +64,7 @@ result.setdefault("phases", [])
 result.setdefault("errors", [])
 def log(msg):
     result["phases"].append((round(time.time(), 3), msg))
+    print(f"FIDELITY_DRIVER {time.time():.3f} {msg}", flush=True)
 
 CASE = <<CASE_JSON>>
 LOCAL_PATH = "<<LOCAL_PATH>>"
@@ -82,8 +84,10 @@ try:
     log(f"setup_start_case={CASE['name']}")
     bpy.ops.object.select_all(action="SELECT")
     bpy.ops.object.delete(use_global=False)
+    log("after_delete_all")
 
     bpy.ops.mesh.primitive_plane_add(size=1.0, location=(0.0, 0.0, 0.0))
+    log("after_plane_add")
     plane = bpy.context.active_object
     plane.name = "FidelityMesh"
     rest_world = [tuple(plane.matrix_world @ v.co) for v in plane.data.vertices]
@@ -97,7 +101,9 @@ try:
     bpy.ops.wm.save_as_mainfile(filepath=blend_path)
     log(f"saved_blend filepath={bpy.data.filepath!r}")
 
+    log("before_get_addon_data")
     root = groups_mod.get_addon_data(bpy.context.scene)
+    log("after_get_addon_data")
     root.state.project_name = CASE["name"]
     root.state.frame_count = CASE.get("frame_count", 10)
     root.state.frame_rate = CASE.get("frame_rate", 100)
@@ -107,9 +113,13 @@ try:
     root.state.air_density = 0.0
     root.state.wind_strength = 0.0
 
+    log("before_create_group")
     cloth = solver_api.create_group("Cloth", "SHELL")
+    log("after_create_group")
     cloth.add(plane.name)
+    log("after_cloth_add")
     pin = cloth.create_pin(plane.name, "AllPin")
+    log("after_create_pin")
 
     # Apply ops in the order they appear in CASE["ops"]. The addon's
     # ``add()`` builders move the freshly-added op to position 0, so
@@ -163,8 +173,11 @@ try:
         else:
             raise ValueError(f"unknown op type: {op_t}")
 
+    log("before_encode_obj")
     data_bytes = encoder_mesh.encode_obj(bpy.context)
+    log(f"after_encode_obj n={len(data_bytes)}")
     param_bytes = encoder_param.encode_param(bpy.context)
+    log(f"after_encode_param n={len(param_bytes)}")
     result["data_size"] = len(data_bytes)
     result["param_size"] = len(param_bytes)
 
@@ -172,8 +185,10 @@ try:
     root.ssh_state.local_path = LOCAL_PATH
     root.ssh_state.docker_port = SERVER_PORT
     com.set_project_name(CASE["name"])
+    log("before_connect_local")
     com.connect_local(root.ssh_state.local_path,
                       server_port=root.ssh_state.docker_port)
+    log("after_connect_local")
 
     deadline = time.time() + 30.0
     while time.time() < deadline:
@@ -187,13 +202,22 @@ try:
         raise RuntimeError("server never reached RUNNING")
     log("connected")
 
+    s_pre = facade.engine.state
+    log(f"before_build_pipeline phase={s_pre.phase.name} server={s_pre.server.name} solver={s_pre.solver.name} activity={s_pre.activity.name} version_ok={s_pre.version_ok} can_operate={s_pre.can_operate} remote_root={s_pre.remote_root!r}")
     com.build_pipeline(data=data_bytes, param=param_bytes,
                        message=f"fidelity-build:{CASE['name']}")
+    s0 = facade.engine.state
+    log(f"after_build_pipeline phase={s0.phase.name} server={s0.server.name} solver={s0.solver.name} activity={s0.activity.name} pending={s0.pending_build} can_operate={s0.can_operate} remote_root={s0.remote_root!r}")
     deadline = time.time() + 300.0
+    last_state = None
     while time.time() < deadline:
         facade.engine.dispatch(events_mod.PollTick())
         facade.tick()
         s = facade.engine.state
+        cur = (s.activity.name, s.solver.name, s.pending_build, s.error[:40] if s.error else "")
+        if cur != last_state:
+            log(f"build_wait state={cur}")
+            last_state = cur
         if s.solver.name in ("READY", "RESUMABLE", "FAILED"):
             break
         time.sleep(0.5)
@@ -210,7 +234,16 @@ try:
         s = facade.engine.state
         if s.solver.name == "RUNNING":
             saw_running = True
-        if saw_running and s.solver.name in ("READY", "RESUMABLE"):
+        # Accept READY/RESUMABLE without requiring saw_running first.
+        # The addon's stale-poll guard (starting_poll_guard) holds the
+        # state in STARTING for the first few polls after RunRequested,
+        # so any subsequent READY/RESUMABLE transition is from the
+        # actual run finishing. For fast-finish solvers (sub-second
+        # CUDA runs on simple pin scenes) the addon view jumps STARTING
+        # -> READY directly, never observing RUNNING; gating on
+        # ``saw_running`` here would sit through the full 90s deadline
+        # waiting for a state the run never enters.
+        if s.solver.name in ("READY", "RESUMABLE"):
             break
         if s.solver.name == "FAILED":
             break
@@ -376,7 +409,7 @@ try:
     # wipes the entire session dir -- including
     # ``output/data/frame_to_time.out`` which we depend on. Capture it
     # up-front, then proceed.
-    f2t_path = os.path.join(shadow_root, "git-debug", project_name,
+    f2t_path = os.path.join(shadow_root, project_name,
                             "session", "output", "data",
                             "frame_to_time.out")
     frame_times: dict[int, float] = {}
@@ -390,8 +423,14 @@ try:
                     except ValueError:
                         continue
 
-    from server.emulator import install as install_debug_emulator
-    install_debug_emulator()
+    # Pull in the same emulator patches the build worker uses
+    # (skip GPU check, redirect BlenderApp's data root to the
+    # PPF_CTS_DATA_ROOT shadow). ``blender_addon.debug.emulator``
+    # would also work but importing under that path triggers
+    # ``blender_addon/__init__.py`` which calls ``import bpy`` and
+    # we're outside Blender here.
+    from frontend._debug_runtime_ import install_debug_patches
+    install_debug_patches()
     import frontend  # type: ignore
 
     app = frontend.BlenderApp(project_name).populate().make()
@@ -418,10 +457,30 @@ try:
 
     # Load the solver->Blender vertex mapping. Frontend's BlenderApp
     # writes ``map.pickle`` per session. Schema: dict[uuid_str, ndarray].
-    map_path = os.path.join(shadow_root, "git-debug", project_name,
+    # Format-sniff: producer flipped to a CBOR envelope (kind=VertexMap)
+    # but legacy pickles still load through the same path.
+    map_path = os.path.join(shadow_root, project_name,
                             "session", "map.pickle")
     with open(map_path, "rb") as f:
-        anim_map = pickle.load(f)
+        blob = f.read()
+    if blob and blob[0] != 0x80:
+        # Inline the addon's _decode_vertex_map_cbor logic; importing
+        # the addon module here would trip ``import bpy``, which isn't
+        # available in the project venv we're running under.
+        import cbor2  # type: ignore
+        env = cbor2.loads(blob)
+        if not isinstance(env, dict) or env.get("kind") != "VertexMap":
+            raise ValueError(
+                f"map.pickle envelope kind mismatch: got "
+                f"{env.get('kind') if isinstance(env, dict) else type(env)!r}"
+            )
+        payload = env.get("payload") or {}
+        anim_map = {
+            uuid: (np.asarray(arr, dtype=np.int64) if arr is not None else None)
+            for uuid, arr in payload.items()
+        }
+    else:
+        anim_map = pickle.loads(blob)
     if not anim_map:
         raise RuntimeError("empty anim_map")
     vmap = list(anim_map.values())[0]
@@ -472,9 +531,7 @@ def _read_payload(resp: dict) -> dict | None:
 
 
 def build_driver(case: dict, ctx: r.ScenarioContext) -> str:
-    repo_root = os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "..", "..", "..")
-    )
+    repo_root = REPO_ROOT_POSIX
     return (
         _DRIVER_TEMPLATE
         .replace("<<CASE_JSON>>", json.dumps(case))
@@ -503,9 +560,7 @@ def run(ctx: r.ScenarioContext, case: dict) -> dict:
         )
 
     shadow_root = os.path.join(ctx.workspace, "project")
-    repo_root = os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "..", "..", "..")
-    )
+    repo_root = REPO_ROOT_POSIX
     # Windows venvs use Scripts\python.exe; POSIX uses bin/python.
     if os.name == "nt":
         venv_python = os.path.join(repo_root, ".venv", "Scripts", "python.exe")

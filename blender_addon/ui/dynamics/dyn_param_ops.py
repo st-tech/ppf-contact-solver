@@ -4,7 +4,7 @@
 # License: Apache v2.0
 
 import bpy  # pyright: ignore
-from bpy.props import EnumProperty, IntProperty  # pyright: ignore
+from bpy.props import EnumProperty  # pyright: ignore
 from bpy.types import Operator  # pyright: ignore
 
 from ...models.collection_utils import safe_update_index, sort_keyframes_by_frame

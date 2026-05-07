@@ -178,6 +178,16 @@ def python_packages():
         "python-lsp-ruff",
         "jupyterlab-code-formatter",
         "nbconvert",  # Required for fast_check to convert notebooks to Python scripts
+        # build-all.sh's `maturin develop --release` step needs
+        # maturin in the venv, frontend/_cbor_bridge_.py imports cbor2
+        # at top level (the CBOR envelope codec the addon uses), and
+        # ppf-cts-server's build_worker subprocess pulls psutil for
+        # runtime metrics. Without these, build-all.sh fails at
+        # maturin and the very first `from frontend import ...`
+        # raises ModuleNotFoundError.
+        "maturin",
+        "cbor2",
+        "psutil",
     ]
 
 

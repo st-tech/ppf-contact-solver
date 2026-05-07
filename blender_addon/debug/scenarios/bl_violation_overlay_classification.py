@@ -74,6 +74,9 @@ try:
     facade = __import__(pkg + ".core.facade",
                         fromlist=["engine", "tick"])
     events = __import__(pkg + ".core.events", fromlist=["ServerPolled"])
+    protocol_mod = __import__(pkg + ".core.protocol",
+                              fromlist=["PROTOCOL_VERSION"])
+    PROTOCOL_VERSION = protocol_mod.PROTOCOL_VERSION
     # ``_solver_to_blender`` is a nested helper inside
     # ``_build_violation_batches`` (not importable at module scope), so
     # only ``_build_violation_batches`` shows up in the fromlist.
@@ -166,7 +169,7 @@ try:
     # accepts it (missing protocol_version or upload_id triggers an early
     # version_ok=False return that never touches state.violations).
     response = {
-        "protocol_version": "0.03",
+        "protocol_version": PROTOCOL_VERSION,
         "upload_id": "synthetic-upload-id",
         "data_hash": "",
         "param_hash": "",

@@ -1,4 +1,4 @@
 @echo off
 cd /d C:\ppf-contact-solver
-git pull origin dev
+git pull origin main
 pause

@@ -127,7 +127,17 @@ class JUPYTER_OT_Export(Operator):
             return {"CANCELLED"}
 
         state = get_addon_data(context.scene).state
-        project_name = filepath.rsplit("/", 1)[-1].removesuffix(".ipynb")
+        # `{project_name}` in the template feeds `BlenderApp.open(...)`,
+        # which keys off the project name on the remote server (the
+        # data path is `<data_dir>/<project_name>`), NOT the notebook
+        # filename. Using the filename stem here meant a user-renamed
+        # notebook ("tree-my.ipynb") generated `BlenderApp.open("tree-my")`
+        # for a project the server actually stores as "tree", and the
+        # notebook failed to load. Fall back to the filename stem only
+        # when the addon's project_name field is empty.
+        project_name = state.project_name.strip() or (
+            filepath.rsplit("/", 1)[-1].removesuffix(".ipynb")
+        )
 
         notebook = copy.deepcopy(JUPYTER_NOTEBOOK_TEMPLATE)
         for cell in notebook["cells"]:
@@ -139,9 +149,9 @@ class JUPYTER_OT_Export(Operator):
 
         # Route the write through the solver server instead of JupyterLab's
         # contents API. Hitting /api/contents was making the exported file
-        # (and its parent `blender-export/` dir) vanish after a while —
-        # suspected interaction with JupyterLab's cloned-workspace state.
-        # server.py resolves relative_path against <src>/examples/.
+        # (and its parent `blender-export/` dir) vanish after a while
+        # (suspected interaction with JupyterLab's cloned-workspace state).
+        # The server resolves relative_path against <src>/examples/.
         connection = com.connection
         if not connection.instance or not com.is_connected():
             self.report({"ERROR"}, "Not connected to solver server. Connect first.")

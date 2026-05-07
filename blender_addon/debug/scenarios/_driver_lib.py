@@ -147,6 +147,25 @@ class DriverHelpers:
         return (self.encoder_mesh.encode_obj(bpy.context),
                 self.encoder_param.encode_param(bpy.context))
 
+    @staticmethod
+    def decode_addon_blob(blob):
+        # Decode the bytes returned by ``encode_obj`` / ``encode_param``.
+        # The producers flipped from pickle to a CBOR envelope
+        # ({version, kind, payload}) during the Rust migration; old
+        # on-disk saves are still pickle. Pickle frames always start
+        # with 0x80 (PROTO opcode), so the first byte is enough to
+        # dispatch. (Comment-style on purpose: this method lives
+        # inside the raw-string DRIVER_LIB, so triple-quotes here
+        # would close the outer literal.)
+        import pickle as _pickle
+        if blob and blob[0] == 0x80:
+            return _pickle.loads(blob)
+        import cbor2  # type: ignore
+        env = cbor2.loads(blob)
+        if isinstance(env, dict) and "payload" in env:
+            return env["payload"]
+        return env
+
     def build_and_wait(self, data_bytes, param_bytes, message,
                        *, timeout=90.0):
         # Distinct from naive solver-state polling: a previous run can
@@ -177,13 +196,13 @@ class DriverHelpers:
 
     def _await_running_then_ready(self, *, timeout):
         # 0.05s poll cadence: with PPF_EMULATED_STEP_MS=100 a single
-        # solver step's RUNNING phase can be ~150 ms wall-clock, which
-        # the previous 0.3s sleep often missed entirely. We treat
-        # ``frame growth since entry`` as conclusive evidence the solver
-        # did transition through RUNNING, even if the poll cadence
-        # skipped the phase label. ``> start_frame`` (not ``> 0``) so
-        # a stale tail from a prior run cannot trigger saw_running
-        # before the new run has actually advanced.
+        # solver step's RUNNING phase can be ~150 ms wall-clock, so a
+        # coarser poll interval (e.g. 0.3s) can miss the phase
+        # entirely. We treat ``frame growth since entry`` as conclusive
+        # evidence the solver did transition through RUNNING, even if
+        # the poll cadence skipped the phase label. ``> start_frame``
+        # (not ``> 0``) so a stale tail from a prior run cannot trigger
+        # saw_running before the new run has actually advanced.
         start_frame = self.facade.engine.state.frame
         saw_running = False
         deadline = time.time() + timeout

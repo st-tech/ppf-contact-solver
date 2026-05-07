@@ -365,6 +365,25 @@ start, a different cloud host, or a colleague's run). Either
 **Transfer** to replace the remote with your current scene, or connect
 to the host where the original run lives.
 
+### Port-in-Use on Reconnect
+
+When you restart Blender while a previous `ppf-cts-server` is still
+listening on the configured port (typical for Windows Native, where
+the add-on owns the spawn), **Connect** does not error out: the add-on
+probes the port with a protocol-0.04 ping, and if the response
+identifies a live `ppf-cts-server`, it attaches to that process
+instead of spawning a new one. Your previous run is still there,
+ready to **Fetch**. SSH and Docker backends always start the server
+out of band, so attaching is implicit there.
+
+If the port is held by a different process (or by a stale `ppf-cts-server`
+that no longer responds to the protocol probe), the Backend Communicator
+panel surfaces the error `Port N is in use` together with a **Force
+Terminate Process** button. Clicking it walks the process tree, force-kills
+the process holding the configured port, and lets the next **Connect**
+spawn a fresh server. The button only appears for this specific error
+wording, so it cannot be used to kill an unrelated process by accident.
+
 ## Aborting a Transfer or Fetch
 
 **Abort** interrupts the *current transfer or fetch*. It does not cancel
@@ -380,7 +399,7 @@ the remote has more frames than have been fetched locally:
 The same workflow is available from Python:
 
 ```python
-from zozo_contact_solver import solver
+from bl_ext.user_default.ppf_contact_solver.ops.api import solver
 
 # The core loop.
 solver.transfer_data()

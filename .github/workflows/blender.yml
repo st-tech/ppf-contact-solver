@@ -60,7 +60,8 @@ jobs:
             xvfb x11-xserver-utils \
             libxi6 libxxf86vm1 libxfixes3 libxrender1 \
             libgl1 libglu1-mesa libxkbcommon0 libsm6 \
-            libdbus-1-3 libsndfile1
+            libdbus-1-3 libsndfile1 \
+            libeigen3-dev
           # Bring up Xvfb on :99 with a 24-bit screen large enough for
           # any panel redraws the rig might trigger.
           Xvfb :99 -screen 0 1280x720x24 -ac >/tmp/xvfb.log 2>&1 &
@@ -68,6 +69,15 @@ jobs:
             xset -q -display :99 >/dev/null 2>&1 && break || sleep 1
           done
           echo "DISPLAY=:99" >> "$GITHUB_ENV"
+
+      - name: macOS native deps
+        # ppf-cts-solver's build.rs invokes make under the `emulated`
+        # feature, and the C++ stub includes <Eigen/Dense>. The macOS
+        # runner image doesn't ship Eigen; brew install puts the
+        # headers at /opt/homebrew/opt/eigen/include/eigen3, which is
+        # the path the Makefile already passes via -I.
+        if: runner.os == 'macOS'
+        run: brew install eigen
 
       # ------------------------------------------------------------------
       # Blender 5.1.1 from the Blender Foundation's official mirror
@@ -128,6 +138,27 @@ jobs:
         run: cargo build --release --features emulated --no-default-features
 
       # ------------------------------------------------------------------
+      # Build the Rust ppf-cts-server binary (workspace member). The
+      # cargo line above only builds the root `ppf-contact-solver`
+      # crate; ppf-cts-server is a separate workspace member with its
+      # own `emulated` feature mirror. The Blender addon launcher
+      # (blender_addon/core/connection.py) checks for the .exe under
+      # target/release/ whenever PPF_USE_RUST_SERVER=1 is opted in,
+      # so build it here and smoke-check `--help` to confirm the
+      # binary loaded its deps.
+      # ------------------------------------------------------------------
+      - name: Build ppf-cts-server (emulated)
+        shell: bash
+        run: |
+          cargo build --release -p ppf-cts-server --features emulated
+          if [ ! -f target/release/ppf-cts-server ]; then
+            echo "ERROR: target/release/ppf-cts-server not found after build"
+            exit 1
+          fi
+          ./target/release/ppf-cts-server --help >/dev/null
+          echo "ppf-cts-server --help OK"
+
+      # ------------------------------------------------------------------
       # Python venv + frontend deps (the rig's debug server runs the real
       # frontend module, which needs numpy/scipy/numba/pythreejs/...)
       # ------------------------------------------------------------------
@@ -144,13 +175,31 @@ jobs:
           .venv/bin/python -m pip install \
             numpy scipy numba plyfile requests trimesh pywavefront \
             matplotlib tqdm pythreejs ipywidgets fast-simplification \
-            tabulate triangle psutil tomli ipython pillow pytetwild
+            tabulate triangle psutil tomli ipython pillow pytetwild \
+            cbor2 maturin
+
+      # ------------------------------------------------------------------
+      # Build the ppf-cts-py wheel and install it editable into the
+      # venv. The frontend modules hard-import `_ppf_cts_py`; without
+      # this step the rig fails at import time.
+      # ------------------------------------------------------------------
+      - name: Build + install ppf-cts-py wheel
+        shell: bash
+        working-directory: crates/ppf-cts-py
+        run: ../../.venv/bin/maturin develop --release
+
+      - name: Verify Rust extension importable
+        shell: bash
+        run: |
+          .venv/bin/python -c "import _ppf_cts_py as m; print('schema_version', m.schema_version()); print('process_name', m.process_name())"
 
       # ------------------------------------------------------------------
       # Install the addon as a Blender 5 extension. install-blender-
       # addon.sh honors PPF_BLENDER_BIN as its cold-start path so the
       # install works before Blender has booted to materialize the
-      # user-prefs tree.
+      # user-prefs tree. It also fetches the cbor2 wheels declared in
+      # blender_manifest.toml (gitignored) from PyPI before symlinking,
+      # via blender_addon/wheels/fetch.py.
       # ------------------------------------------------------------------
       - name: Install addon
         run: ./install-blender-addon.sh

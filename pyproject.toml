@@ -1,3 +1,7 @@
+[tool.pytest.ini_options]
+testpaths = ["frontend/tests", "crates/ppf-cts-py/tests"]
+python_files = ["_*_.py", "test_*.py"]
+
 [tool.ruff]
 # Exclude a variety of commonly ignored directories.
 exclude = [

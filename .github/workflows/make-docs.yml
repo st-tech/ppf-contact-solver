@@ -32,6 +32,16 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: "3.12"
+      # The docs build's frontend-parameter / log-channel generator
+      # imports `frontend._param_` and `frontend._parse_`, both of
+      # which now wrap the maturin-built `_ppf_cts_py` PyO3 extension
+      # (defined under `crates/ppf-cts-py/`). Provide a Rust toolchain
+      # so docs/build.sh can run `maturin develop` against
+      # `docs/.venv` before invoking sphinx-build.
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: docs
       - name: Build Docs
         run: bash docs/build.sh
       - name: List Artifacts

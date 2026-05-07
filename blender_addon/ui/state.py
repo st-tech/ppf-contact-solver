@@ -20,15 +20,14 @@ from bpy.props import (  # pyright: ignore
 from bpy.types import PropertyGroup  # pyright: ignore
 
 from ..models.defaults import DEFAULT_MCP_PORT, DEFAULT_RELOAD_PORT, DEFAULT_SERVER_PORT
-from ..models.groups import (
+# `decode_vertex_group_identifier`, `assign_display_indices`,
+# `find_available_group_slot` are imported here because ui.dynamics
+# submodules import them via ``from ..state import ...``.
+from ..models.groups import (  # noqa: F401
     N_MAX_GROUPS,
-    OBJECT_GROUP_DEFAULTS,
     assign_display_indices,
     decode_vertex_group_identifier,
     find_available_group_slot,
-    get_group_by_uuid,
-    get_object_type,
-    get_vertex_group_items,
     iterate_active_object_groups,
 )
 
@@ -110,10 +109,10 @@ class SSHState(PropertyGroup):
         default=default_key_path,
     )  # pyright: ignore
     docker_path: StringProperty(
-        name="Container Path", default="/root/ppf-contact-solver"
+        name="Container Path", default=""
     )  # pyright: ignore
     local_path: StringProperty(
-        name="Path", default=os.path.expanduser("~/ppf-contact-solver")
+        name="Path", default=""
     )  # pyright: ignore
     server_type: EnumProperty(  # pyright: ignore
         name="Type",
@@ -135,13 +134,13 @@ class SSHState(PropertyGroup):
     command: StringProperty(name="SSH Command", default="ssh -p xxx root@zzz")  # pyright: ignore
     container: StringProperty(name="Container", default="ppf-dev")  # pyright: ignore
     ssh_remote_path: StringProperty(
-        name="Remote Path", default="/root/ppf-contact-solver"
+        name="Remote Path", default=""
     )  # pyright: ignore
     win_native_path: StringProperty(
         name="Solver Path",
         subtype="DIR_PATH",
         default="",
-        description="Root directory where server.py is located",
+        description="Root directory where ppf-cts-server.exe is located",
     )  # pyright: ignore
     docker_port: IntProperty(
         name="Docker Port",
@@ -460,7 +459,7 @@ class State(PropertyGroup):
     server_script: StringProperty(
         name="Args",
         default="",
-        description="Arguments to the server.py script",
+        description="Arguments to the ppf-cts-server binary",
     )  # pyright: ignore
     shell_command: StringProperty(
         name="Command",

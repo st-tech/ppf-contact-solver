@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 640" role="img" aria-label="Three entry points (MCP Streamable HTTP, Blender UI operators, and the Python module) funnel into the same shared add-on core, through one of five transports, to server.py">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 640" role="img" aria-label="Three entry points (MCP Streamable HTTP, Blender UI operators, and the Python module) funnel into the same shared add-on core, through one of five transports, to ppf-cts-server">
   <title>Three entry points converge on the same add-on surface</title>
   <desc>
     A layered block diagram. The top row shows three client categories:
@@ -7,14 +7,14 @@
     and a Python user scripting the add-on from Blender's text editor
     or a notebook. Each client lands in a protocol box in the second
     row: an MCP Streamable HTTP server on localhost port 9633; Blender
-    operators keyed by bl_idname; and the zozo_contact_solver Python
-    module,
-    which forwards unknown attributes to the matching operator. All
+    operators keyed by bl_idname; and the add-on's Python API (exposed
+    under bl_ext.user_default.ppf_contact_solver.ops.api), which
+    forwards unknown attributes to the matching operator. All
     three protocol boxes funnel into a single shared add-on core row
     labeled scene.zozo_contact_solver, the place where pins, merges,
     colliders, and every scene mutation run through the same
     validation. A single transport row below that stands in for the
-    five connection types. At the bottom, server.py runs on whichever
+    five connection types. At the bottom, ppf-cts-server runs on whichever
     side of the transport boundary the mode places it. An orange pill
     on the MCP box reminds the reader that the HTTP server binds
     localhost only.
@@ -106,7 +106,7 @@
 
   <!-- Python module -->
   <rect x="650" y="240" width="280" height="100" rx="8" class="box-proto" />
-  <text x="790" y="264" text-anchor="middle" class="hdr-title">zozo_contact_solver module</text>
+  <text x="790" y="264" text-anchor="middle" class="hdr-title">Python API (addon)</text>
   <text x="790" y="284" text-anchor="middle" class="hdr-mono">solver.create_group(...)</text>
   <text x="790" y="300" text-anchor="middle" class="hdr-mono">solver.transfer_data(), ...</text>
   <text x="790" y="320" text-anchor="middle" class="hdr-italic">forwards unknown attrs to operators</text>
@@ -126,7 +126,7 @@
 
   <!-- Arrow core -> transport -->
   <line x1="480" y1="490" x2="480" y2="528" class="arr-g" marker-end="url(#e-arrow-g)" />
-  <text x="490" y="512" class="lbl-mono">TCP to server.py</text>
+  <text x="490" y="512" class="lbl-mono">TCP to ppf-cts-server</text>
 
   <!-- ============ Row 4: Transport ============ -->
   <text x="20" y="548" class="row-lbl">across one of the five transports</text>
@@ -138,7 +138,7 @@
   <!-- Arrow transport -> server -->
   <line x1="480" y1="604" x2="480" y2="614" class="arr-g" marker-end="url(#e-arrow-g)" />
 
-  <!-- server.py box -->
+  <!-- ppf-cts-server box -->
   <rect x="330" y="614" width="300" height="22" rx="6" class="box-server" />
-  <text x="480" y="630" text-anchor="middle" class="hdr-mono">server.py  :PORT</text>
+  <text x="480" y="630" text-anchor="middle" class="hdr-mono">ppf-cts-server  :PORT</text>
 </svg>

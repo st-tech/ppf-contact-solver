@@ -1,8 +1,8 @@
 """Unit test for the Windows-native backend (no Blender required).
 
 Exercises ``blender_addon/core/backends.py:WinNativeBackend`` end-to-end
-against a freshly built solver. Verifies the four things that broke on
-Windows before the fixes in commit 24a9372d:
+against a freshly built solver. Verifies the four Windows-specific
+behaviors of WinNativeBackend:
 
   1. ``create_backend("win_native", …)`` launches ``server.py`` as a
      subprocess and the server binds the requested port.

@@ -115,6 +115,17 @@ class AppState:
     traffic: str = ""
     frame: int = 0
     version_ok: bool = True
+    # Stale-poll guard counter for the STARTING window. RunRequested /
+    # ResumeRequested seed it to a small N; the post-poll guard in
+    # ``compute_response_transition`` decrements it for each non-BUSY/
+    # SAVING response that arrives while the addon is in STARTING and
+    # only forces ``solver=STARTING, frame=0`` while the counter is
+    # positive. After it drains, fast-finish runs (where the solver
+    # completes between two addon polls) advance to READY/RESUMABLE
+    # cleanly. The counter is reset to 0 on any other state-machine
+    # exit out of STARTING (BUSY/SAVING/error), so a normal-paced run
+    # never even touches it.
+    starting_poll_guard: int = 0
 
     # -- derived helpers (no mutation) --
 

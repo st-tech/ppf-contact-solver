@@ -1,10 +1,16 @@
 #!/usr/bin/env python3
 """AST-based generator for the Blender Python API reference.
 
-Parses ``blender_addon/ops/api.py`` *without importing it* (avoids needing a
-running Blender environment), collects every class decorated with
+Walks the ``blender_addon/ops/api/`` package *without importing it* (avoids
+needing a running Blender environment), collects every class decorated with
 ``@blender_api`` plus each public method that is also decorated with
 ``@blender_api``, and emits ``docs/blender_addon/integrations/python_api_reference.rst``.
+
+The package layout: each sub-module (``solver.py``, ``group.py``, ``pin.py``,
+``collider.py``, ``dynamics.py``) defines the underscore-prefixed runtime
+classes (``_Solver``, ``_Pin``, etc.); ``api/__init__.py`` re-exports them
+under public alias names (``Solver = _Solver``, ``Pin = _Pin``, etc.) which
+the docs key off of.
 
 Fails loudly (non-zero exit) if:
   - ``blender_api`` or ``blender_api_hide`` is imported under an alias.
@@ -30,7 +36,7 @@ from sphinx.ext.napoleon import GoogleDocstring
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-API_FILE = REPO_ROOT / "blender_addon" / "ops" / "api.py"
+API_PACKAGE = REPO_ROOT / "blender_addon" / "ops" / "api"
 OUTPUT_FILE = (
     REPO_ROOT
     / "docs"
@@ -90,14 +96,14 @@ def _is_property(node: ast.AST) -> bool:
     return "property" in _decorator_names(node)
 
 
-def _validate_import_aliases(tree: ast.Module) -> None:
+def _validate_import_aliases(path: Path, tree: ast.Module) -> None:
     """Reject any import that brings the marker decorators in under an alias."""
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom):
             for alias in node.names:
                 if alias.name in MARKER_NAMES and alias.asname is not None:
                     _fail(
-                        f"{API_FILE.name}:{node.lineno}: decorator "
+                        f"{path.relative_to(REPO_ROOT)}:{node.lineno}: decorator "
                         f"'{alias.name}' imported under alias "
                         f"'{alias.asname}'. Import it by its bare name so "
                         f"the AST-based generator can see it."
@@ -175,12 +181,13 @@ def _signature(
 
 
 def _validate_method_docstring(
-    owner: str, func: ast.FunctionDef | ast.AsyncFunctionDef
+    path: Path, owner: str, func: ast.FunctionDef | ast.AsyncFunctionDef
 ) -> str:
     doc = ast.get_docstring(func)
+    rel = path.relative_to(REPO_ROOT)
     if not doc or not doc.strip():
         _fail(
-            f"{API_FILE.name}:{func.lineno}: {owner}.{func.name} is "
+            f"{rel}:{func.lineno}: {owner}.{func.name} is "
             f"marked @blender_api but has no docstring."
         )
     params: list[ast.arg] = [
@@ -193,18 +200,18 @@ def _validate_method_docstring(
         params.append(func.args.kwarg)
     if params and "Args:" not in doc and ":param" not in doc:
         _fail(
-            f"{API_FILE.name}:{func.lineno}: {owner}.{func.name} has "
+            f"{rel}:{func.lineno}: {owner}.{func.name} has "
             f"parameters but no 'Args:' block in its docstring."
         )
     return doc
 
 
-def _validate_class_docstring(cls: ast.ClassDef) -> str:
+def _validate_class_docstring(path: Path, cls: ast.ClassDef) -> str:
     doc = ast.get_docstring(cls)
     if not doc or not doc.strip():
         _fail(
-            f"{API_FILE.name}:{cls.lineno}: class {cls.name} is marked "
-            f"@blender_api but has no docstring."
+            f"{path.relative_to(REPO_ROOT)}:{cls.lineno}: class {cls.name} "
+            f"is marked @blender_api but has no docstring."
         )
     return doc
 
@@ -223,11 +230,12 @@ def _indent(text: str, prefix: str = "   ") -> str:
 
 
 def _render_method(
+    path: Path,
     owner: str,
     func: ast.FunctionDef | ast.AsyncFunctionDef,
     aliases: dict[str, str],
 ) -> str:
-    doc = _validate_method_docstring(owner, func)
+    doc = _validate_method_docstring(path, owner, func)
     if _is_property(func):
         header = f".. py:property:: {owner}.{func.name}"
         type_line = ""
@@ -248,9 +256,12 @@ def _render_method(
 
 
 def _render_class(
-    cls: ast.ClassDef, display_name: str, aliases: dict[str, str]
+    path: Path,
+    cls: ast.ClassDef,
+    display_name: str,
+    aliases: dict[str, str],
 ) -> str:
-    class_doc = _validate_class_docstring(cls)
+    class_doc = _validate_class_docstring(path, cls)
     parts = [
         f".. py:class:: {display_name}",
         "",
@@ -264,7 +275,7 @@ def _render_class(
             continue
         if not _is_marked(child):
             continue
-        parts.append(_indent(_render_method(display_name, child, aliases)))
+        parts.append(_indent(_render_method(path, display_name, child, aliases)))
         parts.append("")
     return "\n".join(parts).rstrip() + "\n"
 
@@ -277,26 +288,47 @@ def _build_toc(classes: list[tuple[str, ast.ClassDef]]) -> str:
     return "\n".join(lines)
 
 
+def _walk_api_package() -> list[tuple[Path, ast.Module]]:
+    """Return ``[(path, ast)]`` for every ``.py`` file directly under
+    ``API_PACKAGE``. Nested sub-packages are not traversed."""
+    if not API_PACKAGE.is_dir():
+        _fail(f"expected api package directory at {API_PACKAGE}")
+    files = sorted(p for p in API_PACKAGE.glob("*.py"))
+    if not files:
+        _fail(f"no .py files in {API_PACKAGE}")
+    out: list[tuple[Path, ast.Module]] = []
+    for path in files:
+        out.append((path, ast.parse(path.read_text(), filename=str(path))))
+    return out
+
+
 def main() -> int:
-    if not API_FILE.exists():
-        _fail(f"expected api.py at {API_FILE}")
+    modules = _walk_api_package()
 
-    source = API_FILE.read_text()
-    tree = ast.parse(source, filename=str(API_FILE))
+    # Aliases (``Pin = _Pin`` style) live in ``__init__.py`` only.
+    aliases: dict[str, str] = {}
+    for path, tree in modules:
+        if path.name == "__init__.py":
+            aliases.update(_collect_aliases(tree))
 
-    _validate_import_aliases(tree)
-    aliases = _collect_aliases(tree)
+    # Validate import aliases in every file (the marker decorators are
+    # imported separately into each sub-module).
+    for path, tree in modules:
+        _validate_import_aliases(path, tree)
 
-    classes: list[tuple[str, ast.ClassDef]] = []
-    for node in tree.body:
-        if isinstance(node, ast.ClassDef) and _is_marked(node):
-            display = aliases.get(node.name, node.name)
-            classes.append((display, node))
+    # Collect classes from every sub-module. ``__init__.py`` only carries
+    # alias declarations, no class bodies of its own.
+    classes: list[tuple[str, Path, ast.ClassDef]] = []
+    for path, tree in modules:
+        for node in tree.body:
+            if isinstance(node, ast.ClassDef) and _is_marked(node):
+                display = aliases.get(node.name, node.name)
+                classes.append((display, path, node))
 
     if not classes:
         _fail(
-            f"no classes in {API_FILE.name} are decorated with @blender_api; "
-            "refusing to emit an empty reference file."
+            f"no classes in {API_PACKAGE.relative_to(REPO_ROOT)} are decorated "
+            "with @blender_api; refusing to emit an empty reference file."
         )
 
     # Sort by the explicit render order; anything unknown sinks to the end
@@ -304,21 +336,25 @@ def main() -> int:
     order_index = {name: i for i, name in enumerate(CLASS_RENDER_ORDER)}
     classes.sort(key=lambda item: order_index.get(item[0], len(CLASS_RENDER_ORDER)))
 
+    toc_pairs = [(display, cls) for display, _path, cls in classes]
     header = [
         "🐍 Blender Python API Reference",
         "==================================",
         "",
-        ".. This file is auto-generated from blender_addon/ops/api.py.",
+        ".. This file is auto-generated from the blender_addon/ops/api/ package.",
         ".. Do not edit by hand. Regenerate via:",
         "..     python docs/generate_blender_api_reference.py",
         "",
         "Every public class and method listed here is reachable after "
-        "``from zozo_contact_solver import solver``.",
+        "``from bl_ext.user_default.ppf_contact_solver.ops.api import solver``.",
         "See :doc:`python_api` for a narrative walkthrough of the same surface.",
         "",
-        _build_toc(classes),
+        _build_toc(toc_pairs),
     ]
-    rendered = [_render_class(cls, display, aliases) for display, cls in classes]
+    rendered = [
+        _render_class(path, cls, display, aliases)
+        for display, path, cls in classes
+    ]
 
     output = "\n".join(header) + "\n" + "\n".join(rendered)
     OUTPUT_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -326,7 +362,7 @@ def main() -> int:
 
     method_count = sum(
         1
-        for _, cls in classes
+        for _, _path, cls in classes
         for child in cls.body
         if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef))
         and _is_marked(child)

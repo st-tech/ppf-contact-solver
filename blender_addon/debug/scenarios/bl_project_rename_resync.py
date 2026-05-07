@@ -38,6 +38,7 @@ import os
 
 from . import _driver_lib as dl
 from . import _runner as r
+from . import REPO_ROOT_POSIX
 
 
 NEEDS_BLENDER = True
@@ -58,10 +59,12 @@ SERVER_PORT = <<SERVER_PORT>>
 def _project_root_for(probe_dir, name):
     # PROBE_DIR is ``<workspace>/probe``; the worker's
     # PPF_CTS_DATA_ROOT shadow lives at ``<workspace>/project`` and
-    # uploads land under ``<shadow>/git-debug/<project_name>/`` (see
-    # server/emulator.py's BlenderApp patch).
+    # uploads land under ``<shadow>/<project_name>/`` (the Rust
+    # ``ppf-cts-server`` joins PPF_CTS_DATA_ROOT with the project
+    # name directly; the historical ``git-debug`` segment from the
+    # python emulator is gone).
     workspace = os.path.dirname(probe_dir)
-    return os.path.join(workspace, "project", "git-debug", name)
+    return os.path.join(workspace, "project", name)
 
 
 def _read_upload_id(root):
@@ -246,9 +249,7 @@ _DRIVER_TEMPLATE = dl.DRIVER_LIB + _DRIVER_BODY
 
 
 def build_driver(ctx: r.ScenarioContext) -> str:
-    repo_root = os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "..", "..", "..")
-    )
+    repo_root = REPO_ROOT_POSIX
     return (
         _DRIVER_TEMPLATE
         .replace("<<LOCAL_PATH>>", repo_root)

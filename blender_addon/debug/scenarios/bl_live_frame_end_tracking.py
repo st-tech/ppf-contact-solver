@@ -3,7 +3,7 @@
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
 # License: Apache v2.0
 #
-# Live scene.frame_end tracking (commit 92546e18).
+# Live scene.frame_end tracking.
 #
 # During a live simulation, frames flow in via DoFetchFrames and
 # apply_animation writes them to PC2 + advances scene.frame_end to the
@@ -23,9 +23,16 @@ import os
 
 from . import _driver_lib as dl
 from . import _runner as r
+from . import REPO_ROOT_POSIX
 
 
 NEEDS_BLENDER = True
+
+# Live-fetch race: the modal can't drain the apply queue mid-driver
+# under host load, so a trailing frame is dropped at parallel >= 2.
+# The orchestrator's serial postlude runs this scenario after the
+# parallel batch, where it passes deterministically.
+NOT_PARALLELIZABLE = True
 
 
 _DRIVER_BODY = r"""
@@ -102,7 +109,12 @@ try:
         s = dh.facade.engine.state
         if s.solver.name == "RUNNING":
             saw_running = True
-        if saw_running and s.solver.name in ("READY", "RESUMABLE", "FAILED"):
+        # Drop the saw_running gate on the terminal-state check: a fast
+        # CUDA run can finish between two polls without ever being
+        # observed in RUNNING (the bounded stale-poll guard then accepts
+        # the next non-BUSY response). Break on any terminal state
+        # directly so the trailing-frame drain still gets a chance.
+        if s.solver.name in ("READY", "RESUMABLE", "FAILED"):
             # Settle: drain any final fetches before sampling.
             # Timeout sized for slow CI runners; the local rig finishes
             # this drain in 1-2 seconds, but a free GitHub Linux runner
@@ -150,7 +162,13 @@ try:
     grew = bool(advanced) and advanced[-1] > advanced[0]
     dh.record(
         "A_live_frame_end_grows_monotonically",
-        saw_running and saw_terminal and monotonic_ok and cap_ok
+        # Drop saw_running from the assertion for the same reason as
+        # the loop's gate above: a sub-second CUDA run can finish
+        # between two polls and never be observed in RUNNING. The
+        # terminal-state observation plus monotonic frame_end growth
+        # proves the live-frame tracker actually advanced; whether the
+        # rig saw the intermediate RUNNING state is irrelevant.
+        saw_terminal and monotonic_ok and cap_ok
         and final_ok and grew,
         {
             "saw_running": saw_running,
@@ -175,9 +193,7 @@ _DRIVER_TEMPLATE = dl.DRIVER_LIB + _DRIVER_BODY
 
 
 def build_driver(ctx: r.ScenarioContext) -> str:
-    repo_root = os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "..", "..", "..")
-    )
+    repo_root = REPO_ROOT_POSIX
     return (
         _DRIVER_TEMPLATE
         .replace("<<LOCAL_PATH>>", repo_root)

@@ -39,11 +39,26 @@ The repo contains:
   animation back. **This file (`LLM.md`) and the `LLM/` tree ship
   inside the add-on** so they're available to any MCP client connected
   to the add-on's server.
-- `src/`: Rust + CUDA solver kernels (`cargo build --release`).
-- `server/`: Python server process the add-on talks to over
-  SSH / Docker / Windows-native transports.
-- `frontend/`: Python asset / scripting layer, auto-documented via
-  Sphinx autodoc; no hand-written prose beyond module docstrings.
+- `crates/`: Rust workspace (`cargo build --release`):
+  - `ppf-cts-core`: pure Rust data model, state machine, and numeric
+    kernels (no PyO3, no I/O).
+  - `ppf-cts-formats`: wire / file schema (`envelope.rs` + `kinds/`),
+    shared by every consumer of the encoded scene.
+  - `ppf-cts-py`: PyO3 binding crate that compiles via maturin to the
+    `_ppf_cts_py` Python module.
+  - `ppf-cts-server`: standalone Rust binary (`ppf-cts-server`) that
+    embeds the in-process Python `frontend` package and exposes the
+    TCP / CBOR protocol the add-on talks to over SSH / Docker /
+    Windows-native transports. Wire protocol version `0.04` (length-
+    prefixed TCMD frames; matched by `blender_addon/core/protocol.py`).
+  - `ppf-cts-solver`: the CUDA-backed solver crate. Builds the
+    `ppf-contact-solver` binary used by the in-process Python frontend
+    that `ppf-cts-server` embeds.
+- `frontend/`: Python asset / scripting layer that imports
+  `_ppf_cts_py` directly for in-process use (notebooks, tests, and
+  inside `ppf-cts-server`). The Blender add-on does not import it; the
+  add-on is an out-of-process client of `ppf-cts-server`. Auto-documented
+  via Sphinx autodoc; no hand-written prose beyond module docstrings.
 - `docs/`: Sphinx site with HTML-facing versions of the same content.
   The LLM tree here is the clean-text mirror for programmatic
   consumption.
@@ -54,8 +69,9 @@ The repo contains:
   analyze / optimize / modeling / canceled). No em-dashes.
 - Python scripts run under `~/.local/share/ppf-cts/venv`.
 - Docs build under `docs/.venv` via `docs/build.sh`.
-- CUDA / Rust compilation lives on `dev-host` host in the `ppf-dev`
-  container; `~/ppf-contact-solver` on dev-host is shared with the container.
+- CUDA / Rust compilation runs on a Linux dev host, typically inside
+  the `ppf-dev` container with the project root bind-mounted from the
+  host into the container.
 
 ## Blender add-on section map
 
@@ -235,7 +251,7 @@ scripting). Load when:
   Python), placement with world clearance, sphere primitive
   construction, target mesh resolution (1-3 % edge length / bbox
   diagonal window), group-type decisions.
-- **Python API** via `from zozo_contact_solver import solver`: the
+- **Python API** via `from bl_ext.user_default.ppf_contact_solver.ops.api import solver`: the
   `solver.param`, `solver.dyn(...)`, `solver.create_group`,
   `group.create_pin(...)`, pin operation chaining, collider builders
   (`InvisibleWallBuilder`, `InvisibleSphereBuilder`), `solver.snap(...)`,
@@ -290,7 +306,7 @@ Mirror of the auto-generated
 ### `LLM/blender_addon/python_api_reference.md` (~745 lines)
 
 Every class, method, and attribute on the `solver` singleton you get
-from `from zozo_contact_solver import solver`. Classes: `Solver`,
+from `from bl_ext.user_default.ppf_contact_solver.ops.api import solver`. Classes: `Solver`,
 `SceneParam`, `DynParam`, `Group`, `GroupParam`, `Pin`, `Wall`,
 `Sphere`, `ColliderParam`. Each entry has the typed signature,
 parameters, return type, and example usage. Plus the top-level

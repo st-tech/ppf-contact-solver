@@ -136,7 +136,7 @@ velocity overwrite) is hidden.
 
 | UI label                             | Python / TOML key                 | Default | Description                                                           |
 | ------------------------------------ | --------------------------------- | ------- | --------------------------------------------------------------------- |
-| **Friction**                         | `friction`                        | 0.0     | Coulomb friction coefficient between this mesh and other groups.      |
+| **Friction**                         | `friction`                        | 0.5     | Coulomb friction coefficient between this mesh and other groups.      |
 | **Contact Gap**                      | `contact_gap`                     | 0.001   | Absolute contact gap distance, in Blender units.                      |
 | **Contact Offset**                   | `contact_offset`                  | 0.0     | Absolute contact offset, in Blender units.                            |
 | **Use Group Bounding Box Diagonal**  | `use_group_bounding_box_diagonal` | `True`  | When true, contact distances are ratios of the group's bbox diagonal. |
@@ -192,7 +192,7 @@ the contact gap picked from the Shell ↔ Static pairing. See
 Create a Static group the same way as any other:
 
 ```python
-from zozo_contact_solver import solver
+from bl_ext.user_default.ppf_contact_solver.ops.api import solver
 
 floor = solver.create_group("Floor", type="STATIC")
 floor.add("Ground")

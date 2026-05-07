@@ -6,12 +6,11 @@
 # Addon reload via the debug TCP port mid-session, preserving scene-
 # level state across the addon_disable / addon_enable boundary.
 #
-# Motivation: commit ``c8236be3`` ("Fix reload crashes when triggered
-# from a UI button and preserve handoff"). The reload server's
+# Why the indirection: the reload server's
 # ``trigger_reload_now`` schedules ``perform_reload`` through
 # ``bpy.app.timers`` so the operator's Python frame unwinds before
-# ``addon_disable`` tears down its class. ``unregister`` no longer
-# pops ``_RESTART_STATE_KEY``, which is written by
+# ``addon_disable`` tears down its class. ``unregister`` deliberately
+# does not pop ``_RESTART_STATE_KEY``, which is written by
 # ``_reload_phase1_disable`` immediately before ``addon_disable``;
 # clearing it inside ``unregister`` would drop the handoff that
 # ``register`` needs to restart the reload server.
@@ -48,11 +47,11 @@
 
 from __future__ import annotations
 
-import os
 import socket
 
 from . import _driver_lib as dl
 from . import _runner as r
+from . import REPO_ROOT_POSIX
 
 
 NEEDS_BLENDER = True
@@ -358,9 +357,7 @@ _DRIVER_TEMPLATE = dl.DRIVER_LIB + _DRIVER_BODY
 
 
 def build_driver(ctx: r.ScenarioContext) -> str:
-    repo_root = os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "..", "..", "..")
-    )
+    repo_root = REPO_ROOT_POSIX
     reload_port = _alloc_local_port()
     return (
         _DRIVER_TEMPLATE

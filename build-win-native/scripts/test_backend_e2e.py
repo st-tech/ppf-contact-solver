@@ -9,7 +9,7 @@ Passes only if no error state is produced at any step. This is the
 regression guard for the three bash-syntax bugs in
 ``blender_addon/core/effect_runner.py`` (``_do_validate_path``,
 ``_do_stop_server``, ``_count_remote_frames``) plus the port-threading
-fix in ``ui/connection_ops.py``, all fixed in commit 24a9372d.
+fix in ``ui/connection_ops.py``.
 
 Run:
 

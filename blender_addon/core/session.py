@@ -26,16 +26,3 @@ _ID_LEN = 12
 def new_session_id() -> str:
     """Return a freshly-generated 12-hex-char session id."""
     return _uuid.uuid4().hex[:_ID_LEN]
-
-
-def is_valid(session_id: str) -> bool:
-    """True if *session_id* is well-formed (right length, all hex)."""
-    if not isinstance(session_id, str):
-        return False
-    if len(session_id) != _ID_LEN:
-        return False
-    try:
-        int(session_id, 16)
-    except ValueError:
-        return False
-    return True

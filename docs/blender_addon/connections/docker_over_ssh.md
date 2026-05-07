@@ -6,12 +6,12 @@ two ways to provide SSH credentials: **Custom** (explicit fields) and
 **Command** (parsed from a raw `ssh ...` string).
 
 ```{figure} ../images/connections/docker_ssh_topology.svg
-:alt: Block diagram split into two boxes. The left box (Blender workstation) holds only the add-on. The right box (remote Linux host) holds the Docker daemon and the container running server.py. Lifecycle commands travel add-on -> SSH -> remote -> docker exec -> container; server traffic rides an SSH tunnel from the add-on to the container's published port on the remote's localhost. A pill reminds the reader that -p PORT:PORT must be published on the container.
+:alt: Block diagram split into two boxes. The left box (Blender workstation) holds only the add-on. The right box (remote Linux host) holds the Docker daemon and the container running ppf-cts-server. Lifecycle commands travel add-on -> SSH -> remote -> docker exec -> container; server traffic rides an SSH tunnel from the add-on to the container's published port on the remote's localhost. A pill reminds the reader that -p PORT:PORT must be published on the container.
 :width: 760px
 
 Where each piece lives, and how the add-on reaches it. Blue solid
 arrows carry lifecycle commands (container start/stop, `exec`, port
-check). Purple dashed arrows carry the TCP connection to `server.py`,
+check). Purple dashed arrows carry the TCP connection to `ppf-cts-server`,
 which rides an SSH tunnel into the container's published port on the
 remote's localhost. For the local variant where the daemon and
 container run on the Blender machine, see [Docker (Local)](docker.md).
@@ -42,8 +42,8 @@ and runs every Docker command there.
    container** (default `/root/ppf-contact-solver`). This path
    is not interpreted on the Blender host or on the remote host's
    filesystem -- it is the path seen from inside the container, where
-   `server.py` lives.
-5. Set **Docker Port** to the TCP port `server.py` listens on inside
+   the `ppf-cts-server` binary lives.
+5. Set **Docker Port** to the TCP port `ppf-cts-server` listens on inside
    the container.
 6. Click **Connect**. The add-on verifies that the container exists on
    the remote host and starts it if it is stopped.
@@ -63,8 +63,8 @@ highlighted.
 | Field | Description |
 | ----- | ----------- |
 | Container | Container name on the *remote* Docker daemon. Must already exist. |
-| Container Path | Working directory **inside** the remote container that holds `server.py`. |
-| Docker Port | Port inside the container where `server.py` listens. Must be published on the container with `-p`. |
+| Container Path | Working directory **inside** the remote container that holds the `ppf-cts-server` binary. |
+| Docker Port | Port inside the container where `ppf-cts-server` listens. Must be published on the container with `-p`. |
 
 :::{warning}
 The server port must be published on the container (`-p 9090:9090` or
@@ -89,7 +89,7 @@ command instead of separate fields.
    (the same field as in Custom Mode -- it is *not* parsed from the
    command string).
 4. Fill **Container Path** with the working directory **inside** that
-   container (where `server.py` lives). This is also a separate field
+   container (where the `ppf-cts-server` binary lives). This is also a separate field
    and is never derived from the SSH command.
 5. Set **Docker Port** and click **Connect**.
 
@@ -111,10 +111,10 @@ directory.
   to see what is actually there.
 - **`Error starting container 'X'`** - the daemon returned a non-zero
   exit or the remote user lacks `docker` group membership.
-- **Server startup timed out.** - the container started but `server.py`
-  did not become ready within 16 seconds. Check `server.log` inside the
-  directory set in **Container Path**; the panel prints the last 20
-  lines automatically.
+- **Server startup timed out.** - the container started but
+  `ppf-cts-server` did not become ready within 16 seconds. Check
+  `server.log` inside the directory set in **Container Path**; the
+  panel prints the last 20 lines automatically.
 
 :::{admonition} Under the hood
 :class: toggle
@@ -147,6 +147,6 @@ an existing container.
 
 Docker over SSH uses the same Unix server-launch path as the SSH and
 Local backends (see {ref}`Connections - Under the hood <connections-under-the-hood>`):
-a small script inside the container launches `server.py` on the
+a small script inside the container launches `ppf-cts-server` on the
 configured port and the UI waits up to 16 s for readiness.
 :::

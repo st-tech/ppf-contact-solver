@@ -175,7 +175,7 @@ automatically on the next depsgraph update.
 The same workflow is available from Python:
 
 ```python
-from zozo_contact_solver import solver
+from bl_ext.user_default.ppf_contact_solver.ops.api import solver
 
 # Make the shirt hug the mannequin at its closest pair of verts, with the
 # right contact gap for the SHELL <-> STATIC pairing. Also registers a

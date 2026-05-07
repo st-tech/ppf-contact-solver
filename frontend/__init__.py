@@ -10,6 +10,19 @@ names listed in ``__all__`` expose the scene, session, mesh, plotting,
 asset, and utility APIs.
 """
 
+# Resolve the Rust extension module exactly once, at the top of the
+# package. Submodules import it as ``from . import _rust`` so a missing
+# wheel surfaces this single, actionable error instead of a cascade of
+# ``ModuleNotFoundError`` from whichever submodule loaded first.
+try:
+    import _ppf_cts_py as _rust  # noqa: N816
+except ImportError as e:
+    raise ImportError(
+        "_ppf_cts_py extension module not found. Build with "
+        "`maturin develop --release` from the repo root, or install "
+        "the prebuilt wheel. Original error: " + str(e)
+    ) from e
+
 __all__ = [
     "App",
     "get_cache_dir",
@@ -44,15 +57,13 @@ __all__ = [
     "ParamManager",
     "Utils",
     "BlenderApp",
-    "ParamDecoder",
-    "SceneDecoder",
     "sdf",
 ]
 
 from . import _sdf_ as sdf
 from ._app_ import App
 from ._asset_ import AssetFetcher, AssetManager, AssetUploader
-from ._decoder_ import BlenderApp, ParamDecoder, SceneDecoder
+from ._decoder_ import BlenderApp
 from ._extra_ import Extra
 from ._mesh_ import CreateManager, MeshManager, Rod, TetMesh, TriMesh
 from ._parse_ import CppRustDocStringParser

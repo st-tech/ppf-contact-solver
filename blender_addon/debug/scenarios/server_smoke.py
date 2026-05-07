@@ -8,7 +8,23 @@
 
 from __future__ import annotations
 
+import importlib.util
+import os
+
 from . import _runner as r
+
+
+def _load_protocol_version() -> str:
+    path = os.path.normpath(
+        os.path.join(os.path.dirname(__file__), "..", "..", "core", "protocol.py")
+    )
+    spec = importlib.util.spec_from_file_location("_protocol_for_smoke", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod.PROTOCOL_VERSION
+
+
+PROTOCOL_VERSION = _load_protocol_version()
 
 
 def run(ctx: r.ScenarioContext) -> dict:
@@ -19,7 +35,7 @@ def run(ctx: r.ScenarioContext) -> dict:
 
     violations: list[str] = []
 
-    if response.get("protocol_version") not in ("0.02", "0.03"):
+    if response.get("protocol_version") != PROTOCOL_VERSION:
         violations.append(
             f"unexpected protocol_version: {response.get('protocol_version')!r}"
         )

@@ -1,12 +1,14 @@
 # 👋 Getting Started
 
-[ZOZO's Contact Solver](https://github.com/st-tech/ppf-contact-solver) is a GPU-accelerated contact simulation engine; the
-Blender 5.0+ add-on is one front-end that ships with it, turning Blender into
-an interactive editor for the solver. You model in Blender, assign material
-groups, pins, and colliders, and the add-on simulates remotely and fetches
-the resulting animation back so you can scrub it on the timeline. By the end of this chapter you will have the add-on
-installed, a connection open, a single cloth sheet simulated, and the
-resulting animation playing in the viewport.
+[ZOZO's Contact Solver](https://github.com/st-tech/ppf-contact-solver) is a
+GPU-accelerated contact simulation engine. The Blender 5.0+ add-on is one
+front-end that ships with it and turns Blender into an interactive editor
+for the solver. You model in Blender, assign material groups, pins, and
+colliders; the add-on uploads the scene to a `ppf-cts-server` instance,
+runs the simulation, and fetches the resulting animation back so you can
+scrub it on the timeline. By the end of this chapter you will have the
+add-on installed, a connection open, a single cloth sheet simulated, and
+the resulting animation playing in the viewport.
 
 ```{toctree}
 :maxdepth: 1

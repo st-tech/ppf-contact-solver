@@ -150,9 +150,9 @@ try:
         },
     )
 
-    # ----- Encode params and decode the pickle ------------------
+    # ----- Encode params and decode the CBOR envelope ------------
     param_bytes = dh.encoder_param.encode_param(bpy.context)
-    decoded = pickle.loads(param_bytes)
+    decoded = dh.decode_addon_blob(param_bytes)
     dh.log(f"decoded keys={sorted(decoded.keys())}")
 
     # group is encoded as [(params_dict, objects, object_uuids), ...].

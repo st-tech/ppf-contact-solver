@@ -11,7 +11,7 @@ This note summarizes the refactor made in October 2025.
 ### 🎮 Custom CUDA Kernels
 
 NVIDIA Thrust library reports runtime errors with driver version `560.94+`.
-A set of custom CUDA kernels are implemented as workaround in `/src/cpp/kernels/`:
+A set of custom CUDA kernels are implemented as workaround in `crates/ppf-cts-solver/src/cpp/kernels/`:
 
 - `reduce.cu` / `reduce.hpp` - Reduction operations ⚡
 - `exclusive_scan.cu` / `exclusive_scan.hpp` - Prefix sum operations 🔢

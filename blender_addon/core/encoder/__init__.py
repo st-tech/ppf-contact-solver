@@ -5,8 +5,18 @@
 
 from ..transform import _normalize_and_scale, _swap_axes, _to_solver
 
-from .mesh import compute_data_hash, compute_mesh_hash, detect_stitch_edges, encode_obj  # noqa: E402
-from .params import compute_param_hash, encode_param  # noqa: E402
+from .mesh import (  # noqa: E402
+    compute_data_hash,
+    compute_mesh_hash,
+    detect_stitch_edges,
+    encode_obj,
+    encode_obj_with_hash,
+)
+from .params import (  # noqa: E402
+    compute_param_hash,
+    encode_param,
+    encode_param_with_hash,
+)
 
 __all__ = [
     "_swap_axes",
@@ -30,19 +40,16 @@ def prepare_upload(
 ) -> tuple[bytes, bytes, str, str]:
     """Single source of truth for what gets sent up the wire.
 
-    Encodes the requested payloads and computes the matching SHA-256
-    fingerprint over the same dict tree. Both hashes ride along with
-    the upload so the server can echo them back on every status
-    response; the click-time handlers in ``SOLVER_OT_Run`` and
-    ``SOLVER_OT_UpdateParams`` re-compute fresh hashes against the
-    live scene to decide whether the user has drifted from the last
-    upload.
+    Builds each payload tree once, encodes to CBOR, and hashes the
+    encoded bytes so the upload-time hash and the click-time drift
+    hash use the same algorithm. The server echoes the hashes on every
+    status response; ``SOLVER_OT_Run`` and ``SOLVER_OT_UpdateParams``
+    re-compute against the live scene to decide whether the user has
+    drifted from the last upload.
 
     Returns ``(data, param, data_hash, param_hash)``. Either payload
     is ``b""`` (and its hash ``""``) when its ``want_*`` flag is False.
     """
-    data = encode_obj(context) if want_data else b""
-    param = encode_param(context) if want_param else b""
-    data_hash = compute_data_hash(context) if data else ""
-    param_hash = compute_param_hash(context) if param else ""
+    data, data_hash = encode_obj_with_hash(context) if want_data else (b"", "")
+    param, param_hash = encode_param_with_hash(context) if want_param else (b"", "")
     return data, param, data_hash, param_hash

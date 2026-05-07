@@ -3,13 +3,13 @@
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
 # License: Apache v2.0
 #
-# Regression: clicking Transfer on a fresh project (server reports
-# ``data="NO_DATA"``) used to dispatch a "Deleting Remote Data..."
-# query first and then upload. The delete is a no-op the user paid
-# for in latency and a misleading status banner. The fix in
+# Regression guard: on a fresh project (server reports
+# ``data="NO_DATA"``), clicking Transfer must skip the
+# "Deleting Remote Data..." query. The delete would be a no-op the
+# user pays for in latency, plus a misleading status banner.
 # ``SOLVER_OT_Transfer.execute`` short-circuits to the upload path
 # when the cached server response already says NO_DATA and we have a
-# remote_root.
+# remote_root; this scenario asserts that short-circuit holds.
 #
 # Subtests:
 #   A. fresh_transfer_skips_delete: invoking ``SOLVER_OT_Transfer
@@ -27,10 +27,10 @@
 
 from __future__ import annotations
 
-import os
 
 from . import _driver_lib as dl
 from . import _runner as r
+from . import REPO_ROOT_POSIX
 
 
 NEEDS_BLENDER = True
@@ -178,9 +178,7 @@ _DRIVER_TEMPLATE = dl.DRIVER_LIB + _DRIVER_BODY
 
 
 def build_driver(ctx: r.ScenarioContext) -> str:
-    repo_root = os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "..", "..", "..")
-    )
+    repo_root = REPO_ROOT_POSIX
     return (
         _DRIVER_TEMPLATE
         .replace("<<LOCAL_PATH>>", repo_root)

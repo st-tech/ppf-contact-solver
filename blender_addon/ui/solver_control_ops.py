@@ -5,11 +5,14 @@
 #
 # Solver console/terminate/status operators.
 
-import bpy  # pyright: ignore
+import os
+import subprocess
+
 from bpy.types import Operator  # pyright: ignore
 
 from ..core.client import RemoteStatus, communicator as com
 from ..models.console import console
+from ..models.defaults import DEFAULT_SERVER_PORT
 
 
 class SOLVER_OT_ShowConsole(Operator):
@@ -81,9 +84,129 @@ class SOLVER_OT_UpdateStatus(Operator):
         return {"FINISHED"}
 
 
+def _find_pid_holding_port(port: int) -> int | None:
+    """Return the PID of the LISTENING process on loopback `port`, or None.
+
+    Cross-platform helpers: netstat -ano on Windows, lsof -ti tcp:N on
+    POSIX. Both ship with the OS by default. Errors (parse failure,
+    binary missing, no match) all coalesce to None.
+    """
+    try:
+        if os.name == "nt":
+            r = subprocess.run(
+                ["netstat", "-ano", "-p", "TCP"],
+                capture_output=True, text=True, timeout=10,
+            )
+            if r.returncode != 0:
+                return None
+            suffix = f":{port}"
+            for line in r.stdout.splitlines():
+                parts = line.split()
+                if len(parts) >= 5 and parts[3].upper() == "LISTENING":
+                    if parts[1].endswith(suffix):
+                        try:
+                            return int(parts[4])
+                        except ValueError:
+                            continue
+            return None
+        else:
+            r = subprocess.run(
+                ["lsof", "-ti", f"tcp:{port}"],
+                capture_output=True, text=True, timeout=10,
+            )
+            if r.returncode not in (0, 1):
+                return None
+            for tok in r.stdout.split():
+                try:
+                    return int(tok)
+                except ValueError:
+                    continue
+            return None
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        return None
+
+
+def _kill_pid(pid: int) -> None:
+    """Force-kill `pid` and any child processes. Raises on failure."""
+    if os.name == "nt":
+        # /T walks the process tree, /F forces termination — needed
+        # because ppf-cts-server.exe spawns child solver subprocesses
+        # the user wants gone too.
+        subprocess.run(
+            ["taskkill", "/F", "/T", "/PID", str(pid)],
+            check=True, timeout=10, capture_output=True,
+        )
+    else:
+        import signal
+        try:
+            os.killpg(os.getpgid(pid), signal.SIGKILL)
+        except (ProcessLookupError, PermissionError, OSError):
+            os.kill(pid, signal.SIGKILL)
+
+
+def _resolved_server_port() -> int:
+    """Best-effort lookup of the solver server port the addon is using.
+
+    Falls back to DEFAULT_SERVER_PORT if nothing else is available.
+    """
+    info_port = getattr(com.info, "server_port", None)
+    if isinstance(info_port, int) and info_port > 0:
+        return info_port
+    return DEFAULT_SERVER_PORT
+
+
+class SOLVER_OT_ForceTerminatePort(Operator):
+    """Find and force-kill any process listening on the solver server port.
+
+    Used as a recovery hatch when a previous Stop/Disconnect cycle left
+    a ppf-cts-server.exe (or some other squatter) bound to the port,
+    surfacing as ``Port N is in use`` on the next Connect attempt.
+    Walks the process tree on Windows so child processes the server
+    spawned (e.g. the CUDA solver subprocess) also go away.
+    """
+
+    bl_idname = "solver.force_terminate_port"
+    bl_label = "Force Terminate Process"
+    bl_description = (
+        "Find and force-kill the process listening on the solver "
+        "server port (recovery hatch for stuck ppf-cts-server)"
+    )
+
+    def execute(self, context):
+        port = _resolved_server_port()
+        pid = _find_pid_holding_port(port)
+        if pid is None:
+            self.report(
+                {"WARNING"},
+                f"No LISTENING process found on port {port}.",
+            )
+            return {"CANCELLED"}
+        try:
+            _kill_pid(pid)
+        except subprocess.CalledProcessError as exc:
+            stderr = (exc.stderr or b"").decode(errors="replace").strip()
+            self.report(
+                {"ERROR"},
+                f"Failed to kill PID {pid} on port {port}: {stderr or exc}",
+            )
+            return {"CANCELLED"}
+        except Exception as exc:
+            self.report(
+                {"ERROR"},
+                f"Failed to kill PID {pid} on port {port}: {exc}",
+            )
+            return {"CANCELLED"}
+        self.report(
+            {"INFO"},
+            f"Killed PID {pid} (was holding port {port}).",
+        )
+        return {"FINISHED"}
+
+
 classes = [
     SOLVER_OT_ShowConsole,
     SOLVER_OT_Terminate,
     SOLVER_OT_SaveAndQuit,
     SOLVER_OT_UpdateStatus,
+    SOLVER_OT_ForceTerminatePort,
 ]

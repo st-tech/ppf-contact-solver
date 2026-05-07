@@ -45,11 +45,6 @@ def install_docker():
     return "Docker-Py installation initiated"
 
 
-def _check_vec3(name: str, v):
-    from ...core.utils import check_vec3
-    return check_vec3(name, v, MCPError)
-
-
 @mcp_handler
 def set_scene_parameters(
     step_size: Optional[float] = None,
@@ -104,10 +99,11 @@ def set_scene_parameters(
     scene = bpy.context.scene
     state = get_addon_data(scene).state
 
+    from ...core.utils import check_vec3
     if gravity is not None:
-        gravity = _check_vec3("gravity", gravity)
+        gravity = check_vec3("gravity", gravity, MCPError)
     if wind_direction is not None:
-        wind_direction = _check_vec3("wind_direction", wind_direction)
+        wind_direction = check_vec3("wind_direction", wind_direction, MCPError)
 
     param_map = {
         "step_size": step_size,

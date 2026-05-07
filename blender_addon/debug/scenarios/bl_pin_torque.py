@@ -4,10 +4,19 @@
 # rest positions for torque pins (TorqueOperation.apply is a no-op
 # at the frontend layer because torque is force-driven), so PC2 and
 # fixed.time agree at zero displacement.
+#
+# On a real CUDA build the torque actually induces motion (the
+# integrator applies the force; the implicit step solves it through),
+# so PC2 diverges from fixed.time by however far the torque moved
+# the verts. The frontend has no force-side reference to compare
+# against, so we just bound the divergence: a magnitude=1.0 torque
+# applied for 0.04 s on a 1x1 plane drifts on the order of 1e-3 m,
+# well under 1e-2. Tightening the tolerance here would amount to
+# asserting a specific solver-side numerical scheme, which we don't
+# want to lock in.
 
 from __future__ import annotations
 from . import _pin_fidelity_common as _common
-from . import _runner as r
 
 NEEDS_BLENDER = True
 
@@ -18,6 +27,7 @@ CASE = {
         {"type": "TORQUE", "magnitude": 1.0, "axis_component": "PC3",
          "frame_start": 1, "frame_end": 4},
     ],
+    "tolerance": 1e-2,
 }
 
 

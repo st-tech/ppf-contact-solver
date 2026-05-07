@@ -117,7 +117,8 @@ documentation, grouped by subject and alphabetized within each group.
 **Constitutive model**
 : The mathematical model that governs how a group deforms (for example
   Baraff-Witkin, Stable NeoHookean, or ARAP). Available choices depend on
-  group type.
+  group type: Shell offers Baraff-Witkin and ARAP, Solid offers Stable
+  NeoHookean and ARAP, Rod is locked to ARAP.
 
 **Dynamic parameter**
 : A scene-level parameter whose value is keyframed over time: gravity,
@@ -226,25 +227,33 @@ documentation, grouped by subject and alphabetized within each group.
   dispatched with `tools/call`. Goes through the same validation layer as
   the sidebar buttons.
 
-**Protocol 0.02**
-: The current wire protocol version between the add-on and `server.py`.
-  The server advertises its version on connect; mismatches surface as a
-  protocol-version-mismatch status and refuse to proceed.
+**Protocol 0.04**
+: The current wire protocol version between the add-on and the
+  `ppf-cts-server` binary. TCMD requests carry a 4-byte big-endian length
+  prefix between the `b"TCMD"` header and the payload, and the server
+  supports heartbeat recovery on long-running operations. CBOR envelope
+  payloads on this connection use the schema from the `ppf-cts-formats`
+  crate. The server advertises its version on connect; mismatches surface
+  as a protocol-version-mismatch status and refuse to proceed.
 
 **Python API (add-on)**
-: The `zozo_contact_solver` module imported from Blender's text editor or
-  a notebook. Covers the same validation layer as the sidebar and the MCP
-  server. See [Blender Python API](integrations/python_api.md).
+: The add-on's Python API, exposed under
+  `bl_ext.user_default.ppf_contact_solver.ops.api` and imported from
+  Blender's text editor or a notebook. Covers the same validation layer
+  as the sidebar and the MCP server. See
+  [Blender Python API](integrations/python_api.md).
 
 **`run_python_script`**
 : MCP tool that evaluates arbitrary Python inside Blender. Exists for
   operations the add-on does not yet expose as first-class tools; see the
   security note in [MCP Server](integrations/mcp.md).
 
-**`server.py`**
-: The solver process launched on the remote side (or as a local
-  subprocess for Windows Native) that listens for work over TCP on the
-  configured port (default 9090).
+**`ppf-cts-server`**
+: The Rust solver binary (`ppf-cts-server` on Linux,
+  `ppf-cts-server.exe` on Windows) launched on the remote side (or as a
+  local subprocess for Windows Native) that listens for work over TCP on
+  the configured port (default 9090). Built from the `ppf-cts-server`
+  crate, which wraps the algorithmic core in `ppf-cts-core`.
 
 **Session ID**
 : Per-connection identifier the server assigns at start. Persisted with

@@ -62,6 +62,7 @@ import os
 
 from . import _driver_lib as dl
 from . import _runner as r
+from . import REPO_ROOT_POSIX
 
 
 NEEDS_BLENDER = True
@@ -207,7 +208,7 @@ try:
     # _encode_explicit_merge_pairs's JSON parse + barycentric argmax,
     # not just a PropertyGroup string round-trip.
     param_bytes = dh.encoder_param.encode_param(bpy.context)
-    decoded = pickle.loads(param_bytes)
+    decoded = dh.decode_addon_blob(param_bytes)
     decoded_emp = decoded.get("explicit_merge_pairs", [])
     encoder_ok = (
         len(decoded_emp) == 1
@@ -341,9 +342,7 @@ _DRIVER_TEMPLATE = dl.DRIVER_LIB + _DRIVER_BODY
 
 
 def build_driver(ctx: r.ScenarioContext) -> str:
-    repo_root = os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "..", "..", "..")
-    )
+    repo_root = REPO_ROOT_POSIX
     return (
         _DRIVER_TEMPLATE
         .replace("<<LOCAL_PATH>>", repo_root)

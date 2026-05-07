@@ -5,13 +5,11 @@
 #
 # Per-group fTetWild override encoding.
 #
-# Motivation: commit 71325d15 ("Per-group fTetWild overrides and
-# velocity keyframe copy/paste"). SOLID groups gained per-field
-# fTetWild overrides (edge_length_fac, epsilon, stop_energy,
-# num_opt_iter, optimize, simplify, coarsen) behind per-field enable
-# toggles. Only enabled overrides ride through ``param.pickle`` as
-# ``param["group"][i][0]["ftetwild"]``; the decoder later fans the
-# kwargs out by UUID into ``tetrahedralize()``.
+# SOLID groups carry per-field fTetWild overrides (edge_length_fac,
+# epsilon, stop_energy, num_opt_iter, optimize, simplify, coarsen)
+# behind per-field enable toggles. Only enabled overrides ride through
+# ``param.pickle`` as ``param["group"][i][0]["ftetwild"]``; the decoder
+# later fans the kwargs out by UUID into ``tetrahedralize()``.
 #
 # This scenario authors a SOLID group on a primitive cube, sets every
 # override toggle on with a non-default value, encodes the params,
@@ -168,9 +166,9 @@ try:
         },
     )
 
-    # ----- Encode params and decode the pickle ------------------
+    # ----- Encode params and decode the CBOR envelope ------------
     param_bytes = dh.encoder_param.encode_param(bpy.context)
-    decoded = pickle.loads(param_bytes)
+    decoded = dh.decode_addon_blob(param_bytes)
     dh.log("decoded keys=" + repr(sorted(decoded.keys())))
 
     # group is encoded as [(params_dict, objects, object_uuids), ...].

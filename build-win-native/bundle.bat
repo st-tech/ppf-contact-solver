@@ -41,10 +41,15 @@ REM ============================================================
 echo [1/9] Verifying build...
 
 set RUST_EXE=%SRC_DIR%\target\release\ppf-contact-solver.exe
-set CUDA_DLL=%SRC_DIR%\src\cpp\build\lib\libsimbackend_cuda.dll
+set SERVER_EXE=%SRC_DIR%\target\release\ppf-cts-server.exe
+set CUDA_DLL=%SRC_DIR%\crates\ppf-cts-solver\src\cpp\build\lib\libsimbackend_cuda.dll
 
 if not exist "%RUST_EXE%" (
     echo ERROR: ppf-contact-solver.exe not found. Please run build.bat first.
+    exit /b 1
+)
+if not exist "%SERVER_EXE%" (
+    echo ERROR: ppf-cts-server.exe not found. Please run build.bat first.
     exit /b 1
 )
 if not exist "%CUDA_DLL%" (
@@ -83,13 +88,24 @@ REM ============================================================
 echo.
 echo [3/9] Copying application binaries...
 
-REM Copy Rust exe to target/release/ (where frontend expects it)
+REM Copy Rust exes to target/release/ (where frontend expects them).
+REM ppf-contact-solver.exe is the CUDA solver driver; ppf-cts-server.exe
+REM is the tokio-based solver host that the Blender addon's Windows
+REM Native launcher (blender_addon/core/connection.py) spawns when
+REM users select "Windows Native" mode in the addon UI.
 copy "%RUST_EXE%" "%TARGET_DIR%\" >nul
 if errorlevel 1 (
     echo ERROR: Failed to copy ppf-contact-solver.exe
     exit /b 1
 )
 echo   Copied ppf-contact-solver.exe to target/release/
+
+copy "%SERVER_EXE%" "%TARGET_DIR%\" >nul
+if errorlevel 1 (
+    echo ERROR: Failed to copy ppf-cts-server.exe
+    exit /b 1
+)
+echo   Copied ppf-cts-server.exe to target/release/
 
 REM Copy CUDA backend DLL to bin/ (loaded via PATH)
 copy "%CUDA_DLL%" "%BIN_DIR%\" >nul
@@ -220,38 +236,39 @@ if exist "%SRC_DIR%\frontend" (
 )
 
 REM ============================================================
-REM Copy src Python module (exclude cpp build artifacts and caches)
+REM Copy crate source roots used by frontend log harvesting
 REM ============================================================
+REM frontend/_session_inspect_.py:_harvest_log_docstrings walks
+REM crates/ppf-cts-solver/src and crates/ppf-cts-core/src to discover
+REM log channel names from `// Name:` docstrings. Without these in the
+REM bundle, session.get.log.names() returns [] and notebooks fail at
+REM `assert "time-per-frame" in logs`. Exclude cpp/build (CUDA build
+REM artifacts; the resulting DLL is copied separately into bin\).
 echo.
-echo [8/9] Copying src module...
+echo [8/9] Copying crate source roots...
 
-if exist "%SRC_DIR%\src" (
-    REM Copy src directory excluding build artifacts and caches
-    robocopy "%SRC_DIR%\src" "%DIST_DIR%\src" /E /XD __pycache__ build obj tests /XF *.pyc *.pyo *.obj *.lib *.exp /NJH /NJS /NDL /NC /NS /NP >nul
+if exist "%SRC_DIR%\crates\ppf-cts-solver\src" (
+    robocopy "%SRC_DIR%\crates\ppf-cts-solver\src" "%DIST_DIR%\crates\ppf-cts-solver\src" /E /XD __pycache__ build obj tests /XF *.pyc *.pyo *.obj *.lib *.exp /NJH /NJS /NDL /NC /NS /NP >nul
     if errorlevel 8 (
-        echo ERROR: Failed to copy src
+        echo ERROR: Failed to copy crates\ppf-cts-solver\src
         exit /b 1
     )
-    echo   [OK] Copied src
+    echo   [OK] Copied crates\ppf-cts-solver\src
 ) else (
-    echo   WARNING: src folder not found, skipping
+    echo ERROR: crates\ppf-cts-solver\src not found at %SRC_DIR%\crates\ppf-cts-solver\src
+    exit /b 1
 )
 
-REM ============================================================
-REM Copy server Python package (server.py imports from server/)
-REM ============================================================
-echo.
-echo [8.5/9] Copying server module...
-
-if exist "%SRC_DIR%\server" (
-    robocopy "%SRC_DIR%\server" "%DIST_DIR%\server" /E /XD __pycache__ /XF *.pyc *.pyo test_*.py /NJH /NJS /NDL /NC /NS /NP >nul
+if exist "%SRC_DIR%\crates\ppf-cts-core\src" (
+    robocopy "%SRC_DIR%\crates\ppf-cts-core\src" "%DIST_DIR%\crates\ppf-cts-core\src" /E /XD __pycache__ /XF *.pyc *.pyo /NJH /NJS /NDL /NC /NS /NP >nul
     if errorlevel 8 (
-        echo ERROR: Failed to copy server
+        echo ERROR: Failed to copy crates\ppf-cts-core\src
         exit /b 1
     )
-    echo   [OK] Copied server
+    echo   [OK] Copied crates\ppf-cts-core\src
 ) else (
-    echo   WARNING: server folder not found, skipping
+    echo ERROR: crates\ppf-cts-core\src not found at %SRC_DIR%\crates\ppf-cts-core\src
+    exit /b 1
 )
 
 REM ============================================================
