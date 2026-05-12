@@ -66,6 +66,7 @@ RUN apt-get update && \
 
 # Copy only necessary files from builder
 COPY --from=builder /root/${PROJ_NAME}/target/release/ppf-contact-solver /root/${PROJ_NAME}/target/release/ppf-contact-solver
+COPY --from=builder /root/${PROJ_NAME}/target/release/ppf-cts-server /root/${PROJ_NAME}/target/release/ppf-cts-server
 COPY --from=builder /root/${PROJ_NAME}/target/release/build/ppf-cts-solver-*/out/lib/*.so /usr/local/lib/
 COPY --from=builder /root/${PROJ_NAME}/*.py /root/${PROJ_NAME}/
 COPY --from=builder /root/${PROJ_NAME}/Cargo.toml /root/${PROJ_NAME}/
