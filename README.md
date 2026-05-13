@@ -45,6 +45,7 @@ involving 👚 shells, 🪵 solids and 🪢 rods. All made by [ZOZO, Inc.](https
 - **🎨 Blender Add-on**: Simulate remotely and fetch results locally, even on macOS.
 - **🤖 MCP Support**: Let a LLM run simulations for you using natural language.
 - **✨ Stay Clean**: You can remove all traces after use.
+- **📜 Permissive License**: Apache 2.0 allows commercial and proprietary use.
 
 > ⚠️ Built for offline uses; not real time. Some examples may run at an interactive rate.
 
@@ -71,11 +72,11 @@ involving 👚 shells, 🪵 solids and 🪢 rods. All made by [ZOZO, Inc.](https
   - [📦 Action Artifacts](#-action-artifacts)
 - [📡 Deploying on Cloud Services](#-deploying-on-cloud-services)
   - [📦 Deploying on vast.ai](#-deploying-on-vastai)
-  - [📦 Deploying on RunPod](#-deploying-on-runpod)
   - [📦 Deploying on Scaleway](#-deploying-on-scaleway)
   - [📦 Deploying on Amazon Web Services](#-deploying-on-amazon-web-services)
   - [📦 Deploying on Google Compute Engine](#-deploying-on-google-compute-engine)
 - [🧩 Community's Blender Add-ons](#-communitys-blender-add-ons)
+- [💼 Commercial Use and Beyond](#-commercial-use-and-beyond)
 - [📬 Contributing](#-contributing)
 - [🙏 Acknowledgements](#-acknowledgements)
 
@@ -138,8 +139,7 @@ To retain consistency with the paper, we have created a new branch ```sigasia-20
 - 🚫 General users *should not* use this branch as it is not optimized for best performance.
 - 🚫 All algorithmic changes listed in this [(Markdown)](./articles/bug.md) are excluded from this branch.
 - 📦 We also provide a pre-compiled Docker image: ```ghcr.io/st-tech/ppf-contact-solver-compiled-sigasia-2024:latest``` of this branch.
-- 🌐 [Template Link for vast.ai](https://cloud.vast.ai/?ref_id=85288&creator_id=85288&name=ppf-contact-solver-sigasia-2024)
-- 🌐 [Template Link for RunPods](https://runpod.io/console/deploy?template=ooqpniuixi&ref=bhy3csxy)
+- 🌐 [Template Link for vast.ai](https://cloud.vast.ai?ref_id=85288&template_id=0c7544fb5eda5ac95bf945c6b1249175)
 
 ## ⚡️ Requirements
 
@@ -156,7 +156,7 @@ Whether you plan to use the Blender add-on or the JupyterLab interface, the solv
 
 #### 🪟 Windows Native Executable
 
-For Windows 10/11 users, a self-contained executable (~230MB) is available.
+For Windows 10/11 users, a self-contained executable (~320MB) is available.
 No Python, Docker, or CUDA Toolkit installation is needed.
 All should simply work out of the box [(Video)](https://zozo.box.com/s/9rthkw122fyss5qxuf5mie9xywg7jzdz).
 
@@ -241,7 +241,7 @@ If you wish to build the docker image from scratch, please refer to the cleaner 
 We provide two frontends: a Blender add-on and a JupyterLab interface. The Blender add-on lets you build scenes and run simulations entirely within Blender's UI, while JupyterLab lets you script everything in Python from your browser. Both communicate with the same solver engine, so pick whichever you like.
 
 In both cases, you can interact with the simulator on your laptop while the actual simulation runs on a remote headless server over the internet.
-This means that **you don't have to own NVIDIA hardware**, but can rent it at [vast.ai](https://vast.ai) or [RunPod](https://www.runpod.io/) for less than $0.5 per hour.
+This means that **you don't have to own NVIDIA hardware**, but can rent it at [vast.ai](https://vast.ai) for less than $0.5 per hour.
 That said, if you do have a modern NVIDIA GPU on a local Windows or Linux machine, you can also run the solver directly on it.
 Actually, this [(Video)](https://zozo.box.com/s/jgd6ijfmwee04vvnnfzapq7m2eq7cxy8) was recorded on a [vast.ai](https://vast.ai) instance.
 The experience is good! 👍
@@ -729,8 +729,8 @@ Running our solver on the cloud has a few practical perks:
 - **📈 Scale on demand**: If you have a deadline, just launch multiple instances and run experiments in parallel. No waiting in a queue.
 - **🤝 Share with collaborators**: Send the JupyterLab link to a remote teammate and they can watch the simulation right alongside you.
 - **🔒 Cloud-grade security**: You inherit whatever security the provider gives you, which is usually a lot more than you'd set up yourself.
-- **🐛 Easier bug repro**: When users and developers are on the same kernel and driver, reproducing a bug is far easier than juggling different local setups.
-- **🛠️ No hardware to babysit**: No drivers to update, no fans to clean, no GPU to replace when it dies.
+- **🐛 Reproducible environments**: Users and developers share the same kernel and driver, making bug reproduction more reliable than across heterogeneous local setups.
+- **🛠️ No hardware maintenance**: No driver updates, no thermal management, and no replacement costs when hardware fails.
 
 Below, we describe how to deploy our solver on major cloud services. These instructions are up to date as of late 2024 and are subject to change.
 
@@ -738,17 +738,8 @@ Below, we describe how to deploy our solver on major cloud services. These instr
 
 ### 📦 Deploying on [vast.ai](https://vast.ai)
 
-- Select our template [(Link)](https://cloud.vast.ai/?creator_id=85288&name=ppf-contact-solver).
-- Create an instance and click `Open` button.
-
-> ⚠️ `Open` button URL is public (not secure); only for testing purposes and should not be used for production use. For better security, duplicate the template and close the port, then use SSH port forwarding instead.
-
-### 📦 Deploying on [RunPod](https://runpod.io)
-
-- Follow this link [(Link)](https://runpod.io/console/deploy?template=we8ta2hy86&ref=bhy3csxy) and deploy an instance using our template.
-- Click `Connect` button and open the `HTTP Services` link.
-
-> ⚠️ `HTTP Services` URL is public (not secure); only for testing purposes and should not be used for production use. For better security, duplicate the template and close the port, then use SSH port forwarding instead.
+- Select our template [(Link)](https://cloud.vast.ai?ref_id=85288&template_id=29158e5c91e1b4b9543b6a027a837979).
+- Create an instance and connect via SSH with port forwarding, e.g. `ssh -L 8080:localhost:8080 root@<host> -p <port>`, then open `http://localhost:8080` in your browser.
 
 ### 📦 Deploying on [Scaleway](https://www.scaleway.com/en/)
 
@@ -783,6 +774,12 @@ Alongside our [official Blender add-on](#-blender-add-on), the following communi
 
 - [AndoSim](https://github.com/Slaymish/AndoSim)
 - [ArzteZ-PPF-solver](https://github.com/tavcitavci-sys-tavci-ui/ArzteZ-PPF-solver)
+
+## 💼 Commercial Use and Beyond
+
+This project is released under the [Apache License 2.0](./LICENSE). In plain terms, you may use, modify, and redistribute the code in commercial products, including proprietary software, without paying royalties or open-sourcing your own code. You only need to preserve the license notice and the attribution required by the license.
+
+If you build something on top of this solver, we would love to hear about it, but you are not obligated to disclose anything.
 
 ## 📬 Contributing
 

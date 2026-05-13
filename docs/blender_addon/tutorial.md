@@ -8,6 +8,12 @@
 
 </figure>
 <figure>
+<figcaption><strong>Setting Up vast.ai</strong><span>Provision a vast.ai instance and connect the add-on to it.</span></figcaption>
+
+[![Setting Up vast.ai](images/tutorials/vast-ai-opt.jpg)](https://zozo.box.com/s/0v1oqem6a00cpj478pt93asp8hz905vg){target="_blank" rel="noopener"}
+
+</figure>
+<figure>
 <figcaption><strong>Windows Setup</strong><span>Install and configure the add-on on Windows.</span></figcaption>
 
 [![Windows Setup](images/tutorials/windows-opt.jpg)](https://zozo.box.com/s/jhs75ddc3oihrl4bw4fa00hpi2dsjdrs){target="_blank" rel="noopener"}
