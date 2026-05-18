@@ -3,7 +3,7 @@
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
 # License: Apache v2.0
 #
-# Fetch failure + watchdog recovery.
+# Fetch failure + watchdog recovery (commit a8766a08).
 #
 # The fetch pipeline guarantees a terminal event on every code path:
 # ``_do_fetch_map`` and ``_do_fetch_frames`` dispatch ``FetchFailed`` on

@@ -3,7 +3,7 @@
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
 # License: Apache v2.0
 #
-# Shared helpers for protocol-level scenarios.
+# Shared helpers for Phase 1 protocol-level scenarios.
 #
 # A ScenarioContext carries the per-worker configuration (server host/port,
 # project name, paths). Each scenario gets one and uses ``ProtoClient``
@@ -162,8 +162,8 @@ def make_minimal_param(frames: int = 6, fps: int = 30) -> bytes:
 
 
 def make_minimal_data() -> bytes:
-    """Stand-in data.pickle. The fake build only cares that the file
-    exists and unpickles; contents are not validated."""
+    """Stand-in data.pickle. Phase 1 doesn't validate its contents; the
+    fake build only cares that the file exists and unpickles."""
     return pickle.dumps({
         "vertices": [],
         "tris": [],

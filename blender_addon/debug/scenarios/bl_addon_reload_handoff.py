@@ -6,11 +6,12 @@
 # Addon reload via the debug TCP port mid-session, preserving scene-
 # level state across the addon_disable / addon_enable boundary.
 #
-# Why the indirection: the reload server's
+# Motivation: commit ``c8236be3`` ("Fix reload crashes when triggered
+# from a UI button and preserve handoff"). The reload server's
 # ``trigger_reload_now`` schedules ``perform_reload`` through
 # ``bpy.app.timers`` so the operator's Python frame unwinds before
-# ``addon_disable`` tears down its class. ``unregister`` deliberately
-# does not pop ``_RESTART_STATE_KEY``, which is written by
+# ``addon_disable`` tears down its class. ``unregister`` no longer
+# pops ``_RESTART_STATE_KEY``, which is written by
 # ``_reload_phase1_disable`` immediately before ``addon_disable``;
 # clearing it inside ``unregister`` would drop the handoff that
 # ``register`` needs to restart the reload server.

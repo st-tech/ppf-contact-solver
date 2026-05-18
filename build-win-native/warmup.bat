@@ -440,8 +440,10 @@ if errorlevel 1 (
     )
 
     echo.
-    echo Installing pytetwild (fTetWild wrapper^)...
-    "%PYTHON%" -m pip install --no-warn-script-location pytetwild
+    echo Installing pytetwild (fTetWild wrapper^) + pyvista...
+    rem pyvista is imported at the top of pytetwild._accessor but is not
+    rem declared as a hard dependency, so install it explicitly.
+    "%PYTHON%" -m pip install --no-warn-script-location pytetwild pyvista
     if errorlevel 1 (
         echo WARNING: pytetwild failed to install
     )

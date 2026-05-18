@@ -3,7 +3,7 @@
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
 # License: Apache v2.0
 #
-# Upload-id desync recovery.
+# Upload-id desync recovery (commit ea4303cb).
 #
 # The pipeline pins ``state.active_upload_id`` to the server's reported
 # upload_id on the first poll after a build is dispatched. If a later

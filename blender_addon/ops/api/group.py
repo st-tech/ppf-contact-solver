@@ -20,6 +20,7 @@ _PARAM_PROPS = {
     "shell_young_modulus", "solid_young_modulus", "rod_young_modulus",
     "shell_poisson_ratio", "solid_poisson_ratio",
     "friction",
+    "use_group_bounding_box_diagonal",
     "contact_gap", "contact_gap_rat",
     "contact_offset", "contact_offset_rat",
     "enable_strain_limit", "strain_limit",
@@ -27,7 +28,7 @@ _PARAM_PROPS = {
     "enable_plasticity", "plasticity", "plasticity_threshold",
     "enable_bend_plasticity", "bend_plasticity", "bend_plasticity_threshold",
     "bend_rest_angle_source",
-    "bend", "shrink", "shrink_x", "shrink_y",
+    "bend", "shrink", "shrink_x", "shrink_y", "length_factor",
     "stitch_stiffness",
 }
 
@@ -47,8 +48,14 @@ class _ParamProxy:
     - **Young's modulus**: ``solid_young_modulus``, ``shell_young_modulus``,
       ``rod_young_modulus``
     - **Poisson ratio**: ``solid_poisson_ratio``, ``shell_poisson_ratio``
-    - **Contact**: ``friction``, ``contact_gap``, ``contact_gap_rat``,
-      ``contact_offset``, ``contact_offset_rat``
+    - **Contact**: ``friction``, ``use_group_bounding_box_diagonal``,
+      ``contact_gap``, ``contact_gap_rat``, ``contact_offset``,
+      ``contact_offset_rat``.  When
+      ``use_group_bounding_box_diagonal`` is ``True`` (the default),
+      the solver consumes ``contact_gap_rat`` * bbox-diagonal and
+      ``contact_offset_rat`` * bbox-diagonal; set it to ``False`` to
+      consume the absolute ``contact_gap`` / ``contact_offset`` values
+      directly.
     - **Strain limit**: ``enable_strain_limit``, ``strain_limit``
     - **Inflation**: ``enable_inflate``, ``inflate_pressure``
     - **Plasticity**: ``enable_plasticity``, ``plasticity``,
@@ -76,11 +83,15 @@ class _ParamProxy:
         group.param.solid_poisson_ratio = 0.45
         group.param.shell_poisson_ratio = 0.30
 
-        # Contact
+        # Contact (absolute mode)
+        group.param.use_group_bounding_box_diagonal = False
         group.param.friction = 0.5
         group.param.contact_gap = 0.001
-        group.param.contact_gap_rat = 0.1
         group.param.contact_offset = 0.002
+
+        # Contact (ratio mode -- defaults)
+        group.param.use_group_bounding_box_diagonal = True
+        group.param.contact_gap_rat = 0.1
         group.param.contact_offset_rat = 0.2
 
         # Strain limit
@@ -159,6 +170,19 @@ class _Group:
             same_group = solver.get_group(group.uuid)
         """
         return object.__getattribute__(self, "_uuid")
+
+    @property
+    @blender_api
+    def name(self) -> str:
+        """Display name of this group.
+
+        Example::
+
+            for g in solver.get_groups():
+                if g.name == "WovenStrands":
+                    g.delete()
+        """
+        return self._get_group().name
 
     @property
     @blender_api
@@ -249,39 +273,127 @@ class _Group:
         )
         return self
 
+    # -- Initial velocity ----------------------------------------------------
+
+    @blender_api
+    def set_velocity(self, object_name: str,
+                     direction: tuple[float, float, float],
+                     speed: float, frame: int = 1) -> "_Group":
+        """Keyframe a velocity on an object assigned to this group.
+
+        Appends an entry to the assigned object's
+        ``velocity_keyframes`` collection.  Call once with
+        ``frame=1`` for an initial-velocity launch; call again with
+        higher ``frame`` values to build a velocity schedule.
+
+        Args:
+            object_name: Name of an object already added to this group
+                via :meth:`add`.
+            direction: ``(dx, dy, dz)`` velocity direction; normalized
+                by the solver before use.
+            speed: Velocity magnitude in m/s.
+            frame: Frame at which the keyframe takes effect.  ``1`` (the
+                default) is the initial-velocity slot.
+
+        Returns:
+            ``self`` for chaining.
+
+        Raises:
+            ValueError: If the object is not assigned to this group, or
+                a keyframe already exists at the requested frame.
+
+        Example::
+
+            ball = solver.create_group("Ball", type="SOLID")
+            ball.add("Sphere")
+            ball.set_velocity("Sphere", direction=(1, 0, 0), speed=2.3)
+        """
+        from ...core.uuid_registry import get_or_create_object_uuid
+        from ...models.collection_utils import sort_keyframes_by_frame
+
+        group = self._get_group()
+        obj = bpy.data.objects.get(object_name)
+        obj_uuid = get_or_create_object_uuid(obj) if obj else ""
+
+        target = None
+        for assigned in group.assigned_objects:
+            if obj_uuid and assigned.uuid == obj_uuid:
+                target = assigned
+                break
+            if not obj_uuid and assigned.name == object_name:
+                target = assigned
+                break
+        if target is None:
+            raise ValueError(
+                f"Object '{object_name}' is not assigned to this group"
+            )
+
+        for kf in target.velocity_keyframes:
+            if kf.frame == frame:
+                raise ValueError(
+                    f"Velocity keyframe at frame {frame} already exists "
+                    f"on '{object_name}'"
+                )
+
+        kf = target.velocity_keyframes.add()
+        kf.frame = frame
+        kf.direction = direction
+        kf.speed = speed
+        target.velocity_keyframes_index = sort_keyframes_by_frame(
+            target.velocity_keyframes
+        )
+        return self
+
     # -- Pin management ------------------------------------------------------
 
     @blender_api
-    def create_pin(self, object_name: str, vertex_group_name: str) -> _Pin:
-        """Pin a vertex group so its vertices stay fixed during simulation.
+    def create_pin(self, object_name: str, vertex_group_name: str,
+                   indices: list[int] | None = None) -> _Pin:
+        """Pin a vertex group (mesh) or set of control points (curve).
 
         Args:
-            object_name: Name of the mesh object.
-            vertex_group_name: Name of the vertex group on that object.
+            object_name: Name of the mesh or curve object.
+            vertex_group_name: For meshes, the name of an existing vertex
+                group on the object.  For curves, the logical name used
+                for the curve's ``_pin_<vertex_group_name>`` custom
+                property holding the pinned control-point indices.
+            indices: Control-point indices for curves only.  When given,
+                the curve's ``_pin_<vertex_group_name>`` property is
+                written before the pin is registered, so the same call
+                both defines and binds the pin.  Must be ``None`` for
+                meshes (meshes use existing vertex groups).
 
         Returns:
             A :class:`Pin` proxy for the newly created pin.
 
         Raises:
-            ValueError: If the object is missing, not a mesh, or the
-                vertex group does not exist on it.
+            ValueError: If the object is missing, not a mesh or curve,
+                the vertex group does not exist on a mesh, the
+                ``_pin_<name>`` property is missing on a curve and no
+                ``indices`` were supplied, or ``indices`` is passed for
+                a mesh.
 
         Example::
 
+            # Mesh: vertex group must already exist.
             pin = group.create_pin("Cloth", "collar")
-            pin.move(delta=(0, 0, 0.2), frame=60)
-        """
-        group = self._get_group()
+            pin.move_by(delta=(0, 0, 0.2), frame_start=1, frame_end=60)
 
-        obj = bpy.data.objects.get(object_name)
-        if obj is None:
-            raise ValueError(f"Object '{object_name}' not found")
-        if obj.type != "MESH":
-            raise ValueError(f"Object '{object_name}' is not a mesh")
-        if vertex_group_name not in [vg.name for vg in obj.vertex_groups]:
-            raise ValueError(
-                f"Vertex group '{vertex_group_name}' not found on '{object_name}'"
+            # Curve: pass control-point indices to define and bind in
+            # one call.
+            rod_pin = rod_group.create_pin(
+                "WovenCylinder", "left", indices=[0, 7, 14, 21],
             )
+        """
+        obj = bpy.data.objects.get(object_name)
+        if obj is not None and indices is not None:
+            if obj.type != "CURVE":
+                raise ValueError(
+                    f"'indices' is only valid for curve objects; "
+                    f"'{object_name}' is {obj.type}"
+                )
+            import json
+            obj[f"_pin_{vertex_group_name}"] = json.dumps(list(indices))
 
         # Validation + locking + raw mutation all go through
         # core.mutation so scripts and MCP clients share one gate.
@@ -299,7 +411,7 @@ class _Group:
         Example::
 
             for pin in group.get_pins():
-                pin.clear_keyframes()
+                print(pin.object_name, pin.vertex_group_name)
         """
         from ...models.groups import decode_vertex_group_identifier
 
@@ -310,26 +422,6 @@ class _Group:
             if obj_name and vg_name:
                 result.append(_Pin(self._uuid, obj_name, vg_name))
         return result
-
-    # -- Keyframe animation (convenience, delegates to each Pin) ---------------
-
-    @blender_api
-    def clear_keyframes(self) -> "_Group":
-        """Delete all keyframes for all pins in this group.
-
-        Convenience method that calls :meth:`Pin.clear_keyframes` on every
-        pin returned by :meth:`get_pins`.
-
-        Returns:
-            ``self`` for chaining.
-
-        Example::
-
-            group.clear_keyframes()
-        """
-        for pin in self.get_pins():
-            pin.clear_keyframes()
-        return self
 
     # -- Lifecycle -----------------------------------------------------------
 

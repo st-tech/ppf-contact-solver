@@ -16,7 +16,7 @@ The add-on talks to a solver process over one of several transports. Pick the on
 | **Docker over SSH Command** | Docker-over-SSH configured from a shell `ssh ...` command | Docker |
 | **Windows Native** | Solver runs as a Windows subprocess using a bundled Python + CUDA | Windows |
 
-All types share the same server-side protocol (TCP, version `0.04`) and the same UI flow in the panel: **Connect** -> **Start Server** -> transfer data -> **Run** -> **Fetch**.
+All types share the same server-side protocol (TCP, version `0.03`) and the same UI flow in the panel: **Connect** -> **Start Server** -> transfer data -> **Run** -> **Fetch**.
 
 Figure: Five stacked block diagrams showing where each piece lives for the five connection types, with blue solid arrows for lifecycle commands (start / stop / exec / port check) and purple dashed arrows for the TCP connection to the solver. The three Docker sub-modes are broken out separately in Docker.
 
@@ -29,7 +29,7 @@ Starting a solver session is two button presses:
 
 The panel stays responsive while this happens, the actual work runs on a background thread and the UI polls it several times a second.
 
-Windows Native is slightly different: it launches the server directly as part of the Connect step, so **Start Server** is effectively a no-op on that backend.
+Windows Native is slightly different: it launches the server directly as part of the Connect step, so **Start Server** is a no-op while the server is already running and only does something after **Stop Server**.
 
 TIP: **Save the connection once it works.** As soon as you have a successful **Connect**, click the **Save** icon on the profile row to write the current fields to a `.toml` file. Next session, **Open** the file, pick the entry, and every field auto-fills, with no retyping host, key path, container, or port. See Connection Profiles for the full workflow.
 
@@ -56,13 +56,15 @@ Connect opens the configured transport (SSH session, Docker client, or a local s
 
 **Start Server step**
 
-On Unix-family backends (Local, SSH, Docker, Docker over SSH) the add-on launches the server via a small script that runs:
+On Unix-family backends (Local, SSH, Docker, Docker over SSH) the add-on writes a small launch script to `/tmp/start_server.sh` and runs it. The script invokes:
 
 ```sh
-nohup ./target/release/ppf-cts-server --port <port> > server.log 2>&1 &
+nohup bash -c '[ -f $HOME/.local/share/ppf-cts/venv/bin/activate ] && source $HOME/.local/share/ppf-cts/venv/bin/activate; ./target/release/ppf-cts-server --port <port>' > server.log 2>&1 &
 ```
 
-The UI waits up to **16 seconds** for the server to announce it is ready. If a line containing `ERROR` or `FAILED` appears first, the wait aborts with that message; on plain timeout, the panel prints the last 20 lines of `server.log`.
+Inside a Docker container the server is launched with `--host 0.0.0.0` so the published port mapping reaches it; on Local and SSH it binds to `127.0.0.1`.
+
+The server writes `SERVER_STARTING` and `SERVER_READY` markers to `progress.log` in the working directory. The UI tails that file and waits up to **16 seconds** for `SERVER_READY`. If a line containing `ERROR` or `FAILED` appears first, the wait aborts with that message; on plain timeout, the panel prints the last 20 lines of `server.log`.
 
 Windows Native launches the server directly during the Connect step. See Windows - Under the hood.
 
@@ -125,7 +127,7 @@ The **Server Port** field is the same underlying property for every connection t
 
 **Virtual environment activation**
 
-Local mode reuses the same launch script as the SSH and Docker backends: it sources `$HOME/.local/share/ppf-cts/venv/bin/activate` if that file exists, otherwise it falls back to system `python3`. The solver's own install scripts are responsible for creating the venv; the add-on never creates or modifies it.
+Local mode reuses the same launch script as the SSH and Docker backends: it sources `$HOME/.local/share/ppf-cts/venv/bin/activate` if that file exists, otherwise the script runs the binary without activating any venv (so the build worker spawned by `ppf-cts-server` resolves `python3` from the system `PATH`). The solver's own install scripts are responsible for creating the venv; the add-on never creates or modifies it.
 
 **File transfer fast path**
 
@@ -250,7 +252,7 @@ Every other flag is silently ignored. If no host can be extracted the operator r
 
 **`~/.ssh/config` resolution**
 
-When **Host** looks like an alias instead of a DNS name, the add-on parses `~/.ssh/config` (first-match, with `Include` directives resolved) and fills in `HostName`, `Port`, `User`, and `IdentityFile` for the alias. Later matching entries fill in fields earlier entries left blank, so a trailing wildcard `Host *` block provides sensible defaults without overriding explicit blocks. If the config file is missing or the alias is not found, the alias text is used as the hostname verbatim. Only the six keywords listed in Supported ssh_config options are read; the parser tokenises each non-comment line on whitespace or `=`, matches the first word case-insensitively, and drops the line if the keyword isn't one it recognises.
+When **Host** looks like an alias instead of a DNS name, the add-on parses `~/.ssh/config` (first-match, with `Include` directives resolved) and fills in `HostName`, `Port`, `User`, and `IdentityFile` for the alias. Later matching entries fill in fields earlier entries left blank, so a trailing wildcard `Host *` block provides sensible defaults without overriding explicit blocks. If the config file is missing or the alias is not found, the alias text is used as the hostname verbatim. Only the six keywords listed in Supported ssh_config options are read; the parser tokenizes each non-comment line on whitespace or `=`, matches the first word case-insensitively, and drops the line if the keyword isn't one it recognizes.
 
 **Host-key policy**
 
@@ -368,11 +370,11 @@ The solver runs directly as a Windows subprocess using a bundled Python interpre
 
 ### Setup
 
-1. Set **Server Type** to `Windows Native`.
-2. Set **Win Native Path** to the root of your solver install. This is the directory that contains the built `ppf-cts-server.exe` binary (under `target\release\` for a developer build, or directly at the root in the redistributable bundle layout) plus either a shipped `python\` subfolder (redistributable bundle) or a `build-win-native\python\` subfolder (developer build) for the build worker.
+1. Set **Server Type** to `Win Native`.
+2. Set **Win Native Path** to the root of your solver install. This is the directory that contains the built `ppf-cts-server.exe` binary (under `target\release\` for a developer build, or under `bin\` in the redistributable bundle layout) plus either a shipped `python\` subfolder (redistributable bundle) or a `build-win-native\python\` subfolder (developer build) for the build worker.
 3. Set **Server Port** (default `9090`).
 4. Click **Connect**. The add-on verifies `ppf-cts-server.exe` is where it should be, picks up the right Python runtime for the build worker, and launches the solver as a hidden subprocess.
-5. The server is launched as part of the connect step, so once **Connect** reports success the server is already running. Pressing **Start Server** afterwards is a no-op on this backend.
+5. The server is launched as part of the connect step, so once **Connect** reports success the server is already running. Pressing **Start Server** is a no-op while it is alive; it re-spawns the subprocess only after a **Stop Server**.
 
 Figure: Backend Communicator with **Server Type** set to `Windows Native`. Only **Solver Path** and **Project Name** appear, with no SSH or Docker fields. **Connect** is highlighted.
 
@@ -380,12 +382,12 @@ Figure: Backend Communicator with **Server Type** set to `Windows Native`. Only 
 
 | Field | Description |
 | ----- | ----------- |
-| Win Native Path | Root directory containing `ppf-cts-server.exe` (under `target\release\` for dev builds, at the root for bundles) plus either `python\` (bundle) or `build-win-native\python\` (dev) for the build worker. |
+| Win Native Path | Root directory containing `ppf-cts-server.exe` (under `target\release\` for dev builds, under `bin\` for bundles) plus either `python\` (bundle) or `build-win-native\python\` (dev) for the build worker. |
 | Server Port | TCP port for `ppf-cts-server.exe`. Default `9090`. |
 
 ### Troubleshooting
 
-- **`ppf-cts-server.exe not found in <root>`** - the root points at the wrong directory. It must be the solver checkout root (so that `target\release\ppf-cts-server.exe` resolves), or the bundle root that ships the binary directly.
+- **`ppf-cts-server.exe not found in <root>`** - the root points at the wrong directory. It must be the solver checkout root (so that `target\release\ppf-cts-server.exe` resolves) or the bundle root that ships the binary under `bin\`.
 - **`Embedded Python not found ...`** - the add-on could not find a Python runtime under the root. Either rebuild the dev tree, or download and unpack the bundle zip.
 - **CUDA DLL load errors** - on the shipped bundle, the solver relies on the system CUDA runtime. Install a matching CUDA version, or switch to the developer build which ships its own CUDA.
 
@@ -403,19 +405,19 @@ Connect picks one of two layouts by looking for `python.exe`:
     python/python.exe
     cuda/bin/*.dll
   target/release/
-    ppf-cts-server.exe       # Rust solver binary
-  src/cpp/build/lib/         # native shared libraries
+    ppf-cts-server.exe       # Rust server binary
+  src/cpp/build/lib/
 ```
 
-Used when you built the solver from source. The Python interpreter for the build worker is `build-win-native\python\python.exe`, `CUDA_PATH` is set to `build-win-native\cuda`, and the launcher prepends, in order, `build-win-native\python`, `target\release`, `src\cpp\build\lib`, and `build-win-native\cuda\bin` to `PATH`.
+Used when you built the server from source. The Python interpreter for the build worker is `build-win-native\python\python.exe`, `CUDA_PATH` is set to `build-win-native\cuda`, and the launcher prepends, in order, `build-win-native\python`, `target\release`, `src\cpp\build\lib`, and `build-win-native\cuda\bin` to `PATH`.
 
 #### Bundle layout
 
 ```text
 <root>/
-  ppf-cts-server.exe         # Rust solver binary at the root
+  bin/
+    ppf-cts-server.exe       # Rust server binary
   python/python.exe
-  bin/                       # native shared libraries
 ```
 
 Used by a shipped redistributable. The Python interpreter for the build worker is `root\python\python.exe`, `CUDA_PATH` is not set (CUDA is expected on the system `PATH`), and the launcher prepends `root\python`, `root\bin`, and `root\target\release` to `PATH`.
@@ -436,25 +438,13 @@ The subprocess inherits your current environment with a few additions:
 
 The solver is launched as `ppf-cts-server.exe --port <port>` with no visible console window, so nothing appears behind Blender.
 
-**Log redirection**
-
-The subprocess's stdout and stderr are redirected to `<root>\server.log` (open append). A `subprocess.PIPE` end the add-on never drains would fill the small Windows OS pipe buffer once the server's log4rs console appender produced enough output, blocking the tokio worker thread that wrote it and wedging the server. Routing both streams to a real file avoids that.
-
-**Attach to an existing server**
-
-If a `ppf-cts-server.exe` is already listening on the configured port (for example because Blender was restarted while the previous session's server is still alive), Connect probes it with a real protocol-0.04 TCMD ping. A matching response means the add-on attaches to the running process instead of trying to spawn a second copy. A foreign process on the port surfaces as `PortInUseByForeignProcess`; clear it via the **Force Terminate Process** button described below.
-
-**Force Terminate Process button**
-
-When Connect reports `Port N is in use`, the panel surfaces a **Force Terminate Process** button. It looks up the PID listening on the configured server port and force-kills it (walking the process tree on Windows so child solver subprocesses go too). This is the recovery hatch for the case where a previous Stop / Disconnect cycle left a `ppf-cts-server.exe` (or some other squatter) bound to the port. The panel suppresses the stale error message once a fresh probe confirms a `ppf-cts-server` is responding on that port again.
-
 **Shutdown**
 
 On disconnect (or **Stop Server**), the add-on asks the subprocess to terminate and waits up to 5 seconds; if it is still alive, it is killed. The Unix `pkill -f ppf-cts-server` path is not used; the backend holds the Windows process handle directly.
 
-**Why Start Server is a no-op**
+**Why Start Server is usually a no-op**
 
-The subprocess is started as part of the Connect step, so by the time Connect reports success the server is already running. Pressing **Start Server** afterwards has nothing to do.
+The subprocess is started as part of the Connect step, so by the time Connect reports success the server is already running and pressing **Start Server** has nothing to do. After a **Stop Server**, however, the process handle is cleared and **Start Server** re-spawns `ppf-cts-server.exe` via the same launcher used at Connect.
 
 ## Connection profiles
 

@@ -89,6 +89,8 @@ OBJECT_GROUP_DEFAULTS = {
     "computed_contact_offset": 0.0,
     # Solid-specific parameters
     "shrink": 1.0,
+    # Rod-specific parameters (1D analog of shell shrink_x / solid shrink)
+    "length_factor": 1.0,
     # fTetWild overrides (SOLID groups). When no sub-override is set, no
     # kwargs are forwarded and pure fTetWild defaults apply.
     "show_ftetwild": False,

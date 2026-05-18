@@ -15,7 +15,7 @@
 #   - ``SOLVER_OT_UpdateParams.poll`` is *always* True when the base
 #     connection / status guards are satisfied -- the button does not
 #     compare hashes itself, so a stale client-side cache cannot grey
-#     it out.
+#     it out (the source of the bug fixed in this commit set).
 #   - ``SOLVER_OT_Run.execute`` recomputes ``compute_param_hash`` at
 #     click time and refuses with an ERROR ("Click Update Params
 #     before running") whenever the fresh hash differs from

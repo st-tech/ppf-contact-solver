@@ -210,16 +210,23 @@ hem.scale(
 # Release a pin after 90 frames.
 shoulder.unpin(frame=90)
 
-# Keyframed move (EMBEDDED_MOVE). First .move(frame=...) auto-keys at the
-# current scene frame, then keys again at the target frame.
-sleeve = cloth.create_pin("Shirt", "SleevePins")
-sleeve.unpin(frame=30)
-sleeve.move(delta=(0, 0, 0.5), frame=20)
-
-# Torque can coexist with EMBEDDED_MOVE but not with SPIN/SCALE/MOVE_BY.
+# Torque can coexist with EMBEDDED_MOVE (UI-keyframed pins) but not with
+# SPIN/SCALE/MOVE_BY.
 twist = cloth.create_pin("Shirt", "TwistPins")
 twist.torque(magnitude=1.0, axis_component="PC3", frame_start=1, frame_end=60)
 ```
+
+For ROD groups whose objects are Blender curves, pass `indices=` to define the pinned control points in the same call (this writes the `_pin_<name>` custom property described above, then registers the pin):
+
+```python
+rod = solver.create_group("Strands", "ROD")
+rod.add("WovenCylinder")           # a curve object
+left  = rod.create_pin("WovenCylinder", "left",  indices=left_cp_indices)
+right = rod.create_pin("WovenCylinder", "right", indices=right_cp_indices)
+left.spin(axis=(1, 0, 0), angular_velocity=360, frame_start=1, frame_end=120)
+```
+
+For building the curve itself, see `solver.create_curve` in the Python API integration notes.
 
 #### Center-mode inference
 

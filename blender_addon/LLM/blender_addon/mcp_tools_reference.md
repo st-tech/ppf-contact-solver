@@ -301,7 +301,7 @@ TORQUE cannot coexist with other op types on the same pin.
 - **frame_start**: First frame the op is active
 - **frame_end**: Last frame the op is active
 - **transition**: LINEAR or SMOOTH
-- **delta**: [x, y, z] translation for MOVE_BY (metres)
+- **delta**: [x, y, z] translation for MOVE_BY (meters)
 - **spin_axis**: [x, y, z] rotation axis for SPIN
 - **spin_angular_velocity**: Degrees per second (SPIN)
 - **spin_flip**: Reverse spin direction
@@ -311,7 +311,7 @@ TORQUE cannot coexist with other op types on the same pin.
 - **scale_center**: [x, y, z] fixed center for SCALE (ABSOLUTE mode only)
 - **scale_center_mode**: CENTROID, ABSOLUTE, MAX_TOWARDS, or VERTEX
 - **torque_axis_component**: PC1, PC2, or PC3 (principal axis)
-- **torque_magnitude**: Torque in newton-metres
+- **torque_magnitude**: Torque in newton-meters
 - **torque_flip**: Reverse torque direction
 
 ### remove_pin_operation(group_uuid: str, vertex_group_identifier: str, index: int)

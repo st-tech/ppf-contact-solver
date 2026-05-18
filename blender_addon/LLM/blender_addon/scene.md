@@ -12,7 +12,7 @@ Accepted geometry:
 
 - Mesh objects may contain triangles, quads, or any mix of the two; n-gons are not supported, so triangulate those before assigning.
 - Solid groups are tetrahedralized internally by fTetWild (https://github.com/wildmeshing/fTetWild), which is tolerant of input quality: the surface does not strictly need to be a closed manifold, and small cracks or near-duplicate vertices are handled automatically.
-- Rod groups additionally accept Bezier curve objects, resampled along arc length at transfer time.
+- Rod groups additionally accept Bezier curve objects; each control point becomes one rod vertex (edge length therefore equals CP spacing) and the simulation evolves CP positions directly. NURBS curves are sampled per arc at four `t` values because NURBS CPs are off-curve.
 
 ## Object Groups
 
@@ -52,7 +52,7 @@ Figure: The panel right after a fresh Create Group click: a single `Group 1` box
 
 The type controls which material parameters are relevant and which material models are available. Static groups collapse to just Friction and Contact rows and replace the pin region with a Transform sub-box that holds per-object Move By / Spin / Scale ops (an alternative to Blender transform keyframes). See Static Objects for the full surface.
 
-Rod groups additionally accept Blender curve objects: Bezier curves are resampled along their arc length into rod vertices when transferred.
+Rod groups additionally accept Blender curve objects. For Bezier curves each control point becomes one rod vertex (1:1 mapping; edge length equals CP spacing), so you control simulation resolution by adding or removing CPs. NURBS curves are sampled per arc at four `t` values (NURBS CPs are off-curve, so interior samples are needed for the solver to track the arc shape).
 
 Figure: Reference matrix of the four types. Shell (green), Solid (red), Rod (yellow), Static (blue). Accepted object types: Shell/Solid/Static take meshes; Rod takes meshes plus Bezier curves. Default material model: Baraff-Witkin for Shell, ARAP for Solid and Rod, none for Static. Available models: Shell offers Baraff-Witkin / Stable NeoHookean / ARAP; Solid offers Stable NeoHookean and ARAP; Rod offers ARAP only; Static none. Density unit: kg/m² for Shell, kg/m³ for Solid, kg/m for Rod. Young's Modulus: Shell/Solid/Rod, not Static. Poisson's Ratio: Shell and Solid. Bend Stiffness: Shell (Rod inherits). Shrink: Shell anisotropic X/Y, Solid uniform, Rod/Static none. Strain Limit: Shell and Rod. Inflate: Shell only. Friction and Contact Gap: all four. Pin storage: Blender vertex groups for Shell/Solid, internal `_pin_name` custom property on curves for Rod, none for Static (uses a Transform sub-box). Default overlay colors: green, red, yellow, blue. Static is the thinnest column because the solver only uses it for collision; no material model and no parameters beyond Friction and Contact Gap. The Material Params box reshapes itself automatically to match the column.
 

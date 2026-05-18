@@ -3,16 +3,15 @@
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
 # License: Apache v2.0
 #
-# Regression guard for Transfer.poll: right after ``Run.execute``
-# the engine has flipped to STARTING_SOLVER locally but the next
-# ``PollTick`` hasn't round-tripped with the server yet. If
-# ``SOLVER_OT_Transfer.poll`` only inspected ``status.ready()`` (a
-# protocol-version check) plus the cached server response, it would
-# read the cached READY value and leave Transfer clickable for a
-# window. The poll therefore also calls
-# ``not com.info.status.in_progress()`` to reject every active
-# operation including STARTING_SOLVER; this scenario asserts the
-# button is disabled across that window.
+# Regression: clicking "Run" used to leave "Transfer" clickable for a
+# window because ``SOLVER_OT_Transfer.poll`` only inspected
+# ``status.ready()`` (a protocol-version check) plus the cached server
+# response. Right after ``Run.execute`` the engine has flipped to
+# STARTING_SOLVER locally but the next ``PollTick`` hasn't round-
+# tripped with the server yet, so ``is_running(response)`` reads the
+# stale READY response and returns False. The fix adds
+# ``not com.info.status.in_progress()`` to Transfer's poll, which
+# rejects every active operation including STARTING_SOLVER.
 #
 # Subtests:
 #   A. transfer_clickable_at_ready: after a successful Transfer +

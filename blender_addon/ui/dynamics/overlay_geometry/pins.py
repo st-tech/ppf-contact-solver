@@ -82,6 +82,37 @@ def _build_rod_batches(scene, depsgraph):
     return batches
 
 
+def _pc2_frame_positions(obj, scene):
+    """Read the current frame's vertex positions from the addon's PC2 cache.
+
+    Returns a list of ``Vector`` (one per base-mesh vertex) when the PC2
+    file is present and the current frame falls inside it; otherwise
+    None so the caller falls back to ``obj.data`` rest positions. PC2 is
+    the source of truth for simulation playback (the MESH_CACHE modifier
+    drives it), and reading it directly avoids modifier output that
+    would interpolate vertex-group weights.
+    """
+    import os
+
+    from ....core.pc2 import (
+        get_pc2_path,
+        object_pc2_key,
+        read_pc2_frame,
+        read_pc2_frame_count,
+    )
+
+    pc2 = get_pc2_path(object_pc2_key(obj))
+    if not os.path.exists(pc2):
+        return None
+    n_verts = len(obj.data.vertices)
+    n_frames = read_pc2_frame_count(pc2)
+    frame_idx = scene.frame_current - 1
+    if n_frames <= 0 or not (0 <= frame_idx < n_frames):
+        return None
+    verts = read_pc2_frame(pc2, frame_idx, n_verts)
+    return [Vector(v) for v in verts]
+
+
 def _build_pin_data(scene, depsgraph):
     """Build pin vertex data. Returns list of (vertex, size, color) tuples."""
     pin_data = []
@@ -99,9 +130,22 @@ def _build_pin_data(scene, depsgraph):
                 current_frame = scene.frame_current
 
                 if obj.type == "MESH":
-                    eval_obj = obj.evaluated_get(depsgraph)
-                    mesh = eval_obj.data
-                    world_matrix = eval_obj.matrix_world
+                    # Pin indices are defined on the base cage, so use
+                    # obj.data (not eval_obj.data) to find which vertices
+                    # belong to the pin's vertex group. The evaluated
+                    # mesh has SUBSURF / other modifiers applied, and
+                    # Blender interpolates vertex-group weights onto
+                    # subdivided verts (edge midpoints, face centers,
+                    # one-ring); iterating it would render pin dots over
+                    # those interpolated locations instead of the actual
+                    # pinned cage verts.
+                    #
+                    # Current world positions come from the PC2 cache
+                    # when present so the overlay follows the simulation;
+                    # fall back to the base-mesh rest pose otherwise.
+                    base_mesh = obj.data
+                    world_matrix = obj.matrix_world
+                    animated_positions = _pc2_frame_positions(obj, scene)
                     animated_indices = set(get_moving_vertex_indices(obj))
 
                     for pin_ref in group.pin_vertex_groups:
@@ -119,10 +163,13 @@ def _build_pin_data(scene, depsgraph):
                                     for op in pin_ref.operations
                                 )
                                 vg_index = vg.index
-                                for vert in mesh.vertices:
+                                for vert in base_mesh.vertices:
                                     for vg_elem in vert.groups:
                                         if vg_elem.group == vg_index:
-                                            world_co = world_matrix @ vert.co
+                                            if animated_positions is not None:
+                                                world_co = world_matrix @ animated_positions[vert.index]
+                                            else:
+                                                world_co = world_matrix @ vert.co
                                             if has_ops or vert.index in animated_indices:
                                                 color = (0.5, 0.5, 1.0, 0.8)
                                             else:

@@ -196,13 +196,13 @@ class DriverHelpers:
 
     def _await_running_then_ready(self, *, timeout):
         # 0.05s poll cadence: with PPF_EMULATED_STEP_MS=100 a single
-        # solver step's RUNNING phase can be ~150 ms wall-clock, so a
-        # coarser poll interval (e.g. 0.3s) can miss the phase
-        # entirely. We treat ``frame growth since entry`` as conclusive
-        # evidence the solver did transition through RUNNING, even if
-        # the poll cadence skipped the phase label. ``> start_frame``
-        # (not ``> 0``) so a stale tail from a prior run cannot trigger
-        # saw_running before the new run has actually advanced.
+        # solver step's RUNNING phase can be ~150 ms wall-clock, which
+        # the previous 0.3s sleep often missed entirely. We treat
+        # ``frame growth since entry`` as conclusive evidence the solver
+        # did transition through RUNNING, even if the poll cadence
+        # skipped the phase label. ``> start_frame`` (not ``> 0``) so
+        # a stale tail from a prior run cannot trigger saw_running
+        # before the new run has actually advanced.
         start_frame = self.facade.engine.state.frame
         saw_running = False
         deadline = time.time() + timeout

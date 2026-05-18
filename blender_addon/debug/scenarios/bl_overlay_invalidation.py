@@ -6,9 +6,11 @@
 # Draw-stale matrix: every property whose update= callback should bump
 # ``state.overlay_version`` is mutated, and we assert the version
 # actually moved. Catches regressions where a new property gets added
-# without wiring an invalidate callback, which would leave the
-# viewport overlay drawing from a stale cache after the property
-# changed.
+# without wiring an invalidate callback (the bug class behind recent
+# commits "Refresh viewport overlay on every preview-feeding state
+# change", "Invalidate collider overlay cache on property edits", and
+# "Fix Blender UI staleness after state changes across operators and
+# handlers").
 #
 # Coverage by overlay class (per the audit in
 # blender_addon/ui/dynamics/overlay.py):

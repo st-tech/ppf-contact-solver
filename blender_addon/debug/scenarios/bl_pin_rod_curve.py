@@ -34,11 +34,12 @@ NEEDS_BLENDER = True
 
 
 # Bezier curve with N control points laid out along +X. With N=4
-# and t = {0, 1/3, 2/3, 1} per segment, sample_curve produces
-# 1 + 3*(N-1) = 10 sampled vertices, and CV layout has 3*N = 12
-# slots ([hl, co, hr] per control point). The first CV (index 0)
-# is pinned, which after map_cp_pins_to_sampled clamps sampled
-# vertex 0 in the solver.
+# and t = {0, 1} per segment, sample_curve produces N=4 sampled
+# vertices (one per CP). CV layout still has 3*N = 12 slots
+# ([hl, co, hr] per control point) because that's the Blender
+# modifier-cache shape, independent of how many samples the solver
+# sees. The first CV (index 0) is pinned, which after
+# map_cp_pins_to_sampled clamps sampled vertex 0 in the solver.
 _N_CV = 4
 
 

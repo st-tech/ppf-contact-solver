@@ -25,8 +25,11 @@ manifold, and small cracks or near-duplicate vertices are handled
 automatically. **Rod** groups accept both mesh and Bezier curve
 objects: mesh edges become rod elements directly (faces are ignored,
 and a Wireframe modifier is added on assignment so the rod structure
-is visible), while Bezier curves are resampled along arc length at
-transfer time.
+is visible). For Bezier curves each control point becomes one rod
+vertex, so the edge length equals the CP spacing and the simulation
+evolves CP positions directly &mdash; you control rod resolution by
+adding or removing CPs. NURBS curves are sampled per arc at four
+`t` values because NURBS CPs are off-curve.
 :::
 
 ```{toctree}

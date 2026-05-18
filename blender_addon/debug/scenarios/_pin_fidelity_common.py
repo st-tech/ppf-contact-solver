@@ -238,11 +238,11 @@ try:
         # The addon's stale-poll guard (starting_poll_guard) holds the
         # state in STARTING for the first few polls after RunRequested,
         # so any subsequent READY/RESUMABLE transition is from the
-        # actual run finishing. For fast-finish solvers (sub-second
+        # actual run finishing — for fast-finish solvers (sub-second
         # CUDA runs on simple pin scenes) the addon view jumps STARTING
-        # -> READY directly, never observing RUNNING; gating on
-        # ``saw_running`` here would sit through the full 90s deadline
-        # waiting for a state the run never enters.
+        # -> READY directly, never observing RUNNING. The original gate
+        # ``saw_running and ...`` would then sit through the full 90s
+        # deadline waiting for a state the run never enters.
         if s.solver.name in ("READY", "RESUMABLE"):
             break
         if s.solver.name == "FAILED":

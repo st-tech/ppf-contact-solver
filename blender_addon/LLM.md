@@ -48,12 +48,7 @@ The repo contains:
     `_ppf_cts_py` Python module.
   - `ppf-cts-server`: standalone Rust binary (`ppf-cts-server`) that
     embeds the in-process Python `frontend` package and exposes the
-    TCP / CBOR protocol the add-on talks to over SSH / Docker /
-    Windows-native transports. Wire protocol version `0.04` (length-
-    prefixed TCMD frames; matched by `blender_addon/core/protocol.py`).
-  - `ppf-cts-solver`: the CUDA-backed solver crate. Builds the
-    `ppf-contact-solver` binary used by the in-process Python frontend
-    that `ppf-cts-server` embeds.
+    TCP / CBOR protocol the add-on talks to over SSH / Docker / Windows-native transports.
 - `frontend/`: Python asset / scripting layer that imports
   `_ppf_cts_py` directly for in-process use (notebooks, tests, and
   inside `ppf-cts-server`). The Blender add-on does not import it; the

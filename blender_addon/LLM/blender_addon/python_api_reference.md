@@ -102,6 +102,26 @@ Deletes every active group, resets scene parameters to their property defaults, 
 
 **Returns:** `self` for chaining.
 
+### create_curve(name: str, \*, bevel_depth: float=0.0, bevel_resolution: int=2, resolution_u: int=4, dimensions: str="3D", clear_existing: bool=True) -> Curve
+
+Start building a multi-spline Bezier curve object.  Returns a `Curve` builder.
+
+**Parameters:**
+
+- **name**: Object name.  When `clear_existing` is true (default) any existing object with this name is removed first.
+- **bevel_depth**: Tube radius for visualization (`Curve.bevel_depth`).  `0` leaves the curve as a wireframe.
+- **bevel_resolution**: Tube cross-section subdivisions (`Curve.bevel_resolution`).
+- **resolution_u**: Spline interpolation resolution (`Curve.resolution_u`).
+- **dimensions**: `"3D"` (default) or `"2D"`.
+- **clear_existing**: Set `False` to skip the same-name cleanup.
+
+```python
+curve = solver.create_curve("Strands", bevel_depth=3e-3)
+for points, closed in strands:
+    curve.add_spline(points, closed=closed)
+obj = curve.finalize()
+```
+
 ### snap(object_a: str, object_b: str) -> Solver
 
 Translate *object_a* so its nearest vertex lands on *object_b*.
@@ -299,6 +319,12 @@ Type: `str`
 
 The UUID of this group. Stable across renames.
 
+### name
+
+Type: `str`
+
+Display name of this group.
+
 ### param
 
 Type: `GroupParam`
@@ -346,35 +372,57 @@ Remove an object from this group.
 
 **Returns:** `self` for chaining.
 
-### create_pin(object_name: str, vertex_group_name: str) -> Pin
+### set_velocity(object_name: str, direction: tuple[float, float, float], speed: float, frame: int=1) -> Group
 
-Pin a vertex group so its vertices stay fixed during simulation.
+Keyframe a velocity on an object assigned to this group.
+
+Appends an entry to the assigned object's `velocity_keyframes` collection. Call once with `frame=1` for an initial-velocity launch; call again with higher `frame` values to build a velocity schedule.
 
 **Parameters:**
 
-- **object_name**: Name of the mesh object.
-- **vertex_group_name**: Name of the vertex group on that object.
+- **object_name**: Name of an object already added to this group via `add`.
+- **direction**: `(dx, dy, dz)` velocity direction; normalized by the solver before use.
+- **speed**: Velocity magnitude in m/s.
+- **frame**: Frame at which the keyframe takes effect. `1` (the default) is the initial-velocity slot.
+
+**Returns:** `self` for chaining.
+
+**Raises:** `ValueError` if the object is not assigned to this group, or a keyframe already exists at the requested frame.
+
+```python
+ball = solver.create_group("Ball", type="SOLID")
+ball.add("Sphere")
+ball.set_velocity("Sphere", direction=(1, 0, 0), speed=2.3)
+```
+
+### create_pin(object_name: str, vertex_group_name: str, indices: list[int] | None=None) -> Pin
+
+Pin a vertex group (mesh) or set of control points (curve).
+
+**Parameters:**
+
+- **object_name**: Name of the mesh or curve object.
+- **vertex_group_name**: For meshes, the name of an existing vertex group on the object.  For curves, the logical name used for the curve's `_pin_<vertex_group_name>` custom property holding the pinned control-point indices.
+- **indices**: Control-point indices for curves only.  When given, the curve's `_pin_<vertex_group_name>` property is written before the pin is registered, so the same call both defines and binds the pin.  Must be `None` for meshes (meshes use existing vertex groups).
 
 **Returns:** A `Pin` proxy for the newly created pin.
 
-**Raises:** `ValueError` if the object is missing, not a mesh, or the vertex group does not exist on it.
+**Raises:** `ValueError` if the object is missing, not a mesh or curve, the vertex group does not exist on a mesh, the `_pin_<name>` property is missing on a curve and no `indices` were supplied, or `indices` is passed for a mesh.
 
 ```python
+# Mesh: vertex group must already exist.
 pin = group.create_pin("Cloth", "collar")
-pin.move(delta=(0, 0, 0.2), frame=60)
+pin.move_by(delta=(0, 0, 0.2), frame_start=1, frame_end=60)
+
+# Curve: pass control-point indices to define and bind in one call.
+rod_pin = rod_group.create_pin(
+    "WovenCylinder", "left", indices=[0, 7, 14, 21],
+)
 ```
 
 ### get_pins() -> list[Pin]
 
 Return all pins in this group as `Pin` proxies.
-
-### clear_keyframes() -> Group
-
-Delete all keyframes for all pins in this group.
-
-Convenience method that calls `Pin.clear_keyframes` on every pin returned by `get_pins`.
-
-**Returns:** `self` for chaining.
 
 ### delete() -> None
 
@@ -412,8 +460,8 @@ Created via `Group.create_pin(object_name, vertex_group_name)`. Every mutating m
 
 ```python
 pin = group.create_pin("Cloth", "hem")
-pin.move(delta=(0, 0, 1.0), frame=60)  # lift hem over 60 frames
-pin.unpin(frame=120)                   # release at frame 120
+pin.move_by(delta=(0, 0, 1.0), frame_start=1, frame_end=60)
+pin.unpin(frame=120)
 ```
 
 ### object_name
@@ -538,7 +586,7 @@ pin.move_by(delta=(0, 0, 1.0),
 
 Mark this pin to be released at the given frame.
 
-Sets the duration on the underlying UI property so the encoder and clear logic are aware. Also prevents future `move(frame=N)` calls where *N* >= *frame*.
+Sets the duration on the underlying pin item so the encoder knows when to stop enforcing the pin constraint.
 
 **Parameters:**
 
@@ -547,41 +595,74 @@ Sets the duration on the underlying UI property so the encoder and clear logic a
 **Returns:** `self` for chaining.
 
 ```python
-pin.move(delta=(0, 0, 1), frame=60).unpin(frame=120)
+pin.move_by(delta=(0, 0, 1.0), frame_start=1, frame_end=60)
+pin.unpin(frame=120)
 ```
-
-### move(delta: tuple[float, float, float]=(0, 0, 0), frame: int | None=None) -> Pin
-
-Move pin vertices by *delta* and optionally keyframe at *frame*.
-
-On the first call with *frame*, the current vertex positions are automatically keyframed at the current scene frame before any movement is applied. Ignored if *frame* >= the unpin frame.
-
-**Parameters:**
-
-- **delta**: `(dx, dy, dz)` offset to apply (default no movement).
-- **frame**: Frame number to keyframe at. `None` means no keyframe.
-
-**Returns:** `self` for chaining.
-
-**Raises:** `ValueError` if the target object is missing, not a mesh, or the vertex group does not exist on it.
-
-```python
-pin = group.create_pin("Cloth", "hem")
-pin.move(delta=(0, 0, 1.0), frame=60)   # auto-keyframes start
-pin.move(delta=(0.5, 0, 0), frame=120)  # adds another keyframe
-```
-
-### clear_keyframes() -> Pin
-
-Delete all positional keyframes for this pin's vertices.
-
-**Returns:** `self` for chaining.
 
 ### delete() -> None
 
 Remove this pin from its group.
 
 **Raises:** `ValueError` if the owning group or pin item can no longer be found (for example, after `solver.clear()`).
+
+## Class: Curve
+
+Builder for a multi-spline Bezier curve object.
+
+Created via `Solver.create_curve`.  Each `add_spline` appends one Bezier spline to the underlying curve datablock; `finalize` links the resulting object into the active scene and returns it.
+
+Pin definition is *not* part of this builder.  Pass the control-point indices to `Group.create_pin` instead, which writes the `_pin_<name>` custom property and registers the pin in one call.
+
+```python
+curve = solver.create_curve("WovenCylinder", bevel_depth=3e-3)
+for points, closed in strands:
+    curve.add_spline(points, closed=closed)
+obj = curve.finalize()
+
+rod = solver.create_group("Strands", type="ROD")
+rod.add(obj.name)
+rod.create_pin(obj.name, "left", indices=left_indices)
+```
+
+### name
+
+Type: `str`
+
+Object name this builder will create on `finalize()`.
+
+### add_spline(points, \*, closed: bool=False) -> int
+
+Append a Bezier spline with AUTO handles.
+
+**Parameters:**
+
+- **points**: Iterable of `(x, y, z)` control-point coordinates (a NumPy array of shape `(n, 3)` works).
+- **closed**: Set `True` to make the spline cyclic.
+
+**Returns:** Zero-based index of the new spline within this curve.  Use it with `set_material`.
+
+**Raises:** `ValueError` if `points` has fewer than two coordinates.
+
+### set_material(spline_index: int, material: bpy.types.Material) -> Curve
+
+Bind a material to a spline by index.
+
+The material is appended to the curve's slots if it isn't already present.  Pre-existing slots are reused so repeated calls with the same material don't grow the slot list.
+
+**Parameters:**
+
+- **spline_index**: Index returned by `add_spline`.
+- **material**: An existing `bpy.types.Material`.  Create it with `bpy.data.materials.new(...)` before calling.
+
+**Returns:** `self` for chaining.
+
+**Raises:** `IndexError` if `spline_index` is out of range.
+
+### finalize() -> bpy.types.Object
+
+Create the `bpy.types.Object`, link it to the scene, and return it.
+
+**Raises:** `RuntimeError` if called more than once on the same builder.
 
 ## Class: Wall
 

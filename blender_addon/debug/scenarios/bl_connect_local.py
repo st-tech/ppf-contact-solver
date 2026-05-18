@@ -3,11 +3,11 @@
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
 # License: Apache v2.0
 #
-# Launch Blender with the addon loaded, point its Local backend at the
-# worker's debug server, and assert the addon's state machine reaches
-# ONLINE. The scenario provides a driver script that the bootstrap
-# exec()s on the first event-loop tick. Result is written to disk; the
-# orchestrator collects it after Blender exits.
+# Phase-2: launch Blender with the addon loaded, point its Local backend
+# at the worker's debug server, and assert the addon's state machine
+# reaches ONLINE. The scenario provides a driver script that the
+# bootstrap exec()s on the first event-loop tick. Result is written to
+# disk; the orchestrator collects it after Blender exits.
 
 from __future__ import annotations
 

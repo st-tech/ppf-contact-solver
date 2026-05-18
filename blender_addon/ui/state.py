@@ -431,6 +431,17 @@ class State(PropertyGroup):
         precision=3,
         description="Damping factor for air resistance",
     )
+    fix_xz: FloatProperty(  # pyright: ignore
+        name="Fix XZ Above Height",
+        default=0.0,
+        min=0.0,
+        precision=3,
+        description=(
+            "Height threshold (m) above which lateral (XY in Blender, "
+            "XZ in solver Y-up) motion is constrained. 0 disables. "
+            "Useful for hanging cloth/rods from above without an explicit pin."
+        ),
+    )
     show_statistics: BoolProperty(
         name="Statistics",
         default=True,

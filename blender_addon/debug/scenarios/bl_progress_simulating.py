@@ -7,7 +7,7 @@
 #
 # The Rust ppf-cts-server publishes ``progress = frame / total_frames``
 # and ``info = "Simulation Running, frame N/M"`` while the solver is
-# active. The addon's ``_interpret_response`` reads
+# active (commit bb6a12a4). The addon's ``_interpret_response`` reads
 # both fields, lifting them to ``state.progress`` / ``state.message``,
 # which the panel renders as a moving progress bar with frame label.
 # This scenario asserts the round-trip end to end:

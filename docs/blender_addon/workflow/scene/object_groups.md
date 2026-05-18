@@ -70,8 +70,11 @@ sub-box that holds per-object **Move By** / **Spin** / **Scale** ops
 For a mesh, every edge becomes a rod element at transfer time
 (faces are ignored by the solver), and the add-on prepends a
 Wireframe modifier on assignment so the rod structure shows in the
-viewport instead of filled faces. For a Bezier curve, the spline is
-resampled along its arc length into rod vertices when transferred.
+viewport instead of filled faces. For a Bezier curve, each control
+point becomes one rod vertex (1:1 mapping; edge length equals CP
+spacing), so simulation resolution is set by the user via CP count.
+NURBS curves are sampled per arc at four `t` values because NURBS
+CPs are off-curve.
 
 ```{figure} ../../images/object_groups/group_type_matrix.svg
 :alt: Reference matrix with four columns. Shell (green swatch), Solid (red), Rod (yellow), Static (blue). Rows: accepted object types (Shell/Solid/Static: mesh; Rod: mesh + Bezier curves); default material model (Baraff-Witkin for Shell, ARAP for Solid and Rod, none for Static); available material models (Shell offers Baraff-Witkin and ARAP; Solid offers Stable NeoHookean and ARAP; Rod offers ARAP only; Static none); density unit (kg/m² for Shell, kg/m³ for Solid, kg/m for Rod); Young's Modulus (Shell/Solid/Rod, not Static); Poisson's Ratio (Shell and Solid); Bend Stiffness (Shell, with Rod inheriting it); Shrink (Shell anisotropic X/Y, Solid uniform, Rod/Static none); Strain Limit (Shell and Rod); Inflate (Shell only); Friction and Contact Gap (all four); pin storage (Blender vertex groups for Shell/Solid, internal _pin_name custom property on curves for Rod, none for Static which uses a Transform sub-box instead); default overlay color (green, red, yellow, blue).

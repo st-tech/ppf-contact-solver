@@ -375,8 +375,9 @@ def run_one(scenario_name: str, *, slot: int, run_root: str,
         # ``<PPF_CTS_DATA_ROOT>/<name>`` (see crates/ppf-cts-server/src/
         # wire.rs::handle_tcmd's root synthesis). Scenarios need the same
         # absolute path so they can stat ``data.pickle`` etc. after the
-        # upload lands. The Rust path resolver lays files out flat
-        # under the data root, so we mirror that layout here.
+        # upload lands. The historical extra ``git-debug`` segment from
+        # the python emulator era is gone now that the Rust path
+        # resolver no longer goes through frontend's branch lookup.
         project_name = f"slot{slot:02d}"
         project_root = os.path.join(spec.project_dir, project_name)
         os.makedirs(project_root, exist_ok=True)

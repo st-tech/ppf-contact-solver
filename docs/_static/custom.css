@@ -76,8 +76,7 @@ a.gh-corner-link {
 .gallery-card img {
     display: block;
     width: 100%;
-    aspect-ratio: 1 / 1;
-    object-fit: cover;
+    height: auto;
     background: rgba(127, 127, 127, 0.08);
 }
 

@@ -16,33 +16,49 @@ from mathutils import Vector  # pyright: ignore
 def map_cp_pins_to_sampled(obj, cp_indices):
     """Map control point pin indices to sampled vertex indices.
 
-    With fixed t=0, 1/3, 2/3, 1 per segment, cp[k] → sampled vertex k*3.
-    If both endpoints of a segment are pinned, interior vertices are also pinned.
+    ``cp_indices`` carries GLOBAL linear control-point indices across all
+    splines, matching the indexing produced by the pin UI op for CURVE
+    objects (``ui/dynamics/pin_ops.py``). Sampled vertex indices are
+    likewise global across splines, matching ``sample_curve``'s vertex
+    concatenation. For Bezier segments where both endpoints are pinned,
+    the two interior sample points are pinned too.
     """
     pinned_cp = set(cp_indices)
     pinned_sampled = set()
 
+    cp_offset = 0
+    sampled_offset = 0
     for s in obj.data.splines:
         is_cyclic = s.use_cyclic_u
         if s.type == "BEZIER":
             n_cp = len(s.bezier_points)
+            # Bezier samples at t = 0, 1 per segment (one sample per CP)
+            # so sampled-vertex i corresponds to CP i within the spline.
+            n_sampled = n_cp
+            stride = 1
         elif s.type in ("NURBS", "POLY"):
             n_cp = len(s.points)
+            # POLY: one sample per cp. NURBS: arc-sampled, but the
+            # cp-to-sample mapping is not well-defined for higher-order
+            # arcs; preserve a 1:1 fallback so single-spline POLY/NURBS
+            # callers behave at least as well as before.
+            n_sampled = n_cp
+            stride = 1
         else:
             continue
 
         n_segs = n_cp if is_cyclic else max(1, n_cp - 1)
         for k in range(n_segs):
             k1 = (k + 1) % n_cp
-            cp_k_pinned = k in pinned_cp
-            cp_k1_pinned = k1 in pinned_cp
+            cp_k_pinned = (cp_offset + k) in pinned_cp
+            cp_k1_pinned = (cp_offset + k1) in pinned_cp
             if cp_k_pinned:
-                pinned_sampled.add(k * 3)
+                pinned_sampled.add(sampled_offset + k * stride)
             if cp_k1_pinned:
-                pinned_sampled.add(k1 * 3)
-            if cp_k_pinned and cp_k1_pinned:
-                pinned_sampled.add(k * 3 + 1)
-                pinned_sampled.add(k * 3 + 2)
+                pinned_sampled.add(sampled_offset + k1 * stride)
+
+        cp_offset += n_cp
+        sampled_offset += n_sampled
 
     return sorted(pinned_sampled)
 
@@ -69,8 +85,12 @@ def _eval_rational_bezier(cps, ws, t):
 def sample_curve(obj, world_matrix):
     """Sample all splines of a curve object into rod vertices + edges.
 
-    Each Bezier/NURBS segment is subdivided at t=0, 1/3, 2/3, 1
-    (control points + handle projections). No resolution parameter needed.
+    Bezier segments sample at t = 0, 1 (one sample per CP — CPs lie on
+    the curve so this is sufficient; edge length matches CP spacing,
+    keeping the contact-offset rule contact_offset < edge_length/2 easy
+    to satisfy). NURBS arcs sample at t = 0, 1/3, 2/3, 1 because NURBS
+    CPs are off-curve and the simulation needs interior points per arc
+    to track the curve shape. POLY uses its points directly.
 
     Args:
         obj: Blender curve object
@@ -86,10 +106,16 @@ def sample_curve(obj, world_matrix):
     all_edges = []
     splines_meta = []
 
-    # Fixed subdivision: t = 0, 1/3, 2/3, 1 per segment (3 edges per segment).
-    # Two interior points per segment provides enough data for stable
-    # least-squares fitting without regularization.
-    seg_t_values = [0.0, 1.0 / 3.0, 2.0 / 3.0, 1.0]
+    # Per-type subdivision. Bezier CPs lie on the curve, so one sample
+    # per CP (t = 0, 1) is enough resolution: edge length matches CP
+    # spacing, the simulation evolves CP positions directly, and the
+    # round-trip fit collapses to identity. NURBS CPs do *not* lie on
+    # the curve in general (the curve passes through arcs of the
+    # rational Bezier basis), so we still need interior samples per arc
+    # for the simulation to track the curve shape; keep t = 0, 1/3,
+    # 2/3, 1 there. POLY has one sample per point unconditionally.
+    bezier_t_values = [0.0, 1.0]
+    nurbs_t_values = [0.0, 1.0 / 3.0, 2.0 / 3.0, 1.0]
 
     for s in obj.data.splines:
         spline_verts = []
@@ -100,6 +126,7 @@ def sample_curve(obj, world_matrix):
             bps = s.bezier_points
             n_cp = len(bps)
             n_segs = n_cp if is_cyclic else n_cp - 1
+            seg_t_values = bezier_t_values
 
             for k in range(n_segs):
                 p0 = bps[k].co
@@ -131,6 +158,7 @@ def sample_curve(obj, world_matrix):
             cp = [Vector((p.co[0], p.co[1], p.co[2])) for p in pts]
             wt = [p.co[3] for p in pts]
             n_arcs = n_cp // step if is_cyclic else max(1, (n_cp - 1) // step)
+            seg_t_values = nurbs_t_values
 
             for a in range(n_arcs):
                 arc_cp = [cp[(a * step + d) % n_cp] for d in range(degree + 1)]
@@ -182,10 +210,14 @@ def sample_curve(obj, world_matrix):
 def compute_params(obj):
     """Compute parameterization from the curve's spline structure.
 
-    With fixed t=0, 1/3, 2/3, 1 per segment, params are fully determined
-    by (n_cp, cyclic, type) — no stored metadata needed.
+    Per-type t-values match :func:`sample_curve`: Bezier samples each
+    segment at t = 0, 1 (one sample per CP, edge length equals CP
+    spacing); NURBS samples each arc at t = 0, 1/3, 2/3, 1 because the
+    CPs themselves are off-curve and interior samples are needed for
+    the sim to track the arc shape.
     """
-    seg_t_values = [0.0, 1.0 / 3.0, 2.0 / 3.0, 1.0]
+    bezier_t_values = [0.0, 1.0]
+    nurbs_t_values = [0.0, 1.0 / 3.0, 2.0 / 3.0, 1.0]
     splines_meta = []
     for s in obj.data.splines:
         is_cyclic = s.use_cyclic_u
@@ -195,7 +227,7 @@ def compute_params(obj):
             n_cp = len(s.bezier_points)
             n_segs = n_cp if is_cyclic else n_cp - 1
             for k in range(n_segs):
-                for t in seg_t_values:
+                for t in bezier_t_values:
                     if k > 0 and t == 0.0:
                         continue
                     if is_cyclic and k == n_segs - 1 and t == 1.0:
@@ -211,7 +243,7 @@ def compute_params(obj):
             wt = [s.points[i].co[3] for i in range(n_cp)]
             n_arcs = n_cp // step if is_cyclic else max(1, (n_cp - 1) // step)
             for a in range(n_arcs):
-                for t in seg_t_values:
+                for t in nurbs_t_values:
                     if a > 0 and t == 0.0:
                         continue
                     if is_cyclic and a == n_arcs - 1 and t == 1.0:
@@ -227,105 +259,154 @@ def compute_params(obj):
     return {"splines": splines_meta}
 
 
-def apply_fit(spline, sim_pos, spline_meta):
-    """Fit simulated positions back to control points via least-squares.
+def build_fit_cache(obj):
+    """Precompute per-spline data for the per-frame fit.
 
-    Returns an array of CV positions in Blender's modifier layout:
-      Bezier:    [hl_0, co_0, hr_0, hl_1, co_1, hr_1, ...] — 3 per point
-      NURBS/Poly: [co_0, co_1, ...] — 1 per point
+    Bezier with t = {0, 1} per segment means sampled vertex i corresponds
+    directly to control point i within the spline, so the fit is a
+    pass-through (no matrix, no SVD). For NURBS we still solve a
+    least-squares fit per arc, so we precompute ``pinv(A) * W`` once and
+    reuse it across frames; for identical-shape NURBS splines the entry
+    is shared (dedup key includes weights). POLY is also a pass-through.
 
-    The returned array can be written directly to a PC2 file for the
-    MESH_CACHE modifier (which accepts curve CVs via AcceptsCVs flag).
-
-    Args:
-        spline: Blender spline object
-        sim_pos: numpy array (N, 3) of simulated positions in local space
-        spline_meta: dict from stored params for this spline
-
-    Returns:
-        numpy array of shape (n_cvs, 3) in Blender CV layout order.
+    Returns a list of per-spline cache entries (one per spline of ``obj``,
+    aligned with ``compute_params(obj)["splines"]``) plus the matching
+    params dict so callers don't need to call ``compute_params`` again.
     """
-    params = spline_meta["params"]
-    n_verts = len(params)
+    params_data = compute_params(obj)
+
+    nurbs_pinv_cache: dict = {}
+
+    cache = []
+    for spline_meta in params_data["splines"]:
+        stype = spline_meta["type"]
+        params = spline_meta["params"]
+        n_verts = len(params)
+        if stype == "BEZIER":
+            cache.append({
+                "type": "BEZIER",
+                "n_cp": spline_meta["n_cp"],
+                "cyclic": bool(spline_meta["cyclic"]),
+                "n_verts": n_verts,
+            })
+        elif stype == "NURBS":
+            n_cp = spline_meta["n_cp"]
+            order = spline_meta["order"]
+            is_cyclic = bool(spline_meta["cyclic"])
+            wt = spline_meta["weights"]
+            # NURBS A depends on the per-spline weight list; include it
+            # in the dedup key so identical-weight splines share.
+            key = (n_cp, order, is_cyclic, tuple(wt))
+            pinv_AW = nurbs_pinv_cache.get(key)
+            if pinv_AW is None:
+                degree = order - 1
+                step = degree
+                A = np.zeros((n_verts, n_cp))
+                W = np.zeros(n_verts)
+                for row, (arc_idx, t) in enumerate(params):
+                    arc_indices = [
+                        (arc_idx * step + d) % n_cp for d in range(degree + 1)
+                    ]
+                    arc_w = [wt[i] for i in arc_indices]
+                    s_t = 0.0
+                    for d in range(degree + 1):
+                        basis = comb(degree, d) * (1 - t) ** (degree - d) * t**d
+                        bw = basis * arc_w[d]
+                        A[row, arc_indices[d]] += bw
+                        s_t += bw
+                    W[row] = s_t
+                # Pre-fold the per-row weight into the pseudo-inverse so
+                # the per-frame call collapses to a single matmul.
+                pinv_AW = (np.linalg.pinv(A) * W[None, :]).astype(
+                    np.float64, copy=False,
+                )
+                nurbs_pinv_cache[key] = pinv_AW
+            cache.append({
+                "type": "NURBS",
+                "n_cp": n_cp,
+                "n_verts": n_verts,
+                "pinv_AW": pinv_AW,
+            })
+        elif stype == "POLY":
+            cache.append({
+                "type": "POLY",
+                "n_cp": spline_meta["n_cp"],
+                "n_verts": n_verts,
+            })
+        else:
+            cache.append(None)
+    return cache, params_data
+
+
+def _bezier_handles_vectorized(co_result, is_cyclic):
+    """Vectorized 1/6-tangent handle construction.
+
+    For interior CPs the handle direction is one-sixth of the tangent
+    spanning the two neighbours; endpoints of an open spline borrow a
+    one-third tangent of the adjacent neighbour. Cyclic splines treat
+    every CP as interior via ``np.roll``.
+    """
+    n_cp = co_result.shape[0]
+    if n_cp == 0:
+        z = np.empty((0, 3), dtype=co_result.dtype)
+        return z, z
+    if is_cyclic:
+        prev_co = np.roll(co_result, 1, axis=0)
+        next_co = np.roll(co_result, -1, axis=0)
+        tangent = (next_co - prev_co) / 6.0
+        return co_result - tangent, co_result + tangent
+    # Open spline: interior uses 1/6, endpoints use 1/3.
+    hl = np.empty_like(co_result)
+    hr = np.empty_like(co_result)
+    if n_cp >= 3:
+        prev_co = co_result[:-2]
+        next_co = co_result[2:]
+        tangent_interior = (next_co - prev_co) / 6.0
+        hl[1:-1] = co_result[1:-1] - tangent_interior
+        hr[1:-1] = co_result[1:-1] + tangent_interior
+    if n_cp >= 2:
+        t0 = (co_result[1] - co_result[0]) / 3.0
+        hr[0] = co_result[0] + t0
+        hl[0] = co_result[0] - t0
+        tn = (co_result[-1] - co_result[-2]) / 3.0
+        hr[-1] = co_result[-1] + tn
+        hl[-1] = co_result[-1] - tn
+    else:
+        hl[0] = co_result[0]
+        hr[0] = co_result[0]
+    return hl, hr
+
+
+def apply_fit_cached(sim_pos, cache_entry):
+    """Per-frame fit using a precomputed entry from :func:`build_fit_cache`.
+
+    Returns a ``(n_cvs, 3)`` array in Blender's modifier-cache layout:
+    ``[hl_0, co_0, hr_0, hl_1, co_1, hr_1, ...]`` (3 per CP) for Bezier
+    and ``[co_0, co_1, ...]`` (1 per CP) for NURBS / POLY.
+    """
+    if cache_entry is None:
+        return np.empty((0, 3), dtype=np.float32)
+    stype = cache_entry["type"]
+    n_verts = cache_entry["n_verts"]
     sim_pos = sim_pos[:n_verts]
-    stype = spline_meta["type"]
 
     if stype == "BEZIER":
-        n_cp = spline_meta["n_cp"]
-        is_cyclic = spline_meta["cyclic"]
-
-        # Fit co positions via least-squares (linear interpolation basis).
-        A = np.zeros((n_verts, n_cp))
-        for row, (seg, t) in enumerate(params):
-            k0 = seg % n_cp
-            k1 = (seg + 1) % n_cp
-            A[row, k0] += 1.0 - t
-            A[row, k1] += t
-
-        co_result = np.zeros((n_cp, 3))
-        for ax in range(3):
-            co_result[:, ax] = np.linalg.lstsq(A, sim_pos[:, ax], rcond=None)[0]
-
-        # Compute smooth handles (1/6 tangent rule)
-        hl = np.zeros((n_cp, 3))
-        hr = np.zeros((n_cp, 3))
-        for k in range(n_cp):
-            co_k = co_result[k]
-            if is_cyclic or (k > 0 and k < n_cp - 1):
-                prev_co = co_result[(k - 1) % n_cp]
-                next_co = co_result[(k + 1) % n_cp]
-                tangent = (next_co - prev_co) / 6.0
-                hl[k] = co_k - tangent
-                hr[k] = co_k + tangent
-            elif k == 0:
-                tangent = (co_result[1] - co_k) / 3.0
-                hr[k] = co_k + tangent
-                hl[k] = co_k - tangent
-            else:  # k == n_cp - 1
-                tangent = (co_k - co_result[n_cp - 2]) / 3.0
-                hr[k] = co_k + tangent
-                hl[k] = co_k - tangent
-
-        # Pack as [hl_0, co_0, hr_0, hl_1, co_1, hr_1, ...]
+        # Sampled vertex i == CP i, so the fit is the identity: the
+        # simulated positions are the CP positions. Handles are then
+        # rebuilt from the 1/6-tangent rule.
+        co_result = np.asarray(sim_pos, dtype=np.float64)
+        hl, hr = _bezier_handles_vectorized(co_result, cache_entry["cyclic"])
+        n_cp = cache_entry["n_cp"]
         cvs = np.empty((n_cp * 3, 3), dtype=np.float32)
         cvs[0::3] = hl
         cvs[1::3] = co_result
         cvs[2::3] = hr
         return cvs
-
-    elif stype == "NURBS":
-        n_cp = spline_meta["n_cp"]
-        is_cyclic = spline_meta["cyclic"]
-        order = spline_meta["order"]
-        degree = order - 1
-        step = degree
-        wt = spline_meta["weights"]
-
-        A = np.zeros((n_verts, n_cp))
-        W = np.zeros(n_verts)
-        for row, (arc_idx, t) in enumerate(params):
-            arc_indices = [(arc_idx * step + d) % n_cp for d in range(degree + 1)]
-            arc_w = [wt[i] for i in arc_indices]
-            s_t = 0.0
-            for d in range(degree + 1):
-                basis = comb(degree, d) * (1 - t) ** (degree - d) * t**d
-                bw = basis * arc_w[d]
-                A[row, arc_indices[d]] += bw
-                s_t += bw
-            W[row] = s_t
-
-        result = np.zeros((n_cp, 3), dtype=np.float32)
-        for ax in range(3):
-            rhs = W * sim_pos[:, ax]
-            result[:, ax] = np.linalg.lstsq(A, rhs, rcond=None)[0]
-
-        return result
-
-    elif stype == "POLY":
-        n_cp = spline_meta["n_cp"]
-        n = min(n_cp, n_verts)
+    if stype == "NURBS":
+        return (cache_entry["pinv_AW"] @ sim_pos).astype(np.float32, copy=False)
+    if stype == "POLY":
+        n = min(cache_entry["n_cp"], n_verts)
         return np.array(sim_pos[:n], dtype=np.float32)
-
     return np.empty((0, 3), dtype=np.float32)
 
 

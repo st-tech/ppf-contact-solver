@@ -479,15 +479,16 @@ for g in solver.get_groups():
 
 | Method                                | Purpose                                                       |
 | ------------------------------------- | ------------------------------------------------------------- |
-| `add(*object_names)`                  | Add one or more mesh objects by name                          |
+| `add(*object_names)`                  | Add one or more mesh or curve objects by name                 |
 | `remove(object_name)`                 | Remove one object                                             |
 | `set_overlay_color(r, g, b, a=1.0)`   | Set and enable the viewport overlay color                     |
-| `create_pin(obj, vg)`                 | Pin a vertex group; returns a pin proxy (see below)           |
+| `set_velocity(obj, dir, speed, frame=1)` | Keyframe a velocity on an assigned object; frame=1 = initial-velocity slot |
+| `create_pin(obj, vg, indices=None)`   | Pin a vertex group (mesh) or curve control points (`indices=`); returns a pin proxy |
 | `get_pins()`                          | List every pin in this group as pin proxies                   |
-| `clear_keyframes()`                   | Shortcut for `pin.clear_keyframes()` on every pin             |
 | `delete()`                            | Remove this group                                             |
 | `.param.<name>`                       | Whitelisted material/contact parameter access                 |
 | `.uuid`                               | UUID string, stable across renames                            |
+| `.name`                               | Display name (current value of the underlying property)       |
 
 Material parameters on `.param` are validated: assigning a name outside the whitelist raises `AttributeError`. See Material Parameters for the full list.
 
@@ -517,32 +518,33 @@ cloth.create_pin("Shirt", "HemPins").pull(strength=2.0)
       .spin(axis=(0, 1, 0), angular_velocity=180, center_vertex=42))
 ```
 
+For curve objects (ROD groups), pass `indices=` to define the pinned control points and bind them in a single call:
+
+```python
+rod = solver.create_group("Strands", type="ROD")
+rod.add("WovenCylinder")
+left  = rod.create_pin("WovenCylinder", "left",  indices=left_cp_indices)
+right = rod.create_pin("WovenCylinder", "right", indices=right_cp_indices)
+left.spin(axis=(1, 0, 0), angular_velocity=360, frame_start=1, frame_end=120)
+```
+
+Curves store their pin sets as `_pin_<vg>` custom properties on the object.  Passing `indices` writes the JSON-encoded index list before the pin is registered; if the property already exists, omit `indices`.
+
 #### Pin surface
 
 | Method                                                          | Purpose                                                   |
 | --------------------------------------------------------------- | --------------------------------------------------------- |
 | `pull(strength=1.0)`                                            | Switch to a soft pull force                               |
-| `move(delta, frame=None)`                                       | Translate the pinned verts; auto-keyframes when `frame` given |
 | `move_by(delta, frame_start, frame_end, transition="LINEAR")`   | Ramp a translation over a frame range                     |
 | `spin(axis, angular_velocity, flip, center*, frame_start, frame_end, transition)` | Rotate about a derived pivot          |
 | `scale(factor, center*, frame_start, frame_end, transition)`    | Scale from a derived pivot                                |
 | `torque(magnitude, axis_component="PC3", flip, frame_start, frame_end)` | PCA-axis torque                                   |
-| `unpin(frame)`                                                  | Release the pin at `frame`; also blocks later `move(frame=N≥frame)` |
-| `clear_keyframes()`                                             | Drop all positional keyframes for this pin's verts        |
+| `unpin(frame)`                                                  | Release the pin at `frame`                                |
 | `delete()`                                                      | Remove this pin from its group                            |
 
 `transition` is `"LINEAR"` or `"SMOOTH"`. `torque`'s `axis_component` is `"PC1"` / `"PC2"` / `"PC3"`.
 
-#### `move` with auto-keyframing
-
-The first `move(...)` call with a `frame=` argument auto-keyframes the current vertex positions at the current scene frame before applying `delta` and keyframing again at `frame`. Subsequent calls only keyframe at the target frame. Calls with `frame >= unpin_frame` are silently ignored, which is handy when you want to leave the pin released cleanly.
-
-```python
-pin = cloth.create_pin("Shirt", "SleevePins")
-pin.unpin(frame=30)
-pin.move(delta=(0, 0, 0.5), frame=20)   # keyframed; under the unpin frame
-pin.move(delta=(0, 0, 0.5), frame=40)   # ignored; past unpin
-```
+Per-vertex animated pins (the EMBEDDED_MOVE path) are authored via the UI "Add Keyframe" button on a pin row, not via this API.
 
 #### Center-mode inference for `spin` and `scale`
 
@@ -563,6 +565,37 @@ pin.spin(axis=(0, 0, 1), angular_velocity=360, center=(0, 0, 1))      # ABSOLUTE
 pin.spin(axis=(0, 0, 1), angular_velocity=360, center_direction=(0, 0, -1))  # MAX_TOWARDS
 pin.spin(axis=(0, 0, 1), angular_velocity=360, center_vertex=42)      # VERTEX
 ```
+
+### Curve construction (ROD scenes)
+
+`solver.create_curve(name, ...)` returns a builder that wraps the `bpy.data.curves.new` / `splines.new` / scene-link boilerplate.  Use it instead of raw `bpy` calls when you'd otherwise write a few dozen lines of curve-datablock setup to feed a ROD group.
+
+```python
+curve = solver.create_curve("WovenCylinder",
+                            bevel_depth=3e-3,    # tube radius for the viewport
+                            bevel_resolution=2,
+                            resolution_u=4)
+for points, closed in strands:                   # points: (n, 3) numpy array or list of triples
+    spline_index = curve.add_spline(points, closed=closed)
+    if k_th_color is not None:
+        mat = bpy.data.materials.new(f"strand-{spline_index}")
+        # ... set mat properties ...
+        curve.set_material(spline_index, mat)
+obj = curve.finalize()                           # links to scene and returns the bpy object
+```
+
+#### Curve builder surface
+
+| Method                                                                                    | Purpose                                                            |
+| ----------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| `add_spline(points, closed=False) -> int`                                                 | Append a Bezier spline (AUTO handles); returns its zero-based index |
+| `set_material(spline_index, material) -> Curve`                                           | Bind a `bpy.types.Material` to a spline; reuses existing slots     |
+| `finalize() -> bpy.types.Object`                                                          | Create + link the object; single-use                               |
+| `.name`                                                                                   | Target object name                                                 |
+
+The constructor's `clear_existing=True` (default) removes any existing object with the same name (and its orphan curve data) so re-running scripts starts from a clean slate.
+
+Pin definition is *not* part of the builder. Pass control-point indices to `Group.create_pin(obj, vg, indices=[...])`, which writes the `_pin_<vg>` JSON property and registers the pin in one call.
 
 ### Snap and merge
 

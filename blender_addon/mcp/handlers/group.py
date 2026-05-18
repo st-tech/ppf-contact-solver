@@ -333,8 +333,18 @@ def add_objects_to_group(group_uuid: str, object_names: list[str]):
             warnings.append(f"Object '{obj_name}' not found")
             continue
 
-        if obj.type != "MESH":
-            warnings.append(f"Object '{obj_name}' is not a mesh")
+        # Mirror the UI operator's acceptance rule
+        # (ui/dynamics/group_ops.py::OBJECT_OT_AddObjectsToGroup): a
+        # ROD group also accepts Bezier curves; every other group type
+        # is mesh-only.
+        is_acceptable = obj.type == "MESH" or (
+            obj.type == "CURVE" and target_group.object_type == "ROD"
+        )
+        if not is_acceptable:
+            warnings.append(
+                f"Object '{obj_name}' has type {obj.type!r} which is not "
+                f"accepted by a {target_group.object_type} group"
+            )
             continue
 
         obj_uuid = get_or_create_object_uuid(obj)

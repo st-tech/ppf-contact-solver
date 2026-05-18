@@ -396,9 +396,11 @@ def setup():
     if result.returncode == 0:
         print(f"Successfully installed {len(packages)} packages")
 
-    # Install pytetwild (fTetWild wrapper for tetrahedralization)
+    # Install pytetwild (fTetWild wrapper for tetrahedralization).
+    # pyvista is imported at the top of pytetwild._accessor but is not
+    # declared as a hard dependency, so install it explicitly.
     print("Installing pytetwild...")
-    subprocess.run([pip_path, "install", "pytetwild"], check=True)
+    subprocess.run([pip_path, "install", "pytetwild", "pyvista"], check=True)
 
     # Node.js installation (user-level)
     print("Installing Node.js via nvm (Node Version Manager)...")

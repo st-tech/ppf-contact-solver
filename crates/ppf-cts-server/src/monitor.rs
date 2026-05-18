@@ -25,7 +25,7 @@ use std::time::Duration;
 
 use ppf_cts_core::datamodel::{is_saving_in_progress, project_resumable};
 use ppf_cts_core::events::Event;
-use ppf_cts_core::state::{Build, Solver};
+use ppf_cts_core::state::{Build, Data, Solver};
 use ppf_cts_formats::files::{
     DATA_PICKLE, FINISHED, INITIALIZE_FINISH, PARAM_PICKLE,
 };
@@ -111,6 +111,44 @@ async fn tick(
                 .unwrap_or_else(tokio::time::Instant::now),
         );
         ctx.last_solver_state = s.solver;
+    }
+
+    // Post-mortem external adoption. Mirror of the live-adoption block
+    // above for the case where an external run (typically command.sh /
+    // a JupyterLab notebook) has already finished by the time the
+    // engine first sees the root: the process is gone so solver_busy()
+    // is false, but `finished.txt` + `vert_*.bin` are sitting on disk.
+    // Without this the addon's Fetch poll stays disabled because
+    // state.frame is still 0 even though the run is complete.
+    // Guard with state.frame == 0 so we fire exactly once per fresh
+    // adoption; once we dispatch SolverFrameUpdated below the frame
+    // count becomes > 0 and this branch stops triggering.
+    if s.solver == Solver::Idle
+        && s.build != Build::Building
+        && !s.root.is_empty()
+        && s.data == Data::Uploaded
+        && s.frame == 0
+    {
+        let root = PathBuf::from(&s.root);
+        let output_dir = root.join("session").join("output");
+        if output_dir.join(FINISHED).exists() {
+            let final_frame = count_frames(&root);
+            if final_frame > 0 {
+                let effects = engine.dispatch(Event::SolverFrameUpdated {
+                    frame: final_frame,
+                });
+                for fx in effects {
+                    executor.execute(fx, engine).await;
+                }
+                let resumable = project_resumable(&root);
+                let effects = engine.dispatch(Event::SolverFinished { resumable });
+                for fx in effects {
+                    executor.execute(fx, engine).await;
+                }
+                s = engine.state();
+                ctx.last_solver_state = s.solver;
+            }
+        }
     }
 
     // Track the running edge so we can apply the startup grace

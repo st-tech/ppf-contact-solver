@@ -270,11 +270,18 @@ def _get_curve_cv_count(obj):
 
 
 def _apply_single_frame(context, n, vert, map_by_uuid, surface_map_by_uuid,
-                        target_objects):
+                        target_objects, curve_fit_cache=None):
     """Process one simulation frame: write vertex/CV data to PC2 files.
 
     Both mesh and curve objects are written to PC2 without calling
     frame_set() — pure file I/O, no depsgraph evaluation.
+
+    ``curve_fit_cache`` is an optional ``{uuid: (cache_list, params_data)}``
+    dict pre-populated by :func:`apply_animation` so each curve's
+    pseudo-inverse is computed once per fetch session instead of once per
+    frame. The fit matrix only depends on the spline parameterisation
+    (segment indices, ``t``, weights, cyclic flag), which is frame-
+    invariant.
     """
     blender_frame = n + 1
 
@@ -282,9 +289,16 @@ def _apply_single_frame(context, n, vert, map_by_uuid, surface_map_by_uuid,
         mat = inv_world_matrix(obj)
 
         if obj.type == "CURVE":
-            from .curve_rod import apply_fit, compute_params
+            from .curve_rod import (
+                apply_fit_cached, build_fit_cache, compute_params,
+            )
 
-            params_data = compute_params(obj)
+            cached = curve_fit_cache.get(uid) if curve_fit_cache is not None else None
+            if cached is None:
+                cached = build_fit_cache(obj)
+                if curve_fit_cache is not None:
+                    curve_fit_cache[uid] = cached
+            cache_list, params_data = cached
             if not params_data.get("splines"):
                 continue
             _validate_curve_mapping(uid, obj, map, vert, params_data["splines"])
@@ -298,7 +312,7 @@ def _apply_single_frame(context, n, vert, map_by_uuid, surface_map_by_uuid,
                     continue
                 n_sp_verts = len(spline_meta["params"])
                 sp_sim = sim_pos[vi_offset : vi_offset + n_sp_verts]
-                cvs = apply_fit(obj.data.splines[si], sp_sim, spline_meta)
+                cvs = apply_fit_cached(sp_sim, cache_list[si])
                 all_cvs.append(cvs)
                 vi_offset += n_sp_verts
 
@@ -452,6 +466,10 @@ def apply_animation():
 
     try:
         target_objects = None
+        # Per-fetch-session cache of {uuid: (per_spline_cache_list, params)}.
+        # build_fit_cache runs once per curve and is reused across every
+        # frame in the loop below.
+        curve_fit_cache = {}
         max_blender_frame = 0
         last_applied = 0
         last_total = 0
@@ -514,7 +532,7 @@ def apply_animation():
 
             bf = _apply_single_frame(
                 context, n, vert, map_by_uuid, surface_map_by_uuid,
-                target_objects,
+                target_objects, curve_fit_cache=curve_fit_cache,
             )
             max_blender_frame = max(max_blender_frame, bf)
             state.add_fetched_frame(n)

@@ -4,9 +4,7 @@ See :mod:`blender_addon.ops.api` for the package overview.
 """
 
 import bpy  # pyright: ignore
-from mathutils import Vector  # pyright: ignore
 
-from ...core.utils import get_vertices_in_group, parse_vertex_index, set_linear_interpolation
 from ...models.collection_utils import safe_update_index
 from .._api_markers import blender_api
 
@@ -25,16 +23,14 @@ class _Pin:
     Example::
 
         pin = group.create_pin("Cloth", "hem")
-        pin.move(delta=(0, 0, 1.0), frame=60)  # lift hem over 60 frames
-        pin.unpin(frame=120)                   # release at frame 120
+        pin.move_by(delta=(0, 0, 1.0), frame_start=1, frame_end=60)
+        pin.unpin(frame=120)
     """
 
     def __init__(self, group_uuid: str, object_name: str, vertex_group_name: str):
         object.__setattr__(self, "_group_uuid", group_uuid)
         object.__setattr__(self, "_object_name", object_name)
         object.__setattr__(self, "_vertex_group_name", vertex_group_name)
-        object.__setattr__(self, "_initial_keyframed", False)
-        object.__setattr__(self, "_unpin_frame", None)
         # Resolve UUID at construction so subsequent lookups are
         # rename-safe within the same session.
         from ...core.uuid_registry import get_or_create_object_uuid
@@ -309,9 +305,8 @@ class _Pin:
     def unpin(self, frame: int) -> "_Pin":
         """Mark this pin to be released at the given frame.
 
-        Sets the duration on the underlying UI property so the encoder
-        and clear logic are aware.  Also prevents future ``move(frame=N)``
-        calls where *N* >= *frame*.
+        Sets the duration on the underlying pin item so the encoder
+        knows when to stop enforcing the pin constraint.
 
         Args:
             frame: Frame number at which the pin is released.
@@ -321,135 +316,13 @@ class _Pin:
 
         Example::
 
-            pin.move(delta=(0, 0, 1), frame=60).unpin(frame=120)
+            pin.move_by(delta=(0, 0, 1.0), frame_start=1, frame_end=60)
+            pin.unpin(frame=120)
         """
-        object.__setattr__(self, "_unpin_frame", frame)
-
-        # Update the PinVertexGroupItem in the UI
         _, pin_item = self._find_pin_item()
         if pin_item is not None:
             pin_item.use_pin_duration = True
             pin_item.pin_duration = frame
-        return self
-
-    @blender_api
-    def move(
-        self,
-        delta: tuple[float, float, float] = (0, 0, 0),
-        frame: int | None = None,
-    ) -> "_Pin":
-        """Move pin vertices by *delta* and optionally keyframe at *frame*.
-
-        On the first call with *frame*, the current vertex positions are
-        automatically keyframed at the current scene frame before any
-        movement is applied.  Ignored if *frame* >= the unpin frame.
-
-        Args:
-            delta: ``(dx, dy, dz)`` offset to apply (default no movement).
-            frame: Frame number to keyframe at.  ``None`` means no keyframe.
-
-        Returns:
-            ``self`` for chaining.
-
-        Raises:
-            ValueError: If the target object is missing, not a mesh, or
-                the vertex group does not exist on it.
-
-        Example::
-
-            pin = group.create_pin("Cloth", "hem")
-            pin.move(delta=(0, 0, 1.0), frame=60)   # auto-keyframes start
-            pin.move(delta=(0.5, 0, 0), frame=120)  # adds another keyframe
-        """
-        unpin_frame = object.__getattribute__(self, "_unpin_frame")
-        if frame is not None and unpin_frame is not None and frame >= unpin_frame:
-            return self
-
-        object_uuid = object.__getattribute__(self, "_object_uuid")
-        vertex_group_name = object.__getattribute__(self, "_vertex_group_name")
-
-        if bpy.context.active_object and bpy.context.active_object.mode == "EDIT":
-            bpy.ops.object.mode_set(mode="OBJECT")
-
-        from ...core.uuid_registry import get_object_by_uuid
-        obj = get_object_by_uuid(object_uuid) if object_uuid else None
-        if not obj or obj.type != "MESH":
-            raise ValueError(f"Object for pin not found or not a mesh")
-        vg = obj.vertex_groups.get(vertex_group_name)
-        if not vg:
-            raise ValueError(f"Vertex group '{vertex_group_name}' not found")
-
-        saved_frame = bpy.context.scene.frame_current
-
-        # Auto-keyframe initial position on first timed move
-        if frame is not None and not object.__getattribute__(self, "_initial_keyframed"):
-            self._insert_keyframe(obj, vg)
-            object.__setattr__(self, "_initial_keyframed", True)
-
-        if frame is not None:
-            bpy.context.scene.frame_current = frame
-
-        # Apply movement
-        if delta != (0, 0, 0):
-            d = Vector(delta)
-            for idx in get_vertices_in_group(obj, vg):
-                obj.data.vertices[idx].co += d
-
-        # Insert keyframe at target frame
-        if frame is not None:
-            self._insert_keyframe(obj, vg)
-            bpy.context.scene.frame_current = saved_frame
-            from ...core.animation import save_pin_keyframes
-            save_pin_keyframes(bpy.context)
-        return self
-
-    def _insert_keyframe(self, obj, vg):
-        """Insert a positional keyframe for this pin's vertices with LINEAR interpolation."""
-        for idx in get_vertices_in_group(obj, vg):
-            obj.data.vertices[idx].keyframe_insert(data_path="co")
-
-        if obj.data.animation_data and obj.data.animation_data.action:
-            set_linear_interpolation(obj.data.animation_data.action)
-
-    @blender_api
-    def clear_keyframes(self) -> "_Pin":
-        """Delete all positional keyframes for this pin's vertices.
-
-        Returns:
-            ``self`` for chaining.
-
-        Example::
-
-            pin = group.create_pin("Cloth", "hem")
-            pin.move(delta=(0, 0, 1.0), frame=60)
-            pin.clear_keyframes()  # wipe the animation, keep the pin
-        """
-        from ...core.utils import _get_fcurves
-        from ...core.uuid_registry import get_object_by_uuid
-
-        object_uuid = object.__getattribute__(self, "_object_uuid")
-        vertex_group_name = object.__getattribute__(self, "_vertex_group_name")
-
-        obj = get_object_by_uuid(object_uuid) if object_uuid else None
-        if not obj or obj.type != "MESH":
-            return self
-        vg = obj.vertex_groups.get(vertex_group_name)
-        if not vg:
-            return self
-
-        pin_indices = set(get_vertices_in_group(obj, vg))
-
-        if not obj.data.animation_data or not obj.data.animation_data.action:
-            return self
-        fcurves = _get_fcurves(obj.data.animation_data.action)
-        to_remove = []
-        for fc in fcurves:
-            if fc.data_path.startswith("vertices[") and ".co" in fc.data_path:
-                idx = parse_vertex_index(fc.data_path)
-                if idx is not None and idx in pin_indices:
-                    to_remove.append(fc)
-        for fc in to_remove:
-            fcurves.remove(fc)
         return self
 
     @blender_api

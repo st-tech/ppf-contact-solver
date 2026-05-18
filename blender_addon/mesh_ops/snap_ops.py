@@ -233,6 +233,131 @@ def _build_explicit_cross_stitch(scene, obj_a, obj_b, threshold):
     }
 
 
+def _snap_pair(operator, context, obj_a, obj_b):
+    """Snap ``obj_a`` to ``obj_b`` and (re)build the merge pair entry.
+
+    Shared by :class:`OBJECT_OT_SnapToVertices` (driven by the snap-A /
+    snap-B dropdowns) and :class:`OBJECT_OT_ResnapMergePair` (driven by
+    the active merge-pairs UIList entry). Returns the Blender operator
+    return set; reports go through ``operator``.
+    """
+    state = get_addon_data(context.scene).state
+
+    if not obj_a or not obj_b:
+        operator.report({"ERROR"}, "One or both objects not found")
+        return {"CANCELLED"}
+
+    try:
+        points_a = _get_snap_points(context.scene, obj_a)
+        points_b = _get_snap_points(context.scene, obj_b)
+    except ValueError as exc:
+        operator.report({"ERROR"}, str(exc))
+        return {"CANCELLED"}
+
+    if not points_a or not points_b:
+        operator.report({"ERROR"}, "Could not find snap points on one or both objects")
+        return {"CANCELLED"}
+
+    kd = kdtree.KDTree(len(points_b))
+    for i, world_co in enumerate(points_b):
+        kd.insert(world_co, i)
+    kd.balance()
+
+    min_distance = float("inf")
+    closest_vert_a = None
+    closest_vert_b = None
+
+    for world_co_a in points_a:
+        co, _, dist = kd.find(world_co_a)
+
+        if dist < min_distance:
+            min_distance = dist
+            closest_vert_a = world_co_a
+            closest_vert_b = co
+
+    if closest_vert_a is None or closest_vert_b is None:
+        operator.report({"ERROR"}, "Could not find closest vertices")
+        return {"CANCELLED"}
+
+    translation = closest_vert_b - closest_vert_a
+
+    face_normal = _compute_target_normal(
+        context.scene, obj_b, closest_vert_a, closest_vert_b
+    )
+
+    gap_a, offset_a, gap_b, offset_b = _get_pair_gap_and_offset(
+        context.scene, obj_a, obj_b
+    )
+    total_gap = 0.0
+    if _should_apply_gap(context.scene, obj_a, obj_b):
+        import numpy as np
+        base_gap = max(gap_a, gap_b) + offset_a + offset_b
+        coord_mag = max(abs(c) for c in closest_vert_b)
+        float32_margin = np.spacing(np.float32(coord_mag)) * 2048
+        total_gap = base_gap + max(base_gap, float32_margin)
+        translation += face_normal * total_gap
+
+    # Apply translation in world space so parenting does not break snap motion.
+    _apply_world_translation(obj_a, translation)
+    context.view_layer.update()
+
+    # h = post-snap separation for the closest vertex pair.
+    # Gap cases: h = total_gap (the applied separation).
+    # No-gap cases: h = max contact gap (mesh-scale tolerance).
+    h = total_gap if total_gap > 0 else max(gap_a, gap_b)
+    explicit_cross_stitch = _build_explicit_cross_stitch(
+        context.scene, obj_a, obj_b, threshold=2.0 * h,
+    )
+
+    from ..core.uuid_registry import get_or_create_object_uuid
+    uuid_a = get_or_create_object_uuid(obj_a)
+    uuid_b = get_or_create_object_uuid(obj_b)
+    if not uuid_a or not uuid_b:
+        operator.report(
+            {"ERROR"},
+            "Cannot snap: one or both objects are library-linked (unwritable)",
+        )
+        return {"CANCELLED"}
+    pair_item = None
+    for pair in state.merge_pairs:
+        if (
+            (pair.object_a_uuid == uuid_a and pair.object_b_uuid == uuid_b)
+            or (pair.object_a_uuid == uuid_b and pair.object_b_uuid == uuid_a)
+        ):
+            pair_item = pair
+            break
+    if pair_item is None:
+        pair_item = state.merge_pairs.add()
+        pair_item.object_a = obj_a.name
+        pair_item.object_b = obj_b.name
+        pair_item.object_a_uuid = uuid_a
+        pair_item.object_b_uuid = uuid_b
+        state.merge_pairs_index = len(state.merge_pairs) - 1
+    if explicit_cross_stitch:
+        # Stamp the source-mesh vertex counts into the JSON so
+        # cleanup_stale_merge_pairs can detect a topology edit after
+        # snap (changing vertex count) and clear the stale indices.
+        if obj_a.type == "MESH":
+            explicit_cross_stitch["a_vert_count"] = len(obj_a.data.vertices)
+        if obj_b.type == "MESH":
+            explicit_cross_stitch["b_vert_count"] = len(obj_b.data.vertices)
+        pair_item.cross_stitch_json = json.dumps(
+            explicit_cross_stitch, separators=(",", ":"),
+        )
+    else:
+        pair_item.cross_stitch_json = ""
+
+    from ..ui.dynamics.overlay import apply_object_overlays
+
+    apply_object_overlays()
+
+    operator.report(
+        {"INFO"},
+        f"Snapped {obj_a.name} to {obj_b.name} (distance: {min_distance:.4f})",
+    )
+    return {"FINISHED"}
+
+
 class OBJECT_OT_SnapToVertices(Operator):
     """Snap object A to object B based on nearest vertices"""
 
@@ -256,115 +381,39 @@ class OBJECT_OT_SnapToVertices(Operator):
         # Dropdown identifiers are UUIDs (see ui/state.py::get_snap_objects).
         obj_a = get_object_by_uuid(state.snap_object_a)
         obj_b = get_object_by_uuid(state.snap_object_b)
+        return _snap_pair(self, context, obj_a, obj_b)
 
-        if not obj_a or not obj_b:
-            self.report({"ERROR"}, "One or both objects not found")
+
+class OBJECT_OT_ResnapMergePair(Operator):
+    """Re-run snap on the active merge pair to rebuild its stitch
+    indices (useful after the addon's curve sampling rule changes or
+    after edits that invalidated the cached cross-stitch JSON)."""
+
+    bl_idname = "object.resnap_merge_pair"
+    bl_label = "Re-snap"
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context):
+        state = get_addon_data(context.scene).state
+        idx = state.merge_pairs_index
+        if not (0 <= idx < len(state.merge_pairs)):
+            return False
+        pair = state.merge_pairs[idx]
+        return bool(pair.object_a_uuid and pair.object_b_uuid)
+
+    def execute(self, context):
+        from ..core.uuid_registry import get_object_by_uuid
+
+        state = get_addon_data(context.scene).state
+        idx = state.merge_pairs_index
+        if not (0 <= idx < len(state.merge_pairs)):
+            self.report({"ERROR"}, "No merge pair selected")
             return {"CANCELLED"}
-
-        try:
-            points_a = _get_snap_points(context.scene, obj_a)
-            points_b = _get_snap_points(context.scene, obj_b)
-        except ValueError as exc:
-            self.report({"ERROR"}, str(exc))
-            return {"CANCELLED"}
-
-        if not points_a or not points_b:
-            self.report({"ERROR"}, "Could not find snap points on one or both objects")
-            return {"CANCELLED"}
-
-        kd = kdtree.KDTree(len(points_b))
-        for i, world_co in enumerate(points_b):
-            kd.insert(world_co, i)
-        kd.balance()
-
-        min_distance = float("inf")
-        closest_vert_a = None
-        closest_vert_b = None
-
-        for world_co_a in points_a:
-            co, _, dist = kd.find(world_co_a)
-
-            if dist < min_distance:
-                min_distance = dist
-                closest_vert_a = world_co_a
-                closest_vert_b = co
-
-        if closest_vert_a is None or closest_vert_b is None:
-            self.report({"ERROR"}, "Could not find closest vertices")
-            return {"CANCELLED"}
-
-        translation = closest_vert_b - closest_vert_a
-
-        face_normal = _compute_target_normal(
-            context.scene, obj_b, closest_vert_a, closest_vert_b
-        )
-
-        gap_a, offset_a, gap_b, offset_b = _get_pair_gap_and_offset(
-            context.scene, obj_a, obj_b
-        )
-        total_gap = 0.0
-        if _should_apply_gap(context.scene, obj_a, obj_b):
-            import numpy as np
-            base_gap = max(gap_a, gap_b) + offset_a + offset_b
-            coord_mag = max(abs(c) for c in closest_vert_b)
-            float32_margin = np.spacing(np.float32(coord_mag)) * 2048
-            total_gap = base_gap + max(base_gap, float32_margin)
-            translation += face_normal * total_gap
-
-        # Apply translation in world space so parenting does not break snap motion.
-        _apply_world_translation(obj_a, translation)
-        context.view_layer.update()
-
-        # h = post-snap separation for the closest vertex pair.
-        # Gap cases: h = total_gap (the applied separation).
-        # No-gap cases: h = max contact gap (mesh-scale tolerance).
-        h = total_gap if total_gap > 0 else max(gap_a, gap_b)
-        explicit_cross_stitch = _build_explicit_cross_stitch(
-            context.scene, obj_a, obj_b, threshold=2.0 * h,
-        )
-
-        from ..core.uuid_registry import get_or_create_object_uuid
-        uuid_a = get_or_create_object_uuid(obj_a)
-        uuid_b = get_or_create_object_uuid(obj_b)
-        if not uuid_a or not uuid_b:
-            self.report({"ERROR"}, "Cannot snap: one or both objects are library-linked (unwritable)")
-            return {"CANCELLED"}
-        pair_item = None
-        for pair in state.merge_pairs:
-            if (
-                (pair.object_a_uuid == uuid_a and pair.object_b_uuid == uuid_b)
-                or (pair.object_a_uuid == uuid_b and pair.object_b_uuid == uuid_a)
-            ):
-                pair_item = pair
-                break
-        if pair_item is None:
-            pair_item = state.merge_pairs.add()
-            pair_item.object_a = obj_a.name
-            pair_item.object_b = obj_b.name
-            pair_item.object_a_uuid = get_or_create_object_uuid(obj_a)
-            pair_item.object_b_uuid = get_or_create_object_uuid(obj_b)
-            state.merge_pairs_index = len(state.merge_pairs) - 1
-        if explicit_cross_stitch:
-            # Stamp the source-mesh vertex counts into the JSON so
-            # cleanup_stale_merge_pairs can detect a topology edit after
-            # snap (changing vertex count) and clear the stale indices.
-            explicit_cross_stitch["a_vert_count"] = len(obj_a.data.vertices)
-            explicit_cross_stitch["b_vert_count"] = len(obj_b.data.vertices)
-            pair_item.cross_stitch_json = json.dumps(
-                explicit_cross_stitch, separators=(",", ":"),
-            )
-        else:
-            pair_item.cross_stitch_json = ""
-
-        from ..ui.dynamics.overlay import apply_object_overlays
-
-        apply_object_overlays()
-
-        self.report(
-            {"INFO"},
-            f"Snapped {obj_a.name} to {obj_b.name} (distance: {min_distance:.4f})",
-        )
-        return {"FINISHED"}
+        pair = state.merge_pairs[idx]
+        obj_a = get_object_by_uuid(pair.object_a_uuid)
+        obj_b = get_object_by_uuid(pair.object_b_uuid)
+        return _snap_pair(self, context, obj_a, obj_b)
 
 
 class OBJECT_OT_PickSnapObject(Operator):
@@ -400,7 +449,11 @@ class OBJECT_OT_PickSnapObject(Operator):
         return {"FINISHED"}
 
 
-classes = (OBJECT_OT_SnapToVertices, OBJECT_OT_PickSnapObject)
+classes = (
+    OBJECT_OT_SnapToVertices,
+    OBJECT_OT_ResnapMergePair,
+    OBJECT_OT_PickSnapObject,
+)
 
 
 def register():

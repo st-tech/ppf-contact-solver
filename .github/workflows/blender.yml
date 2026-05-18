@@ -176,7 +176,7 @@ jobs:
             numpy scipy numba plyfile requests trimesh pywavefront \
             matplotlib tqdm pythreejs ipywidgets fast-simplification \
             tabulate triangle psutil tomli ipython pillow pytetwild \
-            cbor2 maturin
+            pyvista cbor2 maturin
 
       # ------------------------------------------------------------------
       # Build the ppf-cts-py wheel and install it editable into the

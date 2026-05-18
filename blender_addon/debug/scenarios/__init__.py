@@ -3,15 +3,14 @@
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
 # License: Apache v2.0
 #
-# Scenario registry. Each scenario module exports a ``run(ctx) -> dict``
+# Phase 1 scenario registry. Each scenario module exports a ``run(ctx) -> dict``
 # function that returns ``{"status": "pass"|"fail", "violations": [...]}``.
 #
-# Two flavors live here. Protocol-level scenarios talk to the debug server
-# via the same JSON-over-TCP wire the addon's communicator uses, so server
-# code (transitions, monitor, response generation, atomic upload) is
-# exercised end-to-end without a Blender process. Blender-driven scenarios
-# (the ``bl_*`` modules) launch a real Blender with the addon loaded and
-# drive its UI through the same lifecycle.
+# Scenarios are protocol-level: they talk to the debug server via the same
+# JSON-over-TCP wire the addon's communicator uses, so production code on
+# the server side (transitions, monitor, response generation, atomic upload)
+# is exercised end-to-end. Phase 2 will add Blender-driven counterparts
+# that exercise the addon UI through the same lifecycle.
 
 import os
 import sys
@@ -176,9 +175,8 @@ REGISTRY = {
     "bl_pc2_migration": bl_pc2_migration,
     "bl_ngon_rejection": bl_ngon_rejection,
 
-    # Tier 1: bug-fix-driven coverage (upload-id desync, mesh cache
-    # self-heal, live frame_end tracking, fetch watchdog, server unknown
-    # recovery, profile load batching).
+    # Tier 1: bug-fix-driven coverage (commits ea4303cb, 92546e18, a8766a08,
+    # ff0d20ca, ...).
     "bl_upload_id_desync_recovery": bl_upload_id_desync_recovery,
     "bl_mesh_cache_self_heal": bl_mesh_cache_self_heal,
     "bl_live_frame_end_tracking": bl_live_frame_end_tracking,

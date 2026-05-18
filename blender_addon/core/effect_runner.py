@@ -637,7 +637,7 @@ class EffectRunner:
         # falls through to the system python, which doesn't carry the
         # PyO3 wheel and the build fails with
         # `ModuleNotFoundError: No module named '_ppf_cts_py'`.
-        # Convention: $HOME/.local/share/ppf-cts/venv.
+        # Convention: $HOME/.local/share/ppf-cts/venv (per CLAUDE.md).
         # Falls through silently when the venv is absent (Docker /
         # win-native paths use embedded Python set up differently).
         venv_activate = '$HOME/.local/share/ppf-cts/venv/bin/activate'

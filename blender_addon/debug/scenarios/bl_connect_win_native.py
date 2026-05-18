@@ -3,11 +3,11 @@
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
 # License: Apache v2.0
 #
-# Windows-only counterpart to bl_connect_local. Sets the addon's
-# backend to WIN_NATIVE and points it at the worker's debug server.
-# Requires ``PPF_WIN_NATIVE_NO_SPAWN=1`` in the environment so the
-# addon's connect_win_native skips its embedded-Python detection and
-# ppf-cts-server.exe Popen; the rig has already started the server.
+# Phase-2: Windows-only counterpart to bl_connect_local. Sets the
+# addon's backend to WIN_NATIVE and points it at the worker's debug
+# server. Requires ``PPF_WIN_NATIVE_NO_SPAWN=1`` in the environment so
+# the addon's connect_win_native skips its embedded-Python detection
+# and ppf-cts-server.exe Popen; the rig has already started the server.
 
 from __future__ import annotations
 

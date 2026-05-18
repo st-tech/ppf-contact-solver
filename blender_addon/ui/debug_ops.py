@@ -8,6 +8,8 @@
 import os
 import webbrowser
 
+import bpy  # pyright: ignore
+
 from ..core.client import RemoteStatus
 from ..core.client import communicator as com
 from ..core.derived import is_server_busy_from_response as is_running
@@ -501,6 +503,246 @@ class DEBUG_OT_RunUUIDMigration(Operator):
         return {"FINISHED"}
 
 
+# ---------------------------------------------------------------------------
+# Debug Render: per-frame manual animation render.
+#
+# Blender's built-in Render Animation has been observed to capture the
+# depsgraph eval between ``render_pre`` and ``frame_change_pre``, which
+# leaves the curve PC2 cache half-applied — about half the splines render
+# at their rest pose because their bevel mesh wasn't re-evaluated yet.
+# This manual loop drives ``scene.frame_set(frame)`` first, which fires
+# our curve playback handler synchronously and finishes mutating every
+# bezier_point before we ever call ``bpy.ops.render.render(write_still=
+# True)``. Output goes to the same paths Blender's animation render
+# would write (``scene.render.frame_path(frame=N)`` per frame).
+# ---------------------------------------------------------------------------
+
+# Module-level handoff between the operator, the render_complete /
+# render_cancel handlers that chain frames, the Stop button, and the
+# panel that draws the progress bar. Reset between runs.
+_render_anim_state = {
+    "running": False,
+    "cancel": False,
+    "current": 0,         # 1-based count of frames completed
+    "total": 0,           # total frames in this run
+    "current_frame": 0,   # the scene-frame number being rendered
+    "next_frame": 0,      # the next scene-frame to render
+    "step": 1,
+    "end": 0,
+    "saved_filepath": "",
+    "saved_frame": 0,
+}
+
+
+def _render_anim_tick():
+    """One frame per timer fire.
+
+    Driven by ``bpy.app.timers.register``: returning a float from this
+    function re-arms it for the next event-loop iteration.  The actual
+    render is synchronous so the current frame blocks the event loop,
+    but the timer yields *between* frames -- enough for the Stop button
+    click to be processed before the next frame is submitted.
+    """
+    s = _render_anim_state
+    if not s["running"]:
+        return None
+    if s["cancel"]:
+        _cleanup_render_anim(cancelled=True)
+        return None
+    fr = s["next_frame"]
+    if fr > s["end"]:
+        _cleanup_render_anim(cancelled=False)
+        return None
+
+    scene = bpy.context.scene
+    # Drive the curve playback handler synchronously before any
+    # render-related work touches the scene.
+    scene.frame_set(fr)
+    s["current_frame"] = fr
+    # Compose the per-frame output path against the *original*
+    # render.filepath so frame_path() doesn't accumulate frame
+    # numbers ("0001", "00010002", ...). frame_path() returns the
+    # numeric stem without the format extension; append the
+    # configured extension explicitly via scene.render.file_extension
+    # ("." + "png" etc.). Disable use_file_extension while we render
+    # so Blender does not double-append.
+    scene.render.filepath = s["saved_filepath"]
+    target = scene.render.frame_path(frame=fr)
+    ext = scene.render.file_extension
+    if ext and not target.endswith(ext):
+        target = target + ext
+    saved_use_ext = scene.render.use_file_extension
+    scene.render.filepath = target
+    scene.render.use_file_extension = False
+    redraw_all_areas(bpy.context)
+    try:
+        bpy.ops.render.render(write_still=True)
+    except Exception as e:
+        console.write(f"[render anim] frame {fr} failed: {e}")
+        scene.render.use_file_extension = saved_use_ext
+        _cleanup_render_anim(cancelled=True)
+        return None
+    scene.render.use_file_extension = saved_use_ext
+
+    s["current"] += 1
+    s["next_frame"] += s["step"]
+    redraw_all_areas(bpy.context)
+    # Returning a small interval (instead of 0.0) yields the event
+    # loop a tick of breathing room so the Stop button click can be
+    # dispatched and the panel can repaint before the next frame.
+    return 0.05
+
+
+def _cleanup_render_anim(cancelled):
+    scene = bpy.context.scene
+    scene.render.filepath = _render_anim_state["saved_filepath"]
+    try:
+        scene.frame_set(_render_anim_state["saved_frame"])
+    except Exception:
+        pass
+    n_done = _render_anim_state["current"]
+    n_total = _render_anim_state["total"]
+    _render_anim_state["running"] = False
+    _render_anim_state["cancel"] = False
+    _render_anim_state["current"] = 0
+    _render_anim_state["total"] = 0
+    _render_anim_state["current_frame"] = 0
+    _render_anim_state["next_frame"] = 0
+    verb = "cancelled" if cancelled else "finished"
+    console.write(f"[render anim] {verb}: {n_done}/{n_total} frames written")
+    redraw_all_areas(bpy.context)
+
+
+def _expected_frame_paths(context):
+    """Return the absolute file paths this render would write."""
+    scene = context.scene
+    start = scene.frame_start
+    end = scene.frame_end
+    step = max(1, scene.frame_step)
+    ext = scene.render.file_extension
+    paths = []
+    for fr in range(start, end + 1, step):
+        target = scene.render.frame_path(frame=fr)
+        if ext and not target.endswith(ext):
+            target = target + ext
+        paths.append(bpy.path.abspath(target))
+    return paths
+
+
+class DEBUG_OT_RenderAnimation(Operator):
+    """Render the active frame range one frame at a time.
+
+    Drives ``scene.frame_set(N)`` -> synchronous single-frame render
+    via a ``bpy.app.timers`` chain. Output paths match the built-in
+    Render Animation (``scene.render.frame_path(frame=N)`` per frame).
+    Between frames the event loop runs, so the Stop button click is
+    processed before the next frame is submitted.
+    """
+
+    bl_idname = "debug.render_animation"
+    bl_label = "Render Animation"
+    bl_options = {"REGISTER"}
+
+    # Filled in on invoke when previous files are detected.
+    _existing_count: int = 0
+
+    @classmethod
+    def poll(cls, _):
+        return not _render_anim_state["running"]
+
+    def invoke(self, context, _event):
+        # Skip the dialog when no prior frames would be overwritten.
+        existing = [p for p in _expected_frame_paths(context) if os.path.exists(p)]
+        if not existing:
+            return self.execute(context)
+        self._existing_count = len(existing)
+        return context.window_manager.invoke_props_dialog(self, width=420)
+
+    def draw(self, context):
+        layout = self.layout
+        layout.label(
+            text=f"Output directory already contains {self._existing_count} "
+                 f"matching frame file(s).",
+            icon="ERROR",
+        )
+        layout.label(text="They will be deleted before rendering starts.")
+        layout.label(text="Click OK to proceed, or Cancel to abort.")
+
+    def execute(self, context):
+        scene = context.scene
+        # Clean any previous frame files that would be overwritten.
+        deleted = 0
+        for p in _expected_frame_paths(context):
+            if os.path.exists(p):
+                try:
+                    os.remove(p)
+                    deleted += 1
+                except OSError as e:
+                    console.write(f"[render anim] could not delete {p}: {e}")
+
+        start = scene.frame_start
+        end = scene.frame_end
+        step = max(1, scene.frame_step)
+        n_total = max(1, (end - start) // step + 1)
+
+        _render_anim_state["running"] = True
+        _render_anim_state["cancel"] = False
+        _render_anim_state["current"] = 0
+        _render_anim_state["total"] = n_total
+        _render_anim_state["current_frame"] = start
+        _render_anim_state["next_frame"] = start
+        _render_anim_state["step"] = step
+        _render_anim_state["end"] = end
+        _render_anim_state["saved_filepath"] = scene.render.filepath
+        _render_anim_state["saved_frame"] = scene.frame_current
+
+        suffix = f" ({deleted} previous file(s) removed)" if deleted else ""
+        self.report({"INFO"},
+                    f"Render Animation: frames {start}..{end} step {step} "
+                    f"-> {n_total} frames{suffix}")
+        bpy.app.timers.register(_render_anim_tick, first_interval=0.05)
+        return {"FINISHED"}
+
+
+class DEBUG_OT_StopRender(Operator):
+    """Cancel the in-progress manual Render Animation.
+
+    Flips the cancel flag; the timer-driven chain halts before the
+    next frame is submitted. The in-progress frame (if any) keeps
+    rendering to completion because Blender does not expose a clean
+    mid-frame cancel from Python.
+    """
+
+    bl_idname = "debug.stop_render_animation"
+    bl_label = "Stop"
+
+    @classmethod
+    def poll(cls, _):
+        return _render_anim_state["running"]
+
+    def execute(self, _):
+        _render_anim_state["cancel"] = True
+        self.report({"INFO"},
+                    "Stop requested; in-flight frame will finish, then halt")
+        return {"FINISHED"}
+
+
+def is_render_anim_running() -> bool:
+    """Helper for UI code to know whether to show the progress bar."""
+    return _render_anim_state["running"]
+
+
+def get_render_anim_progress() -> tuple[int, int, int]:
+    """Return ``(current, total, current_frame)`` for the panel.
+
+    ``current`` and ``total`` are frame *counts*; ``current_frame`` is the
+    scene-frame number being rendered.  All zero when no render is in
+    progress.
+    """
+    s = _render_anim_state
+    return s["current"], s["total"], s["current_frame"]
+
+
 classes = [
     WM_OT_OpenGitHubLink,
     DEBUG_OT_RunUUIDMigration,
@@ -516,4 +758,6 @@ classes = [
     DEBUG_OT_ClearLogPath,
     DEBUG_OT_DeleteLog,
     DEBUG_OT_GitPullLocal,
+    DEBUG_OT_RenderAnimation,
+    DEBUG_OT_StopRender,
 ]

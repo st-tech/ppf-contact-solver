@@ -77,6 +77,7 @@ def _encode_scene_params(context, state):
         "fps": fps,
         "csrmat-max-nnz": int(state.contact_nnz),
         "isotropic-air-friction": np.float32(state.vertex_air_damp),
+        "fix-xz": np.float32(state.fix_xz),
         "auto-save": auto_save,
         "line-search-max-t": np.float32(state.line_search_max_t),
         "constraint-ghat": np.float32(state.constraint_ghat),
@@ -263,7 +264,7 @@ def _encode_group_params(context, groups, state, fps):
             "bend-plasticity": np.float32(group.bend_plasticity) if group.enable_bend_plasticity else np.float32(0.0),
             "bend-plasticity-threshold": np.float32(group.bend_plasticity_threshold) if group.enable_bend_plasticity else np.float32(0.0),
             "bend-rest-from-geometry": np.float32(1.0 if group.bend_rest_angle_source == "FROM_GEOMETRY" else 0.0),
-            "length-factor": np.float32(1.0),
+            "length-factor": np.float32(group.length_factor),
             # Per-object dicts key on UUID so the decoder looks up the
             # right entry even if the Blender object was renamed between
             # transfer and simulation. pin_config already uses UUID.

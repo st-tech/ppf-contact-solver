@@ -16,9 +16,18 @@ Usage in Blender scripts::
     shell.param.friction = 0.5
 
     # Pin creation returns a Pin proxy; methods are chainable
-    # Initial position is auto-keyframed on first move(frame=...)
     left = shell.create_pin("Plane", "left")
-    left.move(delta=(0, 0, 1.0), frame=60)
+    left.move_by(delta=(0, 0, 1.0), frame_start=1, frame_end=60)
+
+    # Rod scenes: build a Bezier curve, then pin its control points
+    # directly on the group.
+    curve = solver.create_curve("Strands", bevel_depth=3e-3)
+    for points, closed in strands:
+        curve.add_spline(points, closed=closed)
+    obj = curve.finalize()
+    rod = solver.create_group("Rod", type="ROD")
+    rod.add(obj.name)
+    rod.create_pin(obj.name, "left", indices=left_indices)
 
     # Connection (falls through to bpy.ops)
     solver.connect()
@@ -29,6 +38,7 @@ from .collider import (
     _InvisibleSphereBuilder,
     _InvisibleWallBuilder,
 )
+from .curve import _CurveBuilder
 from .dynamics import _DynParamBuilder, _SceneProxy
 from .group import _Group, _ParamProxy
 from .pin import _Pin
@@ -47,6 +57,7 @@ from .solver import _Solver, solver
 Solver = _Solver
 Group = _Group
 Pin = _Pin
+Curve = _CurveBuilder
 SceneParam = _SceneProxy
 GroupParam = _ParamProxy
 ColliderParam = _ColliderParamProxy
@@ -60,6 +71,7 @@ __all__ = [
     "Solver",
     "Group",
     "Pin",
+    "Curve",
     "SceneParam",
     "GroupParam",
     "ColliderParam",
@@ -71,6 +83,7 @@ __all__ = [
     "_Solver",
     "_Group",
     "_Pin",
+    "_CurveBuilder",
     "_SceneProxy",
     "_ParamProxy",
     "_ColliderParamProxy",

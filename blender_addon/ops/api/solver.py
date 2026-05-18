@@ -9,6 +9,7 @@ import bpy  # pyright: ignore
 from ...models.groups import get_addon_data
 from .._api_markers import blender_api
 from .collider import _InvisibleSphereBuilder, _InvisibleWallBuilder
+from .curve import _CurveBuilder
 from .dynamics import _SceneProxy
 from .group import _Group
 
@@ -179,20 +180,32 @@ class _Solver:
                 except Exception:
                     continue
 
-        # Clear fetched frames and saved pin keyframes
-        state.clear_fetched_frames()
-        state.saved_pin_keyframes.clear()
+        # Blender treats CollectionProperty.clear() as a write to the
+        # owning ID and blocks it in restricted contexts (load_post,
+        # render handlers, scripts launched from an embedded Text
+        # data-block during file load). Wrap each .clear() so a
+        # restricted context skips silently instead of crashing the
+        # script halfway through.
+        def _safe_clear(call):
+            try:
+                call()
+            except AttributeError as e:
+                if "Writing to ID classes" not in str(e):
+                    raise
+
+        _safe_clear(state.clear_fetched_frames)
+        _safe_clear(state.saved_pin_keyframes.clear)
 
         # Collection properties don't respond to setattr(prop.default), so
         # clear them explicitly, otherwise solver.clear() silently leaves
         # merge pairs and scene colliders behind.
-        state.merge_pairs.clear()
+        _safe_clear(state.merge_pairs.clear)
         state.merge_pairs_index = 0
         if hasattr(state, "invisible_colliders"):
-            state.invisible_colliders.clear()
+            _safe_clear(state.invisible_colliders.clear)
             state.invisible_colliders_index = 0
         if hasattr(state, "dyn_params"):
-            state.dyn_params.clear()
+            _safe_clear(state.dyn_params.clear)
             state.dyn_params_index = 0
 
         # Remove MESH_CACHE modifiers, PC2 files, and residual animation data
@@ -212,6 +225,54 @@ class _Solver:
         invalidate_overlays()
 
         return self
+
+    # -- Curve construction --------------------------------------------------
+
+    @blender_api
+    def create_curve(self, name: str, *, bevel_depth: float = 0.0,
+                     bevel_resolution: int = 2, resolution_u: int = 4,
+                     dimensions: str = "3D",
+                     clear_existing: bool = True) -> _CurveBuilder:
+        """Start building a multi-spline Bezier curve object.
+
+        Returns a :class:`Curve` builder.  Use :meth:`Curve.add_spline`
+        for each spline, optionally :meth:`Curve.set_material` to color
+        them, then :meth:`Curve.finalize` to link the resulting object
+        into the scene.
+
+        Args:
+            name: Object name.  When ``clear_existing`` is true (the
+                default) any existing object with this name is removed
+                first so re-running the script starts from a clean
+                slate.
+            bevel_depth: Tube radius for visualization (Blender's
+                ``Curve.bevel_depth``).  ``0`` leaves the curve as a
+                wireframe.
+            bevel_resolution: Tube cross-section subdivisions
+                (``Curve.bevel_resolution``).
+            resolution_u: Spline interpolation resolution
+                (``Curve.resolution_u``).
+            dimensions: ``"3D"`` (default) or ``"2D"``.
+            clear_existing: Set ``False`` to skip the same-name cleanup.
+
+        Returns:
+            A :class:`Curve` builder.
+
+        Example::
+
+            curve = solver.create_curve("Strands", bevel_depth=3e-3)
+            for points, closed in strands:
+                curve.add_spline(points, closed=closed)
+            obj = curve.finalize()
+        """
+        return _CurveBuilder(
+            name,
+            bevel_depth=bevel_depth,
+            bevel_resolution=bevel_resolution,
+            resolution_u=resolution_u,
+            dimensions=dimensions,
+            clear_existing=clear_existing,
+        )
 
     # -- Snap ----------------------------------------------------------------
 

@@ -3,7 +3,7 @@
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
 # License: Apache v2.0
 #
-# Live scene.frame_end tracking.
+# Live scene.frame_end tracking (commit 92546e18).
 #
 # During a live simulation, frames flow in via DoFetchFrames and
 # apply_animation writes them to PC2 + advances scene.frame_end to the

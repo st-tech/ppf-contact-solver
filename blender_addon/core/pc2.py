@@ -131,7 +131,7 @@ def fill_gap_frames(filepath, from_frame_idx, to_frame_idx, n_verts, obj_key=Non
     frames tracked in ``_real_frames``, the largest real frame <=
     ``from_frame_idx`` is used as the source. This avoids cascading a
     previously-gap-filled pose into new gaps. When no real frame is available
-    yet, the function falls back to reading ``from_frame_idx`` directly
+    yet, the function falls back to reading ``from_frame_idx`` (old behavior)
     so the first-ever gap-fill still produces a plausible pose.
     """
     src_idx = from_frame_idx

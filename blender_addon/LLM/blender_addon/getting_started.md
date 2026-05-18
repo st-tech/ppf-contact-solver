@@ -123,7 +123,7 @@ Before touching the add-on, lay out the two objects the sim needs: a **subdivide
 
 5. **Transfer.** In the **Solver** panel, click **Transfer**. This encodes the mesh and parameters, uploads both, and triggers the remote **build** stage. The status line walks through *Uploading Mesh Data, Uploading Parameters, Building, Ready*.
 
-6. **Run.** Click **Run**. The status flips to *Simulation in Progress*. Realtime statistics appear; an **Abort** button lets you stop it early. Frames are fetched incrementally as they complete.
+6. **Run.** Click **Run**. The status flips to *Initializing...* and then *Simulation Running...* as soon as the solver finishes its in-process initialization. Realtime statistics appear; a **Terminate** button lets you stop it early. Frames are fetched incrementally as they complete.
 
    NOTE: If **Run** is grayed out and you see *Clear local animation before running*, click **Clear Local Animation** first. Previous simulation output lingers on the objects until you do.
 

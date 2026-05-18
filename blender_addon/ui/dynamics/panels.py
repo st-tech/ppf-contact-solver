@@ -1034,6 +1034,7 @@ class DYNAMICS_PT_Groups(Panel):
                         param_box.prop(group, "rod_density")
                         param_box.prop(group, "rod_young_modulus")
                         param_box.prop(group, "friction")
+                        param_box.prop(group, "length_factor")
 
                         contact_box = param_box.box()
                         contact_box.prop(group, "contact_gap")
@@ -1119,6 +1120,9 @@ class SNAPMERGE_PT_SnapAndMerge(Panel):
                 "merge_pairs_index",
             )
 
+            row = merge_box.row()
+            row.enabled = 0 <= state.merge_pairs_index < len(state.merge_pairs)
+            row.operator("object.resnap_merge_pair", icon="FILE_REFRESH")
             row = merge_box.row()
             row.enabled = 0 <= state.merge_pairs_index < len(state.merge_pairs)
             row.operator("object.remove_merge_pair", icon="REMOVE")

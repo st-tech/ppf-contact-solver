@@ -207,7 +207,13 @@ def clear_invisible_colliders() -> dict[str, Any]:
 
 
 def create_pin(group_uuid: str, object_name: str, vertex_group_name: str) -> dict[str, Any]:
-    """Add a vertex group to a dynamics group's pin list."""
+    """Add a vertex group (mesh) or control-point pin set (curve) to a
+    dynamics group's pin list.
+
+    Mesh objects must have a vertex group named ``vertex_group_name``.
+    Curve objects must have a ``_pin_<vertex_group_name>`` custom
+    property holding a JSON-encoded list of control-point indices.
+    """
     import bpy  # pyright: ignore
 
     if not group_uuid:
@@ -220,8 +226,20 @@ def create_pin(group_uuid: str, object_name: str, vertex_group_name: str) -> dic
         if get_group_by_uuid(bpy.context.scene, group_uuid) is None:
             raise MutationError(f"group '{group_uuid}' not found")
         obj, obj_uuid = _resolve_writable(object_name)
-        if obj.type != "MESH":
-            raise MutationError(f"object '{object_name}' is not a mesh")
+        if obj.type == "MESH":
+            if vertex_group_name not in [vg.name for vg in obj.vertex_groups]:
+                raise MutationError(
+                    f"vertex group '{vertex_group_name}' not found on '{object_name}'"
+                )
+        elif obj.type == "CURVE":
+            if f"_pin_{vertex_group_name}" not in obj:
+                raise MutationError(
+                    f"curve pin '_pin_{vertex_group_name}' not found on '{object_name}'"
+                )
+        else:
+            raise MutationError(
+                f"object '{object_name}' is type {obj.type!r}; expected MESH or CURVE"
+            )
         try:
             _raw_create_pin(group_uuid, object_name, vertex_group_name)
         except ValueError as e:

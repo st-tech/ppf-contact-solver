@@ -149,7 +149,7 @@ Note: **Save** overwrites the currently selected entry and rewrites the whole fi
 ### Status: "Protocol version mismatch"
 
 - You see: this exact status.
-- Why: the server reports a wire version other than `0.04`.
+- Why: the server reports a wire version other than `0.02`.
 - Fix: rebuild the solver from a revision that matches the add-on, or update the add-on.
 
 ### "Remote path not found (.../ppf-cts-server)."
@@ -265,7 +265,7 @@ Note: **Save** overwrites the currently selected entry and rewrites the whole fi
 
 ### Run button is disabled
 
-- You see: button greys out.
+- You see: button is grayed out.
 - Why: a bake is still running.
 - Fix: let it finish, or click **Abort Bake** first.
 
@@ -343,14 +343,14 @@ Note: **Save** overwrites the currently selected entry and rewrites the whole fi
 
 ### "Port already in use"
 
-- You see: when the configured MCP port is busy, the add-on silently walks the next nine (`9633` through `9642`) and binds the first free one.
+- You see: when the configured MCP port is busy, the add-on silently walks the next nine (`9634` through `9642`) and binds the first free one.
 - Why: another MCP server, another Blender, or a stale process is bound to the base port.
 - Fix: nothing required, but check the actual bound port in the MCP panel if an external client is pointing at the base. Confirm with `python blender_addon/debug/main.py --mcp-port <port> status`.
 
-### "MCP server: could not find available port in range 9633-9642"
+### "MCP Server: Could not find available port in range 9633-9642"
 
 - You see: this error when starting the MCP server.
-- Why: all ten slots are taken.
+- Why: all ten slots in the search range are taken.
 - Fix: kill the holding process (`lsof -i :9633-9642` on macOS/Linux, `netstat -ano | findstr 963` on Windows), or set a different base port in the MCP panel.
 
 ### "Failed to start MCP server"
@@ -414,12 +414,12 @@ Note: **Save** overwrites the currently selected entry and rewrites the whole fi
 ### "My change didn't show up after reload"
 
 - You see: add-on reloads cleanly but the new field, new property, or renamed class is not visible.
-- Why: almost always a PropertyGroup schema change. Plain reload swaps code but cannot rebind Blender's RNA.
-- Fix: run `python blender_addon/debug/main.py full-reload`. If even that does not take, restart Blender; this is a limitation of Blender's RNA system, not the reload server.
+- Why: almost always a PropertyGroup schema change. Plain reload swaps code but cannot rebind Blender's RNA. New PropertyGroup fields, removed fields, or changed property types cannot be picked up by either reload command.
+- Fix: for added/removed/retyped properties, restart Blender. For other schema changes, try `python blender_addon/debug/main.py full-reload`; if it still does not take, restart Blender. This is a limitation of Blender's RNA system, not the reload server.
 
 ### "Reload timed out"
 
-- You see: `reload` or `full-reload` exits with this error after 30 s (plain) or 60 s (full).
+- You see: `reload` or `full-reload` exits with this error after 45 s (plain) or 70 s (full).
 - Why: something in the module's top-level code, `register`, or `unregister` is blocking the main thread (network call, large mesh operation, missing `bpy.app.timers.unregister`).
 - Fix: move expensive work to background threads; check the Blender system console for whatever was still printing when the timer fired.
 

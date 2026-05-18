@@ -32,18 +32,20 @@ WARNING: **New PropertyGroup fields still require a full Blender restart.** Neit
 
 The CLI lives at `blender_addon/debug/main.py` and talks to both the debug reload port (TCP 8765) and the MCP HTTP port (default 9633). All commands accept the global options listed below. Run it from a host shell, not from inside Blender.
 
-| Subcommand            | Description                                                                                |
-| --------------------- | ------------------------------------------------------------------------------------------ |
-| `status`              | Check whether the debug port and MCP server are reachable.                                 |
-| `reload`              | Single-tick hot reload. Timeout 45 s.                                                      |
-| `full-reload`         | Two-phase reload for schema changes. Timeout 70 s.                                         |
-| `exec <code>`         | Execute Python inside Blender. Pass `-` to read from stdin.                                |
-| `start-mcp`           | Ask the reload server to start the MCP server. `--port` selects port.                      |
-| `tools`               | List MCP tools. `--json` for raw JSON.                                                     |
-| `call <tool> [json]`  | Invoke an MCP tool with the given JSON arguments.                                          |
-| `scene`               | Fetch the current Blender scene via the MCP `blender://scene/current` resource.            |
-| `resources`           | List MCP resources. `--json` for raw JSON.                                                 |
-| `read <uri>`          | Read an MCP resource by URI. Prints the text body to stdout; `--json` prints the raw envelope. |
+| Subcommand               | Description                                                                                |
+| ------------------------ | ------------------------------------------------------------------------------------------ |
+| `status`                 | Check whether the debug port and MCP server are reachable.                                 |
+| `reload`                 | Single-tick hot reload. Timeout 45 s.                                                      |
+| `full-reload`            | Two-phase reload for schema changes. Timeout 70 s.                                         |
+| `exec <code>`            | Execute Python inside Blender. Pass `-` to read from stdin.                                |
+| `start-mcp`              | Ask the reload server to start the MCP server. `--port` selects port.                      |
+| `restart-server`         | Run `server/restart.sh` on the addon's connected remote (stop + start the solver server).  |
+| `tools`                  | List MCP tools. `--json` for raw JSON.                                                     |
+| `call <tool> [json]`     | Invoke an MCP tool with the given JSON arguments.                                          |
+| `scene`                  | Fetch the current Blender scene via the MCP `blender://scene/current` resource.            |
+| `resources`              | List MCP resources. `--json` for raw JSON.                                                 |
+| `read <uri>`             | Read an MCP resource by URI. Prints the text body to stdout; `--json` prints the raw envelope. |
+| `runtests [scenarios...]`| Run debug scenarios against an isolated emulated server. `--list` enumerates, `--parallel`, `--repeat`, `--knob` available. |
 
 Global options:
 

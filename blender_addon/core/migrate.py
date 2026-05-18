@@ -4,6 +4,10 @@
 # UUID migration for old .blend files.
 # Assigns UUIDs to all name-based references so the UUID system works.
 # Triggered manually via the "Run UUID Migration" button in Debug Options.
+#
+# TODO(removal): delete this module after one minor release ships
+# with the Rust cutover and users have had a window to re-save .blend
+# files. Tracked target: 2026-08-01.
 
 import json
 

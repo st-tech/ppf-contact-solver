@@ -367,7 +367,19 @@ def _encode_pin_config(context, groups, state):
             # Tag with group identity so solver can merge torque vertices
             cfg["pin_group_id"] = f"{obj_uuid}:{vg_name}"
             cfg["obj_uuid"] = obj_uuid
-            for vi in _get_pin_indices(obj, vg_name):
+            # For curves we must match the sampled-vertex index space used
+            # by ``info["pin"]`` in encoder/mesh.py (the solver's
+            # ``pin_holder.index``). Otherwise spin/move_by configs are
+            # keyed at control-point indices and the frontend's lookup
+            # ``obj_cfg.get(sampled_idx)`` misses them.
+            if obj.type == "CURVE":
+                from ..curve_rod import map_cp_pins_to_sampled
+                config_indices = map_cp_pins_to_sampled(
+                    obj, _get_pin_indices(obj, vg_name)
+                )
+            else:
+                config_indices = _get_pin_indices(obj, vg_name)
+            for vi in config_indices:
                 pin_config[obj_uuid][vi] = cfg
 
     return pin_config

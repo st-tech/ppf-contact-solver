@@ -51,6 +51,10 @@ from .debug_ops import (
     DEBUG_OT_ExecuteShell,
     DEBUG_OT_GitPull,
     DEBUG_OT_GitPullLocal,
+    DEBUG_OT_RenderAnimation,
+    DEBUG_OT_StopRender,
+    is_render_anim_running,
+    get_render_anim_progress,
     WM_OT_OpenGitHubLink,
     classes as debug_classes,
 )
@@ -498,6 +502,27 @@ class MAIN_PT_RemotePanel(Panel):
             col.operator("debug.run_uuid_migration", icon="FILE_REFRESH")
             if state.uuid_migration_result:
                 col.label(text=state.uuid_migration_result, icon="INFO")
+
+            col = box.column()
+            col.label(text="Render", icon="RENDER_ANIMATION")
+            row = col.row(align=True)
+            running = is_render_anim_running()
+            r1 = row.row(align=True)
+            r1.enabled = not running
+            r1.operator(DEBUG_OT_RenderAnimation.bl_idname,
+                        text="Render Animation", icon="RENDER_ANIMATION")
+            r2 = row.row(align=True)
+            r2.enabled = running
+            r2.operator(DEBUG_OT_StopRender.bl_idname,
+                        text="Stop", icon="PAUSE")
+            if running:
+                current, total, current_frame = get_render_anim_progress()
+                pct = (current / total) if total > 0 else 0.0
+                col.row().progress(
+                    factor=pct,
+                    type="BAR",
+                    text=f"Frame {current_frame}  ({current}/{total}, {pct*100:.0f}%)",
+                )
 
             col = box.column()
             col.label(text="Add-on Local Debug Server", icon="TOOL_SETTINGS")

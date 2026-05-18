@@ -5,11 +5,13 @@
 #
 # Per-group fTetWild override encoding.
 #
-# SOLID groups carry per-field fTetWild overrides (edge_length_fac,
-# epsilon, stop_energy, num_opt_iter, optimize, simplify, coarsen)
-# behind per-field enable toggles. Only enabled overrides ride through
-# ``param.pickle`` as ``param["group"][i][0]["ftetwild"]``; the decoder
-# later fans the kwargs out by UUID into ``tetrahedralize()``.
+# Motivation: commit 71325d15 ("Per-group fTetWild overrides and
+# velocity keyframe copy/paste"). SOLID groups gained per-field
+# fTetWild overrides (edge_length_fac, epsilon, stop_energy,
+# num_opt_iter, optimize, simplify, coarsen) behind per-field enable
+# toggles. Only enabled overrides ride through ``param.pickle`` as
+# ``param["group"][i][0]["ftetwild"]``; the decoder later fans the
+# kwargs out by UUID into ``tetrahedralize()``.
 #
 # This scenario authors a SOLID group on a primitive cube, sets every
 # override toggle on with a non-default value, encodes the params,

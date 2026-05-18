@@ -543,6 +543,18 @@ class ObjectGroup(PropertyGroup):
         precision=2,
         description="Uniform scale factor for solid material; <1 shrinks, >1 extends",
     )  # pyright: ignore
+    length_factor: FloatProperty(
+        name="Shrink",
+        default=OBJECT_GROUP_DEFAULTS["length_factor"],
+        min=0.1,
+        soft_max=2.0,
+        precision=2,
+        description=(
+            "Rest-length scale for rod edges; <1 shrinks the rod, "
+            ">1 extends it. Maps to the solver's 'length-factor' "
+            "rod parameter"
+        ),
+    )  # pyright: ignore
 
     # fTetWild per-group overrides (SOLID only; ignored for other types).
     # Each sub-override flag gates whether its value is forwarded to

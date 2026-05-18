@@ -3,13 +3,13 @@
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
 # License: Apache v2.0
 #
-# Regression guard: on a fresh project (server reports
-# ``data="NO_DATA"``), clicking Transfer must skip the
-# "Deleting Remote Data..." query. The delete would be a no-op the
-# user pays for in latency, plus a misleading status banner.
+# Regression: clicking Transfer on a fresh project (server reports
+# ``data="NO_DATA"``) used to dispatch a "Deleting Remote Data..."
+# query first and then upload. The delete is a no-op the user paid
+# for in latency and a misleading status banner. The fix in
 # ``SOLVER_OT_Transfer.execute`` short-circuits to the upload path
 # when the cached server response already says NO_DATA and we have a
-# remote_root; this scenario asserts that short-circuit holds.
+# remote_root.
 #
 # Subtests:
 #   A. fresh_transfer_skips_delete: invoking ``SOLVER_OT_Transfer

@@ -102,11 +102,30 @@ __device__ static float strand_energy(const Vec3f &x0, const Vec3f &x1,
 }
 
 __device__ static Mat3x2f gradient_theta(const Vec3f &e0, const Vec3f &e1) {
-    Vec3f n = e0.cross(e1).normalized();
+    // Guard the degenerate / near-degenerate case e0 parallel or
+    // antiparallel to e1 (a perfectly straight or back-folded rod
+    // segment). |e0 x e1|^2 = |e0|^2 |e1|^2 sin^2(theta), so we reject
+    // when sin^2(theta) is below a scale-invariant threshold. Without
+    // this, exact collinearity produces a zero-vector cross whose
+    // ``.normalized()`` returns NaN, which propagates through both the
+    // bending force and the g*g^T Hessian and breaks PCG monotonicity
+    // (alpha flips sign and the residual diverges). The bending force
+    // is (theta - theta_0) * grad(theta) which vanishes at the
+    // singularity anyway, so contributing a zero gradient (and thus a
+    // zero Hessian block) is also the right physics for that vertex.
+    Vec3f cross = e0.cross(e1);
+    float cross_sqnm = cross.squaredNorm();
+    float e0_sqnm = e0.dot(e0);
+    float e1_sqnm = e1.dot(e1);
+    constexpr float kSinSqEps = 1e-12f;
+    if (cross_sqnm <= kSinSqEps * e0_sqnm * e1_sqnm) {
+        return Mat3x2f::Zero();
+    }
+    Vec3f n = cross / sqrtf(cross_sqnm);
     Vec3f e0perp = e0.cross(n);
     Vec3f e1perp = e1.cross(n);
-    Vec3f g0 = e0perp / e0.dot(e0);
-    Vec3f g1 = -e1perp / e1.dot(e1);
+    Vec3f g0 = e0perp / e0_sqnm;
+    Vec3f g1 = -e1perp / e1_sqnm;
     Mat3x2f G;
     G << g0, g1;
     return G;
