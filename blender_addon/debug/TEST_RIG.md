@@ -50,11 +50,11 @@ python3.12 blender_addon/debug/main.py runtests bl_connect_local
 python3.12 blender_addon/debug/main.py runtests --parallel 4 --repeat 3 --report run.json
 ```
 
-The rig is all-green on macOS and the standard Linux / Windows
-build hosts (host scenario counts vary by platform gate: 65 on
-macOS, 67 on Linux, 66 on Windows). Chain scenarios can flake at
-``--parallel 4`` (see "Parallel mode caveats" below); drop to
-``--parallel 2`` if you need stable chain results.
+The rig is all-green on macOS, Linux, and Windows (host scenario
+counts vary by platform gate: 65 on macOS, 67 on Linux, 66 on
+Windows). Chain scenarios can flake at ``--parallel 4`` (see
+"Parallel mode caveats" below); drop to ``--parallel 2`` if you need
+stable chain results.
 
 ## What runs where
 
@@ -176,13 +176,11 @@ canonical source per layer (the Python addon and ``ppf-cts-server``
 each pin a single ``PROTOCOL_VERSION`` constant). Do not redefine it
 inside the scenario. ``bl_upload_id_desync_recovery``,
 ``bl_violation_overlay_classification``, and ``server_smoke`` are
-recent examples of this pattern.
+examples of this pattern.
 
 If your driver mutates Blender data directly, use the helpers in
-``blender_addon/core/mutation`` (``_raw_*``); they used to live in
-``blender_addon/ops/api`` but moved to ``core.mutation``. Some debug
-scenarios still in tree, e.g. ``bl_pin_rod_curve`` and
-``bl_bake_animation``, call them from the new location.
+``blender_addon/core/mutation`` (``_raw_*``). Examples that call
+them: ``bl_pin_rod_curve`` and ``bl_bake_animation``.
 
 ### Why the bootstrap pattern, not exec-over-TCP?
 
