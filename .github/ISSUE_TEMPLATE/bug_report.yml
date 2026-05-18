@@ -1,0 +1,56 @@
+name: Bug Report
+description: Report a problem with the solver, add-on, or documentation.
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug report. Please fill out the sections below.
+        Pull requests are not accepted. See https://github.com/st-tech/ppf-contact-solver/blob/main/CONTRIBUTING.md for details.
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: A clear and concise description of the bug.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to Reproduce
+      description: Minimal steps, scene, or command needed to reproduce the issue.
+      placeholder: |
+        1. ...
+        2. ...
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual Behavior
+      description: Include logs, stack traces, or screenshots if available.
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, GPU/driver, Blender version, solver version or commit hash, etc.
+    validations:
+      required: true
+  - type: checkboxes
+    id: license-agreement
+    attributes:
+      label: License Agreement
+      description: Required before submission.
+      options:
+        - label: "I agree to the licensing terms. See https://github.com/st-tech/ppf-contact-solver/blob/main/CONTRIBUTING.md for details."
+          required: true
