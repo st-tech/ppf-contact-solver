@@ -785,15 +785,10 @@ Alongside our [official Blender add-on](#-blender-add-on), the following communi
 
 ### 📺 Videos
 
-[*The Worst Bug In Games Is Now Gone Forever*](https://www.youtube.com/watch?v=VOORiyip4_c) by [Two Minute Papers](https://www.youtube.com/@TwoMinutePapers).
-
-[![Watch the video](https://img.youtube.com/vi/VOORiyip4_c/0.jpg)](https://www.youtube.com/watch?v=VOORiyip4_c)
+- [*The Worst Bug In Games Is Now Gone Forever*](https://www.youtube.com/watch?v=VOORiyip4_c) by [Two Minute Papers](https://www.youtube.com/@TwoMinutePapers).
+- [*Visual Components - ZOZO's Contact Solver Handshanking*](https://www.youtube.com/watch?v=k000SaPXK4Q) by [idkfa](https://www.youtube.com/@idkfa3).
 
 > 📝 Note: to avoid confusion, we did not fully solve the hardest problem. The solver is still too slow for video games, and it may stall in difficult situations.
-
-[*Visual Components - ZOZO's Contact Solver Handshanking*](https://www.youtube.com/watch?v=k000SaPXK4Q) by [idkfa](https://www.youtube.com/@idkfa3).
-
-[![Watch the video](https://img.youtube.com/vi/k000SaPXK4Q/0.jpg)](https://www.youtube.com/watch?v=k000SaPXK4Q)
 
 ### 📰 Articles
 
