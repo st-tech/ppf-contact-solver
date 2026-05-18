@@ -63,9 +63,3 @@ and then translated**. Writing directly in English avoids polluting
 the text with hallucinated nuances that translation can introduce.
 The author has verified not only the surface-level meaning but also
 the delicate nuances throughout.
-
-## Final Word
-
-Ultimately, the author has carefully checked the fine-grained details
-of the material released here, and takes responsibility for what is
-published under this repository.
