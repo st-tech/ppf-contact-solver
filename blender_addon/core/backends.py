@@ -664,16 +664,15 @@ class WinNativeBackend:
     def stop_server(self) -> None:
         """Terminate the local server subprocess but keep the backend alive.
 
-        Uses the Popen handle the addon owns. After an addon reload the
-        handle is dropped and stop becomes a no-op; that's fine, the
-        next bind attempt will surface any remaining squatter via
-        :class:`PortInUseByForeignProcess` rather than the addon trying
-        to identify and kill foreign processes.
+        Two paths:
 
-        When ``_process`` is None we don't own the server (attach mode
-        after a Blender restart re-used the previous session's server,
-        or test/CI mode). Stop is a no-op in that case: the addon
-        refuses to kill processes it didn't spawn.
+        - **Owned** (we spawned it): terminate the Popen handle.
+        - **Attach mode** (``_process is None``): the addon adopted a
+          pre-existing ``ppf-cts-server.exe`` (Blender restart, addon
+          reload, etc). Fall back to ``taskkill /F /IM ppf-cts-server.exe``.
+          The binary name is unique to this project, so killing every
+          instance is safe and gives the user a working Stop button
+          regardless of how the server was started.
         """
         if self._process and self._process.poll() is None:
             self._process.terminate()
@@ -681,6 +680,11 @@ class WinNativeBackend:
                 self._process.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 self._process.kill()
+        elif self._process is None:
+            subprocess.run(
+                ["taskkill", "/F", "/IM", "ppf-cts-server.exe"],
+                capture_output=True, check=False,
+            )
         self._process = None
 
     def start_server(self) -> None:
