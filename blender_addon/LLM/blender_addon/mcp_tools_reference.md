@@ -1,6 +1,6 @@
 # MCP tool reference
 
-This document mirrors the auto-generated `docs/blender_addon/integrations/mcp_reference.rst`. Every tool listed here is callable over the MCP Streamable HTTP server (`POST /mcp` with `tools/call`, after an `initialize` handshake that returns the `Mcp-Session-Id` to echo on every subsequent request) and, equivalently, via `bpy.ops.zozo_contact_solver.<tool_name>()` inside Blender. See `llm://integrations` for protocol, transport, and security notes.
+This document tracks the bundled MCP tool surface shipped with the add-on. Every tool listed here is callable over the MCP Streamable HTTP server (`POST /mcp` with `tools/call`, after an `initialize` handshake that returns the `Mcp-Session-Id` to echo on every subsequent request) and, equivalently, via `bpy.ops.zozo_contact_solver.<tool_name>()` inside Blender. See `llm://integrations` for protocol, transport, and security notes.
 
 If you reached this file as MCP resource `llm://mcp_tools_reference`, its sibling resources (`llm://index`, `llm://overview`, `llm://parameters`, and so on) cover the surrounding concepts. Call `resources/list` once and pick the matching URI; the full resource surface (URI scheme, list/read examples, error handling) is documented under the **Resources** section of `llm://integrations`.
 
@@ -35,15 +35,15 @@ python blender_addon/debug/main.py call <tool> '{"arg":"value"}'
 ## Categories
 
 - Connection (12)
-- Group (17)
+- Group (21)
 - Object operations (18)
 - Simulation (9)
-- Scene (12)
+- Scene (13)
 - Dynamic parameters (9)
 - Remote (5)
 - Console (3)
 - Debug (8)
-- Blender (6)
+- Blender (10)
 
 ## Connection
 
@@ -120,9 +120,14 @@ Get detailed connection information.
 
 ## Group
 
-### create_group()
+### create_group(name: str='', type: str='SOLID')
 
 Create a new dynamics group.
+
+**Parameters:**
+
+- **name**: Display name for the new group (optional)
+- **type**: Group type (SOLID, SHELL, ROD, STATIC)
 
 ### delete_group(group_uuid: str)
 
@@ -183,6 +188,18 @@ Toggle whether an assigned object is included in the simulation.
 - **object_name**: Name of the assigned object
 - **included**: True to include, False to mute
 
+### get_group(group_uuid: str)
+
+Get one active group by UUID.
+
+**Parameters:**
+
+- **group_uuid**: UUID of group
+
+### get_groups()
+
+Get list of all active groups.
+
 ### get_active_groups()
 
 Get list of all active groups with their properties.
@@ -230,14 +247,15 @@ Set the type of a dynamics group.
 - **group_uuid**: UUID of group
 - **type**: Group type (SOLID, SHELL, ROD, STATIC)
 
-### add_pin_vertex_group(group_uuid: str, vertex_group_identifier: str)
+### add_pin_vertex_group(group_uuid: str, vertex_group_identifier: str, indices: Optional[list[int]]=None)
 
-Add a vertex group to the pin list of a dynamics group.
+Add a mesh vertex group or curve control-point pin set to the pin list of a dynamics group.
 
 **Parameters:**
 
 - **group_uuid**: UUID of group
 - **vertex_group_identifier**: Identifier in format "object_name::vertex_group_name"
+- **indices**: Optional curve control-point indices for CURVE objects
 
 ### remove_pin_vertex_group(group_uuid: str, vertex_group_identifier: str)
 
@@ -247,6 +265,26 @@ Remove a vertex group from the pin list of a dynamics group.
 
 - **group_uuid**: UUID of group
 - **vertex_group_identifier**: Identifier in format "object_name::vertex_group_name"
+
+### list_pins(group_uuid: str)
+
+List all pins in a dynamics group.
+
+**Parameters:**
+
+- **group_uuid**: UUID of group
+
+### set_group_overlay_color(group_uuid: str, r: float, g: float, b: float, a: float=1.0)
+
+Set the viewport overlay color for a dynamics group.
+
+**Parameters:**
+
+- **group_uuid**: UUID of group
+- **r**: Red channel in [0, 1]
+- **g**: Green channel in [0, 1]
+- **b**: Blue channel in [0, 1]
+- **a**: Alpha channel in [0, 1]
 
 ### set_group_material_properties(group_uuid: str, properties: dict)
 
@@ -287,7 +325,7 @@ Set per-pin runtime settings (include/duration/pull).
 - **use_pull**: Use pull force instead of hard constraint
 - **pull_strength**: Pull force strength
 
-### add_pin_operation(group_uuid: str, vertex_group_identifier: str, op_type: str, frame_start: Optional[int]=None, frame_end: Optional[int]=None, transition: Optional[str]=None, delta: Optional[list[float]]=None, spin_axis: Optional[list[float]]=None, spin_angular_velocity: Optional[float]=None, spin_flip: Optional[bool]=None, spin_center: Optional[list[float]]=None, spin_center_mode: Optional[str]=None, scale_factor: Optional[float]=None, scale_center: Optional[list[float]]=None, scale_center_mode: Optional[str]=None, torque_axis_component: Optional[str]=None, torque_magnitude: Optional[float]=None, torque_flip: Optional[bool]=None)
+### add_pin_operation(group_uuid: str, vertex_group_identifier: str, op_type: str, frame_start: Optional[int]=None, frame_end: Optional[int]=None, transition: Optional[str]=None, delta: Optional[list[float]]=None, spin_axis: Optional[list[float]]=None, spin_angular_velocity: Optional[float]=None, spin_flip: Optional[bool]=None, spin_center: Optional[list[float]]=None, spin_center_mode: Optional[str]=None, spin_center_vertex: Optional[int]=None, spin_center_direction: Optional[list[float]]=None, scale_factor: Optional[float]=None, scale_center: Optional[list[float]]=None, scale_center_mode: Optional[str]=None, scale_center_vertex: Optional[int]=None, scale_center_direction: Optional[list[float]]=None, torque_axis_component: Optional[str]=None, torque_magnitude: Optional[float]=None, torque_flip: Optional[bool]=None)
 
 Append an operation to a pin's operation list.
 
@@ -307,9 +345,13 @@ TORQUE cannot coexist with other op types on the same pin.
 - **spin_flip**: Reverse spin direction
 - **spin_center**: [x, y, z] fixed center for SPIN (ABSOLUTE mode only)
 - **spin_center_mode**: CENTROID, ABSOLUTE, MAX_TOWARDS, or VERTEX
+- **spin_center_vertex**: Vertex index for SPIN VERTEX mode
+- **spin_center_direction**: [x, y, z] direction vector for SPIN MAX_TOWARDS mode
 - **scale_factor**: Scale multiplier for SCALE
 - **scale_center**: [x, y, z] fixed center for SCALE (ABSOLUTE mode only)
 - **scale_center_mode**: CENTROID, ABSOLUTE, MAX_TOWARDS, or VERTEX
+- **scale_center_vertex**: Vertex index for SCALE VERTEX mode
+- **scale_center_direction**: [x, y, z] direction vector for SCALE MAX_TOWARDS mode
 - **torque_axis_component**: PC1, PC2, or PC3 (principal axis)
 - **torque_magnitude**: Torque in newton-meters
 - **torque_flip**: Reverse torque direction
@@ -516,6 +558,10 @@ Fetch simulation results from server.
 Clear local animation data and keyframes.
 
 ## Scene
+
+### clear_solver()
+
+Reset the entire solver state to defaults.
 
 ### add_invisible_wall(position: list[float], normal: list[float])
 
@@ -830,6 +876,48 @@ Capture a screenshot of the current 3D viewport and save it to specified file pa
 - **filepath**: File path where to save the screenshot
 - **max_size**: Maximum size in pixels for the largest dimension
 
+### create_curve(name: str, bevel_depth: float=0.0, bevel_resolution: int=2, resolution_u: int=4, dimensions: str='3D', clear_existing: bool=True)
+
+Create a pending curve builder for ROD-scene authoring.
+
+**Parameters:**
+
+- **name**: Object name for the curve to be finalized later
+- **bevel_depth**: Tube radius for viewport visualization
+- **bevel_resolution**: Tube cross-section subdivisions
+- **resolution_u**: Spline interpolation resolution
+- **dimensions**: Curve dimensions ("3D" or "2D")
+- **clear_existing**: Remove an existing same-name object before finalize
+
+### add_curve_spline(name: str, points: list[list[float]], closed: bool=False)
+
+Append a Bezier spline to a pending curve builder.
+
+**Parameters:**
+
+- **name**: Curve builder name passed to create_curve
+- **points**: List of [x, y, z] control-point coordinates
+- **closed**: Whether to make the spline cyclic
+
+### set_curve_material(name: str, spline_index: int, material_name: str, create_if_missing: bool=False)
+
+Bind a Blender material to a spline on a pending curve builder.
+
+**Parameters:**
+
+- **name**: Curve builder name passed to create_curve
+- **spline_index**: Spline index returned by add_curve_spline
+- **material_name**: Existing Blender material name
+- **create_if_missing**: Create the material when it does not exist
+
+### finalize_curve(name: str)
+
+Finalize a pending curve builder, link it to the scene, and return the object.
+
+**Parameters:**
+
+- **name**: Curve builder name passed to create_curve
+
 ### get_ui_element_status(element_type: str='all', element_name: Optional[str]=None, category: Optional[str]=None)
 
 Get status of Blender addon UI elements - poll results for operators, values for properties.
@@ -864,4 +952,4 @@ This is useful when programmatic changes need to be reflected in the UI, such as
 
 ---
 
-Reference mirror of `docs/blender_addon/integrations/mcp_reference.rst` regenerated from `blender_addon/mcp/handlers/*.py` and `blender_addon/mcp/blender_handlers.py`.
+Bundled MCP reference synced to `blender_addon/mcp/handlers/*.py` and `blender_addon/mcp/blender_handlers.py`.

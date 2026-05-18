@@ -208,9 +208,13 @@ def add_pin_operation(
     spin_flip: Optional[bool] = None,
     spin_center: Optional[list[float]] = None,
     spin_center_mode: Optional[str] = None,
+    spin_center_vertex: Optional[int] = None,
+    spin_center_direction: Optional[list[float]] = None,
     scale_factor: Optional[float] = None,
     scale_center: Optional[list[float]] = None,
     scale_center_mode: Optional[str] = None,
+    scale_center_vertex: Optional[int] = None,
+    scale_center_direction: Optional[list[float]] = None,
     torque_axis_component: Optional[str] = None,
     torque_magnitude: Optional[float] = None,
     torque_flip: Optional[bool] = None,
@@ -232,9 +236,13 @@ def add_pin_operation(
         spin_flip: Reverse spin direction
         spin_center: [x, y, z] fixed center for SPIN (ABSOLUTE mode only)
         spin_center_mode: CENTROID, ABSOLUTE, MAX_TOWARDS, or VERTEX
+        spin_center_vertex: Vertex index for SPIN VERTEX mode
+        spin_center_direction: [x, y, z] direction vector for SPIN MAX_TOWARDS mode
         scale_factor: Scale multiplier for SCALE
         scale_center: [x, y, z] fixed center for SCALE (ABSOLUTE mode only)
         scale_center_mode: CENTROID, ABSOLUTE, MAX_TOWARDS, or VERTEX
+        scale_center_vertex: Vertex index for SCALE VERTEX mode
+        scale_center_direction: [x, y, z] direction vector for SCALE MAX_TOWARDS mode
         torque_axis_component: PC1, PC2, or PC3 (principal axis)
         torque_magnitude: Torque in newton-metres
         torque_flip: Reverse torque direction
@@ -275,9 +283,13 @@ def add_pin_operation(
             "spin_flip": spin_flip,
             "spin_center": spin_center,
             "spin_center_mode": spin_center_mode,
+            "spin_center_vertex": spin_center_vertex,
+            "spin_center_direction": spin_center_direction,
             "scale_factor": scale_factor,
             "scale_center": scale_center,
             "scale_center_mode": scale_center_mode,
+            "scale_center_vertex": scale_center_vertex,
+            "scale_center_direction": scale_center_direction,
             "torque_axis_component": torque_axis_component,
             "torque_magnitude": torque_magnitude,
             "torque_flip": torque_flip,
@@ -360,12 +372,16 @@ def list_pin_operations(group_uuid: str, vertex_group_identifier: str):
                 "spin_flip": op.spin_flip,
                 "spin_center": list(op.spin_center),
                 "spin_center_mode": op.spin_center_mode,
+                "spin_center_vertex": op.spin_center_vertex,
+                "spin_center_direction": list(op.spin_center_direction),
             })
         elif op.op_type == "SCALE":
             entry.update({
                 "scale_factor": op.scale_factor,
                 "scale_center": list(op.scale_center),
                 "scale_center_mode": op.scale_center_mode,
+                "scale_center_vertex": op.scale_center_vertex,
+                "scale_center_direction": list(op.scale_center_direction),
             })
         elif op.op_type == "TORQUE":
             entry.update({

@@ -23,6 +23,15 @@ def _call(fn, *args, **kwargs):
         raise MCPError(str(e))
 
 
+@mcp_handler
+def clear_solver():
+    """Reset the entire solver state to defaults."""
+    from ...ops.api import solver as solver_api
+
+    solver_api.clear()
+    return "Solver state cleared"
+
+
 # ---------------------------------------------------------------------------
 # Invisible colliders
 # ---------------------------------------------------------------------------

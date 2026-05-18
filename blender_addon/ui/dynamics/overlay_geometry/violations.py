@@ -21,7 +21,11 @@ def _build_violation_batches(scene, depsgraph, violations):
     if not violations:
         return batches
 
-    shader = gpu.shader.from_builtin("UNIFORM_COLOR")
+    # POINTS batches must use POINT_UNIFORM_COLOR so the shader writes
+    # gl_PointSize: Metal (Blender 5.x macOS) has no fixed-function
+    # point size and gpu.state.point_size_set is a no-op.
+    tri_shader = gpu.shader.from_builtin("UNIFORM_COLOR")
+    point_shader = gpu.shader.from_builtin("POINT_UNIFORM_COLOR")
 
     COLORS = {
         "self_intersection": (1.0, 0.1, 0.1, 0.85),
@@ -58,7 +62,7 @@ def _build_violation_batches(scene, depsgraph, violations):
                 if pos:
                     points.append(_solver_to_blender(pos))
             if points:
-                batch = batch_for_shader(shader, "POINTS", {"pos": points})
+                batch = batch_for_shader(point_shader, "POINTS", {"pos": points})
                 batches.append((batch, "POINTS", color))
                 c = points[0]
                 labels.append({
@@ -86,7 +90,7 @@ def _build_violation_batches(scene, depsgraph, violations):
                         if not centers:
                             centers.append((bverts[0] + bverts[1]) / 2.0)
             if tri_verts:
-                batch = batch_for_shader(shader, "TRIS", {"pos": tri_verts})
+                batch = batch_for_shader(tri_shader, "TRIS", {"pos": tri_verts})
                 batches.append((batch, "TRIS", color))
                 if centers:
                     labels.append({
@@ -106,7 +110,7 @@ def _build_violation_batches(scene, depsgraph, violations):
                         if not centers:
                             centers.append((bv[0] + bv[1] + bv[2]) / 3.0)
             if tri_verts:
-                batch = batch_for_shader(shader, "TRIS", {"pos": tri_verts})
+                batch = batch_for_shader(tri_shader, "TRIS", {"pos": tri_verts})
                 batches.append((batch, "TRIS", color))
                 if centers:
                     labels.append({
@@ -141,7 +145,7 @@ def _build_violation_batches(scene, depsgraph, violations):
                             if not centers:
                                 centers.append((bv[0] + bv[1]) / 2.0)
             if tri_verts:
-                batch = batch_for_shader(shader, "TRIS", {"pos": tri_verts})
+                batch = batch_for_shader(tri_shader, "TRIS", {"pos": tri_verts})
                 batches.append((batch, "TRIS", color))
                 if centers:
                     labels.append({

@@ -41,9 +41,107 @@ def get_group_index_by_uuid(group_uuid: str):
     raise ValidationError(f"Active group with UUID {group_uuid} not found")
 
 
+def _serialize_group(group) -> dict:
+    """Return a stable MCP-facing representation of an active group."""
+    return {
+        "uuid": group.uuid or "",
+        "name": group.name,
+        "object_type": group.object_type,
+        "active": group.active,
+        "assigned_objects": [
+            {
+                "name": obj.name,
+                "uuid": obj.uuid,
+                "included": bool(obj.included),
+            }
+            for obj in group.assigned_objects
+        ],
+        "object_count": len(group.assigned_objects),
+        "pin_count": len(group.pin_vertex_groups),
+        "show_overlay_color": bool(group.show_overlay_color),
+    }
+
+
+def _list_groups() -> list[dict]:
+    """Serialize every active group in display order."""
+    scene = bpy.context.scene
+    assign_display_indices(scene)
+    return [_serialize_group(group) for group in iterate_active_object_groups(scene)]
+
+
+def _add_pin_vertex_group_impl(
+    group_uuid: str,
+    vertex_group_identifier: str,
+    indices: list[int] | None,
+) -> dict:
+    """Shared implementation for mesh and curve pin registration."""
+    group = get_active_group_by_uuid_helper(group_uuid)
+    obj_name, vg_name = _parse_pin_identifier(vertex_group_identifier)
+
+    obj = bpy.data.objects.get(obj_name)
+    if not obj:
+        raise ValidationError(f"Object '{obj_name}' not found")
+    if obj.type == "MESH":
+        if indices is not None:
+            raise ValidationError(
+                f"'indices' is only valid for curve objects; '{obj_name}' is MESH"
+            )
+        if vg_name not in [vg.name for vg in obj.vertex_groups]:
+            raise ValidationError(
+                f"Vertex group '{vg_name}' not found in object '{obj_name}'"
+            )
+    elif obj.type == "CURVE":
+        if indices is not None:
+            import json
+
+            try:
+                encoded_indices = [int(index) for index in indices]
+            except (TypeError, ValueError) as exc:
+                raise ValidationError(
+                    "indices must be a list of integers for curve pins"
+                ) from exc
+            obj[f"_pin_{vg_name}"] = json.dumps(encoded_indices)
+        elif f"_pin_{vg_name}" not in obj:
+            raise ValidationError(
+                f"Curve pin '_pin_{vg_name}' not found on '{obj_name}'; "
+                "pass indices to define and bind the pin in one call"
+            )
+    else:
+        raise ValidationError(
+            f"Object '{obj_name}' has type {obj.type!r}; expected MESH or CURVE"
+        )
+
+    from ...core import mutation
+
+    try:
+        result = mutation.create_pin(group_uuid, obj_name, vg_name)
+    except mutation.MutationError as exc:
+        raise MCPError(str(exc)) from exc
+
+    return {
+        "message": f"Added pin '{obj_name}::{vg_name}' to group {group_uuid}",
+        "group_uuid": group_uuid,
+        "object_name": obj_name,
+        "object_uuid": result["object_uuid"],
+        "vertex_group_name": vg_name,
+        "pin_count": len(group.pin_vertex_groups),
+    }
+
+
 @group_handler
-def create_group():
-    """Create a new dynamics group."""
+def create_group(name: str = "", type: str = "SOLID"):
+    """Create a new dynamics group.
+
+    Args:
+        name: Display name for the new group (optional)
+        type: Group type (SOLID, SHELL, ROD, STATIC)
+    """
+    valid_types = {"SOLID", "SHELL", "ROD", "STATIC"}
+    if type not in valid_types:
+        raise ValidationError(
+            f"Invalid type '{type}'. Valid types: {sorted(valid_types)}"
+        )
+
     # Use UI operator instead of direct manipulation
     bpy.ops.object.create_group()
 
@@ -62,9 +160,13 @@ def create_group():
     if newest_group:
         group_uuid = newest_group.uuid  # already set by the operator
         get_addon_data(scene).state.current_group_uuid = group_uuid
+        if name:
+            newest_group.name = name
+        if type != "SOLID":
+            newest_group.object_type = type
         return {
             "message": f"Created group: {newest_group.name}",
-            "group_name": newest_group.name,
+            "group": _serialize_group(newest_group),
             "group_uuid": group_uuid,
         }
 
@@ -268,29 +370,27 @@ def set_object_included(group_uuid: str, object_name: str, included: bool):
 
 
 @group_handler
+def get_group(group_uuid: str):
+    """Get one active group by UUID.
+
+    Args:
+        group_uuid: UUID of group
+    """
+    group = get_active_group_by_uuid_helper(group_uuid)
+    return {"group": _serialize_group(group)}
+
+
+@group_handler
+def get_groups():
+    """Get list of all active groups."""
+    groups = _list_groups()
+    return {"groups": groups, "group_count": len(groups)}
+
+
+@group_handler
 def get_active_groups():
     """Get list of all active groups with their properties."""
-    scene = bpy.context.scene
-    groups = []
-
-    # Ensure display indices are assigned
-    assign_display_indices(scene)
-
-    for group in iterate_active_object_groups(scene):
-        groups.append(
-            {
-                "uuid": group.uuid or "",
-                "name": group.name,
-                "object_type": group.object_type,
-                "active": group.active,
-                "assigned_objects": [
-                    {"name": obj.name, "uuid": obj.uuid}
-                    for obj in group.assigned_objects
-                ],
-                "object_count": len(group.assigned_objects),
-            }
-        )
-
+    groups = _list_groups()
     return {"groups": groups, "group_count": len(groups)}
 
 
@@ -561,64 +661,19 @@ def _parse_pin_identifier(vertex_group_identifier: str) -> tuple[str, str]:
 
 
 @group_handler
-def add_pin_vertex_group(group_uuid: str, vertex_group_identifier: str):
+def add_pin_vertex_group(
+    group_uuid: str,
+    vertex_group_identifier: str,
+    indices: list[int] | None = None,
+):
     """Add a vertex group to the pin list of a dynamics group.
 
     Args:
         group_uuid: UUID of group
         vertex_group_identifier: Identifier in format "object_name::vertex_group_name"
+        indices: Optional curve control-point indices for CURVE objects
     """
-    group = get_active_group_by_uuid_helper(group_uuid)
-    obj_name, vg_name = _parse_pin_identifier(vertex_group_identifier)
-
-    # Validate that the object exists and is a mesh
-    obj = bpy.data.objects.get(obj_name)
-    if not obj:
-        raise ValidationError(f"Object '{obj_name}' not found")
-    if obj.type != "MESH":
-        raise ValidationError(f"Object '{obj_name}' is not a mesh")
-
-    # Validate that the vertex group exists
-    if vg_name not in [vg.name for vg in obj.vertex_groups]:
-        raise ValidationError(
-            f"Vertex group '{vg_name}' not found in object '{obj_name}'"
-        )
-
-    # Internal format: [ObjectName][VertexGroupName]
-    from ...models.groups import encode_vertex_group_identifier, decode_vertex_group_identifier
-    from ...core.uuid_registry import get_or_create_object_uuid, compute_vg_hash
-    internal_id = encode_vertex_group_identifier(obj_name, vg_name)
-    obj_uuid = get_or_create_object_uuid(obj)
-    if not obj_uuid:
-        raise MCPError(f"Object '{obj_name}' is library-linked and not writable")
-
-    # Check if this vertex group is already in the pin list (UUID + vg_name match)
-    for item in group.pin_vertex_groups:
-        if item.object_uuid != obj_uuid:
-            continue
-        _, item_vg = decode_vertex_group_identifier(item.name)
-        if item_vg == vg_name:
-            return {
-                "message": f"Vertex group already pinned",
-                "group_uuid": group_uuid,
-                "pin_count": len(group.pin_vertex_groups),
-            }
-
-    # Add the vertex group to the pin list
-    item = group.pin_vertex_groups.add()
-    item.name = internal_id
-    item.object_uuid = obj_uuid
-    item.vg_hash = str(compute_vg_hash(obj, vg_name))
-    group.pin_vertex_groups_index = len(group.pin_vertex_groups) - 1
-
-    return {
-        "message": f"Added pin '{obj_name}::{vg_name}' to group {group_uuid}",
-        "group_uuid": group_uuid,
-        "object_name": obj_name,
-        "object_uuid": obj_uuid,
-        "vertex_group_name": vg_name,
-        "pin_count": len(group.pin_vertex_groups),
-    }
+    return _add_pin_vertex_group_impl(group_uuid, vertex_group_identifier, indices)
 
 
 @group_handler
@@ -677,6 +732,66 @@ def remove_pin_vertex_group(group_uuid: str, vertex_group_identifier: str):
         "object_uuid": _obj_uuid,
         "vertex_group_name": vg_name,
         "pin_count": len(group.pin_vertex_groups),
+    }
+
+
+@group_handler
+def list_pins(group_uuid: str):
+    """List all pins in a dynamics group.
+
+    Args:
+        group_uuid: UUID of group
+    """
+    group = get_active_group_by_uuid_helper(group_uuid)
+    pins = []
+    for pin_item in group.pin_vertex_groups:
+        obj_name, vg_name = decode_vertex_group_identifier(pin_item.name)
+        pins.append(
+            {
+                "object_name": obj_name,
+                "object_uuid": pin_item.object_uuid,
+                "vertex_group_name": vg_name,
+                "vertex_group_identifier": f"{obj_name}::{vg_name}",
+                "included": bool(pin_item.included),
+                "use_pin_duration": bool(pin_item.use_pin_duration),
+                "pin_duration": int(pin_item.pin_duration),
+                "use_pull": bool(pin_item.use_pull),
+                "pull_strength": float(pin_item.pull_strength),
+                "operation_count": len(pin_item.operations),
+            }
+        )
+    return {"group_uuid": group_uuid, "pins": pins, "pin_count": len(pins)}
+
+
+@group_handler
+def set_group_overlay_color(
+    group_uuid: str,
+    r: float,
+    g: float,
+    b: float,
+    a: float = 1.0,
+):
+    """Set the viewport overlay color for a dynamics group.
+
+    Args:
+        group_uuid: UUID of group
+        r: Red channel in [0, 1]
+        g: Green channel in [0, 1]
+        b: Blue channel in [0, 1]
+        a: Alpha channel in [0, 1]
+    """
+    group = get_active_group_by_uuid_helper(group_uuid)
+    group.color = (float(r), float(g), float(b), float(a))
+    group.show_overlay_color = True
+
+    from ...ui.dynamics.overlay import apply_object_overlays
+
+    apply_object_overlays()
+    return {
+        "message": f"Updated overlay color for group {group_uuid}",
+        "group_uuid": group_uuid,
+        "color": [float(r), float(g), float(b), float(a)],
+        "show_overlay_color": True,
     }
 
 

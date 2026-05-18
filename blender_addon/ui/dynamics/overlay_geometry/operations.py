@@ -74,6 +74,7 @@ def _build_static_op_batches(group, depsgraph, shader, batches, labels):
                 if all_tris:
                     batches.append((
                         batch_for_shader(shader, "TRIS", {"pos": all_tris}),
+                        "TRIS",
                         (*rgb, 0.8),
                     ))
                 labels.append({
@@ -107,6 +108,7 @@ def _build_static_op_batches(group, depsgraph, shader, batches, labels):
                 if all_tris:
                     batches.append((
                         batch_for_shader(shader, "TRIS", {"pos": all_tris}),
+                        "TRIS",
                         (*rgb, 0.7),
                     ))
                 labels.append({
@@ -130,6 +132,7 @@ def _build_static_op_batches(group, depsgraph, shader, batches, labels):
                 if all_tris:
                     batches.append((
                         batch_for_shader(shader, "TRIS", {"pos": all_tris}),
+                        "TRIS",
                         (*rgb, 0.6),
                     ))
                 labels.append({
@@ -140,8 +143,15 @@ def _build_static_op_batches(group, depsgraph, shader, batches, labels):
 
 
 def _build_operation_batches(scene, depsgraph, view_distance=10.0):
-    """Build GPU batches and labels for pin operation overlays."""
+    """Build GPU batches and labels for pin operation overlays.
+
+    Returns list of (batch, primitive_type, color) tuples. POINTS batches
+    are built with POINT_UNIFORM_COLOR so the shader writes gl_PointSize;
+    Metal (Blender 5.x macOS) has no fixed-function point size and
+    gpu.state.point_size_set is a no-op.
+    """
     shader = gpu.shader.from_builtin("UNIFORM_COLOR")
+    point_shader = gpu.shader.from_builtin("POINT_UNIFORM_COLOR")
     batches = []
     labels = []
 
@@ -239,7 +249,7 @@ def _build_operation_batches(scene, depsgraph, view_distance=10.0):
                     all_tris = circle_tris + arc_tris
                     if all_tris:
                         batch = batch_for_shader(shader, "TRIS", {"pos": all_tris})
-                        batches.append((batch, (*rgb, 0.7)))
+                        batches.append((batch, "TRIS", (*rgb, 0.7)))
 
                     labels.append({
                         "text": f"\u03c9 = {op.spin_angular_velocity:.0f}\u00b0/s",
@@ -259,7 +269,7 @@ def _build_operation_batches(scene, depsgraph, view_distance=10.0):
 
                     if all_tris:
                         batch = batch_for_shader(shader, "TRIS", {"pos": all_tris})
-                        batches.append((batch, (*rgb, 0.6)))
+                        batches.append((batch, "TRIS", (*rgb, 0.6)))
 
                     labels.append({
                         "text": f"\u0394 ({delta.x:.2f}, {delta.y:.2f}, {delta.z:.2f})",
@@ -289,7 +299,7 @@ def _build_operation_batches(scene, depsgraph, view_distance=10.0):
 
                     if all_tris:
                         batch = batch_for_shader(shader, "TRIS", {"pos": all_tris})
-                        batches.append((batch, (*rgb, 0.6)))
+                        batches.append((batch, "TRIS", (*rgb, 0.6)))
 
                     labels.append({
                         "text": f"\u00d7{factor:.2f}",
@@ -359,7 +369,7 @@ def _build_operation_batches(scene, depsgraph, view_distance=10.0):
                     all_tris = circle_tris + arc_tris
                     if all_tris:
                         batch = batch_for_shader(shader, "TRIS", {"pos": all_tris})
-                        batches.append((batch, (*rgb, 0.7)))
+                        batches.append((batch, "TRIS", (*rgb, 0.7)))
 
                     labels.append({
                         "text": f"\u03c4 = {op.torque_magnitude:.1f} N\u00b7m ({op.torque_axis_component})",
@@ -390,8 +400,8 @@ def _build_operation_batches(scene, depsgraph, view_distance=10.0):
                 if not selected_verts:
                     continue
                 # Highlighted points batch (drawn as small spheres via POINTS)
-                point_batch = batch_for_shader(shader, "POINTS", {"pos": selected_verts})
-                batches.append((point_batch, (1.0, 0.8, 0.0, 0.9)))
+                point_batch = batch_for_shader(point_shader, "POINTS", {"pos": selected_verts})
+                batches.append((point_batch, "POINTS", (1.0, 0.8, 0.0, 0.9)))
                 # Centroid of selected
                 sel_centroid = sum(selected_verts, Vector((0, 0, 0))) / len(selected_verts)
                 # Direction arrow from centroid (view-scaled)
@@ -405,9 +415,9 @@ def _build_operation_batches(scene, depsgraph, view_distance=10.0):
                 shaft_tris = [v + sel_centroid for v in shaft_tris]
                 cone_tris = [v + sel_centroid for v in cone_tris]
                 if shaft_tris:
-                    batches.append((batch_for_shader(shader, "TRIS", {"pos": shaft_tris}), (1.0, 0.8, 0.0, 0.7)))
+                    batches.append((batch_for_shader(shader, "TRIS", {"pos": shaft_tris}), "TRIS", (1.0, 0.8, 0.0, 0.7)))
                 if cone_tris:
-                    batches.append((batch_for_shader(shader, "TRIS", {"pos": cone_tris}), (1.0, 0.8, 0.0, 0.9)))
+                    batches.append((batch_for_shader(shader, "TRIS", {"pos": cone_tris}), "TRIS", (1.0, 0.8, 0.0, 0.9)))
                 labels.append({
                     "text": f"Max Towards ({len(selected_verts)} verts)",
                     "pos_3d": sel_centroid + d * arrow_len * 0.5,
@@ -424,8 +434,8 @@ def _build_operation_batches(scene, depsgraph, view_distance=10.0):
                 if vi < 0 or vi >= len(mesh.vertices):
                     continue
                 pos = world_matrix @ mesh.vertices[vi].co
-                point_batch = batch_for_shader(shader, "POINTS", {"pos": [pos]})
-                batches.append((point_batch, (0.0, 1.0, 0.5, 0.9)))
+                point_batch = batch_for_shader(point_shader, "POINTS", {"pos": [pos]})
+                batches.append((point_batch, "POINTS", (0.0, 1.0, 0.5, 0.9)))
                 labels.append({
                     "text": f"Center (v{vi})",
                     "pos_3d": pos,

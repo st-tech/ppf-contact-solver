@@ -37,8 +37,16 @@ _LLM_REFS_BY_TOOL: dict[str, tuple[str, ...]] = {
     "get_object_bounding_box_diagonal": ("integrations",),
     # Material / scene parameters belong to the parameters doc.
     "set_group_material_properties": ("parameters",),
+    "add_pin_vertex_group": ("constraints",),
+    "remove_pin_vertex_group": ("constraints",),
     "set_scene_parameters": ("parameters",),
     "get_scene_parameters": ("parameters",),
+    "clear_solver": ("integrations", "scene", "parameters"),
+    "list_pins": ("constraints",),
+    "create_curve": ("integrations", "scene", "constraints"),
+    "add_curve_spline": ("integrations", "scene", "constraints"),
+    "set_curve_material": ("integrations", "scene"),
+    "finalize_curve": ("integrations", "scene", "constraints"),
 }
 
 

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import os
 import pickle
+import posixpath
 import threading
 import time
 from typing import TYPE_CHECKING
@@ -72,6 +73,17 @@ from .protocol import DEFAULT_CHUNK_SIZE
 
 if TYPE_CHECKING:
     from .engine import Engine
+
+
+def _server_join(backend, *parts: str) -> str:
+    # win_native talks to a Windows server (Windows-style paths).
+    # ssh/docker/local backends all talk to a POSIX server, so the
+    # path must use forward slashes regardless of the client OS,
+    # otherwise a Windows client mixes in backslashes that break
+    # both shell quoting on the remote and the server's open().
+    if backend.backend_type == "win_native":
+        return os.path.join(*parts)
+    return posixpath.join(*parts)
 
 
 def _decode_vertex_map_cbor(blob: bytes) -> dict:
@@ -519,16 +531,19 @@ class EffectRunner:
         # target/release/ppf-cts-server (.exe on Windows). For the
         # Local + win_native backends we probe the local filesystem
         # directly; for SSH / Docker we go through ``exec_command``.
+        # SSH/Docker targets are always Linux, so use POSIX joins and
+        # no .exe regardless of the client OS.
         is_local = self._backend.backend_type in ("local", "win_native")
-        bin_name = "ppf-cts-server.exe" if os.name == "nt" else "ppf-cts-server"
-        server_bin = os.path.join(directory, "target", "release", bin_name)
         if is_local:
+            bin_name = "ppf-cts-server.exe" if os.name == "nt" else "ppf-cts-server"
+            server_bin = os.path.join(directory, "target", "release", bin_name)
             if not os.path.isfile(server_bin):
                 self._engine.dispatch(ErrorOccurred(
                     error=f"Remote path not found ({server_bin}).",
                     source="validate_path",
                 ))
             return
+        server_bin = posixpath.join(directory, "target", "release", "ppf-cts-server")
         result = self._backend.exec_command(
             f"if [ -f {server_bin} ]; then echo FOUND; else echo NOT_FOUND; fi",
             shell=True, cwd="/",
@@ -608,8 +623,12 @@ class EffectRunner:
                         f"Please expose the port with '-p {port}:{port}' when starting the container."
                     )
 
-        server_log = os.path.join(directory, "server.log")
-        progress_file = os.path.join(directory, "progress.log")
+        # Paths constructed here are sent to a Linux remote over SSH/Docker
+        # (this branch never runs for win_native — see early-return above).
+        # Use posixpath so a Windows client doesn't emit backslashes into
+        # the shell commands.
+        server_log = posixpath.join(directory, "server.log")
+        progress_file = posixpath.join(directory, "progress.log")
         script_path = "/tmp/start_server.sh"
 
         # Clear progress.log
@@ -628,7 +647,7 @@ class EffectRunner:
         # The Rust ppf-cts-server binary writes ``progress.log`` markers
         # (SERVER_STARTING / SERVER_READY) and speaks protocol 0.03; build
         # it with ``cargo build --release -p ppf-cts-server``.
-        rust_bin = os.path.join(directory, "target", "release", "ppf-cts-server")
+        rust_bin = posixpath.join(directory, "target", "release", "ppf-cts-server")
         server_cmd = f"{rust_bin} {host_flag}--port {port}"
 
         # Activate the project venv so the build worker subprocess
@@ -820,17 +839,18 @@ class EffectRunner:
         """
         if not self._backend or not self._project_name:
             return 0
-        output_dir = os.path.join(root, "session", "output")
         try:
             # win_native: the output dir is on this machine's local disk.
             # cmd.exe has no `ls`, so glob directly.
             if self._backend.backend_type == "win_native":
                 import glob
+                output_dir = os.path.join(root, "session", "output")
                 names = [
                     os.path.basename(p)
                     for p in glob.glob(os.path.join(output_dir, "vert_*.bin"))
                 ]
             else:
+                output_dir = posixpath.join(root, "session", "output")
                 result = self._backend.exec_command(
                     f"ls -1 {output_dir}/vert_*.bin 2>/dev/null",
                     shell=True,
@@ -859,7 +879,7 @@ class EffectRunner:
                 return
         if not self._backend or not self._project_name:
             return
-        map_path = os.path.join(root, "session", "map.pickle")
+        map_path = _server_join(self._backend, root, "session", "map.pickle")
         map_data = self._backend.receive_data(map_path, self._project_name, chunk_size=self._chunk_size)
         # Format-sniff between pickle (first byte 0x80) and CBOR map
         # (first byte 0xa0-0xb7). Producer: ``frontend/_scene_.py:export_fixed``.
@@ -870,7 +890,7 @@ class EffectRunner:
 
         surface_map = {}
         try:
-            smap_path = os.path.join(root, "session", "surface_map.pickle")
+            smap_path = _server_join(self._backend, root, "session", "surface_map.pickle")
             smap_data = self._backend.receive_data(smap_path, self._project_name, chunk_size=self._chunk_size)
             if smap_data and smap_data[0] != 0x80:
                 payload = _decode_surface_map_cbor(smap_data)
@@ -1002,7 +1022,7 @@ class EffectRunner:
                     )
 
                 filename = f"vert_{i}.bin"
-                path = os.path.join(root, "session", "output", filename)
+                path = _server_join(self._backend, root, "session", "output", filename)
                 data = self._backend.receive_data(
                     path, self._project_name, chunk_size=self._chunk_size,
                     progress_cb=inner_progress if not only_latest else None,

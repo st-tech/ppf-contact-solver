@@ -1,6 +1,6 @@
 # Blender Python API reference
 
-This document mirrors the auto-generated `python_api_reference.rst` found at `docs/blender_addon/integrations/python_api_reference.rst`. It catalogs every public class, method, property, and attribute on the ZOZO Contact Solver Python surface so an LLM can script the add-on after `from bl_ext.user_default.ppf_contact_solver.ops.api import solver`.
+This document tracks the bundled Python API surface exported from `blender_addon/ops/api/__init__.py` and its submodules. It catalogs every public class, method, property, and attribute on the ZOZO Contact Solver Python surface so an LLM can script the add-on after `from bl_ext.user_default.ppf_contact_solver.ops.api import solver`.
 
 If you reached this file as MCP resource `llm://python_api_reference`, its sibling resources (`llm://index`, `llm://overview`, `llm://parameters`, and so on) cover the surrounding concepts. Call `resources/list` once and pick the matching URI; the full resource surface (URI scheme, list/read examples, error handling) is documented under the **Resources** section of `llm://integrations`.
 
@@ -36,6 +36,7 @@ Fallback: any operator registered under `bpy.ops.zozo_contact_solver.<name>()`, 
 - `Group`
 - `GroupParam`
 - `Pin`
+- `Curve`
 - `Wall`
 - `Sphere`
 - `ColliderParam`
@@ -60,6 +61,12 @@ group = solver.create_group("Sphere", type="SOLID")
 group.add("Sphere")
 group.param.solid_density = 1000
 ```
+
+### param
+
+Type: `SceneParam`
+
+Scene and connection parameter proxy. See `SceneParam`.
 
 ### create_group(name: str='', type: str='SOLID') -> Group
 
@@ -226,6 +233,8 @@ Attribute proxy for scene and SSH/connection parameters.
 Accessed as `Solver.param`. Supports both get and set via attribute access. Writes go through the `zozo_contact_solver.set` operator (with auto type coercion), reads fall through to the scene's addon state or SSH state.
 
 `gravity` is an alias for `gravity_3d`.
+
+The attribute surface is intentionally proxy-based rather than a fixed method list: reads and writes are forwarded to the add-on's scene state and SSH/connection state. Stable day-to-day keys include simulation parameters such as `step_size`, `frame_count`, `frame_rate`, `gravity`, `wind_direction`, `wind_strength`, `air_density`, `air_friction`, `vertex_air_damp`, `project_name`, and connection parameters such as `host`, `port`, `username`, `key_path`, `local_path`, `docker_path`, `ssh_remote_path`, `server_type`, and `container`.
 
 ```python
 solver.param.step_size = 0.004
@@ -440,12 +449,12 @@ Whitelisted attributes:
 - **Density**: `solid_density`, `shell_density`, `rod_density`
 - **Young's modulus**: `solid_young_modulus`, `shell_young_modulus`, `rod_young_modulus`
 - **Poisson ratio**: `solid_poisson_ratio`, `shell_poisson_ratio`
-- **Contact**: `friction`, `contact_gap`, `contact_gap_rat`, `contact_offset`, `contact_offset_rat`
+- **Contact**: `friction`, `use_group_bounding_box_diagonal`, `contact_gap`, `contact_gap_rat`, `contact_offset`, `contact_offset_rat`
 - **Strain limit**: `enable_strain_limit`, `strain_limit`
 - **Inflation**: `enable_inflate`, `inflate_pressure`
 - **Plasticity**: `enable_plasticity`, `plasticity`, `plasticity_threshold`
 - **Bend plasticity**: `enable_bend_plasticity`, `bend_plasticity`, `bend_plasticity_threshold`, `bend_rest_angle_source`
-- **Shell-specific**: `bend`, `shrink`, `shrink_x`, `shrink_y`, `stitch_stiffness`
+- **Shell / solid / rod shape controls**: `bend`, `shrink`, `shrink_x`, `shrink_y`, `length_factor`, `stitch_stiffness`
 
 ```python
 group.param.friction = 0.5
@@ -827,4 +836,4 @@ solver.add_wall((0, 0, 0), (0, 0, 1)).param.friction = 0.5
 
 ---
 
-Reference mirror of `docs/blender_addon/integrations/python_api_reference.rst` regenerated from `blender_addon/ops/api.py`.
+Bundled Python API reference synced to `blender_addon/ops/api/__init__.py` and its submodules.

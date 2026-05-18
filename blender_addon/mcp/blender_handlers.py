@@ -17,6 +17,33 @@ from mathutils import Vector  # pyright: ignore
 from ..models.groups import get_addon_data
 from .decorators import MCPError, ValidationError, mcp_handler
 
+_PENDING_CURVE_BUILDERS: dict[str, object] = {}
+
+
+def _require_curve_builder(name: str):
+    builder = _PENDING_CURVE_BUILDERS.get(name)
+    if builder is None:
+        raise MCPError(
+            f"No pending curve builder named '{name}'. Call create_curve first."
+        )
+    return builder
+
+
+def _coerce_curve_points(points: list[list[float]]) -> list[tuple[float, float, float]]:
+    coerced: list[tuple[float, float, float]] = []
+    for index, point in enumerate(points):
+        if len(point) != 3:
+            raise ValidationError(
+                f"points[{index}] must contain exactly 3 coordinates"
+            )
+        try:
+            coerced.append((float(point[0]), float(point[1]), float(point[2])))
+        except (TypeError, ValueError) as exc:
+            raise ValidationError(
+                f"points[{index}] must contain numeric coordinates"
+            ) from exc
+    return coerced
+
 
 @mcp_handler
 def run_python_script(code: str):
@@ -123,6 +150,134 @@ def capture_viewport_image(filepath: str, max_size: int = 800):
         scene.render.filepath = original_filepath
         scene.render.resolution_x = original_resolution_x
         scene.render.resolution_y = original_resolution_y
+
+
+# ============================================================================
+# Curve Construction
+# ============================================================================
+
+
+@mcp_handler
+def create_curve(
+    name: str,
+    bevel_depth: float = 0.0,
+    bevel_resolution: int = 2,
+    resolution_u: int = 4,
+    dimensions: str = "3D",
+    clear_existing: bool = True,
+):
+    """Create a pending curve builder for ROD-scene authoring.
+
+    Args:
+        name: Object name for the curve to be finalized later
+        bevel_depth: Tube radius for viewport visualization
+        bevel_resolution: Tube cross-section subdivisions
+        resolution_u: Spline interpolation resolution
+        dimensions: Curve dimensions ("3D" or "2D")
+        clear_existing: Remove an existing same-name object before finalize
+    """
+    from ..ops.api.curve import _CurveBuilder
+
+    builder = _CurveBuilder(
+        name,
+        bevel_depth=float(bevel_depth),
+        bevel_resolution=int(bevel_resolution),
+        resolution_u=int(resolution_u),
+        dimensions=str(dimensions),
+        clear_existing=bool(clear_existing),
+    )
+    _PENDING_CURVE_BUILDERS[name] = builder
+    return {
+        "message": f"Created pending curve builder '{name}'",
+        "curve_name": name,
+        "bevel_depth": float(bevel_depth),
+        "bevel_resolution": int(bevel_resolution),
+        "resolution_u": int(resolution_u),
+        "dimensions": str(dimensions),
+        "clear_existing": bool(clear_existing),
+    }
+
+
+@mcp_handler
+def add_curve_spline(name: str, points: list[list[float]], closed: bool = False):
+    """Append a Bezier spline to a pending curve builder.
+
+    Args:
+        name: Curve builder name passed to create_curve
+        points: List of [x, y, z] control-point coordinates
+        closed: Whether to make the spline cyclic
+    """
+    builder = _require_curve_builder(name)
+    coerced_points = _coerce_curve_points(points)
+    try:
+        spline_index = builder.add_spline(coerced_points, closed=bool(closed))
+    except ValueError as exc:
+        raise ValidationError(str(exc)) from exc
+    return {
+        "message": f"Added spline {spline_index} to pending curve '{name}'",
+        "curve_name": name,
+        "spline_index": spline_index,
+        "point_count": len(coerced_points),
+        "closed": bool(closed),
+    }
+
+
+@mcp_handler
+def set_curve_material(
+    name: str,
+    spline_index: int,
+    material_name: str,
+    create_if_missing: bool = False,
+):
+    """Bind a Blender material to a spline on a pending curve builder.
+
+    Args:
+        name: Curve builder name passed to create_curve
+        spline_index: Spline index returned by add_curve_spline
+        material_name: Existing Blender material name
+        create_if_missing: Create the material when it does not exist
+    """
+    builder = _require_curve_builder(name)
+    material = bpy.data.materials.get(material_name)
+    if material is None and create_if_missing:
+        material = bpy.data.materials.new(material_name)
+    if material is None:
+        raise MCPError(
+            f"Material '{material_name}' not found. "
+            "Pass create_if_missing=true to create it."
+        )
+    try:
+        builder.set_material(int(spline_index), material)
+    except IndexError as exc:
+        raise ValidationError(str(exc)) from exc
+    return {
+        "message": f"Bound material '{material_name}' to spline {spline_index}",
+        "curve_name": name,
+        "spline_index": int(spline_index),
+        "material_name": material_name,
+    }
+
+
+@mcp_handler
+def finalize_curve(name: str):
+    """Finalize a pending curve builder, link it to the scene, and return the object.
+
+    Args:
+        name: Curve builder name passed to create_curve
+    """
+    builder = _require_curve_builder(name)
+    try:
+        obj = builder.finalize()
+    except RuntimeError as exc:
+        raise MCPError(str(exc)) from exc
+    _PENDING_CURVE_BUILDERS.pop(name, None)
+    return {
+        "message": f"Finalized curve '{obj.name}'",
+        "curve_name": name,
+        "object_name": obj.name,
+        "object_type": obj.type,
+        "spline_count": len(obj.data.splines),
+    }
 
 
 # ============================================================================

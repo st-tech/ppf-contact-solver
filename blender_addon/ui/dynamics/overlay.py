@@ -185,41 +185,49 @@ def draw_overlay_callback():
         gpu.state.blend_set("NONE")
 
     if snap_points and not hide_snaps:
-        # Group by (size, color) so a scene with many snap points issues
-        # one GPU batch per unique style rather than one batch per point.
-        shader = gpu.shader.from_builtin("UNIFORM_COLOR")
+        # POINT_UNIFORM_COLOR (not UNIFORM_COLOR + point_size_set): Metal
+        # has no fixed-function point size, so on Blender 5.x macOS the
+        # state setter is a no-op and points render at 1 px. The point
+        # shader writes gl_PointSize from its `size` uniform on both
+        # backends.
+        shader = gpu.shader.from_builtin("POINT_UNIFORM_COLOR")
         gpu.state.blend_set("ALPHA")
         gpu.state.depth_test_set("LESS_EQUAL")
         gpu.state.depth_mask_set(False)
+        gpu.state.program_point_size_set(True)
 
         grouped: dict[tuple, list] = {}
         for vertex, size, color in snap_points:
             grouped.setdefault((float(size), tuple(color)), []).append(vertex)
         for (size, color), verts in grouped.items():
-            gpu.state.point_size_set(size)
             batch = batch_for_shader(shader, "POINTS", {"pos": verts})
             shader.bind()
             shader.uniform_float("color", color)
+            shader.uniform_float("size", size)
             batch.draw(shader)
 
-        gpu.state.point_size_set(1.0)
+        gpu.state.program_point_size_set(False)
         gpu.state.depth_mask_set(True)
         gpu.state.blend_set("NONE")
 
     pin_data = _overlay_cache["pin_data"]
 
     if pin_data and not hide_pins:
-        shader = gpu.shader.from_builtin("UNIFORM_COLOR")
+        # POINT_UNIFORM_COLOR (see snap_points block): Metal needs the
+        # shader to write gl_PointSize, since fixed-function point size
+        # is unsupported.
+        shader = gpu.shader.from_builtin("POINT_UNIFORM_COLOR")
         gpu.state.blend_set("ALPHA")
         gpu.state.depth_test_set("LESS_EQUAL")
         gpu.state.depth_mask_set(False)
+        gpu.state.program_point_size_set(True)
 
         grouped: dict[tuple, list] = {}
         for vertex, size, color in pin_data:
             # Clip only points behind the camera (ndc.w <= 0 in OpenGL convention).
             # The GPU handles frustum clipping for points that are in front but
             # outside the XY viewport, so we intentionally do NOT reject on
-            # |ndc.xy| > 1 or on ndc.z — Blender's window_matrix is OpenGL-style
+            # |ndc.xy| > 1 or on ndc.z, Blender's window_matrix is OpenGL-style
             # with ndc.z in [-1, 1], and a [0, 1] range would silently drop any
             # pin in the front half of the frustum.
             clip = (
@@ -232,13 +240,13 @@ def draw_overlay_callback():
             grouped.setdefault((float(size), tuple(color)), []).append(vertex)
 
         for (size, color), verts in grouped.items():
-            gpu.state.point_size_set(size)
             batch = batch_for_shader(shader, "POINTS", {"pos": verts})
             shader.bind()
             shader.uniform_float("color", color)
+            shader.uniform_float("size", size)
             batch.draw(shader)
 
-        gpu.state.point_size_set(1.0)
+        gpu.state.program_point_size_set(False)
         gpu.state.depth_mask_set(True)
         gpu.state.blend_set("NONE")
 
@@ -331,18 +339,27 @@ def draw_overlay_callback():
 
     op_batches = _overlay_cache["op_batches"]
     if op_batches:
-        shader = gpu.shader.from_builtin("UNIFORM_COLOR")
+        # Two shaders: TRIS use UNIFORM_COLOR, POINTS use
+        # POINT_UNIFORM_COLOR (Metal point-size, see snap_points block).
+        tri_shader = gpu.shader.from_builtin("UNIFORM_COLOR")
+        point_shader = gpu.shader.from_builtin("POINT_UNIFORM_COLOR")
         gpu.state.blend_set("ALPHA")
         gpu.state.depth_test_set("NONE")
         gpu.state.depth_mask_set(False)
-        gpu.state.point_size_set(8.0)
+        gpu.state.program_point_size_set(True)
 
-        for batch, color in op_batches:
-            shader.bind()
-            shader.uniform_float("color", color)
-            batch.draw(shader)
+        for batch, prim_type, color in op_batches:
+            if prim_type == "POINTS":
+                point_shader.bind()
+                point_shader.uniform_float("color", color)
+                point_shader.uniform_float("size", 8.0)
+                batch.draw(point_shader)
+            else:
+                tri_shader.bind()
+                tri_shader.uniform_float("color", color)
+                batch.draw(tri_shader)
 
-        gpu.state.point_size_set(1.0)
+        gpu.state.program_point_size_set(False)
         gpu.state.depth_test_set("LESS_EQUAL")
         gpu.state.depth_mask_set(True)
         gpu.state.blend_set("NONE")
@@ -390,19 +407,27 @@ def draw_overlay_callback():
 
     violation_batches = _overlay_cache["violation_batches"]
     if violation_batches:
-        shader = gpu.shader.from_builtin("UNIFORM_COLOR")
+        # Two shaders: TRIS use UNIFORM_COLOR, POINTS use
+        # POINT_UNIFORM_COLOR (Metal point-size, see snap_points block).
+        tri_shader = gpu.shader.from_builtin("UNIFORM_COLOR")
+        point_shader = gpu.shader.from_builtin("POINT_UNIFORM_COLOR")
         gpu.state.blend_set("ALPHA")
         gpu.state.depth_test_set("NONE")
         gpu.state.depth_mask_set(False)
+        gpu.state.program_point_size_set(True)
 
         for batch, prim_type, color in violation_batches:
             if prim_type == "POINTS":
-                gpu.state.point_size_set(16.0)
-            shader.bind()
-            shader.uniform_float("color", color)
-            batch.draw(shader)
+                point_shader.bind()
+                point_shader.uniform_float("color", color)
+                point_shader.uniform_float("size", 16.0)
+                batch.draw(point_shader)
+            else:
+                tri_shader.bind()
+                tri_shader.uniform_float("color", color)
+                batch.draw(tri_shader)
 
-        gpu.state.point_size_set(1.0)
+        gpu.state.program_point_size_set(False)
         gpu.state.depth_test_set("LESS_EQUAL")
         gpu.state.depth_mask_set(True)
         gpu.state.blend_set("NONE")

@@ -18,7 +18,7 @@ The MCP server sits beside two sibling entry points: the Blender sidebar and the
 
 ### What the tool surface covers, and what it does not
 
-Before reaching for `run_python_script`, check whether a dedicated tool already exists. The MCP server exposes ~100 tools across ten categories; `run_python_script` is the escape hatch for the gaps, not the default. The authoritative list is `llm://mcp_tools_reference`; the short version:
+Before reaching for `run_python_script`, check whether a dedicated tool already exists. The MCP server exposes more than one hundred tools across ten categories; `run_python_script` is the escape hatch for the gaps, not the default. The authoritative list is `llm://mcp_tools_reference`; the short version:
 
 | Task                                                                                                                               | Where it lives                                                                                           |
 | ---------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
@@ -26,11 +26,11 @@ Before reaching for `run_python_script`, check whether a dedicated tool already 
 | Create / delete / type / rename / duplicate groups; assign and unassign objects; bake a group                                      | Group tools (`create_group`, `delete_group`, `set_group_type`, `add_objects_to_group`, `bake_group_animation`, ...) |
 | Pins (settings + operations), collision windows, velocity keyframes, static object ops                                             | Object-operations tools (`add_pin_vertex_group`, `set_pin_settings`, `add_pin_operation`, `add_static_op`, `add_velocity_keyframe`, `add_collision_window`, ...) |
 | Transfer, run, resume, terminate, save-and-quit, update params, delete remote data, fetch animation, clear local animation        | Simulation tools (`transfer_data`, `run_simulation`, `resume_simulation`, `terminate_simulation`, `update_params`, `fetch_animation`, ...) |
-| Invisible walls and spheres, merge pairs, snap, bake-all                                                                           | Scene tools (`add_invisible_wall`, `add_invisible_sphere`, `add_merge_pair`, `snap_to_vertices`, `bake_all_animation`, ...) |
+| Invisible walls and spheres, merge pairs, snap, bake-all, full solver reset                                                        | Scene tools (`add_invisible_wall`, `add_invisible_sphere`, `add_merge_pair`, `snap_to_vertices`, `bake_all_animation`, `clear_solver`, ...) |
 | Keyframed gravity / wind / air, collider keyframes, scene-wide step/gravity/frame/contact parameters                               | Dynamic-parameters tools (`add_dynamic_param`, `add_dynamic_param_keyframe`, `add_collider_keyframe`, `set_scene_parameters`, ...) |
 | Abort long-running operations, install paramiko or docker, run server-side commands, git pull remote, compile project             | Remote tools (`abort_operation`, `install_paramiko`, `install_docker`, `execute_server_command`, `git_pull_remote`, `compile_project`, ...) |
-| Read Blender's console, grab the latest error, measure a mesh, viewport screenshot, query UI state                                 | Console / Blender tools (`get_console_lines`, `get_latest_error`, `get_average_edge_length`, `get_object_bounding_box_diagonal`, `capture_viewport_image`, `get_ui_element_status`) |
-| **Anything touching Blender primitives, mesh edits, object transforms, materials, modifiers, or pure `bpy.*` scripting**           | **`run_python_script` (no dedicated tool exists)**                                                       |
+| Build Bezier curves for ROD scenes, read Blender's console, grab the latest error, measure a mesh, viewport screenshot, query UI state | Console / Blender tools (`create_curve`, `add_curve_spline`, `set_curve_material`, `finalize_curve`, `get_console_lines`, `get_average_edge_length`, `capture_viewport_image`, `get_ui_element_status`, ...) |
+| **Anything touching general Blender primitives, mesh edits, object transforms, modifiers, shaders, cameras, or pure `bpy.*` scripting** | **`run_python_script` (no dedicated tool exists)**                                                   |
 
 Concrete examples of things that **need** `run_python_script`:
 
@@ -112,7 +112,7 @@ All traffic flows through `/mcp`. The client calls `initialize` first; the serve
 
 ### Exposed tools
 
-The authoritative list, with every tool name, its parameters, and its description, is auto-generated from the handler sources at every docs build and available as `mcp_reference.rst` in the docs build (not inlined here). For a live, schema-attached enumeration against a running server, use `tools/list` (or the CLI `tools` subcommand).
+The authoritative list, with every tool name, its parameters, and its description, is bundled in `llm://mcp_tools_reference`. For a live, schema-attached enumeration against a running server, use `tools/list` (or the CLI `tools` subcommand).
 
 ### Calling a tool from the CLI
 
@@ -262,7 +262,7 @@ Practical consequences:
 
 The MCP surface is not just a protocol. It is also the recommended way for agents (and automation scripts) to *build* a scene before hitting **Transfer → Run**. Unlike a human user, an agent cannot eyeball a mesh and decide it is "probably fine", and the solver is unforgiving about resolution and topology with failure modes that are usually silent. This section collects the rules that keep MCP-driven setup stable.
 
-TIP: Everything below is callable via `tools/call` on the MCP server; the exact parameter schemas are auto-generated and available as `mcp_reference.rst` in the docs build. The advice here is about *which* tools to reach for in what order, not about their JSON schemas.
+TIP: Everything below is callable via `tools/call` on the MCP server; the exact parameter schemas live in `llm://mcp_tools_reference`. The advice here is about *which* tools to reach for in what order, not about their JSON schemas.
 
 ### Use MCP tools, not raw Python
 
@@ -272,7 +272,7 @@ The add-on ships a `run_python_script` tool that evaluates arbitrary Python insi
 - Assigning objects to a group: `add_objects_to_group`.
 - Setting material parameters: `set_group_material_properties`.
 - Scene-level parameters: `set_scene_parameters`.
-- Pins, colliders, merges: the dedicated handlers in the reference (see `mcp_reference.rst` in the docs build).
+- Pins, colliders, merges: the dedicated handlers in the reference (see `llm://mcp_tools_reference`).
 
 The dedicated handlers all go through the same validation layer the UI uses, so a misbehaving agent gets the same errors a user would. `run_python_script` bypasses that layer entirely.
 
@@ -397,7 +397,7 @@ A group with no assigned objects is almost always a bug. Before calling `transfe
 ### See also
 
 - MCP Server: protocol, transport, and security.
-- MCP Tool Reference: full handler list and schemas (auto-generated as `mcp_reference.rst` in the docs build).
+- MCP Tool Reference: full handler list and schemas (`llm://mcp_tools_reference`).
 - Object Groups: what each group type does in the solver.
 - Material Parameters: the fields `set_group_material_properties` accepts and their defaults.
 
@@ -405,7 +405,7 @@ A group with no assigned objects is almost always a bug. Before calling `transfe
 
 Everything the add-on does from the UI (creating groups, pinning vertex groups, keyframing spins, dropping invisible colliders, snapping meshes) can be driven from Python inside Blender's scripting editor. This is the right tool for procedural scene setup, batch variant generation, regression tests, and anything you do not want to click through three hundred times.
 
-TIP: This section is a tutorial-style walkthrough. For the full method-by-method list, generated directly from the source, see the Blender Python API Reference, which is auto-generated and available as `python_api_reference.rst` in the docs build (not inlined here).
+TIP: This section is a tutorial-style walkthrough. For the full method-by-method list, see the bundled Blender Python API Reference at `llm://python_api_reference`.
 
 ### Import
 
@@ -570,6 +570,8 @@ pin.spin(axis=(0, 0, 1), angular_velocity=360, center_vertex=42)      # VERTEX
 
 `solver.create_curve(name, ...)` returns a builder that wraps the `bpy.data.curves.new` / `splines.new` / scene-link boilerplate.  Use it instead of raw `bpy` calls when you'd otherwise write a few dozen lines of curve-datablock setup to feed a ROD group.
 
+The same flow is available over MCP through `create_curve`, `add_curve_spline`, `set_curve_material`, and `finalize_curve`, keyed by the pending builder name.
+
 ```python
 curve = solver.create_curve("WovenCylinder",
                             bevel_depth=3e-3,    # tube radius for the viewport
@@ -661,6 +663,12 @@ solver.clear()
 ```
 
 Wipes every active group, resets scene parameters to their property defaults, clears merge pairs, invisible colliders, dynamic parameters, cached fetched frames, and residual `MESH_CACHE` modifiers. Run it at the top of any script that needs a clean slate.
+
+MCP equivalent:
+
+```text
+clear_solver()
+```
 
 ### Fallback: raw operator dispatch
 
