@@ -125,6 +125,8 @@ https://github.com/user-attachments/assets/f266111e-7380-428b-8a3c-25eac4f039e5
 
 #### 📘 **A Cubic Barrier with Elasticity-Inclusive Dynamic Stiffness**
 
+https://github.com/user-attachments/assets/ac104255-604e-4890-9fb1-59732f004f0a
+
 - 📚 Published in [ACM Transactions on Graphics (TOG) Vol.43, No.6](https://dl.acm.org/doi/abs/10.1145/3687908)
 - 🎥 Main video [(Video)](https://zozo.box.com/s/ylyv8798ue38ra5vqo2dgjhx48edy6j9)
 - 🎥 Additional video examples [(Directory)](https://zozo.box.com/s/inyyosspazk7z79zf9yeikt4xxy641g3)
