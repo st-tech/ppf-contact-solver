@@ -35,6 +35,25 @@ import mathutils
 import numpy as np
 
 
+def _resolve_solver():
+    # Look up the addon under whichever extension repo Blender installed
+    # it into (``user_default`` for Install-from-Disk, or the remote repo
+    # id when installed from a hosted repository).
+    import addon_utils
+    import importlib
+    name = next(
+        (m.__name__ for m in addon_utils.modules()
+         if m.__name__.endswith(".ppf_contact_solver")),
+        None,
+    )
+    if name is None:
+        raise ImportError(
+            "ZOZO's Contact Solver addon not found; enable it in "
+            "Preferences > Add-ons first."
+        )
+    return importlib.import_module(f"{name}.ops.api").solver
+
+
 def make_card_mesh(name: str, res: int, width: float, height: float):
     """Subdivided rectangle in the YZ plane (X=0).
 
@@ -133,7 +152,7 @@ def build(mesh_res: int = 8, n_stack: int = 8, card_height: float = 0.25,
           sphere_radius: float = 0.15, sphere_subdiv: int = 3,
           sphere_velocity: float = 2.3,
           sphere_start: tuple = (-2.0, 0.0, 1.0)):
-    from bl_ext.user_default.ppf_contact_solver.ops.api import solver
+    solver = _resolve_solver()
 
     card_width = 0.75 * card_height
 
@@ -235,6 +254,5 @@ def build(mesh_res: int = 8, n_stack: int = 8, card_height: float = 0.25,
 
 
 if __name__ == "__main__":
-    from bl_ext.user_default.ppf_contact_solver.ops.api import solver
-    solver.clear()
+    _resolve_solver().clear()
     build()

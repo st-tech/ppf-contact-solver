@@ -45,6 +45,25 @@ import bpy
 import numpy as np
 
 
+def _resolve_solver():
+    # Look up the addon under whichever extension repo Blender installed
+    # it into (``user_default`` for Install-from-Disk, or the remote repo
+    # id when installed from a hosted repository).
+    import addon_utils
+    import importlib
+    name = next(
+        (m.__name__ for m in addon_utils.modules()
+         if m.__name__.endswith(".ppf_contact_solver")),
+        None,
+    )
+    if name is None:
+        raise ImportError(
+            "ZOZO's Contact Solver addon not found; enable it in "
+            "Preferences > Add-ons first."
+        )
+    return importlib.import_module(f"{name}.ops.api").solver
+
+
 def _cylinder_mesh_arrays(r: float, min_x: float, max_x: float, n: int):
     """Mirror frontend's app.mesh.cylinder(r, min_x, max_x, n) topology
     but emit quads instead of triangles.
@@ -148,7 +167,7 @@ def build(n: int = 180, n_cylinders: int = 5, ring_radius: float = 1.0,
           step_size: float = 0.01, frame_count: int = 480,
           fps: int = 60, jitter_amp: float = 1e-2,
           group_name: str = "Cylinders", rng_seed: int = 0):
-    from bl_ext.user_default.ppf_contact_solver.ops.api import solver
+    solver = _resolve_solver()
 
     rng = np.random.default_rng(rng_seed)
 
@@ -250,6 +269,5 @@ def build(n: int = 180, n_cylinders: int = 5, ring_radius: float = 1.0,
 
 
 if __name__ == "__main__":
-    from bl_ext.user_default.ppf_contact_solver.ops.api import solver
-    solver.clear()
+    _resolve_solver().clear()
     build()

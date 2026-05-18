@@ -319,8 +319,14 @@ We expose all of the add-on's tools through an MCP server, so any LLM (Claude, C
 You can also drive the entire pipeline from a Python script inside Blender's scripting editor. This is handy for procedural scene setup and batch variant generation. Below is a full example that drapes a sheet over a sphere:
 
 ```python
+import addon_utils
+import importlib
 import bpy
-from bl_ext.user_default.ppf_contact_solver.ops.api import solver
+
+# Look up the add-on module under whichever extension repository Blender
+# installed it into and grab the public solver API.
+addon = next(m for m in addon_utils.modules() if m.__name__.endswith(".ppf_contact_solver"))
+solver = importlib.import_module(f"{addon.__name__}.ops.api").solver
 
 # Reset any prior state.
 solver.clear()
@@ -740,7 +746,7 @@ Also, we apply small jitters to the position of objects in the scene, so **at ea
 
 ## 📡 Deploying on Cloud Services
 
-Running our solver on the cloud has a few practical perks:
+Running our solver on the cloud has a few practical advantages:
 
 - **💰 Pay only when you use it**: Spin up an instance, run your experiment, and delete it when you're done. You pay for hours, not for a GPU sitting on your desk.
 - **📈 Scale on demand**: If you have a deadline, just launch multiple instances and run experiments in parallel. No waiting in a queue.

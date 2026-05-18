@@ -15,6 +15,25 @@ import bpy
 import numpy as np
 
 
+def _resolve_solver():
+    # Look up the addon under whichever extension repo Blender installed
+    # it into (``user_default`` for Install-from-Disk, or the remote repo
+    # id when installed from a hosted repository).
+    import addon_utils
+    import importlib
+    name = next(
+        (m.__name__ for m in addon_utils.modules()
+         if m.__name__.endswith(".ppf_contact_solver")),
+        None,
+    )
+    if name is None:
+        raise ImportError(
+            "ZOZO's Contact Solver addon not found; enable it in "
+            "Preferences > Add-ons first."
+        )
+    return importlib.import_module(f"{name}.ops.api").solver
+
+
 def make_woven_cylinder(n: int, offset: float, scale: float):
     dx, width = 1.0 / (n - 1), 1.25
     scale = 2.0 * 1.48 * scale
@@ -64,7 +83,7 @@ def build(n: int = 256, offset: float = 4e-3, scale: float = 2.0,
           pin: bool = True, motion: bool = True,
           angular_velocity: float = 365.0, move_delta: float = 0.15,
           motion_frame_start: int = 1, motion_frame_end: int = 1200):
-    from bl_ext.user_default.ppf_contact_solver.ops.api import solver
+    solver = _resolve_solver()
 
     strands = make_woven_cylinder(n, offset, scale)
 
@@ -154,6 +173,5 @@ def build(n: int = 256, offset: float = 4e-3, scale: float = 2.0,
 
 
 if __name__ == "__main__":
-    from bl_ext.user_default.ppf_contact_solver.ops.api import solver
-    solver.clear()
+    _resolve_solver().clear()
     build()

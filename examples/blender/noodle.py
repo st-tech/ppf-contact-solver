@@ -29,6 +29,25 @@ import bpy
 import numpy as np
 
 
+def _resolve_solver():
+    # Look up the addon under whichever extension repo Blender installed
+    # it into (``user_default`` for Install-from-Disk, or the remote repo
+    # id when installed from a hosted repository).
+    import addon_utils
+    import importlib
+    name = next(
+        (m.__name__ for m in addon_utils.modules()
+         if m.__name__.endswith(".ppf_contact_solver")),
+        None,
+    )
+    if name is None:
+        raise ImportError(
+            "ZOZO's Contact Solver addon not found; enable it in "
+            "Preferences > Add-ons first."
+        )
+    return importlib.import_module(f"{name}.ops.api").solver
+
+
 def _noodle_material(name: str, rgb: tuple):
     mat = bpy.data.materials.new(name)
     mat.use_nodes = True
@@ -61,7 +80,7 @@ def build(n_grid: int = 11, scale: float = 0.05, n_segments: int = 960,
           fix_xz_threshold: float = 1.0, air_friction: float = 1e-4,
           object_name: str = "Noodles", group_name: str = "Noodles",
           colorize: bool = True, rng_seed: int = 0):
-    from bl_ext.user_default.ppf_contact_solver.ops.api import solver
+    solver = _resolve_solver()
 
     rng = np.random.default_rng(rng_seed)
     n_pts = n_segments + 1
@@ -134,6 +153,5 @@ def build(n_grid: int = 11, scale: float = 0.05, n_segments: int = 960,
 
 
 if __name__ == "__main__":
-    from bl_ext.user_default.ppf_contact_solver.ops.api import solver
-    solver.clear()
+    _resolve_solver().clear()
     build()
