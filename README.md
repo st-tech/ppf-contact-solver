@@ -76,7 +76,7 @@ https://github.com/user-attachments/assets/f266111e-7380-428b-8a3c-25eac4f039e5
   - [📦 Deploying on Amazon Web Services](#-deploying-on-amazon-web-services)
   - [📦 Deploying on Google Compute Engine](#-deploying-on-google-compute-engine)
 - [🤝 Community Works](#-community-works)
-  - [🧩 Blender Add-ons](#-blender-add-ons-1)
+  - [🧩 Blender Add-ons](#-blender-add-ons)
   - [📺 Videos](#-videos)
   - [📰 Articles](#-articles)
   - [📣 Sharing Your Work](#-sharing-your-work)
