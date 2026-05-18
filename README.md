@@ -18,7 +18,7 @@ involving 👚 shells, 🪵 solids and 🪢 rods. All made by [ZOZO, Inc.](https
 
 🎨 Simulate remotely from our [Blender add-on](https://st-tech.github.io/ppf-contact-solver) (screenshots taken on macOS; you can also run locally if you have a modern NVIDIA GPU on Windows or Linux)
 
-![glance-blender](./docs/blender_addon/images/blender.webp)
+https://github.com/user-attachments/assets/f266111e-7380-428b-8a3c-25eac4f039e5
 
 🚀 Or double click `start.bat` (Windows) or run a Docker command (Linux/Windows) to get it running
 
@@ -75,7 +75,11 @@ involving 👚 shells, 🪵 solids and 🪢 rods. All made by [ZOZO, Inc.](https
   - [📦 Deploying on Scaleway](#-deploying-on-scaleway)
   - [📦 Deploying on Amazon Web Services](#-deploying-on-amazon-web-services)
   - [📦 Deploying on Google Compute Engine](#-deploying-on-google-compute-engine)
-- [🧩 Community's Blender Add-ons](#-communitys-blender-add-ons)
+- [🤝 Community Works](#-community-works)
+  - [🧩 Blender Add-ons](#-blender-add-ons-1)
+  - [📺 Videos](#-videos)
+  - [📰 Articles](#-articles)
+  - [📣 Sharing Your Work](#-sharing-your-work)
 - [💼 Commercial Use and Beyond](#-commercial-use-and-beyond)
 - [📬 Contributing](#-contributing)
 - [🙏 Acknowledgements](#-acknowledgements)
@@ -290,6 +294,8 @@ Here are a couple of screenshots of the add-on running inside Blender:
 <td valign="top">Zebra scene set up in Blender. <a href="https://zozo.box.com/s/bkt5uviyqx825os7r854xslurqpxcj2k">(full-size)</a></td>
 </tr>
 </table>
+
+![Blender add-on overview](./docs/blender_addon/images/blender.webp)
 
 #### 🤖 From Natural Language to Simulation (via MCP)
 
@@ -768,12 +774,36 @@ Below, we describe how to deploy our solver on major cloud services. These instr
 - *Do not skip* the Docker container creation in the installation process; it is required.
 - CLI instructions are described in [(Markdown)](./articles/cloud.md#-google-compute-engine).
 
-## 🧩 Community's Blender Add-ons
+## 🤝 Community Works
+
+### 🧩 Blender Add-ons
 
 Alongside our [official Blender add-on](#-blender-add-on), the following community add-ons are also available:
 
 - [AndoSim](https://github.com/Slaymish/AndoSim)
 - [ArzteZ-PPF-solver](https://github.com/tavcitavci-sys-tavci-ui/ArzteZ-PPF-solver)
+
+### 📺 Videos
+
+[*The Worst Bug In Games Is Now Gone Forever*](https://www.youtube.com/watch?v=VOORiyip4_c) by [Two Minute Papers](https://www.youtube.com/@TwoMinutePapers).
+
+[![Watch the video](https://img.youtube.com/vi/VOORiyip4_c/0.jpg)](https://www.youtube.com/watch?v=VOORiyip4_c)
+
+> 📝 Note: to avoid confusion, we did not fully solve the hardest problem. The solver is still too slow for video games, and it may stall in difficult situations.
+
+[*Visual Components - ZOZO's Contact Solver Handshanking*](https://www.youtube.com/watch?v=k000SaPXK4Q) by [idkfa](https://www.youtube.com/@idkfa3).
+
+[![Watch the video](https://img.youtube.com/vi/k000SaPXK4Q/0.jpg)](https://www.youtube.com/watch?v=k000SaPXK4Q)
+
+### 📰 Articles
+
+- [*New Simulation Method To Achieve Accuracy In Collision Physics*](https://80.lv/articles/new-simulation-method-to-achieve-accuracy-in-collision-physics) by Amber Rutherford on [80 Level](https://80.lv/).
+- [*New Research Might Have Finally Solved the Clipping Bug*](https://www.live-laugh-love.world/blog/game-collision-bugs-solution/) by LLL Inc.
+
+### 📣 Sharing Your Work
+
+Our work still needs many improvements, and our documentation and tutorial videos are not very sophisticated.
+The author would greatly appreciate it if you made your own tutorial videos, write-ups, or blog posts about the solver, and posted them online on YouTube, your blog, social media, or anywhere else.
 
 ## 💼 Commercial Use and Beyond
 
