@@ -3,6 +3,7 @@
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
 # License: Apache v2.0
 
+import importlib
 import importlib.util
 import os
 import subprocess
@@ -13,21 +14,55 @@ from ..models.console import console
 
 
 def get_lib_dir():
-    """Get the directory of the add-on lib."""
+    """Get the directory of the add-on lib (legacy install target)."""
     addon_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     return os.path.join(addon_dir, "lib")
 
 
-def import_module(name):
+def get_install_target():
+    """Return the directory where ``install_module`` drops new packages.
+
+    Prefer Blender's user ``scripts/addons/modules`` dir: it is already
+    on ``sys.path``, and being outside any extension directory it doesn't
+    trigger Blender 5's "Policy violation with top level module" warning
+    that fires for every module loaded from inside an extension's tree.
+    Falls back to the addon's ``lib/`` directory when bpy is unavailable
+    (pytest, standalone debug-rig harnesses) so the install path still
+    resolves to *something* writable.
     """
-    Import a module from the add-on lib directory, supporting dotted names (e.g., 'module.submodule').
+    try:
+        import bpy  # pyright: ignore
+        path = bpy.utils.user_resource("SCRIPTS", path="addons/modules", create=True)
+        if path:
+            return os.path.normpath(path)
+    except Exception:
+        pass
+    return get_lib_dir()
+
+
+def import_module(name):
+    """Import a module by dotted name, preferring the normal sys.path.
 
     Args:
         name (str): The module name, possibly with dots.
 
     Returns:
         module: The imported module object.
+
+    Order of resolution:
+    1. ``importlib.import_module`` -- finds the package in
+       ``scripts/addons/modules`` (the new install target) or anywhere
+       else already on ``sys.path``.
+    2. Legacy fallback: load directly from ``<addon>/lib/``. Kept so
+       users whose old ``install_module`` runs landed inside the
+       extension dir still work until they re-click Install Modules.
+       This path triggers Blender 5's policy-violation warning.
     """
+    try:
+        return importlib.import_module(name)
+    except ImportError:
+        pass
+
     lib_dir = get_lib_dir()
     parts = name.split(".")
     if len(parts) == 1:
@@ -66,7 +101,11 @@ def get_cbor2():
 
 def module_exists(packages):
     """
-    Check if a list of modules exist.
+    Check whether each package is importable.
+
+    Looks first in the new install target (``scripts/addons/modules``)
+    and falls back to the legacy ``<addon>/lib/`` location, so both old
+    and new installs are recognized.
 
     Args:
         packages (list): List of package names to check.
@@ -74,9 +113,12 @@ def module_exists(packages):
     Returns:
         bool: True if all packages exist, False otherwise.
     """
-    lib_dir = get_lib_dir()
+    candidates = [get_install_target(), get_lib_dir()]
     for package in packages:
-        if not os.path.exists(os.path.join(lib_dir, package, "__init__.py")):
+        if not any(
+            os.path.exists(os.path.join(d, package, "__init__.py"))
+            for d in candidates
+        ):
             return False
     return True
 
@@ -104,8 +146,8 @@ def install_module(packages):
             install_error_message = ""
 
         try:
-            lib_path = get_lib_dir()
-            console.write(f"Installing packages to {lib_path}: {', '.join(packages)}")
+            target_path = get_install_target()
+            console.write(f"Installing packages to {target_path}: {', '.join(packages)}")
 
             subprocess.check_call(
                 [sys.executable, "-m", "ensurepip", "--upgrade"],
@@ -114,7 +156,7 @@ def install_module(packages):
             )
 
             process = subprocess.Popen(
-                [sys.executable, "-m", "pip", "install", "--target", lib_path]
+                [sys.executable, "-m", "pip", "install", "--target", target_path]
                 + packages,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
