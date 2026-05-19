@@ -39,6 +39,7 @@ pub fn transition(state: ServerState, event: Event) -> (ServerState, Vec<Effect>
             upload_id,
             data_hash,
             param_hash,
+            total_frames,
         } => {
             let data = if has_data && has_param {
                 Data::Uploaded
@@ -47,14 +48,25 @@ pub fn transition(state: ServerState, event: Event) -> (ServerState, Vec<Effect>
             };
 
             // Same project: refresh data availability and upload_id;
-            // preserve solver/build/frame state.
+            // preserve solver/build/frame state. Rehydrate
+            // total_frames from disk only when we currently lack it
+            // (e.g. the connect probe just blew it away by routing
+            // through __probe__ then back). Don't clobber a fresh
+            // value from an in-flight BuildMetadata with a stale
+            // scene_info.json read.
             if name == state.name {
+                let preserved_total = if state.total_frames > 0 {
+                    state.total_frames
+                } else {
+                    total_frames
+                };
                 let mut new = ServerState {
                     root,
                     data,
                     upload_id,
                     data_hash,
                     param_hash,
+                    total_frames: preserved_total,
                     ..state
                 };
                 if new.build == Build::Built {
@@ -64,6 +76,10 @@ pub fn transition(state: ServerState, event: Event) -> (ServerState, Vec<Effect>
             }
 
             // Different project: reset state, optionally load app.
+            // Carry the disk-derived total_frames straight through so
+            // a re-select of a previously-built project (e.g. probe
+            // -> real reconnect) immediately knows how many frames
+            // the build set up, without waiting for another build.
             let build = if has_app {
                 Build::Built
             } else {
@@ -89,7 +105,7 @@ pub fn transition(state: ServerState, event: Event) -> (ServerState, Vec<Effect>
                     error: String::new(),
                     build_progress: 0.0,
                     build_info: String::new(),
-                    total_frames: 0,
+                    total_frames,
                     upload_id,
                     data_hash,
                     param_hash,

@@ -3,22 +3,44 @@
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
 # License: Apache v2.0
 #
-# Save-and-quit / Resume round-trip.
+# Save-and-quit / Resume round-trip with checkpoint-load verification.
 #
 # Sequence:
 #   1. Build a pinned plane with MOVE_BY(delta=(D, 0, 0)) over frames
 #      [1..frame_end] and run it.
-#   2. Once the sim has produced at least one frame, dispatch
-#      SaveAndQuitRequested. The Rust binary detects the ``save_and_quit``
-#      marker on its next loop iteration, calls ``save_state``, and exits.
+#   2. Wait until state.frame >= 1 (a real advance lands), THEN
+#      dispatch SaveAndQuitRequested. The Rust binary detects the
+#      ``save_and_quit`` marker on its next loop iteration, calls
+#      ``save_state``, and exits. The gate guarantees ``saved_frame > 0``
+#      so the resume-correctness checks below can actually
+#      distinguish a real load-from-state from a silent fresh-start
+#      (the saved_frame=0 case falls into ``setup(load=0)`` ->
+#      ``remove_files_in_dir`` -> fresh-start path, which produces
+#      indistinguishable artifacts).
 #   3. Assert: state_*.bin.gz lands on disk, addon settles at RESUMABLE,
-#      state.frame matches the saved frame.
-#   4. Dispatch ResumeRequested. The Rust binary re-launches with
-#      ``--load N``, picks up from the saved frame, and runs to completion.
+#      state.frame matches the saved frame, the server response's
+#      scene_info["Last Saved"] reflects the saved frame index
+#      (catches the regression where scene_info.rs scanned save_*.bin
+#      instead of state_<N>.bin.gz and returned "None" forever).
+#   4. Capture vert_<saved_frame>.bin's mtime, then dispatch
+#      ResumeRequested. The Rust binary re-launches with ``--load -1``
+#      and the solver-side fix resolves the sentinel to the actual
+#      latest checkpoint; setup() then runs remove_files() starting at
+#      saved_frame + 1 instead of 0, preserving vert_<saved_frame>.bin.
 #   5. Fetch + drain so PC2 captures every frame.
-#   6. Assert: PC2 has frame_count samples and the last sample has the
-#      fully-applied delta (so the resume continuation actually advanced
-#      past the save point and produced the right end state).
+#   6. Assert: vert_<saved_frame>.bin's mtime is unchanged across the
+#      resume (catches the --load=-1 fresh-start regression that
+#      would re-write the file), PC2 has frame_count samples, and
+#      the last sample has the fully-applied delta.
+#
+# Bug 3 (ProjectSelected reset wiping total_frames -> progress bar
+# stuck at 0 after server restart) is not exercised here because the
+# LOCAL backend's reconnect doesn't probe with `--name __probe__` and
+# a same-project ProjectSelected on reconnect preserves the cached
+# total_frames. That regression is covered directly at the transition
+# layer in `crates/ppf-cts-core/src/transitions/tests.rs::
+# project_selected_carries_total_frames_for_new_project` and
+# `project_selected_same_project_rehydrates_total_frames_when_lost`.
 
 from __future__ import annotations
 
@@ -72,19 +94,34 @@ try:
     dh.build_and_wait(data_bytes, param_bytes, message="save-resume:build")
     dh.log(f"built solver={dh.facade.engine.state.solver.name}")
 
-    # Run, then dispatch save_and_quit immediately. A fast CUDA sim
-    # can finish in less than one addon poll interval (~200ms), so a
-    # gate like "wait until s.frame >= 1 then dispatch" loses the race
-    # and the sim completes before the save_and_quit sentinel is ever
-    # written. Dispatching right after run() exercises the save/resume
-    # path regardless of which frame the solver happens to be on when
-    # it picks up the sentinel; the resulting state_<n>.bin.gz captures
-    # whatever frame index the solver had reached.
+    # Run, then wait for at least one frame advance before dispatching
+    # save_and_quit. The gate guarantees saved_frame > 0; saved_frame=0
+    # would make the resume-correctness checks below indistinguishable
+    # between the bug and the fix (setup(load=0) wipes everything and
+    # falls through to fresh-start, so the artifact diff disappears).
+    # 100ms-per-step emulator gives us comfortable margin; the gate
+    # itself fails fast (5s timeout) so a real regression that hangs
+    # the solver before the first advance still surfaces.
     dh.com.run()
     saw_running = False
+    gate_deadline = __import__('time').time() + 5.0
+    while __import__('time').time() < gate_deadline:
+        dh.facade.engine.dispatch(dh.events.PollTick())
+        dh.facade.tick()
+        if dh.facade.engine.state.solver.name == "RUNNING":
+            saw_running = True
+        if dh.facade.engine.state.frame >= 1:
+            break
+        __import__('time').sleep(0.05)
+    if dh.facade.engine.state.frame < 1:
+        raise RuntimeError(
+            "save-resume gate: solver never advanced past frame 0 "
+            f"within 5s (frame={dh.facade.engine.state.frame}, "
+            f"solver={dh.facade.engine.state.solver.name})"
+        )
     dh.facade.engine.dispatch(dh.events.SaveAndQuitRequested())
     save_dispatched = True
-    dh.log("save_and_quit dispatched immediately after run()")
+    dh.log(f"save_and_quit dispatched at frame={dh.facade.engine.state.frame}")
     deadline = __import__('time').time() + 90.0
     while __import__('time').time() < deadline:
         dh.facade.engine.dispatch(dh.events.PollTick())
@@ -117,6 +154,29 @@ try:
         {"solver": dh.facade.engine.state.solver.name},
     )
 
+    # Catches the response/scene_info.rs regression where
+    # scan_output_progress scanned save_*.bin (a filename pattern
+    # nothing on disk uses) instead of state_<N>.bin.gz.
+    scene_info = dh.com.response.get("scene_info", {})
+    last_saved_str = str(scene_info.get("Last Saved", ""))
+    dh.record(
+        "scene_info_last_saved_matches",
+        last_saved_str == str(saved_frame),
+        {"reported": last_saved_str, "expected": str(saved_frame),
+         "scene_info_keys": sorted(scene_info.keys())},
+    )
+
+    # Capture vert_<saved_frame>.bin's mtime so we can assert across
+    # the resume that the solver loaded the checkpoint instead of
+    # wiping it and starting fresh. With the --load=-1 regression in
+    # solver/main.rs, setup() runs remove_files starting at index 0
+    # and the fresh restart re-writes vert_0..N -- the mtime bumps.
+    saved_vert_path = os.path.join(output_dir, f"vert_{saved_frame}.bin")
+    saved_vert_mtime_before = (
+        os.path.getmtime(saved_vert_path)
+        if os.path.isfile(saved_vert_path) else None
+    )
+
     dh.settle_idle(timeout=10.0)
     saw_running_resume = dh.resume_and_wait(timeout=90.0)
     dh.record(
@@ -127,6 +187,25 @@ try:
          "saw_running": saw_running_resume},
     )
     dh.log(f"resumed solver={dh.facade.engine.state.solver.name}")
+
+    # Catches the --load=-1 fresh-start regression: a real resume
+    # leaves vert_<saved_frame>.bin untouched (setup() only deletes
+    # frames > saved_frame); a fresh restart wipes and rewrites it,
+    # bumping mtime.
+    saved_vert_mtime_after = (
+        os.path.getmtime(saved_vert_path)
+        if os.path.isfile(saved_vert_path) else None
+    )
+    dh.record(
+        "saved_vert_preserved_across_resume",
+        (saved_vert_mtime_before is not None
+         and saved_vert_mtime_after is not None
+         and abs(saved_vert_mtime_after - saved_vert_mtime_before) < 0.001),
+        {"path": saved_vert_path,
+         "before": saved_vert_mtime_before,
+         "after": saved_vert_mtime_after,
+         "saved_frame": saved_frame},
+    )
 
     dh.force_frame_query(expected_frames=FRAME_COUNT - 1, timeout=10.0)
     dh.settle_idle(timeout=15.0)

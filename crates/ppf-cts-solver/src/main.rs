@@ -48,7 +48,32 @@ extern "C" fn print_rust(message: *const libc::c_char) {
 }
 
 fn main() {
-    let program_args = ProgramArgs::parse();
+    let mut program_args = ProgramArgs::parse();
+    // `--load -1` is the "resume from latest checkpoint" sentinel the
+    // server emits when the user clicks Resume (see
+    // ppf-cts-server::executor::solver::launch_solver). The rest of
+    // this binary keys off `program_args.load > 0` for the resume
+    // path, so resolve the sentinel to a real frame index before
+    // anything reads it. Without this, `--load -1` falls into the
+    // fresh-start branch *and* trips `remove_files("vert"|"state",
+    // ...)` in `setup()` starting at index 0, which destroys the
+    // very checkpoint and vert frames the user wanted to resume from.
+    if program_args.load < 0 {
+        let output_dir = std::path::Path::new(&program_args.output);
+        let saved = ppf_cts_core::datamodel::list_saved_states(output_dir);
+        match saved.into_iter().max() {
+            Some(n) => {
+                program_args.load = n as i32;
+            }
+            None => {
+                eprintln!(
+                    "--load {} (resume from latest) but no state_<N>.bin.gz found in {}",
+                    program_args.load, program_args.output
+                );
+                std::process::exit(1);
+            }
+        }
+    }
     let info = git_info::get();
     info!(
         "git branch: {}",

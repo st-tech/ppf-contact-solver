@@ -18,7 +18,7 @@
 use std::collections::HashMap;
 
 use ppf_cts_core::events::Event;
-use ppf_cts_formats::files::{DATA_PICKLE, PARAM_PICKLE};
+use ppf_cts_formats::files::{DATA_PICKLE, PARAM_PICKLE, SCENE_INFO_JSON};
 use serde_json::Value;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -220,6 +220,17 @@ fn reconcile_project_from_disk(name: &str, root: &str) -> Event {
     };
     let data_hash = crate::upload::read_data_hash(&root_path);
     let param_hash = crate::upload::read_param_hash(&root_path);
+    // BuildMetadata is the only event that normally sets total_frames,
+    // and it only fires during a fresh build. So a re-select of a
+    // previously-built project (typically the connect probe routing
+    // through __probe__ and back to the real project) leaves
+    // total_frames at 0 -- which makes the response shape suppress
+    // the progress field entirely (shape::insert_progress requires
+    // total_frames > 0), and the addon's progress bar sits at 0.
+    // Read it back from scene_info.json's "Total Frames" so the
+    // transition layer can rehydrate the field without forcing a
+    // rebuild.
+    let total_frames = read_total_frames_from_scene_info(&root_path);
 
     Event::ProjectSelected {
         name: name.to_string(),
@@ -231,7 +242,28 @@ fn reconcile_project_from_disk(name: &str, root: &str) -> Event {
         upload_id,
         data_hash,
         param_hash,
+        total_frames,
     }
+}
+
+/// Parse `<root>/scene_info.json`'s `"Total Frames"` string into an
+/// `i32`. Returns 0 when the file is missing, malformed, or the field
+/// is absent / unparseable -- same fallback the transition uses for a
+/// just-uploaded project that has never been built.
+fn read_total_frames_from_scene_info(root: &std::path::Path) -> i32 {
+    let path = root.join(SCENE_INFO_JSON);
+    let text = match std::fs::read_to_string(&path) {
+        Ok(s) => s,
+        Err(_) => return 0,
+    };
+    let v: serde_json::Value = match serde_json::from_str(&text) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    v.get("Total Frames")
+        .and_then(|x| x.as_str())
+        .and_then(|s| s.replace(',', "").parse::<i32>().ok())
+        .unwrap_or(0)
 }
 
 /// Map a TCMD `request` string to an engine `Event`.

@@ -31,6 +31,13 @@ pub enum Event {
         upload_id: String,
         data_hash: String,
         param_hash: String,
+        /// `Total Frames` from scene_info.json when readable; 0 when
+        /// the project has never been built (no scene_info.json yet)
+        /// or the field is missing/unparseable. Lets a reconnect (or
+        /// any other re-select) rehydrate state.total_frames from
+        /// disk so the progress bar keeps working after the connect
+        /// probe's `--name __probe__` transition cleared the field.
+        total_frames: i32,
     },
 
     /// Client requested a scene build.

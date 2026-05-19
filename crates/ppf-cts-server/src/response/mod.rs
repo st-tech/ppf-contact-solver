@@ -344,15 +344,16 @@ mod tests {
             serde_json::to_string(&static_info).unwrap(),
         )
         .unwrap();
-        // The solver writes `vert_*.bin` / `save_*.bin` under
-        // `<root>/session/output/`.
+        // The solver writes `vert_<N>.bin` (per-frame exports) and
+        // `state_<N>.bin.gz` (resume checkpoints) under
+        // `<root>/session/output/`. "Last Saved" reflects the latter.
         let output = dir.path().join("session").join("output");
         std::fs::create_dir_all(&output).unwrap();
         std::fs::write(output.join("vert_0.bin"), b"").unwrap();
         std::fs::write(output.join("vert_1.bin"), b"").unwrap();
         std::fs::write(output.join("vert_2.bin"), b"").unwrap();
-        std::fs::write(output.join("save_5.bin"), b"").unwrap();
-        std::fs::write(output.join("save_12.bin"), b"").unwrap();
+        std::fs::write(output.join("state_5.bin.gz"), b"").unwrap();
+        std::fs::write(output.join("state_12.bin.gz"), b"").unwrap();
 
         let s = ServerState {
             root: dir.path().to_string_lossy().into_owned(),

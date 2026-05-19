@@ -36,6 +36,7 @@ fn new_project_no_data() {
             upload_id: String::new(),
             data_hash: String::new(),
             param_hash: String::new(),
+            total_frames: 0,
         },
     );
     assert_eq!(s2.name, "test");
@@ -59,6 +60,7 @@ fn new_project_with_data() {
             upload_id: String::new(),
             data_hash: String::new(),
             param_hash: String::new(),
+            total_frames: 0,
         },
     );
     assert_eq!(s2.data, Data::Uploaded);
@@ -81,6 +83,7 @@ fn new_project_with_existing_app() {
             upload_id: String::new(),
             data_hash: String::new(),
             param_hash: String::new(),
+            total_frames: 0,
         },
     );
     assert_eq!(s2.build, Build::Built);
@@ -111,6 +114,7 @@ fn same_project_refreshes_data() {
             upload_id: String::new(),
             data_hash: String::new(),
             param_hash: String::new(),
+            total_frames: 0,
         },
     );
     assert_eq!(s2.data, Data::Uploaded);
@@ -132,6 +136,7 @@ fn project_selected_stamps_upload_id() {
             upload_id: "abc123".into(),
             data_hash: String::new(),
             param_hash: String::new(),
+            total_frames: 0,
         },
     );
     assert_eq!(s2.upload_id, "abc123");
@@ -158,6 +163,7 @@ fn same_project_refreshes_upload_id() {
             upload_id: "new".into(),
             data_hash: String::new(),
             param_hash: String::new(),
+            total_frames: 0,
         },
     );
     assert_eq!(s2.upload_id, "new");
@@ -861,4 +867,111 @@ fn external_solver_adopt_skipped_when_solver_already_running() {
     );
     assert_eq!(s2.solver, Solver::Running);
     assert!(fx.is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// ProjectSelected.total_frames rehydration (regression coverage for the
+// progress-bar-stuck-at-0-after-reconnect bug).
+//
+// BuildMetadata is normally the only event that sets state.total_frames,
+// and it only fires during a fresh build. So a re-select of a
+// previously-built project (typically the connect probe routing
+// through __probe__ then back to the real project, or a server restart
+// against an existing project on disk) used to leave total_frames at
+// 0, which made response::shape::insert_progress skip the progress
+// field for the rest of the session. The reconcile_project_from_disk
+// path on the server now reads "Total Frames" from scene_info.json
+// and passes it through ProjectSelected so the transition layer can
+// restore the value without a rebuild.
+
+#[test]
+fn project_selected_carries_total_frames_for_new_project() {
+    // Different-project branch: the disk-derived total_frames flows
+    // straight through. Previously this branch hard-coded
+    // total_frames: 0 and the only way to recover was BuildMetadata
+    // -- which never fires when the project already has app_state.pickle.
+    let (s2, _) = transition(
+        ServerState::default(),
+        Event::ProjectSelected {
+            name: "p".into(),
+            root: "/tmp/p".into(),
+            has_data: true,
+            has_param: true,
+            has_app: true,
+            is_resumable: true,
+            upload_id: String::new(),
+            data_hash: String::new(),
+            param_hash: String::new(),
+            total_frames: 89,
+        },
+    );
+    assert_eq!(s2.total_frames, 89);
+    assert_eq!(s2.build, Build::Built);
+}
+
+#[test]
+fn project_selected_same_project_rehydrates_total_frames_when_lost() {
+    // Same-project branch: the in-memory state lost total_frames
+    // (typically: server restart -> first connect TCMD lands the
+    // project name back on the wire -> reconcile_project_from_disk
+    // re-derives total_frames from scene_info.json). The transition
+    // must adopt the disk-derived value so the progress field
+    // resumes flowing on the next sim run.
+    let s = ServerState {
+        name: "p".into(),
+        root: "/tmp/p".into(),
+        data: Data::Uploaded,
+        build: Build::Built,
+        total_frames: 0,
+        ..Default::default()
+    };
+    let (s2, _) = transition(
+        s,
+        Event::ProjectSelected {
+            name: "p".into(),
+            root: "/tmp/p".into(),
+            has_data: true,
+            has_param: true,
+            has_app: true,
+            is_resumable: true,
+            upload_id: String::new(),
+            data_hash: String::new(),
+            param_hash: String::new(),
+            total_frames: 89,
+        },
+    );
+    assert_eq!(s2.total_frames, 89);
+}
+
+#[test]
+fn project_selected_same_project_does_not_clobber_live_total_frames() {
+    // Inverse of the rehydration case: a same-project re-select
+    // (e.g. an addon TCMD pong against an already-loaded project)
+    // must not let a stale or transiently-zero scene_info.json read
+    // overwrite a live BuildMetadata-derived value. Preserve the
+    // in-memory state.total_frames when it is already non-zero.
+    let s = ServerState {
+        name: "p".into(),
+        root: "/tmp/p".into(),
+        data: Data::Uploaded,
+        build: Build::Built,
+        total_frames: 120,
+        ..Default::default()
+    };
+    let (s2, _) = transition(
+        s,
+        Event::ProjectSelected {
+            name: "p".into(),
+            root: "/tmp/p".into(),
+            has_data: true,
+            has_param: true,
+            has_app: true,
+            is_resumable: true,
+            upload_id: String::new(),
+            data_hash: String::new(),
+            param_hash: String::new(),
+            total_frames: 0,
+        },
+    );
+    assert_eq!(s2.total_frames, 120);
 }
