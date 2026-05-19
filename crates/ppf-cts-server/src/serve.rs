@@ -16,6 +16,45 @@ use crate::executor::EffectExecutor;
 use crate::monitor::spawn_monitor;
 use crate::wire;
 
+/// Clear `HANDLE_FLAG_INHERIT` on the listener's socket handle.
+///
+/// Without this, every child process the server spawns (notably
+/// `ppf-contact-solver.exe` from the solver launcher) inherits the
+/// listen socket on port 9090: Rust's `Command::spawn` defaults to
+/// `bInheritHandles=TRUE` on Windows and tokio's `TcpListener`
+/// doesn't mark sockets non-inheritable. If the parent dies while a
+/// child is still alive, the kernel keeps the port bound -- netstat
+/// shows it as `LISTENING` against a non-existent PID, the next
+/// Connect probes the address and times out (the child isn't running
+/// an accept loop), and the addon surfaces `Port 9090 is in use`.
+///
+/// SOCKET handles are valid HANDLEs for `SetHandleInformation`, per
+/// MSDN's "Windows Sockets" notes. No-op on non-Windows.
+#[cfg(windows)]
+fn mark_listener_no_inherit(listener: &TcpListener) -> std::io::Result<()> {
+    use std::os::raw::c_void;
+    use std::os::windows::io::AsRawSocket;
+
+    type Handle = *mut c_void;
+    const HANDLE_FLAG_INHERIT: u32 = 0x0000_0001;
+    extern "system" {
+        fn SetHandleInformation(h: Handle, dwMask: u32, dwFlags: u32) -> i32;
+    }
+
+    let raw = listener.as_raw_socket();
+    let ok = unsafe { SetHandleInformation(raw as Handle, HANDLE_FLAG_INHERIT, 0) };
+    if ok == 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(not(windows))]
+fn mark_listener_no_inherit(_listener: &TcpListener) -> std::io::Result<()> {
+    Ok(())
+}
+
 /// Bind the listener and run the accept loop until cancelled. The
 /// `cancel` future fires when the host wants graceful shutdown
 /// (Ctrl-C, signal handler).
@@ -29,6 +68,7 @@ pub async fn serve(
     cancel: impl std::future::Future<Output = ()>,
 ) -> std::io::Result<()> {
     let listener = TcpListener::bind(addr).await?;
+    mark_listener_no_inherit(&listener)?;
     let bound = listener.local_addr()?;
     log::info!(target: "ppf::serve", "ppf-cts-server listening on {bound}");
 
@@ -73,6 +113,7 @@ pub async fn bind_listener(
     addr: std::net::SocketAddr,
 ) -> std::io::Result<(TcpListener, std::net::SocketAddr)> {
     let listener = TcpListener::bind(addr).await?;
+    mark_listener_no_inherit(&listener)?;
     let bound = listener.local_addr()?;
     Ok((listener, bound))
 }

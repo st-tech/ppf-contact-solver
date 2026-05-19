@@ -699,7 +699,30 @@ class WinNativeBackend:
         self._process = spawn_win_native_server(self._directory, self._port)
 
     def disconnect(self) -> None:
-        self.stop_server()
+        """Sever the addon's reference to the server without stopping it.
+
+        Matches ``LocalBackend.disconnect``: the server keeps running so a
+        subsequent Connect attaches via the probe path in
+        ``spawn_win_native_server`` instead of trying to spawn a new
+        ``ppf-cts-server.exe`` and colliding with the still-bound port.
+
+        Why this is a no-op rather than a terminate: on Windows the
+        spawned ``ppf-contact-solver.exe`` solver subprocess inherits
+        the listen socket from its parent (Rust's ``Command::spawn``
+        defaults to ``bInheritHandles=TRUE``, tokio's ``TcpListener``
+        doesn't mark sockets non-inheritable). Killing the parent
+        leaves the orphan solver squatting on port 9090: netstat shows
+        it bound to a non-existent PID and the probe times out
+        because no one's accepting, surfacing as ``Port N is in use``
+        on the next Connect attempt.
+
+        Explicit teardown (Stop button) still goes through
+        ``stop_server`` if the user really wants to terminate the
+        server -- this just decouples it from the routine disconnect
+        triggered by ``load_pre`` / atexit / the addon's own
+        DisconnectRequested flow.
+        """
+        return
 
     def is_alive(self) -> bool:
         # Owned process: cheap poll on the Popen handle.

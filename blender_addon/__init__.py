@@ -82,11 +82,16 @@ def _disconnect_on_load(*_args):
 
 
 def _disconnect_at_exit():
-    """atexit hook: disconnect on Blender shutdown so a Windows-native
-    ppf-cts-server.exe subprocess doesn't outlive its parent and become
-    an orphan squatting on its port. Blender doesn't expose a quit_pre
-    handler, so atexit is the only reliable seam to drive a clean
-    disconnect on exit.
+    """atexit hook: clear addon-side connection state on Blender
+    shutdown.
+
+    On Linux/macOS the server is started externally and survives the
+    addon. On Windows native the addon spawns ``ppf-cts-server.exe``,
+    but disconnect is a no-op (see ``WinNativeBackend.disconnect``):
+    the server stays running so a new Blender attaches to it instead
+    of colliding with the orphan listen socket the solver subprocess
+    keeps alive. Users who want the server gone on exit click Stop
+    first.
     """
     try:
         from .core.facade import communicator
