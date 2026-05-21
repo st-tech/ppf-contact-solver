@@ -83,6 +83,7 @@ involving 👚 shells, 🪵 solids and 🪢 rods. All made by [ZOZO, Inc.](https
 - [💼 Commercial Use and Beyond](#-commercial-use-and-beyond)
 - [📬 Contributing](#-contributing)
 - [💬 Participating Discussions](#-participating-discussions)
+- [📨 Reaching the Author](#-reaching-the-author)
 - [🙏 Acknowledgements](#-acknowledgements)
 
 ### 📚 Advanced Contents
@@ -838,6 +839,18 @@ Thank you!
 ## 💬 Participating Discussions
 
 We have opened [GitHub Discussions](https://github.com/st-tech/ppf-contact-solver/discussions) as a place for questions, ideas, and conversations about the solver. Feel free to drop by to ask questions, share your work, or chat with the community.
+
+## 📨 Reaching the Author
+
+This project is owned by [ZOZO, Inc.](https://corp.zozo.com/en/) and maintained by Ryoichi Ando.
+
+For bug reports or feature requests, please open an issue on GitHub. For usage questions, [GitHub Discussions](https://github.com/st-tech/ppf-contact-solver/discussions) is the best place to ask. Either route is the fastest way to reach the author and keeps the conversation searchable for other users.
+
+If you would prefer to reach out privately, you can also email the author at ryoichi.ando@zozo.com.
+
+Please refrain from attaching code patches or other materials that would be considered contributions to this project. Anything you do send is treated under the terms of [CONTRIBUTING.md](./CONTRIBUTING.md): by sending it you agree it is licensed to us and the community under the [Apache License, Version 2.0](./LICENSE) on a royalty-free, unrestricted basis.
+
+If you used this project in a public piece of work, whether a paper, a production credit, or a personal project, the author would like to feature it here. Please send a link to your article, project page, or website (rather than images or clips themselves, since hosting them here may run into licensing issues) and we will be glad to consider linking to it.
 
 ## 🙏 Acknowledgements
 

@@ -8,7 +8,7 @@ The add-on ships with six small example clips that cover a range of motion types
 
 ## Reaching the author
 
-The project is maintained by ZOZO, Inc (https://corp.zozo.com/en/) and authored by Ryoichi Ando. The primary channel for bug reports, feature requests, and usage questions is GitHub issues (https://github.com/st-tech/ppf-contact-solver/issues), which keeps the discussion searchable for other users. For private contact, email ryoichi.ando@zozo.com. If you use the project in a public piece of work (a paper, a production credit, or a personal project), the author would like to feature it in the docs: send a link to the article, project page, or website (rather than images or clips themselves, since hosting them may run into licensing issues).
+The project is maintained by ZOZO, Inc (https://corp.zozo.com/en/) and authored by Ryoichi Ando. The primary channel for bug reports and feature requests is GitHub issues (https://github.com/st-tech/ppf-contact-solver/issues), and usage questions are best asked on GitHub Discussions (https://github.com/st-tech/ppf-contact-solver/discussions); both keep the conversation searchable for other users. For private contact, email ryoichi.ando@zozo.com. If you use the project in a public piece of work (a paper, a production credit, or a personal project), the author would like to feature it in the docs: send a link to the article, project page, or website (rather than images or clips themselves, since hosting them may run into licensing issues).
 
 ## LLM transparency
 

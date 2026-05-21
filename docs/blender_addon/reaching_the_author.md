@@ -2,9 +2,12 @@
 
 This project is owned by **[ZOZO, Inc](https://corp.zozo.com/en/)** and maintained by **Ryoichi Ando**.
 
-For bug reports, feature requests, or usage questions, please
+For bug reports or feature requests, please
 [open an issue on GitHub](https://github.com/st-tech/ppf-contact-solver/issues).
-That is the fastest route and keeps the discussion searchable for other users.
+For usage questions,
+[GitHub Discussions](https://github.com/st-tech/ppf-contact-solver/discussions)
+is the best place to ask. Either route is the fastest way to reach the
+author and keeps the conversation searchable for other users.
 
 If you would prefer to reach out privately, you can also email the author
 at [ryoichi.ando@zozo.com](mailto:ryoichi.ando@zozo.com).
