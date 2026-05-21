@@ -813,6 +813,7 @@ Alongside our [official Blender add-on](#-blender-add-on), the following communi
 - [*New Research Might Have Finally Solved the Clipping Bug*](https://www.live-laugh-love.world/blog/game-collision-bugs-solution/) by LLL Inc.
 - [*New Open-Source Physics Engine For Blender Released*](https://80.lv/articles/new-open-source-physics-engine-for-blender-released) on [80 Level](https://80.lv/).
 - [*The Official Blender Add-on for ZOZO's Contact Solver - An Open-Source Physics Solver*](https://www.pixelsham.com/2026/05/20/the-official-blender-add-on-for-zozos-contact-solver-an-open-source-physics-solver/) on [PixelSham](https://www.pixelsham.com/).
+- [*ZOZO's Contact Solver Blender Add-on 2026*](https://3dnchu.com/archives/zozos-contact-solver-b3d/) (Japanese article) on [3D人-3dnchu-](https://3dnchu.com/).
 
 ### 📣 Sharing Your Work
 
