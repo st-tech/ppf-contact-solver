@@ -82,6 +82,7 @@ involving 👚 shells, 🪵 solids and 🪢 rods. All made by [ZOZO, Inc.](https
   - [📣 Sharing Your Work](#-sharing-your-work)
 - [💼 Commercial Use and Beyond](#-commercial-use-and-beyond)
 - [📬 Contributing](#-contributing)
+- [💬 Participating Discussions](#-participating-discussions)
 - [🙏 Acknowledgements](#-acknowledgements)
 
 ### 📚 Advanced Contents
@@ -807,8 +808,11 @@ Alongside our [official Blender add-on](#-blender-add-on), the following communi
 
 ### 📰 Articles
 
+- [*A New Open-Source Physics Engine for Blender - ZOZO's Contact Solver*](https://www.reddit.com/r/blender/comments/1ti5bbh/a_new_opensource_physics_engine_for_blender_zozos/) on [r/blender](https://www.reddit.com/r/blender/).
 - [*New Simulation Method To Achieve Accuracy In Collision Physics*](https://80.lv/articles/new-simulation-method-to-achieve-accuracy-in-collision-physics) by Amber Rutherford on [80 Level](https://80.lv/).
 - [*New Research Might Have Finally Solved the Clipping Bug*](https://www.live-laugh-love.world/blog/game-collision-bugs-solution/) by LLL Inc.
+- [*New Open-Source Physics Engine For Blender Released*](https://80.lv/articles/new-open-source-physics-engine-for-blender-released) on [80 Level](https://80.lv/).
+- [*The Official Blender Add-on for ZOZO's Contact Solver - An Open-Source Physics Solver*](https://www.pixelsham.com/2026/05/20/the-official-blender-add-on-for-zozos-contact-solver-an-open-source-physics-solver/) on [PixelSham](https://www.pixelsham.com/).
 
 ### 📣 Sharing Your Work
 
@@ -829,6 +833,10 @@ By submitting an Issue or suggestion to this repository, you agree that your con
 
 See [CONTRIBUTING.md](./CONTRIBUTING.md) for details.
 Thank you!
+
+## 💬 Participating Discussions
+
+We have opened [GitHub Discussions](https://github.com/st-tech/ppf-contact-solver/discussions) as a place for questions, ideas, and conversations about the solver. Feel free to drop by to ask questions, share your work, or chat with the community.
 
 ## 🙏 Acknowledgements
 
