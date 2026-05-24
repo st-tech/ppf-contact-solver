@@ -142,7 +142,6 @@ def _sync_all_names(uid: str, new_name: str):
     Identity-carrying strings that get reconciled:
       - AssignedObject.name                  (group membership display)
       - PinVertexGroupItem.name              (composite [obj][vg])
-      - SavedPinGroup.object_name            (keyframe cache display)
       - MergePairItem.object_a / object_b    (snap-pair display)
 
     Not synced here: vertex-group renames.  Those don't change an object's
@@ -170,38 +169,11 @@ def _sync_all_names(uid: str, new_name: str):
                         pin_item.name = encode_vertex_group_identifier(new_name, vg_name)
         root = get_addon_data(scene)
         if hasattr(root, "state"):
-            for grp_entry in root.state.saved_pin_keyframes:
-                if grp_entry.object_uuid == uid and grp_entry.object_name != new_name:
-                    grp_entry.object_name = new_name
             for pair in root.state.merge_pairs:
                 if pair.object_a_uuid == uid and pair.object_a != new_name:
                     pair.object_a = new_name
                 if pair.object_b_uuid == uid and pair.object_b != new_name:
                     pair.object_b = new_name
-    except Exception:
-        pass
-
-
-def _sync_vg_name(uid: str, old_vg: str, new_vg: str):
-    """Sync SavedPinGroup.vertex_group after a VG rename on object *uid*.
-
-    ``encoder/pin.py`` keys saved keyframes by (object_uuid, vertex_group
-    name), so a VG rename without this sync orphans the keyframe cache
-    and silently produces empty pin_anim at encode time.
-    """
-    if old_vg == new_vg:
-        return
-    try:
-        from ..models.groups import get_addon_data
-        scene = bpy.context.scene
-        if not scene:
-            return
-        root = get_addon_data(scene)
-        if not hasattr(root, "state"):
-            return
-        for grp_entry in root.state.saved_pin_keyframes:
-            if grp_entry.object_uuid == uid and grp_entry.vertex_group == old_vg:
-                grp_entry.vertex_group = new_vg
     except Exception:
         pass
 
@@ -234,16 +206,15 @@ def resolve_pin(pin_item) -> "bpy.types.Object | None":
             if updated_obj:
                 from ..models.groups import encode_vertex_group_identifier
                 pin_item.name = encode_vertex_group_identifier(obj.name, vg_name)
-                # VG rename: migrate custom property keys on the object
-                # so _pin_{old} / _embedded_move_{old} don't orphan.
+                # VG rename: migrate the curve pin custom property key so
+                # _pin_{old} doesn't orphan. (The pin-input PC2 cache is
+                # keyed by object UUID, so it needs no rename handling.)
                 if old_vg_name != vg_name:
-                    for prefix in ("_pin_", "_embedded_move_"):
-                        old_key = f"{prefix}{old_vg_name}"
-                        new_key = f"{prefix}{vg_name}"
-                        if old_key in obj and new_key not in obj:
-                            obj[new_key] = obj[old_key]
-                            del obj[old_key]
-                    _sync_vg_name(uid, old_vg_name, vg_name)
+                    old_key = f"_pin_{old_vg_name}"
+                    new_key = f"_pin_{vg_name}"
+                    if old_key in obj and new_key not in obj:
+                        obj[new_key] = obj[old_key]
+                        del obj[old_key]
     except Exception:
         pass
     return obj

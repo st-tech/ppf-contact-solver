@@ -36,7 +36,7 @@ python blender_addon/debug/main.py call <tool> '{"arg":"value"}'
 
 - Connection (12)
 - Group (21)
-- Object operations (18)
+- Object operations (21)
 - Simulation (9)
 - Scene (13)
 - Dynamic parameters (9)
@@ -430,6 +430,33 @@ Remove all static ops from an assigned object.
 
 - **group_uuid**: UUID of STATIC group
 - **object_name**: Name of the assigned object
+
+### capture_static_deformation(group_uuid: str, object_name: str)
+
+Record the per-frame shape of an animated STATIC mesh onto the collider. Use this for STATIC objects whose vertices move because of an Armature modifier, a Lattice or Mesh Deform cage, animated Shape Keys, or a driver that pokes vertex coordinates. The recording runs as a modal operator and continues after this call returns; poll `get_static_deformation_status` to detect completion. Press again any time the underlying animation changes (a new pose, edited action keyframes, a modifier swap). The recording does NOT update on its own.
+
+**Parameters:**
+
+- **group_uuid**: UUID of STATIC group containing the object
+- **object_name**: Name of the assigned mesh to capture
+
+### clear_static_deformation(group_uuid: str, object_name: str)
+
+Discard the recorded deformation cache for one STATIC object. The object returns to the pre-capture state: Capture Deformation becomes the only enabled button on the row, and the next Transfer will refuse to upload the object until a fresh capture is taken.
+
+**Parameters:**
+
+- **group_uuid**: UUID of STATIC group containing the object
+- **object_name**: Name of the assigned mesh
+
+### get_static_deformation_status(group_uuid: str, object_name: str)
+
+Report the deformation-capture state of one STATIC object. Returns three fields: `is_deforming` (True if the object's modifier stack or shape-key animation actually moves vertices over the timeline; when False, Capture Deformation is not needed and the button is grayed out), `has_cache` (True if a deformation cache exists), and `frame_count` (number of frames in the cache, or 0 when absent).
+
+**Parameters:**
+
+- **group_uuid**: UUID of STATIC group containing the object
+- **object_name**: Name of the assigned mesh
 
 ### add_velocity_keyframe(group_uuid: str, object_name: str, frame: int, direction: list[float], speed: float)
 

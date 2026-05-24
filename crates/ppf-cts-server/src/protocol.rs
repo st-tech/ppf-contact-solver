@@ -4,8 +4,8 @@
 // License: Apache v2.0
 //
 // Wire-level protocol constants + framing helpers. Pinned to
-// PROTOCOL_VERSION in lib.rs ("0.03"); the Blender addon expects
-// every byte of these headers exactly as defined here.
+// PROTOCOL_VERSION in lib.rs; the Blender addon expects every byte of
+// these headers exactly as defined here.
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 

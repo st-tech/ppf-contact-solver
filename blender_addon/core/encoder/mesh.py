@@ -11,7 +11,12 @@ import numpy as np
 from mathutils import Vector  # pyright: ignore
 
 from ...models.groups import decode_vertex_group_identifier, get_addon_data, iterate_object_groups
-from ..utils import get_transform_keyframes, get_vertices_in_group, world_matrix
+from ..utils import (
+    get_transform_keyframes,
+    get_vertices_in_group,
+    is_deforming_static_object,
+    world_matrix,
+)
 from . import _swap_axes, _to_solver
 
 
@@ -35,6 +40,11 @@ def compute_mesh_hash(context):
             "edge_count": 0,
             "object_count": sum(1 for obj in group.assigned_objects if obj.included),
             "pin_groups": {},
+            # Per-object hashes of static-deform PC2 sidecars so a re-
+            # capture flips the upload hash even though the rest mesh
+            # topology stayed identical. Keyed by object UUID, value
+            # is (n_frames, n_verts) plus a sha256 of the cache bytes.
+            "static_deform": {},
         }
 
         for assigned in group.assigned_objects:
@@ -66,6 +76,24 @@ def compute_mesh_hash(context):
                 stitch_data = detect_stitch_edges(mesh)
                 if stitch_data is not None:
                     group_hash["edge_count"] += len(stitch_data[0])
+
+            # Static-deform PC2 fingerprint (STATIC group only). Hash
+            # the in-memory cache bytes when present so re-capturing
+            # the modifier stack changes the upload hash; without
+            # this, the encoder would happily ship the OLD cache after
+            # an Armature tweak because the rest mesh is unchanged.
+            if group.object_type == "STATIC" and obj.type == "MESH":
+                from ..pc2 import get_static_deform_cache
+                cache = get_static_deform_cache(obj)
+                if cache is not None:
+                    from ..uuid_registry import get_or_create_object_uuid
+                    obj_uuid = get_or_create_object_uuid(obj)
+                    digest = hashlib.sha256(cache.tobytes()).hexdigest()
+                    group_hash["static_deform"][obj_uuid] = {
+                        "n_frames": int(cache.shape[0]),
+                        "n_verts": int(cache.shape[1]),
+                        "sha256": digest,
+                    }
 
         # Include pin vertex group information
         from ..uuid_registry import resolve_pin as _resolve_pin
@@ -327,9 +355,20 @@ def _encode_obj_inner(context, scene, state, data, curr_frame):
                     stitch_data = None
                     uv = []
                 else:
+                    # STATIC objects with a static-deform cache always
+                    # send canonical (no mesh-ref dedup): each one
+                    # carries its own per-frame vertex buffer, and a
+                    # shared canonical entry would conflate them.
+                    from ..pc2 import has_static_deform_animation
+                    _has_sd = (
+                        group.object_type == "STATIC"
+                        and obj.type == "MESH"
+                        and has_static_deform_animation(obj)
+                    )
+
                     # Deduplication: check if this mesh is a duplicate
                     content_hash = _local_mesh_hash(obj)
-                    if content_hash in canonical_meshes:
+                    if content_hash in canonical_meshes and not _has_sd:
                         # Duplicate: reference the canonical mesh, send only transform
                         mesh_ref = canonical_meshes[content_hash]
                         vert = None
@@ -339,7 +378,8 @@ def _encode_obj_inner(context, scene, state, data, curr_frame):
                     else:
                         # Canonical: extract local-space mesh + transform
                         from ..uuid_registry import get_or_create_object_uuid
-                        canonical_meshes[content_hash] = get_or_create_object_uuid(obj)
+                        if not _has_sd:
+                            canonical_meshes[content_hash] = get_or_create_object_uuid(obj)
                         from ..numpy_mesh_utils import (
                             extract_mesh_to_numpy,
                             triangulate_numpy_mesh,
@@ -353,12 +393,72 @@ def _encode_obj_inner(context, scene, state, data, curr_frame):
 
             info = {}
             if group.object_type == "STATIC":
-                transform_kf = get_transform_keyframes(obj, context, fps)
+                # Static-deform cache wins over fcurves and static_ops:
+                # the depsgraph already composes parent/object fcurves
+                # and modifier deformation into the cache, so the rigid
+                # T/R/S path would double-count if both were emitted.
+                from ..pc2 import (
+                    get_static_deform_cache,
+                    has_static_deform_animation,
+                )
+                _has_sd_cache = (
+                    obj.type == "MESH" and has_static_deform_animation(obj)
+                )
+                if _has_sd_cache:
+                    cache = get_static_deform_cache(obj)
+                    if cache is None or cache.shape[1] == 0 or cache.shape[0] == 0:
+                        raise ValueError(
+                            f"STATIC object '{obj.name}' in group "
+                            f"'{group.name}' has an empty deformation cache; "
+                            "re-run 'Capture Deformation' on this row."
+                        )
+                    if cache.shape[1] != len(mesh.vertices):
+                        raise ValueError(
+                            f"STATIC object '{obj.name}' in group "
+                            f"'{group.name}': deformation cache has "
+                            f"{cache.shape[1]} vertices but the mesh now "
+                            f"has {len(mesh.vertices)}. Edit since the "
+                            "last capture changed the topology; click "
+                            "'Clear Cache' and re-run 'Capture Deformation'."
+                        )
+                    n_frames = int(cache.shape[0])
+                    info["static_deform_animation"] = {
+                        "time": [i / fps for i in range(n_frames)],
+                        "vert_frames": np.ascontiguousarray(
+                            cache, dtype=np.float32,
+                        ),
+                    }
+                else:
+                    # No cache: refuse to silently lose the deformation.
+                    # Matches the existing N-gon / linked-duplicate
+                    # validators in _build_obj_data: hard fail with a
+                    # next-action message.
+                    if (
+                        obj.type == "MESH"
+                        and is_deforming_static_object(obj, context)
+                    ):
+                        raise ValueError(
+                            f"STATIC object '{obj.name}' in group "
+                            f"'{group.name}' has a deforming modifier "
+                            "stack (or shape-key animation) but no "
+                            "deformation cache. Click 'Capture "
+                            "Deformation' on the assigned-object row to "
+                            "record the per-frame mesh, or remove the "
+                            "deformer if the motion shouldn't reach the "
+                            "solver."
+                        )
+
+                transform_kf = (
+                    None if _has_sd_cache
+                    else get_transform_keyframes(obj, context, fps)
+                )
                 if transform_kf is not None:
                     info["transform_animation"] = transform_kf
                 # UI-assigned static ops: find the AssignedObject entry
                 # for this obj and serialize its ops list. Mutually
-                # exclusive with Blender fcurve animation.
+                # exclusive with Blender fcurve animation AND the new
+                # static-deform cache (3-way XOR enforced by the Rust
+                # validator at decode time).
                 from ..uuid_registry import get_or_create_object_uuid as _get_uuid_static
                 _obj_uuid_static = _get_uuid_static(obj)
                 _assigned_static = None
@@ -370,9 +470,11 @@ def _encode_obj_inner(context, scene, state, data, curr_frame):
                     _assigned_static is not None
                     and len(_assigned_static.static_ops) > 0
                     and transform_kf is None
+                    and not _has_sd_cache
                 ):
-                    # Skip if transform_kf is already set — fcurves take
-                    # precedence; the UI warns the user the ops are ignored.
+                    # Skip if transform_kf is already set OR a deform
+                    # cache exists — both take precedence; the UI warns
+                    # the user that ops will be ignored.
                     ops_out = []
                     for op in _assigned_static.static_ops:
                         t_start = (op.frame_start - 1) / fps
@@ -448,6 +550,23 @@ def _encode_obj_inner(context, scene, state, data, curr_frame):
                         info["uv"] = uv
                     if stitch_data is not None:
                         info["stitch"] = stitch_data
+
+            # Case-3 (static-deform pin shell): the cache is in solver
+            # world space, so we override the rest mesh + world matrix
+            # so the pin shell starts AT frame_start's depsgraph pose,
+            # not the bind-pose mesh. Then per-frame MoveBy deltas
+            # (decoder-side) compose into world-space target positions
+            # without needing to re-apply the object's world matrix.
+            if (
+                "static_deform_animation" in info
+                and "vert" in info
+            ):
+                vf = info["static_deform_animation"]["vert_frames"]
+                # vf[0] is the rest pose in solver world space. Use it
+                # as the pin shell's local_vert and reset the world
+                # transform to identity so transform @ local = vf[0].
+                info["vert"] = np.ascontiguousarray(vf[0], dtype=np.float32)
+                info["transform"] = np.eye(4, dtype=np.float64)
 
             objects_info.append(info)
 

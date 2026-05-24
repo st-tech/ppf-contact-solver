@@ -12,13 +12,38 @@ import subprocess
 # Must match crates/ppf-cts-server/src/lib.rs:PROTOCOL_VERSION.
 # A mismatch trips transitions.py's strict-equality protocol check.
 #
+# BUMP THIS whenever the data / param payload schema OR the
+# addon-encoder / frontend-decoder contract changes. The handshake is
+# the only thing that catches an addon paired with a server whose
+# frontend decoder disagrees about payload shape; an un-bumped version
+# there silently mis-decodes instead of erroring.
+#
+# 0.06: deforming STATIC mesh colliders. A STATIC object whose
+# modifier stack deforms vertices (Armature, MeshDeform, Lattice,
+# shape keys, etc.) can now carry a static_deform_animation payload
+# alongside vert / transform: a per-frame absolute vertex buffer in
+# solver world space, captured from Blender's depsgraph via the new
+# Capture Deformation operator. The decoder builds a zero-stiffness
+# pin shell whose every vertex is driven by MoveByOperation segments
+# derived from consecutive frames, just like the per-vertex pin
+# animation in 0.05 but spanning the whole mesh. Mutually exclusive
+# with transform_animation and static_ops; an old decoder would
+# ignore the new field and play the rest-pose mesh.
+#
+# 0.05: keyframed pin animation. param.pin_config[uuid] stays
+# {vertex_index: PinData}, but each PinData now carries its own
+# single-entry pin_anim ({that_vertex: PinAnim}) and the frontend
+# decoder builds genuine per-vertex MoveByOperation deltas from it
+# instead of broadcasting one vertex's track. An old decoder would
+# treat the new payload as a rigid translation.
+#
 # 0.04: TCMD requests carry a 4-byte big-endian length prefix between
 # the b"TCMD" header and the payload, replacing the prior wire that
 # relied on shutdown(SHUT_WR) as the end-of-input signal. Windows
 # tokio did not deliver that half-close to the server's AsyncRead, so
 # the server hung in its read loop and connections piled up in
 # FIN_WAIT_2 until the server stopped responding entirely.
-PROTOCOL_VERSION = "0.04"
+PROTOCOL_VERSION = "0.06"
 HEADER_TEXT_CMD = b"TCMD"
 HEADER_BINARY_DATA = b"BDAT"
 HEADER_JSON_DATA = b"JSON"

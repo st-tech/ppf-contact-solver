@@ -621,6 +621,20 @@ np.savez({output_path!r}, vert=vert, tet=tet)
                 1e-15,
             )
 
+            # fTetWild can return zero tets (or only-degenerate tets that
+            # were filtered above) when the input mesh has no enclosed
+            # volume, e.g. a single flat plane assigned to a SOLID group.
+            # Without this guard the next call would feed an empty
+            # surface into ``frame_mapping`` and panic with
+            # "index out of bounds: the len is 0 but the index is 0".
+            if tet.shape[0] == 0:
+                raise ValueError(
+                    "Tetrahedralization produced no tetrahedra: the input mesh "
+                    "has no enclosed volume (likely flat, coplanar, or "
+                    "non-manifold). Assign thin or open surfaces to a SHELL "
+                    "group instead of SOLID."
+                )
+
             tri_indices, coefs = _frame_mapping(self[0], vert, tri)
 
             np.savez(

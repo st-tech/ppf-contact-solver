@@ -138,7 +138,7 @@ Functions (all in `core/transform.py`, re-exported by `core/utils.py` and `core/
 
 ### Communication Protocol
 
-- Protocol version: `0.03` (constant `PROTOCOL_VERSION`)
+- Protocol version: defined by `PROTOCOL_VERSION` in `core/protocol.py`; the server must report the same string or the handshake fails. The current value is intentionally not duplicated here.
 - Transport: TCP socket with chunked binary transfer (default chunk size 32KB)
 - Headers: `TCMD` (text command query), `BDAT` (binary data, unused), `JSON` (JSON-prefixed binary)
 - Data serialization: CBOR envelopes for mesh/param data, with the schema defined in `crates/ppf-cts-formats` (`envelope.rs` + `kinds/`); the addon emits them via `core/encoder/cbor_encode.py` and `ppf-cts-server` decodes them. On-disk filenames stay `data.pickle` / `param.pickle` for back-compat with existing project layouts.
@@ -204,7 +204,7 @@ The `Communicator` class manages all remote operations in a background daemon th
 
 #### `protocol.py` - Wire Protocol
 
-**Constants:** `PROTOCOL_VERSION = "0.03"`, `HEADER_TEXT_CMD = b"TCMD"`, `HEADER_BINARY_DATA = b"BDAT"`, `HEADER_JSON_DATA = b"JSON"`, `DEFAULT_CHUNK_SIZE = 32 * 1024`
+**Constants:** `PROTOCOL_VERSION` (string, see source of truth in this file), `HEADER_TEXT_CMD = b"TCMD"`, `HEADER_BINARY_DATA = b"BDAT"`, `HEADER_JSON_DATA = b"JSON"`, `DEFAULT_CHUNK_SIZE = 32 * 1024`
 
 **Functions:**
 - `open_server_channel(connection)` - factory that returns a connected socket (local/docker) or SSH channel depending on connection type; used by `send_query`, `_data_send`, `_data_receive`
@@ -308,7 +308,7 @@ Functions: `load_profiles(path) -> dict`, `get_profile_names(path) -> list[str]`
 #### Other Core Files
 
 - **`reload_server.py`**: `ReloadServer` class - TCP server on port 8765. Commands: `"reload"` (disables addon, invalidates modules from sys.modules, re-enables), `"execute"` (exec arbitrary Python), `"start_mcp"` (starts MCP server). Module functions: `start_reload_server(port)`, `stop_reload_server()`, `trigger_reload_now()`.
-- **`module.py`**: `import_module(name)` - imports from lib/ directory, supports dotted names. `install_module(packages)` - async pip install to lib/ in background thread.
+- **`module.py`**: `get_install_target()` returns Blender's user `scripts/addons/modules/` dir. `import_module(name)` resolves via `importlib.import_module`. `install_module(packages)` does an async pip install (`--target` = the install target) on a background thread.
 - **`ssh_config.py`**: `resolve_ssh_config(host, default_port=22) -> SSHConfigEntry` - parses `~/.ssh/config` with Include/glob support, first-match semantics.
 - **`numpy_mesh_utils.py`**: `extract_mesh_to_numpy(mesh)`, `triangulate_numpy_mesh(verts, faces)`, `triangulate_uv_data(mesh, tri_faces)`. NumPy helpers used by `encoder/mesh.py` to triangulate tri/quad/n-gon meshes and match UVs.
 - **`curve_rod.py`**: `sample_curve(obj, world_matrix) -> (verts, edges, params_data)` samples Bezier/NURBS/Poly curves into rod vertices. Bezier uses one sample per CP (edge length = CP spacing); NURBS samples each arc at four `t` values because NURBS CPs are off-curve. `build_fit_cache(obj) -> (cache_list, params_data)` precomputes per-spline data once per fetch; `apply_fit_cached(sim_pos, cache_entry)` writes simulated positions back into Blender's CV layout per frame (identity write for Bezier, weighted-pseudoinverse matmul for NURBS, slice for POLY). `map_cp_pins_to_sampled(obj, cp_indices)` maps global CP pin indices to sampled-vertex indices for the encoder.
@@ -446,13 +446,13 @@ Panel `MAIN_PT_RemotePanel` in VIEW_3D sidebar. Displays:
 
 #### `ui/solver.py` - Solver Panel & Operators
 
-Defines `TransferRequestMixin` (shared by `SOLVER_OT_Transfer` and `DEBUG_OT_TransferWithoutBuild`) with `request_data_send`, `request_param_send`, `request_delete` methods. Both `request_data_send` and `request_param_send` catch `ValueError` from encoding and surface it in the Blender UI via `self.report({"ERROR"}, ...)` and `com.error`.
+Defines `TransferRequestMixin` (used by `DEBUG_OT_TransferWithoutBuild`) with a `request_delete` method that issues the wire `{"request": "delete"}`. `SOLVER_OT_Transfer` does NOT use it: Transfer is upload-only and leaves cached artifacts (tetrahedralization, BVH, mesh caches) intact; a separate `SOLVER_OT_DeleteRemoteData` operator is the dedicated wipe button.
 
 Panel `SSH_PT_SolverPanel`. Key operators:
 
 | Operator | bl_idname | Timeout | Description |
 |----------|-----------|---------|-------------|
-| Transfer | `solver.transfer` | 300s | Multi-stage: delete existing -> send mesh -> send params -> build |
+| Transfer | `solver.transfer` | 300s | Upload data.pickle + param.pickle atomically; preserves remote caches |
 | Run | `solver.run` | 86400s (24h) | Validates mesh hash, clears animation, starts simulation |
 | Resume | `solver.resume` | 86400s | Resumes paused simulation |
 | UpdateParams | `solver.update_params` | 120s | Re-sends parameters and rebuilds |

@@ -72,6 +72,15 @@ fn fixed_session_param_snapshot_is_independent() {
     ));
 }
 
+// PathBuf::join uses the host OS separator (``/`` on POSIX, ``\`` on
+// Windows). The shell-script templates pass paths through Path::display
+// which preserves whatever separator PathBuf produced, so any test
+// asserting the exact path content is implicitly host-OS-specific.
+// Gate the Unix-host assertions with #[cfg(unix)] and the Windows-host
+// assertions with #[cfg(windows)] so ``cargo test`` works on every host;
+// each branch's template is still exercised on its native CI runner.
+
+#[cfg(unix)]
 #[test]
 fn unix_script_has_shebang_and_path_args() {
     let s = Session::new("app", "demo", "/tmp/app", "/tmp/proj", "/tmp/data");
@@ -79,10 +88,40 @@ fn unix_script_has_shebang_and_path_args() {
     let script = shell_command_script(&s, &fs, Platform::Unix);
     assert!(script.starts_with("#!/bin/bash"));
     assert!(script.contains("/tmp/proj/target/release/ppf-contact-solver"));
-    assert!(script.contains("--path /tmp/app/demo"));
-    assert!(script.contains("--output /tmp/app/demo/output"));
+    // Path values are double-quoted so spaces in project root don't
+    // get word-split by the shell before reaching clap.
+    assert!(script.contains(r#"--path "/tmp/app/demo""#));
+    assert!(script.contains(r#"--output "/tmp/app/demo/output""#));
     // Variadic forwarding for extra solver args.
     assert!(script.contains("\"$@\""));
+}
+
+#[cfg(unix)]
+#[test]
+fn unix_script_quotes_paths_with_spaces() {
+    let s = Session::new("My App", "demo", "/tmp/has space", "/tmp/has space/proj", "/tmp/has space/data");
+    let fs = FixedSession::from_session(&s);
+    let script = shell_command_script(&s, &fs, Platform::Unix);
+    // Both path args must reach the solver as a single argv entry.
+    assert!(script.contains(r#"--path "/tmp/has space/demo""#));
+    assert!(script.contains(r#"--output "/tmp/has space/demo/output""#));
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_script_quotes_paths_with_spaces() {
+    let s = Session::new(
+        "My App", "demo",
+        "C:\\New Folder\\app",
+        "C:\\New Folder\\proj",
+        "C:\\New Folder\\data",
+    );
+    let fs = FixedSession::from_session(&s);
+    let script = shell_command_script(&s, &fs, Platform::Windows);
+    // Path values are wrapped in double quotes so cmd doesn't split
+    // "C:\New Folder\app\demo" on the embedded space.
+    assert!(script.contains(r#"--path "C:\New Folder\app\demo""#));
+    assert!(script.contains(r#"--output "C:\New Folder\app\demo\output""#));
 }
 
 #[test]
@@ -626,12 +665,26 @@ fn solver_subprocess_command_per_platform() {
     let p = std::path::Path::new("/tmp/session/command.sh");
     assert_eq!(
         solver_subprocess_command(p, 0, Platform::Unix),
-        "bash /tmp/session/command.sh --load 0"
+        r#"bash "/tmp/session/command.sh" --load 0"#
     );
     let p = std::path::Path::new("C:\\session\\command.bat");
     assert_eq!(
         solver_subprocess_command(p, 5, Platform::Windows),
         "\"C:\\session\\command.bat\" --load 5"
+    );
+}
+
+#[test]
+fn solver_subprocess_command_handles_spaces_in_path() {
+    let p = std::path::Path::new("/home/user/My Project/session/command.sh");
+    assert_eq!(
+        solver_subprocess_command(p, 0, Platform::Unix),
+        r#"bash "/home/user/My Project/session/command.sh" --load 0"#
+    );
+    let p = std::path::Path::new("C:\\New Folder\\session\\command.bat");
+    assert_eq!(
+        solver_subprocess_command(p, 7, Platform::Windows),
+        "\"C:\\New Folder\\session\\command.bat\" --load 7"
     );
 }
 
@@ -753,7 +806,19 @@ fn ffmpeg_video_command_matches_python_template() {
     assert!(cmd.contains("\"/usr/bin/ffmpeg\""));
     assert!(cmd.contains("frame_%d.ply.png"));
     assert!(cmd.contains("-c:v libx264"));
-    assert!(cmd.contains("frame.mp4"));
+    // vid_name is double-quoted, not bare, so spaces survive the shell.
+    assert!(cmd.contains("\"frame.mp4\""));
+}
+
+#[test]
+fn ffmpeg_video_command_handles_spaces_in_paths() {
+    let cmd = ffmpeg_video_command(
+        std::path::Path::new("/My Apps/bin/ffmpeg"),
+        "ply",
+        "out frame.mp4",
+    );
+    assert!(cmd.contains("\"/My Apps/bin/ffmpeg\""));
+    assert!(cmd.contains("\"out frame.mp4\""));
 }
 
 #[test]

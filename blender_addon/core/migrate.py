@@ -29,7 +29,7 @@ def needs_migration() -> str:
     )
 
     scene = bpy.context.scene
-    counts = {"groups": 0, "objects": 0, "pins": 0, "pairs": 0, "keyframes": 0}
+    counts = {"groups": 0, "objects": 0, "pins": 0, "pairs": 0}
 
     for group in iterate_active_object_groups(scene):
         if not group.uuid:
@@ -55,21 +55,6 @@ def needs_migration() -> str:
                         counts["pairs"] += 1
                 except (json.JSONDecodeError, ValueError):
                     pass
-        from .uuid_registry import get_object_by_uuid
-        orphaned_keyframe_idx = []
-        for i, grp_entry in enumerate(state.saved_pin_keyframes):
-            # Drop orphaned entries whose UUID no longer resolves — likely
-            # a leftover from a deleted/renamed object in a previous file.
-            if grp_entry.object_uuid and not get_object_by_uuid(grp_entry.object_uuid):
-                orphaned_keyframe_idx.append(i)
-                continue
-            # Legacy shapes: no UUID, or UUID set but vg_hash missing.
-            if grp_entry.object_name and (
-                not grp_entry.object_uuid or not grp_entry.vg_hash
-            ):
-                counts["keyframes"] += 1
-        for i in reversed(orphaned_keyframe_idx):
-            state.saved_pin_keyframes.remove(i)
 
     total = sum(counts.values())
     if total == 0:
@@ -86,7 +71,6 @@ def migrate_legacy_data() -> str:
     - PinVertexGroupItems (pin references)
     - MergePairItems (snap/stitch pairs)
     - Cross-stitch JSON embedded in merge pairs
-    - SavedPinGroups (keyframe data)
 
     Returns a summary string.
     """
@@ -104,7 +88,6 @@ def migrate_legacy_data() -> str:
         migrated_objects = []
         migrated_pins = []
         migrated_pairs = []
-        migrated_keyframes = []
         migrated_groups = []
 
         for group in iterate_active_object_groups(scene):
@@ -201,31 +184,11 @@ def migrate_legacy_data() -> str:
                     except (json.JSONDecodeError, Exception):
                         pass
 
-            # Saved pin keyframes — populate object_uuid and vg_hash so the
-            # rename/hash resolution machinery works for restored data too.
-            for grp_entry in state.saved_pin_keyframes:
-                if not grp_entry.object_name:
-                    continue
-                obj = bpy.data.objects.get(grp_entry.object_name)
-                if not obj:
-                    continue
-                if not grp_entry.object_uuid:
-                    grp_entry.object_uuid = get_or_create_object_uuid(obj)
-                    migrated_keyframes.append(grp_entry.object_name)
-                if not grp_entry.vg_hash and grp_entry.vertex_group:
-                    h = compute_vg_hash(obj, grp_entry.vertex_group)
-                    if h:
-                        grp_entry.vg_hash = str(h)
-                        migrated_keyframes.append(
-                            f"{grp_entry.object_name}:{grp_entry.vertex_group}:hash"
-                        )
-
         total = (
             len(migrated_groups)
             + len(migrated_objects)
             + len(migrated_pins)
             + len(migrated_pairs)
-            + len(migrated_keyframes)
         )
         if total > 0:
             parts = []
@@ -237,10 +200,9 @@ def migrate_legacy_data() -> str:
                 parts.append(f"pins: {', '.join(migrated_pins)}")
             if migrated_pairs:
                 parts.append(f"pairs: {', '.join(migrated_pairs)}")
-            if migrated_keyframes:
-                parts.append(f"keyframes: {', '.join(migrated_keyframes)}")
             return f"Migrated {total} items ({'; '.join(parts)}). Save to persist."
         return "No migration needed — all items already have UUIDs."
 
     except Exception as e:
         return f"Migration error: {e}"
+

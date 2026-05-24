@@ -9,8 +9,8 @@ import bpy  # pyright: ignore
 import numpy as np
 from mathutils import Vector  # pyright: ignore
 
-from ...models.groups import decode_vertex_group_identifier, get_addon_data
-from ..utils import get_vertices_in_group, parse_vertex_index, world_matrix
+from ...models.groups import decode_vertex_group_identifier
+from ..utils import get_vertices_in_group, world_matrix
 from . import _swap_axes, _to_solver
 
 
@@ -84,9 +84,70 @@ def _max_towards_center(obj, vg_name, state, direction, frame=None, eps=1e-3):
     return centroid.tolist()
 
 
+_PIN_VERTEX_CO_RGX = None  # lazy-initialized in the collector below
+
+
+def _collect_pin_vertex_fcurve_frames(obj, vg_name):
+    """Walk ``obj.data.animation_data.action`` for vertex-co fcurves on
+    pinned vertices. Returns ``(sorted_unique_frames, lookup)`` where
+    ``lookup`` is ``{(vertex_index, axis_index): fcurve}``. Both
+    Blender 5.x layered actions and the legacy flat layout are
+    supported. Returns ``([], {})`` when no animation data or no
+    matching fcurves exist.
+    """
+    import re
+
+    global _PIN_VERTEX_CO_RGX
+    if _PIN_VERTEX_CO_RGX is None:
+        _PIN_VERTEX_CO_RGX = re.compile(r"vertices\[(\d+)\]\.co$")
+    rgx = _PIN_VERTEX_CO_RGX
+
+    ad = obj.data.animation_data
+    action = ad.action if ad is not None else None
+    if action is None:
+        return [], {}
+
+    pinned = set(_get_pin_indices(obj, vg_name))
+    if not pinned:
+        return [], {}
+
+    lookup: dict[tuple[int, int], object] = {}
+    frames: set[int] = set()
+
+    def consume(fc):
+        m = rgx.match(fc.data_path)
+        if m is None:
+            return
+        ai = fc.array_index
+        if not (0 <= ai < 3):
+            return
+        vi = int(m.group(1))
+        if vi not in pinned:
+            return
+        lookup[(vi, ai)] = fc
+        for kp in fc.keyframe_points:
+            f = int(round(kp.co[0]))
+            if f >= 1:
+                frames.add(f)
+
+    if hasattr(action, "layers") and len(action.layers) > 0:
+        for layer in action.layers:
+            for strip in layer.strips:
+                for slot in action.slots:
+                    cb = strip.channelbag(slot)
+                    if cb is None:
+                        continue
+                    for fc in cb.fcurves:
+                        consume(fc)
+    elif hasattr(action, "fcurves"):
+        for fc in action.fcurves:
+            consume(fc)
+
+    return sorted(frames), lookup
+
+
 def _encode_pin_config(context, groups, state):
     """Encode pin vertex group config and animation."""
-    scene = context.scene
     fps = (
         bpy.context.scene.render.fps
         if state.use_frame_rate_in_output
@@ -100,7 +161,11 @@ def _encode_pin_config(context, groups, state):
             continue
         for pin_item in group.pin_vertex_groups:
             has_operations = len(pin_item.operations) > 0
-            if not pin_item.use_pin_duration and not pin_item.use_pull and not has_operations:
+            # EMBEDDED_MOVE (the fcurve-keyframed-pin sentinel) lives
+            # in ``operations``, so ``has_operations`` already covers
+            # the keyframed-pin case alongside Move/Spin/Scale/Torque.
+            if (not pin_item.use_pin_duration and not pin_item.use_pull
+                    and not has_operations):
                 continue
             from ..uuid_registry import resolve_pin, get_or_create_object_uuid
             obj = resolve_pin(pin_item)
@@ -113,59 +178,46 @@ def _encode_pin_config(context, groups, state):
             if not _get_pin_indices(obj, vg_name):
                 continue
             obj_uuid = get_or_create_object_uuid(obj)
+            has_embedded_move = any(
+                op.op_type == "EMBEDDED_MOVE" for op in pin_item.operations
+            )
+            if has_embedded_move and obj.type != "MESH":
+                raise ValueError(
+                    f"Pin '{vg_name}' on '{obj_name}': keyframed pin "
+                    "animation is only supported for mesh objects"
+                )
+            # Keyframed pin animation composes cleanly with Move/Spin/
+            # Scale via ``embedded_move_index`` (the decoder splices
+            # the per-vertex pin_anim track in among the explicit
+            # ops). Only Torque is genuinely incompatible, since it
+            # shares the per-pin force-vs-kinematic switch the
+            # kinematic ops use.
+            if has_embedded_move and has_operations:
+                if any(op.op_type == "TORQUE" for op in pin_item.operations):
+                    raise ValueError(
+                        f"Pin '{vg_name}' on '{obj_name}': keyframed pin "
+                        "animation cannot be combined with Torque operations"
+                    )
             cfg = {}
-            saved_col = get_addon_data(scene).state.saved_pin_keyframes
             if pin_item.use_pin_duration:
                 cfg["unpin_time"] = float(pin_item.pin_duration) / fps
             if pin_item.use_pull:
                 cfg["pull_strength"] = float(pin_item.pull_strength)
-            # Detect embedded move from operations list (synced from F-curves by UI).
-            # Reject >1 — each pin gets at most one embedded move because the
-            # decoder uses the single slot keyed on embedded_move_index.
-            embedded_move_count = sum(
-                1 for op in pin_item.operations if op.op_type == "EMBEDDED_MOVE"
-            )
-            if embedded_move_count > 1:
-                raise ValueError(
-                    f"Pin '{vg_name}' on '{obj_name}': more than one "
-                    f"EMBEDDED_MOVE operation is not supported"
-                )
-            has_embedded_move = embedded_move_count == 1
-            if has_operations or has_embedded_move:
+            if has_operations:
                 ops_list = []
-                embedded_move_index = -1
+                # Centroid for CENTROID-mode spin/scale: frame-1 vertex
+                # positions in the no-translation solver frame.
                 centroid_blender = None
-                if has_embedded_move:
-                    # Compute centroid from saved_pin_keyframes (frame 1 values)
-                    for grp_entry in saved_col:
-                        if grp_entry.object_uuid == obj_uuid and grp_entry.vertex_group == vg_name:
-                            rest_pos = {}  # {vertex_idx: [x, y, z]}
-                            for fc_entry in grp_entry.fcurves:
-                                vi = parse_vertex_index(fc_entry.data_path)
-                                if vi is not None and fc_entry.points:
-                                    if vi not in rest_pos:
-                                        rest_pos[vi] = [0.0, 0.0, 0.0]
-                                    rest_pos[vi][fc_entry.array_index] = fc_entry.points[0].value
-                            if rest_pos:
-                                n = len(rest_pos)
-                                cx = sum(p[0] for p in rest_pos.values()) / n
-                                cy = sum(p[1] for p in rest_pos.values()) / n
-                                cz = sum(p[2] for p in rest_pos.values()) / n
-                                centroid_blender = _swap_axes([cx, cy, cz])
-                            break
-                else:
-                    # No embedded move -- compute centroid from frame 1 vertex positions
-                    # Use no-translation matrix (solver adds displacement separately)
-                    pin_indices = _get_pin_indices(obj, vg_name)
-                    if pin_indices:
-                        mat = world_matrix(obj).to_3x3().to_4x4()
-                        positions = [mat @ _get_point_co(obj, i) for i in pin_indices]
-                        n = len(positions)
-                        centroid_blender = [
-                            sum(p[0] for p in positions) / n,
-                            sum(p[1] for p in positions) / n,
-                            sum(p[2] for p in positions) / n,
-                        ]
+                pin_indices = _get_pin_indices(obj, vg_name)
+                if pin_indices:
+                    mat = world_matrix(obj).to_3x3().to_4x4()
+                    positions = [mat @ _get_point_co(obj, i) for i in pin_indices]
+                    n = len(positions)
+                    centroid_blender = [
+                        sum(p[0] for p in positions) / n,
+                        sum(p[1] for p in positions) / n,
+                        sum(p[2] for p in positions) / n,
+                    ]
                 # Validate: torque cannot be mixed with kinematic ops
                 op_types = {o.op_type for o in pin_item.operations}
                 has_torque = "TORQUE" in op_types
@@ -175,34 +227,15 @@ def _encode_pin_config(context, groups, state):
                         f"Pin '{vg_name}' on '{obj_name}': "
                         "torque cannot be mixed with Move/Spin/Scale operations"
                     )
-                # CENTROID center mode bakes the frame-1 centroid at
-                # encode time; EMBEDDED_MOVE then shifts pins per-frame.
-                # The solver doesn't re-compute the centroid as the
-                # pins move, so the two combined silently drift apart.
-                # Reject up front so the user picks one or the other.
-                if has_embedded_move:
-                    for op in pin_item.operations:
-                        if op.op_type == "SPIN" and op.spin_center_mode == "CENTROID":
-                            raise ValueError(
-                                f"Pin '{vg_name}' on '{obj_name}': "
-                                "SPIN with CENTROID center cannot be combined "
-                                "with EMBEDDED_MOVE (centroid is baked at "
-                                "frame 1 and would drift from the moving pin)"
-                            )
-                        if op.op_type == "SCALE" and op.scale_center_mode == "CENTROID":
-                            raise ValueError(
-                                f"Pin '{vg_name}' on '{obj_name}': "
-                                "SCALE with CENTROID center cannot be combined "
-                                "with EMBEDDED_MOVE (centroid is baked at "
-                                "frame 1 and would drift from the moving pin)"
-                            )
                 # Object's solver-space translation (displacement).
                 # Subtract from absolute centers so they match the solver's
                 # untranslated vertex space.
                 disp = world_matrix(obj).to_translation()
-                if has_embedded_move:
-                    embedded_move_index = 0  # always first
-                for op_i, op in enumerate(pin_item.operations):
+                for op in pin_item.operations:
+                    # EMBEDDED_MOVE is the sentinel signaling
+                    # keyframe animation; it has no runtime semantics
+                    # itself, the per-vertex pin_anim track is what
+                    # the solver actually consumes.
                     if op.op_type == "EMBEDDED_MOVE":
                         continue
                     op_dict = {"type": op.op_type.lower()}
@@ -316,54 +349,77 @@ def _encode_pin_config(context, groups, state):
                     ops_list.append(op_dict)
                 if ops_list:
                     cfg["operations"] = ops_list
-                if embedded_move_index >= 0:
-                    cfg["embedded_move_index"] = embedded_move_index
-            # Encode pin animation entirely from saved_pin_keyframes
-            # No dependency on mesh fcurves or current frame
-            # Use no-translation matrix (solver adds displacement separately)
-            mat = world_matrix(obj).to_3x3().to_4x4()
-            pin_anim = {}
-            for grp_entry in saved_col:
-                if grp_entry.object_uuid == obj_uuid and grp_entry.vertex_group == vg_name:
-                    keyframes = {}
-                    for fc_entry in grp_entry.fcurves:
-                        idx = parse_vertex_index(fc_entry.data_path)
-                        if idx is None:
-                            continue
-                        if idx not in keyframes:
-                            keyframes[idx] = {}
-                        for pt in fc_entry.points:
-                            if pt.frame not in keyframes[idx]:
-                                keyframes[idx][pt.frame] = {}
-                            keyframes[idx][pt.frame][fc_entry.array_index] = pt.value
-                    for idx, animation in keyframes.items():
-                        min_frame = min(animation.keys())
-                        max_frame = max(animation.keys())
-                        xyz = []
-                        anim_frames = []
-                        # Use first keyframe as initial coord (from saved data)
-                        coord = [0.0, 0.0, 0.0]
-                        if min_frame in animation:
-                            for ai, val in animation[min_frame].items():
-                                coord[ai] = val
-                        for n in range(min_frame, max_frame + 1):
-                            if n in animation:
-                                for ai, value in animation[n].items():
-                                    coord[ai] = value
-                                anim_frames.append(n)
-                                xyz.append(coord.copy())
-                        if xyz:
-                            xyz_arr = np.array(
-                                [mat @ Vector(v) for v in xyz], dtype=np.float32,
-                            )
-                            times = [(f - 1) / fps for f in anim_frames]
-                            pin_anim[idx] = {"time": times, "position": xyz_arr}
-                    break
-            if pin_anim:
-                cfg["pin_anim"] = pin_anim
-            # Key by UUID for rename resilience
+            # Key by UUID for rename resilience.
             if obj_uuid not in pin_config:
                 pin_config[obj_uuid] = {}
+            # Keyframed pin animation. Two motion sources can supply
+            # ``pin_anim``:
+            #
+            # Sparse vertex-co fcurves on the mesh's action, authored
+            # via Make Keyframe. The sentinel is an EMBEDDED_MOVE op
+            # in ``pin_item.operations``; its presence tells the
+            # encoder to gather per-vertex pin_anim from the live
+            # action and splice it in at ``embedded_move_index``.
+            # Pub-main mirrors keyframes through
+            # ``state.saved_pin_keyframes`` first which is an O(N^2)
+            # walk; we read fcurves directly to avoid that.
+            #
+            # STATIC mesh colliders use a separate dense path
+            # (``_staticdeform.pc2`` + ``encoder/mesh.py``) and never
+            # show up here.
+            vert_tracks = {}
+            embedded_move_count = sum(
+                1 for op in pin_item.operations
+                if op.op_type == "EMBEDDED_MOVE"
+            )
+            if embedded_move_count > 1:
+                raise ValueError(
+                    f"Pin '{vg_name}' on '{obj_name}': more than one "
+                    "EMBEDDED_MOVE operation is not supported"
+                )
+            has_embedded_move_fcurves = (
+                embedded_move_count == 1 and obj.type == "MESH"
+            )
+            fcurve_frames, fcurve_lookup = (
+                _collect_pin_vertex_fcurve_frames(obj, vg_name)
+                if has_embedded_move_fcurves else ([], {})
+            )
+            if fcurve_frames:
+                mat = world_matrix(obj).to_3x3()
+                rot = np.array(
+                    [[mat[r][c] for c in range(3)] for r in range(3)],
+                    dtype=np.float32,
+                )
+                # One (time, position) sample per authored fcurve
+                # keyframe frame, indexed by vertex. Axes the fcurve
+                # doesn't cover sit at the mesh's rest position,
+                # mirroring native Blender playback.
+                n_verts_total = len(obj.data.vertices)
+                rest_co = np.empty(n_verts_total * 3, dtype=np.float32)
+                obj.data.vertices.foreach_get("co", rest_co)
+                rest_pose = rest_co.reshape(n_verts_total, 3)
+                times = [(f - 1) / fps for f in fcurve_frames]
+                pose_stack = np.broadcast_to(
+                    rest_pose, (len(fcurve_frames), n_verts_total, 3),
+                ).copy()
+                for (vi, ai), fc in fcurve_lookup.items():
+                    if 0 <= vi < n_verts_total:
+                        for k, fr in enumerate(fcurve_frames):
+                            pose_stack[k, vi, ai] = fc.evaluate(fr)
+                transformed = pose_stack @ rot.T
+                for vi in _get_pin_indices(obj, vg_name):
+                    if 0 <= vi < n_verts_total:
+                        vert_tracks[vi] = {
+                            "time": times,
+                            "position": np.ascontiguousarray(
+                                transformed[:, vi, :]
+                            ),
+                        }
+                # ``embedded_move_index = 0``: Make Keyframe pins the
+                # EMBEDDED_MOVE op to slot 0 of ``pin_item.operations``,
+                # so after the encode loop skips it the pin_anim track
+                # wants slot 0 of the emitted ``operations`` list.
+                cfg["embedded_move_index"] = 0
             # Tag with group identity so solver can merge torque vertices
             cfg["pin_group_id"] = f"{obj_uuid}:{vg_name}"
             cfg["obj_uuid"] = obj_uuid
@@ -380,6 +436,12 @@ def _encode_pin_config(context, groups, state):
             else:
                 config_indices = _get_pin_indices(obj, vg_name)
             for vi in config_indices:
-                pin_config[obj_uuid][vi] = cfg
+                if vi in vert_tracks:
+                    # Shared group fields + this vertex's own track.
+                    pin_config[obj_uuid][vi] = {
+                        **cfg, "pin_anim": {vi: vert_tracks[vi]},
+                    }
+                else:
+                    pin_config[obj_uuid][vi] = cfg
 
     return pin_config

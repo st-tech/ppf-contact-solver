@@ -645,8 +645,9 @@ class EffectRunner:
         host_flag = "--host 0.0.0.0 " if in_container else ""
 
         # The Rust ppf-cts-server binary writes ``progress.log`` markers
-        # (SERVER_STARTING / SERVER_READY) and speaks protocol 0.03; build
-        # it with ``cargo build --release -p ppf-cts-server``.
+        # (SERVER_STARTING / SERVER_READY) and serves the same wire
+        # protocol the addon speaks; build it with
+        # ``cargo build --release -p ppf-cts-server``.
         rust_bin = posixpath.join(directory, "target", "release", "ppf-cts-server")
         server_cmd = f"{rust_bin} {host_flag}--port {port}"
 

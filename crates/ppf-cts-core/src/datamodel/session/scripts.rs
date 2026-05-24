@@ -44,6 +44,12 @@ pub fn shell_command_script(
                 .proj_root
                 .join("crates/ppf-cts-solver/src/cpp/build/lib");
             let lib_bundle = session.proj_root.join("bin");
+            // Path interpolations are wrapped in double quotes so a
+            // project root containing spaces (e.g. ``C:\New Folder\proj``)
+            // reaches the solver as a single argument instead of being
+            // word-split by clap. ``set FOO=...`` does not need quoting
+            // (cmd reads the value to end-of-line literally), and use
+            // sites already quote ``%SOLVER_PATH%`` / the run line.
             format!(
                 r#"@echo off
 set SOLVER_PATH={program}
@@ -58,7 +64,7 @@ if not exist "%SOLVER_PATH%" (
     exit /b 1
 )
 
-"%SOLVER_PATH%" --path {session_path} --output {output_path} %*
+"%SOLVER_PATH%" --path "{session_path}" --output "{output_path}" %*
 "#,
                 program = program.display(),
                 lib_dev = lib_dev.display(),
@@ -67,6 +73,9 @@ if not exist "%SOLVER_PATH%" (
         }
         Platform::Unix => {
             let program = session.proj_root.join("target/release/ppf-contact-solver");
+            // Same spaces-in-path concern as the Windows branch: quote
+            // ``{session_path}`` / ``{output_path}`` so the POSIX shell
+            // doesn't word-split them before exec hands them to clap.
             format!(
                 r#"#!/bin/bash
 SOLVER_PATH="{program}"
@@ -76,7 +85,7 @@ if [ ! -f "$SOLVER_PATH" ]; then
     exit 1
 fi
 
-"$SOLVER_PATH" --path {session_path} --output {output_path} "$@"
+"$SOLVER_PATH" --path "{session_path}" --output "{output_path}" "$@"
 "#,
                 program = program.display(),
             )
@@ -129,11 +138,15 @@ pub fn write_shell_command_script(
 /// Build the per-platform solver invocation string (the body passed
 /// to `subprocess.Popen(shell=True)`):
 ///     win: `"{cmd_path}" --load {load}`
-///     unix: `bash {cmd_path} --load {load}`
+///     unix: `bash "{cmd_path}" --load {load}`
+///
+/// Both branches double-quote `cmd_path` so a project root containing
+/// spaces (e.g. `~/My Project/...`) doesn't get word-split by the
+/// shell before exec.
 pub fn solver_subprocess_command(cmd_path: &Path, load: i64, platform: Platform) -> String {
     match platform {
         Platform::Windows => format!(r#""{}" --load {}"#, cmd_path.display(), load),
-        Platform::Unix => format!("bash {} --load {}", cmd_path.display(), load),
+        Platform::Unix => format!(r#"bash "{}" --load {}"#, cmd_path.display(), load),
     }
 }
 
@@ -154,11 +167,13 @@ pub fn locate_bundled_ffmpeg(project_root: &Path) -> Option<PathBuf> {
 
 /// Build the ffmpeg command line invoked via
 /// `subprocess.run(..., shell=True)`. Caller still drives the
-/// subprocess (we don't shell out from Rust).
+/// subprocess (we don't shell out from Rust). Both `ffmpeg_path` and
+/// `vid_name` are double-quoted so paths or file names with spaces
+/// reach ffmpeg as single arguments.
 pub fn ffmpeg_video_command(ffmpeg_path: &Path, ext: &str, vid_name: &str) -> String {
     format!(
         "\"{ffmpeg}\" -hide_banner -loglevel error -y -r 60 -i frame_%d.{ext}.png \
-         -pix_fmt yuv420p -c:v libx264 {vid_name}",
+         -pix_fmt yuv420p -c:v libx264 \"{vid_name}\"",
         ffmpeg = ffmpeg_path.display(),
     )
 }

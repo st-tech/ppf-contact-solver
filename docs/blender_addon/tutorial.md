@@ -26,6 +26,12 @@
 
 </figure>
 <figure>
+<figcaption><strong>Armature Interaction</strong><span>Pose an armature to drive deformable bodies during simulation.</span></figcaption>
+
+[![Armature Interaction](images/tutorials/armature-opt.jpg)](https://zozo.box.com/s/h6mojg3dbqj5an5xio73fclsugwek76j){target="_blank" rel="noopener"}
+
+</figure>
+<figure>
 <figcaption><strong>Twisting a Cylinder</strong><span>Pin both ends of a cylinder and rotate them to apply a twist.</span></figcaption>
 
 [![Twisting a Cylinder](images/tutorials/twist-opt.jpg)](https://zozo.box.com/s/werjjc01v0quqqdpyv5k9yntnx1z6p76){target="_blank" rel="noopener"}

@@ -255,8 +255,13 @@ def add_pin_operation(
     group = get_active_group_by_uuid_helper(group_uuid)
     pin, obj_uuid, vg_name = _resolve_pin(group, vertex_group_identifier)
 
+    if any(op.op_type == "EMBEDDED_MOVE" for op in pin.operations):
+        raise MCPError(
+            "Pin is keyframed; remove its keyframed animation before "
+            "adding Move/Spin/Scale/Torque ops"
+        )
     existing_types = {o.op_type for o in pin.operations}
-    if op_type == "TORQUE" and (existing_types - {"TORQUE", "EMBEDDED_MOVE"}):
+    if op_type == "TORQUE" and (existing_types - {"TORQUE"}):
         raise MCPError("Torque cannot be mixed with Move/Spin/Scale ops")
     if op_type != "TORQUE" and "TORQUE" in existing_types:
         raise MCPError("Cannot add Move/Spin/Scale to a pin that has Torque")
@@ -329,10 +334,6 @@ def remove_pin_operation(
         raise ValidationError(
             f"Index {index} out of range (0..{len(pin.operations) - 1})"
         )
-    if pin.operations[index].op_type == "EMBEDDED_MOVE":
-        raise MCPError(
-            "Cannot remove EMBEDDED_MOVE via MCP; clear keyframes on the source object"
-        )
     pin.operations.remove(index)
     pin.operations_index = safe_update_index(index, len(pin.operations))
     from ...models.groups import invalidate_overlays
@@ -400,7 +401,7 @@ def list_pin_operations(group_uuid: str, vertex_group_identifier: str):
 
 @group_handler
 def clear_pin_operations(group_uuid: str, vertex_group_identifier: str):
-    """Remove every non-embedded operation from a pin.
+    """Remove every operation from a pin.
 
     Args:
         group_uuid: UUID of group
@@ -408,13 +409,8 @@ def clear_pin_operations(group_uuid: str, vertex_group_identifier: str):
     """
     group = get_active_group_by_uuid_helper(group_uuid)
     pin, _, vg_name = _resolve_pin(group, vertex_group_identifier)
-    # Walk from the tail so indices stay valid as we remove.
-    removed = 0
-    for i in range(len(pin.operations) - 1, -1, -1):
-        if pin.operations[i].op_type == "EMBEDDED_MOVE":
-            continue
-        pin.operations.remove(i)
-        removed += 1
+    removed = len(pin.operations)
+    pin.operations.clear()
     pin.operations_index = safe_update_index(-1, len(pin.operations))
     from ...models.groups import invalidate_overlays
     invalidate_overlays()
@@ -851,4 +847,151 @@ def clear_collision_windows(group_uuid: str, object_name: str):
         "message": f"Cleared {removed} collision windows on '{object_name}'",
         "group_uuid": group_uuid,
         "object_name": object_name,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Static-deformation capture (Armature / Lattice / Shape Key driven STATIC
+# colliders). Mirrors the UI's Capture Deformation / Clear Deformation Cache
+# buttons. The capture is modal and runs after this handler returns; poll
+# get_static_deformation_status to detect completion.
+# ---------------------------------------------------------------------------
+
+
+@group_handler
+def capture_static_deformation(group_uuid: str, object_name: str):
+    """Record the per-frame shape of an animated STATIC mesh onto the collider.
+
+    Use this for STATIC objects whose vertices move because of an Armature
+    modifier, a Lattice or Mesh Deform cage, animated Shape Keys, or a
+    driver that pokes vertex coordinates. The recording runs as a modal
+    operator and continues after this call returns; poll
+    ``get_static_deformation_status`` to detect completion.
+
+    Press again any time the underlying animation changes (a new pose,
+    edited action keyframes, a modifier swap). The recording does NOT
+    update on its own.
+
+    Args:
+        group_uuid: UUID of STATIC group containing the object
+        object_name: Name of the assigned mesh to capture
+    """
+    from .group import get_group_index_by_uuid
+    group, assigned, obj_uuid = _resolve_assigned(group_uuid, object_name)
+    if group.object_type != "STATIC":
+        raise MCPError(
+            f"Group {group_uuid} is {group.object_type}; capture requires STATIC"
+        )
+
+    obj = bpy.data.objects.get(object_name)
+    from ...core.utils import is_deforming_static_object
+    if not is_deforming_static_object(obj, bpy.context):
+        raise MCPError(
+            f"Object '{object_name}' has no deforming modifier or shape-key "
+            "animation. Capture Deformation only applies to STATIC meshes "
+            "whose vertices move (Armature, Lattice, Mesh Deform, Shape Keys, "
+            "or drivers)."
+        )
+
+    # Select the assigned-object row in the UI so the modal operator
+    # picks up the right object via group.assigned_objects_index.
+    idx = -1
+    for i, a in enumerate(group.assigned_objects):
+        if a.uuid == obj_uuid:
+            idx = i
+            break
+    if idx < 0:
+        raise MCPError(f"Object '{object_name}' not in group {group_uuid}")
+    group.assigned_objects_index = idx
+
+    group_index = get_group_index_by_uuid(group_uuid)
+    bpy.ops.object.capture_static_deformation(
+        "EXEC_DEFAULT", group_index=group_index,
+    )
+    return {
+        "message": (
+            f"Started Capture Deformation for '{object_name}'. The recording "
+            "runs in the background; poll get_static_deformation_status until "
+            "it reports a non-zero frame_count."
+        ),
+        "group_uuid": group_uuid,
+        "object_name": object_name,
+        "object_uuid": obj_uuid,
+    }
+
+
+@group_handler
+def clear_static_deformation(group_uuid: str, object_name: str):
+    """Discard the recorded deformation cache for one STATIC object.
+
+    The object returns to the pre-capture state: Capture Deformation
+    becomes the only enabled button on the row, and the next Transfer
+    will refuse to upload the object until a fresh capture is taken.
+
+    Args:
+        group_uuid: UUID of STATIC group containing the object
+        object_name: Name of the assigned mesh
+    """
+    from .group import get_group_index_by_uuid
+    group, assigned, obj_uuid = _resolve_assigned(group_uuid, object_name)
+    if group.object_type != "STATIC":
+        raise MCPError(
+            f"Group {group_uuid} is {group.object_type}; clear requires STATIC"
+        )
+
+    idx = -1
+    for i, a in enumerate(group.assigned_objects):
+        if a.uuid == obj_uuid:
+            idx = i
+            break
+    if idx < 0:
+        raise MCPError(f"Object '{object_name}' not in group {group_uuid}")
+    group.assigned_objects_index = idx
+
+    group_index = get_group_index_by_uuid(group_uuid)
+    bpy.ops.object.clear_static_deformation(
+        "EXEC_DEFAULT", group_index=group_index,
+    )
+    return {
+        "message": f"Cleared deformation cache for '{object_name}'",
+        "group_uuid": group_uuid,
+        "object_name": object_name,
+        "object_uuid": obj_uuid,
+    }
+
+
+@group_handler
+def get_static_deformation_status(group_uuid: str, object_name: str):
+    """Report the deformation-capture state of one STATIC object.
+
+    Returns three fields:
+
+    - ``is_deforming``: True if the object's modifier stack or shape-key
+      animation actually moves vertices over the timeline. When False,
+      Capture Deformation is not needed and the button is grayed out.
+    - ``has_cache``: True if a deformation cache exists for the object.
+    - ``frame_count``: Number of frames in the cache, or 0 when absent.
+
+    Args:
+        group_uuid: UUID of STATIC group containing the object
+        object_name: Name of the assigned mesh
+    """
+    group, _, obj_uuid = _resolve_assigned(group_uuid, object_name)
+    if group.object_type != "STATIC":
+        raise MCPError(
+            f"Group {group_uuid} is {group.object_type}; status requires STATIC"
+        )
+    obj = bpy.data.objects.get(object_name)
+    from ...core.utils import is_deforming_static_object
+    from ...ui.dynamics.static_deform_ops import (
+        object_deformation_frame_count,
+        object_has_deformation_cache,
+    )
+    return {
+        "group_uuid": group_uuid,
+        "object_name": object_name,
+        "object_uuid": obj_uuid,
+        "is_deforming": bool(is_deforming_static_object(obj, bpy.context)),
+        "has_cache": bool(object_has_deformation_cache(obj)),
+        "frame_count": int(object_deformation_frame_count(obj)),
     }

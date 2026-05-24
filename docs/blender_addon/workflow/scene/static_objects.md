@@ -10,10 +10,14 @@ exclusive ways to drive motion.
 This page centralizes everything specific to the Static type:
 
 - [Creating a Static group](#creating-a-static-group)
-- [Moving a Static object](#moving-a-static-object): the two ways
-  (Static Ops vs Blender keyframes) and the rule that picks one
+- [Moving a Static object](#moving-a-static-object): the three ways
+  (Static Ops, Blender keyframes, captured deformation) and the rule
+  that picks one
 - [The Transform sub-box](#the-transform-sub-box): where Static ops
   live in the UI
+- [Armature-driven Static objects](#armature-driven-static-objects):
+  using **Capture Deformation** to bake a deforming modifier stack
+  into the solver collider
 - [Contact parameters](#contact-parameters): the small parameter set a
   Static group exposes
 - [Baking behavior](#baking-behavior)
@@ -43,15 +47,14 @@ for Solid/Shell/Rod groups. See
 
 ## Moving a Static Object
 
-Static meshes don't deform, but they can translate, rotate, or scale
-over time. There are **two mutually exclusive** ways to drive that
-motion:
+Static meshes do not deform in the simulation, but they can still
+translate, rotate, scale, or follow an armature pose over time.
+There are **three mutually exclusive** ways to drive that motion:
 
 1. **Static ops**. UI-assigned **Move By** / **Spin** / **Scale**
    entries edited per assigned object inside the group's
-   [Transform sub-box](#the-transform-sub-box). These are declarative
-   (time range + delta/axis/factor) and shipped as a list to the solver
-   at transfer time.
+   [Transform sub-box](#the-transform-sub-box). You give each op a
+   time range and a delta, axis, or factor.
 2. **Blender transform keyframes**. The usual way you animate an
    object in Blender: select it, hit <kbd>I</kbd> on a frame, and pick
    **Location**, **Rotation**, or **Scale**. Any keyframes you set on
@@ -59,32 +62,41 @@ motion:
    The add-on samples the world transform at each keyframe and ships
    the track, including Bezier handles, so eases you see in the Graph
    Editor carry over to the simulation.
+3. **Captured deformation**. For objects whose mesh shape changes
+   over time, an **Armature** modifier driven by a posed rig, a
+   **Lattice** or **Mesh Deform** cage, animated **Shape Keys**, and
+   the like, use the
+   [**Capture Deformation**](#armature-driven-static-objects) button
+   to record the animation onto the collider.
 
 :::{warning}
 **Only one source of motion per object at a time.** If an assigned
-Static mesh has any transform fcurve, the encoder sends its keyframed
-transform and **ignores** that object's Static ops list. The UI flags
-this up-front with an error label above the ops list,
-*"Object has Blender keyframes; these ops will be ignored"*, and the
-Add-Op operator emits the same warning when you add a new op. The ops
-stay in the list; they just don't take effect until you remove the
-fcurves.
+Static mesh has Blender transform keyframes, the add-on uses those
+and ignores that object's Static ops list. The UI flags this with
+the label *"Object has Blender keyframes; these ops will be
+ignored"* above the ops list. A captured deformation takes priority
+over both: while a deformation cache is present for the object, its
+Static ops and transform keyframes are ignored, because the cache
+already includes any rigid parent motion in the recorded vertex
+positions.
 :::
 
 :::{note}
-**Shape keys / mesh-level animation are not supported on Static
-objects.** Only object-level transform animation counts. The encoder
-raises a `RuntimeError` at transfer time if a Static mesh has an action
-on its mesh datablock (shape-key fcurves), rather than silently
-dropping the animation.
+**Shape Keys and other mesh-level animation are only honored through
+Capture Deformation.** A Static mesh with Shape Key animation will
+not move in the solver unless you click **Capture Deformation**, and
+the add-on will refuse to upload it with an explicit error.
 :::
 
 Use **Static ops** when the motion is scripted and easy to describe
 with a few time ranges: a sliding floor plate that moves from A to B
-between frame 30 and 60, a spinning turntable, a shrinking platform. Use
-**Blender keyframes** when the motion lives in Blender's own timeline
-already, typically a rigged mannequin driven by an armature or a prop
-animated by hand in the Graph Editor.
+between frame 30 and 60, a spinning turntable, a shrinking platform.
+Use **Blender keyframes** when the motion lives in Blender's own
+timeline already at the object level: a prop animated by hand in the
+Graph Editor, a collider parented to a Camera. Use
+**Captured deformation** when the motion is *inside the mesh* (a
+posed armature, a deforming lattice, a Shape Key), not just on the
+object transform.
 
 ## The Transform Sub-Box
 
@@ -126,6 +138,81 @@ the group).
 Common fields on every op: `frame_start`, `frame_end`, `transition`
 (`LINEAR` / `SMOOTH`), and `show_overlay` (toggle the viewport
 preview).
+
+## Armature-Driven Static Objects
+
+When a Static mesh moves because of something inside the mesh,
+typically an **Armature** modifier on a body model, but also a
+**Lattice** or **Mesh Deform** cage, animated **Shape Keys**, or
+similar setups, the add-on cannot pick up that motion from object
+keyframes alone. You have to record the animation onto the collider
+using the **Capture Deformation** button.
+
+When you assign such an object to a Static group, the panel
+recognizes the animation and the button row activates with a hint
+underneath it:
+
+```{figure} ../../images/static_objects/armature_panel_pre_capture.png
+:alt: Dynamics Groups panel showing a Static group "Mannequin" with the deforming Cube assigned. The Capture Deformation button is enabled, the Clear Deformation Cache button is grayed out, and a hint reads "Deforming modifier detected; capture to encode".
+:width: 500px
+
+The Static group row immediately after assigning an animated mesh.
+**Capture Deformation** is enabled; **Clear Deformation Cache** is
+grayed out because nothing has been recorded yet; the hint
+*"Deforming modifier detected; capture to encode"* tells you what
+to do next.
+```
+
+### The Capture Deformation Button
+
+```{figure} ../../images/static_objects/armature_btn_capture_deformation.png
+:alt: Close-up of the Capture Deformation button highlighted with a red box. The button sits to the left of the Clear Deformation Cache button on the row directly under Bake Animation / Bake Single Frame.
+:width: 500px
+
+The **Capture Deformation** button. Press it after assigning an
+animated mesh to a Static group, and press it again any time the
+animation changes.
+```
+
+Click **Capture Deformation** to record the animation. The add-on
+plays through the action and stores the per-frame shape of the mesh
+on the object. After the recording finishes, the panel replaces the
+hint with the number of frames captured:
+
+```{figure} ../../images/static_objects/armature_panel_post_capture.png
+:alt: Same panel after Capture Deformation finished. The hint label is replaced with "Deform cache: 60 frame(s)" and the Clear Deformation Cache button is now enabled.
+:width: 500px
+
+After capturing. The hint is replaced with **Deform cache: 60
+frame(s)**, and **Clear Deformation Cache** is now enabled.
+```
+
+:::{warning}
+**You must press Capture Deformation again whenever the animation
+changes.** The recording is a snapshot taken at the moment you
+clicked the button. It does not update on its own. If you tweak the
+armature pose, edit the action's keyframes, change the modifier
+stack, edit the rest mesh, or alter parent or constraint chains,
+the recording is now out of date and the solver will keep using the
+old motion. Re-press **Capture Deformation** before the next
+**Transfer** so the simulation sees the current animation.
+:::
+
+### The Clear Deformation Cache Button
+
+```{figure} ../../images/static_objects/armature_btn_clear_deformation_cache.png
+:alt: Close-up of the Clear Deformation Cache button highlighted with a red box. The button sits to the right of the Capture Deformation button.
+:width: 500px
+
+**Clear Deformation Cache** discards the recording for the selected
+object. The panel returns to the pre-capture state so
+**Capture Deformation** is the only live button on the row.
+```
+
+Use **Clear Deformation Cache** when you no longer want the recorded
+animation, for instance when you turn the object back into a rigid
+collider, or when you have edited the mesh in a way that changed
+its vertex count and need to start over.
 
 ## Contact Parameters
 
@@ -246,23 +333,31 @@ and the encoder picks it up at Transfer time.
 
 The encoder checks each Static object in order:
 
-1. If `obj.data.animation_data` has any fcurve (shape-key animation),
-   raise `RuntimeError`. This case is unsupported, and silently
-   dropping it would mislead the user.
-2. Else if `obj.animation_data.action` has any transform fcurve,
+1. If the object has a populated **deformation cache** (a PC2 written
+   by **Capture Deformation**), emit it as `static_deform_animation`
+   and override the per-frame transform with identity. The cache
+   already includes any rigid parent motion in the per-vertex
+   stream, so emitting `transform_animation` or `static_ops`
+   alongside it would double-count.
+2. Else, if the object is *deforming* (its modifier stack would move
+   vertices and the depsgraph confirms it does), refuse the upload
+   with an explicit error. Shipping it as a rest-pose collider
+   would silently mislead the artist.
+3. Else if `obj.animation_data.action` has any transform fcurve,
    extract sparse `(time, translation, quaternion, scale)` keyframes
    plus per-segment Bezier-handle data and send them as
    `transform_animation`.
-3. Else if the matching `AssignedObject` has a non-empty
+4. Else if the matching `AssignedObject` has a non-empty
    `static_ops` collection, serialize those ops (frames converted
    to seconds using the scene FPS, axes swapped into solver
    orientation) as `static_ops`.
-4. Else send the object with no animation: a rigid, unmoving
+5. Else send the object with no animation: a rigid, unmoving
    collider.
 
 The first match wins; the other channels are dropped. This is why the
 UI can warn *"these ops will be ignored"* as soon as fcurves appear on
-the object.
+the object, and why **Capture Deformation** is required (rather than
+just helpful) for an Armature-driven collider.
 
 **Time conversion**
 

@@ -164,7 +164,7 @@ class _Solver:
 
         # Reset scene parameters to defaults
         bl_props = state.bl_rna.properties
-        skip = {"bl_rna", "rna_type", "name", "fetched_frame", "saved_pin_keyframes"}
+        skip = {"bl_rna", "rna_type", "name", "fetched_frame"}
         for prop in bl_props:
             pid = prop.identifier
             if pid in skip:
@@ -194,7 +194,6 @@ class _Solver:
                     raise
 
         _safe_clear(state.clear_fetched_frames)
-        _safe_clear(state.saved_pin_keyframes.clear)
 
         # Collection properties don't respond to setattr(prop.default), so
         # clear them explicitly, otherwise solver.clear() silently leaves

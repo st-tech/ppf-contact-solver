@@ -22,7 +22,7 @@
 # This scenario bypasses the server entirely: it builds a synthetic
 # violations payload covering one of each known type plus an unknown
 # ``frobnitz`` entry, dispatches a single ``ServerPolled`` event with
-# a fully formed protocol-0.03 response, and asserts:
+# a fully formed response, and asserts:
 #
 #   A. ``_interpret_response`` writes the payload onto
 #      ``engine.state.violations`` verbatim.
@@ -165,8 +165,8 @@ try:
     ]
     log("payload_built")
 
-    # Build a fully-formed protocol-0.03 response so _interpret_response
-    # accepts it (missing protocol_version or upload_id triggers an early
+    # Build a fully-formed response so _interpret_response accepts it
+    # (missing protocol_version or upload_id triggers an early
     # version_ok=False return that never touches state.violations).
     response = {
         "protocol_version": PROTOCOL_VERSION,

@@ -634,6 +634,82 @@ class DYNAMICS_PT_Groups(Panel):
                 bake_frame_op = col.operator("object.bake_single_frame", icon="KEYFRAME")
                 bake_frame_op.group_index = actual_index
 
+                # Capture Deformation row: only meaningful for STATIC
+                # groups whose selected assigned object deforms via
+                # modifiers (Armature, MeshDeform, Lattice, shape keys,
+                # geometry nodes, drivers). Always renders for STATIC so
+                # the user can see the controls exist; per-button
+                # ``enabled`` flags grey them out when the preconditions
+                # aren't met (no selection, not deforming, no cache, or
+                # a job is already in flight).
+                if group.object_type == "STATIC":
+                    from .static_deform_ops import (
+                        is_capture_running as _is_capture_running,
+                        object_deformation_frame_count as _df_count,
+                        object_has_deformation_cache as _has_df,
+                        object_needs_deformation_capture as _needs_df,
+                    )
+                    from ...core.uuid_registry import resolve_assigned as _resolve_sd
+                    _sd_obj = (
+                        _resolve_sd(group.assigned_objects[group.assigned_objects_index])
+                        if has_selection
+                        else None
+                    )
+                    _capture_active = _is_capture_running()
+                    _deforms = (
+                        _sd_obj is not None
+                        and _needs_df(_sd_obj, context)
+                    )
+                    _has_cache = _sd_obj is not None and _has_df(_sd_obj)
+                    row = box.row()
+                    col = row.column()
+                    col.enabled = (
+                        _deforms
+                        and not _capture_active
+                        and not _bake_active
+                    )
+                    cap_op = col.operator(
+                        "object.capture_static_deformation",
+                        icon="REC",
+                    )
+                    cap_op.group_index = actual_index
+                    col = row.column()
+                    col.enabled = _has_cache and not _capture_active
+                    clr_op = col.operator(
+                        "object.clear_static_deformation",
+                        icon="X",
+                    )
+                    clr_op.group_index = actual_index
+                    if _has_cache:
+                        n = _df_count(_sd_obj)
+                        box.label(
+                            text=f"Deform cache: {n} frame(s)",
+                            icon="FILE_CACHE",
+                        )
+                    elif _deforms:
+                        box.label(
+                            text="Deforming modifier detected; capture to encode",
+                            icon="INFO",
+                        )
+                    elif not has_selection:
+                        # No object selected — scan the group for any
+                        # assigned mesh that has a deforming modifier
+                        # stack so the user knows the controls are
+                        # waiting on a row click. Cheap declarative
+                        # check (no depsgraph round-trip) since this
+                        # runs on every panel redraw.
+                        from ...core.utils import has_deforming_modifier_stack
+                        any_deforms = any(
+                            has_deforming_modifier_stack(_resolve_sd(a))
+                            for a in group.assigned_objects
+                        )
+                        if any_deforms:
+                            box.label(
+                                text="Deformable object(s) detected; "
+                                     "select one from the list above to enable capture",
+                                icon="INFO",
+                            )
+
                 # Third row: Delete Group button
                 row = box.row()
                 delete_op = row.operator("object.delete_group", icon="TRASH")

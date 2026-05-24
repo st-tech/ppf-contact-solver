@@ -7,7 +7,7 @@
 #
 # Pin Operations sit on a per-pin item ``PinVertexGroupItem.operations``
 # CollectionProperty. The ops list grows with one of MOVE_BY / SPIN /
-# SCALE / TORQUE / EMBEDDED_MOVE entries, each with its own scalar
+# SCALE / TORQUE entries, each with its own scalar
 # payload (delta, axis, angular velocity, center mode, flip, frame
 # range, transition, ...). The Operations row exposes COPYDOWN /
 # PASTEDOWN buttons bound to ``object.copy_pin_ops`` /
@@ -17,8 +17,7 @@
 # back, replacing the destination pin's ops list.
 #
 # The scenario builds one pin item, fills its operations with one op
-# per supported op_type (excluding EMBEDDED_MOVE which is auto-detected
-# from keyframes), perturbs every scalar field on every op to value-
+# per supported op_type, perturbs every scalar field on every op to value-
 # set A, snapshots, copies, replaces the operations with a much smaller
 # list of unrelated ops, then pastes. Every op (and every field on
 # every op except those in PIN_OP_CLIPBOARD_EXCLUDE) must round-trip.
@@ -131,9 +130,7 @@ try:
     group.pin_vertex_groups_index = 0
     pin_item.operations.clear()
 
-    # Author one op per non-auto op_type. EMBEDDED_MOVE is excluded:
-    # it's reserved for the auto-detected keyframe path and pasting
-    # one onto a non-keyframe pin would be meaningless.
+    # Author one op per op_type.
     op_types = ["MOVE_BY", "SPIN", "SCALE", "TORQUE"]
     for ot in op_types:
         op = pin_item.operations.add()

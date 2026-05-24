@@ -548,6 +548,9 @@ pub(crate) fn traverse_overlap<F: FnMut(i32)>(
 /// Find the index of the triangle on the BVH closest to `point`. Used
 /// by `frame_mapping`; the frame solve happens inline at the
 /// call site, so this only returns the index (no bary, no dist).
+///
+/// Returns `-1` for an empty BVH (zero elements). Callers receiving
+/// `-1` must not index `tris_flat` / `verts_flat` with it.
 #[inline]
 pub(crate) fn closest_triangle_index(
     point: [f64; 3],
@@ -555,6 +558,11 @@ pub(crate) fn closest_triangle_index(
     verts_flat: &[f64],
     tris_flat: &[i32],
 ) -> i32 {
+    // Empty BVH: no nodes to traverse. Bail before touching `node_bbox_min[0]`.
+    if bvh.node_bbox_min.is_empty() {
+        return -1;
+    }
+
     let mut best_dist_sq = f64::INFINITY;
     let mut best_tri: i32 = 0;
 
@@ -657,6 +665,15 @@ pub fn frame_mapping(
     let n_new_tri = new_tri_flat.len() / 3;
     debug_assert_eq!(orig_vert_flat.len(), n_orig * 3);
     debug_assert_eq!(new_tri_flat.len(), n_new_tri * 3);
+
+    // Empty target surface: no triangles to map onto. Return `-1` per
+    // point and zero coefs so callers can detect the no-mapping case
+    // (used by `_mesh_.py:tetrahedralize` to raise a clean user-facing
+    // error when fTetWild produces zero usable tets, e.g. for a flat
+    // / coplanar input mesh assigned to a SOLID group).
+    if n_new_tri == 0 {
+        return (vec![-1; n_orig], vec![0.0; n_orig * 3]);
+    }
 
     // Build per-tri centroids + bboxes for the BVH.
     let mut tri_centroids = vec![0.0f64; n_new_tri * 3];
@@ -934,5 +951,23 @@ mod tests {
         let bvh = build_bvh(&[], &[], &[], DEFAULT_MAX_LEAF);
         assert!(bvh.node_bbox_min.is_empty());
         assert!(bvh.sorted_indices.is_empty());
+        // The traversal helper must also accept an empty BVH and return
+        // a sentinel, not index `node_bbox_min[0]` (the panic that hit
+        // user issue #18 when a Plane was assigned to a SOLID group).
+        let idx = closest_triangle_index([0.0, 0.0, 0.0], &bvh, &[], &[]);
+        assert_eq!(idx, -1);
+    }
+
+    #[test]
+    fn frame_mapping_empty_target_returns_minus_one() {
+        // Non-empty source verts, zero target triangles: the post-
+        // `tet_extract_surface` shape when fTetWild produces no usable
+        // tets. `frame_mapping` must not panic; it returns `-1` per
+        // input point so the Python wrapper can detect the no-mapping
+        // case and raise a clear error.
+        let orig: Vec<f64> = vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0];
+        let (tri_idx, coefs) = frame_mapping(&orig, &[], &[]);
+        assert_eq!(tri_idx, vec![-1; 4]);
+        assert_eq!(coefs, vec![0.0; 12]);
     }
 }

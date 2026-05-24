@@ -16,7 +16,7 @@ The add-on talks to a solver process over one of several transports. Pick the on
 | **Docker over SSH Command** | Docker-over-SSH configured from a shell `ssh ...` command | Docker |
 | **Windows Native** | Solver runs as a Windows subprocess using a bundled Python + CUDA | Windows |
 
-All types share the same server-side protocol (TCP, version `0.03`) and the same UI flow in the panel: **Connect** -> **Start Server** -> transfer data -> **Run** -> **Fetch**.
+All types share the same server-side TCP protocol (see `PROTOCOL_VERSION` in `core/protocol.py` for the current wire version) and the same UI flow in the panel: **Connect** -> **Start Server** -> transfer data -> **Run** -> **Fetch**.
 
 Figure: Five stacked block diagrams showing where each piece lives for the five connection types, with blue solid arrows for lifecycle commands (start / stop / exec / port check) and purple dashed arrows for the TCP connection to the solver. The three Docker sub-modes are broken out separately in Docker.
 

@@ -29,25 +29,6 @@ class FetchedFrameItem(PropertyGroup):
     value: IntProperty(name="Frame", default=0)  # pyright: ignore
 
 
-class SavedPinKeyframePoint(PropertyGroup):
-    frame: IntProperty()  # pyright: ignore
-    value: FloatProperty()  # pyright: ignore
-
-
-class SavedPinFCurve(PropertyGroup):
-    data_path: StringProperty()  # pyright: ignore
-    array_index: IntProperty()  # pyright: ignore
-    points: CollectionProperty(type=SavedPinKeyframePoint)  # pyright: ignore
-
-
-class SavedPinGroup(PropertyGroup):
-    object_name: StringProperty()  # pyright: ignore
-    object_uuid: StringProperty()  # pyright: ignore
-    vertex_group: StringProperty()  # pyright: ignore
-    vg_hash: StringProperty()  # pyright: ignore  # 64-bit content hash of VG vertex indices
-    fcurves: CollectionProperty(type=SavedPinFCurve)  # pyright: ignore
-
-
 class MergePairItem(PropertyGroup):
     object_a: StringProperty(name="Object A", default="")  # pyright: ignore
     object_b: StringProperty(name="Object B", default="")  # pyright: ignore
@@ -436,14 +417,21 @@ class PinOperation(PropertyGroup):
         description="Show operation preview in viewport",
         update=_on_overlay_changed,
     )  # pyright: ignore
+    # Numeric IDs are explicit because Blender's EnumProperty stores values
+    # as integers when no number is given; auto-numbering by list order means
+    # removing or reordering an item silently renames every saved op in
+    # existing .blend files. Slot 0 is reserved for the legacy EMBEDDED_MOVE
+    # op so files saved before that variant was retired keep decoding their
+    # remaining ops to the right identifier. Filter `EMBEDDED_MOVE` out at
+    # the encoder; never offer it from the Add menu.
     op_type: EnumProperty(
         name="Type",
         items=[
-            ("EMBEDDED_MOVE", "Embedded Move", "Keyframe-based vertex movement (auto-detected)"),
-            ("MOVE_BY", "Move By", "Move by delta over time range"),
-            ("SPIN", "Spin", "Rotate around axis"),
-            ("SCALE", "Scale", "Scale from center"),
-            ("TORQUE", "Torque", "Apply rotational force around PCA axis"),
+            ("EMBEDDED_MOVE", "Embedded Move", "Deprecated: kept only so legacy .blend files decode correctly", "NONE", 0),
+            ("MOVE_BY", "Move By", "Move by delta over time range", "NONE", 1),
+            ("SPIN", "Spin", "Rotate around axis", "NONE", 2),
+            ("SCALE", "Scale", "Scale from center", "NONE", 3),
+            ("TORQUE", "Torque", "Apply rotational force around PCA axis", "NONE", 4),
         ],
         default="MOVE_BY",
         update=_on_overlay_changed,

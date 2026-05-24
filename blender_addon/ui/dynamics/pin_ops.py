@@ -9,7 +9,7 @@ import bpy  # pyright: ignore
 
 from bpy.types import Operator  # pyright: ignore
 
-from ...core.utils import get_vertices_in_group, parse_vertex_index, redraw_all_areas, set_linear_interpolation
+from ...core.utils import get_vertices_in_group, redraw_all_areas
 from ...models.collection_utils import safe_update_index
 from ..state import iterate_active_object_groups
 from .utils import get_group_from_index
@@ -245,10 +245,6 @@ class OBJECT_OT_AddPinVertexGroup(Operator):
                 item.object_uuid = resolved_uuid
                 if vg_name:
                     item.vg_hash = str(compute_vg_hash(obj, vg_name))
-                # Recover EMBEDDED_MOVE from object marker (survives remove/re-add)
-                if vg_name and obj.get(f"_embedded_move_{vg_name}"):
-                    op = item.operations.add()
-                    op.op_type = "EMBEDDED_MOVE"
             else:
                 # No assigned object resolved — remove the half-built item
                 group.pin_vertex_groups.remove(len(group.pin_vertex_groups) - 1)
@@ -352,21 +348,12 @@ class OBJECT_OT_RenamePinVertexGroup(Operator):
                 obj[f"_pin_{new_vg}"] = obj[key_old]
                 del obj[key_old]
 
-        # Migrate _embedded_move_ marker
-        em_old = f"_embedded_move_{old_vg}"
-        em_new = f"_embedded_move_{new_vg}"
-        if em_old in obj and em_new not in obj:
-            obj[em_new] = obj[em_old]
-            del obj[em_old]
-
-        # Update pin identifier and hash
+        # Update pin identifier and hash. The pin-input PC2 cache is
+        # keyed by object UUID, so a vertex-group rename does not touch
+        # it — nothing else to migrate.
         from ...models.groups import encode_vertex_group_identifier
         pin_item.name = encode_vertex_group_identifier(obj.name, new_vg)
         pin_item.vg_hash = str(compute_vg_hash(obj, new_vg))
-
-        # Sync saved keyframe cache entries
-        from ...core.uuid_registry import _sync_vg_name
-        _sync_vg_name(pin_item.object_uuid, old_vg, new_vg)
 
         apply_object_overlays()
         self.report({"INFO"}, f"Renamed '{old_vg}' to '{new_vg}'")
@@ -529,36 +516,71 @@ class OBJECT_OT_MakePinKeyframe(Operator):
             self.report({"ERROR"}, f"Vertex group '{vg_name}' not found")
             return {"CANCELLED"}
 
-        # Flush edit mode changes to mesh data before keyframing
+        # Reject if any non-EMBEDDED_MOVE op exists. EMBEDDED_MOVE is
+        # the sentinel we add ourselves, so re-pressing Make Keyframe
+        # at another frame finds it there and must NOT bail.
+        non_embedded = [
+            op for op in pin_item.operations
+            if op.op_type != "EMBEDDED_MOVE"
+        ]
+        if non_embedded:
+            self.report(
+                {"ERROR"},
+                "Pin has Move/Spin/Scale/Torque operations; keyframed "
+                "animation cannot be combined with them",
+            )
+            return {"CANCELLED"}
+
+        # Flush edit-mode edits to mesh data before sampling positions.
         was_edit = False
         if context.active_object and context.active_object.mode == "EDIT":
             bpy.ops.object.mode_set(mode="OBJECT")
             was_edit = True
 
-        count = 0
-        for vi in get_vertices_in_group(obj, vg):
-            obj.data.vertices[vi].keyframe_insert(data_path="co")
-            count += 1
+        # Pin keyframes are stored as native vertex-co fcurves on the
+        # mesh's action. The DopeSheet / Graph Editor surface them as
+        # standard diamonds, drag to retime, X to delete, all owned by
+        # Blender. Our role is just inserting the keys; playback flows
+        # through Blender's animation system on each frame change.
+        # Capture Deformation PC2 is a separate motion source and is
+        # not written here.
+        #
+        # Call shape mirrors the pre-PC2 pub-main pattern:
+        # ``vertex.keyframe_insert(data_path="co")`` (no ``index``, no
+        # ``frame``) inserts on all three axes at the current scene
+        # frame in a single call. The per-axis form crashes Blender
+        # 5.x's animation evaluator on subsequent frame changes,
+        # apparently because of a slot-binding edge case when fcurves
+        # are added one array-index at a time.
+        scene_frame = scene.frame_current
+        pin_indices = sorted({
+            int(v.index)
+            for v in obj.data.vertices
+            for g in v.groups
+            if g.group == vg.index and g.weight > 0
+        })
+        inserted = 0
+        for vi in pin_indices:
+            if obj.data.vertices[vi].keyframe_insert(data_path="co"):
+                inserted += 1
+        # Linear interpolation matches the solver's piecewise-linear
+        # treatment of sparse pin_anim samples, and avoids the Bezier
+        # default overshooting at the brackets.
+        _set_pin_fcurves_linear(obj)
+        # The encoder treats an ``EMBEDDED_MOVE`` op at index N as the
+        # signal "this pin has keyframe animation; splice the per-
+        # vertex pin_anim track in at index N". Ensure exactly one
+        # EMBEDDED_MOVE op exists at the head so embedded_move_index
+        # comes out as 0.
+        _ensure_embedded_move_op(pin_item)
 
         if was_edit:
             bpy.ops.object.mode_set(mode="EDIT")
 
-        if obj.data.animation_data and obj.data.animation_data.action:
-            set_linear_interpolation(obj.data.animation_data.action)
-
-        # Add EMBEDDED_MOVE to operations list if not already present
-        if not any(op.op_type == "EMBEDDED_MOVE" for op in pin_item.operations):
-            op = pin_item.operations.add()
-            op.op_type = "EMBEDDED_MOVE"
-            for i in range(len(pin_item.operations) - 1, 0, -1):
-                pin_item.operations.move(i, i - 1)
-        # Store marker on object for recovery after remove/re-add
-        obj[f"_embedded_move_{vg_name}"] = True
-
-        self.report({"INFO"}, f"Keyframed {count} vertices at frame {scene.frame_current}")
-
-        from ...core.animation import save_pin_keyframes
-        save_pin_keyframes(context)
+        self.report(
+            {"INFO"},
+            f"Inserted keyframes on {inserted} pin vertices at frame {scene_frame}",
+        )
         from ...models.groups import invalidate_overlays
         invalidate_overlays()
 
@@ -575,7 +597,6 @@ class OBJECT_OT_DeletePinKeyframes(Operator):
     group_index: bpy.props.IntProperty(options={'HIDDEN'})  # pyright: ignore
 
     def execute(self, context):
-        from ...core.utils import _get_fcurves
         from ...models.groups import decode_vertex_group_identifier
 
         scene = context.scene
@@ -606,45 +627,141 @@ class OBJECT_OT_DeletePinKeyframes(Operator):
             self.report({"INFO"}, "Keyframe deletion not applicable for curve pins")
             return {"FINISHED"}
 
-        vg = obj.vertex_groups.get(vg_name)
-        if not vg:
-            self.report({"ERROR"}, f"Vertex group '{vg_name}' not found")
-            return {"CANCELLED"}
+        # Remove every vertex-co fcurve on the mesh's action
+        # (Blender 5.x layered actions and the legacy flat layout
+        # both supported). Capture Deformation PC2, if any, is a
+        # separate motion source and stays untouched.
+        import re
+        rgx = re.compile(r"vertices\[(\d+)\]\.co$")
+        ad = obj.data.animation_data
+        action = ad.action if ad else None
+        if action is not None:
+            removed = _remove_vertex_co_fcurves(action, rgx)
+        else:
+            removed = 0
+        # Drop every EMBEDDED_MOVE op too. That op is the encoder's
+        # "this pin has keyframe animation" sentinel; clearing the
+        # fcurves without clearing it would leave the pin claiming
+        # animation it no longer has.
+        ops_removed = _remove_embedded_move_ops(pin_item)
 
-        indices = set(get_vertices_in_group(obj, vg))
-        removed = 0
-        if obj.data.animation_data and obj.data.animation_data.action:
-            fcurves = _get_fcurves(obj.data.animation_data.action)
-            to_remove = []
-            for fc in fcurves:
-                if fc.data_path.startswith("vertices[") and ".co" in fc.data_path:
-                    vi = parse_vertex_index(fc.data_path)
-                    if vi is not None and vi in indices:
-                        to_remove.append(fc)
-            for fc in to_remove:
-                fcurves.remove(fc)
-                removed += 1
-
-        # Remove EMBEDDED_MOVE from operations list
-        for i in range(len(pin_item.operations) - 1, -1, -1):
-            if pin_item.operations[i].op_type == "EMBEDDED_MOVE":
-                pin_item.operations.remove(i)
-                break
-        from ...models.collection_utils import safe_update_index
-        pin_item.operations_index = safe_update_index(pin_item.operations_index, len(pin_item.operations))
-        # Remove marker from object
-        key = f"_embedded_move_{vg_name}"
-        if key in obj:
-            del obj[key]
-
-        self.report({"INFO"}, f"Removed {removed} fcurves")
-
-        from ...core.animation import save_pin_keyframes
-        save_pin_keyframes(context)
+        self.report({"INFO"},
+                    f"Removed {removed} pin-vertex fcurves, "
+                    f"{ops_removed} EMBEDDED_MOVE ops")
         from ...models.groups import invalidate_overlays
         invalidate_overlays()
 
         return {"FINISHED"}
+
+
+def _ensure_embedded_move_op(pin_item) -> None:
+    """Ensure exactly one ``EMBEDDED_MOVE`` op exists at index 0 in
+    ``pin_item.operations``. Adds one if absent, moves the first
+    existing one to the head, and drops any duplicates.
+
+    The encoder treats ``EMBEDDED_MOVE``'s index in this list as the
+    insertion point for the per-vertex ``pin_anim`` track via
+    ``embedded_move_index``. Pinning it to slot 0 keeps the splice
+    deterministic and matches pub-main.
+    """
+    embedded_positions = [
+        i for i, op in enumerate(pin_item.operations)
+        if op.op_type == "EMBEDDED_MOVE"
+    ]
+    if not embedded_positions:
+        op = pin_item.operations.add()
+        op.op_type = "EMBEDDED_MOVE"
+        # Newly added entries land at the end; move to head.
+        last = len(pin_item.operations) - 1
+        if last > 0:
+            pin_item.operations.move(last, 0)
+        return
+    # Keep the first EMBEDDED_MOVE; drop the rest. Walk in reverse
+    # so earlier indices remain valid as later entries are removed.
+    keep = embedded_positions[0]
+    for i in reversed(embedded_positions[1:]):
+        pin_item.operations.remove(i)
+    if keep != 0:
+        pin_item.operations.move(keep, 0)
+
+
+def _remove_embedded_move_ops(pin_item) -> int:
+    """Drop every ``EMBEDDED_MOVE`` op from ``pin_item.operations``
+    and return the count removed. Used by Delete All Keyframes so the
+    sentinel doesn't outlive the fcurves it represents.
+    """
+    embedded_positions = [
+        i for i, op in enumerate(pin_item.operations)
+        if op.op_type == "EMBEDDED_MOVE"
+    ]
+    for i in reversed(embedded_positions):
+        pin_item.operations.remove(i)
+    if pin_item.operations_index >= len(pin_item.operations):
+        pin_item.operations_index = max(-1, len(pin_item.operations) - 1)
+    return len(embedded_positions)
+
+
+def _set_pin_fcurves_linear(obj) -> None:
+    """Set LINEAR interpolation on every vertex-co fcurve on *obj*'s
+    mesh action (Blender 5.x layered or legacy flat). The solver
+    treats pin_anim samples as piecewise-linear, so matching that
+    here keeps the viewport playback consistent with the eventual
+    Transfer.
+    """
+    ad = obj.data.animation_data
+    action = ad.action if ad is not None else None
+    if action is None:
+        return
+    import re
+    rgx = re.compile(r"vertices\[\d+\]\.co$")
+    if hasattr(action, "layers") and len(action.layers) > 0:
+        for layer in action.layers:
+            for strip in layer.strips:
+                for bag in strip.channelbags:
+                    for fc in bag.fcurves:
+                        if rgx.match(fc.data_path) is None:
+                            continue
+                        for kp in fc.keyframe_points:
+                            kp.interpolation = "LINEAR"
+    elif hasattr(action, "fcurves"):
+        for fc in action.fcurves:
+            if rgx.match(fc.data_path) is None:
+                continue
+            for kp in fc.keyframe_points:
+                kp.interpolation = "LINEAR"
+
+
+def _remove_vertex_co_fcurves(action, rgx) -> int:
+    """Walk ``action`` (Blender 5.x layered or legacy flat) and remove
+    every fcurve whose data_path matches ``vertices[N].co``. Returns
+    the number of fcurves removed. Tolerates malformed actions.
+    """
+    removed = 0
+    if hasattr(action, "layers") and len(action.layers) > 0:
+        for layer in action.layers:
+            for strip in layer.strips:
+                for slot in action.slots:
+                    cb = strip.channelbag(slot)
+                    if cb is None:
+                        continue
+                    for fc in list(cb.fcurves):
+                        if rgx.match(fc.data_path) is None:
+                            continue
+                        try:
+                            cb.fcurves.remove(fc)
+                            removed += 1
+                        except Exception:
+                            pass
+    elif hasattr(action, "fcurves"):
+        for fc in list(action.fcurves):
+            if rgx.match(fc.data_path) is None:
+                continue
+            try:
+                action.fcurves.remove(fc)
+                removed += 1
+            except Exception:
+                pass
+    return removed
 
 
 class OBJECT_OT_AddPinOperation(Operator):
@@ -672,9 +789,20 @@ class OBJECT_OT_AddPinOperation(Operator):
         if idx < 0 or idx >= len(group.pin_vertex_groups):
             return {"CANCELLED"}
         pin_item = group.pin_vertex_groups[idx]
+        # Reject if the pin already carries an EMBEDDED_MOVE sentinel
+        # (Make Keyframe authored fcurve animation); the kinematic
+        # ops would need to compose with that and pub-main's contract
+        # is one-or-the-other on a pin.
+        if any(op.op_type == "EMBEDDED_MOVE" for op in pin_item.operations):
+            self.report(
+                {"ERROR"},
+                "Pin is keyframed; remove its keyframed animation before "
+                "adding Move/Spin/Scale/Torque operations",
+            )
+            return {"CANCELLED"}
         # Torque cannot be mixed with other operation types
         existing_types = {o.op_type for o in pin_item.operations}
-        if self.op_type == "TORQUE" and existing_types - {"TORQUE", "EMBEDDED_MOVE"}:
+        if self.op_type == "TORQUE" and existing_types - {"TORQUE"}:
             self.report({"ERROR"}, "Torque cannot be mixed with Move/Spin/Scale operations")
             return {"CANCELLED"}
         if self.op_type != "TORQUE" and "TORQUE" in existing_types:
@@ -717,10 +845,6 @@ class OBJECT_OT_RemovePinOperation(Operator):
         op_idx = pin_item.operations_index
         if op_idx < 0 or op_idx >= len(pin_item.operations):
             return {"CANCELLED"}
-        if pin_item.operations[op_idx].op_type == "EMBEDDED_MOVE":
-            # Delegate to delete_pin_keyframes operator
-            bpy.ops.object.delete_pin_keyframes(group_index=self.group_index)
-            return {"FINISHED"}
         pin_item.operations.remove(op_idx)
         pin_item.operations_index = safe_update_index(op_idx, len(pin_item.operations))
         from ...models.groups import invalidate_overlays

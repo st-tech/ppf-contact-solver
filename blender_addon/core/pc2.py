@@ -520,6 +520,123 @@ def remove_curve_handler():
             fc.remove(h)
 
 
+
+# ---------------------------------------------------------------------------
+# Static-deform mesh cache (deforming STATIC collider input)
+#
+# A STATIC mesh whose modifier stack deforms vertices (Armature,
+# MeshDeform, Lattice, shape keys, ...) carries a per-frame absolute
+# vertex buffer captured from Blender's depsgraph. Cache layout matches
+# the pin-input PC2 (PointCache2 binary, dict[key]->ndarray), but the
+# data is solver-input only: the depsgraph already paints the deformed
+# mesh in the viewport, so this namespace registers NO frame_change
+# handler. Suffix ``_staticdeform`` keeps these keys isolated from
+# pin-input PC2 (``_pininput``) so an object moving between groups
+# can't inherit a stale animation from the wrong subsystem.
+# ---------------------------------------------------------------------------
+
+_static_deform_cache: dict[str, numpy.ndarray] = {}
+
+
+def static_deform_pc2_key(obj) -> str:
+    """Return the UUID-backed key for an object's static-deform PC2 file."""
+    from .uuid_registry import get_or_create_object_uuid
+    return get_or_create_object_uuid(obj) + "_staticdeform"
+
+
+def write_static_deform_pc2(obj, frames):
+    """Write an object's static-deform cache to PC2 and stash it in memory.
+
+    Args:
+        obj: The mesh object.
+        frames: ndarray ``(n_frames, n_verts, 3)`` of solver-world-space
+            positions; index 0 maps to ``scene.frame_start``.
+    """
+    arr = numpy.ascontiguousarray(frames, dtype="<f")
+    key = static_deform_pc2_key(obj)
+    path = get_pc2_path(key)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    write_pc2(path, [arr[i] for i in range(arr.shape[0])])
+    _static_deform_cache[key] = arr.copy()
+
+
+def load_static_deform_cache(key):
+    """Load a static-deform PC2 file into the in-memory cache."""
+    path = get_pc2_path(key)
+    if not os.path.exists(path):
+        return
+    with open(path, "rb") as f:
+        f.seek(16)
+        n_verts = struct.unpack("<i", f.read(4))[0]
+        f.seek(28)
+        n_frames = struct.unpack("<i", f.read(4))[0]
+        if n_frames < 1 or n_verts < 1:
+            return
+        data = numpy.frombuffer(f.read(), dtype="<f")
+    _static_deform_cache[key] = data.reshape(n_frames, n_verts, 3).copy()
+
+
+def unload_static_deform_cache(key=None):
+    """Remove one or all objects from the static-deform cache."""
+    if key is None:
+        _static_deform_cache.clear()
+    else:
+        _static_deform_cache.pop(key, None)
+
+
+def has_static_deform_cache_key(key):
+    """Check if a static-deform key has cached data in memory."""
+    return key in _static_deform_cache
+
+
+def has_static_deform_animation(obj):
+    """True if *obj* has a static-deform PC2 (in memory or on disk)."""
+    if obj is None or getattr(obj, "type", None) != "MESH":
+        return False
+    key = static_deform_pc2_key(obj)
+    if key in _static_deform_cache:
+        return True
+    return os.path.exists(get_pc2_path(key))
+
+
+def get_static_deform_cache(obj):
+    """Return the cached ``(n_frames, n_verts, 3)`` array for *obj*.
+
+    Lazy-loads from the PC2 file on disk (file reopen / addon reload).
+    Returns ``None`` when the object has no static-deform cache.
+    """
+    key = static_deform_pc2_key(obj)
+    if key not in _static_deform_cache:
+        load_static_deform_cache(key)
+    return _static_deform_cache.get(key)
+
+
+def remove_static_deform_pc2(obj):
+    """Delete an object's static-deform PC2 file and drop the cache entry."""
+    key = static_deform_pc2_key(obj)
+    path = get_pc2_path(key)
+    if os.path.exists(path):
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+    unload_static_deform_cache(key)
+
+
+def clear_all_static_deform_animation():
+    """Delete every static-deform PC2 file and clear the in-memory cache."""
+    if bpy is not None:
+        for obj in list(bpy.data.objects):
+            if obj.type == "MESH":
+                path = get_pc2_path(static_deform_pc2_key(obj))
+                if os.path.exists(path):
+                    try:
+                        os.remove(path)
+                    except OSError:
+                        pass
+    unload_static_deform_cache()
+
+
 # ---------------------------------------------------------------------------
 # Save-post migration (temp → data/)
 # ---------------------------------------------------------------------------
@@ -540,6 +657,16 @@ def migrate_pc2_on_save(*_args):
     tmp_dir = os.path.realpath(os.path.join(tempfile.gettempdir(), "data"))
     for obj in bpy.data.objects:
         if obj.type == "MESH":
+            # Static-deform PC2: temp -> data/ migration on first save.
+            sd_key = static_deform_pc2_key(obj)
+            safe_sd = sd_key.replace(" ", "_").replace("/", "_")
+            sd_old = os.path.realpath(os.path.join(tmp_dir, f"{safe_sd}.pc2"))
+            if os.path.exists(sd_old):
+                os.makedirs(target_dir, exist_ok=True)
+                sd_new = os.path.join(target_dir, f"{safe_sd}.pc2")
+                if os.path.realpath(sd_new) != sd_old:
+                    shutil.move(sd_old, sd_new)
+                    load_static_deform_cache(sd_key)
             mod = obj.modifiers.get(MODIFIER_NAME)
             if mod is None:
                 continue

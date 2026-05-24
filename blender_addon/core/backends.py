@@ -149,8 +149,8 @@ def _query_via_channel(
 ) -> tuple[dict, bool]:
     """Send a text-command query over a channel and parse the JSON response.
 
-    Wire format (TCMD, protocol 0.04): ``b"TCMD"`` header (4 bytes),
-    then a big-endian u32 payload-length prefix, then exactly that many
+    Wire format (TCMD): ``b"TCMD"`` header (4 bytes), then a
+    big-endian u32 payload-length prefix, then exactly that many
     payload bytes (the ``--key value`` argument string). The server
     reads the length, then exactly that many bytes, so we never need
     ``shutdown(SHUT_WR)`` to signal end of input. The previous wire did

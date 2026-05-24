@@ -3,64 +3,9 @@
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
 # License: Apache v2.0
 
-from mathutils import Vector  # pyright: ignore
-
-from ..models.groups import decode_vertex_group_identifier, get_addon_data, iterate_active_object_groups
+from ..models.groups import get_addon_data, iterate_active_object_groups
 from .pc2 import cleanup_mesh_cache, has_mesh_cache
-from .utils import (
-    _get_fcurves,
-    get_pin_vertex_indices,
-    get_vertices_in_group,
-    parse_vertex_index,
-    set_linear_interpolation,
-)
-
-
-def save_pin_keyframes(context):
-    """Save all keyframes on pinned vertices to persistent Blender storage.
-
-    Saves per (object_uuid, vertex_group) so lookups are fast.
-    """
-    state = get_addon_data(context.scene).state
-    state.saved_pin_keyframes.clear()
-    for group in iterate_active_object_groups(context.scene):
-        if group.object_type == "STATIC":
-            continue
-        for pin_item in group.pin_vertex_groups:
-            from .uuid_registry import resolve_pin
-            obj = resolve_pin(pin_item)
-            obj_name, vg_name = decode_vertex_group_identifier(pin_item.name)
-            if not obj_name or not vg_name:
-                continue
-            if not obj or obj.type != "MESH":
-                continue
-            if not obj.data.animation_data or not obj.data.animation_data.action:
-                continue
-            vg = obj.vertex_groups.get(vg_name)
-            if not vg:
-                continue
-            pin_vis = set(get_vertices_in_group(obj, vg))
-            if not pin_vis:
-                continue
-            grp_entry = None
-            for fc in _get_fcurves(obj.data.animation_data.action):
-                if fc.data_path.startswith("vertices[") and ".co" in fc.data_path:
-                    idx = parse_vertex_index(fc.data_path)
-                    if idx is not None and idx in pin_vis:
-                        if grp_entry is None:
-                            from .uuid_registry import get_or_create_object_uuid, compute_vg_hash
-                            grp_entry = state.saved_pin_keyframes.add()
-                            grp_entry.object_name = obj_name
-                            grp_entry.object_uuid = get_or_create_object_uuid(obj)
-                            grp_entry.vertex_group = vg_name
-                            grp_entry.vg_hash = str(compute_vg_hash(obj, vg_name))
-                        fc_entry = grp_entry.fcurves.add()
-                        fc_entry.data_path = fc.data_path
-                        fc_entry.array_index = fc.array_index
-                        for kp in fc.keyframe_points:
-                            pt = fc_entry.points.add()
-                            pt.frame = int(kp.co[0])
-                            pt.value = kp.co[1]
+from .utils import _get_fcurves
 
 
 def clear_animation_data(context, move_to_frame: bool = True):
@@ -87,30 +32,10 @@ def clear_animation_data(context, move_to_frame: bool = True):
                 continue
             if obj.type != "MESH":
                 continue
-            # Remove MESH_CACHE modifier and delete PC2 file
-            vert_save = [Vector(v.co) for v in obj.data.vertices]
+            # Remove the output MESH_CACHE modifier and its PC2 file.
+            # Keyframed-pin PC2 caches use a separate key and are left
+            # intact — their playback handler keeps driving the mesh.
             cleanup_mesh_cache(obj)
-            # Restore saved pin keyframes for all pinned vertices
-            saved_col = get_addon_data(context.scene).state.saved_pin_keyframes
-            restored = False
-            from .uuid_registry import get_object_uuid
-            obj_uuid = get_object_uuid(obj)
-            for grp_entry in saved_col:
-                if grp_entry.object_uuid == obj_uuid:
-                    for fc_entry in grp_entry.fcurves:
-                        idx = parse_vertex_index(fc_entry.data_path)
-                        for pt in fc_entry.points:
-                            obj.data.vertices[idx].co[fc_entry.array_index] = pt.value
-                            obj.data.vertices[idx].keyframe_insert(
-                                data_path="co", index=fc_entry.array_index,
-                                frame=pt.frame,
-                            )
-                    restored = True
-            if restored:
-                if obj.data.animation_data and obj.data.animation_data.action:
-                    set_linear_interpolation(obj.data.animation_data.action)
-            for i in range(len(obj.data.vertices)):
-                obj.data.vertices[i].co = vert_save[i]
     # Clear fetched frame tracking since keyframes were removed
     get_addon_data(context.scene).state.clear_fetched_frames()
 
@@ -175,21 +100,36 @@ def _restore_object_geometry(obj, snapshot):
                 pt.co = point
 
 
+# Mesh ID-property that records "the current shape in
+# ``vertices[i].co`` is the preserved frame-1 anchor". Written by
+# ``_insert_frame_one_keys`` and read by ``_has_frame_one_geometry_keys``.
+# Keying every pinned vertex's ``vertices[N].co`` here instead would
+# fan out to hundreds of per-axis fcurves across several meshes and
+# tip Blender 5.x's parallel animation evaluator into heap corruption
+# on the next ``frame_set``. The pose already lives in the mesh's
+# vertex buffer, so a single bool property carries the same signal
+# with zero per-frame evaluator load.
+_FRAME_ONE_MARKER = "_pcs_frame_one_preserved"
+
+
 def _insert_frame_one_keys(obj, context):
     if obj.type == "MESH":
-        # Only insert frame-1 keys for pinned vertices (simulation uses PC2)
-        pinned_vert_index = set(get_pin_vertex_indices(obj, context, frame=1))
-        for i in pinned_vert_index:
-            if i < len(obj.data.vertices):
-                obj.data.vertices[i].keyframe_insert(data_path="co", frame=1)
-        if obj.data.animation_data and obj.data.animation_data.action:
-            set_linear_interpolation(obj.data.animation_data.action)
-    # Curves use PC2 — no frame-1 keyframes needed
+        # The pose was just placed into ``vertices[i].co`` by
+        # ``_restore_object_geometry``; setting the marker tells
+        # ``_has_frame_one_geometry_keys`` not to re-snapshot on the
+        # next ``prepare_animation_targets`` pass. The pin encoder
+        # gates on the ``EMBEDDED_MOVE`` sentinel for fcurve reads,
+        # so it sees nothing here either way.
+        obj.data[_FRAME_ONE_MARKER] = True
+    # Curves use PC2; no frame-1 keyframes needed.
 
 
 def _has_frame_one_geometry_keys(obj):
-    # Objects with MESH_CACHE modifier are considered "ready"
+    # Objects with a MESH_CACHE modifier are considered "ready":
+    # their geometry is already driven.
     if has_mesh_cache(obj):
+        return True
+    if obj.type == "MESH" and obj.data.get(_FRAME_ONE_MARKER):
         return True
     if not obj.data.animation_data or not obj.data.animation_data.action:
         return False
@@ -200,6 +140,13 @@ def _has_frame_one_geometry_keys(obj):
         path_prefixes = ("splines[",)
     else:
         return False
+    # Curves anchor on ``splines[N].co`` fcurves (no heap-corruption
+    # issue at this volume) and a marker-less mesh file may carry the
+    # anchor as a frame-1 keyframe on each pinned vertex's ``co``
+    # fcurve. Both are still recognized so the check is correct on
+    # those layouts; the next ``prepare_animation_targets`` pass on a
+    # marker-less mesh writes the marker, after which this branch
+    # short-circuits above.
     for fc in _get_fcurves(action):
         if not fc.data_path.startswith(path_prefixes):
             continue

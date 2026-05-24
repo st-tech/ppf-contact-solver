@@ -113,6 +113,32 @@ def _pc2_frame_positions(obj, scene):
     return [Vector(v) for v in verts]
 
 
+def _edit_mode_pin_positions(obj, vg_index):
+    """Return ``{vert_index: world_co}`` for verts in vg ``vg_index`` on
+    a mesh object that is currently in Edit Mode. Reads positions from
+    the live BMesh so vertex drags update the pin overlay in real time
+    instead of staying at the object-mode snapshot. Returns ``None`` if
+    the object isn't in edit mode or its bmesh has no deform layer.
+    """
+    if obj.mode != "EDIT":
+        return None
+    import bmesh
+    try:
+        bm = bmesh.from_edit_mesh(obj.data)
+    except Exception:
+        return None
+    dl = bm.verts.layers.deform.active
+    if dl is None:
+        return {}
+    world_matrix = obj.matrix_world
+    out = {}
+    for bv in bm.verts:
+        weights = bv[dl]
+        if vg_index in weights and weights[vg_index] > 0.0:
+            out[bv.index] = world_matrix @ bv.co
+    return out
+
+
 def _build_pin_data(scene, depsgraph):
     """Build pin vertex data. Returns list of (vertex, size, color) tuples."""
     pin_data = []
@@ -163,6 +189,33 @@ def _build_pin_data(scene, depsgraph):
                                     for op in pin_ref.operations
                                 )
                                 vg_index = vg.index
+                                # While the user is editing this mesh,
+                                # the live vertex positions live in
+                                # BMesh; ``base_mesh.vertices[i].co``
+                                # still holds the pre-edit snapshot
+                                # until mode exit, so the overlay would
+                                # lag behind a vertex drag. Read live
+                                # positions from BMesh here. PC2-driven
+                                # animated positions are skipped while
+                                # in edit mode because the pin handler
+                                # cannot rewrite the BMesh-owned data
+                                # anyway and the user expects to see
+                                # what they're dragging.
+                                edit_positions = _edit_mode_pin_positions(
+                                    obj, vg_index,
+                                )
+                                if edit_positions is not None:
+                                    for vi, world_co in edit_positions.items():
+                                        if has_ops or vi in animated_indices:
+                                            color = (0.5, 0.5, 1.0, 0.8)
+                                        else:
+                                            color = (1.0, 1.0, 1.0, 0.8)
+                                        pin_data.append((
+                                            world_co,
+                                            group.pin_overlay_size,
+                                            color,
+                                        ))
+                                    continue
                                 for vert in base_mesh.vertices:
                                     for vg_elem in vert.groups:
                                         if vg_elem.group == vg_index:

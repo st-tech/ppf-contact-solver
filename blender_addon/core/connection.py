@@ -261,9 +261,9 @@ def spawn_win_native_server(root, port):
     # does this implicitly because the server is started outside the
     # addon; on Windows the addon owns the spawn, so we have to
     # recognize the attach case explicitly. The probe sends a real
-    # protocol-0.04 TCMD ping and checks the JSON response, so a
-    # foreign squatter (e.g. some other tool parked on 9090) still
-    # surfaces as PortInUseByForeignProcess below.
+    # TCMD ping and checks the JSON response, so a foreign squatter
+    # (e.g. some other tool parked on 9090) still surfaces as
+    # PortInUseByForeignProcess below.
     if _port_is_in_use(port):
         if _probe_ppf_cts_server(port):
             return None

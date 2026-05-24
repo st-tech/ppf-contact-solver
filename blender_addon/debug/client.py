@@ -248,39 +248,6 @@ def debug_start_mcp(port=DEFAULT_MCP_PORT, host=HOST):
     return debug_request({"command": "start_mcp", "port": port}, host=host, timeout=10.0)
 
 
-def restart_remote_server(host=HOST, timeout=60.0):
-    """Invoke the remote ``$HOME/dev/server/restart.sh`` script via the
-    addon's currently-connected backend (SSH / Docker / local / win_native).
-
-    The script does stop + start atomically on the remote, which is more
-    reliable than coordinating two MCP calls across the still-responding
-    old server and the freshly-launched one.
-
-    Requires the Blender addon to be connected. Returns the script's
-    exit code and output.
-    """
-    # Resolve addon root inside Blender so this works for both legacy
-    # and bl_ext.user_default.<id> layouts.
-    code = (
-        "import sys\n"
-        "_pkg = next(n.removesuffix('.core.facade') for n in sys.modules\n"
-        "            if n.endswith('.core.facade'))\n"
-        "_facade = __import__(_pkg + '.core.facade', fromlist=['runner'])\n"
-        "runner = _facade.runner\n"
-        "backend = runner._backend\n"
-        "if backend is None:\n"
-        "    raise RuntimeError('Addon is not connected; cannot reach remote.')\n"
-        "host_env = 'HOST=0.0.0.0 ' if getattr(backend, '_container', '') else ''\n"
-        "result = backend.exec_command(f'{host_env}bash $HOME/dev/server/restart.sh', shell=True)\n"
-        "print('exit_code:', result.get('exit_code'))\n"
-        "for line in result.get('stdout', []) or []:\n"
-        "    print('[stdout]', line.rstrip())\n"
-        "for line in result.get('stderr', []) or []:\n"
-        "    print('[stderr]', line.rstrip())\n"
-    )
-    return debug_exec(code, host=host, timeout=timeout)
-
-
 # ---------------------------------------------------------------------------
 # Convenience / composite helpers
 # ---------------------------------------------------------------------------

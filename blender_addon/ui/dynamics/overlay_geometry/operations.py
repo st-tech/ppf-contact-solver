@@ -169,8 +169,7 @@ def _build_operation_batches(scene, depsgraph, view_distance=10.0):
                 continue
 
             has_visible = any(
-                op.show_overlay and op.op_type != "EMBEDDED_MOVE"
-                for op in pin_ref.operations
+                op.show_overlay for op in pin_ref.operations
             )
             has_max_towards = any(
                 (op.op_type == "SPIN" and op.spin_center_mode == "MAX_TOWARDS" and op.show_max_towards_spin)
@@ -210,7 +209,7 @@ def _build_operation_batches(scene, depsgraph, view_distance=10.0):
             centroid = sum(vertices, Vector((0, 0, 0))) / len(vertices)
 
             for op in pin_ref.operations:
-                if not op.show_overlay or op.op_type == "EMBEDDED_MOVE":
+                if not op.show_overlay:
                     continue
 
                 rgb = _OP_COLORS.get(op.op_type, (0.8, 0.8, 0.8))

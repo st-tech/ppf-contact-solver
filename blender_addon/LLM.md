@@ -137,6 +137,13 @@ matter. Load when:
 - **Static objects and their Transform sub-box** (Move By / Spin /
   Scale ops, alternative to Blender fcurves, interaction with baked
   output).
+- **Armature-driven static objects**: the **Capture Deformation** /
+  **Clear Deformation Cache** buttons that record per-frame mesh
+  shape onto a STATIC collider whose vertices move because of an
+  Armature modifier, a Lattice or Mesh Deform cage, animated Shape
+  Keys, or a driver. Must be re-pressed any time the animation
+  changes. Exposed as MCP tools `capture_static_deformation`,
+  `clear_static_deformation`, and `get_static_deformation_status`.
 - Overlay colors per group type (Solid red, Shell green, Rod yellow,
   Static blue).
 - **Modifier behavior**: the solver reads `obj.data.vertices`, so
@@ -276,7 +283,7 @@ Developer tooling (not end-user workflows). Load when:
 
 ### `LLM/blender_addon/mcp_tools_reference.md` (~870 lines)
 
-Every MCP tool exposed by the add-on (108 tools in 10 categories:
+Every MCP tool exposed by the add-on (111 tools in 10 categories:
 Connection, Group, Object operations, Simulation, Scene, Dynamic
 parameters, Remote, Console, Debug, Blender). Each entry has the full
 typed signature, parameter list with descriptions, and return notes.
@@ -354,6 +361,7 @@ primary home and the secondary homes so you don't miss anything.
 | Active collision windows                  | scene.md              | parameters.md (the toggle lives in Material Params) |
 | Object group types (SHELL/SOLID/ROD/STATIC) | scene.md            | parameters.md (per-type param tables), constraints.md (curve pins live on ROD only) |
 | Static group Transform ops                | scene.md              | constraints.md (Move By / Spin / Scale share the operation semantics with pin ops) |
+| Armature / Lattice / Shape Key driven Static colliders (Capture Deformation) | scene.md | mcp_tools_reference.md (`capture_static_deformation`, `clear_static_deformation`, `get_static_deformation_status`) |
 | Modifier stack behavior                   | scene.md              | simulation.md (the cache modifier is installed post-Fetch) |
 | SSH + port forwarding                     | connections.md        | troubleshooting.md (auth errors)             |
 | MCP server & tools (narrative)            | integrations.md       | debug.md (CLI starts / reaches it)           |

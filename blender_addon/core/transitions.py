@@ -683,12 +683,13 @@ def _interpret_response(
             [DoLog(f"Protocol version mismatch: {version} != {PROTOCOL_VERSION}")],
         )
 
-    # upload_id is part of protocol 0.03; absence indicates a malformed
-    # response, treat as version mismatch rather than silently coping.
+    # upload_id is mandatory in the current wire protocol; absence
+    # indicates a malformed response, treat as version mismatch
+    # rather than silently coping.
     if "upload_id" not in r:
         return (
             replace(state, version_ok=False),
-            [DoLog("Server response missing upload_id field (protocol 0.03).")],
+            [DoLog("Server response missing upload_id field.")],
         )
     server_upload_id = r["upload_id"]
     # data_hash / param_hash are best-effort: a server that predates
@@ -759,13 +760,13 @@ def _interpret_response(
     else:
         # status_str == "" reaches here only when error_msg is also empty
         # (the error-only path above handled the error+empty-status case).
-        # That combination shouldn't happen against a conforming 0.03
-        # server; treat it as a malformed response.
+        # That combination shouldn't happen against a conforming server;
+        # treat it as a malformed response.
         return (
             replace(state, version_ok=False),
             [DoLog(
-                "Server response has empty status and no error — malformed "
-                "protocol 0.03 reply."
+                "Server response has empty status and no error: malformed "
+                "protocol reply."
             )],
         )
 

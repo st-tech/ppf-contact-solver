@@ -171,13 +171,14 @@ Library-linked rejection. Library-linked objects are rejected because the add-on
 
 ## Static Objects
 
-A Static object group holds meshes that do not deform in the solver: colliders, ground planes, mannequins, props, anything that should influence the simulation without being simulated itself. Static groups share the same panel, transfer, and bake flow as Solid / Shell / Rod groups, but with a smaller material-parameter surface and two exclusive ways to drive motion.
+A Static object group holds meshes that do not deform in the solver: colliders, ground planes, mannequins, props, anything that should influence the simulation without being simulated itself. Static groups share the same panel, transfer, and bake flow as Solid / Shell / Rod groups, but with a smaller material-parameter surface and three mutually exclusive ways to drive motion.
 
 This page centralizes everything specific to the Static type:
 
 - Creating a Static group
-- Moving a Static object: the two ways (Static Ops vs Blender keyframes) and the rule that picks one
+- Moving a Static object: the three ways (Static Ops, Blender keyframes, captured deformation) and the rule that picks one
 - The Transform sub-box: where Static ops live in the UI
+- Armature-driven static objects: the Capture Deformation / Clear Deformation Cache buttons for Armature, Lattice, Mesh Deform, and Shape Key driven colliders
 - Contact parameters: the small parameter set a Static group exposes
 - Baking behavior
 - Snap and merge
@@ -196,16 +197,17 @@ Everything else (duplicating the group, per-object Include checkboxes, removing 
 
 ### Moving a Static object
 
-Static meshes don't deform, but they can translate, rotate, or scale over time. There are two mutually exclusive ways to drive that motion:
+Static meshes do not deform in the simulation, but they can still translate, rotate, scale, or follow an armature pose over time. There are three mutually exclusive ways to drive that motion:
 
-1. Static ops. UI-assigned Move By / Spin / Scale entries edited per assigned object inside the group's Transform sub-box. These are declarative (time range + delta/axis/factor) and shipped as a list to the solver at transfer time.
+1. Static ops. UI-assigned Move By / Spin / Scale entries edited per assigned object inside the group's Transform sub-box. You give each op a time range and a delta, axis, or factor.
 2. Blender transform keyframes. The usual way you animate an object in Blender: select it, hit I on a frame, and pick Location, Rotation, or Scale. Any keyframes you set on the object's own transform channels get picked up automatically. The add-on samples the world transform at each keyframe and ships the track, including Bezier handles, so eases you see in the Graph Editor carry over to the simulation.
+3. Captured deformation. For objects whose mesh shape changes over time, an Armature modifier driven by a posed rig, a Lattice or Mesh Deform cage, animated Shape Keys, or similar setups, use the Capture Deformation button (see the next section) to record the animation onto the collider.
 
-WARNING: Only one source of motion per object at a time. If an assigned Static mesh has any transform fcurve, the encoder sends its keyframed transform and ignores that object's Static ops list. The UI flags this up-front with an error label above the ops list, "Object has Blender keyframes; these ops will be ignored", and the Add-Op operator emits the same warning when you add a new op. The ops stay in the list; they just don't take effect until you remove the fcurves.
+WARNING: Only one source of motion per object at a time. If an assigned Static mesh has any transform fcurve, the encoder sends its keyframed transform and ignores that object's Static ops list. The UI flags this up-front with an error label above the ops list, "Object has Blender keyframes; these ops will be ignored", and the Add-Op operator emits the same warning when you add a new op. The ops stay in the list; they just don't take effect until you remove the fcurves. A populated deformation cache wins over both: while a cache is present for the object, its Static ops and transform keyframes are ignored, because the cache already includes any rigid parent motion in the recorded vertex positions.
 
-NOTE: Shape keys / mesh-level animation are not supported on Static objects. Only object-level transform animation counts. The encoder raises a `RuntimeError` at transfer time if a Static mesh has an action on its mesh datablock (shape-key fcurves), rather than silently dropping the animation.
+NOTE: Shape keys and other mesh-level animation are only honored through Capture Deformation. A Static mesh with Shape Key animation will not move in the solver unless you click Capture Deformation, and the add-on refuses the upload with an explicit error if a deforming Static mesh has no cache.
 
-Use Static ops when the motion is scripted and easy to describe with a few time ranges: a sliding floor plate that moves from A to B between frame 30 and 60, a spinning turntable, a shrinking platform. Use Blender keyframes when the motion lives in Blender's own timeline already, typically a rigged mannequin driven by an armature or a prop animated by hand in the Graph Editor.
+Use Static ops when the motion is scripted and easy to describe with a few time ranges: a sliding floor plate that moves from A to B between frame 30 and 60, a spinning turntable, a shrinking platform. Use Blender keyframes when the motion lives in Blender's own timeline already at the object level: a prop animated by hand in the Graph Editor, a collider parented to a Camera. Use captured deformation when the motion is inside the mesh (a posed armature, a deforming lattice, a Shape Key), not just on the object transform.
 
 ### The Transform sub-box
 
@@ -232,6 +234,21 @@ Ops compose in list order: if you stack a `Move By` and a `Spin` whose time rang
 | `SCALE`    | `scale_factor`                                 | Object origin    | Uniform scale; `< 1` shrinks, `> 1` grows.              |
 
 Common fields on every op: `frame_start`, `frame_end`, `transition` (`LINEAR` / `SMOOTH`), and `show_overlay` (toggle the viewport preview).
+
+### Armature-driven static objects
+
+When a Static mesh moves because of something inside the mesh, typically an Armature modifier on a body model, but also a Lattice or Mesh Deform cage, animated Shape Keys, or similar setups, the add-on cannot pick up that motion from object keyframes alone. The artist has to record the animation onto the collider using the Capture Deformation button.
+
+When such an object is assigned to a Static group, the panel recognizes the animation and the button row activates with the hint "Deforming modifier detected; capture to encode" underneath. The buttons:
+
+- Capture Deformation: records the per-frame shape of the deformed mesh onto the object. After the recording, the panel replaces the hint with "Deform cache: N frame(s)".
+- Clear Deformation Cache: discards the recorded animation and returns the panel to the pre-capture state.
+
+WARNING: The artist must press Capture Deformation again whenever the animation changes. The recording is a snapshot taken at the moment the button was clicked. It does not update on its own. If the artist tweaks the armature pose, edits the action's keyframes, changes the modifier stack, edits the rest mesh, or alters parent or constraint chains, the recording is now out of date and the solver will keep using the old motion. Re-press Capture Deformation before the next Transfer so the simulation sees the current animation.
+
+Topology must stay constant across the captured range. If a modifier above the deformer changes the vertex count mid-capture (Subdivision Surface evaluated after the Armature, Remesh, Decimate, Mask), the operator aborts with an explicit error pointing at the offending modifier. Move topology-changing modifiers above the deformer in the stack, or apply them, then retry.
+
+Clear Deformation Cache is also the right move when the artist edits the rest mesh in a way that changes the vertex count, or when the object is being turned back into a rigid Static collider.
 
 ### Contact parameters
 
@@ -298,9 +315,16 @@ add_static_op(group_uuid, object_name, op_type,
 remove_static_op(group_uuid, object_name, index)
 list_static_ops(group_uuid, object_name)
 clear_static_ops(group_uuid, object_name)
+
+# Capture Deformation for Armature / Lattice / Shape Key driven STATIC objects:
+capture_static_deformation(group_uuid, object_name)        # start the modal recording
+clear_static_deformation(group_uuid, object_name)          # drop the recording
+get_static_deformation_status(group_uuid, object_name)     # poll is_deforming / has_cache / frame_count
 ```
 
 See the MCP Tool Reference for the full signatures.
+
+`capture_static_deformation` is modal: it returns as soon as the recording starts and the actual scrub runs on Blender's main loop. Poll `get_static_deformation_status` until `frame_count > 0` to detect completion. Press it again any time the underlying animation changes; the recording does NOT update on its own.
 
 For the Blender-keyframe route there is no add-on-specific API at all. Key the object's transform in Blender as you normally would (`I` in the viewport, the Graph Editor, constraints baked to fcurves, or `obj.keyframe_insert(data_path="location", frame=...)` from Python) and the encoder picks it up at Transfer time.
 
@@ -308,12 +332,15 @@ UNDER THE HOOD:
 
 Mutual exclusion. The encoder checks each Static object in order:
 
-1. If `obj.data.animation_data` has any fcurve (shape-key animation), raise `RuntimeError`. This case is unsupported, and silently dropping it would mislead the user.
-2. Else if `obj.animation_data.action` has any transform fcurve, extract sparse `(time, translation, quaternion, scale)` keyframes plus per-segment Bezier-handle data and send them as `transform_animation`.
-3. Else if the matching `AssignedObject` has a non-empty `static_ops` collection, serialize those ops (frames converted to seconds using the scene FPS, axes swapped into solver orientation) as `static_ops`.
-4. Else send the object with no animation: a rigid, unmoving collider.
+1. If the object has a populated deformation cache (PC2 written by Capture Deformation), emit it as `static_deform_animation` and override the per-frame transform with identity. The cache already includes any rigid parent motion in the recorded vertex stream, so emitting `transform_animation` or `static_ops` alongside it would double-count.
+2. Else, if the object is deforming (its modifier stack would move vertices and the depsgraph confirms it does), refuse the upload with an explicit error. Shipping it as a rest-pose collider would silently mislead the artist.
+3. Else if `obj.animation_data.action` has any transform fcurve, extract sparse `(time, translation, quaternion, scale)` keyframes plus per-segment Bezier-handle data and send them as `transform_animation`.
+4. Else if the matching `AssignedObject` has a non-empty `static_ops` collection, serialize those ops (frames converted to seconds using the scene FPS, axes swapped into solver orientation) as `static_ops`.
+5. Else send the object with no animation: a rigid, unmoving collider.
 
-The first match wins; the other channels are dropped. This is why the UI can warn "these ops will be ignored" as soon as fcurves appear on the object.
+The first match wins; the other channels are dropped. This is why the UI can warn "these ops will be ignored" as soon as fcurves appear on the object, and why Capture Deformation is required (rather than just helpful) for an Armature-driven collider.
+
+Deformation capture internals. The Capture Deformation operator scrubs the Blender depsgraph from `scene.frame_start` to the highest keyframe across every Action that influences the object (the object's own animation_data, its shape-keys animation_data, every parent in the chain, and every modifier's `.object` target). Driver-only and constraint-only setups, which expose no Actions, fall back to `scene.frame_end`. Decoupling from `scene.frame_end` means a 90-frame bone action with the timeline extended to 180 produces a 90-frame cache that releases the collider at frame 91 (so the cloth can fall freely afterwards), rather than a 180-frame cache that freezes the collider at the last posed frame. The cache is stored as a UUID-keyed PC2 sidecar under `<blend_dir>/data/<blend_basename>/<uuid>_staticdeform.pc2`; `clear_static_deformation` deletes it.
 
 Time conversion. Frame values in the UI and MCP handlers are 1-based Blender frames. The encoder converts to seconds as `(frame - 1) / fps`, using the scene's effective FPS (`scene.render.fps` or the add-on's `frame_rate` override; see Scene Parameters).
 

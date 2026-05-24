@@ -307,16 +307,18 @@ pub fn validate_scene_object_identity(name: &str, uuid: &str) -> PyResult<()> {
         .map_err(crate::errors::into_py_err)
 }
 
-/// Reject the encoder bug where a STATIC object carries both an
-/// fcurve-style `transform_animation` and explicit `static_ops`.
+/// Reject the encoder bug where a STATIC object carries more than one
+/// motion source (`transform_animation`, `static_ops`, or
+/// `static_deform_animation`). At most one may be present.
 #[pyfunction]
-#[pyo3(signature = (name, has_anim, has_ops))]
+#[pyo3(signature = (name, has_anim, has_ops, has_deform))]
 pub fn validate_static_anim_xor_ops(
     name: &str,
     has_anim: bool,
     has_ops: bool,
+    has_deform: bool,
 ) -> PyResult<()> {
-    dec::validate_static_anim_xor_ops(name, has_anim, has_ops)
+    dec::validate_static_anim_xor_ops(name, has_anim, has_ops, has_deform)
         .map_err(crate::errors::into_py_err)
 }
 

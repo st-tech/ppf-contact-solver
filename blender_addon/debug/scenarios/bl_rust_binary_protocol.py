@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 import os
 import re
 import subprocess
@@ -28,9 +29,26 @@ NEEDS_BLENDER = True
 # which probes ppf-cts-server.exe at a different code path.
 PLATFORMS = ("linux",)
 
-# Pinned in crates/ppf-cts-server/src/lib.rs::PROTOCOL_VERSION. If a
-# future schema bump lands, update both places in lockstep.
-EXPECTED_PROTOCOL = "0.04"
+
+def _load_expected_protocol() -> str:
+    """Read PROTOCOL_VERSION from the addon's canonical source.
+
+    Mirrors the pattern in ``server_smoke.py`` so the scenario never
+    pins a literal version of its own. The Rust binary's
+    ``PROTOCOL_VERSION`` is required to match this same string at
+    runtime (the addon refuses to handshake otherwise), so reading
+    the Python side is sufficient.
+    """
+    path = os.path.normpath(
+        os.path.join(os.path.dirname(__file__), "..", "..", "core", "protocol.py")
+    )
+    spec = importlib.util.spec_from_file_location("_protocol_for_rust_binary", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod.PROTOCOL_VERSION
+
+
+EXPECTED_PROTOCOL = _load_expected_protocol()
 
 
 _DRIVER_TEMPLATE = """
@@ -87,9 +105,9 @@ def _probe_protocol_version(binary: str, timeout: float = 10.0) -> str | None:
     """Run ``ppf-cts-server --version`` and extract the protocol token.
 
     The clap-generated output is a single line shaped
-    ``ppf-cts-server 0.1.0 (protocol v0.03, schema v1)``. We grep for
-    the ``protocol v...`` substring rather than parsing positionally so
-    a future version-line tweak doesn't false-fail.
+    ``ppf-cts-server <crate-version> (protocol v<X>, schema v<Y>)``.
+    We grep for the ``protocol v...`` substring rather than parsing
+    positionally so a future version-line tweak doesn't false-fail.
     """
     try:
         out = subprocess.run(

@@ -75,8 +75,8 @@ class ProtoClient:
         understands. Returns the parsed response dict; raises on socket
         error.
 
-        Wire is protocol 0.04: ``b"TCMD"`` header, then a big-endian
-        u32 payload-length prefix, then the payload bytes. The previous
+        Wire format: ``b"TCMD"`` header, then a big-endian u32
+        payload-length prefix, then the payload bytes. The previous
         wire relied on ``shutdown(SHUT_WR)`` as the end-of-input
         signal, which Windows tokio failed to deliver as ``Ok(0)`` to
         AsyncRead and pinned every query in FIN_WAIT_2; the production

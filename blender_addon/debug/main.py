@@ -49,7 +49,6 @@ from client import (  # noqa: E402
     mcp_list_resources,
     mcp_list_tools,
     mcp_read_resource,
-    restart_remote_server,
     run_in_blender,
 )
 from output import print_json  # noqa: E402
@@ -127,22 +126,6 @@ def cmd_full_reload(args):
 def cmd_start_mcp(args):
     resp = debug_start_mcp(args.port, args.host)
     print(resp.get("message", resp.get("error", "unknown")))
-
-
-def cmd_restart_server(args):
-    """Run server/restart.sh on the addon's currently-connected remote."""
-    resp = restart_remote_server(host=args.host, timeout=args.timeout)
-    # debug_exec returns {"status": "ok" | "error", "output": "...", "error": "..."}
-    status = resp.get("status")
-    output = resp.get("output", "")
-    if output:
-        print(output, end="")
-    if status != "ok":
-        err = resp.get("error") or resp.get("message") or "unknown"
-        print(f"Error: {err}", file=sys.stderr)
-        sys.exit(1)
-    if "exit_code: 0" not in output:
-        sys.exit(1)
 
 
 def cmd_scene(args):
@@ -288,14 +271,6 @@ def main():
     p_start.add_argument("--port", type=int, default=DEFAULT_MCP_PORT,
                          help=f"MCP port to use (default: {DEFAULT_MCP_PORT})")
 
-    p_restart = sub.add_parser(
-        "restart-server",
-        help="Run server/restart.sh on the addon's connected remote "
-             "(stop + start the solver server atomically).",
-    )
-    p_restart.add_argument("--timeout", type=float, default=60.0,
-                           help="Script timeout in seconds (default: 60)")
-
     sub.add_parser("scene", help="Get current Blender scene info")
 
     p_resources = sub.add_parser("resources", help="List MCP resources")
@@ -350,7 +325,6 @@ def main():
         "reload": cmd_reload,
         "full-reload": cmd_full_reload,
         "start-mcp": cmd_start_mcp,
-        "restart-server": cmd_restart_server,
         "scene": cmd_scene,
         "resources": cmd_resources,
         "read": cmd_read,

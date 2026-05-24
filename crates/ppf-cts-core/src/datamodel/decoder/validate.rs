@@ -44,8 +44,8 @@ pub enum DecoderValidationError {
     ObjectDataMissing,
     #[error("Scene must be populated before making the app")]
     SceneNotPopulated,
-    #[error("STATIC object '{name}' has both transform_animation and static_ops, encoder should have rejected this.")]
-    StaticBothAnimAndOps { name: String },
+    #[error("STATIC object '{name}' has more than one motion source ({sources}); the encoder should have rejected this.")]
+    StaticBothAnimAndOps { name: String, sources: String },
     #[error("Unknown static op type {op_type}")]
     UnknownStaticOpType { op_type: String },
     #[error("Edge data not found for rod object {name}")]
@@ -181,20 +181,41 @@ pub fn validate_scene_object_identity(
     Ok(())
 }
 
-/// Reject the encoder bug where a STATIC object carries both an
-/// fcurve-style `transform_animation` and explicit `static_ops`.
+/// Reject the encoder bug where a STATIC object carries more than one
+/// motion source. The three sources are:
+///   * `transform_animation` (sparse T/R/S keyframes from object/parent
+///     fcurves);
+///   * `static_ops` (UI-authored move/spin/scale ops);
+///   * `static_deform_animation` (per-frame depsgraph-baked vertex
+///     buffer captured by the Capture Deformation operator).
+///
+/// At most one may be present per object. The deform cache always wins
+/// over the other two when present, because the depsgraph already
+/// composed those into its evaluation before the cache was captured.
 pub fn validate_static_anim_xor_ops(
     name: &str,
     has_anim: bool,
     has_ops: bool,
+    has_deform: bool,
 ) -> Result<(), DecoderValidationError> {
-    if has_anim && has_ops {
-        Err(DecoderValidationError::StaticBothAnimAndOps {
-            name: name.to_string(),
-        })
-    } else {
-        Ok(())
+    let n = (has_anim as u32) + (has_ops as u32) + (has_deform as u32);
+    if n <= 1 {
+        return Ok(());
     }
+    let mut active: Vec<&str> = Vec::with_capacity(3);
+    if has_anim {
+        active.push("transform_animation");
+    }
+    if has_ops {
+        active.push("static_ops");
+    }
+    if has_deform {
+        active.push("static_deform_animation");
+    }
+    Err(DecoderValidationError::StaticBothAnimAndOps {
+        name: name.to_string(),
+        sources: active.join(" + "),
+    })
 }
 
 /// Validate a STATIC op type tag.
@@ -356,14 +377,34 @@ mod tests {
     }
 
     #[test]
-    fn validate_static_anim_xor_ops_rejects_both() {
-        assert!(validate_static_anim_xor_ops("a", true, false).is_ok());
-        assert!(validate_static_anim_xor_ops("a", false, true).is_ok());
-        assert!(validate_static_anim_xor_ops("a", false, false).is_ok());
+    fn validate_static_anim_xor_ops_rejects_overlap() {
+        // Zero or one source: always OK.
+        assert!(validate_static_anim_xor_ops("a", false, false, false).is_ok());
+        assert!(validate_static_anim_xor_ops("a", true, false, false).is_ok());
+        assert!(validate_static_anim_xor_ops("a", false, true, false).is_ok());
+        assert!(validate_static_anim_xor_ops("a", false, false, true).is_ok());
+        // Any pair: rejected.
         assert!(matches!(
-            validate_static_anim_xor_ops("a", true, true),
+            validate_static_anim_xor_ops("a", true, true, false),
             Err(DecoderValidationError::StaticBothAnimAndOps { .. })
         ));
+        assert!(matches!(
+            validate_static_anim_xor_ops("a", true, false, true),
+            Err(DecoderValidationError::StaticBothAnimAndOps { .. })
+        ));
+        assert!(matches!(
+            validate_static_anim_xor_ops("a", false, true, true),
+            Err(DecoderValidationError::StaticBothAnimAndOps { .. })
+        ));
+        // All three: rejected, error names every conflicting source.
+        match validate_static_anim_xor_ops("a", true, true, true) {
+            Err(DecoderValidationError::StaticBothAnimAndOps { sources, .. }) => {
+                assert!(sources.contains("transform_animation"));
+                assert!(sources.contains("static_ops"));
+                assert!(sources.contains("static_deform_animation"));
+            }
+            other => panic!("expected StaticBothAnimAndOps, got {other:?}"),
+        }
     }
 
     #[test]

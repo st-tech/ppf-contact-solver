@@ -7,7 +7,8 @@
 // engine + default executor, runs the tokio accept loop until the
 // process receives SIGINT/SIGTERM.
 //
-// The binary speaks protocol v0.03 with the same `progress.log`
+// The binary speaks the wire protocol advertised by
+// `PROTOCOL_VERSION` (see lib.rs) and follows the `progress.log`
 // startup contract the launcher polls for: it appends
 // `SERVER_STARTING` on entry and `SERVER_READY` once the listener is
 // bound. The launcher script

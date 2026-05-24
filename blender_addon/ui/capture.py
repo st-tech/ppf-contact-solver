@@ -662,6 +662,14 @@ def swap_operator_label(op_idname: str, marker_label: str):
     }
     if orig_poll is not None and callable(orig_poll):
         attrs["poll"] = classmethod(lambda cls, ctx: orig_poll(ctx))
+    # Carry over the original operator's property annotations so panel
+    # ``draw`` code that sets ``op.some_field = ...`` on the layout-
+    # returned OperatorProperties keeps working through the swap. Without
+    # this, ``cap_op.group_index = actual_index`` raises AttributeError
+    # mid-draw and Blender drops the remainder of the panel.
+    orig_annotations = getattr(orig, "__annotations__", {})
+    if orig_annotations:
+        attrs["__annotations__"] = dict(orig_annotations)
     Replacement = type(
         "CaptureReplacement_" + op_idname.replace(".", "_"),
         (bpy.types.Operator,), attrs,

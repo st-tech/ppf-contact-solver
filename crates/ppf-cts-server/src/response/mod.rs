@@ -64,6 +64,7 @@ pub fn build_response(state: &ServerState, config: &EngineConfig) -> Value {
 mod tests {
     use super::*;
     use crate::config::EngineConfig;
+    use crate::PROTOCOL_VERSION;
     use ppf_cts_core::state::{Build, Data, ServerState, Solver};
 
     #[test]
@@ -84,7 +85,7 @@ mod tests {
         assert_eq!(m["status"], "READY");
         assert_eq!(m["data"], "READY");
         assert_eq!(m["upload_id"], "abc123abc123");
-        assert_eq!(m["protocol_version"], "0.03");
+        assert_eq!(m["protocol_version"], PROTOCOL_VERSION);
         assert!(m.contains_key("hardware"));
         // No build progress when not building.
         assert!(!m.contains_key("progress"));

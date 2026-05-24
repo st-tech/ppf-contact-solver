@@ -112,9 +112,33 @@ def draw_overlay_callback():
     frame = scene.frame_current
     view_distance = region.view_distance
     cached_view_distance = _overlay_cache["view_distance"]
+    # An object in Edit Mode owns its vertex positions via BMesh; the
+    # object-mode mesh data and the overlay_version are not updated
+    # for live vertex drags. Force a per-redraw rebuild while any
+    # pinned mesh is being edited so the pin overlay tracks the drag
+    # in real time. Cost is bounded by ``_build_pin_data`` over the
+    # active groups, which is the same cost as a normal frame change.
+    any_pin_obj_in_edit = False
+    try:
+        for grp in iterate_active_object_groups(scene):
+            if grp.object_type == "STATIC":
+                continue
+            for obj_ref in grp.assigned_objects:
+                if not obj_ref.included:
+                    continue
+                from ...core.uuid_registry import resolve_assigned
+                ob = resolve_assigned(obj_ref)
+                if ob is not None and ob.type == "MESH" and ob.mode == "EDIT":
+                    any_pin_obj_in_edit = True
+                    break
+            if any_pin_obj_in_edit:
+                break
+    except Exception:
+        any_pin_obj_in_edit = False
     rod_needs_rebuild = (
         version != _overlay_cache["version"]
         or frame != _overlay_cache["frame"]
+        or any_pin_obj_in_edit
     )
     # View-scaled batches also need to refresh on zoom.
     view_needs_rebuild = (

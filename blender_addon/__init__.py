@@ -274,7 +274,11 @@ def _register_body():
     _atexit.unregister(_disconnect_at_exit)
     _atexit.register(_disconnect_at_exit)
 
-    # Register curve handlers (persistent — survive file loads)
+    # Register curve playback handler (persistent — survives file loads).
+    # No pin handler: pin animation is driven by native vertex-co
+    # fcurves through Blender's own animation system; an extra
+    # frame_change_post handler that touches obj.data.vertices during
+    # playback corrupts the heap in Blender 5.x.
     ensure_curve_handler()
 
     # Note: MESH_CACHE self-heal is driven by the PPF_OT_FramePump modal
@@ -389,7 +393,14 @@ def unregister():
                              bpy.app.handlers.frame_change_post,
                              bpy.app.handlers.depsgraph_update_post):
             for h in list(handler_list):
-                if getattr(h, "__name__", "") == "curve_frame_change_handler":
+                if getattr(h, "__name__", "") in (
+                    # ``pin_frame_change_handler`` is the dead pin-input
+                    # playback handler from the retired _pininput.pc2
+                    # path; the name stays in the cleanup list so any
+                    # leftover instance from an older addon generation
+                    # gets removed on this reload.
+                    "curve_frame_change_handler", "pin_frame_change_handler",
+                ):
                     handler_list.remove(h)
         for h in list(bpy.app.handlers.save_post):
             if getattr(h, "__name__", "") == "migrate_pc2_on_save":

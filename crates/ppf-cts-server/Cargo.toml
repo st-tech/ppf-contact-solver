@@ -4,9 +4,9 @@
 # License: Apache v2.0
 #
 # Tokio engine host for the contact solver. Owns the runtime, wire
-# protocol (TCMD/JSON/BDAT, protocol_version 0.03), monitor task,
-# and effects executor. Bound to ppf-cts-core for the pure state
-# machine.
+# protocol (TCMD/JSON/BDAT; see PROTOCOL_VERSION in src/lib.rs for
+# the current wire version), monitor task, and effects executor.
+# Bound to ppf-cts-core for the pure state machine.
 
 [package]
 name = "ppf-cts-server"

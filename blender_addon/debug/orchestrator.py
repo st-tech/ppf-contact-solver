@@ -69,34 +69,49 @@ if not os.path.isfile(DEFAULT_PYTHON):
 # Addon-side cbor2 prep
 # ---------------------------------------------------------------------------
 
-def ensure_addon_cbor2(*, python: str = DEFAULT_PYTHON,
-                       timeout: float = 60.0) -> tuple[bool, str]:
-    """Make sure ``blender_addon/lib/cbor2/__init__.py`` exists.
+def warmup_addon_install(*, timeout: float = 60.0) -> tuple[bool, str]:
+    """Force Blender's manifest-driven extension wheel install to complete
+    before any worker spawns.
 
-    The Rust-migration encoder calls ``cbor2.dumps`` on every Transfer
-    click, and the addon resolves it through ``core.module.import_module``
-    against ``blender_addon/lib/``. Production users get the wheel via
-    ``blender_manifest.toml``'s install flow; the test rig sideloads the
-    addon by junction so the wheel never lands on disk. Pip-install
-    cbor2 into the addon's lib/ once before any worker spawns Blender.
-    Idempotent: skips when the dir already exists.
+    ``install-blender-addon.sh`` creates a symlink at
+    ``extensions/user_default/ppf_contact_solver``. The first Blender
+    boot that enables the extension triggers the manifest's wheels
+    (declared in ``blender_addon/blender_manifest.toml``) to be
+    installed into ``extensions/.local/lib/python<X.Y>/site-packages/``
+    with the matching ABI for Blender's bundled Python. Doing that
+    here, synchronously, means slot 0 never races against the install
+    and ``import cbor2`` in a scenario driver always resolves to the
+    correctly-ABI'd wheel.
+
+    The probe doubles as a smoke test: if ``import cbor2`` fails inside
+    Blender after enable, the orchestrator aborts the whole run with a
+    clear error before burning 15 minutes on doomed worker spawns.
+    Production users get the same install path via Blender's Remote
+    Repository (``bpy.ops.extensions.package_install_files``); this
+    function brings the rig into alignment with that flow.
     """
-    addon_lib = os.path.join(REPO_ROOT, "blender_addon", "lib")
-    if os.path.isdir(os.path.join(addon_lib, "cbor2")):
-        return True, "cbor2 already present in blender_addon/lib"
-    os.makedirs(addon_lib, exist_ok=True)
+    import blender_harness as bh
+    bbin = bh.find_blender()
+    if not bbin:
+        return False, "Blender binary not found (set PPF_BLENDER_BIN)"
+
     try:
-        result = subprocess.run(
-            [python, "-m", "pip", "install", "--target", addon_lib,
-             "--no-warn-script-location", "cbor2"],
-            timeout=timeout,
-            capture_output=True,
-            text=True,
+        probe = subprocess.run(
+            [bbin, "-b",
+             "--addons", "bl_ext.user_default.ppf_contact_solver",
+             "--python-expr",
+             "import cbor2; print('CBOR2_OK ' + getattr(cbor2, '__version__', '?'))"],
+            capture_output=True, text=True, timeout=timeout,
         )
     except subprocess.TimeoutExpired as e:
-        return False, f"cbor2 install timed out after {timeout}s\n{e}"
-    output = (result.stdout or "") + (result.stderr or "")
-    return result.returncode == 0, output
+        return False, f"Blender warmup timed out after {timeout}s\n{e}"
+    out = (probe.stdout or "") + (probe.stderr or "")
+    if probe.returncode != 0 or "CBOR2_OK" not in (probe.stdout or ""):
+        return False, (
+            f"cbor2 import inside Blender failed (returncode={probe.returncode}):\n"
+            f"{out[-2000:]}"
+        )
+    return True, out
 
 
 # ---------------------------------------------------------------------------
@@ -503,23 +518,25 @@ def run_many(scenario_names: list[str], *,
     # frontend's parallel njit code is broken on this host (e.g. the
     # workqueue layer crashes on "Concurrent access"); aborting now
     # gives a clear error instead of a 60s build timeout per worker.
-    # Make sure cbor2 is on disk under blender_addon/lib/ so the addon
-    # can import it on the first Transfer click; the Extensions install
-    # path that resolves the manifest's wheels list isn't exercised by
-    # the test rig (it junctions the addon source).
-    print("[orchestrator] ensuring blender_addon/lib/cbor2 is present...")
-    cbor_ok, cbor_log = ensure_addon_cbor2(python=python)
+    # Trigger Blender's manifest-driven extension wheel install (which
+    # installs cbor2 with the correct ABI for Blender's bundled Python)
+    # synchronously, so no worker races against the install on first
+    # boot. This mirrors what Blender's Remote Repository install does
+    # for production users.
+    print("[orchestrator] warming addon install (manifest wheels)...")
+    cbor_ok, cbor_log = warmup_addon_install()
     if not cbor_ok:
-        print("[orchestrator] cbor2 install FAILED:")
+        print("[orchestrator] addon warmup FAILED:")
         print(cbor_log[-2000:])
         return {
             "run_id": run_id, "run_root": run_root,
             "parallel": parallel, "repeat": repeat,
             "total": 0, "passed": 0, "failed": 1,
             "results": [{
-                "slot": -1, "scenario": "<cbor2 install>",
+                "slot": -1, "scenario": "<addon warmup>",
                 "status": "fail", "duration_s": 0.0,
-                "violations": ["cbor2 install into blender_addon/lib/ failed"],
+                "violations": ["cbor2 import inside Blender failed; "
+                               "manifest wheel install didn't satisfy import"],
                 "notes": [cbor_log[-1500:]],
             }],
         }

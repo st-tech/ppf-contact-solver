@@ -100,14 +100,14 @@ where
     R: AsyncReadExt + Unpin,
     W: AsyncWriteExt + Unpin,
 {
-    // TCMD wire (protocol 0.04): the 4-byte header is followed by a
-    // big-endian u32 length prefix, then exactly that many payload
-    // bytes (the `--key value` argument string). Earlier versions of
-    // this handler read until EOF instead, relying on the client
-    // calling shutdown(SHUT_WR) to signal end-of-input — that worked on
-    // POSIX but on Windows tokio doesn't reliably surface the
-    // half-close as Ok(0) to AsyncRead, so the read loop hung forever
-    // and connections piled up in FIN_WAIT_2 state until the server
+    // TCMD wire: the 4-byte header is followed by a big-endian u32
+    // length prefix, then exactly that many payload bytes (the
+    // `--key value` argument string). Earlier versions of this
+    // handler read until EOF instead, relying on the client calling
+    // shutdown(SHUT_WR) to signal end-of-input: that worked on POSIX
+    // but on Windows tokio doesn't reliably surface the half-close
+    // as Ok(0) to AsyncRead, so the read loop hung forever and
+    // connections piled up in FIN_WAIT_2 state until the server
     // stopped accepting new requests entirely.
     let mut len_buf = [0u8; 4];
     if let Err(e) = reader.read_exact(&mut len_buf).await {

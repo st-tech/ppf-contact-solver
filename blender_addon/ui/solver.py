@@ -42,6 +42,10 @@ from ..models.groups import (
     iterate_active_object_groups,
 )
 from .dynamics.bake_ops import bake_progress_snapshot, is_bake_running
+from .dynamics.static_deform_ops import (
+    capture_progress_snapshot,
+    is_capture_running,
+)
 
 
 def _find_missing_pc2_paths(context) -> list[str]:
@@ -321,6 +325,20 @@ class SOLVER_PT_SolverPanel(Panel):
                 prog_box.label(text=f"{bar} {label_text}")
             prog_box.operator("solver.bake_abort", icon="X")
 
+        if is_capture_running():
+            done, total, status, _ = capture_progress_snapshot()
+            factor = (done / total) if total > 0 else 0.0
+            prog_box = box.box()
+            prog_box.label(text=status or "Capturing...", icon="REC")
+            label_text = f"{int(factor * 100)}% ({done}/{total})"
+            try:
+                prog_box.progress(factor=factor, type="BAR", text=label_text)
+            except (AttributeError, TypeError):
+                filled = int(round(factor * 20))
+                bar = "[" + "#" * filled + "." * (20 - filled) + "]"
+                prog_box.label(text=f"{bar} {label_text}")
+            prog_box.operator("solver.capture_abort", icon="X")
+
         # Show missing frames warning (not during simulation)
         response = com.info.response
         remote_frames = int(response.get("frame", 0)) if response else 0
@@ -402,8 +420,10 @@ class SOLVER_PT_SolverPanel(Panel):
             sub.prop(state, "mcp_port", text="Port")
 
 
-class SOLVER_OT_Transfer(TransferRequestMixin, AsyncOperator):
-    """Transfer data to the solver."""
+class SOLVER_OT_Transfer(AsyncOperator):
+    """Upload the scene to the solver, overwriting data.pickle and
+    param.pickle without touching cached artifacts (tetrahedralization,
+    BVH, mesh caches). Use ``Delete Remote Data`` to wipe everything."""
 
     bl_idname = "solver.transfer"
     bl_label = "Transfer"
@@ -448,39 +468,27 @@ class SOLVER_OT_Transfer(TransferRequestMixin, AsyncOperator):
         if error:
             self.report({"ERROR"}, error)
             return {"CANCELLED"}
-        status = com.info.status
-        # Skip the delete round-trip when the server already reports NO_DATA and remote_root is known.
-        response = com.info.response
-        if (response and response.get("data") == "NO_DATA"
-                and com.connection.remote_root):
-            self.report({"INFO"}, "No remote data to delete; uploading scene.")
-            try:
-                data, param, data_hash, param_hash = prepare_upload(context)
-            except ValueError as e:
-                self.report({"ERROR"}, str(e))
-                com.set_error(str(e))
-                return {"CANCELLED"}
-            com.animation.clear()
-            com.build_pipeline(
-                data=data, param=param,
-                data_hash=data_hash, param_hash=param_hash,
-                message="Uploading scene...",
-            )
-            self._mode = "pipeline"
-            self.setup_modal(context)
-            return {"RUNNING_MODAL"}
-        if status in (
-            RemoteStatus.READY,
-            RemoteStatus.RESUMABLE,
-            RemoteStatus.SIMULATION_FAILED,
-        ):
-            self.report(
-                {"INFO"},
-                "Remote data already exists. Deleting it before transfer.",
-            )
-        else:
-            self.report({"INFO"}, "Clearing remote project state before transfer.")
-        self.request_delete()
+        # Transfer is upload-only: it overwrites data.pickle and
+        # param.pickle atomically and lets the server's build pipeline
+        # decide what cached artifacts (tetrahedralization, BVH, mesh
+        # caches) remain valid for the new payload. To wipe everything,
+        # the user has a dedicated "Delete Remote Data" button.
+        try:
+            data, param, data_hash, param_hash = prepare_upload(context)
+        except ValueError as e:
+            self.report({"ERROR"}, str(e))
+            com.set_error(str(e))
+            return {"CANCELLED"}
+        # Local fetched animation is keyed by the previous upload's
+        # data; new data invalidates it, so drop it before kicking the
+        # pipeline (matches the prior NO_DATA fast-path behavior).
+        com.animation.clear()
+        com.build_pipeline(
+            data=data, param=param,
+            data_hash=data_hash, param_hash=param_hash,
+            message="Uploading scene...",
+        )
+        self._mode = "pipeline"
         self.setup_modal(context)
         return {"RUNNING_MODAL"}
 
@@ -509,37 +517,6 @@ class SOLVER_OT_Transfer(TransferRequestMixin, AsyncOperator):
             return {"CANCELLED"}
 
         redraw_all_areas(context)
-        if self._mode == "delete":
-            # Wait for the delete query to complete before dispatching the
-            # upload. If activity is still EXECUTING, the BuildPipelineRequested
-            # transition's ``state.can_operate`` guard would silently drop
-            # the event and the modal would report "complete" on stale
-            # status.
-            if com.busy():
-                return {"PASS_THROUGH"}
-            data_stat = com.info.response.get("data", None)
-            if data_stat == "NO_DATA":
-                if not com.connection.remote_root:
-                    # Root not yet refreshed after delete — wait for next poll
-                    return {"PASS_THROUGH"}
-                self.report({"INFO"}, "Remote data deleted successfully.")
-                try:
-                    data, param, data_hash, param_hash = prepare_upload(context)
-                except ValueError as e:
-                    self.report({"ERROR"}, str(e))
-                    com.set_error(str(e))
-                    self.cleanup_modal(context)
-                    redraw_all_areas(context)
-                    return {"CANCELLED"}
-                com.animation.clear()
-                _console.write("[Transfer] uploading scene...")
-                com.build_pipeline(
-                    data=data, param=param,
-                    data_hash=data_hash,
-                    param_hash=param_hash,
-                    message="Uploading scene...",
-                )
-                self._mode = "pipeline"
 
         if self.is_complete():
             _console.write(f"[Transfer] complete: {com.info.status.value}")

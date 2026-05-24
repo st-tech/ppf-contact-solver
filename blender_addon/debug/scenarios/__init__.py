@@ -43,6 +43,9 @@ from . import bl_pin_torque
 from . import bl_pin_compose_move_spin
 from . import bl_pin_compose_spin_move
 from . import bl_pin_compose_full
+from . import bl_pin_op_type_enum_stable
+from . import bl_pin_make_keyframe_writes_fcurves
+from . import bl_pin_overlay_follows_edit_mode
 
 # UI / state-machine integration scenarios. These exercise
 # overlay invalidation, race-condition surfaces, fetch-clear-refetch,
@@ -78,6 +81,7 @@ from . import bl_fetch_failed_watchdog
 from . import bl_server_unknown_recovery
 from . import bl_profile_load_batch
 from . import bl_pin_rod_curve
+from . import bl_static_deform_anim
 from . import bl_static_op_anim
 from . import bl_multi_group
 from . import bl_collider_keyframes
@@ -91,6 +95,7 @@ from . import bl_project_rename_resync
 from . import bl_intersection_records_roundtrip
 from . import bl_violation_overlay_classification
 from . import bl_self_intersection_build_reject
+from . import bl_solid_zero_volume_reject
 
 # Copy/paste roundtrip coverage. Material Params and Pin Operations
 # expose COPYDOWN / PASTEDOWN buttons backed by a WindowManager-scoped
@@ -148,6 +153,9 @@ REGISTRY = {
     "bl_pin_compose_move_spin": bl_pin_compose_move_spin,
     "bl_pin_compose_spin_move": bl_pin_compose_spin_move,
     "bl_pin_compose_full": bl_pin_compose_full,
+    "bl_pin_op_type_enum_stable": bl_pin_op_type_enum_stable,
+    "bl_pin_make_keyframe_writes_fcurves": bl_pin_make_keyframe_writes_fcurves,
+    "bl_pin_overlay_follows_edit_mode": bl_pin_overlay_follows_edit_mode,
 
     # UI / state-machine integration
     "bl_overlay_invalidation": bl_overlay_invalidation,
@@ -189,6 +197,7 @@ REGISTRY = {
     # stitch, velocity keyframe, bake) and verifies the encoded /
     # simulated round-trip end-to-end.
     "bl_pin_rod_curve": bl_pin_rod_curve,
+    "bl_static_deform_anim": bl_static_deform_anim,
     "bl_static_op_anim": bl_static_op_anim,
     "bl_multi_group": bl_multi_group,
     "bl_collider_keyframes": bl_collider_keyframes,
@@ -211,6 +220,7 @@ REGISTRY = {
     "bl_intersection_records_roundtrip": bl_intersection_records_roundtrip,
     "bl_violation_overlay_classification": bl_violation_overlay_classification,
     "bl_self_intersection_build_reject": bl_self_intersection_build_reject,
+    "bl_solid_zero_volume_reject": bl_solid_zero_volume_reject,
 
     # Copy/paste clipboards (Material Params, Pin Operations).
     "bl_copy_paste_material_params": bl_copy_paste_material_params,

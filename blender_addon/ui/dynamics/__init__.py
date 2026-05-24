@@ -13,6 +13,7 @@ from . import (
     panels,
     pin_ops,
     profile_ops,
+    static_deform_ops,
     static_ops,
     ui_lists,
     velocity_keyframe_ops,
@@ -106,6 +107,7 @@ def register():
     dyn_param_ops.register()
     invisible_collider_ops.register()
     pin_ops.register()
+    static_deform_ops.register()
     static_ops.register()
     velocity_keyframe_ops.register()
     collision_window_ops.register()
@@ -124,6 +126,7 @@ def unregister():
     collision_window_ops.unregister()
     velocity_keyframe_ops.unregister()
     static_ops.unregister()
+    static_deform_ops.unregister()
     pin_ops.unregister()
     dyn_param_ops.unregister()
     bake_ops.unregister()

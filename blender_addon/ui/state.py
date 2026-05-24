@@ -34,9 +34,6 @@ from ..models.groups import (  # noqa: F401
 # Re-exports for backward compatibility
 from .state_types import (
     FetchedFrameItem,
-    SavedPinKeyframePoint,
-    SavedPinFCurve,
-    SavedPinGroup,
     MergePairItem,
     DynParamKeyframe,
     DynParamItem,
@@ -556,12 +553,6 @@ class State(PropertyGroup):
         name="Fetched Frame",
         description="A list of fetched frames",
     )  # pyright: ignore
-    saved_pin_keyframes: CollectionProperty(
-        type=SavedPinGroup,
-        name="Saved Pin Keyframes",
-        description="Pin keyframes saved before simulation for restore on clear",
-    )  # pyright: ignore
-
     def convert_fetched_frames_to_list(self) -> list[int]:
         """Convert fetched frames to a list of integers."""
         return [item.value for item in self.fetched_frame]
@@ -730,9 +721,6 @@ for _i in range(N_MAX_GROUPS):
 
 classes = [
     FetchedFrameItem,
-    SavedPinKeyframePoint,
-    SavedPinFCurve,
-    SavedPinGroup,
     VelocityKeyframe,
     CollisionWindowEntry,
     StaticOpItem,

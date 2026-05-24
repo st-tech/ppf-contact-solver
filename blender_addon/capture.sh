@@ -124,6 +124,14 @@ OPTIONS
                         realistic content. The script is exec'd with `bpy`
                         already imported in its globals.
 
+    --blend-file PATH   Load a .blend file at Blender startup, BEFORE the
+                        capture timer fires. Use this when you need a
+                        prepared scene (mesh + addon group state already
+                        on disk) instead of building it from scratch in
+                        --pre-python. Loading the file via the command
+                        line avoids the GUI-mode hang that an in-timer
+                        ``bpy.ops.wm.open_mainfile`` triggers.
+
     --interactive       Launch Blender and stay alive for LLM control.
                         Prints CAPTURE_READY with ports. See notes above
                         about the 5s MCP timeout limitation.
@@ -206,6 +214,7 @@ SIDEBAR_WIDTH=560
 HIDE_PANELS=""
 PROFILE=""
 PRE_PYTHON=""
+BLEND_FILE=""
 TARGETS=()
 ALL_PANELS=()  # Array — multiple --all flags allowed
 
@@ -220,6 +229,7 @@ while [[ $# -gt 0 ]]; do
         --hide)       HIDE_PANELS="$2"; shift 2 ;;
         --profile)    PROFILE="$2"; shift 2 ;;
         --pre-python) PRE_PYTHON="$2"; shift 2 ;;
+        --blend-file) BLEND_FILE="$2"; shift 2 ;;
         --interactive) INTERACTIVE=1; shift ;;
         -*)           echo "Unknown option: $1" >&2; exit 1 ;;
         *)            TARGETS+=("$1"); shift ;;
@@ -734,7 +744,21 @@ export _CAPTURE_RELOAD_PORT="$RELOAD_PORT"
 
 # Launch Blender in the background, then immediately hide its window.
 # Screenshots still work because the window exists (just not visible).
-"$BLENDER" --enable-event-simulate --addons bl_ext.user_default.ppf_contact_solver --python-expr "$PYTHON_SCRIPT" 2>&1 &
+#
+# A --blend-file goes BEFORE the option flags so Blender opens it on the
+# command line. We deliberately avoid ``bpy.ops.wm.open_mainfile`` from a
+# pre-python script: in GUI mode, replacing the active blend inside a
+# timer callback invalidates the window-manager that owns the timer and
+# wedges the main event loop.
+BLEND_ARGS=()
+if [ -n "$BLEND_FILE" ]; then
+    if [ ! -f "$BLEND_FILE" ]; then
+        echo "Error: --blend-file '$BLEND_FILE' does not exist" >&2
+        exit 1
+    fi
+    BLEND_ARGS+=("$BLEND_FILE")
+fi
+"$BLENDER" "${BLEND_ARGS[@]}" --enable-event-simulate --addons bl_ext.user_default.ppf_contact_solver --python-expr "$PYTHON_SCRIPT" 2>&1 &
 BLENDER_PID=$!
 
 # Wait briefly for the window to appear, then hide it

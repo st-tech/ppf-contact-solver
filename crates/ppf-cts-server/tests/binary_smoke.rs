@@ -22,6 +22,8 @@ use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
+use ppf_cts_server::PROTOCOL_VERSION;
+
 /// Pick a free TCP port by binding to port 0 and immediately closing.
 /// Race window vs. the child spawn is small but non-zero; tests
 /// retry the connection on `ConnectionRefused` for the boot grace.
@@ -127,7 +129,7 @@ fn binary_listens_accepts_tcmd_and_shuts_down() {
 
     let response: serde_json::Value =
         serde_json::from_str(trimmed).unwrap_or_else(|e| panic!("bad JSON: {e}\nbody: {trimmed}"));
-    assert_eq!(response["protocol_version"], "0.03");
+    assert_eq!(response["protocol_version"], PROTOCOL_VERSION);
     assert_eq!(response["status"], "NO_DATA");
     assert!(response.get("hardware").is_some(), "missing hardware block");
 

@@ -9,11 +9,12 @@
 // the response shape + on-disk side effects.
 //
 // This is the closest analog to a Blender-addon ↔ server interaction
-// we can run from cargo test, so it locks in protocol_version 0.03
-// byte compatibility.
+// we can run from cargo test, so it locks in byte compatibility for
+// whatever PROTOCOL_VERSION the crate currently advertises.
 
 use std::time::Duration;
 
+use ppf_cts_server::PROTOCOL_VERSION;
 use serde_json::Value;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -36,7 +37,7 @@ async fn tcmd_ping_returns_status_response() {
         panic!("invalid JSON: {e}\n--- raw ---\n{body}");
     });
 
-    assert_eq!(response["protocol_version"], "0.03");
+    assert_eq!(response["protocol_version"], PROTOCOL_VERSION);
     // No data uploaded yet, so status must be NO_DATA.
     assert_eq!(response["status"], "NO_DATA");
     assert_eq!(response["data"], "NO_DATA");
@@ -61,7 +62,7 @@ async fn tcmd_no_id_returns_error() {
     let body = std::str::from_utf8(&bytes).unwrap().trim_end();
     let response: Value = serde_json::from_str(body).expect(body);
     assert_eq!(response["error"], "NO_ID");
-    assert_eq!(response["protocol_version"], "0.03");
+    assert_eq!(response["protocol_version"], PROTOCOL_VERSION);
 
     let _ = cancel.send(());
 }

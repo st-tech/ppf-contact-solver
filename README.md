@@ -151,7 +151,7 @@ To retain consistency with the paper, we have created a new branch ```sigasia-20
 
 ## ⚡️ Requirements
 
-- 🔥 A modern NVIDIA GPU (CUDA 12.8 or newer)
+- 🔥 An NVIDIA GPU with CUDA 12.8 or newer support. The RTX 4090 or 5090 is ideal for large-scale simulations, while the RTX 3090, 4070, or 5070 remains suitable for small to medium-scale workloads.
 - 💻 x86 architecture (arm64 is not supported)
 - 🐳 A Docker environment (see [below](#-docker-linux-and-windows)) or 🪟 Windows 10/11 for native executable (see [below](#-windows-native-executable))
 - 🎨 Blender 5+ (only if you intend to use the Blender add-on)
@@ -815,11 +815,15 @@ Alongside our [official Blender add-on](#-blender-add-on), the following communi
 - [*New Open-Source Physics Engine For Blender Released*](https://80.lv/articles/new-open-source-physics-engine-for-blender-released) on [80 Level](https://80.lv/).
 - [*The Official Blender Add-on for ZOZO's Contact Solver - An Open-Source Physics Solver*](https://www.pixelsham.com/2026/05/20/the-official-blender-add-on-for-zozos-contact-solver-an-open-source-physics-solver/) on [PixelSham](https://www.pixelsham.com/).
 - [*ZOZO's Contact Solver Blender Add-on 2026*](https://3dnchu.com/archives/zozos-contact-solver-b3d/) (Japanese article) on [3D人-3dnchu-](https://3dnchu.com/).
+- [*ZOZO Releases Open-Source High-Precision Physics Simulation "ppf-contact-solver", Enabling Large-Scale Cloth Simulation from Blender*](https://modelinghappy.com/archives/68744) (Japanese article) on [MODELING HAPPY](https://modelinghappy.com/).
+- [*ZOZO's Contact Solver: open-source physics simulation lands in Blender 5*](https://www.kabum.it/blog/zozo-ppfcontact-solver-for-blender/) on [Kabum](https://www.kabum.it/).
 
 ### 📣 Sharing Your Work
 
 Our work still needs many improvements, and our documentation and tutorial videos are not very sophisticated.
 The author would greatly appreciate it if you made your own tutorial videos, write-ups, or blog posts about the solver, and posted them online on YouTube, your blog, social media, or anywhere else.
+
+If you post about it on [X.com](https://x.com), please consider using the [**#ZOZOContactSolver**](https://x.com/hashtag/ZOZOContactSolver) tag so the author and community users can find your work.
 
 ## 💼 Commercial Use and Beyond
 

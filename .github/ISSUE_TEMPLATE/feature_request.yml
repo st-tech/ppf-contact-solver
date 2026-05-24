@@ -37,10 +37,10 @@ body:
     validations:
       required: false
   - type: checkboxes
-    id: license-agreement
+    id: contribution-agreement
     attributes:
-      label: License Agreement
+      label: Contribution Agreement
       description: Required before submission.
       options:
-        - label: "I agree to the licensing terms. See https://github.com/st-tech/ppf-contact-solver/blob/main/CONTRIBUTING.md for details."
+        - label: "I confirm that any content I submit in this issue may be used, reproduced, modified, and distributed by this project under the project license or as otherwise described in CONTRIBUTING.md."
           required: true

@@ -140,6 +140,195 @@ def has_transform_fcurves(obj) -> bool:
     return False
 
 
+# Modifier types whose evaluation can move mesh vertices off the
+# rest pose. Picked by inspecting Blender's modifier categories; if
+# any of these is in the stack AND enabled for the depsgraph, the
+# evaluated mesh may differ from obj.data.vertices and a STATIC
+# collider needs a Capture Deformation pass to feed the solver.
+#
+# ``NODES`` is intentionally absent. A Geometry Nodes modifier can
+# do anything from full procedural deformation to a pure normal
+# recompute (Blender 4.1+'s default "Smooth by Angle" node group,
+# auto-added on most meshes, is the most common case and moves no
+# vertices). Treating every NODES modifier as deforming forces
+# Capture Deformation on objects that don't need it. ``NODES`` is
+# instead caught by tier 2 of ``is_deforming_static_object``
+# (depsgraph local-space sampling across the timeline), which
+# answers the same question correctly per-object.
+_DEFORMING_MODIFIER_TYPES = frozenset({
+    "ARMATURE",
+    "CAST",
+    "CLOTH",
+    "CORRECTIVE_SMOOTH",
+    "CURVE",
+    "DISPLACE",
+    "HOOK",
+    "LAPLACIANDEFORM",
+    "LAPLACIANSMOOTH",
+    "LATTICE",
+    "MESH_DEFORM",
+    "SHRINKWRAP",
+    "SIMPLE_DEFORM",
+    "SMOOTH",
+    "SOFT_BODY",
+    "SURFACE_DEFORM",
+    "VOLUME_DISPLACE",
+    "WARP",
+    "WAVE",
+})
+
+
+def _has_shape_key_animation(obj) -> bool:
+    """True if *obj* has any shape-key value fcurve.
+
+    Shape keys with animated `.value` deform the evaluated mesh even
+    though the modifier list looks empty. The encoder must not silently
+    ignore them.
+    """
+    if obj is None or obj.type != "MESH":
+        return False
+    sk = getattr(obj.data, "shape_keys", None)
+    if sk is None:
+        return False
+    ad = getattr(sk, "animation_data", None)
+    if ad is None or ad.action is None:
+        return False
+    return any(_get_fcurves(ad.action))
+
+
+def has_deforming_modifier_stack(obj) -> bool:
+    """True if *obj*'s modifier stack contains any vertex-moving deformer.
+
+    Cheap declarative check (no depsgraph round-trip). Only modifiers
+    enabled for ``show_viewport`` count — a muted deformer doesn't
+    contribute to what Blender or the depsgraph sees.
+    """
+    if obj is None or obj.type != "MESH":
+        return False
+    if not hasattr(obj, "modifiers"):
+        return False
+    for mod in obj.modifiers:
+        if not getattr(mod, "show_viewport", True):
+            continue
+        if mod.type in _DEFORMING_MODIFIER_TYPES:
+            return True
+    return False
+
+
+def _depsgraph_mesh_differs_across_range(obj, context) -> bool:
+    """Compare depsgraph-evaluated mesh *shape* at ``frame_start`` and
+    ``frame_end``. Returns True if any vertex moves in the object's
+    LOCAL space between the two samples.
+
+    Local space is the right comparison: the goal is to detect mesh
+    SHAPE changes (drivers poking vertex coords, geometry-node
+    deformation that fell through the modifier-name list) and let
+    rigid object-transform animation be handled separately by
+    ``transform_animation``. A previous version of this function
+    compared world-space coords, which conflated own-transform
+    fcurves with deformation and forced Capture Deformation on
+    rigid-only STATIC objects.
+    """
+    import numpy as np
+
+    scene = context.scene
+    if scene.frame_end <= scene.frame_start:
+        return False
+    saved = scene.frame_current
+    try:
+        def _sample(f):
+            scene.frame_set(int(f))
+            dg = context.evaluated_depsgraph_get()
+            eval_obj = obj.evaluated_get(dg)
+            eval_mesh = eval_obj.to_mesh()
+            try:
+                n = len(eval_mesh.vertices)
+                if n == 0:
+                    return None
+                co = np.empty((n, 3), dtype=np.float32)
+                eval_mesh.vertices.foreach_get("co", co.ravel())
+                return co
+            finally:
+                eval_obj.to_mesh_clear()
+
+        a = _sample(scene.frame_start)
+        b = _sample(scene.frame_end)
+    finally:
+        scene.frame_set(saved)
+    if a is None or b is None or a.shape != b.shape:
+        return False
+    return bool(np.any(np.abs(a - b) > 1e-6))
+
+
+def _matrix_world_differs_without_own_fcurves(obj, context) -> bool:
+    """Detect motion that comes from a parent / constraint / driver
+    rather than the object's own location/rotation/scale fcurves.
+
+    ``transform_animation`` samples ``obj.matrix_world`` only at the
+    object's own fcurve keyframes; if there are no own fcurves but
+    the world matrix still changes across the timeline, the encoder
+    would silently drop the motion. Surface that case so the user
+    knows to Capture Deformation (which bakes the evaluated motion
+    from every source).
+
+    Returns False when the object DOES have its own loc/rot/scale
+    fcurves: the encoder's transform-keyframe sampler covers those,
+    so the rigid path is sufficient.
+    """
+    import numpy as np
+
+    if has_transform_fcurves(obj):
+        return False
+    scene = context.scene
+    if scene.frame_end <= scene.frame_start:
+        return False
+    saved = scene.frame_current
+    try:
+        def _mw(f):
+            scene.frame_set(int(f))
+            dg = context.evaluated_depsgraph_get()
+            eval_obj = obj.evaluated_get(dg)
+            return np.array(eval_obj.matrix_world, dtype=np.float64)
+        a = _mw(scene.frame_start)
+        b = _mw(scene.frame_end)
+    finally:
+        scene.frame_set(saved)
+    return bool(np.any(np.abs(a - b) > 1e-6))
+
+
+def is_deforming_static_object(obj, context) -> bool:
+    """True if *obj* needs a Capture Deformation pass for the solver.
+
+    Three-tier detection:
+      1. Declarative: deforming modifier stack or shape-key
+         animation.
+      2. Local-space mesh shape change across the timeline (catches
+         driver-only and geometry-node deformation).
+      3. Externally driven object motion: ``matrix_world`` changes
+         across the timeline AND the object has no own loc/rot/scale
+         fcurves (so the rigid ``transform_animation`` path would
+         silently miss it).
+
+    Pure own-transform animation (rigid loc/rot/scale fcurves on a
+    mesh with constant shape and no parent/constraint motion) returns
+    False, and the encoder uses the lighter ``transform_animation``
+    path instead.
+    """
+    if obj is None or obj.type != "MESH":
+        return False
+    if has_deforming_modifier_stack(obj):
+        return True
+    if _has_shape_key_animation(obj):
+        return True
+    if context is None:
+        return False
+    if _depsgraph_mesh_differs_across_range(obj, context):
+        return True
+    if _matrix_world_differs_without_own_fcurves(obj, context):
+        return True
+    return False
+
+
 def get_vertices_in_group(obj, vg) -> list[int]:
     """Return vertex indices belonging to the given vertex group.
 

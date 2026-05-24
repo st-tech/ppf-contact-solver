@@ -80,6 +80,11 @@ class OBJECT_UL_PinVertexGroupsList(UIList):
 class OBJECT_UL_PinOperationsList(bpy.types.UIList):
     def draw_item(self, context, layout, data, item, icon, active_data, active_property, index):
         row = layout.row(align=True)
+        # EMBEDDED_MOVE is the legacy auto-detected marker the addon
+        # wrote for fcurve-driven pin animation. It's not a runtime
+        # operation; the encoder skips it. Display matches pub-main:
+        # ``[Embedded] Move`` with the standard KEYFRAME icon, no
+        # show_overlay toggle.
         if item.op_type == "EMBEDDED_MOVE":
             row.label(text="[Embedded] Move", icon="KEYFRAME")
             return

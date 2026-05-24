@@ -586,6 +586,12 @@ class ParamDecoder:
             obj_cfg = self._pin_config.get(dyn_name, {})
             if not obj_cfg:
                 continue
+            # Collapse the single all-vertex holder (built by
+            # _apply_pin_mapping) into one holder per pin_group_id, so a
+            # group's ops/animation apply once to the whole group. Without
+            # this a keyframed N-vertex pin became N one-vertex holders,
+            # each carrying every keyframe op -> N*M solver pin files.
+            self._regroup_pin_holders(dyn_obj, obj_cfg)
             for pin_holder in dyn_obj.pin_list:
                 # For solid objects, use stored Blender indices for config lookup
                 lookup_indices = getattr(pin_holder._data, '_blender_pin_indices', None) or pin_holder.index
@@ -593,10 +599,52 @@ class ParamDecoder:
                     cfg = obj_cfg.get(vi)
                     if cfg is None:
                         continue
-                    self._apply_pin_cfg_entry(pin_holder, dyn_name, vi, cfg, verbose)
+                    self._apply_pin_cfg_entry(
+                        pin_holder, dyn_name, vi, cfg, obj_cfg, verbose,
+                    )
                     break
 
-    def _apply_pin_cfg_entry(self, pin_holder, dyn_name, vi, cfg, verbose):
+    @staticmethod
+    def _regroup_pin_holders(dyn_obj, obj_cfg):
+        """Rebuild ``dyn_obj``'s pin holders as one holder per pin group.
+
+        ``_apply_pin_mapping`` registers a single holder spanning every
+        pinned vertex of an object. An object with several distinct pin
+        vertex groups (e.g. separate ``left`` / ``right`` pins) needs one
+        holder per group so each group's config is applied to exactly its
+        vertices. Grouping key is ``pin_group_id`` from ``obj_cfg``.
+
+        Skips SOLID surface-mapped holders: those carry
+        ``_blender_pin_indices`` and a sim-vertex set the regroup would
+        lose, and ``_apply_pin_mapping`` already builds them correctly.
+        """
+        holders = list(dyn_obj.pin_list)
+        if not holders:
+            return
+        if any(getattr(h._data, "_blender_pin_indices", None)
+               for h in holders):
+            return
+        all_idx = [int(i) for h in holders for i in h.index]
+        gid_order: list = []
+        gid_verts: dict = {}
+        for vi in all_idx:
+            cfg = obj_cfg.get(vi)
+            # Verts with no config entry (plain hold-fixed pins) group
+            # under one sentinel key so they stay a single holder too.
+            key = cfg.get("pin_group_id") if cfg else "__plain__"
+            if key not in gid_verts:
+                gid_verts[key] = []
+                gid_order.append(key)
+            gid_verts[key].append(vi)
+        # Already one-holder-per-group: nothing to do.
+        if len(holders) == len(gid_order):
+            return
+        dyn_obj.pin_list.clear()
+        for key in gid_order:
+            dyn_obj.pin(gid_verts[key])
+
+    def _apply_pin_cfg_entry(self, pin_holder, dyn_name, vi, cfg, obj_cfg,
+                             verbose):
         """Apply a single pin-config entry to ``pin_holder``."""
         if "unpin_time" in cfg:
             pin_holder.unpin(cfg["unpin_time"])
@@ -608,9 +656,9 @@ class ParamDecoder:
             pin_holder._data.pin_group_id = cfg["pin_group_id"]
             if verbose:
                 print(f"  {dyn_name}[{vi}]: pin_group_id={cfg['pin_group_id']}")
-        if "operations" not in cfg and "pin_anim" not in cfg:
+        if "operations" not in cfg and "embedded_move_index" not in cfg:
             return
-        embedded_ops = self._build_embedded_move_ops(pin_holder, cfg, vi)
+        embedded_ops = self._build_embedded_move_ops(pin_holder, obj_cfg)
         embedded_move_index = cfg.get("embedded_move_index", -1)
         explicit_operations = cfg.get("operations", [])
         # Validate: torque cannot be mixed with kinematic ops
@@ -645,38 +693,53 @@ class ParamDecoder:
             print(f"  {dyn_name}[{vi}]: operations={len(pin_holder.operations)}")
 
     @staticmethod
-    def _build_embedded_move_ops(pin_holder, cfg, vi):
-        """Build embedded ``MoveByOperation`` segments from ``pin_anim`` keyframes.
+    def _build_embedded_move_ops(pin_holder, obj_cfg):
+        """Build embedded ``MoveByOperation`` segments from ``pin_anim``.
 
-        Deltas are broadcast to all sim vertices in the pin. Per-segment
-        delta math runs in Rust (``dec::keyframe_translation_segments``);
-        the Python wrapper still owns ``MoveByOperation`` instantiation
-        since ``MoveByOperation`` is a Python dataclass.
+        Each pinned vertex's ``PinData`` carries its own single-entry
+        ``pin_anim`` track (``{vertex_index: PinAnim}``). Consecutive
+        keyframes become ``MoveByOperation`` segments whose ``delta`` is
+        the genuine per-vertex displacement, so the pin deforms — it is
+        not rigidly translated.
         """
         import numpy as np
-        pin_anim = cfg.get("pin_anim", {})
-        n_pin_verts = len(pin_holder.index)
-        keyframe = pin_anim.get(vi)
+        from ._scene_pin_ import MoveByOperation
+
+        index = list(pin_holder.index)
+        n_pin_verts = len(index)
+
+        # Each vertex's own track lives in its own cfg entry, keyed by
+        # that same vertex index. Gather them in pin_holder.index order.
+        tracks = []
+        times = None
+        for v in index:
+            cfg = obj_cfg.get(v)
+            track = cfg.get("pin_anim", {}).get(v) if cfg else None
+            tracks.append(track)
+            if track is not None and times is None:
+                times = list(track["time"])
+        if times is None or len(times) < 2:
+            return []
+        n_frames = len(times)
+
+        # Per-vertex absolute-position tracks, aligned to the
+        # pin_holder.index order. A vertex with no track keeps a zero
+        # track (zero delta — unaffected by the embedded move).
+        positions = np.zeros((n_frames, n_pin_verts, 3), dtype=np.float64)
+        for j, track in enumerate(tracks):
+            if track is not None:
+                pos = np.asarray(track["position"], dtype=np.float64)
+                if pos.shape == (n_frames, 3):
+                    positions[:, j, :] = pos
+
         embedded_ops: list = []
-        if keyframe and len(keyframe["time"]) >= 2:
-            from ._scene_pin_ import MoveByOperation
-            times_arr = np.ascontiguousarray(
-                np.asarray(keyframe["time"], dtype=np.float64)
-            )
-            positions_arr = np.ascontiguousarray(
-                np.asarray(keyframe["position"], dtype=np.float64)
-            )
-            segments = _rust.keyframe_translation_segments(
-                times_arr, positions_arr
-            )
-            for prev_t, t, d in segments:
-                delta = np.tile(np.asarray(d, dtype=np.float64), (n_pin_verts, 1))
-                embedded_ops.append(MoveByOperation(
-                    delta=delta,
-                    t_start=prev_t,
-                    t_end=t,
-                    transition="linear",
-                ))
+        for k in range(n_frames - 1):
+            embedded_ops.append(MoveByOperation(
+                delta=np.ascontiguousarray(positions[k + 1] - positions[k]),
+                t_start=times[k],
+                t_end=times[k + 1],
+                transition="linear",
+            ))
         return embedded_ops
 
     def _dispatch_pin_op(self, pin_holder, op):
@@ -1162,24 +1225,29 @@ class SceneDecoder:
 
     def _populate_static(self, scene, obj, name, obj_uuid, local_vert, face, transform, verbose):
         """STATIC group dispatcher: rest-pose mesh, transform-keyframe
-        animation, or UI-assigned static ops. Returns the Scene Object
-        for downstream pin / stitch passes, or ``None`` for the
-        rest-pose case (no further pin work needed).
+        animation, UI-assigned static ops, or per-vertex deformation
+        cache. Returns the Scene Object for downstream pin / stitch
+        passes, or ``None`` for the rest-pose case (no further pin
+        work needed).
         """
         import numpy as np
 
         transform_anim = obj.get("transform_animation", None)
         static_ops = obj.get("static_ops", []) or []
+        static_deform = obj.get("static_deform_animation", None)
         _rust.validate_static_anim_xor_ops(
             name,
             transform_anim is not None,
             bool(static_ops),
+            static_deform is not None,
         )
         if verbose:
             print(
                 f"      > transform_animation: "
                 f"{'YES' if transform_anim else 'NO'}, "
-                f"static_ops: {len(static_ops)}"
+                f"static_ops: {len(static_ops)}, "
+                f"static_deform_animation: "
+                f"{'YES' if static_deform else 'NO'}"
             )
 
         def _setup_pin_shell():
@@ -1261,7 +1329,58 @@ class SceneDecoder:
                 else:
                     _rust.validate_static_op_type(op["op_type"])
             return _obj
-        # Case 3: rest-pose static (plain collision mesh).
+        if static_deform is not None:
+            # Case 3: per-frame depsgraph-baked vertex stream from the
+            # Capture Deformation operator. local_vert is already
+            # frame_start's depsgraph-evaluated mesh in solver world
+            # space (the encoder swapped it in), and transform is
+            # identity. The pin shell starts at vert_frames[0] and we
+            # add one MoveByOperation per consecutive frame pair to
+            # drive every vertex through the recorded trajectory.
+            #
+            # Blender's depsgraph already paints the deformed mesh in
+            # the viewport, so this shell is excluded from output PC2.
+            times = list(static_deform["time"])
+            vert_frames = np.ascontiguousarray(
+                static_deform["vert_frames"], dtype=np.float64,
+            )
+            if vert_frames.ndim != 3 or vert_frames.shape[2] != 3:
+                raise ValueError(
+                    f"static_deform_animation['vert_frames'] for "
+                    f"'{name}' must be (n_frames, n_verts, 3); got "
+                    f"shape {vert_frames.shape}"
+                )
+            n_frames = vert_frames.shape[0]
+            n_verts = vert_frames.shape[1]
+            if n_frames != len(times):
+                raise ValueError(
+                    f"static_deform_animation for '{name}': "
+                    f"len(time)={len(times)} != n_frames={n_frames}"
+                )
+            if n_verts != len(local_vert):
+                raise ValueError(
+                    f"static_deform_animation for '{name}': "
+                    f"cache has {n_verts} vertices but mesh has "
+                    f"{len(local_vert)}"
+                )
+            _obj, _ = _setup_pin_shell()
+            _obj._exclude_from_output = True
+            pin = _obj.pin()
+            # Successive MoveBy segments compose: at t=times[k],
+            # pin pos = local_vert + sum(deltas up to k) = vert_frames[k]
+            # (because the encoder set local_vert == vert_frames[0]).
+            for k in range(n_frames - 1):
+                delta = np.ascontiguousarray(
+                    vert_frames[k + 1] - vert_frames[k], dtype=np.float64,
+                )
+                pin.move_by(
+                    delta,
+                    t_start=float(times[k]),
+                    t_end=float(times[k + 1]),
+                    transition="linear",
+                )
+            return _obj
+        # Case 4: rest-pose static (plain collision mesh).
         self._asset.add.tri(name, local_vert, face)
         _static_obj = scene.add(name, obj_uuid)
         if transform is not None:
@@ -1306,12 +1425,18 @@ class SceneDecoder:
             ftw_kwargs = (
                 (ftetwild_by_uuid or {}).get(obj_uuid, {}) or {}
             )
-            tet_mesh = entry["tri_mesh"].tetrahedralize(
-                status_callback=lambda detail, prefix=prefix: report(
-                    f"{prefix}: {detail}"
-                ),
-                **ftw_kwargs,
-            )
+            try:
+                tet_mesh = entry["tri_mesh"].tetrahedralize(
+                    status_callback=lambda detail, prefix=prefix: report(
+                        f"{prefix}: {detail}"
+                    ),
+                    **ftw_kwargs,
+                )
+            except ValueError as e:
+                # Prepend the object name so the addon UI shows which
+                # SOLID mesh failed (the underlying message already
+                # explains the cause and suggests SHELL).
+                raise ValueError(f"{name}: {e}") from e
             entry["_tet_mesh_result"] = tet_mesh
             progress["completed"] += entry["tetra_weight"]
             report(
@@ -1457,8 +1582,13 @@ class SceneDecoder:
                     holder._data._tet_V = V
                     holder._data._blender_vert = vert
         else:
-            for i in pin_index:
-                _obj.pin([i])
+            # One holder for the whole pinned set. apply_pin_config
+            # later splits it per pin_group_id when the object has
+            # multiple distinct pin vertex groups. (A per-vertex
+            # _obj.pin([i]) loop here made N holders, and a keyframed
+            # pin then wrote N x M operation files for the solver.)
+            if pin_index:
+                _obj.pin(list(pin_index))
 
     def _apply_stitch(self, obj, _obj, name, verbose):
         """Stitch pass: register a stitch asset and attach it to ``_obj``
