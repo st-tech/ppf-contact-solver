@@ -806,6 +806,7 @@ Alongside our [official Blender add-on](#-blender-add-on), the following communi
 
 - [*The Worst Bug In Games Is Now Gone Forever*](https://www.youtube.com/watch?v=VOORiyip4_c) by [Two Minute Papers](https://www.youtube.com/@TwoMinutePapers).
 - [*Visual Components - ZOZO's Contact Solver Handshanking*](https://www.youtube.com/watch?v=k000SaPXK4Q) by [idkfa](https://www.youtube.com/@idkfa3).
+- [*Blender 3D - ZOZO's Contact Solver Capability Test - Squished Cloths under Rubber Ball*](https://www.youtube.com/watch?v=emA3xxJjtOM) by [\[BH\]Lithium](https://www.youtube.com/@lithium820).
 
 ### 📰 Articles
 
@@ -854,7 +855,7 @@ If you would prefer to reach out privately, you can also email the author at ryo
 
 Please refrain from attaching code patches or other materials that would be considered contributions to this project. Anything you do send is treated under the terms of [CONTRIBUTING.md](./CONTRIBUTING.md): by sending it you agree it is licensed to us and the community under the [Apache License, Version 2.0](./LICENSE) on a royalty-free, unrestricted basis.
 
-If you used this project in a public piece of work, whether a paper, a production credit, or a personal project, the author would like to feature it here. Please send a link to your article, project page, or website (rather than images or clips themselves, since hosting them here may run into licensing issues) and we will be glad to consider linking to it.
+If you used this project in a public piece of work, whether a paper, a production credit, or a personal project, the author would love to feature it here. A link to your article, project page, or website is all we need (rather than images or clips themselves, since hosting them here may run into licensing issues), and we will be happy to add it.
 
 ## 🙏 Acknowledgements
 
