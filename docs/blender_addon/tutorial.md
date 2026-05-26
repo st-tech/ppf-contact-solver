@@ -127,4 +127,16 @@
 [![Snap and Merge](images/tutorials/snap-merge-opt.jpg)](https://zozo.box.com/s/ndqjlf67cdo2dv3xjynqftitg3244a1z){target="_blank" rel="noopener"}
 
 </figure>
+<figure>
+<figcaption><strong>Save and Quit</strong><span>Use the save-and-quit function to checkpoint a session.</span></figcaption>
+
+[![Save and Quit](images/tutorials/save-and-quit-opt.jpg)](https://zozo.box.com/s/8uwsdb5jtcc2ihxi0ugjy1f6qk5yq3nk){target="_blank" rel="noopener"}
+
+</figure>
+<figure>
+<figcaption><strong>Shrink at Runtime</strong><span>Use the shrink material parameter to let things shrink at runtime.</span></figcaption>
+
+[![Shrink at Runtime](images/tutorials/shrink-opt.jpg)](https://zozo.box.com/s/ufmln92er89azj2adnr0ict6bbtpsg39){target="_blank" rel="noopener"}
+
+</figure>
 </div>
