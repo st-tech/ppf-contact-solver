@@ -42,5 +42,15 @@ body:
       label: Contribution Agreement
       description: Required before submission.
       options:
-        - label: "I confirm that any content I submit in this issue may be used, reproduced, modified, and distributed by this project under the project license or as otherwise described in CONTRIBUTING.md."
+        - label: "I confirm that any code, patches, scripts, attachments, or other copyrightable material I include in this issue may be used, reproduced, modified, and distributed by this project under the Apache License 2.0 or as otherwise described in CONTRIBUTING.md."
           required: true
+        - label: "This is a feature request from the community (please provide a reference below)."
+          required: false
+  - type: input
+    id: community-reference
+    attributes:
+      label: Community Reference
+      description: If this is a community-sourced request, provide a URL or other reference (forum post, chat link, etc.).
+      placeholder: https://...
+    validations:
+      required: false
