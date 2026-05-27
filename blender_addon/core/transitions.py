@@ -678,9 +678,29 @@ def _interpret_response(
             [DoLog("Server response missing protocol_version field.")],
         )
     if str(version) != PROTOCOL_VERSION:
+        # Take the mismatched server down on detection. Reason: a stale
+        # server orphaned from a previous binary version can keep its
+        # in-memory image alive across the user's update step (they
+        # download a new addon or rebuild the server on disk but the
+        # already-running process keeps serving its old PROTOCOL_VERSION).
+        # If we just log and stay connected, the next Transfer / Run
+        # round-trip hits the same mismatch and the user keeps wondering
+        # why the bump did nothing. Stopping the server forces a clean
+        # restart against the on-disk binary, which is the version the
+        # user actually intended to run. DoStopServer routes through the
+        # current backend (local/win_native: subprocess.terminate;
+        # ssh/docker: pkill -f ppf-cts-server on the remote).
         return (
             replace(state, version_ok=False),
-            [DoLog(f"Protocol version mismatch: {version} != {PROTOCOL_VERSION}")],
+            [
+                DoLog(
+                    f"Protocol version mismatch: server reports {version}, "
+                    f"addon expects {PROTOCOL_VERSION}. Stopping the server "
+                    f"so a fresh restart picks up the on-disk binary; "
+                    f"update the older side if the mismatch persists."
+                ),
+                DoStopServer(),
+            ],
         )
 
     # upload_id is mandatory in the current wire protocol; absence

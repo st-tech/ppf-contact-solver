@@ -57,6 +57,17 @@ pub use executor::{DefaultExecutor, EffectExecutor};
 /// `frontend` decoder disagrees about payload shape; an un-bumped
 /// version there silently mis-decodes instead of erroring.
 ///
+/// 0.07: moving STATIC colliders join the output vertex map. The
+/// pin-shells produced by `transform_animation` (Case 1) and
+/// `static_deform_animation` (Case 3) are no longer flagged
+/// `_exclude_from_output`, so their simulator-projected per-frame
+/// positions stream back as a regular PC2 + ContactSolverCache
+/// modifier on the static object. An old client paired with a new
+/// server would receive vertex frames for static UUIDs its decoder
+/// wasn't expecting; a new client paired with an old server would
+/// silently keep displaying the input animation while the cloth
+/// resolves against the soft-pinned positions.
+///
 /// 0.06: deforming STATIC mesh colliders. A STATIC object whose
 /// modifier stack deforms vertices (Armature, MeshDeform, Lattice,
 /// shape keys, etc.) can now carry a `static_deform_animation`
@@ -82,4 +93,4 @@ pub use executor::{DefaultExecutor, EffectExecutor};
 /// to signal end-of-input, but tokio on Windows did not surface that
 /// half-close as `Ok(0)` to AsyncRead, so the server's read loop
 /// hung forever and the connection sat in FIN_WAIT_2 indefinitely.
-pub const PROTOCOL_VERSION: &str = "0.06";
+pub const PROTOCOL_VERSION: &str = "0.07";

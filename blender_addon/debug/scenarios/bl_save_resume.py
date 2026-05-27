@@ -99,12 +99,17 @@ try:
     # would make the resume-correctness checks below indistinguishable
     # between the bug and the fix (setup(load=0) wipes everything and
     # falls through to fresh-start, so the artifact diff disappears).
-    # 100ms-per-step emulator gives us comfortable margin; the gate
-    # itself fails fast (5s timeout) so a real regression that hangs
-    # the solver before the first advance still surfaces.
+    # Wall-clock to first frame varies a lot between backends: the
+    # CPU emulator at PPF_EMULATED_STEP_MS=100 advances in well under
+    # a second, but the real CUDA solver on a GPU host needs several
+    # seconds of cold start (kernel JIT, GPU mem allocation, dataset
+    # build) before the first frame lands. The gate is long enough
+    # to absorb that cold start; a truly hung solver is still caught
+    # well below the scenario's overall 240s timeout.
+    GATE_TIMEOUT_S = 60.0
     dh.com.run()
     saw_running = False
-    gate_deadline = __import__('time').time() + 5.0
+    gate_deadline = __import__('time').time() + GATE_TIMEOUT_S
     while __import__('time').time() < gate_deadline:
         dh.facade.engine.dispatch(dh.events.PollTick())
         dh.facade.tick()
@@ -115,8 +120,9 @@ try:
         __import__('time').sleep(0.05)
     if dh.facade.engine.state.frame < 1:
         raise RuntimeError(
-            "save-resume gate: solver never advanced past frame 0 "
-            f"within 5s (frame={dh.facade.engine.state.frame}, "
+            f"save-resume gate: solver never advanced past frame 0 "
+            f"within {GATE_TIMEOUT_S:.0f}s "
+            f"(frame={dh.facade.engine.state.frame}, "
             f"solver={dh.facade.engine.state.solver.name})"
         )
     dh.facade.engine.dispatch(dh.events.SaveAndQuitRequested())

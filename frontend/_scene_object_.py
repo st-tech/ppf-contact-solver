@@ -230,7 +230,6 @@ class Object:
         self._stitch = None
         self._uv = None
         self._transform_animation: Optional[TransformAnimation] = None
-        self._exclude_from_output = False
         # Flagged by the decoder when the object is a static-moving mesh
         # driven by a pin-shell (either fcurve or UI-op). Propagates into
         # PinData.hide_in_preview so the JupyterLab viewer doesn't draw

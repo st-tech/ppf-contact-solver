@@ -14,13 +14,28 @@ asset, and utility APIs.
 # package. Submodules import it as ``from . import _rust`` so a missing
 # wheel surfaces this single, actionable error instead of a cascade of
 # ``ModuleNotFoundError`` from whichever submodule loaded first.
+#
+# Tree-local PyO3 lookup. The compiled ``_ppf_cts_py`` wheel is installed
+# into ``<tree-root>/.tree-pyo3/`` by build-all.sh, so two worktrees
+# (e.g. one on `dev`, one on `main`) on the same host don't clobber each
+# other's PyO3 module through a shared venv site-packages. We prepend
+# the tree-local dir to ``sys.path`` if it exists, falling back to the
+# usual import resolution (system Python / Blender bundle / shared venv)
+# when it doesn't. This is intentionally relative to *this file*, so
+# the right tree's build wins regardless of caller cwd.
+import os as _os
+import sys as _sys
+_TREE_PYO3 = _os.path.abspath(_os.path.join(_os.path.dirname(__file__), "..", ".tree-pyo3"))
+if _os.path.isdir(_TREE_PYO3) and _TREE_PYO3 not in _sys.path:
+    _sys.path.insert(0, _TREE_PYO3)
 try:
     import _ppf_cts_py as _rust  # noqa: N816
 except ImportError as e:
     raise ImportError(
         "_ppf_cts_py extension module not found. Build with "
-        "`maturin develop --release` from the repo root, or install "
-        "the prebuilt wheel. Original error: " + str(e)
+        "`build-all.sh` from the repo root (writes the wheel into "
+        f"{_TREE_PYO3}), or install the prebuilt wheel into the "
+        "active Python environment. Original error: " + str(e)
     ) from e
 
 __all__ = [

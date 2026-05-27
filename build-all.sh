@@ -20,6 +20,16 @@
 #   - A Python venv at $HOME/.local/share/ppf-cts/venv with `maturin`
 #     installed. If absent, the script falls back to whatever maturin
 #     is on PATH and warns.
+#
+# PyO3 install location: the maturin output (the `_ppf_cts_py.so` plus
+# its dist-info) lands in `<tree-root>/.tree-pyo3/`, NOT in the shared
+# venv's site-packages. The shared venv stays branch-independent, so
+# multiple checkouts of this repo on a single host don't clobber each
+# other's PyO3 module through the shared venv. `frontend/__init__.py`
+# prepends `<tree-root>/.tree-pyo3/` to `sys.path` at import time, so
+# Python finds the right checkout's PyO3 module automatically. Windows
+# is already tree-local (each tree has its own embedded Python under
+# `build-win-native/python/`); this script doesn't apply there.
 
 set -euo pipefail
 
@@ -31,11 +41,18 @@ VENV="$HOME/.local/share/ppf-cts/venv"
 CARGO_FLAGS=(--release --workspace)
 if [ "$(uname -s)" = "Darwin" ]; then
     # No nvcc on macOS; emulated mode skips the C++/CUDA build path.
+    # Also exclude ppf-cts-py from the workspace cargo step: PyO3 has a
+    # long-running symbol-resolution mismatch with arm64 Python that
+    # makes `cargo build -p ppf-cts-py` fail at link
+    # ("Undefined symbol: __Py_TrueStruct"). The maturin block below
+    # attempts the same compile via its own toolchain and falls back
+    # gracefully when it fails too (see feedback_build_all_macos_pyo3).
     CARGO_FLAGS+=(
+        --exclude ppf-cts-py
         --no-default-features
         --features ppf-cts-solver/emulated,ppf-cts-server/emulated
     )
-    echo "==> macOS detected: building with --features emulated"
+    echo "==> macOS detected: building with --features emulated (ppf-cts-py excluded)"
 fi
 
 # --- Content-hash mtime healer ------------------------------------------------
@@ -116,7 +133,9 @@ fi
 echo "==> cargo build ${CARGO_FLAGS[*]}"
 cargo build "${CARGO_FLAGS[@]}"
 
-echo "==> maturin develop --release (ppf-cts-py)"
+TREE_PYO3="$REPO_ROOT/.tree-pyo3"
+
+echo "==> maturin build --release (ppf-cts-py) → $TREE_PYO3"
 if [ -f "$VENV/bin/activate" ]; then
     # Some venv activate scripts touch unset variables; relax `-u` while sourcing.
     set +u
@@ -140,11 +159,54 @@ if [ -f "$VENV/bin/activate" ]; then
         pip install --quiet "${missing[@]}"
     fi
 else
-    echo "warn: venv not found at $VENV; using whatever maturin is on PATH"
+    echo "warn: venv not found at $VENV; using whatever maturin / pip is on PATH"
 fi
-(cd "$REPO_ROOT/crates/ppf-cts-py" && maturin develop --release)
+
+# Defense in depth: a `_ppf_cts_py` left over in the shared venv from
+# an older `maturin develop` would still satisfy `import _ppf_cts_py`
+# from any tree where `.tree-pyo3/` was not built yet, and would
+# silently shadow this tree's build until a fresh maturin runs. We
+# strip it once on every build-all.sh run; `pip uninstall -y` is a
+# no-op when the package isn't installed.
+if [ -x "$VENV/bin/pip" ]; then
+    if "$VENV/bin/pip" show ppf-cts-py >/dev/null 2>&1; then
+        echo "==> scrubbing stale ppf-cts-py from shared venv"
+        "$VENV/bin/pip" uninstall -y ppf-cts-py >/dev/null
+    fi
+fi
+
+# Build the wheel via maturin into the workspace's target/wheels/, then
+# install it into THIS tree's .tree-pyo3/. `--force-reinstall --no-deps`
+# guarantees an in-place overwrite even when the dist-info already
+# exists from a previous run.
+#
+# macOS link gotcha: pyo3 vs the system / venv Python on arm64 has a
+# long-running symbol-resolution mismatch (see feedback_build_all_macos_pyo3).
+# `maturin build` fails the same way `maturin develop` did, with
+# "Undefined symbol: __Py_TrueStruct" type errors. We attempt the
+# build, fall back to a warning on failure, and leave .tree-pyo3/
+# empty in that case -- frontend/__init__.py's sys.path hook then
+# falls through to whatever _ppf_cts_py is already in the active
+# Python's site-packages (typically a previous successful build, or
+# a wheel built remotely on Linux and rsync'd in).
+set +e
+(cd "$REPO_ROOT/crates/ppf-cts-py" && maturin build --release)
+MATURIN_RC=$?
+set -e
+if [ "$MATURIN_RC" -ne 0 ]; then
+    echo "warn: maturin build failed (rc=$MATURIN_RC). $TREE_PYO3 left untouched;"
+    echo "      frontend/__init__.py falls back to the currently-installed _ppf_cts_py."
+else
+    WHEEL="$(ls -1t "$REPO_ROOT/target/wheels/"ppf_cts_py-*.whl 2>/dev/null | head -n 1)"
+    if [ -z "$WHEEL" ]; then
+        echo "warn: maturin reported success but produced no wheel under $REPO_ROOT/target/wheels/"
+    else
+        mkdir -p "$TREE_PYO3"
+        pip install --quiet --target "$TREE_PYO3" --force-reinstall --no-deps "$WHEEL"
+        echo "==> _ppf_cts_py installed in $TREE_PYO3"
+    fi
+fi
 
 echo "==> done"
 echo "    target/release/ppf-contact-solver"
 echo "    target/release/ppf-cts-server"
-echo "    _ppf_cts_py installed in the venv"

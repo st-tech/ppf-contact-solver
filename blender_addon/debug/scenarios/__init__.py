@@ -82,6 +82,7 @@ from . import bl_server_unknown_recovery
 from . import bl_profile_load_batch
 from . import bl_pin_rod_curve
 from . import bl_static_deform_anim
+from . import bl_static_fcurve_anim
 from . import bl_static_op_anim
 from . import bl_multi_group
 from . import bl_collider_keyframes
@@ -198,6 +199,7 @@ REGISTRY = {
     # simulated round-trip end-to-end.
     "bl_pin_rod_curve": bl_pin_rod_curve,
     "bl_static_deform_anim": bl_static_deform_anim,
+    "bl_static_fcurve_anim": bl_static_fcurve_anim,
     "bl_static_op_anim": bl_static_op_anim,
     "bl_multi_group": bl_multi_group,
     "bl_collider_keyframes": bl_collider_keyframes,

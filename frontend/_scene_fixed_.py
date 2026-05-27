@@ -176,7 +176,6 @@ class FixedScene:
         self._stitch_w = np.zeros((0, 0))
         self._static_param = {}
         self._static_transform_animations: list[tuple[int, TransformAnimation]] = []
-        self._excluded_from_output: set[str] = set()
         self._wall = wall
         self._sphere = sphere
         self._rod_vert_range = rod_vert_range
@@ -620,9 +619,7 @@ class FixedScene:
 
         map_path = os.path.join(path, "map.pickle")
         with open(map_path, "wb") as f:
-            exported_map = {k: v for k, v in self._map_by_name.items()
-                           if k not in self._excluded_from_output}
-            f.write(_cbor.dumps_envelope(_cbor.KIND_VERTEX_MAP, exported_map))
+            f.write(_cbor.dumps_envelope(_cbor.KIND_VERTEX_MAP, self._map_by_name))
         if self._surface_map_by_name:
             # Wire format v2: frame-embedding coefs replace barycentric weights.
             # Wrapped in a versioned envelope so legacy clients (which expected

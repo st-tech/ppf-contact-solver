@@ -240,20 +240,59 @@ def object_pc2_key(obj) -> str:
 # ---------------------------------------------------------------------------
 
 
-def setup_mesh_cache_modifier(obj, pc2_path, frame_start=0.0):
+# Modifier types that change vertex count or topology. MESH_CACHE
+# must come BEFORE any of these in the stack so its per-frame data
+# matches the vertex count baked into the PC2 file. Deform-only
+# modifiers (Armature, Lattice, Hook, Shape Keys, ...) preserve
+# vertex count and can sit above MESH_CACHE; their output is then
+# overridden by the PC2 data on display. Geometry Nodes can do
+# anything topology-wise, so we treat them as generative.
+_GENERATIVE_MODIFIER_TYPES = frozenset({
+    "ARRAY", "BEVEL", "BOOLEAN", "BUILD", "DECIMATE", "EDGE_SPLIT",
+    "MASK", "MIRROR", "MULTIRES", "REMESH", "SCREW", "SKIN",
+    "SOLIDIFY", "SUBSURF", "TRIANGULATE", "WELD", "WIREFRAME",
+    "VOLUME_TO_MESH", "MESH_TO_VOLUME",
+    "EXPLODE", "PARTICLE_INSTANCE",
+    "NODES",
+})
+
+
+def setup_mesh_cache_modifier(obj, pc2_path, frame_start=0.0,
+                              place_after_deformers=False):
     """Add or update a MESH_CACHE modifier on *obj* pointing to *pc2_path*.
 
     Also stamps the current session id on the object as ``_solver_session``
     so reconcile-on-reconnect can tell whether the modifier's cached data
     was produced by the currently-connected run.
+
+    ``place_after_deformers``: when True, position the new modifier so it
+    sits AFTER all position-preserving deformers (Armature, Lattice,
+    Hook, Shape Keys, ...) and BEFORE the first topology-changing
+    modifier (Subsurf, Mirror, Solidify, ...). Used for STATIC colliders
+    whose captured-deformation cache feeds into the simulator: the
+    simulator-projected positions in PC2 must win over the deformers
+    that produced the input, while the user's downstream visual
+    decorators (Subsurf, etc.) keep applying on top. The default
+    (False) puts the modifier first, which is the right semantics for
+    dynamic objects (sim output is the base; decorators run after).
     """
     mod = obj.modifiers.get(MODIFIER_NAME)
     if mod is None:
         mod = obj.modifiers.new(name=MODIFIER_NAME, type="MESH_CACHE")
-        # Move to first so it applies before other modifiers
         idx = obj.modifiers.find(MODIFIER_NAME)
-        if idx > 0:
-            obj.modifiers.move(idx, 0)
+        if place_after_deformers:
+            target = None
+            for i, m in enumerate(obj.modifiers):
+                if m.name == MODIFIER_NAME:
+                    continue
+                if m.type in _GENERATIVE_MODIFIER_TYPES:
+                    target = i
+                    break
+            if target is not None and target < idx:
+                obj.modifiers.move(idx, target)
+        else:
+            if idx > 0:
+                obj.modifiers.move(idx, 0)
     mod.cache_format = "PC2"
     mod.filepath = bpy.path.relpath(pc2_path) if bpy.data.filepath else pc2_path
     mod.interpolation = "LINEAR"
@@ -282,6 +321,42 @@ def remove_mesh_cache_modifier(obj):
     mod = obj.modifiers.get(MODIFIER_NAME)
     if mod is not None:
         obj.modifiers.remove(mod)
+
+
+def modifiers_above_cache(obj) -> list:
+    """Names of modifiers sitting above ContactSolverCache in *obj*'s
+    stack. This is exactly the set :func:`strip_modifiers_above_cache`
+    would remove on bake finalize; the bake-confirm dialog renders
+    this list so the user can see what they'd lose before clicking
+    OK. Empty when the cache modifier is at index 0, absent, or
+    *obj* is not a MESH (curves and other types are never struck).
+    """
+    if obj is None or getattr(obj, "type", None) != "MESH":
+        return []
+    names: list[str] = []
+    for m in obj.modifiers:
+        if m.name == MODIFIER_NAME:
+            return names
+        names.append(m.name)
+    return []
+
+
+def strip_modifiers_above_cache(obj):
+    """Remove every modifier that sits above ContactSolverCache in the
+    stack. Used by Bake operators on STATIC objects whose Case-3
+    deformation feeders (Armature, Lattice, MeshDeform, Shape Keys
+    via a Shape Keys modifier, ...) would otherwise re-deform the
+    baked shape-key data once ContactSolverCache itself is removed.
+
+    No-op when the cache modifier is absent (e.g. already removed)
+    or sits at index 0 with nothing above it (dynamics, Case 1, and
+    Case 2 stacks all land here, so the helper is safe to call
+    unconditionally for any baked MESH).
+    """
+    for name in modifiers_above_cache(obj):
+        mod = obj.modifiers.get(name)
+        if mod is not None:
+            obj.modifiers.remove(mod)
 
 
 def has_mesh_cache(obj):

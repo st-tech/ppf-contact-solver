@@ -1062,10 +1062,6 @@ class Scene:
             rest_vert_mask=rest_vert_mask if has_rest_vert else None,
         )
 
-        for name, obj in dyn_objects:
-            if obj._exclude_from_output:
-                fixed._excluded_from_output.add(name)
-
         if velocity_schedules_by_dmap:
             fixed._velocity_schedules = velocity_schedules_by_dmap
         if collision_windows_by_dmap:

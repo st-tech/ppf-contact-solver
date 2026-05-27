@@ -18,6 +18,17 @@ import subprocess
 # frontend decoder disagrees about payload shape; an un-bumped version
 # there silently mis-decodes instead of erroring.
 #
+# 0.07: moving STATIC colliders join the output vertex map. The
+# pin-shells produced by transform_animation (Case 1) and
+# static_deform_animation (Case 3) are no longer flagged
+# `_exclude_from_output`, so their simulator-projected per-frame
+# positions stream back as a regular PC2 + ContactSolverCache
+# modifier on the static object. An old client paired with a new
+# server would receive vertex frames for static UUIDs its decoder
+# wasn't expecting; a new client paired with an old server would
+# silently keep displaying the input animation while the cloth
+# resolves against the soft-pinned positions.
+#
 # 0.06: deforming STATIC mesh colliders. A STATIC object whose
 # modifier stack deforms vertices (Armature, MeshDeform, Lattice,
 # shape keys, etc.) can now carry a static_deform_animation payload
@@ -43,7 +54,7 @@ import subprocess
 # tokio did not deliver that half-close to the server's AsyncRead, so
 # the server hung in its read loop and connections piled up in
 # FIN_WAIT_2 until the server stopped responding entirely.
-PROTOCOL_VERSION = "0.06"
+PROTOCOL_VERSION = "0.07"
 HEADER_TEXT_CMD = b"TCMD"
 HEADER_BINARY_DATA = b"BDAT"
 HEADER_JSON_DATA = b"JSON"

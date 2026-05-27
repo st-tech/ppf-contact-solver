@@ -19,10 +19,12 @@ from ...core.pc2 import (
     get_pc2_path,
     has_mesh_cache,
     load_curve_cache,
+    modifiers_above_cache,
     object_pc2_key,
     read_pc2_frame,
     read_pc2_frame_count,
     read_pc2_n_verts,
+    strip_modifiers_above_cache,
 )
 from ...core.utils import _get_fcurves, redraw_all_areas, set_linear_interpolation
 from ...models.collection_utils import safe_update_index
@@ -501,6 +503,14 @@ def _finalize_job(context) -> tuple[int, int]:
         # readable PC2 file can otherwise survive the bake). cleanup is
         # idempotent — safe if nothing is there.
         try:
+            # Strip Case-3 upstream deformers (Armature, Lattice, ...)
+            # before removing the cache. They fed the simulator via the
+            # captured-deformation pipeline and would otherwise re-deform
+            # the local-space baked shape keys at playback. No-op when
+            # ContactSolverCache is at index 0, which covers dynamics,
+            # Case 1 (fcurves), and Case 2 (UI ops).
+            if entry["obj_type"] == "MESH":
+                strip_modifiers_above_cache(obj)
             cleanup_mesh_cache(
                 obj,
                 keep_baked_pose=(entry["obj_type"] == "CURVE"),
@@ -600,6 +610,52 @@ def _abort_curve_entry(obj, entry) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Bake-confirm dialog: list the deforming modifiers bake will strip
+# ---------------------------------------------------------------------------
+
+
+def _removable_modifiers_for_objs(objs) -> list:
+    """For each object that has at least one modifier above
+    ContactSolverCache in its stack, return ``(obj_name, [mod_names])``
+    in stack order. Objects with no upstream modifiers (or no
+    ContactSolverCache, or non-MESH) are skipped. The bake-confirm
+    dialog renders this list so the user sees which modifiers the
+    finalize step will delete (so PC2 isn't re-deformed at playback)
+    before clicking OK."""
+    result = []
+    for obj in objs:
+        if obj is None:
+            continue
+        mods = modifiers_above_cache(obj)
+        if mods:
+            result.append((obj.name, mods))
+    return result
+
+
+def _draw_bake_dialog(layout, prompt: str, removable: list) -> None:
+    """Render the shared bake-confirm dialog body."""
+    layout.label(text=prompt, icon="QUESTION")
+    if removable:
+        layout.separator()
+        box = layout.box()
+        box.label(
+            text="These deforming modifiers will also be removed:",
+            icon="ERROR",
+        )
+        for obj_name, mod_names in removable:
+            box.label(text=obj_name, icon="OBJECT_DATA")
+            for mod_name in mod_names:
+                box.label(text="     " + mod_name, icon="MODIFIER")
+        box.separator()
+        box.label(
+            text="They fed the captured-deformation cache; leaving them in",
+        )
+        box.label(
+            text="would re-deform the baked shape keys at playback.",
+        )
+
+
+# ---------------------------------------------------------------------------
 # Modal operator mixin (shared between per-object and all-object bakes)
 # ---------------------------------------------------------------------------
 
@@ -693,7 +749,23 @@ class OBJECT_OT_BakeAnimation(_ModalBakeBase, Operator):
         return not _bake_job["active"]
 
     def invoke(self, context, event):
-        return context.window_manager.invoke_confirm(self, event)
+        from ...core.uuid_registry import get_object_by_uuid
+        queue = self._build_queue_for(context)
+        objs = [
+            get_object_by_uuid(e["obj_uuid"])
+            for e in queue if e["obj_type"] == "MESH"
+        ]
+        self._removable = _removable_modifiers_for_objs(objs)
+        return context.window_manager.invoke_props_dialog(
+            self, width=420, title="Bake Animation", confirm_text="Bake",
+        )
+
+    def draw(self, context):
+        _draw_bake_dialog(
+            self.layout,
+            "Bake animation for the selected object?",
+            getattr(self, "_removable", []),
+        )
 
     def _build_queue_for(self, context) -> list:
         return _build_queue(context, group_index=self.group_index)
@@ -718,7 +790,28 @@ class OBJECT_OT_BakeSingleFrame(Operator):
         return not _bake_job["active"]
 
     def invoke(self, context, event):
-        return context.window_manager.invoke_confirm(self, event)
+        obj = self._resolve_target_obj(context)
+        self._removable = _removable_modifiers_for_objs([obj] if obj else [])
+        return context.window_manager.invoke_props_dialog(
+            self, width=420, title="Bake Single Frame", confirm_text="Bake",
+        )
+
+    def draw(self, context):
+        _draw_bake_dialog(
+            self.layout,
+            "Bake the current frame as Frame 1 for the selected object?",
+            getattr(self, "_removable", []),
+        )
+
+    def _resolve_target_obj(self, context):
+        from ...core.uuid_registry import resolve_assigned
+        group = get_group_from_index(context.scene, self.group_index)
+        if group is None:
+            return None
+        idx = group.assigned_objects_index
+        if not (0 <= idx < len(group.assigned_objects)):
+            return None
+        return resolve_assigned(group.assigned_objects[idx])
 
     def execute(self, context):
         from .overlay import apply_object_overlays
@@ -756,7 +849,12 @@ class OBJECT_OT_BakeSingleFrame(Operator):
             scene.frame_set(1)
             _apply_curve_pose(data, snapshot)
         else:
+            # Capture eval positions FIRST (MESH_CACHE in stack means
+            # this is the simulator-overridden output). Then strip the
+            # Case-3 upstream deformers so they don't re-deform the
+            # captured positions once we drop MESH_CACHE.
             current_positions = [v.co.copy() for v in eval_obj.data.vertices]
+            strip_modifiers_above_cache(obj)
             cleanup_mesh_cache(obj)
             scene.frame_set(1)
             for i, pos in enumerate(current_positions):
@@ -792,7 +890,24 @@ class SOLVER_OT_BakeAllAnimation(_ModalBakeBase, Operator):
         return _has_animated_objects(context)
 
     def invoke(self, context, event):
-        return context.window_manager.invoke_confirm(self, event)
+        from ...core.uuid_registry import get_object_by_uuid
+        queue = self._build_queue_for(context)
+        objs = [
+            get_object_by_uuid(e["obj_uuid"])
+            for e in queue if e["obj_type"] == "MESH"
+        ]
+        self._removable = _removable_modifiers_for_objs(objs)
+        return context.window_manager.invoke_props_dialog(
+            self, width=420, title="Bake Animation",
+            confirm_text="Bake All",
+        )
+
+    def draw(self, context):
+        _draw_bake_dialog(
+            self.layout,
+            "Bake animation for all objects in active groups?",
+            getattr(self, "_removable", []),
+        )
 
     def _build_queue_for(self, context) -> list:
         return _build_queue(context, group_index=None)
@@ -817,7 +932,25 @@ class SOLVER_OT_BakeAllSingleFrame(Operator):
         return _has_animated_objects(context)
 
     def invoke(self, context, event):
-        return context.window_manager.invoke_confirm(self, event)
+        from ...core.uuid_registry import resolve_assigned
+        objs = []
+        for group in iterate_active_object_groups(context.scene):
+            for assigned in group.assigned_objects:
+                obj = resolve_assigned(assigned)
+                if obj is not None and _is_bakeable(obj):
+                    objs.append(obj)
+        self._removable = _removable_modifiers_for_objs(objs)
+        return context.window_manager.invoke_props_dialog(
+            self, width=420, title="Bake Single Frame",
+            confirm_text="Bake All",
+        )
+
+    def draw(self, context):
+        _draw_bake_dialog(
+            self.layout,
+            "Bake the current frame as Frame 1 for all objects in active groups?",
+            getattr(self, "_removable", []),
+        )
 
     def execute(self, context):
         from .overlay import apply_object_overlays
@@ -865,6 +998,7 @@ class SOLVER_OT_BakeAllSingleFrame(Operator):
                     cap_type, cap_data = captured[uid]
                     data = obj.data
                     if cap_type == "MESH":
+                        strip_modifiers_above_cache(obj)
                         cleanup_mesh_cache(obj)
                         for vi, pos in enumerate(cap_data):
                             data.vertices[vi].co = pos

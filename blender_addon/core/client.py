@@ -8,6 +8,7 @@
 # transitions go through the pure ``transition()`` function in
 # ``core/transitions.py``.
 
+import collections
 import os
 
 import bpy  # pyright: ignore
@@ -23,6 +24,8 @@ from .pc2 import (
     ensure_curve_handler,
     fill_gap_frames,
     get_pc2_path,
+    has_static_deform_animation,
+    get_static_deform_cache,
     load_curve_cache,
     mark_real_frame,
     object_pc2_key,
@@ -37,6 +40,43 @@ from .status import (
     RemoteStatus,
 )
 from .transform import inv_world_matrix
+
+
+# Per-target apply state. ``needs_per_frame`` is True for STATIC meshes
+# whose matrix_world can vary across frames (fcurves, NLA, drivers,
+# parent chain, constraints). For those, ``constant_inv`` is None and
+# the apply loop refreshes the inverse from a per-tick ``scene.frame_set``
+# before each write. For everyone else ``constant_inv`` carries a
+# pre-snapshotted ``inv_world_matrix(obj)`` numpy (4,4) and the loop
+# skips the per-frame depsgraph eval.
+_ApplyTarget = collections.namedtuple(
+    "_ApplyTarget",
+    ["uuid", "obj", "map", "object_type", "needs_per_frame", "constant_inv"],
+)
+
+
+def _static_needs_per_frame_matrix(obj):
+    """True if a STATIC obj's matrix_world can vary across frames.
+
+    Conservative: any frame-dependent source of motion makes us pay the
+    extra per-frame ``scene.frame_set`` cost. We use Blender's own
+    depsgraph eval (rather than re-implementing fcurve/NLA/driver math)
+    so this also covers parent chains, constraints, and drivers.
+    """
+    from .utils import _get_fcurves
+    ad = obj.animation_data
+    if ad:
+        if ad.action and any(_get_fcurves(ad.action)):
+            return True
+        if list(ad.nla_tracks):
+            return True
+        if list(ad.drivers):
+            return True
+    if obj.parent is not None:
+        return True
+    if obj.constraints:
+        return True
+    return False
 
 
 def _apply_matrix_np(mat, positions):
@@ -163,7 +203,8 @@ def _validate_mesh_mapping(display_name, obj, map_indices, surface_map, vert):
         raise ValueError(f"Surface vertex mapping out of range for '{display_name}'.")
 
 
-def _write_mesh_frame_to_pc2(obj, map_vert, blender_frame, n_verts_override=None):
+def _write_mesh_frame_to_pc2(obj, map_vert, blender_frame, n_verts_override=None,
+                              place_after_deformers=False):
     """Write a single frame to the object's PC2 file.
 
     Works for both mesh objects (vertex positions) and curve objects
@@ -175,7 +216,10 @@ def _write_mesh_frame_to_pc2(obj, map_vert, blender_frame, n_verts_override=None
 
     Creates the file + MESH_CACHE modifier on the first arriving frame
     (regardless of frame index).  Fills gap frames when frames are
-    skipped during live simulation preview.
+    skipped during live simulation preview. For STATIC meshes with a
+    captured-deformation cache, the gap-fill draws from the cache so
+    pre-real-frame display matches the depsgraph-baked pose at each
+    gap frame, not the undeformed rest mesh.
     """
     n_verts = n_verts_override if n_verts_override is not None else len(obj.data.vertices)
     key = object_pc2_key(obj)
@@ -205,14 +249,29 @@ def _write_mesh_frame_to_pc2(obj, map_vert, blender_frame, n_verts_override=None
         if obj.type == "CURVE":
             from .curve_rod import get_curve_rest_cvs
             rest_co = get_curve_rest_cvs(obj)
+            sd_cache_local = None
         else:
             rest_co = numpy.empty(n_verts * 3, dtype=numpy.float64)
             obj.data.vertices.foreach_get("co", rest_co)
             rest_co = rest_co.reshape(n_verts, 3)
+            # Case 3 STATIC: gap-fill from the captured-deformation
+            # cache instead of the undeformed rest mesh, so frames
+            # before the first sim arrival still show the
+            # depsgraph-baked pose at each gap frame.
+            sd_cache_local = None
+            if has_static_deform_animation(obj):
+                sd_cache = get_static_deform_cache(obj)
+                if sd_cache is not None and sd_cache.shape[1] == n_verts:
+                    inv = numpy.array(inv_world_matrix(obj), dtype=numpy.float64)
+                    sd_world = sd_cache.astype(numpy.float64)
+                    sd_cache_local = sd_world @ inv[:3, :3].T + inv[:3, 3]
         create_pc2_file(pc2_path, n_verts, start=0.0, sampling=1.0)
-        # Fill gap frames [0, frame_idx) with rest pose if needed
-        for _ in range(frame_idx):
-            append_pc2_frame(pc2_path, rest_co, n_verts)
+        # Fill gap frames [0, frame_idx).
+        for gap_i in range(frame_idx):
+            if sd_cache_local is not None and gap_i < sd_cache_local.shape[0]:
+                append_pc2_frame(pc2_path, sd_cache_local[gap_i], n_verts)
+            else:
+                append_pc2_frame(pc2_path, rest_co, n_verts)
         # Write the actual simulation frame
         append_pc2_frame(pc2_path, map_vert, n_verts)
         mark_real_frame(key, frame_idx)
@@ -224,7 +283,10 @@ def _write_mesh_frame_to_pc2(obj, map_vert, blender_frame, n_verts_override=None
             # Defensive try/except: if ID-write is momentarily denied,
             # the next PPF_OT_FramePump tick heals the modifier.
             try:
-                setup_mesh_cache_modifier(obj, pc2_path, frame_start=1.0)
+                setup_mesh_cache_modifier(
+                    obj, pc2_path, frame_start=1.0,
+                    place_after_deformers=place_after_deformers,
+                )
             except Exception:
                 pass
     else:
@@ -270,11 +332,16 @@ def _get_curve_cv_count(obj):
 
 
 def _apply_single_frame(context, n, vert, map_by_uuid, surface_map_by_uuid,
-                        target_objects, curve_fit_cache=None):
+                        target_objects, world_inv_by_uuid,
+                        curve_fit_cache=None):
     """Process one simulation frame: write vertex/CV data to PC2 files.
 
     Both mesh and curve objects are written to PC2 without calling
-    frame_set() — pure file I/O, no depsgraph evaluation.
+    frame_set() here — the caller has already done so for frame N when
+    any target needs a per-frame matrix. World-to-local conversion picks
+    the per-frame inverse from ``world_inv_by_uuid`` for animated STATIC
+    targets, falling back to the target's pre-snapshotted
+    ``constant_inv`` for everyone else.
 
     ``curve_fit_cache`` is an optional ``{uuid: (cache_list, params_data)}``
     dict pre-populated by :func:`apply_animation` so each curve's
@@ -285,8 +352,14 @@ def _apply_single_frame(context, n, vert, map_by_uuid, surface_map_by_uuid,
     """
     blender_frame = n + 1
 
-    for uid, obj, map in target_objects:
-        mat = inv_world_matrix(obj)
+    for target in target_objects:
+        uid = target.uuid
+        obj = target.obj
+        map = target.map
+        if target.needs_per_frame:
+            mat = world_inv_by_uuid[uid]
+        else:
+            mat = target.constant_inv
 
         if obj.type == "CURVE":
             from .curve_rod import (
@@ -322,6 +395,11 @@ def _apply_single_frame(context, n, vert, map_by_uuid, surface_map_by_uuid,
                 _write_mesh_frame_to_pc2(obj, curve_cvs[:n_cvs], blender_frame,
                                          n_verts_override=n_cvs)
             continue
+
+        # STATIC collider meshes have captured-deformation or fcurve
+        # animation flowing into the simulator; their MESH_CACHE must
+        # sit after the upstream deformers so PC2 wins on display.
+        place_after_deformers = target.object_type == "STATIC"
 
         # --- Mesh path: write simulation output directly to PC2 ---
         surface_map = surface_map_by_uuid.get(uid)
@@ -366,7 +444,8 @@ def _apply_single_frame(context, n, vert, map_by_uuid, surface_map_by_uuid,
             n_verts = len(obj.data.vertices)
             map_vert = _apply_matrix_np(mat, vert[map[:n_verts]])
         map_vert = apply_stitch_constraints(obj, map_vert, context)
-        _write_mesh_frame_to_pc2(obj, map_vert, blender_frame)
+        _write_mesh_frame_to_pc2(obj, map_vert, blender_frame,
+                                 place_after_deformers=place_after_deformers)
 
     return blender_frame
 
@@ -396,8 +475,6 @@ def heal_mesh_caches_if_stale():
         from .uuid_registry import resolve_assigned
         from ..models.groups import iterate_active_object_groups
         for g in iterate_active_object_groups(scene):
-            if g.object_type == "STATIC":
-                continue
             for assigned in g.assigned_objects:
                 if not assigned.included:
                     continue
@@ -431,7 +508,10 @@ def heal_mesh_caches_if_stale():
                 if not needs_setup:
                     continue
                 try:
-                    setup_mesh_cache_modifier(obj, pc2, frame_start=1.0)
+                    setup_mesh_cache_modifier(
+                        obj, pc2, frame_start=1.0,
+                        place_after_deformers=(g.object_type == "STATIC"),
+                    )
                 except Exception:
                     # ID-write may be briefly blocked; next tick retries.
                     pass
@@ -463,6 +543,11 @@ def apply_animation():
     context = bpy.context
     com = communicator
     state = get_addon_data(context.scene).state
+    # Snapshotted so a mid-fetch error can return the user to their
+    # original frame instead of stranding the playhead wherever the
+    # exception landed. Success leaves frame_current at the latest
+    # written frame (existing intentional behavior for live preview).
+    original_frame = context.scene.frame_current
 
     try:
         target_objects = None
@@ -482,6 +567,7 @@ def apply_animation():
         # ``advanced_first10: [3, 2, 4, ...]`` on macOS CI.
         first_apply_in_run = len(state.fetched_frame) == 0
         applied_this_tick = 0
+        any_per_frame = False
 
         while True:
             frame, map_by_uuid, surface_map_by_uuid, applied, total = (
@@ -499,9 +585,6 @@ def apply_animation():
                 if getattr(context, "screen", None) and context.screen.is_animation_playing:
                     bpy.ops.screen.animation_cancel(restore_frame=False)
                 target_objects = []
-                # PC2 eligibility: anything the frontend put in
-                # map_by_uuid. Fcurve-driven static objects are excluded
-                # upstream (_exclude_from_output), so they never appear.
                 for group in iterate_active_object_groups(context.scene):
                     for assigned in group.assigned_objects:
                         if not assigned.uuid:
@@ -526,13 +609,47 @@ def apply_animation():
                                 for m in obj.modifiers:
                                     if m.type == "WIREFRAME" and m.use_even_offset:
                                         m.use_even_offset = False
-                            target_objects.append(
-                                (assigned.uuid, obj, map_by_uuid[assigned.uuid])
+                            needs_per_frame = (
+                                group.object_type == "STATIC"
+                                and obj.type == "MESH"
+                                and _static_needs_per_frame_matrix(obj)
                             )
+                            constant_inv = (
+                                None if needs_per_frame
+                                else numpy.array(
+                                    inv_world_matrix(obj), dtype=numpy.float64,
+                                )
+                            )
+                            target_objects.append(_ApplyTarget(
+                                uuid=assigned.uuid,
+                                obj=obj,
+                                map=map_by_uuid[assigned.uuid],
+                                object_type=group.object_type,
+                                needs_per_frame=needs_per_frame,
+                                constant_inv=constant_inv,
+                            ))
+                any_per_frame = any(t.needs_per_frame for t in target_objects)
+
+            # For STATIC targets whose matrix_world varies per frame, we
+            # must evaluate Blender's depsgraph at frame N to read the
+            # true playback matrix_world before computing PC2_local. This
+            # is the cost of letting PC2 + MESH_CACHE display the
+            # simulator's soft-projected static collider positions
+            # against the user's preserved fcurves/parents/constraints
+            # without drift.
+            world_inv_by_uuid = {}
+            if any_per_frame:
+                context.scene.frame_set(n + 1)
+                for t in target_objects:
+                    if t.needs_per_frame:
+                        world_inv_by_uuid[t.uuid] = numpy.array(
+                            inv_world_matrix(t.obj), dtype=numpy.float64,
+                        )
 
             bf = _apply_single_frame(
                 context, n, vert, map_by_uuid, surface_map_by_uuid,
-                target_objects, curve_fit_cache=curve_fit_cache,
+                target_objects, world_inv_by_uuid,
+                curve_fit_cache=curve_fit_cache,
             )
             max_blender_frame = max(max_blender_frame, bf)
             state.add_fetched_frame(n)
@@ -573,6 +690,12 @@ def apply_animation():
                         progress=last_applied / last_total
                     ))
     except Exception as e:
+        # Restore the playhead so the user isn't stranded on whatever
+        # frame the per-frame scene.frame_set last set before the error.
+        try:
+            context.scene.frame_set(original_frame)
+        except Exception:
+            pass
         console.write(f"Error applying animation frame: {e}")
         from .events import FetchFailed
         engine.dispatch(FetchFailed(reason=f"apply: {e}"))

@@ -17,10 +17,12 @@
 # animates the bones so the mesh deforms, captures the deformation
 # directly into the PC2 cache (bypassing the modal Capture Deformation
 # operator - headless Blender has no event-loop ticks), and then runs
-# the full transfer/build/run cycle. The collider's per-frame motion
-# is solver-internal (the shell is `_exclude_from_output`), so we
-# validate the upload contract end-to-end and the cache itself, not
-# the simulator's contact resolution.
+# the full transfer/build/run cycle. The collider is included in the
+# output stream so its simulator-projected positions overwrite the
+# depsgraph-driven mesh on display (matching the cloth's collision
+# geometry exactly); this scenario validates the upload contract,
+# the cache itself, and the end-to-end run, not the simulator's
+# contact resolution residual.
 #
 # Subtests:
 #   A. capture_writes_pc2_with_expected_shape
@@ -339,6 +341,120 @@ try:
             "cloth_pc2_path": cloth_pc2,
             "cloth_samples": cloth_samples,
             "expected_min_samples": FRAME_COUNT - 1,
+        },
+    )
+
+    # ----- E: static sphere itself gets a PC2 post-fetch ----------
+    # With the soft-pin shell now included in the output map, the
+    # simulator's per-frame static-collider positions stream back as
+    # a PC2 + ContactSolverCache modifier on the sphere. We verify
+    # (i) the modifier exists, (ii) the PC2 file has the expected
+    # sample count and vertex count, (iii) the modifier was placed
+    # AFTER the Armature deformer (so PC2 overrides the depsgraph
+    # deformation on display, which is the whole point), and
+    # (iv) the recorded local-space verts, transformed back through
+    # the sphere's world matrix, land near the captured deformation
+    # cache that fed the simulator. The simulator's soft constraint
+    # introduces a small residual, so the tolerance is generous.
+    sphere_pc2 = dh.find_pc2_for(sphere)
+    sphere_arr = dh.read_pc2(sphere_pc2) if sphere_pc2 and os.path.isfile(sphere_pc2) else None
+    sphere_samples = int(sphere_arr.shape[0]) if sphere_arr is not None else 0
+    n_sphere_verts = len(sphere.data.vertices)
+
+    mod_order = [m.name for m in sphere.modifiers]
+    armature_idx = mod_order.index("ArmatureMod") if "ArmatureMod" in mod_order else -1
+    cache_idx = mod_order.index("ContactSolverCache") if "ContactSolverCache" in mod_order else -1
+    cache_after_armature = (
+        armature_idx >= 0 and cache_idx >= 0 and cache_idx > armature_idx
+    )
+
+    # Sanity check: PC2 frame 0 in local space, transformed back to
+    # solver world via world_matrix(sphere), should be close to the
+    # captured cache frame 0 (the simulator's input). Bounded
+    # comparison rather than exact equality to allow for the
+    # soft-pin residual.
+    transform_mod = __import__(pkg + ".core.transform", fromlist=["world_matrix"])
+    world_matrix = transform_mod.world_matrix
+    sphere_solver_world_max_err = -1.0
+    if sphere_arr is not None and sphere_arr.shape[1] == n_sphere_verts and sphere_samples >= 1:
+        wm = np.array(world_matrix(sphere), dtype=np.float64).reshape(4, 4)
+        local0 = sphere_arr[0].astype(np.float64)
+        homog = np.concatenate([local0, np.ones((n_sphere_verts, 1))], axis=1)
+        world0 = (homog @ wm.T)[:, :3]
+        sphere_solver_world_max_err = float(np.max(np.abs(world0 - captured[0])))
+
+    _SPHERE_SOFT_PIN_TOL = 0.1
+    dh.record(
+        "E_static_sphere_has_pc2_after_fetch",
+        sphere_pc2 is not None
+        and sphere_arr is not None
+        and sphere_samples >= FRAME_COUNT - 1
+        and sphere_arr.shape[1] == n_sphere_verts
+        and cache_after_armature
+        and 0.0 <= sphere_solver_world_max_err < _SPHERE_SOFT_PIN_TOL,
+        {
+            "sphere_pc2_path": sphere_pc2,
+            "sphere_samples": sphere_samples,
+            "sphere_pc2_n_verts": (
+                int(sphere_arr.shape[1]) if sphere_arr is not None else None
+            ),
+            "sphere_mesh_n_verts": n_sphere_verts,
+            "expected_min_samples": FRAME_COUNT - 1,
+            "modifier_order": mod_order,
+            "armature_index": armature_idx,
+            "cache_index": cache_idx,
+            "cache_after_armature": cache_after_armature,
+            "sphere_solver_world_max_err": sphere_solver_world_max_err,
+            "soft_pin_tolerance": _SPHERE_SOFT_PIN_TOL,
+        },
+    )
+
+    # ----- F: Bake Animation strips upstream deformers ------------
+    # Running Bake Animation must remove ContactSolverCache (always)
+    # AND every modifier that sat above it in the stack -- in this
+    # scenario, ArmatureMod. If the Armature stayed, the freshly
+    # written shape keys (local-space PC2 output) would be re-deformed
+    # at every playback frame by the bone pose, defeating the whole
+    # purpose of baking the simulator's resolved positions in.
+    bake_ops_mod = __import__(
+        pkg + ".ui.dynamics.bake_ops",
+        fromlist=["_build_queue", "_check_mesh_shape_keys",
+                  "_start_job", "_tick_job",
+                  "_finalize_job", "_reset_job"],
+    )
+    pre_bake_order = [m.name for m in sphere.modifiers]
+    pre_bake_had_armature = "ArmatureMod" in pre_bake_order
+    pre_bake_had_cache = "ContactSolverCache" in pre_bake_order
+
+    queue = bake_ops_mod._build_queue(bpy.context, group_index=None)
+    bake_started, bake_start_err = bake_ops_mod._start_job(queue, kind="all")
+    if not bake_started:
+        raise RuntimeError(f"bake _start_job rejected: {bake_start_err!r}")
+    import time as _time
+    bake_deadline = _time.time() + 60.0
+    while bake_ops_mod._tick_job(budget_ms=40):
+        if _time.time() > bake_deadline:
+            raise TimeoutError("bake animation did not finish within timeout")
+    bake_ops_mod._finalize_job(bpy.context)
+    bake_ops_mod._reset_job()
+
+    post_bake_order = [m.name for m in sphere.modifiers]
+    post_bake_has_armature = "ArmatureMod" in post_bake_order
+    post_bake_has_cache = "ContactSolverCache" in post_bake_order
+
+    dh.record(
+        "F_bake_animation_strips_upstream_deformers",
+        pre_bake_had_armature
+        and pre_bake_had_cache
+        and not post_bake_has_armature
+        and not post_bake_has_cache,
+        {
+            "pre_bake_order": pre_bake_order,
+            "post_bake_order": post_bake_order,
+            "pre_bake_had_armature": pre_bake_had_armature,
+            "pre_bake_had_cache": pre_bake_had_cache,
+            "post_bake_has_armature": post_bake_has_armature,
+            "post_bake_has_cache": post_bake_has_cache,
         },
     )
 

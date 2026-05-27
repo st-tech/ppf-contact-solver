@@ -1275,11 +1275,14 @@ class SceneDecoder:
             return _o, rest_t
 
         if transform_anim is not None:
-            # Case 1: Blender keyframes drive the pose. Blender
-            # already animates the object in the viewport, so no
-            # PC2 playback is needed (exclude from output).
+            # Case 1: Blender keyframes drive the pose. The simulator
+            # enforces the pin as a soft constraint, so its output
+            # vertices drift slightly from the input keyframes. The
+            # dynamics were resolved against the drifted positions, so
+            # we must display those — not the keyframes — to keep the
+            # collider visually consistent with the cloth. Include in
+            # output PC2.
             _obj, rest_translation = _setup_pin_shell()
-            _obj._exclude_from_output = True
             _obj.pin().transform_keyframes(
                 local_vert=local_vert,
                 times=transform_anim["time"],
@@ -1338,8 +1341,11 @@ class SceneDecoder:
             # add one MoveByOperation per consecutive frame pair to
             # drive every vertex through the recorded trajectory.
             #
-            # Blender's depsgraph already paints the deformed mesh in
-            # the viewport, so this shell is excluded from output PC2.
+            # The pin is a soft constraint, so the simulator output
+            # drifts from the captured cache. The cloth was resolved
+            # against the drifted positions, so include the shell in
+            # output PC2 and let MESH_CACHE overwrite the depsgraph-
+            # driven mesh on display.
             times = list(static_deform["time"])
             vert_frames = np.ascontiguousarray(
                 static_deform["vert_frames"], dtype=np.float64,
@@ -1364,7 +1370,6 @@ class SceneDecoder:
                     f"{len(local_vert)}"
                 )
             _obj, _ = _setup_pin_shell()
-            _obj._exclude_from_output = True
             pin = _obj.pin()
             # Successive MoveBy segments compose: at t=times[k],
             # pin pos = local_vert + sum(deltas up to k) = vert_frames[k]
