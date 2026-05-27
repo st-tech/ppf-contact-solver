@@ -76,9 +76,9 @@ involving 👚 shells, 🪵 solids and 🪢 rods. All made by [ZOZO, Inc.](https
   - [📦 Deploying on Amazon Web Services](#-deploying-on-amazon-web-services)
   - [📦 Deploying on Google Compute Engine](#-deploying-on-google-compute-engine)
 - [🤝 Community Works](#-community-works)
-  - [🧩 Blender Add-ons](#-blender-add-ons)
-  - [📺 Videos](#-videos)
+  - [📺 YouTube](#-youtube)
   - [📰 Articles](#-articles)
+  - [🧩 Blender Add-ons](#-blender-add-ons)
   - [📣 Sharing Your Work](#-sharing-your-work)
 - [💼 Commercial Use and Beyond](#-commercial-use-and-beyond)
 - [📬 Contributing](#-contributing)
@@ -795,16 +795,19 @@ Below, we describe how to deploy our solver on major cloud services. These instr
 
 ## 🤝 Community Works
 
-### 🧩 Blender Add-ons
+### 📺 YouTube
 
-Alongside our [official Blender add-on](#-blender-add-on), the following community add-ons are also available:
+<table>
+<tr>
+<td width="50%" valign="top"><a href="https://www.youtube.com/watch?v=dXfTz01Z-GM&t=616s"><img src="https://img.youtube.com/vi/dXfTz01Z-GM/maxresdefault.jpg" alt="Blender Gets Serious About Physics + Motion Designer Builds a Mograph App | Motion Mondays"></a></td>
+<td width="50%" valign="top"><a href="https://www.youtube.com/watch?v=VOORiyip4_c"><img src="https://img.youtube.com/vi/VOORiyip4_c/maxresdefault.jpg" alt="The Worst Bug In Games Is Now Gone Forever"></a></td>
+</tr>
+<tr>
+<td valign="top"><a href="https://www.youtube.com/watch?v=dXfTz01Z-GM&t=616s"><em>Blender Gets Serious About Physics + Motion Designer Builds a Mograph App | Motion Mondays</em></a> by <a href="https://www.youtube.com/@SchoolofMotion">School of Motion</a>.</td>
+<td valign="top"><a href="https://www.youtube.com/watch?v=VOORiyip4_c"><em>The Worst Bug In Games Is Now Gone Forever</em></a> by <a href="https://www.youtube.com/@TwoMinutePapers">Two Minute Papers</a>.</td>
+</tr>
+</table>
 
-- [AndoSim](https://github.com/Slaymish/AndoSim)
-- [ArzteZ-PPF-solver](https://github.com/tavcitavci-sys-tavci-ui/ArzteZ-PPF-solver)
-
-### 📺 Videos
-
-- [*The Worst Bug In Games Is Now Gone Forever*](https://www.youtube.com/watch?v=VOORiyip4_c) by [Two Minute Papers](https://www.youtube.com/@TwoMinutePapers).
 - [*Visual Components - ZOZO's Contact Solver Handshanking*](https://www.youtube.com/watch?v=k000SaPXK4Q) by [idkfa](https://www.youtube.com/@idkfa3).
 - [*Blender 3D - ZOZO's Contact Solver Capability Test - Squished Cloths under Rubber Ball*](https://www.youtube.com/watch?v=emA3xxJjtOM) by [\[BH\]Lithium](https://www.youtube.com/@lithium820).
 
@@ -818,6 +821,13 @@ Alongside our [official Blender add-on](#-blender-add-on), the following communi
 - [*ZOZO's Contact Solver Blender Add-on 2026*](https://3dnchu.com/archives/zozos-contact-solver-b3d/) (Japanese article) on [3D人-3dnchu-](https://3dnchu.com/).
 - [*ZOZO Releases Open-Source High-Precision Physics Simulation "ppf-contact-solver", Enabling Large-Scale Cloth Simulation from Blender*](https://modelinghappy.com/archives/68744) (Japanese article) on [MODELING HAPPY](https://modelinghappy.com/).
 - [*ZOZO's Contact Solver: open-source physics simulation lands in Blender 5*](https://www.kabum.it/blog/zozo-ppfcontact-solver-for-blender/) on [Kabum](https://www.kabum.it/).
+
+### 🧩 Blender Add-ons
+
+Alongside our [official Blender add-on](#-blender-add-on), the following community add-ons are also available:
+
+- [AndoSim](https://github.com/Slaymish/AndoSim)
+- [ArzteZ-PPF-solver](https://github.com/tavcitavci-sys-tavci-ui/ArzteZ-PPF-solver)
 
 ### 📣 Sharing Your Work
 
