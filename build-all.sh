@@ -201,8 +201,18 @@ else
     if [ -z "$WHEEL" ]; then
         echo "warn: maturin reported success but produced no wheel under $REPO_ROOT/target/wheels/"
     else
+        # Pip's --target mode doesn't treat the target as a real
+        # environment, so --force-reinstall is silently ignored when
+        # the package's dir already exists and pip prints a "Specify
+        # --upgrade to force replacement" warning while doing nothing.
+        # The stale .so from the previous build then keeps satisfying
+        # imports, so a fresh maturin compile lands as a no-op on disk
+        # and any new PyO3 binding (e.g. load_cipc_stitch_mesh) raises
+        # AttributeError at runtime. Wipe the target dir first so pip
+        # is always installing into empty space.
+        rm -rf "$TREE_PYO3"
         mkdir -p "$TREE_PYO3"
-        pip install --quiet --target "$TREE_PYO3" --force-reinstall --no-deps "$WHEEL"
+        pip install --quiet --target "$TREE_PYO3" --no-deps "$WHEEL"
         echo "==> _ppf_cts_py installed in $TREE_PYO3"
     fi
 fi
