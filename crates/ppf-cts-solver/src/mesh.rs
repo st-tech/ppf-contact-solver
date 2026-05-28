@@ -117,12 +117,15 @@ fn compute_edge(
     rod: &Matrix2xX<usize>,
     face: &Matrix3xX<usize>,
 ) -> (Matrix2xX<usize>, Vec<Vec<usize>>) {
-    let mut hash = HashMap::<usize, (usize, usize, usize, Option<usize>)>::new();
-    let n_face = face.shape().1;
+    // Tuple key (idx_min, idx_max): face indices are global into a
+    // vertex array shared with rod/tet groups, so they can sit
+    // arbitrarily far past any packed-integer radix derived from
+    // face count alone.
+    let mut hash = HashMap::<(usize, usize), (usize, usize, usize, Option<usize>)>::new();
     for (i, column) in face.column_iter().enumerate() {
         for j in 0..3 {
             let e = (column[j], column[(j + 1) % 3], i, None);
-            let key = e.0.min(e.1) + 3 * n_face * e.0.max(e.1);
+            let key = (e.0.min(e.1), e.0.max(e.1));
             if let Some(b) = hash.get_mut(&key) {
                 b.3 = Some(i);
             } else {
@@ -145,36 +148,26 @@ fn compute_edge(
     (Matrix2xX::from_vec(edge), edge_face)
 }
 
-fn has_duplicates(numbers: &[usize]) -> bool {
-    let mut seen = std::collections::HashSet::new();
-    for number in numbers {
-        if !seen.insert(number) {
-            return true;
-        }
-    }
-    false
-}
-
 fn compute_hinge(face: &Matrix3xX<usize>) -> (Matrix4xX<usize>, Vec<Vec<usize>>) {
-    let mut keys = Vec::new();
+    // Tuple keys for both the canonical-face dedup and the
+    // shared-edge hash: face indices are global into a vertex array
+    // shared with rod/tet groups, so packing them into one integer
+    // would need a radix the face count cannot bound.
+    let mut keys = HashSet::<[usize; 3]>::new();
     for f in face.column_iter() {
         let mut e = [f[0], f[1], f[2]];
         e.sort();
-        let key = e[0] + 3 * face.shape().1 * e[1] + 9 * face.shape().1 * face.shape().1 * e[2];
-        keys.push(key);
+        assert!(keys.insert(e));
     }
-    assert!(!has_duplicates(&keys));
-    let mut hash =
-        HashMap::<usize, (usize, usize, usize, Option<usize>, usize, Option<usize>)>::new();
+    let mut hash = HashMap::<
+        (usize, usize),
+        (usize, usize, usize, Option<usize>, usize, Option<usize>),
+    >::new();
     let mut excludes = Vec::new();
     for (i, f) in face.column_iter().enumerate() {
         for j in 0..3 {
             let e = (f[j], f[(j + 1) % 3], f[(j + 2) % 3]);
-            let (idx0, idx1) = (e.0.min(e.1), e.0.max(e.1));
-            let w = 3 * face.shape().1;
-            assert!(idx0 < w);
-            assert!(idx1 < w);
-            let key = idx0 + w * idx1;
+            let key = (e.0.min(e.1), e.0.max(e.1));
             if let Some(b) = hash.get_mut(&key) {
                 if b.3.is_some() {
                     excludes.push(key);
