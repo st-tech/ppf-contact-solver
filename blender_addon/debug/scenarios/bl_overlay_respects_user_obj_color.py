@@ -112,6 +112,91 @@ try:
         {"member_color_after_excluded": list(member_excluded)},
     )
 
+    # ---- D: Add Selected Objects flips Solid sub-mode to OBJECT --
+    # The add operator is an explicit user action and counts as the
+    # user signing up for the tint to be visible, so it's allowed to
+    # one-shot-switch the Solid color_type from MATERIAL/RANDOM/etc.
+    # to OBJECT. The subsequent apply_object_overlays() must NOT
+    # re-trigger that switch (the prior shading bug).
+    bpy.ops.object.select_all(action="SELECT")
+    bpy.ops.object.delete(use_global=False)
+    for i in range(32):
+        gg = getattr(root, f"object_group_{i}")
+        gg.active = False
+        gg.assigned_objects.clear()
+    # Force MATERIAL pre-state
+    pre_color_type = None
+    for win in bpy.context.window_manager.windows:
+        for area in win.screen.areas:
+            if area.type != "VIEW_3D":
+                continue
+            for sp in area.spaces:
+                if sp.type != "VIEW_3D":
+                    continue
+                sp.shading.type = "SOLID"
+                sp.shading.color_type = "MATERIAL"
+                pre_color_type = sp.shading.color_type
+                break
+    # Add an object + create group + Add to it via the operator
+    bpy.ops.mesh.primitive_plane_add(size=1.0)
+    add_plane = bpy.context.active_object
+    add_plane.name = "AddSwitchPlane"
+    bpy.ops.object.create_group("EXEC_DEFAULT")
+    gidx = None
+    for i in range(32):
+        gg = getattr(root, f"object_group_{i}")
+        if gg.active:
+            gidx = i
+            break
+    bpy.ops.object.select_all(action="DESELECT")
+    add_plane.select_set(True)
+    bpy.context.view_layer.objects.active = add_plane
+    bpy.ops.object.add_objects_to_group("EXEC_DEFAULT", group_index=gidx)
+    # Post-Add: color_type should be OBJECT now
+    post_color_type = None
+    for win in bpy.context.window_manager.windows:
+        for area in win.screen.areas:
+            if area.type != "VIEW_3D":
+                continue
+            for sp in area.spaces:
+                if sp.type != "VIEW_3D":
+                    continue
+                post_color_type = sp.shading.color_type
+                break
+    # Then user switches back to MATERIAL; apply_object_overlays must
+    # NOT re-flip it (the shading-respect contract).
+    for win in bpy.context.window_manager.windows:
+        for area in win.screen.areas:
+            if area.type != "VIEW_3D":
+                continue
+            for sp in area.spaces:
+                if sp.type != "VIEW_3D":
+                    continue
+                sp.shading.color_type = "MATERIAL"
+                break
+    apply_overlays()
+    final_color_type = None
+    for win in bpy.context.window_manager.windows:
+        for area in win.screen.areas:
+            if area.type != "VIEW_3D":
+                continue
+            for sp in area.spaces:
+                if sp.type != "VIEW_3D":
+                    continue
+                final_color_type = sp.shading.color_type
+                break
+    dh.record(
+        "D_add_to_group_flips_to_object_once",
+        pre_color_type == "MATERIAL"
+        and post_color_type == "OBJECT"
+        and final_color_type == "MATERIAL",
+        {
+            "pre_color_type": pre_color_type,
+            "post_add_color_type": post_color_type,
+            "after_user_repicks_material": final_color_type,
+        },
+    )
+
 except Exception as exc:
     result["errors"].append(f"{type(exc).__name__}: {exc}")
     result["errors"].append(traceback.format_exc())

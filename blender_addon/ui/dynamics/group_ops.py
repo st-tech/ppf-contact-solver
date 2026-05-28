@@ -291,6 +291,29 @@ class OBJECT_OT_AddObjectsToGroup(Operator):
                     obj.color = group.color
 
             apply_object_overlays()
+
+            # The per-object overlay tint just written above only
+            # renders when the Solid shading sub-mode is OBJECT. The
+            # user signed up for the tint by clicking Add, so flip
+            # every Solid VIEW_3D's color sub-mode to OBJECT as a
+            # one-shot here. We do not touch non-SOLID modes
+            # (Material / Rendered previews use materials anyway),
+            # and we never re-flip on every redraw / undo — that was
+            # the prior bug fixed in overlay.py. See
+            # feedback_narrow_user_owned_state_writes for the rule:
+            # writes to user-owned viewport state are allowed inside
+            # an explicit user-invoked operator's execute().
+            if group.show_overlay_color:
+                for win in bpy.context.window_manager.windows:
+                    for area in win.screen.areas:
+                        if area.type != "VIEW_3D":
+                            continue
+                        for sp in area.spaces:
+                            if sp.type != "VIEW_3D":
+                                continue
+                            if sp.shading.type == "SOLID":
+                                sp.shading.color_type = "OBJECT"
+
             return {"FINISHED"}
 
         self.report({"ERROR"}, "Group not found")
