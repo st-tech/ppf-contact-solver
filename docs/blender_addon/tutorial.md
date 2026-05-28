@@ -145,4 +145,10 @@
 [![Shrink at Runtime](images/tutorials/shrink-opt.jpg)](https://zozo.box.com/s/ufmln92er89azj2adnr0ict6bbtpsg39){target="_blank" rel="noopener"}
 
 </figure>
+<figure>
+<figcaption><strong>Shrink Curves</strong><span>Use the shrink material parameter on curve rods to let them contract at runtime.</span></figcaption>
+
+[![Shrink Curves](images/tutorials/shrink-curve-opt.jpg)](https://zozo.box.com/s/0nil8tcizygynblsqrz9jq2olma3hp22){target="_blank" rel="noopener"}
+
+</figure>
 </div>
