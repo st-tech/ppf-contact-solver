@@ -525,29 +525,76 @@ def unregister_overlay():
 
 
 def apply_object_overlays():
-    """Update object colors and invalidate overlay cache."""
+    """Update object colors for addon-managed objects only.
+
+    Previously this walked **every** mesh and curve in the scene and
+    unconditionally wrote ``obj.color = (1, 1, 1, 1)`` before applying
+    group tints. Triggered on every undo/redo and group operation, the
+    reset clobbered colors the user had set on meshes that had nothing
+    to do with the add-on (reference assets, third-party tool color
+    hints). The fix narrows the write set: only objects whose UUID is
+    registered in an active group get their color touched, computed
+    from that group's ``show_overlay_color`` + the assignment's
+    ``included`` flag + the global ``hide_overlay_colors`` toggle.
+
+    Cleanup for objects that were removed from a group is handled by
+    explicit operator paths (``OBJECT_OT_RemoveObjectFromGroup`` calls
+    ``reset_object_display``, and ``group_ops._apply_cleanup`` runs on
+    depsgraph updates for deleted objects). Those paths know which
+    UUIDs to reset; ``apply_object_overlays`` does not, so it stays
+    out of that business.
+    """
     from ...models.groups import invalidate_overlays
+    from ...core.uuid_registry import get_object_uuid
 
     scene = bpy.context.scene
     try:
         hide_overlay_colors = bool(get_addon_data(scene).state.hide_overlay_colors)
     except Exception:
         hide_overlay_colors = False
-    # Reset all object colors to default
+
+    # Build UUID -> target_color from active groups. An object that
+    # appears in multiple groups gets the last group's color (matches
+    # the prior unconditional-overwrite ordering).
+    target_color: dict[str, tuple[float, float, float, float]] = {}
+    for group in iterate_active_object_groups(scene):
+        if (not hide_overlay_colors) and group.show_overlay_color:
+            tint = (
+                float(group.color[0]),
+                float(group.color[1]),
+                float(group.color[2]),
+                float(group.color[3]),
+            )
+        else:
+            tint = (1.0, 1.0, 1.0, 1.0)
+        for obj_ref in group.assigned_objects:
+            uid = obj_ref.uuid
+            if not uid:
+                continue
+            if not obj_ref.included:
+                # included=False means the object isn't participating
+                # in the sim; clear any addon-applied tint on it.
+                target_color[uid] = (1.0, 1.0, 1.0, 1.0)
+            else:
+                target_color[uid] = tint
+
+    # Walk meshes and curves once and write only when the object's
+    # UUID is in the target map. Objects the user hasn't added to any
+    # group (no UUID, or a UUID not in any active group) are not
+    # touched.
     for obj in bpy.data.objects:
-        if obj.type in ("MESH", "CURVE"):
-            obj.color = (1.0, 1.0, 1.0, 1.0)
-    # Apply group colors
-    if not hide_overlay_colors:
-        for group in iterate_active_object_groups(scene):
-            if group.show_overlay_color:
-                for obj_ref in group.assigned_objects:
-                    if not obj_ref.included:
-                        continue
-                    from ...core.uuid_registry import resolve_assigned
-                    obj = resolve_assigned(obj_ref)
-                    if obj and obj.type in ("MESH", "CURVE"):
-                        obj.color = group.color
+        if obj.type not in ("MESH", "CURVE"):
+            continue
+        uid = get_object_uuid(obj)
+        if not uid:
+            continue
+        new = target_color.get(uid)
+        if new is None:
+            continue
+        cur = obj.color
+        if (cur[0], cur[1], cur[2], cur[3]) != new:
+            obj.color = new
+
     # The viewport shading mode is owned by the user. ``obj.color`` is
     # written above for any object in a group with overlay enabled, but
     # whether Blender renders that tint depends on the user's Solid

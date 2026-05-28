@@ -54,6 +54,7 @@ from . import bl_pin_overlay_follows_edit_mode
 # geometry hash propagation, and parameter transfer.
 from . import bl_overlay_invalidation
 from . import bl_overlay_respects_shading
+from . import bl_overlay_respects_user_obj_color
 from . import bl_race_state_machine
 from . import bl_fetch_clear_refetch
 from . import bl_geometry_hash
@@ -166,6 +167,7 @@ REGISTRY = {
     # UI / state-machine integration
     "bl_overlay_invalidation": bl_overlay_invalidation,
     "bl_overlay_respects_shading": bl_overlay_respects_shading,
+    "bl_overlay_respects_user_obj_color": bl_overlay_respects_user_obj_color,
     "bl_race_state_machine": bl_race_state_machine,
     "bl_fetch_clear_refetch": bl_fetch_clear_refetch,
     "bl_geometry_hash": bl_geometry_hash,
