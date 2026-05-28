@@ -1,7 +1,7 @@
 # ZOZO's Contact Solver 🫶
 
 A contact solver for physics-based simulations
-involving 👚 shells, 🪵 solids and 🪢 rods. All made by [ZOZO, Inc.](https://corp.zozo.com/en/), the largest fashion e-commerce company in Japan.
+involving 👚 shells, 🪵 solids and 🪢 rods. Started as an in-house physics engine at [ZOZO, Inc.](https://corp.zozo.com/en/), the largest fashion e-commerce company in Japan, and now evolving with the community.
 
 [![Getting Started](https://github.com/st-tech/ppf-contact-solver/actions/workflows/getting-started.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/getting-started.yml)
 [![All Examples](https://github.com/st-tech/ppf-contact-solver/actions/workflows/run-all-once.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/run-all-once.yml)
@@ -844,7 +844,7 @@ If you build something on top of this solver, we would love to hear about it, bu
 
 ## 📬 Contributing
 
-We appreciate your interest in opening pull requests, but we are not ready to accept external pull requests because doing so involves resolving copyright and licensing matters with [ZOZO, Inc.](https://corp.zozo.com/en/) For the time being, please open issues for bug reports under the terms described below. If you wish to extend the codebase, please fork the repository and work on it.
+We appreciate your interest in opening pull requests, but we are not ready to accept them directly, as this involves resolving copyright and licensing matters with [ZOZO, Inc.](https://corp.zozo.com/en/) We do, however, welcome indirect contributions, such as suggested fixes and feature requests that are compatible with the [Apache License, Version 2.0](./LICENSE). For instance, you can fork the repository and share a reference implementation; we will review it and consider how it can benefit the codebase. If your contribution is substantial, we will gladly credit your account name here. For now, please open issues for bug reports and proposals under the terms described below.
 
 By submitting an Issue or suggestion to this repository, you agree that your contribution is provided under the terms of the [Apache License, Version 2.0](./LICENSE). Any bug reports or feature proposals you provide will be deemed to be licensed to us and the community on a royalty-free, unrestricted basis for the purpose of improving this software.
 
