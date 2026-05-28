@@ -75,7 +75,7 @@ involving 👚 shells, 🪵 solids and 🪢 rods. All made by [ZOZO, Inc.](https
   - [📦 Deploying on Scaleway](#-deploying-on-scaleway)
   - [📦 Deploying on Amazon Web Services](#-deploying-on-amazon-web-services)
   - [📦 Deploying on Google Compute Engine](#-deploying-on-google-compute-engine)
-- [🤝 Community Works](#-community-works)
+- [🤝 Community Response](#-community-response)
   - [📺 YouTube](#-youtube)
   - [📰 Articles](#-articles)
   - [🧩 Blender Add-ons](#-blender-add-ons)
@@ -793,7 +793,7 @@ Below, we describe how to deploy our solver on major cloud services. These instr
 - *Do not skip* the Docker container creation in the installation process; it is required.
 - CLI instructions are described in [(Markdown)](./articles/cloud.md#-google-compute-engine).
 
-## 🤝 Community Works
+## 🤝 Community Response
 
 ### 📺 YouTube
 
