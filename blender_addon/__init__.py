@@ -122,6 +122,58 @@ def _reconcile_manifest_on_load(*_args):
         pass
 
 
+@persistent
+def _reconcile_pin_captured_anim_on_load(*_args):
+    """load_post hook: sync ``pin_item.has_captured_anim`` flags with
+    on-disk ``_pindeform.pc2`` files.
+
+    The bool is the source of truth at runtime (cheap to read in
+    panel polls and UIList rows), but it can desync across machines:
+    a .blend saved with the cache present may open on a host where
+    the cache file was never copied. This handler walks every pin in
+    the scene, flips ``has_captured_anim`` to match disk presence,
+    and drops the EMBEDDED_MOVE sentinel if the cache vanished and no
+    manual fcurves remain.
+    """
+    import bpy  # pyright: ignore
+    try:
+        from .core.pc2 import has_pin_anim_pc2
+        from .core.uuid_registry import resolve_pin
+        from .models.groups import (
+            decode_vertex_group_identifier,
+            iterate_active_object_groups,
+        )
+        from .ui.dynamics.pin_capture_ops import (
+            _pin_has_vertex_co_fcurves,
+        )
+        from .ui.dynamics.pin_ops import _remove_embedded_move_ops
+
+        for scene in bpy.data.scenes:
+            for group in iterate_active_object_groups(scene):
+                if group.object_type == "STATIC":
+                    continue
+                for pin_item in group.pin_vertex_groups:
+                    try:
+                        obj = resolve_pin(pin_item)
+                    except ValueError:
+                        continue
+                    if obj is None or obj.type != "MESH":
+                        continue
+                    _, vg_name = decode_vertex_group_identifier(pin_item.name)
+                    if not vg_name:
+                        continue
+                    on_disk = has_pin_anim_pc2(obj, vg_name)
+                    pin_item.has_captured_anim = bool(on_disk)
+                    if not on_disk and not _pin_has_vertex_co_fcurves(pin_item):
+                        # Cache vanished AND no manual fcurves to claim
+                        # the EMBEDDED_MOVE sentinel; drop it so the
+                        # encoder doesn't trip "more than one source"
+                        # checks on a stale marker.
+                        _remove_embedded_move_ops(pin_item)
+    except Exception:
+        pass
+
+
 def _register_deferred_timer(fn, first_interval: float) -> None:
     import bpy  # pyright: ignore
     bpy.app.timers.register(fn, first_interval=first_interval)
@@ -262,6 +314,11 @@ def _register_body():
         for h in bpy.app.handlers.load_post
     ):
         bpy.app.handlers.load_post.append(_reconcile_manifest_on_load)
+    if not any(
+        getattr(h, "__name__", "") == "_reconcile_pin_captured_anim_on_load"
+        for h in bpy.app.handlers.load_post
+    ):
+        bpy.app.handlers.load_post.append(_reconcile_pin_captured_anim_on_load)
     if not any(
         getattr(h, "__name__", "") == "_disconnect_on_load"
         for h in bpy.app.handlers.load_pre
@@ -412,7 +469,10 @@ def unregister():
             if getattr(h, "__name__", "") == "_save_manifest_post":
                 bpy.app.handlers.save_post.remove(h)
         for h in list(bpy.app.handlers.load_post):
-            if getattr(h, "__name__", "") == "_reconcile_manifest_on_load":
+            if getattr(h, "__name__", "") in (
+                "_reconcile_manifest_on_load",
+                "_reconcile_pin_captured_anim_on_load",
+            ):
                 bpy.app.handlers.load_post.remove(h)
         for h in list(bpy.app.handlers.load_pre):
             if getattr(h, "__name__", "") == "_disconnect_on_load":

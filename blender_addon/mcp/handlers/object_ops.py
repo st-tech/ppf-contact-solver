@@ -995,3 +995,173 @@ def get_static_deformation_status(group_uuid: str, object_name: str):
         "has_cache": bool(object_has_deformation_cache(obj)),
         "frame_count": int(object_deformation_frame_count(obj)),
     }
+
+
+# ---------------------------------------------------------------------------
+# Pin-deformation capture (Armature / Lattice / Mesh Deform / Shape Key
+# driven SHELL / SOLID / ROD pins). Mirrors the UI's Capture Deformation /
+# Clear Deformation Cache buttons on the pin details panel. The capture is
+# modal and runs after this handler returns; poll get_pin_deformation_status
+# to detect completion.
+# ---------------------------------------------------------------------------
+
+
+def _resolve_pin_index(group, pin_item) -> int:
+    """Return the index of ``pin_item`` in its group's pin collection."""
+    for i, item in enumerate(group.pin_vertex_groups):
+        if item.as_pointer() == pin_item.as_pointer():
+            return i
+    raise MCPError(
+        f"Pin item not found in group {group.uuid}; collection may have "
+        "mutated mid-call"
+    )
+
+
+@group_handler
+def capture_pin_deformation(group_uuid: str, vertex_group_identifier: str):
+    """Record the per-frame shape of a deformable pin onto the cloth mesh.
+
+    Use this for pins whose vertices ride along with an Armature, Lattice,
+    Mesh Deform cage, animated Shape Keys, or a driver. The recording
+    runs as a modal operator and continues after this call returns; poll
+    ``get_pin_deformation_status`` until ``frame_count`` is non-zero.
+
+    Press again any time the underlying animation changes. The recording
+    does NOT update on its own. Refuses to start if the pin already
+    carries manual Make-Keyframe vertex-co fcurves; clear those first.
+
+    Args:
+        group_uuid: UUID of the SHELL/SOLID/ROD group containing the pin
+        vertex_group_identifier: Pin id in 'object::vertex_group' form
+    """
+    from .group import get_group_index_by_uuid
+
+    group = get_active_group_by_uuid_helper(group_uuid)
+    if group.object_type == "STATIC":
+        raise MCPError(
+            f"Group {group_uuid} is STATIC; use capture_static_deformation instead"
+        )
+    pin_item, obj_uuid, vg_name = _resolve_pin(group, vertex_group_identifier)
+
+    obj = bpy.data.objects.get(_parse_pin_identifier(vertex_group_identifier)[0])
+    if obj is None or obj.type != "MESH":
+        raise MCPError(
+            f"Pin '{vertex_group_identifier}': capture only applies to mesh pins"
+        )
+    from ...core.utils import has_deforming_modifier_stack
+    if not has_deforming_modifier_stack(obj):
+        raise MCPError(
+            f"Object '{obj.name}' has no deforming modifier stack. "
+            "Capture Deformation applies to pins whose vertices move "
+            "(Armature, Lattice, Mesh Deform, Shape Keys, or drivers)."
+        )
+
+    pin_index = _resolve_pin_index(group, pin_item)
+    group_index = get_group_index_by_uuid(group_uuid)
+    bpy.ops.object.capture_pin_deformation(
+        "EXEC_DEFAULT",
+        group_index=group_index,
+        pin_index=pin_index,
+    )
+    return {
+        "message": (
+            f"Started Capture Deformation for pin "
+            f"'{vertex_group_identifier}'. The recording runs in the "
+            "background; poll get_pin_deformation_status until it reports "
+            "a non-zero frame_count."
+        ),
+        "group_uuid": group_uuid,
+        "vertex_group_identifier": vertex_group_identifier,
+        "object_uuid": obj_uuid,
+        "vertex_group": vg_name,
+    }
+
+
+@group_handler
+def clear_pin_deformation(group_uuid: str, vertex_group_identifier: str):
+    """Discard the captured deformation cache for one pin.
+
+    The pin returns to whatever motion source it had before (none, or
+    manual Make-Keyframe fcurves if any).  If no manual fcurves exist
+    the EMBEDDED_MOVE sentinel is also removed so the pin no longer
+    appears animated.
+
+    Args:
+        group_uuid: UUID of the group containing the pin
+        vertex_group_identifier: Pin id in 'object::vertex_group' form
+    """
+    from .group import get_group_index_by_uuid
+
+    group = get_active_group_by_uuid_helper(group_uuid)
+    if group.object_type == "STATIC":
+        raise MCPError(
+            f"Group {group_uuid} is STATIC; use clear_static_deformation instead"
+        )
+    pin_item, obj_uuid, vg_name = _resolve_pin(group, vertex_group_identifier)
+    pin_index = _resolve_pin_index(group, pin_item)
+    group_index = get_group_index_by_uuid(group_uuid)
+    bpy.ops.object.clear_pin_deformation(
+        "EXEC_DEFAULT",
+        group_index=group_index,
+        pin_index=pin_index,
+    )
+    return {
+        "message": (
+            f"Cleared captured deformation for pin "
+            f"'{vertex_group_identifier}'"
+        ),
+        "group_uuid": group_uuid,
+        "vertex_group_identifier": vertex_group_identifier,
+        "object_uuid": obj_uuid,
+        "vertex_group": vg_name,
+    }
+
+
+@group_handler
+def get_pin_deformation_status(
+    group_uuid: str, vertex_group_identifier: str,
+):
+    """Report the captured-deformation state of one pin.
+
+    Returns four fields:
+
+    - ``is_deforming``: True if the pin object's modifier stack will move
+      vertices over the timeline (Armature, Lattice, ...).
+    - ``has_cache``: True if a captured-deformation cache exists for the
+      pin (in memory or on disk).
+    - ``frame_count``: Number of frames in the cache, or 0 when absent.
+    - ``has_captured_anim_flag``: The pin item's ``has_captured_anim``
+      bool; should match ``has_cache`` after the load_post reconciler runs.
+
+    Args:
+        group_uuid: UUID of the group containing the pin
+        vertex_group_identifier: Pin id in 'object::vertex_group' form
+    """
+    from ...core.pc2 import has_pin_anim_pc2
+    from ...core.utils import has_deforming_modifier_stack
+    from ...ui.dynamics.pin_capture_ops import pin_captured_frame_count
+
+    group = get_active_group_by_uuid_helper(group_uuid)
+    if group.object_type == "STATIC":
+        raise MCPError(
+            f"Group {group_uuid} is STATIC; use get_static_deformation_status instead"
+        )
+    pin_item, obj_uuid, vg_name = _resolve_pin(group, vertex_group_identifier)
+    obj_name, _ = _parse_pin_identifier(vertex_group_identifier)
+    obj = bpy.data.objects.get(obj_name)
+    is_deforming = bool(obj is not None and has_deforming_modifier_stack(obj))
+    has_cache = bool(
+        obj is not None and obj.type == "MESH" and has_pin_anim_pc2(obj, vg_name)
+    )
+    return {
+        "group_uuid": group_uuid,
+        "vertex_group_identifier": vertex_group_identifier,
+        "object_uuid": obj_uuid,
+        "vertex_group": vg_name,
+        "is_deforming": is_deforming,
+        "has_cache": has_cache,
+        "frame_count": int(pin_captured_frame_count(pin_item)),
+        "has_captured_anim_flag": bool(
+            getattr(pin_item, "has_captured_anim", False)
+        ),
+    }

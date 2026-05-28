@@ -260,6 +260,91 @@ simulation runs.
 **Delete All Keyframes** removes every keyframe *and* the **Embedded
 Move** operation in one step.
 
+### Capture Deformation
+
+When the pinned vertices already follow a deformer on the cloth mesh,
+such as an **Armature** pose, a **Lattice** cage, a **Mesh Deform**
+cage, animated **Shape Keys**, or a **driver**, pressing **Make
+Keyframe** at every frame to mirror the motion is impractical.
+**Capture Deformation** does the sampling pass for you.
+
+```{figure} ../../images/pins/pin_capture_overlay.png
+:alt: Bent cloth at frame 30 with pin overlay dots tracing the bone curve
+:width: 520px
+
+A cloth driven by a multi-bone armature partway through its pose
+animation. The white pin overlay dots follow the bone-driven edge,
+so the solver sees the pin's target position at every frame without
+any per-frame keyframing by the artist.
+```
+
+#### Where the controls live
+
+In the **Pins** section of the pin's group, with the pin selected in the
+list, two buttons appear under the **Show Pins** row: **Capture
+Deformation** and **Clear Deformation Cache**. Both turn on only when
+the pin's mesh has a deforming modifier on it. When a cache exists, a
+**Pin cache: N frame(s)** label sits just below the buttons, and the
+operation list shows an **`[Embedded] Move (Captured)`** entry that
+labels the captured animation as the live source.
+
+```{figure} ../../images/pins/pin_capture_panel.png
+:alt: Pins section showing Capture / Clear buttons, the Pin cache label, and the captured Embedded Move row
+:width: 360px
+
+The same pin's section in the **Dynamics Groups** panel. The captured
+state is visible in three places at once: the **Capture Deformation**
+/ **Clear Deformation Cache** row, the **Pin cache: 60 frame(s)**
+status line, and the **`[Embedded] Move (Captured)`** entry in
+**Operations**.
+```
+
+#### Using it
+
+1. Bind the cloth to its deformer the usual way (e.g. parent to the
+   armature and add an **Armature** modifier; pose the bones and
+   keyframe the pose).
+2. Create the **Dynamics Group**, add the cloth, and register the pin
+   vertex group on the edge or region you want the bones to drive.
+3. Set the scene frame range to cover the pose animation, then press
+   **Capture Deformation**. A progress label reports as it walks the
+   range; on completion the **Pin cache** count appears and the
+   operation row updates.
+4. Press **Transfer** and **Run** as usual. The pinned vertices follow
+   the bones; the rest of the cloth simulates around them.
+
+Press **Capture Deformation** again any time the underlying animation
+changes, a new pose, edited keys, a different modifier; the cache does
+not refresh on its own.
+
+**Clear Deformation Cache** discards the cache and returns the pin to
+its previous state. If the pin had no manual **Make Keyframe**
+authoring underneath, the **`[Embedded] Move`** entry is removed too.
+
+:::{note}
+**Capture Deformation** and manual **Make Keyframe** authoring cannot
+co-exist on the same pin. Capture refuses to start while manual
+keyframes are present (press **Delete All Keyframes** first), and
+**Make Keyframe** refuses to add new keys to a captured pin (press
+**Clear Deformation Cache** first). **Torque** is also incompatible
+with captured animation, matching the existing **Torque** vs
+**Embedded Move** rule.
+:::
+
+:::{admonition} Under the hood
+:class: dropdown
+
+Capture writes a per-pin cache keyed by the cloth object and the
+vertex group name; reopening the file on a host where the cache file
+is missing automatically clears the captured marker so the pin won't
+silently feed stale data into the next **Transfer**.
+
+When the cloth has a deformer on it, the solver-output cache modifier
+is installed *after* the deformer in the modifier stack. This avoids
+re-applying the bone displacement on top of the solver's already
+bone-aware output, which would visibly double the motion on playback.
+:::
+
 ### Center-Mode Dropdown and Overlays
 
 **Spin** and **Scale** both rotate or scale *around* something. The
@@ -367,7 +452,7 @@ into a new resting configuration before letting it fall freely.
 
 | UI label          | Python / TOML key | Parameters (UI labels)                                                                              | Description                                                     |
 | ----------------- | ----------------- | --------------------------------------------------------------------------------------------------- | --------------------------------------------------------------- |
-| **Embedded Move** | `EMBEDDED_MOVE`   | N/A                                                                                                 | Plays back per-vertex keyframes. Auto-added on first Make Keyframe.     |
+| **Embedded Move** | `EMBEDDED_MOVE`   | N/A                                                                                                 | Plays back per-vertex animation. Auto-added on first **Make Keyframe** (manual) or **Capture Deformation** (shown as **`[Embedded] Move (Captured)`**). |
 | **Move By**       | `MOVE_BY`         | **Delta (m)**, **Start**, **End**, **Transition**                                                   | Translate the pinned vertices by a delta over a frame range.    |
 | **Spin**          | `SPIN`            | **Axis**, **Angular Velocity (°/s)**, **Center**, **Start**, **End**, **Transition**               | Rotate the pinned vertices around an axis through a pivot.      |
 | **Scale**         | `SCALE`           | **Factor**, **Center**, **Start**, **End**, **Transition**                                          | Scale the pinned vertices uniformly from a pivot.               |

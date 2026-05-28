@@ -198,6 +198,58 @@ try:
         },
     )
 
+    # ---- D: UIList row is plain [Embedded] Move when not captured ---
+    # Re-author the fcurves so EMBEDDED_MOVE exists again, leave
+    # has_captured_anim at False, render the UIList row, expect the
+    # plain (no "(Captured)" suffix) label. Counterpart of subtest B
+    # in bl_pin_capture_deformation which checks the captured-suffix
+    # path.
+    ui_lists = __import__(pkg + ".ui.dynamics.ui_lists",
+                          fromlist=["OBJECT_UL_PinOperationsList"])
+    bpy.context.scene.frame_set(5)
+    for v in plane.data.vertices:
+        v.keyframe_insert(data_path="co")
+    # _ensure_embedded_move_op via the public path: Make Keyframe.
+    bpy.ops.object.make_pin_keyframe(group_index=0)
+    captured_flag = bool(pin_item.has_captured_anim)
+
+    class _LabelCap:
+        def __init__(self):
+            self.labels = []
+        def row(self, align=False):
+            return self
+        def label(self, text="", icon="NONE"):
+            self.labels.append((text, icon))
+        def prop(self, *_a, **_kw):
+            pass
+
+    em_op = next(
+        (op for op in pin_item.operations if op.op_type == "EMBEDDED_MOVE"),
+        None,
+    )
+    label_text = None
+    if em_op is not None:
+        capture = _LabelCap()
+        # bpy.types.UIList subclasses can't be instantiated directly
+        # via __new__ from Python; call draw_item unbound with None
+        # for self since the EMBEDDED_MOVE branch never reads self.
+        ui_lists.OBJECT_UL_PinOperationsList.draw_item(
+            None,
+            bpy.context, capture, pin_item, em_op, 0, None, None, 0,
+        )
+        if capture.labels:
+            label_text = capture.labels[0][0]
+    record(
+        "D_uilist_label_is_plain_when_make_keyframe_only",
+        captured_flag is False
+        and label_text == "[Embedded] Move",
+        {
+            "has_captured_anim": captured_flag,
+            "label_text": label_text,
+            "embedded_move_present": em_op is not None,
+        },
+    )
+
     log("checks=" + str(len(result["checks"])) + " done")
 except Exception as exc:
     result["errors"].append(type(exc).__name__ + ": " + str(exc))

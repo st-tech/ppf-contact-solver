@@ -531,6 +531,18 @@ class OBJECT_OT_MakePinKeyframe(Operator):
             )
             return {"CANCELLED"}
 
+        # Reject if this pin currently owns a captured-deformation
+        # cache. PC2 wins over fcurves in the encoder, so manual
+        # keyframes added on top would be silently ignored; force
+        # the user to Clear the capture first to avoid that confusion.
+        if getattr(pin_item, "has_captured_anim", False):
+            self.report(
+                {"ERROR"},
+                "Pin is captured from the depsgraph; press Clear "
+                "Deformation Cache first before adding manual keyframes",
+            )
+            return {"CANCELLED"}
+
         # Flush edit-mode edits to mesh data before sampling positions.
         was_edit = False
         if context.active_object and context.active_object.mode == "EDIT":

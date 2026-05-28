@@ -32,6 +32,12 @@
 
 </figure>
 <figure>
+<figcaption><strong>Armature Pin Deformation</strong><span>Drive pinned vertices with an armature to deform them during simulation.</span></figcaption>
+
+[![Armature Pin Deformation](images/tutorials/armature-pin-opt.jpg)](https://zozo.box.com/s/le9yi9es94herjj78ru69pkia3jhpy07){target="_blank" rel="noopener"}
+
+</figure>
+<figure>
 <figcaption><strong>Twisting a Cylinder</strong><span>Pin both ends of a cylinder and rotate them to apply a twist.</span></figcaption>
 
 [![Twisting a Cylinder](images/tutorials/twist-opt.jpg)](https://zozo.box.com/s/werjjc01v0quqqdpyv5k9yntnx1z6p76){target="_blank" rel="noopener"}

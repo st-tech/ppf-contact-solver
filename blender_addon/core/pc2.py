@@ -713,6 +713,137 @@ def clear_all_static_deform_animation():
 
 
 # ---------------------------------------------------------------------------
+# Pin-deform animation cache (Capture Deformation on SHELL/SOLID/ROD pins)
+#
+# A pin whose vertices move because of a deformer on the cloth mesh
+# (Armature, Lattice, MeshDeform, Hook, shape keys, drivers, ...)
+# carries a per-frame absolute vertex buffer captured from the
+# depsgraph. The encoder reads this in preference to the manual
+# vertex-co fcurves the Make Keyframe button writes (implicit
+# PC2-wins). Suffix ``_pindeform`` keeps these keys isolated from
+# the STATIC ``_staticdeform`` namespace.
+#
+# Keyed per (object, vertex-group) so two pins on the same mesh
+# capture independently. The cache stores ONLY the pin's vertices,
+# in the same order as ``_get_pin_indices`` returns at capture
+# time, in solver world space (z2y @ matrix_world @ co_local). The
+# decoder consumes consecutive frames as MoveBy deltas; absolute
+# space cancels out, but world space matches what the cloth mesh's
+# initial-upload coords use, so frame-0 alignment is exact.
+# ---------------------------------------------------------------------------
+
+_pin_anim_cache: dict[str, numpy.ndarray] = {}
+
+
+def _safe_vg_for_key(vg_name: str) -> str:
+    """Make a vertex-group name filesystem-safe for use in a PC2 key.
+
+    Mirrors the substitution ``get_pc2_path`` applies to keys before
+    they hit disk. Applied here so the lookup key in
+    ``_pin_anim_cache`` matches the eventual filename one-to-one,
+    which makes the load_post reconciler's "is this cache present?"
+    check identical to ``os.path.exists`` on the same key.
+    """
+    return vg_name.replace(" ", "_").replace("/", "_")
+
+
+def pin_anim_pc2_key(obj, vg_name: str) -> str:
+    """Return the UUID-backed key for a pin's depsgraph-captured cache."""
+    from .uuid_registry import get_or_create_object_uuid
+    return f"{get_or_create_object_uuid(obj)}__{_safe_vg_for_key(vg_name)}__pindeform"
+
+
+def write_pin_anim_pc2(obj, vg_name: str, frames):
+    """Write a pin's captured per-frame positions to PC2 and the in-memory cache.
+
+    Args:
+        obj: The mesh object the pin belongs to.
+        vg_name: The vertex group name identifying the pin.
+        frames: ndarray ``(n_frames, n_pin_verts, 3)`` of solver-world-space
+            positions; index 0 maps to ``scene.frame_start``. Vertex
+            order matches ``_get_pin_indices(obj, vg_name)`` at capture
+            time.
+    """
+    arr = numpy.ascontiguousarray(frames, dtype="<f")
+    key = pin_anim_pc2_key(obj, vg_name)
+    path = get_pc2_path(key)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    write_pc2(path, [arr[i] for i in range(arr.shape[0])])
+    _pin_anim_cache[key] = arr.copy()
+
+
+def load_pin_anim_cache(key):
+    """Load a pin-deform PC2 file into the in-memory cache (no-op if missing)."""
+    path = get_pc2_path(key)
+    if not os.path.exists(path):
+        return
+    with open(path, "rb") as f:
+        f.seek(16)
+        n_verts = struct.unpack("<i", f.read(4))[0]
+        f.seek(28)
+        n_frames = struct.unpack("<i", f.read(4))[0]
+        if n_frames < 1 or n_verts < 1:
+            return
+        data = numpy.frombuffer(f.read(), dtype="<f")
+    _pin_anim_cache[key] = data.reshape(n_frames, n_verts, 3).copy()
+
+
+def unload_pin_anim_cache(key=None):
+    """Drop one or all pin-deform entries from the in-memory cache."""
+    if key is None:
+        _pin_anim_cache.clear()
+    else:
+        _pin_anim_cache.pop(key, None)
+
+
+def has_pin_anim_pc2(obj, vg_name: str) -> bool:
+    """True if a pin-deform PC2 exists (in memory or on disk)."""
+    if obj is None or getattr(obj, "type", None) != "MESH":
+        return False
+    key = pin_anim_pc2_key(obj, vg_name)
+    if key in _pin_anim_cache:
+        return True
+    return os.path.exists(get_pc2_path(key))
+
+
+def get_pin_anim_cache(obj, vg_name: str):
+    """Return ``(n_frames, n_pin_verts, 3)`` for a pin, lazy-loading from disk."""
+    key = pin_anim_pc2_key(obj, vg_name)
+    if key not in _pin_anim_cache:
+        load_pin_anim_cache(key)
+    return _pin_anim_cache.get(key)
+
+
+def remove_pin_anim_pc2(obj, vg_name: str):
+    """Delete a pin's PC2 file and drop its in-memory cache entry."""
+    key = pin_anim_pc2_key(obj, vg_name)
+    path = get_pc2_path(key)
+    if os.path.exists(path):
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+    unload_pin_anim_cache(key)
+
+
+def clear_all_pin_anim_animation():
+    """Delete every pin-deform PC2 file and clear the in-memory cache."""
+    if bpy is not None:
+        # Pin caches use a per-pin filename suffix, not a per-object key;
+        # walk the on-disk directory and match by suffix to catch every
+        # cache regardless of which pin authored it.
+        pc2_dir = get_pc2_dir()
+        if os.path.isdir(pc2_dir):
+            for fname in os.listdir(pc2_dir):
+                if fname.endswith("__pindeform.pc2"):
+                    try:
+                        os.remove(os.path.join(pc2_dir, fname))
+                    except OSError:
+                        pass
+    unload_pin_anim_cache()
+
+
+# ---------------------------------------------------------------------------
 # Save-post migration (temp → data/)
 # ---------------------------------------------------------------------------
 
@@ -742,6 +873,23 @@ def migrate_pc2_on_save(*_args):
                 if os.path.realpath(sd_new) != sd_old:
                     shutil.move(sd_old, sd_new)
                     load_static_deform_cache(sd_key)
+            # Pin-deform PC2: per-pin caches share the object's UUID
+            # prefix and end with ``__pindeform.pc2``. Migrate every
+            # match for this object.
+            uid = obj.get("_solver_uuid", "") or ""
+            if uid and os.path.isdir(tmp_dir):
+                prefix = f"{uid}__"
+                for fname in os.listdir(tmp_dir):
+                    if not fname.startswith(prefix) or not fname.endswith("__pindeform.pc2"):
+                        continue
+                    pd_old = os.path.realpath(os.path.join(tmp_dir, fname))
+                    if not os.path.exists(pd_old):
+                        continue
+                    os.makedirs(target_dir, exist_ok=True)
+                    pd_new = os.path.join(target_dir, fname)
+                    if os.path.realpath(pd_new) != pd_old:
+                        shutil.move(pd_old, pd_new)
+                        load_pin_anim_cache(fname[:-len(".pc2")])
             mod = obj.modifiers.get(MODIFIER_NAME)
             if mod is None:
                 continue

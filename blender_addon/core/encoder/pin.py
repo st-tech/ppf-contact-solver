@@ -352,17 +352,23 @@ def _encode_pin_config(context, groups, state):
             # Key by UUID for rename resilience.
             if obj_uuid not in pin_config:
                 pin_config[obj_uuid] = {}
-            # Keyframed pin animation. Two motion sources can supply
+            # Keyframed pin animation. Three motion sources can supply
             # ``pin_anim``:
             #
-            # Sparse vertex-co fcurves on the mesh's action, authored
-            # via Make Keyframe. The sentinel is an EMBEDDED_MOVE op
-            # in ``pin_item.operations``; its presence tells the
-            # encoder to gather per-vertex pin_anim from the live
-            # action and splice it in at ``embedded_move_index``.
-            # Pub-main mirrors keyframes through
-            # ``state.saved_pin_keyframes`` first which is an O(N^2)
-            # walk; we read fcurves directly to avoid that.
+            # 1. Captured depsgraph cache (``_pindeform.pc2``) written
+            #    by Capture Deformation. Dense one-sample-per-frame
+            #    coverage for armature / lattice / mesh-deform / shape-
+            #    key driven pins. PC2 wins over fcurves: when both
+            #    exist on the same pin, the cache is the live source.
+            #
+            # 2. Sparse vertex-co fcurves on the mesh's action, authored
+            #    via Make Keyframe. The sentinel is an EMBEDDED_MOVE op
+            #    in ``pin_item.operations``; its presence tells the
+            #    encoder to gather per-vertex pin_anim from the live
+            #    action and splice it in at ``embedded_move_index``.
+            #    Pub-main mirrors keyframes through
+            #    ``state.saved_pin_keyframes`` first which is an O(N^2)
+            #    walk; we read fcurves directly to avoid that.
             #
             # STATIC mesh colliders use a separate dense path
             # (``_staticdeform.pc2`` + ``encoder/mesh.py``) and never
@@ -377,13 +383,57 @@ def _encode_pin_config(context, groups, state):
                     f"Pin '{vg_name}' on '{obj_name}': more than one "
                     "EMBEDDED_MOVE operation is not supported"
                 )
-            has_embedded_move_fcurves = (
-                embedded_move_count == 1 and obj.type == "MESH"
+
+            # PC2-wins: check the captured cache first. The
+            # ``has_captured_anim`` flag is authoritative when set
+            # (capture finalize sets it), but we also probe the cache
+            # directly in case a .blend was opened without the
+            # load_post reconciler having had a chance to run yet.
+            from ..pc2 import get_pin_anim_cache
+            pin_cache = (
+                get_pin_anim_cache(obj, vg_name)
+                if obj.type == "MESH" else None
             )
-            fcurve_frames, fcurve_lookup = (
-                _collect_pin_vertex_fcurve_frames(obj, vg_name)
-                if has_embedded_move_fcurves else ([], {})
-            )
+            if pin_cache is not None and pin_cache.shape[0] >= 2:
+                live_pin_indices = _get_pin_indices(obj, vg_name)
+                if pin_cache.shape[1] != len(live_pin_indices):
+                    raise ValueError(
+                        f"Pin '{vg_name}' on '{obj_name}': captured "
+                        f"deformation cache has {pin_cache.shape[1]} "
+                        f"vertices but the live pin has "
+                        f"{len(live_pin_indices)}. The vertex group "
+                        "changed since capture; press Clear Deformation "
+                        "Cache and Capture Deformation again."
+                    )
+                n_frames_cache = pin_cache.shape[0]
+                cache_frame_start = int(bpy.context.scene.frame_start)
+                cache_times = [
+                    (cache_frame_start + k - 1) / fps
+                    for k in range(n_frames_cache)
+                ]
+                # Cache stores positions in world solver space
+                # (zup_to_yup @ matrix_world @ co_local). The decoder
+                # only uses consecutive deltas, so absolute frame and
+                # translation cancel; any consistent space works.
+                pin_idx_array = np.asarray(live_pin_indices, dtype=np.int64)
+                for j, vi in enumerate(pin_idx_array):
+                    vert_tracks[int(vi)] = {
+                        "time": cache_times,
+                        "position": np.ascontiguousarray(
+                            pin_cache[:, j, :].astype(np.float32, copy=False)
+                        ),
+                    }
+                cfg["embedded_move_index"] = 0
+                # Skip the fcurve scan entirely; PC2 owns the track.
+                fcurve_frames, fcurve_lookup = [], {}
+            else:
+                has_embedded_move_fcurves = (
+                    embedded_move_count == 1 and obj.type == "MESH"
+                )
+                fcurve_frames, fcurve_lookup = (
+                    _collect_pin_vertex_fcurve_frames(obj, vg_name)
+                    if has_embedded_move_fcurves else ([], {})
+                )
             if fcurve_frames:
                 mat = world_matrix(obj).to_3x3()
                 rot = np.array(

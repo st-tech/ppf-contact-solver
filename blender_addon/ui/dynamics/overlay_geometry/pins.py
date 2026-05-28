@@ -113,6 +113,46 @@ def _pc2_frame_positions(obj, scene):
     return [Vector(v) for v in verts]
 
 
+def _evaluated_pin_positions(obj, depsgraph, vert_indices):
+    """Return ``{vert_index: world_co}`` for *vert_indices* sampled from
+    the depsgraph-evaluated mesh of *obj*.
+
+    Used when the object's modifier stack deforms the cloth (Armature,
+    Lattice, Mesh Deform, Hook, shape keys, ...) and no simulation PC2
+    cache is present yet: without this path the pin overlay would
+    render at the rest-pose positions and visibly lag the bone
+    deformation in the viewport.
+
+    Returns ``None`` if the evaluated mesh isn't available; callers
+    fall through to ``obj.data.vertices[i].co``. Limits the iteration
+    to ``vert_indices`` so we never pay the per-redraw cost of walking
+    every vertex when only a small pin group needs sampling.
+    """
+    if depsgraph is None:
+        return None
+    try:
+        eval_obj = obj.evaluated_get(depsgraph)
+    except Exception:
+        return None
+    try:
+        eval_mesh = eval_obj.to_mesh()
+    except Exception:
+        return None
+    try:
+        n_eval = len(eval_mesh.vertices)
+        eval_world = eval_obj.matrix_world
+        out = {}
+        for vi in vert_indices:
+            if 0 <= vi < n_eval:
+                out[vi] = eval_world @ eval_mesh.vertices[vi].co
+        return out
+    finally:
+        try:
+            eval_obj.to_mesh_clear()
+        except Exception:
+            pass
+
+
 def _edit_mode_pin_positions(obj, vg_index):
     """Return ``{vert_index: world_co}`` for verts in vg ``vg_index`` on
     a mesh object that is currently in Edit Mode. Reads positions from
@@ -173,6 +213,20 @@ def _build_pin_data(scene, depsgraph):
                     world_matrix = obj.matrix_world
                     animated_positions = _pc2_frame_positions(obj, scene)
                     animated_indices = set(get_moving_vertex_indices(obj))
+                    # When the cloth has a deforming modifier (Armature,
+                    # Lattice, Mesh Deform, shape keys, ...) and the
+                    # simulation hasn't produced a PC2 cache for it yet,
+                    # the rest-pose fallback would render pin dots at
+                    # the un-deformed positions while Blender draws the
+                    # mesh bent by the bone. Sample the depsgraph-
+                    # evaluated mesh for the pinned verts so the overlay
+                    # follows the live bone deformation. Bounded by the
+                    # pin's vertex count, not by the whole mesh.
+                    from ....core.utils import has_deforming_modifier_stack
+                    deforms_via_modifiers = (
+                        animated_positions is None
+                        and has_deforming_modifier_stack(obj)
+                    )
 
                     for pin_ref in group.pin_vertex_groups:
                         if pin_ref.use_pin_duration and current_frame > pin_ref.pin_duration:
@@ -216,22 +270,40 @@ def _build_pin_data(scene, depsgraph):
                                             color,
                                         ))
                                     continue
-                                for vert in base_mesh.vertices:
-                                    for vg_elem in vert.groups:
-                                        if vg_elem.group == vg_index:
-                                            if animated_positions is not None:
-                                                world_co = world_matrix @ animated_positions[vert.index]
-                                            else:
-                                                world_co = world_matrix @ vert.co
-                                            if has_ops or vert.index in animated_indices:
-                                                color = (0.5, 0.5, 1.0, 0.8)
-                                            else:
-                                                color = (1.0, 1.0, 1.0, 0.8)
-                                            pin_data.append((
-                                                world_co,
-                                                group.pin_overlay_size,
-                                                color,
-                                            ))
+                                # First pass: collect pinned indices off
+                                # the base cage (vertex-group membership
+                                # lives on obj.data, not the eval mesh).
+                                pinned_idx = [
+                                    vert.index
+                                    for vert in base_mesh.vertices
+                                    if any(g.group == vg_index for g in vert.groups)
+                                ]
+                                # If the cloth deforms via modifiers and
+                                # has no PC2 yet, sample those indices
+                                # from the depsgraph; otherwise this is
+                                # None and we keep the rest-pose path.
+                                eval_positions = (
+                                    _evaluated_pin_positions(
+                                        obj, depsgraph, pinned_idx,
+                                    )
+                                    if deforms_via_modifiers else None
+                                )
+                                for vi in pinned_idx:
+                                    if animated_positions is not None:
+                                        world_co = world_matrix @ animated_positions[vi]
+                                    elif eval_positions is not None and vi in eval_positions:
+                                        world_co = eval_positions[vi]
+                                    else:
+                                        world_co = world_matrix @ base_mesh.vertices[vi].co
+                                    if has_ops or vi in animated_indices:
+                                        color = (0.5, 0.5, 1.0, 0.8)
+                                    else:
+                                        color = (1.0, 1.0, 1.0, 0.8)
+                                    pin_data.append((
+                                        world_co,
+                                        group.pin_overlay_size,
+                                        color,
+                                    ))
 
                 elif obj.type == "CURVE":
                     world_matrix = obj.matrix_world

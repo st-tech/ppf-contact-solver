@@ -80,13 +80,23 @@ class OBJECT_UL_PinVertexGroupsList(UIList):
 class OBJECT_UL_PinOperationsList(bpy.types.UIList):
     def draw_item(self, context, layout, data, item, icon, active_data, active_property, index):
         row = layout.row(align=True)
-        # EMBEDDED_MOVE is the legacy auto-detected marker the addon
-        # wrote for fcurve-driven pin animation. It's not a runtime
-        # operation; the encoder skips it. Display matches pub-main:
-        # ``[Embedded] Move`` with the standard KEYFRAME icon, no
-        # show_overlay toggle.
+        # EMBEDDED_MOVE is the sentinel that signals "this pin has
+        # animation"; the encoder splices a per-vertex pin_anim track
+        # at this op's index but never executes the op itself.
+        #
+        # Two motion sources reach this row:
+        #   - Manual Make Keyframe writes vertex-co fcurves on the
+        #     mesh action; the label stays ``[Embedded] Move``.
+        #   - Capture Deformation writes a ``_pindeform.pc2`` cache;
+        #     the label switches to ``[Embedded] Move (Captured)`` so
+        #     the user can tell which path is live. The pin item's
+        #     ``has_captured_anim`` flag is the source of truth.
         if item.op_type == "EMBEDDED_MOVE":
-            row.label(text="[Embedded] Move", icon="KEYFRAME")
+            pin_item = data
+            if getattr(pin_item, "has_captured_anim", False):
+                row.label(text="[Embedded] Move (Captured)", icon="KEYFRAME")
+            else:
+                row.label(text="[Embedded] Move", icon="KEYFRAME")
             return
         if item.op_type == "MOVE_BY":
             d = item.delta

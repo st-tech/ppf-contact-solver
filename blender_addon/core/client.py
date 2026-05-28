@@ -399,7 +399,16 @@ def _apply_single_frame(context, n, vert, map_by_uuid, surface_map_by_uuid,
         # STATIC collider meshes have captured-deformation or fcurve
         # animation flowing into the simulator; their MESH_CACHE must
         # sit after the upstream deformers so PC2 wins on display.
-        place_after_deformers = target.object_type == "STATIC"
+        # SHELL/SOLID/ROD cloths inherit the same need whenever they
+        # carry a deforming modifier stack (Armature, Lattice, ...) -
+        # Capture Pin Deformation is the canonical case but any
+        # deformer would otherwise re-deform the solver's PC2 output
+        # on top of itself, producing double-counted motion.
+        from .utils import has_deforming_modifier_stack
+        place_after_deformers = (
+            target.object_type == "STATIC"
+            or has_deforming_modifier_stack(obj)
+        )
 
         # --- Mesh path: write simulation output directly to PC2 ---
         surface_map = surface_map_by_uuid.get(uid)
@@ -508,9 +517,13 @@ def heal_mesh_caches_if_stale():
                 if not needs_setup:
                     continue
                 try:
+                    from .utils import has_deforming_modifier_stack
                     setup_mesh_cache_modifier(
                         obj, pc2, frame_start=1.0,
-                        place_after_deformers=(g.object_type == "STATIC"),
+                        place_after_deformers=(
+                            g.object_type == "STATIC"
+                            or has_deforming_modifier_stack(obj)
+                        ),
                     )
                 except Exception:
                     # ID-write may be briefly blocked; next tick retries.

@@ -589,3 +589,9 @@ class PinVertexGroupItem(PropertyGroup):
     )  # pyright: ignore
     operations: CollectionProperty(type=PinOperation)  # pyright: ignore
     operations_index: IntProperty(default=-1)  # pyright: ignore
+    # True after Capture Deformation has written a ``_pindeform.pc2``
+    # cache for this pin. Source of truth for the UIList label
+    # ("(Captured)" suffix), the Capture/Clear button enabled state,
+    # and the encoder's PC2-wins branch. Reconciled against on-disk
+    # cache presence on file load via a load_post handler.
+    has_captured_anim: BoolProperty(default=False)  # pyright: ignore

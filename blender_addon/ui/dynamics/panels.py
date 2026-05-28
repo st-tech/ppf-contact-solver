@@ -805,6 +805,73 @@ class DYNAMICS_PT_Groups(Panel):
                     pin_idx = group.pin_vertex_groups_index
                     if 0 <= pin_idx < len(group.pin_vertex_groups):
                         pin_item = group.pin_vertex_groups[pin_idx]
+
+                        # Capture Deformation row for the selected pin.
+                        # Always drawn (just like the use_pin_duration /
+                        # use_pull rows below) so users discover the
+                        # feature exists; per-button ``enabled`` flags
+                        # gate actual use on the preconditions. Status
+                        # label below reports the live reason for the
+                        # current enabled state.
+                        from .pin_capture_ops import (
+                            is_pin_capture_running as _is_pin_capture_running,
+                            pin_captured_frame_count as _pin_cap_count,
+                            pin_has_captured_anim as _pin_has_cap,
+                            pin_object_supports_capture as _pin_supports_cap,
+                        )
+                        from ...core.uuid_registry import (
+                            resolve_pin as _resolve_pin,
+                        )
+                        try:
+                            _pin_obj = _resolve_pin(pin_item)
+                        except ValueError:
+                            _pin_obj = None
+                        _pin_can_capture = (
+                            _pin_obj is not None
+                            and _pin_obj.type == "MESH"
+                            and _pin_supports_cap(_pin_obj)
+                        )
+                        _pin_has_cache = _pin_has_cap(pin_item)
+                        _pin_capture_active = _is_pin_capture_running()
+                        row = col.row(align=True)
+                        sub = row.column()
+                        sub.enabled = (
+                            _pin_can_capture
+                            and not _pin_capture_active
+                        )
+                        cap_op = sub.operator(
+                            "object.capture_pin_deformation",
+                            icon="REC",
+                        )
+                        cap_op.group_index = actual_index
+                        cap_op.pin_index = pin_idx
+                        sub = row.column()
+                        sub.enabled = (
+                            _pin_has_cache and not _pin_capture_active
+                        )
+                        clr_op = sub.operator(
+                            "object.clear_pin_deformation",
+                            icon="X",
+                        )
+                        clr_op.group_index = actual_index
+                        clr_op.pin_index = pin_idx
+                        if _pin_has_cache:
+                            n = _pin_cap_count(pin_item)
+                            col.label(
+                                text=f"Pin cache: {n} frame(s)",
+                                icon="FILE_CACHE",
+                            )
+                        elif _pin_can_capture:
+                            col.label(
+                                text="Deforming modifier detected; capture to encode",
+                                icon="INFO",
+                            )
+                        else:
+                            col.label(
+                                text="No deforming modifier on this pin's object",
+                                icon="INFO",
+                            )
+
                         row = col.row(align=True)
                         row.prop(pin_item, "use_pin_duration")
                         sub = row.row()

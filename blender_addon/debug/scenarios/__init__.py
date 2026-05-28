@@ -44,6 +44,8 @@ from . import bl_pin_compose_move_spin
 from . import bl_pin_compose_spin_move
 from . import bl_pin_compose_full
 from . import bl_pin_op_type_enum_stable
+from . import bl_pin_capture_deformation
+from . import bl_pin_capture_deformation_persistence
 from . import bl_pin_make_keyframe_writes_fcurves
 from . import bl_pin_overlay_follows_edit_mode
 
@@ -155,6 +157,8 @@ REGISTRY = {
     "bl_pin_compose_spin_move": bl_pin_compose_spin_move,
     "bl_pin_compose_full": bl_pin_compose_full,
     "bl_pin_op_type_enum_stable": bl_pin_op_type_enum_stable,
+    "bl_pin_capture_deformation": bl_pin_capture_deformation,
+    "bl_pin_capture_deformation_persistence": bl_pin_capture_deformation_persistence,
     "bl_pin_make_keyframe_writes_fcurves": bl_pin_make_keyframe_writes_fcurves,
     "bl_pin_overlay_follows_edit_mode": bl_pin_overlay_follows_edit_mode,
 

@@ -116,6 +116,22 @@ Subsequent presses add more keyframes at the current scene frame without duplica
 
 Delete All Keyframes removes every keyframe and the Embedded Move operation in one step.
 
+#### Capture Deformation (bone / lattice / shape-key driven pins)
+
+For pins whose vertices already move because of a deformer on the cloth mesh (Armature, Lattice, Mesh Deform, Hook, animated Shape Keys, drivers), Make Keyframe per scene frame is impractical. Use Capture Deformation instead: it walks the scene frame range, samples the depsgraph-evaluated mesh at every frame, and stores the pinned vertices' positions in a per-pin `_pindeform.pc2` cache. The encoder consumes that cache in place of vertex-co fcurves, so the simulation follows the bone deformation natively.
+
+Surfaced as a Capture Deformation / Clear Deformation Cache pair on the pin details panel, just below the pin's selected row. The Capture button is enabled only when the pin object has a deforming modifier stack; Clear is enabled only when a cache already exists.
+
+The cache stores positions in solver world space and is keyed by `(object UUID, vertex group name)`, so two pins on the same mesh capture independently. After a successful capture the pin shows an `[Embedded] Move (Captured)` row in the Operations UIList (vs. the plain `[Embedded] Move` row for manual Make Keyframe authoring), so you can tell which animation source is live.
+
+When both a captured cache and manual vertex-co fcurves exist on the same pin, the captured cache wins. Capture Deformation refuses to run if manual fcurves are present (delete them with Delete All Keyframes first); Make Keyframe refuses on a captured pin (clear the cache first). Capture is also incompatible with Torque ops on the same pin, matching the existing Torque-vs-Embedded-Move rule.
+
+Press Capture Deformation again any time the underlying bone animation changes (new pose, edited rotation keys, modifier swap). The cache does NOT update on its own.
+
+The cache file is migrated from a temp directory into `<blend_dir>/data/<blend_basename>/` on the first save of the .blend, alongside the existing static-deform and dynamic PC2 caches. On reopen, a load_post handler reconciles every pin's `(Captured)` label against the on-disk cache: if the file is missing on the current host, the pin drops the captured marker and the encoder skips the cache path until the user re-runs Capture Deformation.
+
+MCP tools that mirror the buttons: `capture_pin_deformation(group_uuid, vertex_group_identifier)`, `clear_pin_deformation(...)`, `get_pin_deformation_status(...)`. The capture is modal: poll `get_pin_deformation_status` until `frame_count` is non-zero.
+
 #### Center-mode dropdown and overlays
 
 Spin and Scale both rotate or scale around something. The per-operation editor exposes that "something" as a Center dropdown with four modes, each revealing a different companion field underneath:
@@ -166,7 +182,7 @@ When a pin covers every vertex of an object and a movement operation (Move By, S
 
 | UI label          | Python / TOML key | Parameters (UI labels)                                                                              | Description                                                     |
 | ----------------- | ----------------- | --------------------------------------------------------------------------------------------------- | --------------------------------------------------------------- |
-| **Embedded Move** | `EMBEDDED_MOVE`   | N/A                                                                                                 | Plays back per-vertex keyframes. Auto-added on first Make Keyframe.     |
+| **Embedded Move** | `EMBEDDED_MOVE`   | N/A                                                                                                 | Plays back per-vertex animation. Auto-added on first Make Keyframe (manual fcurves) or on Capture Deformation (depsgraph PC2 cache, shown as `[Embedded] Move (Captured)`). |
 | **Move By**       | `MOVE_BY`         | **Delta (m)**, **Start**, **End**, **Transition**                                                   | Translate the pinned vertices by a delta over a frame range.    |
 | **Spin**          | `SPIN`            | **Axis**, **Angular Velocity (°/s)**, **Center**, **Start**, **End**, **Transition**               | Rotate the pinned vertices around an axis through a pivot.      |
 | **Scale**         | `SCALE`           | **Factor**, **Center**, **Start**, **End**, **Transition**                                          | Scale the pinned vertices uniformly from a pivot.               |
