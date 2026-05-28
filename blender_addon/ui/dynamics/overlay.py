@@ -85,17 +85,15 @@ def draw_overlay_callback():
     hide_snaps = bool(getattr(vis_state, "hide_snaps", False))
     hide_pin_operations = bool(getattr(vis_state, "hide_pin_operations", False))
 
-    # Ensure object color mode is active when groups have overlay colors
-    has_overlay = (not hide_overlay_colors) and any(
-        group.show_overlay_color
-        for group in iterate_active_object_groups(scene)
-    )
-    if has_overlay:
-        space = view_3d.spaces.active
-        if hasattr(space, "shading"):
-            shading = space.shading
-            if shading.type == "SOLID" and shading.color_type != "OBJECT":
-                shading.color_type = "OBJECT"
+    # NOTE: previous versions of this draw callback forced
+    # ``space.shading.color_type = "OBJECT"`` whenever any group had
+    # ``show_overlay_color`` on, so users picking Material / Random /
+    # Vertex / Texture / Single in Solid shading would have their
+    # choice snapped back on the next redraw. The per-object overlay
+    # tint (``obj.color = group.color`` in ``apply_object_overlays``)
+    # is still applied, but the viewport shading mode is now the
+    # user's decision: if they want to see the overlay tints they
+    # pick Solid + Object themselves.
 
     # Get matrices
     region = view_3d.spaces.active.region_3d
@@ -550,14 +548,12 @@ def apply_object_overlays():
                     obj = resolve_assigned(obj_ref)
                     if obj and obj.type in ("MESH", "CURVE"):
                         obj.color = group.color
-    # Ensure solid shading uses object colors
-    for window in bpy.context.window_manager.windows:
-        for area in window.screen.areas:
-            if area.type == "VIEW_3D":
-                space = area.spaces.active
-                if hasattr(space, "shading"):
-                    if space.shading.type == "SOLID":
-                        space.shading.color_type = "OBJECT"
+    # The viewport shading mode is owned by the user. ``obj.color`` is
+    # written above for any object in a group with overlay enabled, but
+    # whether Blender renders that tint depends on the user's Solid
+    # shading ``color_type`` choice. Do not override it here: a prior
+    # version snapped non-OBJECT picks (Material / Random / Vertex)
+    # back to OBJECT on every undo/redo and group operation.
 
     invalidate_overlays()
 
