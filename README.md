@@ -897,6 +897,9 @@ If you used this project in a public piece of work, whether a paper, a productio
  </picture>
 </a>
 
+- The first sharp rise came when [Two Minute Papers](https://www.youtube.com/watch?v=VOORiyip4_c) discovered the project and shared it with their audience.
+- The second spike was sparked by our initial release of the Blender 5+ add-on.
+
 ## 🙏 Acknowledgements
 
 The author thanks [ZOZO, Inc.](https://corp.zozo.com/en/) for permitting the release of the code and the team members for assisting with the internal paperwork for this project.
