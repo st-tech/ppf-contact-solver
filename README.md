@@ -82,6 +82,9 @@ involving 👚 shells, 🪵 solids and 🪢 rods. Started as an in-house physics
   - [📣 Sharing Your Work](#-sharing-your-work)
 - [💼 Commercial Use and Beyond](#-commercial-use-and-beyond)
 - [📬 Contributing](#-contributing)
+  - [🔀 Pull Requests and Indirect Contributions](#-pull-requests-and-indirect-contributions)
+  - [🏷️ How Issues Are Handled](#️-how-issues-are-handled)
+  - [⚖️ Licensing of Contributions](#️-licensing-of-contributions)
 - [💬 Participating Discussions](#-participating-discussions)
 - [📨 Reaching the Author](#-reaching-the-author)
 - [🙏 Acknowledgements](#-acknowledgements)
@@ -844,7 +847,15 @@ If you build something on top of this solver, we would love to hear about it, bu
 
 ## 📬 Contributing
 
+### 🔀 Pull Requests and Indirect Contributions
+
 We appreciate your interest in opening pull requests, but we are not ready to accept them directly, as this involves resolving copyright and licensing matters with [ZOZO, Inc.](https://corp.zozo.com/en/) We do, however, welcome indirect contributions, such as suggested fixes and feature requests that are compatible with the [Apache License, Version 2.0](./LICENSE). For instance, you can fork the repository and share a reference implementation; we will review it and consider how it can benefit the codebase. If your contribution is substantial, we will gladly credit your account name here. For now, please open issues for bug reports and proposals under the terms described below.
+
+### 🏷️ How Issues Are Handled
+
+This project has a single maintainer (Ryoichi Ando), who cannot work on it full time. To keep things manageable, issues are triaged rather than answered one by one. An issue worth looking into is tagged with the `queued` label so it joins a list to revisit later, and the `in-progress` label is applied once work on it actually begins. Once it has been addressed, the `worked` label is applied and the issue stays visible for a while before being closed, so you have time to see the outcome. Issues tend to be worked on in batches rather than individually, so please be patient if a response takes a while. The labels are there so you can see where your issue stands at any time.
+
+### ⚖️ Licensing of Contributions
 
 By submitting an Issue, suggestion, or reference implementation (including code shared via Issues or Discussions) to this repository, you agree that your contribution is provided under the terms of the [Apache License, Version 2.0](./LICENSE). Any bug reports, feature proposals, or code you provide will be deemed to be licensed to us and the community on a royalty-free, unrestricted basis for the purpose of improving this software.
 

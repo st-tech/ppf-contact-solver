@@ -8,6 +8,8 @@ body:
       value: |
         Thanks for taking the time to file a bug report. Please fill out the sections below.
         Pull requests are not accepted. See https://github.com/st-tech/ppf-contact-solver/blob/main/CONTRIBUTING.md for details.
+
+        **How issues are handled:** This project has a single maintainer who cannot work on it full time, so issues are triaged rather than answered one by one. An issue worth looking into is tagged `queued` to be revisited later, `in-progress` once work begins, and `worked` after it has been addressed (it then stays visible for a while before being closed). Issues are usually worked on in batches, so please be patient if a response takes a while. The labels let you see where your issue stands at any time.
   - type: textarea
     id: summary
     attributes:
