@@ -87,6 +87,9 @@ involving 👚 shells, 🪵 solids and 🪢 rods. Started as an in-house physics
   - [⚖️ Licensing of Contributions](#️-licensing-of-contributions)
 - [💬 Participating Discussions](#-participating-discussions)
 - [📨 Reaching the Author](#-reaching-the-author)
+- [📈 Project Trends](#-project-trends)
+  - [🏆 Trendshift](#-trendshift)
+  - [⭐ Star History](#-star-history)
 - [🙏 Acknowledgements](#-acknowledgements)
 
 ### 📚 Advanced Contents
@@ -877,6 +880,22 @@ If you would prefer to reach out privately, you can also email the author at ryo
 Please refrain from attaching code patches or other materials that would be considered contributions to this project. Anything you do send is treated under the terms of [CONTRIBUTING.md](./CONTRIBUTING.md): by sending it you agree it is licensed to us and the community under the [Apache License, Version 2.0](./LICENSE) on a royalty-free, unrestricted basis.
 
 If you used this project in a public piece of work, whether a paper, a production credit, or a personal project, the author would love to feature it here. A link to your article, project page, or website is all we need (rather than images or clips themselves, since hosting them here may run into licensing issues), and we will be happy to add it.
+
+## 📈 Project Trends
+
+### 🏆 Trendshift
+
+<a href="https://trendshift.io/repositories/34395" target="_blank"><img src="https://trendshift.io/api/badge/repositories/34395" alt="st-tech%2Fppf-contact-solver | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
+
+### ⭐ Star History
+
+<a href="https://www.star-history.com/?repos=st-tech%2Fppf-contact-solver&type=date&legend=top-left">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=st-tech/ppf-contact-solver&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=st-tech/ppf-contact-solver&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=st-tech/ppf-contact-solver&type=date&legend=top-left" />
+ </picture>
+</a>
 
 ## 🙏 Acknowledgements
 
