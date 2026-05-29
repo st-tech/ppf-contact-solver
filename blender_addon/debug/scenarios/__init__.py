@@ -48,6 +48,7 @@ from . import bl_pin_capture_deformation
 from . import bl_pin_capture_deformation_persistence
 from . import bl_pin_make_keyframe_writes_fcurves
 from . import bl_pin_overlay_follows_edit_mode
+from . import bl_pin_create_clears_stale_membership
 
 # UI / state-machine integration scenarios. These exercise
 # overlay invalidation, race-condition surfaces, fetch-clear-refetch,
@@ -163,6 +164,7 @@ REGISTRY = {
     "bl_pin_capture_deformation_persistence": bl_pin_capture_deformation_persistence,
     "bl_pin_make_keyframe_writes_fcurves": bl_pin_make_keyframe_writes_fcurves,
     "bl_pin_overlay_follows_edit_mode": bl_pin_overlay_follows_edit_mode,
+    "bl_pin_create_clears_stale_membership": bl_pin_create_clears_stale_membership,
 
     # UI / state-machine integration
     "bl_overlay_invalidation": bl_overlay_invalidation,

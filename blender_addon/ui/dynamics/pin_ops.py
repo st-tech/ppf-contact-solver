@@ -139,6 +139,10 @@ class OBJECT_OT_CreatePinVertexGroup(Operator):
             vg = obj.vertex_groups.get(name)
             if vg is None:
                 vg = obj.vertex_groups.new(name=name)
+            else:
+                # vg.add(..., "REPLACE") only overwrites weights for the
+                # listed indices, so clear stale membership first.
+                vg.remove(list(range(len(obj.data.vertices))))
             vg.add(selected, 1.0, "REPLACE")
         elif obj.type == "CURVE":
             # Store as custom property for curves (no native vertex group support)
