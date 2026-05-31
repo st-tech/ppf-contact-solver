@@ -39,6 +39,13 @@ development use.
 <figcaption>Windows Setup: an end-to-end install walkthrough on Windows.</figcaption>
 </figure>
 
+<figure style="text-align: center; margin: 1.5rem 0;">
+
+[![ZoZos Contact Solver - The ultimate Blender cloth simulator](https://img.youtube.com/vi/D0k6evTvJDg/maxresdefault.jpg)](https://www.youtube.com/watch?v=D0k6evTvJDg){target="_blank" rel="noopener"}
+
+<figcaption>Video tutorial by <a href="https://www.youtube.com/@CGMatter" target="_blank" rel="noopener">CGMatter</a>: a full setup and workflow walkthrough.</figcaption>
+</figure>
+
 ### Option A: Add as a Remote Repository (recommended)
 
 This route gets you auto-updates: when a new add-on release is published,

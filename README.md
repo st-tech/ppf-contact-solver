@@ -273,6 +273,10 @@ Follow this page [How to Install](https://st-tech.github.io/ppf-contact-solver/b
   <a href="https://st-tech.github.io/ppf-contact-solver"><img src="./asset/image/read-blender-addon-docs.svg" alt="Read Blender Add-on Documentation" height="35"></a>
 </p>
 
+🎬 Prefer video? [CGMatter](https://www.youtube.com/@CGMatter) walks through the full setup in this video tutorial:
+
+<p align="center"><a href="https://www.youtube.com/watch?v=D0k6evTvJDg"><img src="https://img.youtube.com/vi/D0k6evTvJDg/maxresdefault.jpg" alt="ZoZos Contact Solver - The ultimate Blender cloth simulator"></a></p>
+
 Here are some highlights:
 
 #### 📖 Docs Look
@@ -805,17 +809,27 @@ Below, we describe how to deploy our solver on major cloud services. These instr
 
 <table>
 <tr>
+<td width="50%" valign="top"><a href="https://www.youtube.com/watch?v=D0k6evTvJDg"><img src="https://img.youtube.com/vi/D0k6evTvJDg/maxresdefault.jpg" alt="ZoZos Contact Solver - The ultimate Blender cloth simulator"></a></td>
 <td width="50%" valign="top"><a href="https://www.youtube.com/watch?v=dXfTz01Z-GM&t=616s"><img src="https://img.youtube.com/vi/dXfTz01Z-GM/maxresdefault.jpg" alt="Blender Gets Serious About Physics + Motion Designer Builds a Mograph App | Motion Mondays"></a></td>
-<td width="50%" valign="top"><a href="https://www.youtube.com/watch?v=VOORiyip4_c"><img src="https://img.youtube.com/vi/VOORiyip4_c/maxresdefault.jpg" alt="The Worst Bug In Games Is Now Gone Forever"></a></td>
 </tr>
 <tr>
+<td valign="top"><a href="https://www.youtube.com/watch?v=D0k6evTvJDg"><em>ZoZos Contact Solver - The ultimate Blender cloth simulator</em></a> by <a href="https://www.youtube.com/@CGMatter">CGMatter</a>.</td>
 <td valign="top"><a href="https://www.youtube.com/watch?v=dXfTz01Z-GM&t=616s"><em>Blender Gets Serious About Physics + Motion Designer Builds a Mograph App | Motion Mondays</em></a> by <a href="https://www.youtube.com/@SchoolofMotion">School of Motion</a>.</td>
+</tr>
+<tr>
+<td width="50%" valign="top"><a href="https://www.youtube.com/watch?v=VOORiyip4_c"><img src="https://img.youtube.com/vi/VOORiyip4_c/maxresdefault.jpg" alt="The Worst Bug In Games Is Now Gone Forever"></a></td>
+<td width="50%" valign="top"></td>
+</tr>
+<tr>
 <td valign="top"><a href="https://www.youtube.com/watch?v=VOORiyip4_c"><em>The Worst Bug In Games Is Now Gone Forever</em></a> by <a href="https://www.youtube.com/@TwoMinutePapers">Two Minute Papers</a>.</td>
+<td valign="top"></td>
 </tr>
 </table>
 
 - [*Visual Components - ZOZO's Contact Solver Handshanking*](https://www.youtube.com/watch?v=k000SaPXK4Q) by [idkfa](https://www.youtube.com/@idkfa3).
 - [*Blender 3D - ZOZO's Contact Solver Capability Test - Squished Cloths under Rubber Ball*](https://www.youtube.com/watch?v=emA3xxJjtOM) by [\[BH\]Lithium](https://www.youtube.com/@lithium820).
+- [*Testing ZoZo's contact solver in blender*](https://www.youtube.com/watch?v=DkIWXsxFJLs) by [Colin T](https://www.youtube.com/@ManiacalV).
+- [*Zozo's Contact Solver | Blender Test*](https://www.youtube.com/watch?v=EcTBUaeOu2U) by [YEETboys_666](https://www.youtube.com/@YEETboys_555).
 
 ### 📰 Articles
 
@@ -856,7 +870,13 @@ We appreciate your interest in opening pull requests, but we are not ready to ac
 
 ### 🏷️ How Issues Are Handled
 
-This project has a single maintainer (Ryoichi Ando), who cannot work on it full time. To keep things manageable, issues are triaged rather than answered one by one. An issue worth looking into is tagged with the `queued` label so it joins a list to revisit later, and the `in-progress` label is applied once work on it actually begins. Once it has been addressed, the `worked` label is applied and the issue stays visible for a while before being closed, so you have time to see the outcome. Issues tend to be worked on in batches rather than individually, so please be patient if a response takes a while. The labels are there so you can see where your issue stands at any time.
+This project has a single maintainer (Ryoichi Ando), who cannot work on it full time, so issues are triaged with labels that show where yours stands:
+
+- `queued`: the author has seen the issue.
+- `in-progress`: work on it has started.
+- `worked`: it has been answered at least once.
+
+Issues are handled in batches, so please be patient if a response takes a while.
 
 ### ⚖️ Licensing of Contributions
 
