@@ -26,6 +26,7 @@ from . import server_smoke
 from . import upload_id_changes
 from . import bl_connect_local
 from . import bl_connect_win_native
+from . import bl_connection_path_validation
 from . import bl_direct_disk_transfer
 from . import bl_rust_binary_protocol
 
@@ -147,6 +148,7 @@ REGISTRY = {
     # Rust binary (--features emulated) -> vert_*.bin -> fetch.
     "bl_connect_local": bl_connect_local,
     "bl_connect_win_native": bl_connect_win_native,
+    "bl_connection_path_validation": bl_connection_path_validation,
     "bl_direct_disk_transfer": bl_direct_disk_transfer,
     "bl_rust_binary_protocol": bl_rust_binary_protocol,
 

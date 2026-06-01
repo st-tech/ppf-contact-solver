@@ -15,7 +15,7 @@ from bpy.types import Operator  # pyright: ignore
 from ..core.async_op import AsyncOperator
 from ..core.client import communicator as com
 from ..core.module import module_exists
-from ..core.utils import get_timer_wait_time, redraw_all_areas
+from ..core.utils import find_invalid_name_char, find_invalid_path_char, get_timer_wait_time, redraw_all_areas
 from ..models.groups import get_addon_data
 
 
@@ -59,12 +59,16 @@ class REMOTE_OT_Connect(Operator):
         root = get_addon_data(context.scene)
         props = root.ssh_state
         state = root.state
-        project_name_valid = state.project_name.strip() != ""
+        project_name_valid = (
+            state.project_name.strip() != ""
+            and find_invalid_name_char(state.project_name) is None
+        )
 
         if props.server_type == "COMMAND":
             return (
                 not com.is_connected()
                 and props.command.strip() != ""
+                and find_invalid_path_char(props.ssh_remote_path) is None
                 and module_exists(["paramiko"])
                 and project_name_valid
             )
@@ -72,6 +76,8 @@ class REMOTE_OT_Connect(Operator):
             return (
                 not com.is_connected()
                 and props.host.strip() != ""
+                and find_invalid_path_char(props.key_path) is None
+                and find_invalid_path_char(props.ssh_remote_path) is None
                 and module_exists(["paramiko"])
                 and project_name_valid
             )
@@ -80,6 +86,8 @@ class REMOTE_OT_Connect(Operator):
                 not com.is_connected()
                 and props.container.strip() != ""
                 and props.key_path.strip() != ""
+                and find_invalid_path_char(props.key_path) is None
+                and find_invalid_path_char(props.docker_path) is None
                 and module_exists(["docker"])
                 and project_name_valid
             )
@@ -88,6 +96,8 @@ class REMOTE_OT_Connect(Operator):
                 not com.is_connected()
                 and props.host.strip() != ""
                 and props.container.strip() != ""
+                and find_invalid_path_char(props.key_path) is None
+                and find_invalid_path_char(props.docker_path) is None
                 and module_exists(["paramiko"])
                 and project_name_valid
             )
@@ -96,6 +106,7 @@ class REMOTE_OT_Connect(Operator):
                 not com.is_connected()
                 and props.command.strip() != ""
                 and props.container.strip() != ""
+                and find_invalid_path_char(props.docker_path) is None
                 and module_exists(["paramiko"])
                 and project_name_valid
             )
@@ -103,10 +114,15 @@ class REMOTE_OT_Connect(Operator):
             return (
                 not com.is_connected()
                 and props.win_native_path.strip() != ""
+                and find_invalid_path_char(props.win_native_path) is None
                 and project_name_valid
             )
         elif props.server_type == "LOCAL":
-            return not com.is_connected() and project_name_valid
+            return (
+                not com.is_connected()
+                and find_invalid_path_char(props.local_path) is None
+                and project_name_valid
+            )
 
     def execute(self, context):
         root = get_addon_data(context.scene)

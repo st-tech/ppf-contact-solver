@@ -21,7 +21,7 @@ from ..core.derived import (
 from ..models.groups import get_addon_data, has_addon_data
 from ..core.module import get_install_error_message, get_install_result, get_installing_status, module_exists
 from ..core.reload_server import get_reload_server_status
-from ..core.utils import get_category_name
+from ..core.utils import find_invalid_name_char, find_invalid_path_char, get_category_name
 
 from .connection_ops import (
     REMOTE_OT_Abort,
@@ -100,6 +100,28 @@ def _our_server_responding_in_error(error_msg: str) -> bool:
     ours = _probe_ppf_cts_server(port, timeout=0.5)
     _probe_cache[port] = (now, ours)
     return ours
+
+
+def _draw_path_warning(layout, path) -> bool:
+    """Draw a one-line warning when *path* holds a space or shell-unsafe
+    character, and return ``True`` so the caller can skip any follow-up status
+    line.  Draws nothing and returns ``False`` for a valid (or blank) path.
+    """
+    if find_invalid_path_char(path) is None:
+        return False
+    layout.label(text="Path should not contain spaces or special characters", icon="ERROR")
+    return True
+
+
+def _draw_name_warning(layout, name) -> bool:
+    """Draw a one-line warning when the project *name* holds a space or a
+    character that isn't filename-safe, and return ``True``. Draws nothing and
+    returns ``False`` for a valid (or blank) name.
+    """
+    if find_invalid_name_char(name) is None:
+        return False
+    layout.label(text="Project name should not contain spaces or special characters", icon="ERROR")
+    return True
 
 
 class MAIN_OT_ProjectNameFromFile(bpy.types.Operator):
@@ -225,6 +247,7 @@ class MAIN_PT_RemotePanel(Panel):
                 col.prop(props, "port")
                 col.prop(props, "username")
                 col.prop(props, "key_path")
+                _draw_path_warning(col, props.key_path)
             elif props.server_type == "DOCKER":
                 col.prop(props, "container")
             elif props.server_type == "DOCKER_SSH":
@@ -232,34 +255,40 @@ class MAIN_PT_RemotePanel(Panel):
                 col.prop(props, "port")
                 col.prop(props, "username")
                 col.prop(props, "key_path")
+                _draw_path_warning(col, props.key_path)
                 col.prop(props, "container")
             elif props.server_type == "DOCKER_SSH_COMMAND":
                 col.prop(props, "command")
                 col.prop(props, "container")
             if props.server_type == "WIN_NATIVE":
                 col.prop(props, "win_native_path")
-                win_path = props.win_native_path.strip().rstrip("/\\")
-                if win_path:
-                    candidates = [
-                        os.path.join(win_path, "target", "release", "ppf-cts-server.exe"),
-                        os.path.join(win_path, "bin", "ppf-cts-server.exe"),
-                    ]
-                    if any(os.path.exists(p) for p in candidates):
-                        col.label(text="Solver path valid", icon="CHECKMARK")
-                    else:
-                        col.label(text="ppf-cts-server.exe not found", icon="ERROR")
+                if not _draw_path_warning(col, props.win_native_path):
+                    win_path = props.win_native_path.strip().rstrip("/\\")
+                    if win_path:
+                        candidates = [
+                            os.path.join(win_path, "target", "release", "ppf-cts-server.exe"),
+                            os.path.join(win_path, "bin", "ppf-cts-server.exe"),
+                        ]
+                        if any(os.path.exists(p) for p in candidates):
+                            col.label(text="Solver path valid", icon="CHECKMARK")
+                        else:
+                            col.label(text="ppf-cts-server.exe not found", icon="ERROR")
             elif props.server_type == "LOCAL":
                 col.prop(props, "local_path")
+                _draw_path_warning(col, props.local_path)
             elif props.server_type in ["CUSTOM", "COMMAND"]:
                 col.prop(props, "ssh_remote_path")
+                _draw_path_warning(col, props.ssh_remote_path)
             else:
                 col.prop(props, "docker_path")
+                _draw_path_warning(col, props.docker_path)
 
             row = box.row(align=True)
             row.enabled = not com.is_server_running() and not com.is_server_launching()
             row.prop(state, "project_name", text="Project Name")
             if bpy.data.filepath and state.project_name.strip() in ("", "unnamed"):
                 row.operator("main.project_name_from_file", text="", icon="COPYDOWN")
+            _draw_name_warning(box, state.project_name)
             if "DOCKER" in props.server_type:
                 box.prop(props, "docker_port")
 

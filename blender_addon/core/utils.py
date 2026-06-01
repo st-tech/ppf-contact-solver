@@ -14,6 +14,52 @@ def get_category_name():
     return "ZOZO's Contact Solver"
 
 
+# Characters that break a connection path when it is interpolated into a shell
+# command (``cd {path} && ...``, ``docker exec -w {path} ...``).  Whitespace
+# plus shell and glob metacharacters.  ``~`` is intentionally NOT included:
+# ``~/work`` is a common, safe remote path and the shell expands it fine.  The
+# usual path components (``/``, ``\``, ``:``, ``.``, ``-``, ``_``) are also
+# allowed so Windows drive letters and separators pass.
+_INVALID_PATH_CHARS = frozenset(
+    " \t\n\r"          # whitespace
+    "&|;<>()$`\"'"     # shell metacharacters
+    "*?[]{}#"          # glob, brace expansion, comment
+    "!%^"              # history expansion, env, caret
+)
+
+
+def find_invalid_path_char(path: str) -> str | None:
+    """Return the first space or shell-unsafe character in *path*, else ``None``.
+
+    Used to warn about, and refuse, connection paths that would break (or be
+    misinterpreted) when interpolated into a shell command.  Returns ``None``
+    for an empty or whitespace-only path, so callers can chain
+    ``find_invalid_path_char(p) is None`` without rejecting an intentionally
+    blank optional path; emptiness is validated separately per connection type.
+    """
+    for ch in path.strip():
+        if ch in _INVALID_PATH_CHARS:
+            return ch
+    return None
+
+
+def find_invalid_name_char(name: str) -> str | None:
+    """Return the first character in *name* that is not filename-safe, else ``None``.
+
+    A project name becomes a single directory-name component on the server and
+    is interpolated into commands, so it is held to a stricter rule than a
+    path: only letters, digits, ``.``, ``-`` and ``_`` are allowed. That
+    rejects spaces, shell/glob metacharacters, AND path separators (``/``,
+    ``\\``, ``:``), none of which belong in a single name component. Returns
+    ``None`` for an empty or whitespace-only name; emptiness is validated
+    separately.
+    """
+    for ch in name.strip():
+        if not (ch.isalnum() or ch in "._-"):
+            return ch
+    return None
+
+
 def count_ngon_faces(obj) -> int:
     """Return the number of N-gon faces (polygons with > 4 vertices)
     on *obj*'s mesh. ``0`` means the mesh has only triangles and
