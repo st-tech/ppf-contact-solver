@@ -652,6 +652,8 @@ class ParamDecoder:
                 print(f"  {dyn_name}[{vi}]: unpin_time={cfg['unpin_time']}")
         if "pull_strength" in cfg:
             pin_holder.pull(cfg["pull_strength"])
+        if "pin_stiffness" in cfg:
+            pin_holder._data.pin_stiffness = float(cfg["pin_stiffness"])
         if "pin_group_id" in cfg:
             pin_holder._data.pin_group_id = cfg["pin_group_id"]
             if verbose:

@@ -26,6 +26,7 @@ from . import server_smoke
 from . import upload_id_changes
 from . import bl_connect_local
 from . import bl_connect_win_native
+from . import bl_direct_disk_transfer
 from . import bl_rust_binary_protocol
 
 # Pin fidelity matrix. Each scenario builds a scene with one pin op
@@ -46,6 +47,11 @@ from . import bl_pin_compose_full
 from . import bl_pin_op_type_enum_stable
 from . import bl_pin_capture_deformation
 from . import bl_pin_capture_deformation_persistence
+from . import bl_geonode_deform_input
+from . import bl_geonode_capture_range_frame_count
+from . import bl_static_smooth_by_angle_no_capture
+from . import bl_pin_stiffness_travel
+from . import bl_bake_aborts_unfetched
 from . import bl_pin_make_keyframe_writes_fcurves
 from . import bl_pin_overlay_follows_edit_mode
 from . import bl_pin_create_clears_stale_membership
@@ -141,6 +147,7 @@ REGISTRY = {
     # Rust binary (--features emulated) -> vert_*.bin -> fetch.
     "bl_connect_local": bl_connect_local,
     "bl_connect_win_native": bl_connect_win_native,
+    "bl_direct_disk_transfer": bl_direct_disk_transfer,
     "bl_rust_binary_protocol": bl_rust_binary_protocol,
 
     # Pin-op fidelity matrix. Each scenario cross-checks the Rust
@@ -162,6 +169,11 @@ REGISTRY = {
     "bl_pin_op_type_enum_stable": bl_pin_op_type_enum_stable,
     "bl_pin_capture_deformation": bl_pin_capture_deformation,
     "bl_pin_capture_deformation_persistence": bl_pin_capture_deformation_persistence,
+    "bl_geonode_deform_input": bl_geonode_deform_input,
+    "bl_geonode_capture_range_frame_count": bl_geonode_capture_range_frame_count,
+    "bl_static_smooth_by_angle_no_capture": bl_static_smooth_by_angle_no_capture,
+    "bl_pin_stiffness_travel": bl_pin_stiffness_travel,
+    "bl_bake_aborts_unfetched": bl_bake_aborts_unfetched,
     "bl_pin_make_keyframe_writes_fcurves": bl_pin_make_keyframe_writes_fcurves,
     "bl_pin_overlay_follows_edit_mode": bl_pin_overlay_follows_edit_mode,
     "bl_pin_create_clears_stale_membership": bl_pin_create_clears_stale_membership,

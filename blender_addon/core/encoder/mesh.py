@@ -12,12 +12,34 @@ from mathutils import Vector  # pyright: ignore
 
 from ...models.groups import decode_vertex_group_identifier, get_addon_data, iterate_object_groups
 from ..utils import (
+    eval_deform_local_positions,
     get_transform_keyframes,
     get_vertices_in_group,
+    has_deforming_modifier_stack,
     is_deforming_static_object,
     world_matrix,
 )
 from . import _swap_axes, _to_solver
+
+
+def _frame_one_eval_local_verts(obj, context):
+    """Frame-1 deform-evaluated local verts for *obj*, or ``None`` when
+    no usable eval is available (caller keeps the rest mesh).
+
+    Honors a deform-only Geometry Nodes / Armature / Lattice stack so
+    the solver starts in the shape the artist sees at frame 1. Pinned
+    vertices are included: the decoder integrates a captured pin track
+    as deltas from each vertex's INITIAL position, and the captured
+    cache's frame-0 row IS the frame-1 deform pose, so initial ==
+    cache[0] telescopes to the exact wave (frame-1 + (cache[k] -
+    cache[0]) = cache[k]). Holding pinned verts at rest instead would
+    shift the whole track by the frame-1 displacement. The addon's
+    MESH_CACHE is excluded so a prior solve's output isn't read back.
+    """
+    from ..pc2 import MODIFIER_NAME
+    return eval_deform_local_positions(
+        obj, context, exclude_modifier_name=MODIFIER_NAME,
+    )
 
 
 def compute_mesh_hash(context):
@@ -366,9 +388,17 @@ def _encode_obj_inner(context, scene, state, data, curr_frame):
                         and has_static_deform_animation(obj)
                     )
 
+                    # A deform-only modifier stack (Geometry Nodes,
+                    # Armature, ...) makes the frame-1 shape diverge from
+                    # the rest cage, so two objects that share a rest mesh
+                    # can no longer share one canonical buffer. Exclude
+                    # them from dedup, same as the static-deform case.
+                    _has_deform = has_deforming_modifier_stack(obj)
+                    _dedup_ok = not _has_sd and not _has_deform
+
                     # Deduplication: check if this mesh is a duplicate
                     content_hash = _local_mesh_hash(obj)
-                    if content_hash in canonical_meshes and not _has_sd:
+                    if content_hash in canonical_meshes and _dedup_ok:
                         # Duplicate: reference the canonical mesh, send only transform
                         mesh_ref = canonical_meshes[content_hash]
                         vert = None
@@ -378,7 +408,7 @@ def _encode_obj_inner(context, scene, state, data, curr_frame):
                     else:
                         # Canonical: extract local-space mesh + transform
                         from ..uuid_registry import get_or_create_object_uuid
-                        if not _has_sd:
+                        if _dedup_ok:
                             canonical_meshes[content_hash] = get_or_create_object_uuid(obj)
                         from ..numpy_mesh_utils import (
                             extract_mesh_to_numpy,
@@ -386,8 +416,14 @@ def _encode_obj_inner(context, scene, state, data, curr_frame):
                             triangulate_uv_data,
                         )
                         local_verts, faces = extract_mesh_to_numpy(mesh)
+                        # Triangulation and UVs come off the rest topology
+                        # (stable vertex indices); the positions sent to
+                        # the solver honor the frame-1 deform when present,
+                        # except on pin-driven verts (kept at rest so the
+                        # pin delta track isn't double-counted).
                         tri = triangulate_numpy_mesh(local_verts, faces)
-                        vert = local_verts
+                        eval_verts = _frame_one_eval_local_verts(obj, context)
+                        vert = eval_verts if eval_verts is not None else local_verts
                         uv = triangulate_uv_data(mesh, tri)
                         stitch_data = detect_stitch_edges(mesh)
 

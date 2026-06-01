@@ -257,6 +257,59 @@ _GENERATIVE_MODIFIER_TYPES = frozenset({
 })
 
 
+def _stack_preserves_vertex_count(obj) -> bool:
+    """True if *obj*'s evaluated mesh keeps the base vertex count.
+
+    Used to disambiguate a Geometry Nodes modifier, which lives in both
+    the deforming and the generative type sets. When the whole stack
+    preserves the vertex count, no modifier changes topology, so any GN
+    present only displaces existing vertices (deform-only) and the
+    cache must sit AFTER it. When the count differs, something is
+    generative and we keep the conservative before-the-boundary
+    placement. Returns False if evaluation isn't available, which keeps
+    the safe (treat GN as generative) behavior.
+    """
+    try:
+        import bpy
+        base = len(obj.data.vertices)
+        deps = bpy.context.evaluated_depsgraph_get()
+        eval_obj = obj.evaluated_get(deps)
+        mesh = eval_obj.to_mesh()
+        try:
+            return len(mesh.vertices) == base
+        finally:
+            eval_obj.to_mesh_clear()
+    except Exception:
+        return False
+
+
+def _cache_insertion_index(obj) -> int:
+    """Index where ContactSolverCache should sit so it lands AFTER every
+    position-preserving deformer and BEFORE the first topology-changing
+    modifier. Computed over the stack with the cache excluded, so the
+    returned value is the cache's desired final index and can be passed
+    straight to ``obj.modifiers.move(current_idx, here)``.
+
+    A NODES (Geometry Nodes) modifier is treated as a topology boundary
+    only when it actually changes the vertex count; a deform-only GN
+    (e.g. a Set Position wave) is treated as a deformer so PC2 wins on
+    display instead of the GN re-deforming the cache output on top of
+    itself.
+    """
+    nodes_are_deformers = _stack_preserves_vertex_count(obj)
+    pos = 0
+    for m in obj.modifiers:
+        if m.name == MODIFIER_NAME:
+            continue
+        is_boundary = m.type in _GENERATIVE_MODIFIER_TYPES
+        if m.type == "NODES" and nodes_are_deformers:
+            is_boundary = False
+        if is_boundary:
+            return pos
+        pos += 1
+    return pos
+
+
 def setup_mesh_cache_modifier(obj, pc2_path, frame_start=0.0,
                               place_after_deformers=False):
     """Add or update a MESH_CACHE modifier on *obj* pointing to *pc2_path*.
@@ -279,20 +332,18 @@ def setup_mesh_cache_modifier(obj, pc2_path, frame_start=0.0,
     mod = obj.modifiers.get(MODIFIER_NAME)
     if mod is None:
         mod = obj.modifiers.new(name=MODIFIER_NAME, type="MESH_CACHE")
-        idx = obj.modifiers.find(MODIFIER_NAME)
-        if place_after_deformers:
-            target = None
-            for i, m in enumerate(obj.modifiers):
-                if m.name == MODIFIER_NAME:
-                    continue
-                if m.type in _GENERATIVE_MODIFIER_TYPES:
-                    target = i
-                    break
-            if target is not None and target < idx:
-                obj.modifiers.move(idx, target)
-        else:
-            if idx > 0:
-                obj.modifiers.move(idx, 0)
+    # Enforce placement for both freshly-created AND already-present
+    # caches: a stale order saved by an older session (or a file made
+    # before a deformer was added) is corrected on the next setup,
+    # rather than leaving the cache wherever it happened to land.
+    idx = obj.modifiers.find(MODIFIER_NAME)
+    if place_after_deformers:
+        target = _cache_insertion_index(obj)
+        if target != idx:
+            obj.modifiers.move(idx, target)
+    else:
+        if idx > 0:
+            obj.modifiers.move(idx, 0)
     mod.cache_format = "PC2"
     mod.filepath = bpy.path.relpath(pc2_path) if bpy.data.filepath else pc2_path
     mod.interpolation = "LINEAR"

@@ -271,6 +271,13 @@ fn decode_pin_header(d: &Bound<'_, PyDict>) -> PyResult<sl::PinHeader> {
         .get_item("pull_strength")?
         .ok_or_else(|| PyValueError::new_err("missing pull_strength"))?
         .extract()?;
+    // Defaults to 1.0 (no scaling) when absent, so older payloads that
+    // predate per-pin stiffness keep their original force.
+    let pin_stiffness: f64 = d
+        .get_item("pin_stiffness")?
+        .map(|v| v.extract::<f64>())
+        .transpose()?
+        .unwrap_or(1.0);
     let unpin_time: Option<f64> = d
         .get_item("unpin_time")?
         .map(|v| v.extract::<Option<f64>>())
@@ -285,6 +292,7 @@ fn decode_pin_header(d: &Bound<'_, PyDict>) -> PyResult<sl::PinHeader> {
         operation_count,
         pin_count,
         pull_strength,
+        pin_stiffness,
         unpin_time,
         pin_group_id,
     })

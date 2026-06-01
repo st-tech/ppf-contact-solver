@@ -883,6 +883,18 @@ class DYNAMICS_PT_Groups(Panel):
                         sub.enabled = pin_item.use_pull
                         sub.prop(pin_item, "pull_strength")
 
+                        # Pin stiffness scales the moving-pin constraint
+                        # force, so it only matters once the pin animates
+                        # (an op or a captured deformation). Drawn always
+                        # for discoverability; disabled for stationary
+                        # pins where it has no effect.
+                        row = col.row(align=True)
+                        row.enabled = (
+                            len(pin_item.operations) > 0
+                            or pin_item.has_captured_anim
+                        )
+                        row.prop(pin_item, "pin_stiffness")
+
                         # Operations list
                         col.separator()
                         ops_row = col.row()

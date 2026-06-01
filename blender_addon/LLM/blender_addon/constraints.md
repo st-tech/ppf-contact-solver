@@ -177,6 +177,7 @@ When a pin covers every vertex of an object and a movement operation (Move By, S
 | **Include**                   | `included`                          | Pin is active for the current solve.                          |
 | **Duration** / **Active For** | `use_pin_duration` / `pin_duration` | Release the pin at the given frame (`solver.unpin(frame=...)`). |
 | **Pull** / **Strength**       | `use_pull` / `pull_strength`        | Replace the hard pin with a soft pull force.                  |
+| **Pin Stiffness**             | `pin_stiffness`                     | Scale a moving (animated) pin's constraint force. 1.0 default; raise it if the pin lags its target. No effect on a stationary pin. |
 
 ### Operations reference
 

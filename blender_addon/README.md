@@ -251,7 +251,7 @@ Re-exported by `core/utils.py` (matrix functions) and `core/encoder/__init__.py`
 **`encode_param(context) -> bytes`** (CBOR envelope, schema `crates/ppf-cts-formats`): Dict with keys:
 - `scene`: dt, min-newton-steps, air-density, air-friction, gravity[3], wind[3], frames, fps, csrmat-max-nnz, isotropic-air-friction, auto-save, line-search-max-t, constraint-ghat, cg-max-iter, cg-tol, include-face-mass, disable-contact, inactive-momentum, stitch-stiffness
 - `group`: list of (params_dict, object_names) per group. Params: model, density, young-mod, poiss-rat, friction, contact-gap, contact-offset, bend, shrink (solid), shrink-x, shrink-y, strain-limit, pressure, length-factor, velocity
-- `pin_config`: {obj_name: {vertex_idx: {unpin_time, pull_strength, operations[], embedded_move_index, pin_anim, pin_group_id}}}
+- `pin_config`: {obj_name: {vertex_idx: {unpin_time, pull_strength, pin_stiffness, operations[], embedded_move_index, pin_anim, pin_group_id}}}
 - `merge_pairs`: [(object_a, object_b, stitch_stiffness), ...]
 - `dyn_param` (optional): dict mapping solver key to list of `(time_seconds, value_list, is_hold)` tuples. Keys: `"gravity"`, `"wind"`, `"air-density"`, `"air-friction"`, `"isotropic-air-friction"`. Only present when dynamic parameters with >1 keyframe exist. Encoded by `_encode_dyn_params()`. Vectors are coordinate-converted (Z-up to Y-up), wind is direction*strength combined. The decoder (`frontend/_decoder_.py`) reads this key and applies via `session.param.dyn(key).time(t).hold()` or `.change(v)`.
 - `invisible_colliders` (optional): dict with `"walls"` and `"spheres"` lists. Each wall: `{position, normal, contact_gap, friction, keyframes: [{time, position}]}`. Each sphere: `{position, radius, hemisphere, invert, contact_gap, friction, keyframes: [{time, position, radius}]}`. Encoded by `_encode_invisible_colliders()`. The decoder creates `Wall`/`Sphere` objects via `scene.add.invisible.wall()` / `.sphere()` before `scene.build()`.
@@ -414,7 +414,7 @@ Collections: `fetched_frame` (FetchedFrameItem), `saved_pin_keyframes` (SavedPin
 
 Collections: `assigned_objects` (AssignedObject with name + included toggle), `pin_vertex_groups` (PinVertexGroupItem with operations CollectionProperty).
 
-**PinVertexGroupItem:** `name` (format `[ObjectName][VertexGroupName]`), `included`, `use_pin_duration`, `pin_duration` (frames), `use_pull`, `pull_strength`, `operations` (CollectionProperty of PinOperation), `operations_index`.
+**PinVertexGroupItem:** `name` (format `[ObjectName][VertexGroupName]`), `included`, `use_pin_duration`, `pin_duration` (frames), `use_pull`, `pull_strength`, `pin_stiffness` (scales the moving-pin force; 1.0 default), `operations` (CollectionProperty of PinOperation), `operations_index`.
 
 **PinOperation:** `op_type` (EMBEDDED_MOVE/MOVE_BY/SPIN/SCALE/TORQUE), `delta` (XYZ), `spin_axis` (XYZ), `spin_angular_velocity` (deg/s, default 360), `spin_center` (XYZ), `spin_center_mode` (CENTROID/ABSOLUTE/MAX_TOWARDS/VERTEX), `spin_center_vertex` (int, default -1), `spin_center_direction` (XYZ), `show_max_towards_spin` (bool), `show_vertex_spin` (bool), `scale_factor`, `scale_center` (XYZ), `scale_center_mode` (CENTROID/ABSOLUTE/MAX_TOWARDS/VERTEX), `scale_center_vertex` (int, default -1), `scale_center_direction` (XYZ), `show_max_towards_scale` (bool), `show_vertex_scale` (bool), `torque_axis_component` (PC1/PC2/PC3), `torque_magnitude` (N*m), `torque_flip`, `frame_start`, `frame_end`, `transition` (LINEAR/SMOOTH), `show_overlay`.
 

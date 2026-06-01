@@ -90,6 +90,7 @@ _PIN_SETTABLE = {
     "pin_duration",
     "use_pull",
     "pull_strength",
+    "pin_stiffness",
 }
 
 
@@ -102,8 +103,9 @@ def set_pin_settings(
     pin_duration: Optional[int] = None,
     use_pull: Optional[bool] = None,
     pull_strength: Optional[float] = None,
+    pin_stiffness: Optional[float] = None,
 ):
-    """Set per-pin runtime settings (include/duration/pull).
+    """Set per-pin runtime settings (include/duration/pull/stiffness).
 
     Args:
         group_uuid: UUID of group
@@ -113,6 +115,8 @@ def set_pin_settings(
         pin_duration: Number of frames the pin is active
         use_pull: Use pull force instead of hard constraint
         pull_strength: Pull force strength
+        pin_stiffness: Scale on this pin's moving (kinematic) constraint
+            force; 1.0 default, only affects animated pins
     """
     group = get_active_group_by_uuid_helper(group_uuid)
     pin, obj_uuid, vg_name = _resolve_pin(group, vertex_group_identifier)
@@ -123,6 +127,7 @@ def set_pin_settings(
         "pin_duration": pin_duration,
         "use_pull": use_pull,
         "pull_strength": pull_strength,
+        "pin_stiffness": pin_stiffness,
     }
     applied = {}
     for k, v in updates.items():

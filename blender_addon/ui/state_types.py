@@ -587,6 +587,19 @@ class PinVertexGroupItem(PropertyGroup):
         precision=2,
         description="Pull force strength (0=no pull, 1=default)",
     )  # pyright: ignore
+    pin_stiffness: FloatProperty(
+        name="Pin Stiffness",
+        default=1.0,
+        min=0.0,
+        soft_max=10000.0,
+        precision=2,
+        description=(
+            "Stiffness scale for this pin's moving (animated) constraint "
+            "force. 1.0 is the default; raise it if an animated pin lags "
+            "or wobbles away from its target, lower it for a softer pull. "
+            "Has no effect on a stationary pin"
+        ),
+    )  # pyright: ignore
     operations: CollectionProperty(type=PinOperation)  # pyright: ignore
     operations_index: IntProperty(default=-1)  # pyright: ignore
     # True after Capture Deformation has written a ``_pindeform.pc2``

@@ -20,16 +20,14 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
 mod common;
-use common::{read_to_eof, spawn_server, spawn_server_with_data_root};
+use common::{read_to_eof, send_tcmd, spawn_server, spawn_server_with_data_root};
 
 #[tokio::test]
 async fn tcmd_ping_returns_status_response() {
     let (addr, cancel) = spawn_server().await;
 
     let mut s = TcpStream::connect(addr).await.unwrap();
-    s.write_all(b"TCMD").await.unwrap();
-    s.write_all(b"--name demo").await.unwrap();
-    s.shutdown().await.unwrap();
+    send_tcmd(&mut s, b"--name demo").await;
 
     let bytes = read_to_eof(&mut s).await;
     let body = std::str::from_utf8(&bytes).unwrap().trim_end();
@@ -53,10 +51,8 @@ async fn tcmd_no_id_returns_error() {
     let (addr, cancel) = spawn_server().await;
 
     let mut s = TcpStream::connect(addr).await.unwrap();
-    s.write_all(b"TCMD").await.unwrap();
     // No --name → server returns NO_ID error.
-    s.write_all(b"--request build").await.unwrap();
-    s.shutdown().await.unwrap();
+    send_tcmd(&mut s, b"--request build").await;
 
     let bytes = read_to_eof(&mut s).await;
     let body = std::str::from_utf8(&bytes).unwrap().trim_end();
@@ -88,12 +84,10 @@ async fn unknown_header_returns_error_json() {
 async fn upload_atomic_lands_data_and_param_files() {
     let dir = tempfile::tempdir().unwrap();
     let (addr, cancel) = spawn_server_with_data_root(Some(dir.path().to_path_buf())).await;
-    // Server resolves the project root via make_root: it's
-    // `<data_root>/git-<branch>/p`. The branch is whatever the test
-    // process detects, which inside `cargo test` is "unknown" (no
-    // branch_name.txt + the harness's cwd is not the repo). Glob
-    // for the single git-* subdir under the tempdir to stay robust
-    // either way.
+    // With a `data_root` override, make_root uses the flat layout
+    // `<data_root>/<name>` (the per-worker rig path). The `git-<branch>`
+    // segment is only inserted for the production home-relative root,
+    // not when a data_root override is in play.
     let data_payload = b"DATA-PICKLE-BYTES".to_vec();
     let param_payload = b"PARAM-PICKLE-BYTES-MORE".to_vec();
 
@@ -121,21 +115,9 @@ async fn upload_atomic_lands_data_and_param_files() {
         .unwrap();
     assert_eq!(&buf[..n], b"OK\n");
 
-    // Resolve the actual project root the server picked. With
-    // `data_root = <tempdir>` and a project named "p", make_root
-    // composes `<tempdir>/git-<branch>/p` for some detected branch.
-    let mut git_dir: Option<std::path::PathBuf> = None;
-    let mut entries = tokio::fs::read_dir(dir.path()).await.unwrap();
-    while let Some(entry) = entries.next_entry().await.unwrap() {
-        let name = entry.file_name();
-        if name.to_string_lossy().starts_with("git-") {
-            git_dir = Some(entry.path());
-            break;
-        }
-    }
-    let project_root = git_dir
-        .expect("server should have created exactly one git-<branch>/ dir under data_root")
-        .join("p");
+    // Flat override layout: the upload lands directly at
+    // `<data_root>/p`.
+    let project_root = dir.path().join("p");
 
     // Files must exist with the right contents and the right names.
     let on_data = tokio::fs::read(project_root.join("data.pickle")).await.unwrap();
@@ -189,9 +171,7 @@ async fn upload_atomic_then_tcmd_status_reflects_uploaded() {
     // UPLOADED.
     drop(s);
     let mut s = TcpStream::connect(addr).await.unwrap();
-    s.write_all(b"TCMD").await.unwrap();
-    s.write_all(b"--name proj").await.unwrap();
-    s.shutdown().await.unwrap();
+    send_tcmd(&mut s, b"--name proj").await;
 
     let bytes = read_to_eof(&mut s).await;
     let body = std::str::from_utf8(&bytes).unwrap().trim_end();
@@ -264,9 +244,7 @@ async fn tcmd_reconciles_existing_project_from_disk() {
 
     let (addr, cancel) = spawn_server_with_data_root(Some(dir.path().to_path_buf())).await;
     let mut s = TcpStream::connect(addr).await.unwrap();
-    s.write_all(b"TCMD").await.unwrap();
-    s.write_all(b"--name p").await.unwrap();
-    s.shutdown().await.unwrap();
+    send_tcmd(&mut s, b"--name p").await;
     let bytes = read_to_eof(&mut s).await;
     let body = std::str::from_utf8(&bytes).unwrap().trim_end();
     let response: Value = serde_json::from_str(body).expect(body);
@@ -283,6 +261,133 @@ async fn tcmd_reconciles_existing_project_from_disk() {
     assert!(
         status == "RESUMABLE" || status == "READY",
         "status should be a runnable state, got: {status} body={body}"
+    );
+
+    let _ = cancel.send(());
+}
+
+#[tokio::test]
+async fn upload_notify_stamps_id_and_advances_state() {
+    // Co-located transport: the addon writes the pickles straight to
+    // the project root and sends only the payload-free upload_notify
+    // control message. The server must stamp the addon-supplied
+    // upload_id + hashes (which we deliberately do NOT pre-plant, so
+    // their appearance proves the handler ran) and advance engine
+    // state to uploaded, exactly as the streamed upload_atomic path.
+    let dir = tempfile::tempdir().unwrap();
+    let project_root = dir.path().join("p");
+    std::fs::create_dir_all(&project_root).unwrap();
+    std::fs::write(project_root.join("data.pickle"), b"DATA-ON-DISK").unwrap();
+    std::fs::write(project_root.join("param.pickle"), b"PARAM-ON-DISK").unwrap();
+
+    let (addr, cancel) = spawn_server_with_data_root(Some(dir.path().to_path_buf())).await;
+
+    let header = serde_json::json!({
+        "request": "upload_notify",
+        "name": "p",
+        "upload_id": "abcdef012345",
+        "data_hash": "deadbeef",
+        "param_hash": "feedface",
+        "has_data": true,
+        "has_param": true,
+    });
+    let mut s = TcpStream::connect(addr).await.unwrap();
+    s.write_all(b"JSON").await.unwrap();
+    s.write_all(format!("{header}\n").as_bytes()).await.unwrap();
+    s.flush().await.unwrap();
+    let mut buf = [0u8; 32];
+    let n = tokio::time::timeout(Duration::from_secs(2), s.read(&mut buf))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(&buf[..n], b"OK\n");
+    drop(s);
+
+    // The handler wrote the metadata next to the pickles.
+    assert_eq!(
+        tokio::fs::read_to_string(project_root.join("upload_id.txt"))
+            .await
+            .unwrap(),
+        "abcdef012345",
+    );
+    assert_eq!(
+        tokio::fs::read_to_string(project_root.join("data_hash.txt"))
+            .await
+            .unwrap(),
+        "deadbeef",
+    );
+    assert_eq!(
+        tokio::fs::read_to_string(project_root.join("param_hash.txt"))
+            .await
+            .unwrap(),
+        "feedface",
+    );
+
+    // Engine state advanced: a TCMD status now reports the project as
+    // uploaded with the stamped id.
+    let mut s = TcpStream::connect(addr).await.unwrap();
+    send_tcmd(&mut s, b"--name p").await;
+    let bytes = read_to_eof(&mut s).await;
+    let body = std::str::from_utf8(&bytes).unwrap().trim_end();
+    let response: Value = serde_json::from_str(body).expect(body);
+    assert_eq!(response["data"], "READY", "data must be READY after notify: {body}");
+    assert_eq!(response["upload_id"], "abcdef012345", "got: {body}");
+
+    let _ = cancel.send(());
+}
+
+#[tokio::test]
+async fn upload_notify_missing_pickles_errors() {
+    // upload_notify with no pickles on disk is a client bug (the addon
+    // should have written them first); the server refuses to advance
+    // state on an empty root.
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("p")).unwrap();
+    let (addr, cancel) = spawn_server_with_data_root(Some(dir.path().to_path_buf())).await;
+
+    let header = serde_json::json!({
+        "request": "upload_notify",
+        "name": "p",
+        "upload_id": "abcdef012345",
+    });
+    let mut s = TcpStream::connect(addr).await.unwrap();
+    s.write_all(b"JSON").await.unwrap();
+    s.write_all(format!("{header}\n").as_bytes()).await.unwrap();
+    s.shutdown().await.unwrap();
+    let bytes = read_to_eof(&mut s).await;
+    let body = std::str::from_utf8(&bytes).unwrap().trim_end();
+    let response: Value = serde_json::from_str(body).expect(body);
+    assert!(
+        response["error"].as_str().unwrap().contains("neither"),
+        "got: {body}",
+    );
+
+    let _ = cancel.send(());
+}
+
+#[tokio::test]
+async fn upload_notify_requires_upload_id() {
+    // A missing / empty upload_id is rejected before any disk write.
+    let dir = tempfile::tempdir().unwrap();
+    let project_root = dir.path().join("p");
+    std::fs::create_dir_all(&project_root).unwrap();
+    std::fs::write(project_root.join("data.pickle"), b"DATA").unwrap();
+    let (addr, cancel) = spawn_server_with_data_root(Some(dir.path().to_path_buf())).await;
+
+    let header = serde_json::json!({
+        "request": "upload_notify",
+        "name": "p",
+    });
+    let mut s = TcpStream::connect(addr).await.unwrap();
+    s.write_all(b"JSON").await.unwrap();
+    s.write_all(format!("{header}\n").as_bytes()).await.unwrap();
+    s.shutdown().await.unwrap();
+    let bytes = read_to_eof(&mut s).await;
+    let body = std::str::from_utf8(&bytes).unwrap().trim_end();
+    let response: Value = serde_json::from_str(body).expect(body);
+    assert!(
+        response["error"].as_str().unwrap().contains("upload_id"),
+        "got: {body}",
     );
 
     let _ = cancel.send(());

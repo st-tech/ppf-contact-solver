@@ -241,6 +241,9 @@ class PinData:
     unpin_time: Optional[float] = None
     transition: str = "linear"
     pull_strength: float = 0.0
+    # Per-pin scale on the moving (kinematic) constraint force; 1.0
+    # leaves it unchanged. Applied solver-side only to kinematic pins.
+    pin_stiffness: float = 1.0
     pin_group_id: str = ""
     # Static moving objects use the pin-shell as an implementation detail
     # (every vertex is pinned to drive a rigid-body motion). The user
@@ -333,6 +336,7 @@ def _pin_to_toml_dict(pin: "PinData") -> dict:
         "operation_count": len(pin.operations),
         "pin_count": len(pin.index),
         "pull_strength": float(pin.pull_strength),
+        "pin_stiffness": float(pin.pin_stiffness),
         "unpin_time": float(pin.unpin_time) if pin.unpin_time is not None else None,
         "pin_group_id": pin.pin_group_id if pin.pin_group_id else None,
         "ops": [_pin_op_to_toml_dict(op) for op in pin.operations],
@@ -751,6 +755,11 @@ class PinHolder:
     def pull_strength(self) -> float:
         """Get pull force strength."""
         return self._data.pull_strength
+
+    @property
+    def pin_stiffness(self) -> float:
+        """Get the moving (kinematic) pin force stiffness scale."""
+        return self._data.pin_stiffness
 
     @property
     def transition(self) -> str:

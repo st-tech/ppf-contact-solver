@@ -369,7 +369,17 @@ def run_one(scenario_name: str, *, slot: int, run_root: str,
     # ``--knob`` flags override per-scenario defaults so a developer
     # can still poke at edge cases manually.
     scenario_knobs = dict(getattr(scenario, "KNOBS", {}) or {})
-    effective_knobs = {**scenario_knobs, **(knobs or {})}
+    # Force the co-located backends (local / win_native) onto the
+    # streamed TCP transport by default so every scenario keeps
+    # exercising the wire handlers that SSH/Docker rely on in
+    # production. The one scenario that targets the direct-disk path
+    # opts back out via its own KNOBS; a CLI --knob still overrides
+    # either.
+    effective_knobs = {
+        "PPF_FORCE_TCP_TRANSFER": "1",
+        **scenario_knobs,
+        **(knobs or {}),
+    }
     proc = _spawn_server(spec, python=python, knobs=effective_knobs)
     started_at = time.monotonic()
     blender_proc = None
@@ -444,6 +454,7 @@ def run_one(scenario_name: str, *, slot: int, run_root: str,
                 probe_dir=spec.probe_dir,
                 blend_file="",
                 driver_source=driver_src,
+                env_extra=dict(effective_knobs),
             )
             blender_proc = bh.spawn(bspec)
             ctx.artifacts["blender_spec"] = bspec

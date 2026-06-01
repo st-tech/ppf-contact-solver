@@ -14,6 +14,12 @@
 #   META frames=<int>\n                 total frames from param.pickle
 #   ERROR <message>\n                   fatal error, followed by exit 1
 #
+# Side channel (file): on a scene-validation failure the structured
+# violation payload (world-space geometry for the viewport overlay) is
+# written to ``<root>/build_violations.json``. The stdout protocol only
+# carries a flat ERROR string, so geometry travels via this file; the
+# server reads it back on failure and forwards it to the add-on.
+#
 # Cancellation: the parent sends SIGTERM. The handler raises
 # ``KeyboardInterrupt``, BlenderApp.populate().make() unwinds, and we
 # exit with code 130 so the parent can distinguish cancel from crash.
@@ -204,6 +210,22 @@ def main(argv: list[str]) -> int:
             _emit(f"ERROR {exc.code}")
         return code
     except BaseException as exc:
+        # When scene validation fails, ValidationError carries a
+        # structured ``violations`` payload (self-intersecting triangles,
+        # contact-offset pairs, wall/sphere hits) with world-space
+        # geometry. Persist it to a sidecar the server reads back on
+        # failure and forwards to the add-on, which highlights the
+        # offending faces in the viewport. ``getattr`` keeps this a
+        # no-op for ordinary errors that carry no violations.
+        violations = getattr(exc, "violations", None)
+        if violations:
+            try:
+                import json
+                import os
+                with open(os.path.join(root, "build_violations.json"), "w") as fp:
+                    json.dump({"violations": violations}, fp)
+            except Exception as werr:  # best-effort; never mask the build error
+                sys.stderr.write(f"build_violations write failed: {werr}\n")
         msg = f"{type(exc).__name__}: {exc}"
         _emit(f"ERROR {msg}")
         # Send the traceback to stderr for the server log; stdout stays

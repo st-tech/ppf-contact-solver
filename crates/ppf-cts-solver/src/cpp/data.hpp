@@ -252,6 +252,10 @@ struct FixPair {
     float ghat;
     unsigned index;
     bool kinematic;
+    // Per-pin force scale, applied only for kinematic pins. 1.0 is the
+    // default (no change). Field order must mirror Rust FixPair in
+    // data.rs (repr(C) ABI).
+    float stiffness;
 };
 
 struct PullPair {

@@ -31,6 +31,13 @@ pub(super) fn spawn_build_task(engine: &ServerEngine) {
     let engine = engine.clone();
 
     tokio::spawn(async move {
+        // Clear any sidecar left by a previous build so a later failure
+        // that produces no structured violations (e.g. a tetwild crash)
+        // can't inherit stale geometry. `root` is the project dir the
+        // worker also writes `build_violations.json` to.
+        let root = engine.state().root;
+        clear_build_violations(&root);
+
         let result = run_build_pipeline(&engine, cancel.clone()).await;
 
         // Re-entrant dispatch routes through whichever executor the
@@ -46,14 +53,11 @@ pub(super) fn spawn_build_task(engine: &ServerEngine) {
                 dispatch_re_entrant(&engine, Event::BuildCancelledEvent).await;
             }
             BuildOutcome::Failed(error) => {
-                dispatch_re_entrant(
-                    &engine,
-                    Event::BuildFailed {
-                        error,
-                        violations: vec![],
-                    },
-                )
-                .await;
+                // The worker persists ValidationError's structured
+                // geometry to a sidecar; pull it in so the add-on can
+                // highlight the offending faces in the viewport.
+                let violations = read_build_violations(&root);
+                dispatch_re_entrant(&engine, Event::BuildFailed { error, violations }).await;
             }
             BuildOutcome::AlreadyDispatched => {
                 // Pipeline body owns the terminal dispatch (e.g.
@@ -63,6 +67,61 @@ pub(super) fn spawn_build_task(engine: &ServerEngine) {
 
         engine.clear_cancel_handle();
     });
+}
+
+/// Remove a stale `<root>/build_violations.json` before a build runs so
+/// a later failure that produces no structured violations can't inherit
+/// the geometry from a previous self-intersection failure.
+fn clear_build_violations(root: &str) {
+    if root.is_empty() {
+        return;
+    }
+    let path = Path::new(root).join("build_violations.json");
+    match std::fs::remove_file(&path) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => log::warn!(
+            target: "ppf::build",
+            "[BUILD] could not clear build_violations.json: {e}",
+        ),
+    }
+}
+
+/// Read the structured violation payload the worker wrote to
+/// `<root>/build_violations.json` when scene validation failed. Mirrors
+/// `monitor::read_intersection_violations`: the state machine carries
+/// violations as `Vec<String>` (opaque payload), so each violation dict
+/// is JSON-encoded into one entry; the response builder
+/// (`response::shape::violations_to_json`) re-parses them into nested
+/// JSON the add-on's overlay consumes. Best-effort: any I/O or parse
+/// error yields an empty list so the build still fails cleanly with its
+/// error message, just without the viewport highlight.
+fn read_build_violations(root: &str) -> Vec<String> {
+    if root.is_empty() {
+        return vec![];
+    }
+    let path = Path::new(root).join("build_violations.json");
+    let body = match std::fs::read_to_string(&path) {
+        Ok(b) => b,
+        Err(_) => return vec![],
+    };
+    let parsed: serde_json::Value = match serde_json::from_str(&body) {
+        Ok(v) => v,
+        Err(e) => {
+            log::warn!(target: "ppf::build", "[BUILD] malformed build_violations.json: {e}");
+            return vec![];
+        }
+    };
+    parsed
+        .get("violations")
+        .and_then(|v| v.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|rec| serde_json::to_string(rec).ok())
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 pub(super) enum BuildOutcome {
@@ -502,6 +561,52 @@ mod tests {
             "tetwild crashed"
         );
         assert!(parse_error_line("PROGRESS percent=1.0").is_none());
+    }
+
+    #[test]
+    fn read_build_violations_parses_sidecar_into_json_strings() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_string_lossy().into_owned();
+        std::fs::write(
+            dir.path().join("build_violations.json"),
+            r#"{"violations":[{"type":"self_intersection","count":2,"tris":[[[0,0,0],[1,0,0],[0,1,0]],[[0,0,1],[1,0,1],[0,1,1]]]}]}"#,
+        )
+        .unwrap();
+
+        let out = read_build_violations(&root);
+        assert_eq!(out.len(), 1);
+        // Each entry round-trips back into a violation dict the response
+        // builder can re-parse and the add-on overlay can draw.
+        let v: serde_json::Value = serde_json::from_str(&out[0]).unwrap();
+        assert_eq!(v["type"], "self_intersection");
+        assert_eq!(v["count"], 2);
+        assert!(v["tris"].as_array().is_some());
+    }
+
+    #[test]
+    fn read_build_violations_absent_or_malformed_yields_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_string_lossy().into_owned();
+        // No file yet.
+        assert!(read_build_violations(&root).is_empty());
+        // Malformed JSON degrades to empty rather than erroring.
+        std::fs::write(dir.path().join("build_violations.json"), "{not json").unwrap();
+        assert!(read_build_violations(&root).is_empty());
+        // Empty root short-circuits.
+        assert!(read_build_violations("").is_empty());
+    }
+
+    #[test]
+    fn clear_build_violations_removes_stale_sidecar() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_string_lossy().into_owned();
+        let path = dir.path().join("build_violations.json");
+        std::fs::write(&path, r#"{"violations":[]}"#).unwrap();
+        assert!(path.exists());
+        clear_build_violations(&root);
+        assert!(!path.exists());
+        // Idempotent: clearing an already-absent file is a no-op.
+        clear_build_violations(&root);
     }
 
     #[test]

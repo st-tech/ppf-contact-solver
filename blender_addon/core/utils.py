@@ -146,15 +146,18 @@ def has_transform_fcurves(obj) -> bool:
 # evaluated mesh may differ from obj.data.vertices and a STATIC
 # collider needs a Capture Deformation pass to feed the solver.
 #
-# ``NODES`` is intentionally absent. A Geometry Nodes modifier can
-# do anything from full procedural deformation to a pure normal
-# recompute (Blender 4.1+'s default "Smooth by Angle" node group,
-# auto-added on most meshes, is the most common case and moves no
-# vertices). Treating every NODES modifier as deforming forces
-# Capture Deformation on objects that don't need it. ``NODES`` is
-# instead caught by tier 2 of ``is_deforming_static_object``
-# (depsgraph local-space sampling across the timeline), which
-# answers the same question correctly per-object.
+# ``NODES`` is included, but a Geometry Nodes modifier is NOT taken
+# at face value: ``has_deforming_modifier_stack`` only counts it when
+# its node group actually writes vertex positions (see
+# ``_nodes_modifier_can_deform``). A Geometry Nodes modifier can do
+# anything from full procedural deformation to a pure normal recompute
+# (Blender 4.1+'s default "Smooth by Angle" node group, auto-added on
+# most meshes, is the most common case and moves no vertices).
+# Counting every NODES modifier as a deformer forces Capture
+# Deformation on objects that don't need it; the position-write scan
+# excludes those, and ``is_deforming_static_object`` keeps a
+# depsgraph-sampling backstop for groups whose writers the scan
+# doesn't enumerate.
 _DEFORMING_MODIFIER_TYPES = frozenset({
     "ARMATURE",
     "CAST",
@@ -167,6 +170,15 @@ _DEFORMING_MODIFIER_TYPES = frozenset({
     "LAPLACIANSMOOTH",
     "LATTICE",
     "MESH_DEFORM",
+    # Geometry Nodes can displace existing vertices (e.g. a Set Position
+    # wave driven by Scene Time). It may also change topology, in which
+    # case it is additionally treated as generative for MESH_CACHE
+    # placement (see ``_GENERATIVE_MODIFIER_TYPES`` in ``core/pc2.py``);
+    # the two classifications are independent. A position-writing GN is
+    # treated as a deformer here (gated by ``_nodes_modifier_can_deform``)
+    # so the pin overlay, Capture Deformation, and the encoder follow
+    # GN-driven motion the same way they follow Armature/Lattice.
+    "NODES",
     "SHRINKWRAP",
     "SIMPLE_DEFORM",
     "SMOOTH",
@@ -196,12 +208,67 @@ def _has_shape_key_animation(obj) -> bool:
     return any(_get_fcurves(ad.action))
 
 
+# Geometry Nodes node types that can move existing mesh vertices off
+# their rest position. A GN modifier whose tree contains none of these
+# cannot deform the mesh (it may still recompute normals, set shade-
+# smooth flags, assign attributes, ...), so it must not be treated as a
+# deformer. Instance-transform nodes (Translate/Rotate/Scale Instances,
+# Set Instance Transform) are intentionally excluded: they move
+# instances, not the realized collider mesh's own vertices.
+_GN_POSITION_WRITING_NODES = frozenset({
+    "GeometryNodeSetPosition",
+    "GeometryNodeTransform",
+    "GeometryNodeDeformCurvesOnSurface",
+})
+
+
+def _nodes_modifier_can_deform(mod) -> bool:
+    """True if a Geometry Nodes *mod* can move mesh vertices.
+
+    Scans the modifier's node group, recursing into nested node
+    groups, for any node that writes geometry position (see
+    ``_GN_POSITION_WRITING_NODES``). A group with no such node, e.g.
+    Blender's auto-added "Smooth by Angle" (which only sets shade-
+    smooth flags), leaves every vertex at rest and is not a deformer.
+
+    Conservative on failure: if the node group can't be introspected,
+    returns True so the caller errs toward treating it as deforming
+    (``is_deforming_static_object``'s depsgraph backstop then settles
+    it per-frame for the one path that hard-fails on a missing cache).
+    """
+    ng = getattr(mod, "node_group", None)
+    if ng is None:
+        return False
+    try:
+        seen = set()
+        stack = [ng]
+        while stack:
+            tree = stack.pop()
+            if tree is None or tree.as_pointer() in seen:
+                continue
+            seen.add(tree.as_pointer())
+            for node in tree.nodes:
+                if node.bl_idname in _GN_POSITION_WRITING_NODES:
+                    return True
+                nested = getattr(node, "node_tree", None)
+                if nested is not None:
+                    stack.append(nested)
+        return False
+    except Exception:
+        return True
+
+
 def has_deforming_modifier_stack(obj) -> bool:
     """True if *obj*'s modifier stack contains any vertex-moving deformer.
 
-    Cheap declarative check (no depsgraph round-trip). Only modifiers
-    enabled for ``show_viewport`` count — a muted deformer doesn't
-    contribute to what Blender or the depsgraph sees.
+    Cheap declarative check (no depsgraph round-trip, except a node-tree
+    scan for Geometry Nodes modifiers). Only modifiers enabled for
+    ``show_viewport`` count — a muted deformer doesn't contribute to what
+    Blender or the depsgraph sees.
+
+    A Geometry Nodes modifier counts only when its node group actually
+    writes vertex positions: the ubiquitous auto-added "Smooth by Angle"
+    group moves nothing and must not be mistaken for a deformer.
     """
     if obj is None or obj.type != "MESH":
         return False
@@ -210,9 +277,61 @@ def has_deforming_modifier_stack(obj) -> bool:
     for mod in obj.modifiers:
         if not getattr(mod, "show_viewport", True):
             continue
-        if mod.type in _DEFORMING_MODIFIER_TYPES:
-            return True
+        if mod.type not in _DEFORMING_MODIFIER_TYPES:
+            continue
+        if mod.type == "NODES" and not _nodes_modifier_can_deform(mod):
+            continue
+        return True
     return False
+
+
+def eval_deform_local_positions(obj, context=None, exclude_modifier_name=None):
+    """Return ``(N, 3)`` float32 local-space vertex positions of *obj*
+    with its deform-only modifier stack evaluated at the current frame,
+    or ``None`` when the result can't stand in for the rest mesh.
+
+    Honors Geometry Nodes / Armature / Lattice deforms so callers can
+    capture the shape the artist sees, instead of the undeformed rest
+    cage. ``exclude_modifier_name`` (typically the addon's
+    ``ContactSolverCache``) is temporarily hidden during evaluation:
+    that MESH_CACHE replays prior solver output with OVERWRITE, so
+    reading it back would feed the output into the next input.
+
+    Returns ``None`` when the evaluated vertex count differs from the
+    base mesh (a generative modifier changed topology, so base
+    triangulation / vertex-group indices would no longer line up) or
+    when evaluation isn't available.
+    """
+    import numpy as np
+
+    if obj is None or obj.type != "MESH":
+        return None
+    if context is None:
+        context = bpy.context
+    toggled = []
+    try:
+        if exclude_modifier_name:
+            for m in obj.modifiers:
+                if m.name == exclude_modifier_name and m.show_viewport:
+                    m.show_viewport = False
+                    toggled.append(m)
+        deps = context.evaluated_depsgraph_get()
+        eval_obj = obj.evaluated_get(deps)
+        eval_mesh = eval_obj.to_mesh()
+        try:
+            n = len(eval_mesh.vertices)
+            if n != len(obj.data.vertices):
+                return None
+            co = np.empty(n * 3, dtype=np.float32)
+            eval_mesh.vertices.foreach_get("co", co)
+            return co.reshape(n, 3)
+        finally:
+            eval_obj.to_mesh_clear()
+    except Exception:
+        return None
+    finally:
+        for m in toggled:
+            m.show_viewport = True
 
 
 def _depsgraph_mesh_differs_across_range(obj, context) -> bool:

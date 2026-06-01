@@ -411,6 +411,10 @@ pub struct FixPair {
     pub ghat: f32,
     pub index: u32,
     pub kinematic: bool,
+    /// Per-pin scale on the constraint force, applied device-side only
+    /// when `kinematic` is true. 1.0 leaves the force unchanged. Field
+    /// order must mirror `FixPair` in `cpp/data.hpp` (repr(C) ABI).
+    pub stiffness: f32,
 }
 
 #[repr(C)]

@@ -30,7 +30,7 @@ use std::time::{Duration, Instant};
 use ppf_cts_server::config::EngineConfig;
 use ppf_cts_server::serve::{bind_listener, serve_with_listener};
 use ppf_cts_server::{DefaultExecutor, EffectExecutor, ServerEngine};
-use tokio::io::AsyncReadExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
 /// Spin up an in-process server on an ephemeral 127.0.0.1 port and
@@ -91,6 +91,23 @@ pub async fn spawn_server_with_data_root(
         }
     }
     (addr, cancel_tx)
+}
+
+/// Send a TCMD request on `stream` using the current wire: the
+/// `b"TCMD"` header, a 4-byte big-endian payload-length prefix, then
+/// the `--key value` argument bytes. Protocol 0.04+ length-prefixes
+/// the payload instead of relying on a `shutdown(SHUT_WR)` half-close,
+/// so the server reads exactly `args.len()` bytes and never blocks
+/// waiting for EOF. The caller then drains the reply with
+/// [`read_to_eof`].
+pub async fn send_tcmd(stream: &mut TcpStream, args: &[u8]) {
+    stream.write_all(b"TCMD").await.unwrap();
+    stream
+        .write_all(&(args.len() as u32).to_be_bytes())
+        .await
+        .unwrap();
+    stream.write_all(args).await.unwrap();
+    stream.flush().await.unwrap();
 }
 
 /// Drain `stream` to EOF with a 2 s timeout and return the bytes.

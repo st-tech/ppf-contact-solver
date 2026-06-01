@@ -311,7 +311,7 @@ Contact properties (mutually exclusive modes):
 
 ## Object operations
 
-### set_pin_settings(group_uuid: str, vertex_group_identifier: str, included: Optional[bool]=None, use_pin_duration: Optional[bool]=None, pin_duration: Optional[int]=None, use_pull: Optional[bool]=None, pull_strength: Optional[float]=None)
+### set_pin_settings(group_uuid: str, vertex_group_identifier: str, included: Optional[bool]=None, use_pin_duration: Optional[bool]=None, pin_duration: Optional[int]=None, use_pull: Optional[bool]=None, pull_strength: Optional[float]=None, pin_stiffness: Optional[float]=None)
 
 Set per-pin runtime settings (include/duration/pull).
 
@@ -324,6 +324,7 @@ Set per-pin runtime settings (include/duration/pull).
 - **pin_duration**: Number of frames the pin is active
 - **use_pull**: Use pull force instead of hard constraint
 - **pull_strength**: Pull force strength
+- **pin_stiffness**: Scale on the pin's moving (kinematic) constraint force; 1.0 default, only affects animated pins
 
 ### add_pin_operation(group_uuid: str, vertex_group_identifier: str, op_type: str, frame_start: Optional[int]=None, frame_end: Optional[int]=None, transition: Optional[str]=None, delta: Optional[list[float]]=None, spin_axis: Optional[list[float]]=None, spin_angular_velocity: Optional[float]=None, spin_flip: Optional[bool]=None, spin_center: Optional[list[float]]=None, spin_center_mode: Optional[str]=None, spin_center_vertex: Optional[int]=None, spin_center_direction: Optional[list[float]]=None, scale_factor: Optional[float]=None, scale_center: Optional[list[float]]=None, scale_center_mode: Optional[str]=None, scale_center_vertex: Optional[int]=None, scale_center_direction: Optional[list[float]]=None, torque_axis_component: Optional[str]=None, torque_magnitude: Optional[float]=None, torque_flip: Optional[bool]=None)
 

@@ -18,6 +18,20 @@ import subprocess
 # frontend decoder disagrees about payload shape; an un-bumped version
 # there silently mis-decodes instead of erroring.
 #
+# 0.08: co-located transfer. When the addon and server share a
+# machine (local / win_native backends), the addon writes
+# data.pickle / param.pickle straight to the project root on disk and
+# then sends a lightweight upload_notify JSON request (carrying the
+# addon-minted upload_id, the data / param hashes, and has_data /
+# has_param) instead of streaming the payloads through the socket via
+# upload_atomic. The server stamps the supplied id, then dispatches
+# the same UploadLanded event the streamed path does. Set
+# PPF_FORCE_TCP_TRANSFER=1 to keep local / win_native on the streamed
+# path (the test rig does this so every scenario but the dedicated
+# direct-disk one still exercises the wire handlers). An old server
+# paired with a new addon rejects upload_notify as an unknown
+# request; both directions are caught by this handshake.
+#
 # 0.07: moving STATIC colliders join the output vertex map. The
 # pin-shells produced by transform_animation (Case 1) and
 # static_deform_animation (Case 3) are no longer flagged
@@ -54,7 +68,7 @@ import subprocess
 # tokio did not deliver that half-close to the server's AsyncRead, so
 # the server hung in its read loop and connections piled up in
 # FIN_WAIT_2 until the server stopped responding entirely.
-PROTOCOL_VERSION = "0.07"
+PROTOCOL_VERSION = "0.08"
 HEADER_TEXT_CMD = b"TCMD"
 HEADER_BINARY_DATA = b"BDAT"
 HEADER_JSON_DATA = b"JSON"

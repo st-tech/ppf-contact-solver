@@ -104,6 +104,25 @@ def _has_animated_objects(context) -> bool:
     return False
 
 
+def _has_unfetched_frames(scene) -> bool:
+    """True when the connected run produced animation frames that have
+    not been fetched into local PC2 yet. Baking now would commit an
+    incomplete animation, so the Bake Animation operators refuse and
+    ask the user to fetch first. Mirrors the render-time and panel
+    warnings (see ``warn_missing_frames_on_render`` in ``core/pc2.py``).
+    """
+    try:
+        response = com.info.response
+        remote_frames = int(response.get("frame", 0)) if response else 0
+        if remote_frames <= 0 or is_running(response):
+            return False
+        from ...models.groups import get_addon_data
+        fetched = get_addon_data(scene).state.convert_fetched_frames_to_list()
+        return (remote_frames - len(fetched)) > 0
+    except Exception:
+        return False
+
+
 # ---------------------------------------------------------------------------
 # Curve pose capture/apply (Bake Single Frame path)
 # ---------------------------------------------------------------------------
@@ -749,6 +768,13 @@ class OBJECT_OT_BakeAnimation(_ModalBakeBase, Operator):
         return not _bake_job["active"]
 
     def invoke(self, context, event):
+        if _has_unfetched_frames(context.scene):
+            self.report(
+                {"ERROR"},
+                "Unfetched animation frames exist. "
+                "Fetch all animation frames first.",
+            )
+            return {"CANCELLED"}
         from ...core.uuid_registry import get_object_by_uuid
         queue = self._build_queue_for(context)
         objs = [
@@ -890,6 +916,13 @@ class SOLVER_OT_BakeAllAnimation(_ModalBakeBase, Operator):
         return _has_animated_objects(context)
 
     def invoke(self, context, event):
+        if _has_unfetched_frames(context.scene):
+            self.report(
+                {"ERROR"},
+                "Unfetched animation frames exist. "
+                "Fetch all animation frames first.",
+            )
+            return {"CANCELLED"}
         from ...core.uuid_registry import get_object_by_uuid
         queue = self._build_queue_for(context)
         objs = [

@@ -10,6 +10,9 @@
 # Usage:
 #   Install:   .\install-blender-addon.ps1
 #   Uninstall: .\install-blender-addon.ps1 -Uninstall
+#                 prompts (interactively, default No) to also wipe
+#                 third-party deps the addon pip-installed into
+#                 Blender's user scripts\addons\modules\ dir.
 #
 # Cold-start (e.g. fresh runner where Blender hasn't booted yet):
 #   $env:PPF_BLENDER_BIN="C:\path\to\blender.exe"; .\install-blender-addon.ps1
@@ -98,6 +101,35 @@ if ($Uninstall) {
     if (-not $removed) {
         Write-Host "Addon not installed: $ExtLink"
     }
+
+    # Offer to wipe third-party Python deps that the addon's Install
+    # operators (paramiko, docker) and the test rig's orchestrator
+    # (cbor2) pip-install into Blender's user modules dir. The dir is
+    # bpy.utils.user_resource('SCRIPTS', path='addons/modules'); see
+    # blender_addon\core\module.py:get_install_target. Default is No;
+    # non-tty stdin (CI) skips the prompt and leaves them in place.
+    $ModulesDir = Join-Path $BlenderBase "$BlenderVersion\scripts\addons\modules"
+    if (Test-Path $ModulesDir) {
+        $entries = Get-ChildItem -Path $ModulesDir -Force
+        if ($entries) {
+            Write-Host ""
+            Write-Host "Third-party packages in ${ModulesDir}:"
+            foreach ($entry in $entries) {
+                Write-Host "  $($entry.Name)"
+            }
+            if (-not [Console]::IsInputRedirected) {
+                $answer = Read-Host "Also remove these? [y/N]"
+                if ($answer -match '^(y|Y|yes|YES)$') {
+                    Remove-Item -Path $ModulesDir -Recurse -Force
+                    Write-Host "Removed: $ModulesDir"
+                } else {
+                    Write-Host "Kept: $ModulesDir"
+                }
+            } else {
+                Write-Host "(non-interactive stdin; left in place)"
+            }
+        }
+    }
     exit 0
 }
 
@@ -106,17 +138,45 @@ if ($Uninstall) {
 # because the wheel paths in the manifest won't resolve. fetch.py is
 # idempotent: re-runs are no-ops when the local files already match
 # the pinned sha256 digests.
-$PythonBin = $env:PPF_PYTHON_BIN
-if (-not $PythonBin) {
-    if (Get-Command python -ErrorAction SilentlyContinue) {
-        $PythonBin = "python"
-    } elseif (Get-Command python3 -ErrorAction SilentlyContinue) {
-        $PythonBin = "python3"
-    } else {
-        Write-Error "No python/python3 found in PATH (needed by blender_addon\wheels\fetch.py)"
-        exit 1
+# Resolve a real Python interpreter explicitly instead of trusting bare
+# `python` from PATH. On Windows, `python` commonly resolves to the
+# Microsoft Store App-execution-alias stub: Get-Command reports it as
+# present, but running it prints "Python was not found..." and exits
+# 9009, which (under $ErrorActionPreference="Stop") aborts this script
+# before the junction is ever created. So we (1) honor an explicit
+# override, (2) prefer the embedded interpreter shipped under
+# build-win-native, and only then (3) fall back to PATH candidates --
+# and in every case we accept a candidate only if it actually prints a
+# version, which rejects the Store stub.
+function Test-PythonRuns($bin) {
+    if (-not $bin) { return $false }
+    try {
+        $v = & $bin --version 2>&1
+        return ($LASTEXITCODE -eq 0 -and "$v" -match 'Python \d')
+    } catch {
+        return $false
     }
 }
+
+$PythonCandidates = @(
+    $env:PPF_BUILD_PYTHON,      # explicit override (matches the rig's build-python knobs)
+    $env:PPF_PYTHON_BIN,        # legacy override name kept for back-compat
+    (Join-Path $ScriptDir "build-win-native\dist\python\python.exe"),  # embedded interpreter
+    "python",
+    "python3",
+    "py"
+)
+$PythonBin = $null
+foreach ($cand in $PythonCandidates) {
+    if (Test-PythonRuns $cand) { $PythonBin = $cand; break }
+}
+if (-not $PythonBin) {
+    Write-Error ("No working Python found for blender_addon\wheels\fetch.py " +
+        "(tried PPF_BUILD_PYTHON, PPF_PYTHON_BIN, the embedded interpreter, " +
+        "python, python3, py). Set PPF_BUILD_PYTHON to a python.exe.")
+    exit 1
+}
+Write-Host "Using Python for fetch.py: $PythonBin"
 & $PythonBin (Join-Path $AddonSource "wheels\fetch.py")
 if ($LASTEXITCODE -ne 0) {
     Write-Error "blender_addon\wheels\fetch.py failed (exit $LASTEXITCODE)"

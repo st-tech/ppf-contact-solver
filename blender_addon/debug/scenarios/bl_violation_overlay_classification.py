@@ -210,12 +210,15 @@ try:
 
     # The contract returns (batch, primitive, color) triples. Index by
     # color so we can tie each batch back to its source violation type.
+    # Alpha is a flat 0.5 across all types (50-50 blend); the RGB triples
+    # are what distinguish the classes. Keep this in lockstep with the
+    # COLORS map in overlay_geometry/violations.py.
     expected_colors = {
-        "self_intersection": (1.0, 0.1, 0.1, 0.85),
-        "contact_offset": (1.0, 0.5, 0.0, 0.85),
-        "wall": (1.0, 0.1, 0.1, 0.9),
-        "sphere": (0.8, 0.1, 1.0, 0.9),
-        "runtime_intersection": (1.0, 0.05, 0.05, 0.9),
+        "self_intersection": (1.0, 0.1, 0.1, 0.5),
+        "contact_offset": (1.0, 0.5, 0.0, 0.5),
+        "wall": (1.0, 0.1, 0.1, 0.5),
+        "sphere": (0.8, 0.1, 1.0, 0.5),
+        "runtime_intersection": (1.0, 0.05, 0.05, 0.5),
     }
     expected_label_text = {
         "self_intersection": "Self-Intersections",

@@ -107,6 +107,29 @@ class _Pin:
         return self
 
     @blender_api
+    def stiffness(self, value: float = 1.0) -> "_Pin":
+        """Scale this pin's moving (kinematic) constraint force.
+
+        Only affects an animated pin (one with operations or a captured
+        deformation); 1.0 leaves the force unchanged. Raise it if a
+        moving pin lags or wobbles off its target.
+
+        Args:
+            value: Stiffness scale (default 1.0).
+
+        Returns:
+            ``self`` for chaining.
+
+        Example::
+
+            group.create_pin("Cloth", "edge").stiffness(value=4.0)
+        """
+        _, pin_item = self._find_pin_item()
+        if pin_item is not None:
+            pin_item.pin_stiffness = value
+        return self
+
+    @blender_api
     def spin(self, axis: tuple[float, float, float] = (1, 0, 0),
              angular_velocity: float = 360.0,
              flip: bool = False,

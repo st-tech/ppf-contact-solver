@@ -13,13 +13,16 @@ from .primitives import _line_to_tris
 def _build_violation_batches(scene, depsgraph, violations):
     """Build GPU batches to highlight validation violations.
 
-    Returns list of (batch, primitive_type, color) tuples.
+    Returns ``(batches, labels)``: a list of
+    ``(gpu_batch, primitive_type, color)`` tuples and a list of label
+    dicts. Both are empty when ``violations`` is empty. Callers unpack
+    the pair, so the empty case must return a 2-tuple too.
     """
     from gpu_extras.batch import batch_for_shader
 
     batches = []
     if not violations:
-        return batches
+        return batches, []
 
     # POINTS batches must use POINT_UNIFORM_COLOR so the shader writes
     # gl_PointSize: Metal (Blender 5.x macOS) has no fixed-function
@@ -27,12 +30,14 @@ def _build_violation_batches(scene, depsgraph, violations):
     tri_shader = gpu.shader.from_builtin("UNIFORM_COLOR")
     point_shader = gpu.shader.from_builtin("POINT_UNIFORM_COLOR")
 
+    # Alpha is a flat 0.5 (50-50 blend) so the highlight tints the
+    # offending geometry without obscuring the mesh underneath.
     COLORS = {
-        "self_intersection": (1.0, 0.1, 0.1, 0.85),
-        "contact_offset": (1.0, 0.5, 0.0, 0.85),
-        "wall": (1.0, 0.1, 0.1, 0.9),
-        "sphere": (0.8, 0.1, 1.0, 0.9),
-        "runtime_intersection": (1.0, 0.05, 0.05, 0.9),
+        "self_intersection": (1.0, 0.1, 0.1, 0.5),
+        "contact_offset": (1.0, 0.5, 0.0, 0.5),
+        "wall": (1.0, 0.1, 0.1, 0.5),
+        "sphere": (0.8, 0.1, 1.0, 0.5),
+        "runtime_intersection": (1.0, 0.05, 0.05, 0.5),
     }
     LABELS = {
         "self_intersection": "Self-Intersections",
@@ -51,7 +56,7 @@ def _build_violation_batches(scene, depsgraph, violations):
 
     for violation in violations:
         vtype = violation.get("type", "")
-        color = COLORS.get(vtype, (1.0, 0.0, 0.0, 0.9))
+        color = COLORS.get(vtype, (1.0, 0.0, 0.0, 0.5))
         label_text = LABELS.get(vtype, "Violation")
         count = violation.get("count", 0)
 

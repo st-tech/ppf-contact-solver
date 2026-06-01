@@ -148,9 +148,9 @@ def _collect_influencing_actions(obj, _seen=None) -> list:
     (id-keyed). Covers the common deformers: Armature on a parent or
     self, MeshDeform / SurfaceDeform / Lattice / Hook with their own
     animated cages, shape keys driven by an action. Does NOT walk
-    drivers, constraints, or geometry-nodes inputs; those return no
-    actions and the capture falls back to ``scene.frame_end`` (caller
-    decides).
+    drivers, constraints, or geometry-nodes Scene-Time inputs; those
+    return no actions and the capture falls back to the solver's global
+    frame count (see ``_effective_frame_range``).
     """
     if _seen is None:
         _seen = set()
@@ -178,19 +178,40 @@ def _collect_influencing_actions(obj, _seen=None) -> list:
     return out
 
 
+def _sim_frame_count(scene) -> int | None:
+    """The solver's global simulation frame count for *scene*.
+
+    Reads ``state.frame_count`` (the "Frame Count" / "Number of frames
+    for simulation" param). Returns ``None`` when the addon state isn't
+    available yet (during register / fresh load_post), so callers can
+    fall back.
+    """
+    try:
+        from ...models.groups import get_addon_data
+        return int(get_addon_data(scene).state.frame_count)
+    except Exception:
+        return None
+
+
 def _effective_frame_range(scene, obj) -> tuple[int, int, str]:
     """Pick the [frame_start, frame_end] to capture for *obj*.
 
-    Capture range is set by the actions that influence *obj*: lower
-    bound is ``scene.frame_start`` (so cache index 0 always aligns
-    with solver time 0); upper bound is the highest keyframe across
-    every influencing action, falling back to ``scene.frame_end`` if
-    nothing is keyframed (driver-only or constraint-only setups).
+    Lower bound is always ``scene.frame_start`` (so cache index 0
+    aligns with solver time 0). The upper bound depends on how the
+    motion is authored:
 
-    Decoupling from ``scene.frame_end`` means the captured cache
-    covers the full keyframe span even if the user has shrunk the
-    viewport timeline, and avoids burning frames past the last
-    keyframe when the action settles early.
+      - Keyframed deformers (Armature, Lattice, shape keys, animated
+        Geometry Nodes inputs): the highest keyframe across every
+        influencing action. The action settles at its last key, so
+        capturing past it would burn frames on a static pose, and the
+        viewport timeline being shrunk doesn't truncate the cache.
+      - Procedural motion with no detectable keyframes (Geometry Nodes
+        driven by Scene Time, drivers, constraints): there's no settle
+        point to read, so the capture is bounded by the solver's global
+        frame count (``state.frame_count``), exactly the number of
+        frames the simulation will consume from the cache. Only when
+        the addon state is unavailable do we fall back to
+        ``scene.frame_end``.
     """
     frame_start = int(scene.frame_start)
     actions = _collect_influencing_actions(obj)
@@ -200,9 +221,14 @@ def _effective_frame_range(scene, obj) -> tuple[int, int, str]:
         if f is not None and (max_kf is None or f > max_kf):
             max_kf = f
     if max_kf is None:
-        # No detectable keyframes — most likely driver- or constraint-
-        # driven motion. Honor the scene range as a documented fallback.
-        return frame_start, int(scene.frame_end), "scene.frame_end (no keyframes found)"
+        # No detectable keyframes: procedural motion (Geometry Nodes
+        # on Scene Time, drivers, constraints). Bound the capture by the
+        # solver's frame count, not the viewport timeline's frame_end.
+        n_sim = _sim_frame_count(scene)
+        if n_sim is not None and n_sim > 0:
+            frame_end = frame_start + n_sim - 1
+            return frame_start, frame_end, f"simulation frame count ({n_sim})"
+        return frame_start, int(scene.frame_end), "scene.frame_end (state unavailable)"
     frame_end = max(max_kf, frame_start)
     return frame_start, frame_end, f"last keyframe ({max_kf})"
 

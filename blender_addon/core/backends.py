@@ -17,12 +17,15 @@
 from __future__ import annotations
 
 import json
+import os
 import socket
 import subprocess
+import uuid
 from typing import Any, Callable, Protocol, runtime_checkable
 
 from .protocol import (
     DEFAULT_CHUNK_SIZE,
+    HEADER_JSON_DATA,
     HEADER_TEXT_CMD,
     format_traffic,
     socket_data_send,
@@ -30,6 +33,27 @@ from .protocol import (
     socket_upload_atomic,
 )
 from .status import BytesPerSecondCalculator
+
+# The two scene payloads land at these fixed basenames under the
+# project root; data_send refuses them (only upload_atomic writes them)
+# and the direct-disk path writes them straight to disk.
+DATA_PICKLE = "data.pickle"
+PARAM_PICKLE = "param.pickle"
+
+
+def _force_tcp() -> bool:
+    """True when ``PPF_FORCE_TCP_TRANSFER`` is set to a truthy value.
+
+    Co-located backends (``local`` / ``win_native``) default to direct
+    disk I/O: they write/read the project pickles straight to/from the
+    shared filesystem instead of streaming them through the localhost
+    socket. This knob routes them back through the wire handlers so the
+    test rig can keep exercising the streamed path that SSH/Docker rely
+    on in production. SSH/Docker never consult it (they have no disk to
+    share).
+    """
+    val = os.environ.get("PPF_FORCE_TCP_TRANSFER", "").strip().lower()
+    return val not in ("", "0", "false", "no", "off")
 
 
 # ---------------------------------------------------------------------------
@@ -316,6 +340,184 @@ def _receive_via_channel(
 
 
 # ---------------------------------------------------------------------------
+# Direct-disk helpers (co-located local / win_native fast path)
+#
+# When the addon and server share a filesystem, the payloads never need
+# to cross the socket: the addon writes/reads them on disk directly.
+# Only upload_atomic still touches the socket, and just for a tiny
+# upload_notify control message so the server's state machine advances
+# exactly as the streamed path would (UploadLanded -> Data::Uploaded,
+# stale-build invalidation).
+# ---------------------------------------------------------------------------
+
+def _atomic_write_disk(path: str, data: bytes) -> None:
+    """Write *data* to *path* via a sibling tempfile + ``os.replace``.
+
+    ``os.replace`` is atomic on POSIX and on Windows NTFS, so a reader
+    (a racing status reconcile, the build worker) never observes a
+    half-written file. Mirrors the server's temp+rename staging.
+    """
+    directory = os.path.dirname(path) or "."
+    tmp = os.path.join(
+        directory,
+        f"{os.path.basename(path)}.tmp.{os.getpid()}.{uuid.uuid4().hex}",
+    )
+    try:
+        with open(tmp, "wb") as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except Exception:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def _send_via_disk(
+    remote_path: str,
+    data: bytes,
+    project_name: str,
+    progress_cb: Callable | None,
+    interrupt_cb: Callable | None,
+) -> None:
+    """Write a generic file straight to disk (data_send equivalent)."""
+    if project_name is None:
+        raise Exception("Project name is not set.")
+    if data is None or len(data) == 0:
+        if progress_cb:
+            progress_cb(1.0, "")
+        raise Exception("No data to send.")
+    # Match the server's invariant: the scene pickles only ever land via
+    # upload_atomic, never data_send.
+    basename = os.path.basename(remote_path)
+    if basename in (DATA_PICKLE, PARAM_PICKLE):
+        raise Exception(
+            f"data_send no longer accepts {basename}; "
+            "use upload_atomic for scene uploads."
+        )
+    if interrupt_cb and interrupt_cb():
+        raise Exception("Data send interrupted.")
+    if progress_cb:
+        progress_cb(0.0, format_traffic(0))
+    parent = os.path.dirname(remote_path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    _atomic_write_disk(remote_path, data)
+    if progress_cb:
+        progress_cb(1.0, "")
+
+
+def _notify_upload_via_channel(channel_opener: Callable, request_data: dict) -> None:
+    """Send a payload-free ``upload_notify`` control message and await OK."""
+    channel = channel_opener()
+    try:
+        channel.sendall(HEADER_JSON_DATA)
+        header = json.dumps(request_data).encode() + b"\n"
+        sent = 0
+        while sent < len(header):
+            n = channel.send(header[sent:])
+            if n == 0:
+                raise RuntimeError("Socket connection broken during header send")
+            sent += n
+        response = b""
+        while b"\n" not in response:
+            chunk = channel.recv(1024)
+            if not chunk:
+                break
+            response += chunk
+        if b"OK" not in response:
+            try:
+                msg = json.loads(response.decode().strip())
+                raise Exception(msg.get("error", "Server did not confirm upload"))
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                raise Exception(
+                    f"Server did not confirm upload: {response[:200]!r}"
+                )
+    finally:
+        channel.close()
+
+
+def _upload_atomic_via_disk(
+    channel_opener: Callable,
+    project_root: str,
+    data: bytes,
+    param: bytes,
+    project_name: str,
+    progress_cb: Callable | None,
+    interrupt_cb: Callable | None,
+    data_hash: str,
+    param_hash: str,
+) -> None:
+    """Write the pickles to disk, then notify the co-located server.
+
+    The addon mints the ``upload_id`` and carries it on the notify so
+    the server stamps that exact id (the streamed path mints its own
+    server-side). The pickles are written atomically; the server's
+    ``upload_notify`` handler writes ``upload_id.txt`` + the hash files
+    and dispatches the single ``UploadLanded`` event.
+    """
+    if project_name is None:
+        raise Exception("Project name is not set.")
+    if not data and not param:
+        raise Exception("upload_atomic requires at least one payload.")
+    if progress_cb:
+        progress_cb(0.0, format_traffic(0))
+
+    os.makedirs(project_root, exist_ok=True)
+    upload_id = uuid.uuid4().hex[:12]
+    has_data = bool(data)
+    has_param = bool(param)
+
+    if has_data:
+        if interrupt_cb and interrupt_cb():
+            raise Exception("Upload interrupted.")
+        _atomic_write_disk(os.path.join(project_root, DATA_PICKLE), data)
+    if has_param:
+        if interrupt_cb and interrupt_cb():
+            raise Exception("Upload interrupted.")
+        _atomic_write_disk(os.path.join(project_root, PARAM_PICKLE), param)
+
+    # The big bytes are on disk now; only this tiny control message
+    # crosses the socket so the server advances its state machine.
+    _notify_upload_via_channel(
+        channel_opener,
+        {
+            "request": "upload_notify",
+            "name": project_name,
+            "upload_id": upload_id,
+            "data_hash": data_hash,
+            "param_hash": param_hash,
+            "has_data": has_data,
+            "has_param": has_param,
+        },
+    )
+    if progress_cb:
+        progress_cb(1.0, "")
+
+
+def _receive_via_disk(
+    remote_path: str,
+    progress_cb: Callable | None,
+    interrupt_cb: Callable | None,
+) -> bytes:
+    """Read a file straight off disk (data_receive equivalent)."""
+    if progress_cb:
+        progress_cb(0.0, format_traffic(0))
+    if interrupt_cb and interrupt_cb():
+        raise Exception("Data receive interrupted.")
+    if not os.path.isfile(remote_path):
+        raise Exception(f"File not found: {remote_path}")
+    with open(remote_path, "rb") as f:
+        data = f.read()
+    if progress_cb:
+        progress_cb(1.0, "")
+    return data
+
+
+# ---------------------------------------------------------------------------
 # SSH backend
 # ---------------------------------------------------------------------------
 
@@ -538,27 +740,37 @@ class LocalBackend:
 
     def send_data(self, remote_path, data, project_name, *, chunk_size=DEFAULT_CHUNK_SIZE,
                   progress_cb=None, interrupt_cb=None, bps_window=3.0):
-        # Go through the server socket so the server's handler runs
-        # (atomic rename, event dispatch). Skipping the socket for a
-        # direct disk write bypasses upload_id minting and leaves the
-        # server unaware of the upload.
-        _send_via_channel(self.open_channel, remote_path, data, project_name,
-                          chunk_size, progress_cb, interrupt_cb, bps_window)
+        # Co-located: write straight to the shared filesystem. Set
+        # PPF_FORCE_TCP_TRANSFER=1 to stream through the socket instead
+        # (keeps the wire handlers under test in the rig).
+        if _force_tcp():
+            _send_via_channel(self.open_channel, remote_path, data, project_name,
+                              chunk_size, progress_cb, interrupt_cb, bps_window)
+        else:
+            _send_via_disk(remote_path, data, project_name, progress_cb, interrupt_cb)
 
     def upload_atomic(self, project_root, data, param, project_name, *,
                       data_hash="", param_hash="",
                       chunk_size=DEFAULT_CHUNK_SIZE,
                       progress_cb=None, interrupt_cb=None, bps_window=3.0):
-        _upload_atomic_via_channel(
-            self.open_channel, project_root, data, param, project_name,
-            chunk_size, progress_cb, interrupt_cb, bps_window,
-            data_hash=data_hash, param_hash=param_hash,
-        )
+        if _force_tcp():
+            _upload_atomic_via_channel(
+                self.open_channel, project_root, data, param, project_name,
+                chunk_size, progress_cb, interrupt_cb, bps_window,
+                data_hash=data_hash, param_hash=param_hash,
+            )
+        else:
+            _upload_atomic_via_disk(
+                self.open_channel, project_root, data, param, project_name,
+                progress_cb, interrupt_cb, data_hash, param_hash,
+            )
 
     def receive_data(self, remote_path, project_name, *, chunk_size=DEFAULT_CHUNK_SIZE,
                      progress_cb=None, interrupt_cb=None, bps_window=3.0):
-        return _receive_via_channel(self.open_channel, remote_path, project_name,
-                                    chunk_size, progress_cb, interrupt_cb, bps_window)
+        if _force_tcp():
+            return _receive_via_channel(self.open_channel, remote_path, project_name,
+                                        chunk_size, progress_cb, interrupt_cb, bps_window)
+        return _receive_via_disk(remote_path, progress_cb, interrupt_cb)
 
     def disconnect(self) -> None:
         pass
@@ -641,25 +853,36 @@ class WinNativeBackend:
 
     def send_data(self, remote_path, data, project_name, *, chunk_size=DEFAULT_CHUNK_SIZE,
                   progress_cb=None, interrupt_cb=None, bps_window=3.0):
-        # Go through the server socket so the server's handler runs
-        # (atomic rename, event dispatch). See LocalBackend.send_data.
-        _send_via_channel(self.open_channel, remote_path, data, project_name,
-                          chunk_size, progress_cb, interrupt_cb, bps_window)
+        # Co-located: write straight to the shared filesystem. See
+        # LocalBackend.send_data for the PPF_FORCE_TCP_TRANSFER override.
+        if _force_tcp():
+            _send_via_channel(self.open_channel, remote_path, data, project_name,
+                              chunk_size, progress_cb, interrupt_cb, bps_window)
+        else:
+            _send_via_disk(remote_path, data, project_name, progress_cb, interrupt_cb)
 
     def upload_atomic(self, project_root, data, param, project_name, *,
                       data_hash="", param_hash="",
                       chunk_size=DEFAULT_CHUNK_SIZE,
                       progress_cb=None, interrupt_cb=None, bps_window=3.0):
-        _upload_atomic_via_channel(
-            self.open_channel, project_root, data, param, project_name,
-            chunk_size, progress_cb, interrupt_cb, bps_window,
-            data_hash=data_hash, param_hash=param_hash,
-        )
+        if _force_tcp():
+            _upload_atomic_via_channel(
+                self.open_channel, project_root, data, param, project_name,
+                chunk_size, progress_cb, interrupt_cb, bps_window,
+                data_hash=data_hash, param_hash=param_hash,
+            )
+        else:
+            _upload_atomic_via_disk(
+                self.open_channel, project_root, data, param, project_name,
+                progress_cb, interrupt_cb, data_hash, param_hash,
+            )
 
     def receive_data(self, remote_path, project_name, *, chunk_size=DEFAULT_CHUNK_SIZE,
                      progress_cb=None, interrupt_cb=None, bps_window=3.0):
-        return _receive_via_channel(self.open_channel, remote_path, project_name,
-                                    chunk_size, progress_cb, interrupt_cb, bps_window)
+        if _force_tcp():
+            return _receive_via_channel(self.open_channel, remote_path, project_name,
+                                        chunk_size, progress_cb, interrupt_cb, bps_window)
+        return _receive_via_disk(remote_path, progress_cb, interrupt_cb)
 
     def stop_server(self) -> None:
         """Terminate the local server subprocess but keep the backend alive.

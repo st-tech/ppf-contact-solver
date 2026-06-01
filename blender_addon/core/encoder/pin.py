@@ -203,6 +203,11 @@ def _encode_pin_config(context, groups, state):
                 cfg["unpin_time"] = float(pin_item.pin_duration) / fps
             if pin_item.use_pull:
                 cfg["pull_strength"] = float(pin_item.pull_strength)
+            # Per-pin stiffness scale for the moving (kinematic) pin
+            # constraint force. Always emitted; the solver applies it
+            # only when the pin is kinematic. Defaults to 1.0 server-side
+            # when absent (older payloads).
+            cfg["pin_stiffness"] = float(pin_item.pin_stiffness)
             if has_operations:
                 ops_list = []
                 # Centroid for CENTROID-mode spin/scale: frame-1 vertex

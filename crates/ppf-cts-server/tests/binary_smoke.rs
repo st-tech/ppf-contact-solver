@@ -116,11 +116,16 @@ fn binary_listens_accepts_tcmd_and_shuts_down() {
     stream
         .set_read_timeout(Some(Duration::from_secs(5)))
         .expect("set read timeout");
+    // TCMD wire (0.04+): header, 4-byte big-endian payload-length
+    // prefix, then the argument bytes. The server reads exactly that
+    // many bytes, so no half-close is needed to signal end-of-input.
+    let args = b"--name smoke";
     stream.write_all(b"TCMD").expect("write header");
-    stream.write_all(b"--name smoke").expect("write body");
     stream
-        .shutdown(std::net::Shutdown::Write)
-        .expect("half-close");
+        .write_all(&(args.len() as u32).to_be_bytes())
+        .expect("write length prefix");
+    stream.write_all(args).expect("write body");
+    stream.flush().expect("flush");
 
     let mut buf = Vec::with_capacity(2048);
     stream.read_to_end(&mut buf).expect("read response");

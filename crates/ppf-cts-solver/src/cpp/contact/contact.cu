@@ -835,6 +835,11 @@ __device__ unsigned embed_vertex_constraint_force_hessian(
         float tmp =
             w.squaredNorm() ? (local_hess * w).dot(w) / w.squaredNorm() : 0.0f;
         float stiff_k = tmp + mass / (gap * gap);
+        // Per-pin stiffness scales the moving-pin pull (force + Hessian).
+        // Static pins keep stiffness == 1.0 effect (left unscaled).
+        if (fix.kinematic) {
+            stiff_k *= fix.stiffness;
+        }
         f += stiff_k * fix::gradient(x, y);
         H += stiff_k * fix::hessian();
     } else if (mass > 0.0f) {

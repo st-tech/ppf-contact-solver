@@ -57,6 +57,20 @@ pub use executor::{DefaultExecutor, EffectExecutor};
 /// `frontend` decoder disagrees about payload shape; an un-bumped
 /// version there silently mis-decodes instead of erroring.
 ///
+/// 0.08: co-located transfer. When the addon and server share a
+/// machine (`local` / `win_native` backends), the addon writes
+/// `data.pickle` / `param.pickle` straight to the project root on
+/// disk and then sends a lightweight `upload_notify` JSON request
+/// (carrying the addon-minted `upload_id`, the data / param hashes,
+/// and `has_data` / `has_param`) instead of streaming the payloads
+/// through the socket via `upload_atomic`. The server stamps the
+/// supplied id, then dispatches the same `UploadLanded` event the
+/// streamed path does. An old server paired with a new addon would
+/// reject `upload_notify` as an unknown request, so the build would
+/// never see the on-disk pickles; a new server paired with an old
+/// addon would never receive the notify and keep waiting on the
+/// streamed bytes. Both are caught by this handshake.
+///
 /// 0.07: moving STATIC colliders join the output vertex map. The
 /// pin-shells produced by `transform_animation` (Case 1) and
 /// `static_deform_animation` (Case 3) are no longer flagged
@@ -93,4 +107,4 @@ pub use executor::{DefaultExecutor, EffectExecutor};
 /// to signal end-of-input, but tokio on Windows did not surface that
 /// half-close as `Ok(0)` to AsyncRead, so the server's read loop
 /// hung forever and the connection sat in FIN_WAIT_2 indefinitely.
-pub const PROTOCOL_VERSION: &str = "0.07";
+pub const PROTOCOL_VERSION: &str = "0.08";

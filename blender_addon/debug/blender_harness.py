@@ -27,7 +27,7 @@ import socket
 import subprocess
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -43,6 +43,12 @@ class BlenderSpec:
     blend_file: str
     driver_source: str  # Python source to exec inside Blender
     addon_name: str = "bl_ext.user_default.ppf_contact_solver"
+
+    # Extra environment variables to inject into the Blender process.
+    # The orchestrator passes the scenario's effective knobs here so
+    # addon-side knobs (e.g. PPF_FORCE_TCP_TRANSFER, which selects the
+    # co-located transport) reach the addon, not just the server.
+    env_extra: dict = field(default_factory=dict)
 
     stdout_path: str = ""
     stderr_path: str = ""
@@ -309,6 +315,13 @@ def spawn(spec: BlenderSpec) -> subprocess.Popen:
     # requirement; setting it here so individual scenarios don't have
     # to opt in.
     env.setdefault("PPF_WIN_NATIVE_NO_SPAWN", "1")
+
+    # Scenario knobs that the addon (not just the server) reads, e.g.
+    # PPF_FORCE_TCP_TRANSFER selecting the co-located transport. These
+    # win over the inherited environment so a scenario's KNOBS override
+    # the rig-wide default.
+    for key, value in spec.env_extra.items():
+        env[key] = str(value)
 
     # Blender's ``--background`` mode skips the event loop, so any code
     # we register via ``bpy.app.timers.register`` never runs. The

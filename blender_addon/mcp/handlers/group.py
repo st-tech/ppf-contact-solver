@@ -757,6 +757,7 @@ def list_pins(group_uuid: str):
                 "pin_duration": int(pin_item.pin_duration),
                 "use_pull": bool(pin_item.use_pull),
                 "pull_strength": float(pin_item.pull_strength),
+                "pin_stiffness": float(pin_item.pin_stiffness),
                 "operation_count": len(pin_item.operations),
             }
         )

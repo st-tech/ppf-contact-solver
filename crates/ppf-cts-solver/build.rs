@@ -32,7 +32,14 @@ fn main() {
         let out_dir = env::var("OUT_DIR").unwrap();
         let num_threads = num_cpus::get();
         println!("cargo:rerun-if-changed={cpp_dir}");
-        if !emulated {
+        if emulated {
+            // cpp_emul/main.cpp includes shared headers from ../cpp
+            // (data.hpp, etc.). Without watching that directory, cargo
+            // skips re-running make when a shared struct like FixPair or
+            // ParamSet changes, leaving a stale static lib whose layout
+            // disagrees with the Rust repr(C) structs -> SIGBUS at run.
+            println!("cargo:rerun-if-changed=src/cpp");
+        } else {
             println!("cargo:rerun-if-changed=../../eigsys/eig-hpp");
         }
         let output = Command::new("make")

@@ -317,6 +317,7 @@ where
 
     match req_type {
         "upload_atomic" => upload::handle_upload_atomic(reader, writer, engine, executor, &req).await,
+        "upload_notify" => upload::handle_upload_notify(writer, engine, executor, &req).await,
         "data_send" => data::handle_data_send(reader, writer, &req).await,
         "data_receive" => data::handle_data_receive(writer, &req).await,
         "notebook_send" => notebook::handle_notebook_send(reader, writer, &req).await,

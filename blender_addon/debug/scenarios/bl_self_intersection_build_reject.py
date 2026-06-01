@@ -31,6 +31,22 @@
 #   C. ``failure_surfaces_self_intersection``: the addon's surfaced
 #      error (state.error / state.server_error / console messages)
 #      mentions "self-intersect" so a user can act on it.
+#   D. ``violations_payload_reaches_state``: the failed build delivers a
+#      structured ``self_intersection`` entry onto
+#      ``engine.state.violations`` carrying the world-space ``tris``
+#      geometry. This is the seam a flat ERROR string hides: the worker
+#      persists ``ValidationError.violations`` to a sidecar and the
+#      server forwards it through ``BuildFailed``. An empty
+#      ``violations`` vec (the regression this guards) still passes B/C
+#      because the error text surfaces regardless, so the payload itself
+#      must be asserted, not just the message.
+#   E. ``overlay_draws_from_real_violations``: feeding the *real*
+#      ``state.violations`` (not a synthetic payload) into
+#      ``_build_violation_batches`` yields at least one drawable ``TRIS``
+#      batch plus a "Self-Intersection" label. This proves the geometry
+#      is not merely present but actually visualizable in the viewport,
+#      end-to-end from a real build through the server to the GPU batch
+#      builder.
 
 from __future__ import annotations
 
@@ -199,6 +215,80 @@ try:
             "server_error_tail": final_server_error[-200:],
             "console_msg_count": len(console_msgs),
             "haystack_tail": haystack[-300:],
+        },
+    )
+
+    # ----- D: structured violations reach state.violations ------------
+    # The error STRING surfacing (subtest C) is independent of the
+    # structured payload: the regression that motivated this subtest had
+    # the server forward ``BuildFailed { violations: vec![] }`` while the
+    # error text still landed, so C/B passed with an empty overlay. Assert
+    # the geometry payload itself: a ``self_intersection`` entry whose
+    # ``tris`` is a list of triangle pairs, each pair two triangles, each
+    # triangle three xyz verts -- exactly the shape the overlay consumes.
+    state_violations = list(getattr(final, "violations", []) or [])
+    si_entries = [
+        v for v in state_violations
+        if isinstance(v, dict) and v.get("type") == "self_intersection"
+    ]
+    si = si_entries[0] if si_entries else None
+    si_tris = (si or {}).get("tris") or []
+    tris_well_formed = (
+        si is not None
+        and len(si_tris) >= 1
+        and all(len(pair) == 2 for pair in si_tris)
+        and all(len(tri) == 3 for pair in si_tris for tri in pair)
+        and all(
+            len(vert) == 3
+            for pair in si_tris for tri in pair for vert in tri
+        )
+    )
+    dh.record(
+        "D_violations_payload_reaches_state",
+        bool(state_violations) and tris_well_formed,
+        {
+            "n_violations": len(state_violations),
+            "types": [
+                v.get("type") for v in state_violations
+                if isinstance(v, dict)
+            ],
+            "si_count": (si or {}).get("count"),
+            "n_tri_pairs": len(si_tris),
+            "first_pair_shape": (
+                [len(tri) for tri in si_tris[0]] if si_tris else None
+            ),
+        },
+    )
+
+    # ----- E: overlay draws from the REAL violations ------------------
+    # Feed the server-delivered payload (not a synthetic one) into the
+    # GPU batch builder and assert it would actually paint the viewport:
+    # at least one TRIS batch plus a label that names the self-intersection.
+    # ``_build_violation_batches`` returns (batches, labels) where each
+    # batch is (gpu_batch, primitive_type, color). Asserting on the
+    # primitive + label text keeps this robust to color/alpha tweaks.
+    overlay_geometry = __import__(
+        pkg + ".ui.dynamics.overlay_geometry",
+        fromlist=["_build_violation_batches"],
+    )
+    scene = bpy.context.scene
+    depsgraph = bpy.context.evaluated_depsgraph_get()
+    o_batches, o_labels = overlay_geometry._build_violation_batches(
+        scene, depsgraph, state_violations,
+    )
+    tris_batches = [b for b in o_batches if b[1] == "TRIS"]
+    si_label = any(
+        "self-intersection" in (lab.get("text", "") or "").lower()
+        for lab in o_labels
+    )
+    dh.record(
+        "E_overlay_draws_from_real_violations",
+        len(tris_batches) >= 1 and si_label,
+        {
+            "batch_count": len(o_batches),
+            "tris_batch_count": len(tris_batches),
+            "primitives": [b[1] for b in o_batches],
+            "label_texts": [lab.get("text") for lab in o_labels],
         },
     )
 

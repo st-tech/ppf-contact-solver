@@ -254,6 +254,24 @@ def _write_mesh_frame_to_pc2(obj, map_vert, blender_frame, n_verts_override=None
             rest_co = numpy.empty(n_verts * 3, dtype=numpy.float64)
             obj.data.vertices.foreach_get("co", rest_co)
             rest_co = rest_co.reshape(n_verts, 3)
+            # A deform-only modifier stack (Geometry Nodes, Armature,
+            # ...) makes the visible pose diverge from the rest cage.
+            # Gap-fill from the deform-evaluated pose so frames before
+            # the first sim arrival (notably PC2 frame 0 / scene frame
+            # 1) match the shape the solver started from, instead of
+            # showing the flat rest mesh for one frame. The MESH_CACHE
+            # is excluded from the eval so we don't read prior output.
+            from .utils import (
+                eval_deform_local_positions,
+                has_deforming_modifier_stack,
+            )
+            if has_deforming_modifier_stack(obj):
+                from .pc2 import MODIFIER_NAME
+                deform_co = eval_deform_local_positions(
+                    obj, exclude_modifier_name=MODIFIER_NAME,
+                )
+                if deform_co is not None and len(deform_co) == n_verts:
+                    rest_co = deform_co.astype(numpy.float64)
             # Case 3 STATIC: gap-fill from the captured-deformation
             # cache instead of the undeformed rest mesh, so frames
             # before the first sim arrival still show the

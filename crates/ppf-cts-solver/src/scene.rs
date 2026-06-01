@@ -131,6 +131,9 @@ struct Pin {
     operations: Vec<PinOperation>,
     unpin_time: Option<f64>,
     pull_w: f32,
+    /// Per-pin scale on the moving (kinematic) constraint force.
+    /// 1.0 leaves it unchanged; applied only when the pin is kinematic.
+    stiffness: f32,
     pin_group_id: String,
 }
 
@@ -506,6 +509,12 @@ impl Scene {
             let operation_count = read_usize(count, "operation_count");
             let unpin_time = count.get("unpin_time").and_then(|v| v.as_float());
             let pull_w = read_f32(count, "pull");
+            // Defaults to 1.0 (no scaling) when absent so older saved
+            // states without the key keep their original pin force.
+            let stiffness = count
+                .get("stiffness")
+                .and_then(|v| v.as_float())
+                .unwrap_or(1.0) as f32;
             let pin_group_id = count
                 .get("pin_group_id")
                 .and_then(|v| v.as_str())
@@ -692,6 +701,7 @@ impl Scene {
                 operations,
                 unpin_time,
                 pull_w,
+                stiffness,
                 pin_group_id,
             });
         }
@@ -1890,6 +1900,7 @@ impl Scene {
                         ghat: self.args.constraint_ghat,
                         index: ind as u32,
                         kinematic,
+                        stiffness: pin.stiffness,
                     });
                 }
             }

@@ -889,6 +889,7 @@ class Scene:
                 operations=[_remap_op(op, np.asarray(map_by_name[name])) for op in p.operations],
                 unpin_time=p.unpin_time,
                 pull_strength=p.pull_strength,
+                pin_stiffness=p.pin_stiffness,
                 transition=p.transition,
                 pin_group_id=p.pin_group_id,
                 hide_in_preview=bool(getattr(obj, "_is_static_moving", False)),
