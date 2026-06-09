@@ -830,6 +830,7 @@ Below, we describe how to deploy our solver on major cloud services. These instr
 - [*Blender 3D - ZOZO's Contact Solver Capability Test - Squished Cloths under Rubber Ball*](https://www.youtube.com/watch?v=emA3xxJjtOM) by [\[BH\]Lithium](https://www.youtube.com/@lithium820).
 - [*Testing ZoZo's contact solver in blender*](https://www.youtube.com/watch?v=DkIWXsxFJLs) by [Colin T](https://www.youtube.com/@ManiacalV).
 - [*Zozo's Contact Solver | Blender Test*](https://www.youtube.com/watch?v=EcTBUaeOu2U) by [YEETboys_666](https://www.youtube.com/@YEETboys_555).
+- [*Zozo's Multi-Cloth Simulation | Blender Test*](https://www.youtube.com/watch?v=VVphAZokcjs) by [YEETboys_666](https://www.youtube.com/@YEETboys_555).
 
 ### 📰 Articles
 
@@ -841,6 +842,8 @@ Below, we describe how to deploy our solver on major cloud services. These instr
 - [*ZOZO's Contact Solver Blender Add-on 2026*](https://3dnchu.com/archives/zozos-contact-solver-b3d/) (Japanese article) on [3D人-3dnchu-](https://3dnchu.com/).
 - [*ZOZO Releases Open-Source High-Precision Physics Simulation "ppf-contact-solver", Enabling Large-Scale Cloth Simulation from Blender*](https://modelinghappy.com/archives/68744) (Japanese article) on [MODELING HAPPY](https://modelinghappy.com/).
 - [*ZOZO's Contact Solver: open-source physics simulation lands in Blender 5*](https://www.kabum.it/blog/zozo-ppfcontact-solver-for-blender/) on [Kabum](https://www.kabum.it/).
+- [*The Polynomial That Fixed 30 Years of Cloth Simulation*](https://towardsdatascience.com/the-polynomial-that-fixed-30-years-of-cloth-simulation/) by Ferran Alia on [Towards Data Science](https://towardsdatascience.com/).
+- [*GALAXY S26 ULTRA new colors*](https://blenderartists.org/t/galaxy-s26-ultra-new-colors/1643756) by NARZ.CG on [Blender Artists](https://blenderartists.org/).
 
 ### 🧩 Blender Add-ons
 
