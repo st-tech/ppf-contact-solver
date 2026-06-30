@@ -12,8 +12,8 @@ Split out of ``_scene_.py``: see :func:`Scene.add.invisible.wall` /
 from . import _rust  # type: ignore[attr-defined]
 
 
-class WallParam:
-    """A class to hold wall parameters."""
+class ColliderParam:
+    """A class to hold invisible collider parameters (shared by Wall and Sphere)."""
 
     def __init__(self):
         self._param = {
@@ -24,26 +24,30 @@ class WallParam:
         }
 
     def list(self) -> dict[str, float]:
-        """List all the parameters for the wall.
+        """List all the parameters for the collider.
 
         Returns:
-            dict[str, float]: A dictionary of wall parameters.
+            dict[str, float]: A dictionary of collider parameters.
         """
         return self._param
 
-    def set(self, name: str, value: float) -> "WallParam":
-        """Set a parameter for the wall.
+    def set(self, name: str, value: float) -> "ColliderParam":
+        """Set a parameter for the collider.
 
         Args:
             name (str): The parameter name (must already exist in the defaults).
             value (float): The new value.
 
         Returns:
-            WallParam: The updated wall parameters.
+            ColliderParam: The updated collider parameters.
         """
         _rust.scene_validate_known_param_name(name, list(self._param.keys()))
         self._param[name] = value
         return self
+
+
+class WallParam(ColliderParam):
+    """A class to hold wall parameters."""
 
 
 class Wall:
@@ -80,6 +84,18 @@ class Wall:
                     print(t, pos)
         """
         return self._entry
+
+    def is_static_collider(self) -> bool:
+        """Return whether this wall is a static collider.
+
+        A wall is static when it has exactly one keyframe entry. An
+        empty entry list and a multi-keyframe (kinematic) wall both
+        return ``False``: kinematic walls are handled elsewhere.
+
+        Returns:
+            bool: ``True`` when the wall has exactly one keyframe.
+        """
+        return len(self._entry) == 1
 
     def add(self, pos: list[float], normal: list[float]) -> "Wall":
         """Add the initial wall entry.
@@ -221,38 +237,8 @@ class Wall:
         return self._param
 
 
-class SphereParam:
+class SphereParam(ColliderParam):
     """A class to hold sphere parameters."""
-
-    def __init__(self):
-        self._param = {
-            "contact-gap": 1e-3,
-            "friction": 0.0,
-            "active-duration": -1.0,
-            "thickness": 1.0,
-        }
-
-    def list(self) -> dict[str, float]:
-        """List all the parameters for the sphere.
-
-        Returns:
-            dict[str, float]: A dictionary of sphere parameters.
-        """
-        return self._param
-
-    def set(self, name: str, value: float) -> "SphereParam":
-        """Set a parameter for the sphere.
-
-        Args:
-            name (str): The parameter name (must already exist in the defaults).
-            value (float): The new value.
-
-        Returns:
-            SphereParam: The updated sphere parameters.
-        """
-        _rust.scene_validate_known_param_name(name, list(self._param.keys()))
-        self._param[name] = value
-        return self
 
 
 class Sphere:
@@ -325,6 +311,18 @@ class Sphere:
         """
         return self._entry
 
+    def is_static_collider(self) -> bool:
+        """Return whether this sphere is a static collider.
+
+        A sphere is static when it has exactly one keyframe entry. An
+        empty entry list and a multi-keyframe (kinematic) sphere both
+        return ``False``: kinematic spheres are handled elsewhere.
+
+        Returns:
+            bool: ``True`` when the sphere has exactly one keyframe.
+        """
+        return len(self._entry) == 1
+
     def add(self, pos: list[float], radius: float) -> "Sphere":
         """Add an invisible sphere information.
 
@@ -350,7 +348,7 @@ class Sphere:
         Args:
             time (float): The time to check.
         """
-        _rust.scene_validate_sphere_time(float(self._entry[-1][2]), float(time))
+        _rust.scene_validate_collider_time(float(self._entry[-1][2]), float(time))
 
     def transform_to(self, pos: list[float], radius: float, time: float) -> "Sphere":
         """Change the sphere to a new position and radius at a specific time.

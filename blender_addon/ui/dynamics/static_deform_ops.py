@@ -27,7 +27,9 @@ from bpy.types import Operator  # pyright: ignore
 
 from ...core.pc2 import (
     remove_static_deform_pc2,
+    resume_mesh_cache_display,
     static_deform_pc2_key,
+    suspend_mesh_cache_display,
     write_static_deform_pc2,
 )
 from ...core.transform import zup_to_yup
@@ -53,6 +55,9 @@ _capture_job: dict = {
     "saved_frame": 1,
     "status": "",
     "error": "",
+    # {obj_uuid: prior show_viewport} for ContactSolverCache modifiers
+    # suspended for the duration of the capture (see _start_job).
+    "suspended_caches": {},
 }
 
 
@@ -67,6 +72,7 @@ def _reset_job() -> None:
         "saved_frame": 1,
         "status": "",
         "error": "",
+        "suspended_caches": {},
     })
 
 
@@ -309,21 +315,38 @@ def _process_one_frame(scene, depsgraph, entry, frame: int) -> tuple[bool, str]:
 def _start_job(context, entries: list) -> tuple[bool, str]:
     if _capture_job["active"]:
         return False, "Another Capture Deformation job is in progress"
+    # Refuse to start if a pin-deformation capture is in flight: the two
+    # share the depsgraph + frame_set side effects and would corrupt each
+    # other's running frame cursor (mirrors the symmetric guard in
+    # pin_capture_ops._start_job).
+    from .pin_capture_ops import is_pin_capture_running as _pin_running
+    if _pin_running():
+        return False, "Pin-deformation capture is in progress; wait for it to finish"
     if not entries:
         return False, "No deforming STATIC objects to capture"
     scene = context.scene
     total = sum(e["frames"].shape[0] for e in entries)
+    # Suspend each captured object's ContactSolverCache so the per-frame
+    # sample reads the pure deformer output, not the solver's previous
+    # (OVERWRITE) result. Restored in _teardown on every exit path.
+    from ...core.uuid_registry import get_object_by_uuid
+    suspended: dict = {}
+    for entry in entries:
+        uid = entry["obj_uuid"]
+        if uid in suspended:
+            continue
+        suspended[uid] = suspend_mesh_cache_display(get_object_by_uuid(uid))
     _capture_job.update({
         "active": True,
         "aborted": False,
         "objects": entries,
         "object_cursor": 0,
-        "frame_cursor": 0,
         "total_frames_processed": 0,
         "total_frames": total,
         "saved_frame": int(scene.frame_current),
         "status": "Capturing...",
         "error": "",
+        "suspended_caches": suspended,
     })
     return True, ""
 
@@ -390,6 +413,22 @@ def _restore_frame(context) -> None:
         context.scene.frame_set(int(saved))
 
 
+def _cleanup_after_job(context) -> None:
+    """Restore the saved frame, resume the suspended ContactSolverCache
+    modifiers, and reset the job singleton.
+
+    The non-timer half of the modal teardown, factored out so the
+    all-objects coordinator (which owns its own timer) can clean up the
+    job after each phase without an operator instance.
+    """
+    from ...core.uuid_registry import get_object_by_uuid
+
+    _restore_frame(context)
+    for uid, prior in _capture_job.get("suspended_caches", {}).items():
+        resume_mesh_cache_display(get_object_by_uuid(uid), prior)
+    _reset_job()
+
+
 # ---------------------------------------------------------------------------
 # Modal base (mirrors _ModalBakeBase, simpler because capture has no
 # undo path: a captured PC2 is either fully written or never written)
@@ -423,42 +462,50 @@ class _ModalCaptureBase:
     def modal(self, context, event):
         if event.type != "TIMER":
             return {"PASS_THROUGH"}
-        if _capture_job["aborted"]:
-            err = _capture_job.get("error", "")
+        # Any exception inside the tick must still run _teardown, or the
+        # suspended ContactSolverCache stays disabled and the job flag
+        # stays set forever (worse than a visible failure).
+        try:
+            if _capture_job["aborted"]:
+                err = _capture_job.get("error", "")
+                self._teardown(context)
+                redraw_all_areas(context)
+                if err:
+                    self.report({"ERROR"}, err)
+                else:
+                    self.report({"INFO"}, "Capture aborted")
+                return {"CANCELLED"}
+            more = _tick_job(context)
+            redraw_all_areas(context)
+            if not more and not _capture_job["aborted"]:
+                n_objs, n_frames = _finalize_job(context)
+                self._teardown(context)
+                from .overlay import apply_object_overlays
+                apply_object_overlays()
+                redraw_all_areas(context)
+                self.report(
+                    {"INFO"},
+                    f"Captured {n_frames} frame(s) for {n_objs} object(s)",
+                )
+                return {"FINISHED"}
+            return {"RUNNING_MODAL"}
+        except Exception as exc:  # noqa: BLE001 — must restore state
             self._teardown(context)
             redraw_all_areas(context)
-            if err:
-                self.report({"ERROR"}, err)
-            else:
-                self.report({"INFO"}, "Capture aborted")
+            self.report({"ERROR"}, f"Capture failed: {exc}")
             return {"CANCELLED"}
-        more = _tick_job(context)
-        redraw_all_areas(context)
-        if not more and not _capture_job["aborted"]:
-            n_objs, n_frames = _finalize_job(context)
-            self._teardown(context)
-            from .overlay import apply_object_overlays
-            apply_object_overlays()
-            redraw_all_areas(context)
-            self.report(
-                {"INFO"},
-                f"Captured {n_frames} frame(s) for {n_objs} object(s)",
-            )
-            return {"FINISHED"}
-        return {"RUNNING_MODAL"}
 
     def cancel(self, context):
         self._teardown(context)
         redraw_all_areas(context)
 
     def _teardown(self, context):
-        _restore_frame(context)
         wm = context.window_manager
         timer = getattr(self, "_timer", None)
         if timer is not None:
             wm.event_timer_remove(timer)
             self._timer = None
-        _reset_job()
+        _cleanup_after_job(context)
 
 
 # ---------------------------------------------------------------------------
@@ -571,8 +618,20 @@ class SOLVER_OT_CaptureAbort(Operator):
 
 
 def object_needs_deformation_capture(obj, context) -> bool:
-    """Public predicate the UI uses to decide whether to show the button."""
-    return is_deforming_static_object(obj, context)
+    """Public predicate the UI uses to decide whether to show the button.
+
+    Called from panel ``draw()``, so it must stay cheap and write-free: it
+    runs the declarative tiers of ``is_deforming_static_object``
+    (``allow_eval=False``, no depsgraph sampling / no scene mutation) plus a
+    cheap non-fcurve motion check, so the button stays reachable for
+    parent/constraint/driver/NLA-driven statics without stepping the scene on
+    every redraw. The encoder runs the full depsgraph-backed gate at Transfer.
+    """
+    from ...core.utils import _has_nonfcurve_motion_source
+    return (
+        is_deforming_static_object(obj, context, allow_eval=False)
+        or _has_nonfcurve_motion_source(obj)
+    )
 
 
 def object_has_deformation_cache(obj) -> bool:
@@ -592,6 +651,153 @@ def object_deformation_frame_count(obj) -> int:
     if cache is None:
         return 0
     return int(cache.shape[0])
+
+
+# ---------------------------------------------------------------------------
+# "Re-capture all" support: enumerate every deforming STATIC object across
+# the active groups, and drive the shared job from a coordinator that owns
+# its own timer (see SOLVER_OT_RecaptureAllDeformations in solver.py). The
+# capture machinery already processes a list of entries, so "all" is just a
+# different entry set fed through the same _build_entries / _start_job /
+# _tick_job / _finalize_job path.
+# ---------------------------------------------------------------------------
+
+
+def collect_capturable_static_objects(context, *, allow_eval: bool = False) -> list:
+    """Every deforming STATIC-group object that needs a deformation capture,
+    deduplicated, in group/assignment order.
+
+    ``allow_eval=False`` (default) uses the cheap, draw-safe predicate
+    (:func:`object_needs_deformation_capture`, no depsgraph sampling), so it
+    is callable from a panel poll. ``allow_eval=True`` uses the full
+    depsgraph-backed gate (:func:`is_deforming_static_object`), matching the
+    per-object Capture button, for the execute path.
+    """
+    from ...core.uuid_registry import resolve_assigned
+    from ...models.groups import iterate_active_object_groups
+
+    out: list = []
+    seen: set = set()
+    for group in iterate_active_object_groups(context.scene):
+        if group.object_type != "STATIC":
+            continue
+        for assigned in group.assigned_objects:
+            try:
+                obj = resolve_assigned(assigned)
+            except ValueError:
+                continue
+            if obj is None or obj.type != "MESH" or id(obj) in seen:
+                continue
+            needs = (
+                is_deforming_static_object(obj, context)
+                if allow_eval
+                else object_needs_deformation_capture(obj, context)
+            )
+            if needs:
+                seen.add(id(obj))
+                out.append(obj)
+    return out
+
+
+def scene_has_capturable_static(context) -> bool:
+    """Fast, stateless poll signal for "Re-capture All Deformations": True as
+    soon as one active STATIC-group MESH object needs a deformation capture.
+
+    Resolving every assigned STATIC object by UUID per redraw was the cost
+    (~0.03ms each); the declarative "is this deforming" predicate is ~25x
+    cheaper. So this scans ``bpy.data.objects`` with that cheap predicate
+    first -- which rejects the rigid-collider majority without resolving
+    anything -- and only confirms STATIC-group membership (a UUID-set lookup)
+    for the few deforming candidates. Equivalent result to
+    :func:`collect_capturable_static_objects` (``allow_eval=False``); the
+    full list builder used by ``execute`` still resolves per assignment.
+    """
+    import bpy
+    from ...core.uuid_registry import get_object_uuid
+    from ...models.groups import iterate_active_object_groups
+
+    static_uuids = {
+        getattr(assigned, "uuid", "")
+        for group in iterate_active_object_groups(context.scene)
+        if group.object_type == "STATIC"
+        for assigned in group.assigned_objects
+        if getattr(assigned, "uuid", "")
+    }
+    if not static_uuids:
+        return False
+    for obj in bpy.data.objects:
+        if obj.type != "MESH":
+            continue
+        if not object_needs_deformation_capture(obj, context):
+            continue
+        if get_object_uuid(obj) in static_uuids:
+            return True
+    return False
+
+
+def start_capture_for_objects(context, objects: list) -> tuple[bool, str]:
+    """Build entries for *objects* and start the shared capture job.
+
+    Public entry point for the "Re-capture All Deformations" coordinator;
+    returns ``(ok, error_message)`` like :func:`_start_job`.
+    """
+    errors: list = []
+    entries = _build_entries(context.scene, objects, errors)
+    if not entries:
+        return False, (
+            errors[0] if errors else "No deforming STATIC objects to capture"
+        )
+    return _start_job(context, entries)
+
+
+def advance_capture(context) -> tuple[bool, bool, str]:
+    """Tick the running capture once.
+
+    Returns ``(more_remaining, aborted, error)``. The coordinator calls this
+    each timer tick and stops the whole run when ``aborted`` is True (e.g.
+    the user hit the Abort button, which sets the job's aborted flag).
+    """
+    if _capture_job.get("aborted"):
+        return False, True, str(_capture_job.get("error", ""))
+    more = _tick_job(context)
+    if _capture_job.get("aborted"):
+        return False, True, str(_capture_job.get("error", ""))
+    return more, False, ""
+
+
+def finalize_capture(context) -> tuple[int, int]:
+    """Write completed entries to PC2; returns ``(objects, frames)`` written."""
+    return _finalize_job(context)
+
+
+def cleanup_capture(context) -> None:
+    """Restore frame, resume suspended caches, and clear the job state."""
+    _cleanup_after_job(context)
+
+
+def collect_objects_with_deform_cache(context) -> list:
+    """Every STATIC-group object that currently holds a static-deform cache,
+    deduplicated. Used by "Clear All Deformations" (and its poll). Draw-safe:
+    only checks for an existing cache, no depsgraph sampling."""
+    from ...core.uuid_registry import resolve_assigned
+    from ...models.groups import iterate_active_object_groups
+
+    out: list = []
+    seen: set = set()
+    for group in iterate_active_object_groups(context.scene):
+        if group.object_type != "STATIC":
+            continue
+        for assigned in group.assigned_objects:
+            try:
+                obj = resolve_assigned(assigned)
+            except ValueError:
+                continue
+            if obj is None or obj.type != "MESH" or id(obj) in seen:
+                continue
+            if object_has_deformation_cache(obj):
+                seen.add(id(obj))
+                out.append(obj)
+    return out
 
 
 # ---------------------------------------------------------------------------

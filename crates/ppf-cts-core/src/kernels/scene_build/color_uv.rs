@@ -81,10 +81,8 @@ pub fn dynamic_color(
                 0.0
             };
             intensity[ti] = dyn_face_intensity[ti];
-            // colorsys.hsv_to_rgb with hue = 240*(1-val)/360, s=0.75,
-            // v=1.0; matches the Python branch.
-            let hue = 240.0 * (1.0 - val) / 360.0;
-            let (r, g, b) = hsv_to_rgb(hue, 0.75, 1.0);
+            // Blue→red strain ramp; see `strain_hue_rgb`.
+            let (r, g, b) = strain_hue_rgb(val);
             face_color[3 * ti] = r;
             face_color[3 * ti + 1] = g;
             face_color[3 * ti + 2] = b;
@@ -151,8 +149,7 @@ pub fn direction_color(verts: &[f64], direction: [f64; 3]) -> Vec<f64> {
     let mut out = vec![0.0f64; 3 * n];
     for i in 0..n {
         let y = (vals[i] - min_val) * inv;
-        let hue = 240.0 * (1.0 - y) / 360.0;
-        let (r, g, b) = hsv_to_rgb(hue, 0.75, 1.0);
+        let (r, g, b) = strain_hue_rgb(y);
         out[3 * i] = r;
         out[3 * i + 1] = g;
         out[3 * i + 2] = b;
@@ -192,7 +189,9 @@ pub fn cylinder_color(
         let mut angle = yv.atan2(xv);
         // Match Python's `np.mod(angle, 2*pi) / (2*pi)`.
         angle = angle.rem_euclid(two_pi) / two_pi;
-        let (r, g, b) = hsv_to_rgb(angle, 0.75, 1.0);
+        // Raw normalized angle as hue (not the blue→red strain span), so
+        // feed `hsv_to_rgb` directly while reusing the shared sat/val pair.
+        let (r, g, b) = hsv_to_rgb(angle, STRAIN_SAT, STRAIN_VAL);
         out[3 * i] = r;
         out[3 * i + 1] = g;
         out[3 * i + 2] = b;
@@ -292,6 +291,19 @@ pub fn uv_from_directions(
         out.push(c[0] * ey[0] + c[1] * ey[1] + c[2] * ey[2]);
     }
     Ok(out)
+}
+
+// Shared blue→red strain ramp: saturation/value pair fed to `hsv_to_rgb`
+// across the color kernels (matches the Python `s=0.75, v=1.0` branch).
+const STRAIN_SAT: f64 = 0.75;
+const STRAIN_VAL: f64 = 1.0;
+
+/// Map a normalized strain `v` in `[0, 1]` through the blue→red HSV ramp:
+/// `colorsys.hsv_to_rgb(240*(1-v)/360, 0.75, 1.0)`. Matches the Python
+/// branch shared by `dynamic_color` and `direction_color`.
+fn strain_hue_rgb(v: f64) -> (f64, f64, f64) {
+    let hue = 240.0 * (1.0 - v) / 360.0;
+    hsv_to_rgb(hue, STRAIN_SAT, STRAIN_VAL)
 }
 
 /// Standard HSV→RGB. `hue` is in `[0, 1]` (callers divide by 360).

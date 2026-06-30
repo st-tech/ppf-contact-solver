@@ -32,7 +32,7 @@ class Console:
         return console_text
 
     def show(self, last_lines=10):
-        """Show the console in a new or existing window and scroll to the last 10 lines."""
+        """Show the console in a new or existing window and scroll to the last `last_lines` lines."""
         console_text = self.get_or_create()
 
         for window in bpy.context.window_manager.windows:

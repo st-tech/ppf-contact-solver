@@ -8,139 +8,7 @@
 import os
 import subprocess
 
-from ..models.console import console
-from .module import import_module
 from .status import ConnectionInfo
-
-
-def connect_ssh(
-    host,
-    port,
-    username,
-    key_path,
-    path,
-    container,
-    keepalive_interval,
-    server_port,
-    exec_fn,
-):
-    """Establish an SSH connection and return a ConnectionInfo.
-
-    Args:
-        host: SSH hostname.
-        port: SSH port.
-        username: SSH username.
-        key_path: Path to the SSH key file.
-        path: Remote working directory.
-        container: Docker container name (may be empty).
-        keepalive_interval: SSH keep-alive interval in seconds.
-        server_port: The solver server port.
-        exec_fn: Callable ``exec_fn(command, connection=..., shell=..., cwd=...)``
-                  used to run commands on the remote; signature matches
-                  ``protocol.exec_command``.
-
-    Returns:
-        A populated ConnectionInfo instance.
-    """
-    paramiko = import_module("paramiko")
-    instance = paramiko.SSHClient()
-    instance.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    instance.connect(
-        hostname=host,
-        port=port,
-        username=username,
-        key_filename=key_path,
-        compress=True,
-    )
-    instance.get_transport().set_keepalive(keepalive_interval)
-
-    connection = ConnectionInfo()
-    connection.type = "ssh"
-    connection.current_directory = path
-    connection.instance = instance
-    connection.container = container
-    connection.server_port = server_port
-
-    if container:
-        result = exec_fn(
-            f"docker ps -a --filter 'name={container}' --format '{{{{.Names}}}}'",
-            connection=connection,
-        )
-        exit_code = result["exit_code"]
-        if exit_code != 0:
-            raise Exception(f"Error: {result['stderr']}")
-        container_check = result["stdout"]
-        if not container_check:
-            connection.instance.close()
-            connection.instance = None
-            raise Exception(f"Container '{container}' does not exist.")
-        result = exec_fn(
-            f"docker inspect -f '{{{{.State.Running}}}}' {container}",
-            connection=connection,
-        )
-        exit_code = result["exit_code"]
-        if exit_code != 0:
-            connection.instance.close()
-            connection.instance = None
-            raise Exception(f"Error: {result['stderr']}")
-        is_running_str = result["stdout"]
-        if is_running_str != "true":
-            start_output = exec_fn(
-                f"docker start {container}", connection=connection
-            )
-            if not start_output:
-                connection.instance.close()
-                connection.instance = None
-                raise Exception(f"error starting container '{container}'")
-
-    return connection
-
-
-def connect_docker(container, path, server_port):
-    """Establish a Docker connection and return a ConnectionInfo.
-
-    Args:
-        container: Docker container name.
-        path: Working directory inside the container.
-        server_port: The solver server port.
-
-    Returns:
-        A populated ConnectionInfo instance.
-    """
-    console.write(f"connecting to Docker container {container}...")
-    docker = import_module("docker")
-    client = docker.from_env()
-    container_instance = client.containers.get(container)
-
-    if container_instance.status != "running":
-        container_instance.start()
-        container_instance.reload()
-
-    connection_info = ConnectionInfo()
-    connection_info.type = "docker"
-    connection_info.current_directory = path
-    connection_info.instance = container_instance
-    connection_info.container = container
-    connection_info.server_port = server_port
-    return connection_info
-
-
-def connect_local(path, server_port):
-    """Establish a local connection and return a ConnectionInfo.
-
-    Args:
-        path: Local working directory.
-        server_port: The solver server port.
-
-    Returns:
-        A populated ConnectionInfo instance.
-    """
-    connection_info = ConnectionInfo()
-    connection_info.type = "local"
-    connection_info.current_directory = path
-    connection_info.instance = "local"
-    connection_info.server_port = server_port
-    return connection_info
 
 
 class PortInUseByForeignProcess(Exception):
@@ -269,22 +137,25 @@ def spawn_win_native_server(root, port):
             return None
         raise PortInUseByForeignProcess(port)
 
-    # The existence probe hits the ``ppf-cts-server.exe`` binary in
-    # either the dev layout or a bundled ``bin/``. Only required when we
-    # actually need to spawn; the attach path above already returned.
+    # Resolve the Rust ``ppf-cts-server.exe`` binary. We look in the dev
+    # layout first, then the bundled ``bin/`` so a Windows native bundle
+    # can ship the binary alongside the embedded Python. Only required
+    # when we actually need to spawn; the attach path above already
+    # returned. Resolved before the embedded-Python branch so an
+    # all-missing layout surfaces the server.exe error first.
     candidates = [
         os.path.join(root, "target", "release", "ppf-cts-server.exe"),
         os.path.join(root, "bin", "ppf-cts-server.exe"),
     ]
-    if not any(os.path.exists(p) for p in candidates):
+    rust_bin = next((p for p in candidates if os.path.exists(p)), None)
+    if rust_bin is None:
         raise FileNotFoundError(
-            "ppf-cts-server.exe not found in any of: "
-            + ", ".join(candidates)
+            "Rust ppf-cts-server.exe not found in "
+            f"{candidates}. Build with `cargo build --release -p ppf-cts-server`."
         )
 
     build_dir = os.path.join(root, "build-win-native")
     if os.path.exists(os.path.join(build_dir, "python", "python.exe")):
-        python_exe = os.path.join(build_dir, "python", "python.exe")
         extra_paths = [
             os.path.join(build_dir, "python"),
             os.path.join(root, "target", "release"),
@@ -293,7 +164,6 @@ def spawn_win_native_server(root, port):
         ]
         cuda_path = os.path.join(build_dir, "cuda")
     elif os.path.exists(os.path.join(root, "python", "python.exe")):
-        python_exe = os.path.join(root, "python", "python.exe")
         extra_paths = [
             os.path.join(root, "python"),
             os.path.join(root, "bin"),
@@ -313,19 +183,6 @@ def spawn_win_native_server(root, port):
 
     creation_flags = subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0
 
-    # Rust ppf-cts-server binary. We look in the dev layout first,
-    # then the bundled ``bin/`` so a Windows native bundle can ship the
-    # binary alongside the embedded Python.
-    candidates = [
-        os.path.join(root, "target", "release", "ppf-cts-server.exe"),
-        os.path.join(root, "bin", "ppf-cts-server.exe"),
-    ]
-    rust_bin = next((p for p in candidates if os.path.exists(p)), None)
-    if rust_bin is None:
-        raise FileNotFoundError(
-            "Rust ppf-cts-server.exe not found in "
-            f"{candidates}. Build with `cargo build --release -p ppf-cts-server`."
-        )
     # Redirect to a real file, NOT subprocess.PIPE. With PIPE the addon
     # owns the read end and never drains it; on Windows the OS pipe
     # buffer is only a few KB, and once the server's log4rs console
@@ -391,32 +248,3 @@ def connect_win_native(root, port):
     connection_info.container = ""
     connection_info.server_port = port
     return connection_info, process
-
-
-def disconnect_ssh(connection):
-    """Close an SSH connection.
-
-    Args:
-        connection: A ConnectionInfo with an open SSH instance.
-    """
-    if connection.instance:
-        connection.instance.close()
-    connection.clear()
-
-
-def disconnect_docker(connection):
-    """Clear a Docker connection.
-
-    Args:
-        connection: A ConnectionInfo for a Docker connection.
-    """
-    connection.clear()
-
-
-def disconnect_local(connection):
-    """Clear a local connection.
-
-    Args:
-        connection: A ConnectionInfo for a local connection.
-    """
-    connection.clear()

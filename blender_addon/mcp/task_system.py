@@ -3,8 +3,6 @@
 import threading
 import time
 
-# Import handlers to trigger decorator registration
-from .handlers import connection, console, debug, group, remote, simulation  # noqa: F401
 from .integration import get_integrated_handlers, initialize_integrated_system
 
 _get_integrated_handlers = get_integrated_handlers
@@ -14,8 +12,16 @@ _initialize_integrated_system = initialize_integrated_system
 # MCP Task Processing System (keep existing task system)
 _mcp_task_queue = []
 _mcp_results = {}
+_mcp_result_times = {}
 _mcp_lock = threading.Lock()
 _mcp_task_id_counter = 0
+
+# Reap results that were never collected (client disconnected or the
+# get_mcp_result timeout already fired before the handler finished). The
+# default get_mcp_result timeout is 5.0s, so 2x that is comfortably past
+# the point any live reader would still be waiting, and a waiting reader
+# always consumes its own entry within its timeout window first.
+_RESULT_REAP_SECONDS = 10.0
 
 
 def post_mcp_task(task_type, args):
@@ -47,6 +53,7 @@ def get_mcp_result(task_id, timeout=5.0):
             if task_id in _mcp_results:
                 result = _mcp_results[task_id]
                 del _mcp_results[task_id]  # Clean up
+                _mcp_result_times.pop(task_id, None)
                 return result
 
         time.sleep(0.01)  # Small sleep to prevent busy waiting
@@ -81,6 +88,22 @@ def process_mcp_tasks():
         # Store result
         with _mcp_lock:
             _mcp_results[task_id] = result
+            _mcp_result_times[task_id] = time.time()
+
+    # Reap any results abandoned by a reader that already timed out or
+    # disconnected, so _mcp_results does not grow without bound over a long
+    # session. A live get_mcp_result deletes its own entry well within its
+    # timeout window, so this only evicts entries no reader will ever read.
+    now = time.time()
+    with _mcp_lock:
+        stale_ids = [
+            tid
+            for tid, stored_at in _mcp_result_times.items()
+            if now - stored_at > _RESULT_REAP_SECONDS
+        ]
+        for tid in stale_ids:
+            _mcp_results.pop(tid, None)
+            del _mcp_result_times[tid]
 
 
 def _execute_blender_task(task_type, args):
@@ -99,6 +122,7 @@ def clear_task_state():
     with _mcp_lock:
         _mcp_task_queue.clear()
         _mcp_results.clear()
+        _mcp_result_times.clear()
 
 
 # Initialize the integrated system on module load

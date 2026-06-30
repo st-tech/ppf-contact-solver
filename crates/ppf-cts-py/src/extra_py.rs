@@ -65,3 +65,9 @@ pub fn sparse_clone(
         _ => PyRuntimeError::new_err(e.to_string()),
     })
 }
+
+pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(load_cipc_stitch_mesh, m)?)?;
+    m.add_function(wrap_pyfunction!(sparse_clone, m)?)?;
+    Ok(())
+}

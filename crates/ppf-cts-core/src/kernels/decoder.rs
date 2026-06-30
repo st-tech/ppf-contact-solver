@@ -21,6 +21,8 @@
 // path math and the validation helpers the Python decoder calls
 // before mutating its caller's scene/session.
 
+use super::geom_util::barycentric_clamp_project;
+
 /// Apply a 4x4 transform to local-space vertices and return
 /// world-space vertices in `f32`.
 ///
@@ -104,35 +106,38 @@ pub fn summarize_tetra_jobs(jobs: &[TetraJob<'_>]) -> String {
     )
 }
 
-/// Result of [`barycentric_project_anchors`]: each anchor maps to one
-/// stitch row of `(src_index, fv0, fv1, fv2)` in `ind` and
-/// `(1.0, alpha, beta, gamma)` in `w`. Anchors that fall on a mesh
-/// with no valid faces are skipped.
+/// Result of [`barycentric_project_anchors`]: each anchor maps to the
+/// closest triangle `(v0, v1, v2)` in `tri` and its barycentric weights
+/// `(alpha, beta, gamma)` in `bary`. This is a pure single-mesh
+/// projection: the 6-slot stitch row is assembled by the caller, which
+/// places one side's `(tri, bary)` into slots `[0..2]` (source) and the
+/// other into `[3..5]` (target). Anchors on a mesh with no valid faces
+/// are dropped (all-or-nothing: a mesh with >= 1 valid face keeps every
+/// anchor in input order, so source and target projections stay aligned
+/// per row).
 pub struct StitchRows {
-    pub ind: Vec<[i64; 4]>,
-    pub w: Vec<[f32; 4]>,
+    pub tri: Vec<[i64; 3]>,
+    pub bary: Vec<[f32; 3]>,
 }
 
-/// Project each anchor onto the closest target triangle and emit the
-/// barycentric stitch row.
+/// Project each anchor onto the closest triangle of one mesh and emit
+/// its triangle + barycentric weights.
 ///
 /// `target_face` is row-major `(F, 3)`. `target_pos` is row-major
 /// `(P, 3)` (world space already). `anchors` is row-major `(K, 3)`.
-/// `src_indices` aligns with `anchors` and is the source-side vertex
-/// id stitched to each anchor. Output rows are in input order; rows
-/// where every face is degenerate are dropped.
+/// Output rows are in input order; rows where every face is degenerate
+/// are dropped (which only happens if the whole mesh has no valid face,
+/// dropping all anchors at once).
 pub fn barycentric_project_anchors(
     target_face: &[i64],
     target_pos: &[f64],
     anchors: &[f64],
-    src_indices: &[i64],
 ) -> StitchRows {
     debug_assert_eq!(target_face.len() % 3, 0, "target_face must be (F, 3)");
     debug_assert_eq!(target_pos.len() % 3, 0, "target_pos must be (P, 3)");
     debug_assert_eq!(anchors.len() % 3, 0, "anchors must be (K, 3)");
     let n_face = target_face.len() / 3;
     let n_anchor = anchors.len() / 3;
-    debug_assert_eq!(src_indices.len(), n_anchor);
 
     // Pre-compute per-face geometry.
     let mut p0 = vec![[0.0f64; 3]; n_face];
@@ -166,8 +171,8 @@ pub fn barycentric_project_anchors(
         safe_denom[f] = if valid[f] { denom[f] } else { 1.0 };
     }
 
-    let mut ind_out: Vec<[i64; 4]> = Vec::new();
-    let mut w_out: Vec<[f32; 4]> = Vec::new();
+    let mut tri_out: Vec<[i64; 3]> = Vec::new();
+    let mut bary_out: Vec<[f32; 3]> = Vec::new();
 
     for a in 0..n_anchor {
         let sv = [
@@ -197,29 +202,18 @@ pub fn barycentric_project_anchors(
                 -1.0
             };
             let alpha = 1.0 - beta - gamma;
-            let mut a_c = alpha.clamp(0.0, 1.0);
-            let mut b_c = beta.clamp(0.0, 1.0);
-            let mut g_c = gamma.clamp(0.0, 1.0);
-            let s = a_c + b_c + g_c;
-            let safe_s = if s > 0.0 { s } else { 1.0 };
-            a_c /= safe_s;
-            b_c /= safe_s;
-            g_c /= safe_s;
-            // Project: alpha*p0 + beta*p1 + gamma*p2.
-            let px = a_c * p0[f][0] + b_c * p1[f][0] + g_c * p2[f][0];
-            let py = a_c * p0[f][1] + b_c * p1[f][1] + g_c * p2[f][1];
-            let pz = a_c * p0[f][2] + b_c * p1[f][2] + g_c * p2[f][2];
-            let dx = sv[0] - px;
-            let dy = sv[1] - py;
-            let dz = sv[2] - pz;
-            let dist = (dx * dx + dy * dy + dz * dz).sqrt();
+            // Clamp to the triangle and project; the per-face 1e-20
+            // degeneracy gate (`valid[f]`) stays out here so the shared
+            // helper only runs the convex-projection tail.
+            let (bary, _proj, dist) =
+                barycentric_clamp_project(alpha, beta, gamma, sv, p0[f], p1[f], p2[f]);
             let dist = if valid[f] { dist } else { f64::INFINITY };
             if dist < best_dist {
                 best_dist = dist;
                 best_fi = f;
-                best_alpha = a_c;
-                best_beta = b_c;
-                best_gamma = g_c;
+                best_alpha = bary[0];
+                best_beta = bary[1];
+                best_gamma = bary[2];
             }
         }
         if best_dist == f64::INFINITY {
@@ -228,10 +222,10 @@ pub fn barycentric_project_anchors(
         let fv0 = target_face[3 * best_fi];
         let fv1 = target_face[3 * best_fi + 1];
         let fv2 = target_face[3 * best_fi + 2];
-        ind_out.push([src_indices[a], fv0, fv1, fv2]);
-        w_out.push([1.0f32, best_alpha as f32, best_beta as f32, best_gamma as f32]);
+        tri_out.push([fv0, fv1, fv2]);
+        bary_out.push([best_alpha as f32, best_beta as f32, best_gamma as f32]);
     }
-    StitchRows { ind: ind_out, w: w_out }
+    StitchRows { tri: tri_out, bary: bary_out }
 }
 
 /// Compute the per-Blender-vertex "best simulation vertex" mapping
@@ -454,16 +448,14 @@ mod tests {
         ];
         // Anchor exactly at the first vertex => alpha=1.
         let anchors = vec![0.0, 0.0, 0.0];
-        let src = vec![42_i64];
-        let r = barycentric_project_anchors(&face, &pos, &anchors, &src);
-        assert_eq!(r.ind.len(), 1);
-        assert_eq!(r.w.len(), 1);
-        assert_eq!(r.ind[0], [42, 0, 1, 2]);
-        // alpha=1, beta=0, gamma=0 (with the leading 1.0 source weight).
-        assert!((r.w[0][0] - 1.0).abs() < 1e-5);
-        assert!((r.w[0][1] - 1.0).abs() < 1e-5);
-        assert!((r.w[0][2] - 0.0).abs() < 1e-5);
-        assert!((r.w[0][3] - 0.0).abs() < 1e-5);
+        let r = barycentric_project_anchors(&face, &pos, &anchors);
+        assert_eq!(r.tri.len(), 1);
+        assert_eq!(r.bary.len(), 1);
+        assert_eq!(r.tri[0], [0, 1, 2]);
+        // alpha=1, beta=0, gamma=0.
+        assert!((r.bary[0][0] - 1.0).abs() < 1e-5);
+        assert!((r.bary[0][1] - 0.0).abs() < 1e-5);
+        assert!((r.bary[0][2] - 0.0).abs() < 1e-5);
     }
 
     #[test]
@@ -477,17 +469,15 @@ mod tests {
             0.0, 1.0, 0.0,
         ];
         let anchors = vec![0.5, 0.25, 0.5];
-        let src = vec![7_i64];
-        let r = barycentric_project_anchors(&face, &pos, &anchors, &src);
-        assert_eq!(r.ind.len(), 1);
-        assert_eq!(r.ind[0], [7, 0, 1, 2]);
-        // beta=0.5, gamma=0.25, alpha=0.25 (from the projection,
+        let r = barycentric_project_anchors(&face, &pos, &anchors);
+        assert_eq!(r.tri.len(), 1);
+        assert_eq!(r.tri[0], [0, 1, 2]);
+        // alpha=0.25, beta=0.5, gamma=0.25 (from the projection,
         // which clamps then renormalizes; here all in-range).
-        let w = r.w[0];
-        assert!((w[0] - 1.0).abs() < 1e-5);
-        assert!((w[1] - 0.25).abs() < 1e-5);
-        assert!((w[2] - 0.5).abs() < 1e-5);
-        assert!((w[3] - 0.25).abs() < 1e-5);
+        let b = r.bary[0];
+        assert!((b[0] - 0.25).abs() < 1e-5);
+        assert!((b[1] - 0.5).abs() < 1e-5);
+        assert!((b[2] - 0.25).abs() < 1e-5);
     }
 
     #[test]
@@ -500,9 +490,8 @@ mod tests {
             2.0, 0.0, 0.0, // collinear
         ];
         let anchors = vec![0.5, 0.0, 0.0];
-        let src = vec![1_i64];
-        let r = barycentric_project_anchors(&face, &pos, &anchors, &src);
-        assert_eq!(r.ind.len(), 0);
+        let r = barycentric_project_anchors(&face, &pos, &anchors);
+        assert_eq!(r.tri.len(), 0);
     }
 
     #[test]

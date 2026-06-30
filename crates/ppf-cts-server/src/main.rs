@@ -116,11 +116,10 @@ async fn main() -> anyhow::Result<()> {
     // logging; the merged map is keyed by channel name and later
     // entries with the same key overwrite earlier ones (channel names
     // do not collide across files in practice). Probed roots, in order:
-    //   1. `<root>/src/`                              (older layout)
-    //   2. `<root>/crates/ppf-cts-solver/src/`        (CUDA solver,
+    //   1. `<root>/crates/ppf-cts-solver/src/`        (CUDA solver,
     //                                                  owns most
     //                                                  channels)
-    //   3. `<root>/crates/ppf-cts-core/src/`          (Rust kernels)
+    //   2. `<root>/crates/ppf-cts-core/src/`          (Rust kernels)
     // `<root>` is resolved as: `PPF_CTS_LOG_SRC_DIR` env var first
     // (colon-separated absolute paths used directly), then cwd, then a
     // `target/release/` walk-up from the binary's own location. The
@@ -144,6 +143,14 @@ async fn main() -> anyhow::Result<()> {
         config.hardware.cpu,
         config.hardware.ram,
     );
+    if config.hardware.emulated {
+        log::warn!(
+            target: "ppf::serve",
+            "MODE: EMULATED build (CPU stub backend, no CUDA). Simulations \
+             will NOT produce real physics; this binary is for the test \
+             rig only. Rebuild without `--features emulated` for real runs."
+        );
+    }
     let src_roots: Vec<std::path::PathBuf> = if let Ok(override_paths) =
         std::env::var("PPF_CTS_LOG_SRC_DIR")
     {
@@ -169,7 +176,6 @@ async fn main() -> anyhow::Result<()> {
         }
         let mut roots: Vec<std::path::PathBuf> = Vec::new();
         for base in probe_bases {
-            roots.push(base.join("src"));
             roots.push(base.join("crates").join("ppf-cts-solver").join("src"));
             roots.push(base.join("crates").join("ppf-cts-core").join("src"));
         }

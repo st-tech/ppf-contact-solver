@@ -1,7 +1,9 @@
 """Session store for the Streamable HTTP MCP transport.
 
-Each session owns a queue of server-to-client SSE events plus a small ring
-buffer so a reconnecting client can resume from Last-Event-ID.
+The server answers every JSON-RPC request synchronously over the POST
+response, so there is no server-initiated push. Each session keeps a queue
+used only to deliver a None sentinel from close(), which unblocks the GET
+SSE stream's blocking get() so it can shut down promptly.
 """
 
 import queue
@@ -15,31 +17,7 @@ class Session:
         self.id = session_id
         self.created_at = time.monotonic()
         self.event_queue: "queue.Queue" = queue.Queue()
-        self._next_event_id = 0
-        self._recent: list = []
-        self._recent_max = 256
-        self._lock = threading.Lock()
         self.closed = False
-
-    def emit(self, payload: str) -> str:
-        with self._lock:
-            event_id = str(self._next_event_id)
-            self._next_event_id += 1
-            self._recent.append((event_id, payload))
-            if len(self._recent) > self._recent_max:
-                self._recent = self._recent[-self._recent_max:]
-        self.event_queue.put((event_id, payload))
-        return event_id
-
-    def replay_after(self, last_event_id: str):
-        with self._lock:
-            snapshot = list(self._recent)
-        seen = False
-        for eid, payload in snapshot:
-            if seen:
-                yield eid, payload
-            elif eid == last_event_id:
-                seen = True
 
     def close(self):
         if self.closed:

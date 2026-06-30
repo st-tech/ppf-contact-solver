@@ -27,6 +27,7 @@ import numpy
 
 from ..models.console import console
 from .backends import ConnectionBackend, create_backend
+from .derived import is_sim_running_from_response
 from .effects import (
     DoClearAnimation,
     DoClearInterrupt,
@@ -37,7 +38,6 @@ from .effects import (
     DoFetchMap,
     DoLaunchServer,
     DoLog,
-    DoPollAfter,
     DoQuery,
     DoReceiveData,
     DoRedrawUI,
@@ -59,7 +59,6 @@ from .events import (
     FetchComplete,
     FetchFailed,
     FetchMapComplete,
-    PollTick,
     ProgressUpdated,
     ReceiveDataComplete,
     SendDataComplete,
@@ -70,6 +69,7 @@ from .events import (
     UploadPipelineComplete,
 )
 from .protocol import DEFAULT_CHUNK_SIZE
+from .session import new_session_id
 
 if TYPE_CHECKING:
     from .engine import Engine
@@ -165,7 +165,6 @@ class EffectRunner:
         self._io_lock = threading.Lock()       # Protects _cmd_queue + _poll_slot
         self._work_event = threading.Event()   # Wakes the worker
         self._stop_event = threading.Event()   # Stops the worker on cleanup
-        self._pending_timers: list = []        # Unfired bpy.app.timers callbacks
         self._worker = threading.Thread(target=self._worker_loop, daemon=True)
         self._worker.start()
 
@@ -189,16 +188,6 @@ class EffectRunner:
         """Stop the worker thread. Called during addon unregister/reload."""
         self._stop_event.set()
         self._work_event.set()  # Wake it so it exits
-        # Cancel any unfired poll-after timers; the stale module state
-        # they'd dispatch into would segfault after reload.
-        try:
-            import bpy  # pyright: ignore
-            for fn in list(self._pending_timers):
-                if bpy.app.timers.is_registered(fn):
-                    bpy.app.timers.unregister(fn)
-        except Exception:
-            pass
-        self._pending_timers.clear()
         # Drop queued I/O so a later restart() doesn't resurrect jobs
         # that reference a backend the user already walked away from.
         with self._io_lock:
@@ -248,7 +237,14 @@ class EffectRunner:
                 cfg_copy = dict(cfg)
                 if sp:
                     cfg_copy["server_port"] = sp
-                self._submit_cmd(self._do_connect, bt, cfg_copy)
+                # Mint the fresh session id and read the last-saved id here,
+                # on the main thread, so the bpy read happens where it is
+                # safe (execute() runs inside Engine.tick() on the main
+                # thread) and the Connected transition arm stays pure. The
+                # values ride on the Connected event the worker dispatches.
+                sid = new_session_id()
+                saved = self._last_saved_session_id()
+                self._submit_cmd(self._do_connect, bt, cfg_copy, sid, saved)
 
             case DoDisconnect():
                 self._do_disconnect()
@@ -273,13 +269,6 @@ class EffectRunner:
                     # Status poll — latest wins
                     self._submit_poll(self._do_query, req)
 
-            case DoPollAfter(delay=d):
-                import bpy  # pyright: ignore
-                bpy.app.timers.register(
-                    self._dispatch_poll_timer, first_interval=d
-                )
-                self._pending_timers.append(self._dispatch_poll_timer)
-
             # -- Data transfer (commands) --
             case DoSendData(remote_path=p, data=d):
                 self._submit_cmd(self._do_send_data, p, d)
@@ -288,7 +277,7 @@ class EffectRunner:
                                  data_hash=dh, param_hash=ph):
                 self._submit_cmd(self._do_upload_atomic, pr, d, pm, dh, ph)
 
-            case DoReceiveData(remote_path=p, tag=_tag):
+            case DoReceiveData(remote_path=p):
                 self._submit_cmd(self._do_receive_data, p)
 
             # -- Fetch (commands) --
@@ -458,38 +447,41 @@ class EffectRunner:
                         error=str(e), source=fn.__name__,
                     ))
 
-    def _dispatch_poll(self) -> None:
-        self._engine.dispatch(PollTick())
-
-    def _dispatch_poll_timer(self) -> None:
-        """Blender timer callback: dispatch PollTick into the queue.
-
-        The persistent timer (_persistent_tick) handles processing.
-        """
-        try:
-            self._pending_timers.remove(self._dispatch_poll_timer)
-        except ValueError:
-            pass
-        try:
-            self._engine.dispatch(PollTick())
-        except Exception:
-            pass
-
     # -- I/O implementations --
 
-    def _do_connect(self, backend_type: str, config: dict) -> None:
+    def _last_saved_session_id(self) -> str:
+        """Session id stored in the active scene at last save, or "".
+
+        Reads ``bpy`` state, so it must run on the main thread (it is
+        called from ``execute()`` inside ``Engine.tick()``). Mirrors
+        ``facade.last_saved_session_id`` but logs a genuine read failure to
+        the console instead of swallowing it silently, so the reconcile
+        branch is not skipped without a trace.
+        """
+        try:
+            import bpy  # pyright: ignore
+            from ..models.groups import get_addon_data, has_addon_data
+            scene = bpy.context.scene
+            if scene is None or not has_addon_data(scene):
+                return ""
+            return get_addon_data(scene).state.last_session_id or ""
+        except Exception as e:
+            console.write(f"last-saved session id read failed: {e}")
+            return ""
+
+    def _do_connect(
+        self,
+        backend_type: str,
+        config: dict,
+        session_id: str = "",
+        saved_session_id: str = "",
+    ) -> None:
         try:
             backend = create_backend(backend_type, config)
             self._backend = backend
             remote_root = ""
             if hasattr(backend, 'current_directory'):
                 remote_root = backend.current_directory
-            print(
-                f"DEBUG_CONNECT backend_type={backend_type} "
-                f"config_path={config.get('path')!r} "
-                f"current_directory={remote_root!r}",
-                flush=True,
-            )
         except Exception as e:
             # Reset any partial backend so the next attempt starts clean.
             if self._backend is not None:
@@ -500,15 +492,19 @@ class EffectRunner:
                 self._backend = None
             self._engine.dispatch(ConnectionFailed(error=str(e)))
             return
-        self._engine.dispatch(Connected(remote_root=remote_root))
+        self._engine.dispatch(Connected(
+            remote_root=remote_root,
+            session_id=session_id,
+            saved_session_id=saved_session_id,
+        ))
 
     def _do_disconnect(self) -> None:
         if self._backend:
             self._backend.disconnect()
             self._backend = None
         with self._anim_lock:
-            self._anim_map.clear()
-            self._anim_surface_map.clear()
+            self._anim_map = {}
+            self._anim_surface_map = {}
             self._anim_frames.clear()
             self._anim_total = 0
             self._anim_applied = 0
@@ -652,12 +648,13 @@ class EffectRunner:
         server_cmd = f"{rust_bin} {host_flag}--port {port}"
 
         # Activate the project venv so the build worker subprocess
-        # (spawned by ppf-cts-server) resolves `python3` to one with
-        # `_ppf_cts_py` installed. Without this, a non-login SSH shell
-        # falls through to the system python, which doesn't carry the
-        # PyO3 wheel and the build fails with
-        # `ModuleNotFoundError: No module named '_ppf_cts_py'`.
-        # Convention: $HOME/.local/share/ppf-cts/venv (per CLAUDE.md).
+        # (spawned by ppf-cts-server) resolves `python3` to one with the
+        # runtime deps (cbor2 / psutil). Without this, a non-login SSH
+        # shell falls through to the system python, which lacks them and
+        # the build fails with a ModuleNotFoundError. The `_ppf_cts_py`
+        # cdylib itself is not installed into the venv; `frontend` loads
+        # it directly from `target/<profile>/`.
+        # Convention: $HOME/.local/share/ppf-cts/venv.
         # Falls through silently when the venv is absent (Docker /
         # win-native paths use embedded Python set up differently).
         venv_activate = '$HOME/.local/share/ppf-cts/venv/bin/activate'
@@ -1084,8 +1081,7 @@ class EffectRunner:
         # Wait for simulation to stop
         for _ in range(20):
             response, alive = self._backend.query({}, self._project_name, self._chunk_size)
-            status = response.get("status", "")
-            if status not in ("BUSY", "SAVE_AND_QUIT"):
+            if not is_sim_running_from_response(response):
                 break
             time.sleep(0.25)
         self._response_cache.record(response)

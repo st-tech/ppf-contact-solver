@@ -10,6 +10,7 @@ from typing import Optional
 import numpy as np
 
 from . import _rust  # type: ignore[attr-defined]
+from ._utils_ import _as_c
 
 
 def check_contact_offset_violation(
@@ -40,9 +41,9 @@ def check_contact_offset_violation(
         and M..M+K-1 refer to edges.
     """
     return _rust.check_contact_offset_violation(
-        np.ascontiguousarray(V, dtype=np.float64),
-        np.ascontiguousarray(F, dtype=np.int32) if F is not None else None,
-        np.ascontiguousarray(E, dtype=np.int32) if E is not None else None,
-        np.ascontiguousarray(is_collider, dtype=bool) if is_collider is not None else None,
-        np.ascontiguousarray(contact_offset, dtype=np.float64) if contact_offset is not None else None,
+        _as_c(V, np.float64),
+        _as_c(F, np.int32),
+        _as_c(E, np.int32),
+        _as_c(is_collider, bool),
+        _as_c(contact_offset, np.float64),
     )

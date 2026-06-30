@@ -12,10 +12,23 @@ from mathutils import Vector  # pyright: ignore
 from ...state import iterate_active_object_groups
 
 from .primitives import (
+    _compute_pca_axes,
     _generate_arrow,
+    _generate_circle,
+    _generate_rotation_arc,
     _generate_sphere_fill,
     _generate_sphere_wireframe,
 )
+
+# Shared strength-to-arrow scaling: clamp the physical strength and divide by a
+# reference so direction-preview and velocity arrows respond identically.
+_ARROW_STRENGTH_CAP = 20.0
+_ARROW_STRENGTH_REF = 5.0
+
+
+def _strength_to_arrow_factor(strength):
+    """Return the shared arrow scale factor for a physical strength."""
+    return min(strength, _ARROW_STRENGTH_CAP) / _ARROW_STRENGTH_REF
 
 
 class DirectionPreviewManager:
@@ -75,7 +88,7 @@ class DirectionPreviewManager:
 
             # Arrow -- length proportional to strength
             strength = entry.get("strength", 1.0)
-            arrow_scale = min(strength, 20.0) / 5.0 if strength > 0 else 1.0
+            arrow_scale = _strength_to_arrow_factor(strength) if strength > 0 else 1.0
             shaft_verts, cone_verts = _generate_arrow(
                 entry["direction"],
                 shaft_length=1.2 * radius * arrow_scale,
@@ -149,9 +162,66 @@ def _build_velocity_arrow_batches(scene, view_distance):
                 continue
 
             for kf in preview_kfs:
+                # Spin (angular) preview: a circle + rotation arc about the
+                # chosen axis. Principal axes (PC1-3) are previewed from the
+                # current mesh so the handedness matches the solver (both
+                # canonicalize the eigenvector sign); World X/Y/Z and Custom
+                # are fixed world-space directions.
+                if kf.enable_angular and kf.angular_speed != 0.0:
+                    mat = obj.matrix_world
+                    verts_world = [mat @ v.co for v in obj.data.vertices]
+                    if verts_world:
+                        mode = kf.angular_axis
+                        center = sum(verts_world, Vector((0.0, 0.0, 0.0))) / len(verts_world)
+                        axis = None
+                        label = mode
+                        if mode in ("PC1", "PC2", "PC3"):
+                            pca = _compute_pca_axes(verts_world)
+                            if pca is not None:
+                                center, eigvecs = pca
+                                comp = {"PC1": 0, "PC2": 1, "PC3": 2}[mode]
+                                axis = Vector((
+                                    float(eigvecs[0, comp]),
+                                    float(eigvecs[1, comp]),
+                                    float(eigvecs[2, comp]),
+                                ))
+                        elif mode == "X":
+                            axis = Vector((1.0, 0.0, 0.0))
+                        elif mode == "Y":
+                            axis = Vector((0.0, 1.0, 0.0))
+                        elif mode == "Z":
+                            axis = Vector((0.0, 0.0, 1.0))
+                        elif mode == "CUSTOM":
+                            axis = Vector(kf.angular_axis_custom)
+                            label = "Custom"
+                        if axis is not None and axis.length >= 1e-6:
+                            axis = axis.normalized()
+                            total = 0.0
+                            for v in verts_world:
+                                diff = v - center
+                                total += (diff - axis * diff.dot(axis)).length
+                            avg_radius = total / max(1, len(verts_world))
+                            if avg_radius < 1e-4:
+                                avg_radius = 0.1
+                            spin_thick = max(0.002, avg_radius * 0.01)
+                            spin_tris = _generate_circle(
+                                center, axis, avg_radius, thickness=spin_thick,
+                            ) + _generate_rotation_arc(
+                                center, axis, avg_radius, kf.angular_speed,
+                                thickness=spin_thick * 2,
+                            )
+                            if spin_tris:
+                                batch = batch_for_shader(shader, "TRIS", {"pos": spin_tris})
+                                batches.append((batch, arrow_color))
+                            labels.append({
+                                "pos_3d": center + axis * avg_radius * 1.05,
+                                "text": f"F{kf.frame} ω={kf.angular_speed:.0f}°/s {label}",
+                                "color": (r, g, b, 0.9),
+                            })
+
                 vel_dir = Vector(kf.direction)
                 strength = kf.speed
-                if vel_dir.length < 1e-6 or strength < 1e-6:
+                if not kf.enable_translational or vel_dir.length < 1e-6 or strength < 1e-6:
                     continue
                 vel_dir = vel_dir.normalized()
 
@@ -167,7 +237,7 @@ def _build_velocity_arrow_batches(scene, view_distance):
                     batches.append((batch, fill_color))
 
                 center = mat.translation.copy()
-                arrow_len = scale * min(strength, 20.0) / 5.0
+                arrow_len = scale * _strength_to_arrow_factor(strength)
                 shaft_tris, cone_tris = _generate_arrow(
                     vel_dir,
                     shaft_length=arrow_len,

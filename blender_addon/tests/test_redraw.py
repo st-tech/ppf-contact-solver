@@ -114,7 +114,7 @@ def test_connect_modal_stays_running_while_connecting():
     op = _fake_connect_op()
     with mock.patch.object(com, "is_connected", return_value=False), \
          mock.patch.object(com, "is_connecting", return_value=True), \
-         mock.patch.object(connection_ops_mod, "refresh_ssh_panel"):
+         mock.patch.object(connection_ops_mod, "_refresh_ssh_panel_bridge"):
         result = connection_ops_mod.REMOTE_OT_Connect.modal(op, _mock_context(), _mock_event())
     assert result == {"PASS_THROUGH"}, f"expected PASS_THROUGH, got {result!r}"
     assert op._connection_established is False

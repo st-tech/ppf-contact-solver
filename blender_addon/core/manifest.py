@@ -160,7 +160,15 @@ def build_pc2_inventory(pc2_dir: str, active_uuids: set[str]) -> list[PC2Entry]:
         if not os.path.isfile(full):
             continue
         stem = name[:-4]
-        uuid_match = stem if stem in active_uuids else ""
+        # Recover the owning UUID for all three namespaces: plain
+        # ``<uuid>``, static-deform ``<uuid>_staticdeform``, and
+        # pin-deform ``<uuid>__<vg>__pindeform``.  A uuid4 string has no
+        # underscores, so the first underscore always immediately follows
+        # the 36-char UUID; splitting on it yields the owner in every case
+        # (and stays correct even when a sanitized vertex-group name
+        # contains underscores).
+        owner = stem.split("_", 1)[0]
+        uuid_match = owner if owner in active_uuids else ""
         try:
             frame_count = int(read_pc2_frame_count(full))
         except (OSError, ValueError, TypeError):
@@ -180,8 +188,8 @@ def build_pc2_inventory(pc2_dir: str, active_uuids: set[str]) -> list[PC2Entry]:
 
 
 def find_orphan_pc2(manifest: Optional[ProjectManifest], active_uuids: set[str]) -> list[str]:
-    """Return filenames listed in the manifest (or inferred from disk)
-    whose object_uuid is no longer in the active set."""
+    """Return filenames listed in the manifest whose object_uuid is
+    no longer in the active set."""
     if manifest is None:
         return []
     return [

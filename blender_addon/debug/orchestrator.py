@@ -52,7 +52,7 @@ SERVER_BIN = os.path.join(
     "ppf-cts-server.exe" if os.name == "nt" else "ppf-cts-server",
 )
 # The debug server runs the **real** ``frontend`` Python module, so it
-# needs numpy / scipy / numba / pythreejs / pytetwild ... installed.
+# needs numpy / scipy / numba / pythreejs / pytetwild / tetgen ... installed.
 # These are pre-installed in the project ``.venv``. Falls back to
 # ``sys.executable`` for callers who explicitly opt in via --python.
 # Windows venvs put the interpreter in ``Scripts\python.exe`` (vs

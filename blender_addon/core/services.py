@@ -10,7 +10,15 @@
 
 import os
 
-from .client import communicator as com
+from .facade import communicator as com
+
+
+def _require_connected_and_idle():
+    """Raise if not connected or if the communicator is busy."""
+    if not com.is_connected():
+        raise RuntimeError("Not connected")
+    if com.busy():
+        raise RuntimeError("Communicator is busy")
 
 
 # ---------------------------------------------------------------------------
@@ -42,10 +50,7 @@ def save_and_quit():
 
 def update_status():
     """Query server status."""
-    if not com.is_connected():
-        raise RuntimeError("Not connected")
-    if com.busy():
-        raise RuntimeError("Communicator is busy")
+    _require_connected_and_idle()
     com.query(message="Updating Status...")
 
 
@@ -73,28 +78,19 @@ def show_console():
 
 def execute_shell(command, shell=True):
     """Execute shell command on remote."""
-    if not com.is_connected():
-        raise RuntimeError("Not connected")
-    if com.busy():
-        raise RuntimeError("Communicator is busy")
+    _require_connected_and_idle()
     com.exec(command, shell=shell)
 
 
 def git_pull():
     """Pull latest changes on remote."""
-    if not com.is_connected():
-        raise RuntimeError("Not connected")
-    if com.busy():
-        raise RuntimeError("Communicator is busy")
+    _require_connected_and_idle()
     com.exec("git pull")
 
 
 def compile_project():
     """Compile project on remote."""
-    if not com.is_connected():
-        raise RuntimeError("Not connected")
-    if com.busy():
-        raise RuntimeError("Communicator is busy")
+    _require_connected_and_idle()
     com.exec("/root/.cargo/bin/cargo build --release")
 
 

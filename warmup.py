@@ -178,14 +178,13 @@ def python_packages():
         "python-lsp-ruff",
         "jupyterlab-code-formatter",
         "nbconvert",  # Required for fast_check to convert notebooks to Python scripts
-        # build-all.sh's `maturin develop --release` step needs
-        # maturin in the venv, frontend/_cbor_bridge_.py imports cbor2
-        # at top level (the CBOR envelope codec the addon uses), and
-        # ppf-cts-server's build_worker subprocess pulls psutil for
-        # runtime metrics. Without these, build-all.sh fails at
-        # maturin and the very first `from frontend import ...`
+        # The `_ppf_cts_py` cdylib is built by `cargo build --release`
+        # (no maturin), so maturin is no longer a dependency here.
+        # frontend/_cbor_bridge_.py imports cbor2 at top level (the CBOR
+        # envelope codec the addon uses), and ppf-cts-server's
+        # build_worker subprocess pulls psutil for runtime metrics.
+        # Without these, the very first `from frontend import ...`
         # raises ModuleNotFoundError.
-        "maturin",
         "cbor2",
         "psutil",
     ]
@@ -396,11 +395,12 @@ def setup():
     if result.returncode == 0:
         print(f"Successfully installed {len(packages)} packages")
 
-    # Install pytetwild (fTetWild wrapper for tetrahedralization).
+    # Install the tetrahedralizers: pytetwild (fTetWild wrapper, default
+    # backend) and tetgen (TetGen wrapper, surface-preserving backend).
     # pyvista is imported at the top of pytetwild._accessor but is not
     # declared as a hard dependency, so install it explicitly.
-    print("Installing pytetwild...")
-    subprocess.run([pip_path, "install", "pytetwild", "pyvista"], check=True)
+    print("Installing pytetwild and tetgen...")
+    subprocess.run([pip_path, "install", "pytetwild", "tetgen", "pyvista"], check=True)
 
     # Node.js installation (user-level)
     print("Installing Node.js via nvm (Node Version Manager)...")

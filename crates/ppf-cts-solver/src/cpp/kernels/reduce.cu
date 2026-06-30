@@ -346,6 +346,88 @@ template <class T> T max_array(const T *array, unsigned size, T init_val) {
         init_val, size);
 }
 
+// Reduce `count` partial sums held in `cur` down to a single value written to
+// the caller's device pointer `out`, ping-ponging between the `cur` and `nxt`
+// scratch buffers (each sized >= max_blocks). The host reduce path copies
+// partials back with a device-to-device cudaMemcpy between passes, which
+// synchronizes the host; swapping pointers instead keeps every pass on `queue`
+// with no host round-trip. Kept at namespace (external-linkage) scope, like the
+// other reductions here, because nvcc requires that for a function whose
+// extended __device__ lambda instantiates a __global__ template.
+void reduce_partials_into(float *cur, float *nxt, unsigned count, float *out,
+                          cudaStream_t queue) {
+    const unsigned max_blocks = 1024;
+    auto add_func = [] __device__(float a, float b) { return a + b; };
+    while (count > 1) {
+        unsigned block_size = choose_block_size(count);
+        unsigned new_grid =
+            umin((count + block_size - 1) / block_size, max_blocks);
+        float *dst = (new_grid == 1) ? out : nxt;
+        reduce_op_kernel_1<float><<<new_grid, block_size, 0, queue>>>(
+            cur, dst, add_func, 0.0f, count);
+        CUDA_HANDLE_ERROR(cudaGetLastError());
+        float *swap = cur;
+        cur = nxt;
+        nxt = swap;
+        count = new_grid;
+    }
+}
+
+void inner_product_into(const float *a, const float *b, float *out, unsigned n,
+                        cudaStream_t queue) {
+    if (n == 0) {
+        CUDA_HANDLE_ERROR(cudaMemsetAsync(out, 0, sizeof(float), queue));
+        return;
+    }
+    const unsigned max_blocks = 1024;
+    unsigned block_size = choose_block_size(n);
+    unsigned grid_size = umin((n + block_size - 1) / block_size, max_blocks);
+
+    if (grid_size == 1) {
+        // Single block: the optimized kernel writes its block sum straight to
+        // the caller's device scalar.
+        inner_product_kernel_optimized<float>
+            <<<1, block_size, 0, queue>>>(a, b, out, n);
+        CUDA_HANDLE_ERROR(cudaGetLastError());
+        return;
+    }
+
+    buffer::MemoryPool &pool = buffer::get();
+    auto scratch_a = pool.get<float>(max_blocks);
+    auto scratch_b = pool.get<float>(max_blocks);
+    inner_product_kernel_optimized<float>
+        <<<grid_size, block_size, 0, queue>>>(a, b, scratch_a.data, n);
+    CUDA_HANDLE_ERROR(cudaGetLastError());
+    reduce_partials_into(scratch_a.data, scratch_b.data, grid_size, out, queue);
+}
+
+void sum_into(const float *in, float *out, unsigned n, cudaStream_t queue) {
+    if (n == 0) {
+        CUDA_HANDLE_ERROR(cudaMemsetAsync(out, 0, sizeof(float), queue));
+        return;
+    }
+    const unsigned max_blocks = 1024;
+    unsigned block_size = choose_block_size(n);
+    unsigned grid_size = umin((n + block_size - 1) / block_size, max_blocks);
+    auto add_func = [] __device__(float a, float b) { return a + b; };
+
+    if (grid_size == 1) {
+        reduce_op_kernel_1<float>
+            <<<1, block_size, 0, queue>>>(in, out, add_func, 0.0f, n);
+        CUDA_HANDLE_ERROR(cudaGetLastError());
+        return;
+    }
+
+    buffer::MemoryPool &pool = buffer::get();
+    auto scratch_a = pool.get<float>(max_blocks);
+    auto scratch_b = pool.get<float>(max_blocks);
+    reduce_op_kernel_1<float>
+        <<<grid_size, block_size, 0, queue>>>(in, scratch_a.data, add_func,
+                                              0.0f, n);
+    CUDA_HANDLE_ERROR(cudaGetLastError());
+    reduce_partials_into(scratch_a.data, scratch_b.data, grid_size, out, queue);
+}
+
 template float sum_array(const float *array, unsigned size);
 template unsigned sum_array(const unsigned *array, unsigned size);
 template float min_array(const float *array, unsigned size, float init_val);
@@ -358,7 +440,5 @@ template unsigned max_array(const unsigned *array, unsigned size,
                             unsigned init_val);
 template float inner_product(const float *array1, const float *array2,
                              unsigned size);
-template double inner_product(const double *array1, const double *array2,
-                              unsigned size);
 
 } // namespace kernels

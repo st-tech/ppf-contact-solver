@@ -198,11 +198,11 @@ mod tests {
         // Mark data uploaded so BuildRequested isn't rejected.
         engine.dispatch(Event::upload_landed("uid"));
 
-        let effects = engine.dispatch(Event::BuildRequested);
+        let effects = engine.dispatch(Event::BuildRequested { preserve_output: false });
         let s = engine.state();
         assert_eq!(s.build, Build::Building);
         assert_eq!(s.data, Data::Uploaded);
-        assert!(effects.iter().any(|e| matches!(e, Effect::DoSpawnBuild)));
+        assert!(effects.iter().any(|e| matches!(e, Effect::DoSpawnBuild { .. })));
     }
 
     #[test]

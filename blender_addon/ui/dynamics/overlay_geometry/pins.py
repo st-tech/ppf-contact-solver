@@ -14,7 +14,11 @@ from ...state import decode_vertex_group_identifier, iterate_active_object_group
 from ....core.utils import get_moving_vertex_indices
 from ....models.groups import get_addon_data
 
-from .primitives import _line_to_tris
+from .primitives import _line_to_tris, _orthonormal_basis
+
+# On-screen point sizes baked into the snap_points data tuples at build time.
+_SNAP_SRC_POINT_SIZE = 7.0
+_SNAP_DST_POINT_SIZE = 5.0
 
 
 def _build_rod_batches(scene, depsgraph):
@@ -49,11 +53,7 @@ def _build_rod_batches(scene, depsgraph):
 
                         edge_dir = (v2 - v1).normalized()
 
-                        if abs(edge_dir.z) < 0.9:
-                            perp1 = edge_dir.cross(Vector((0, 0, 1))).normalized()
-                        else:
-                            perp1 = edge_dir.cross(Vector((1, 0, 0))).normalized()
-                        perp2 = edge_dir.cross(perp1).normalized()
+                        perp1, perp2 = _orthonormal_basis(edge_dir)
 
                         offset1 = perp1 * thickness
                         offset2 = perp2 * thickness
@@ -184,16 +184,37 @@ def _build_pin_data(scene, depsgraph):
     pin_data = []
 
     for group in iterate_active_object_groups(scene):
-        if group.show_pin_overlay and group.object_type != "STATIC":
+        if group.object_type != "STATIC":
+            current_frame = scene.frame_current
+            # UUIDs of objects that have at least one pin to draw this
+            # frame. Only these objects can contribute a pin dot, so
+            # objects with no matching visible pin are skipped before the
+            # per-object setup below (PC2 read, moving-index scan,
+            # modifier-stack probe) ever runs. Without this gate that
+            # setup executes for every assigned object even in a group
+            # with no pins, which is ~1.8s on a 1.6k-object net.
+            pinned_obj_uuids = {
+                pin_ref.object_uuid
+                for pin_ref in group.pin_vertex_groups
+                if pin_ref.show_overlay
+                and pin_ref.object_uuid
+                and not (
+                    pin_ref.use_pin_duration
+                    and current_frame > pin_ref.pin_duration
+                )
+            }
+            if not pinned_obj_uuids:
+                continue
             for obj_ref in group.assigned_objects:
                 if not obj_ref.included:
+                    continue
+                if obj_ref.uuid not in pinned_obj_uuids:
                     continue
                 from ....core.uuid_registry import resolve_assigned, resolve_pin
                 obj = resolve_assigned(obj_ref)
                 if not obj:
                     continue
                 _obj_uuid = obj_ref.uuid
-                current_frame = scene.frame_current
 
                 if obj.type == "MESH":
                     # Pin indices are defined on the base cage, so use
@@ -229,6 +250,8 @@ def _build_pin_data(scene, depsgraph):
                     )
 
                     for pin_ref in group.pin_vertex_groups:
+                        if not pin_ref.show_overlay:
+                            continue
                         if pin_ref.use_pin_duration and current_frame > pin_ref.pin_duration:
                             continue
                         resolve_pin(pin_ref)
@@ -308,6 +331,8 @@ def _build_pin_data(scene, depsgraph):
                 elif obj.type == "CURVE":
                     world_matrix = obj.matrix_world
                     for pin_ref in group.pin_vertex_groups:
+                        if not pin_ref.show_overlay:
+                            continue
                         if pin_ref.use_pin_duration and current_frame > pin_ref.pin_duration:
                             continue
                         resolve_pin(pin_ref)
@@ -339,7 +364,6 @@ def _build_pin_data(scene, depsgraph):
                                 else:
                                     for pt in spline.points:
                                         if idx in cp_indices:
-                                            from mathutils import Vector  # pyright: ignore
                                             pin_data.append((
                                                 world_matrix @ Vector((pt.co[0], pt.co[1], pt.co[2])),
                                                 group.pin_overlay_size,
@@ -356,22 +380,13 @@ def _overlay_object_points(scene, obj_uuid):
     if obj is None:
         return None
     if obj.type == "MESH":
-        # Read animated positions from PC2 file (no depsgraph access)
-        from ....core.pc2 import (
-            get_pc2_path,
-            object_pc2_key,
-            read_pc2_frame_count,
-            read_pc2_frame,
-        )
-        import os
-        pc2 = get_pc2_path(object_pc2_key(obj))
-        if os.path.exists(pc2):
-            n_verts = len(obj.data.vertices)
-            n_frames = read_pc2_frame_count(pc2)
-            frame_idx = scene.frame_current - 1
-            if n_frames > 0 and 0 <= frame_idx < n_frames:
-                verts = read_pc2_frame(pc2, frame_idx, n_verts)
-                return [obj.matrix_world @ Vector(v) for v in verts]
+        # Read animated positions from the PC2 cache (no depsgraph
+        # access). _pc2_frame_positions returns local-space Vectors or
+        # None on a cache miss / out-of-range frame, so fall back to the
+        # base-mesh rest pose here.
+        positions = _pc2_frame_positions(obj, scene)
+        if positions is not None:
+            return [obj.matrix_world @ p for p in positions]
         return [obj.matrix_world @ v.co for v in obj.data.vertices]
     if obj.type == "CURVE":
         from ....core.curve_rod import sample_curve
@@ -410,24 +425,33 @@ def _build_snap_batches(scene):
             continue
 
         for row, weight in zip(ind, w, strict=False):
-            if len(row) < 4 or len(weight) < 4:
+            # The source is a single Blender vertex (degenerate
+            # [si, si, si]); target bary is slots 3..5 in the 6-wide layout
+            # and slots 1..3 in the legacy 4-wide layout. Accept both.
+            if len(row) >= 6 and len(weight) >= 6:
+                src_i = int(row[0])
+                target_indices = [int(row[3]), int(row[4]), int(row[5])]
+                wts = (float(weight[3]), float(weight[4]), float(weight[5]))
+            elif len(row) >= 4 and len(weight) >= 4:
+                src_i = int(row[0])
+                target_indices = [int(row[1]), int(row[2]), int(row[3])]
+                wts = (float(weight[1]), float(weight[2]), float(weight[3]))
+            else:
                 continue
-            src_i = int(row[0])
             if src_i < 0 or src_i >= len(source_points):
                 continue
-            target_indices = [int(row[1]), int(row[2]), int(row[3])]
             if any(idx < 0 or idx >= len(target_points) for idx in target_indices):
                 continue
 
             source_pos = source_points[src_i]
             target_pos = (
-                float(weight[1]) * target_points[target_indices[0]]
-                + float(weight[2]) * target_points[target_indices[1]]
-                + float(weight[3]) * target_points[target_indices[2]]
+                wts[0] * target_points[target_indices[0]]
+                + wts[1] * target_points[target_indices[1]]
+                + wts[2] * target_points[target_indices[2]]
             )
             all_tris.extend(_line_to_tris(source_pos, target_pos, thickness))
-            snap_points.append((source_pos, 7.0, (1.0, 0.7, 0.2, 1.0)))
-            snap_points.append((target_pos, 5.0, (1.0, 1.0, 0.2, 1.0)))
+            snap_points.append((source_pos, _SNAP_SRC_POINT_SIZE, (1.0, 0.7, 0.2, 1.0)))
+            snap_points.append((target_pos, _SNAP_DST_POINT_SIZE, (1.0, 1.0, 0.2, 1.0)))
 
     if not all_tris:
         return [], []

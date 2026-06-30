@@ -8,23 +8,29 @@ but which fields are relevant depends on the group's type:
 - **Solid**: density, stiffness, a single shrink factor, and contact
   settings.
 - **Rod**: density, stiffness, bend, strain limit, and contact settings.
+- **PDRD**: density, friction, and contact settings only. PDRD is an
+  exactly-rigid body type with no Young's modulus, Poisson ratio, bend,
+  shrink, strain limit, or inflate.
 - **Static**: only friction and contact settings (static objects have no
   deformation to tune). See [Static Objects](../scene/static_objects.md) for the
   full treatment of Static groups, including how to animate them.
+- **Sand**: a granular body whose relevant fields are grain radius,
+  particle mass, friction, and contact settings.
 
 Rows that don't apply to the current type are hidden in the UI.
 
 ```{figure} ../../images/material_params/group_type_popdown.png
-:alt: The group-type dropdown menu, popped open. A Type label with a disclosure arrow sits above a vertical list of four buttons (Solid, highlighted as the current selection; Shell; Rod; Static) each spanning the full width of the popup.
+:alt: The group-type dropdown menu, popped open. A Type label with a disclosure arrow sits above a vertical list of six buttons (Solid, highlighted as the current selection; Shell; Rod; Static; PDRD; Sand) each spanning the full width of the popup.
 :width: 360px
 
-The four options in the group-type dropdown on each group's header row.
+The six options in the group-type dropdown on each group's header row.
 Picking one changes the **Material Params** box to match: **Solid**
 shows density, stiffness, and a single shrink factor; **Shell** shows
 the full cloth stack including anisotropic shrink, strain limit,
 inflate, and stitch; **Rod** shows density, stiffness, bend, and
 strain limit; **Static** collapses to just **Friction** and the
-contact rows.
+contact rows; and **Sand** shows grain radius, particle mass, friction,
+and the contact rows.
 ```
 
 ## The Material Params Box
@@ -189,6 +195,37 @@ deliberately.
 See [Contact gap: absolute vs ratio](#contact-gap-absolute-vs-ratio) below
 for which pair you should be editing.
 
+## Rayleigh Damping
+
+**Solid**, **Shell**, and **Rod** groups expose stiffness-proportional
+Rayleigh damping in a **Rayleigh Damping** box. Both coefficients default
+to `0.0` (no damping), must be non-negative, and are measured in seconds.
+
+| UI label                | Python / TOML key      | Default | Applies to          | Description                                                       |
+| ----------------------- | ---------------------- | ------- | ------------------- | ---------------------------------------------------------------- |
+| **Deformation Damping** | `deformation_damping`  | 0.0     | Solid, Shell, Rod   | Damps stretch / membrane / solid deformation (seconds).          |
+| **Bending Damping**     | `bending_damping`      | 0.0     | Shell, Rod only     | Damps shell and rod bending (seconds). Solid has no bending term. |
+
+Start near zero and raise these only to calm jitter. Small values
+(roughly 0.001 – 0.01 s) already reduce visible jitter noticeably;
+bending damping is usually smaller than deformation damping.
+
+:::{note}
+**PDRD** groups are not Rayleigh-damped. The damping coefficients apply to
+the FEM element types (Solid, Shell, Rod) only.
+:::
+
+:::{admonition} Under the hood
+:class: toggle
+
+Stiffness-proportional damping adds a `(beta/dt) * K` term to the system,
+where `K` is the element tangent stiffness and `beta` is the coefficient
+in seconds. The deformation term reuses the SPD-projected deformation
+Hessian; the bending term uses a lagged-dihedral form so it stays
+dissipative. Tetrahedral (Solid) elements use only the deformation term,
+since a tet has no bending energy.
+:::
+
 ## Shell-Specific
 
 | UI label                 | Python / TOML key      | Default          | Description                                                    |
@@ -201,7 +238,7 @@ for which pair you should be editing.
 | **Shrink X**             | `shrink_x`             | 1.0              | Anisotropic warp scale (min 0.1). < 1 shrinks, > 1 extends.    |
 | **Shrink Y**             | `shrink_y`             | 1.0              | Anisotropic weft scale (min 0.1). < 1 shrinks, > 1 extends.    |
 | **Enable Strain Limit**  | `enable_strain_limit`  | `False`          | Turns on non-physical strain clamp (good for stiff cloth).     |
-| **Strain Limit**         | `strain_limit`         | 0.05             | Max strain permitted when **Enable Strain Limit** is on.       |
+| **Strain Limit**         | `strain_limit_percent` | 5.0              | Max stretch beyond rest length, as a percentage (5.0 = 5%). Active only when **Enable Strain Limit** is on. |
 | **Inflate**              | `enable_inflate`       | `False`          | Turns on per-face pressure along face normals.                 |
 | **Pressure (Pa)**        | `inflate_pressure`     | 0.0              | Inflation pressure, Pa. Active only when **Inflate** is on.    |
 | **Stitch Stiffness**     | `stitch_stiffness`     | 1.0              | Stiffness of loose-edge stitches detected in the mesh.         |
@@ -253,16 +290,17 @@ mesh to deform freely under force, or when **Shrink X** / **Shrink Y** are
 non-unity on a **Shell** group (the two systems conflict).
 
 Example values:
-- **Strain Limit** = 0.025: very stiff (~2.5% stretch).
-- **Strain Limit** = 0.05: default; tight but drapes visibly.
-- **Strain Limit** = 0.15: loose; bigger ripples.
+- **Strain Limit** = 2.5%: very stiff (~2.5% stretch).
+- **Strain Limit** = 5%: default; tight but drapes visibly.
+- **Strain Limit** = 15%: loose; bigger ripples.
 
 ```{figure} ../../images/material_params/strain_limit.png
 :alt: Strain Limit toggle and value field highlighted in Material Params box
 :width: 500px
 
 With **Enable Strain Limit** on, the **Strain Limit** field activates.
-The value is a strain ratio (0.05 = 5%), not a force.
+The value is a stretch percentage (5% means edges may stretch 5% beyond
+rest length), not a force.
 ```
 
 ### Inflate
@@ -352,7 +390,7 @@ top picks which assigned object the keyframes belong to, and the
 | UI label                   | Python / TOML key     | Default              | Description                                               |
 | -------------------------- | --------------------- | -------------------- | --------------------------------------------------------- |
 | **Model**                  | `solid_model`         | `ARAP`               | Material model. Either `STABLE_NEOHOOKEAN` or `ARAP`.     |
-| **Density (kg/m³)**        | `solid_density`       | 1000.0               | Volumetric density, kg/m³.                                |
+| **Density (kg/m³)**        | `solid_density`       | 100.0                | Volumetric density, kg/m³.                                |
 | **Young's Modulus (Pa/ρ)** | `solid_young_modulus` | 500.0                | Young's modulus (see note below). Range 0 – 10 M.         |
 | **Poisson's Ratio**        | `solid_poisson_ratio` | 0.35                 | Poisson ratio, 0 – 0.4999.                                |
 | **Shrink**                 | `shrink`              | 1.0                  | Uniform rest-shape scale (min 0.1).                       |
@@ -384,15 +422,35 @@ box (**Shell** groups instead get anisotropic **Shrink X** / **Shrink
 Y**).
 ```
 
-### fTetWild Overrides
+### Tetrahedralizer (per object)
 
 **Solid** groups only. The bottom of the Material Params box on a
-**Solid** group has an **fTetWild** disclosure row; expanding it reveals
-six per-group overrides for the tetrahedralizer the add-on runs on the
-input surface before sending the mesh to the solver. Each row has an
-**Override** checkbox on the left and the value on the right; the value
-is only forwarded to fTetWild when its checkbox is on. With all
-overrides off, the tetrahedralizer runs at its own defaults.
+**Solid** group has a **Tetrahedralizer** box. A solid's surface is
+tetrahedralized before it is sent to the solver, and the box lets you
+pick how, per assigned object:
+
+- An **Object** dropdown on the header row picks which assigned mesh in
+  the group you are configuring, so each solid in the group can use its
+  own backend and overrides.
+- A backend dropdown below it chooses the tetrahedralizer:
+  - **fTetWild** (the default): a tolerant remesher. It accepts open,
+    cracked, or non-manifold input, but it resamples the surface, so
+    your input vertices are reconstructed through a surface map rather
+    than preserved exactly.
+  - **TetGen**: surface-exact (a one-to-one vertex map). It requires a
+    clean, closed, manifold mesh and rejects open, coplanar, or
+    non-manifold input. If TetGen refuses a mesh, repair it, route the
+    object to a **Shell** group, or switch it back to **fTetWild**.
+
+The override rows below the backend dropdown change to match the selected
+backend.
+
+#### fTetWild Overrides
+
+When **fTetWild** is selected, six per-object overrides appear. Each row
+has an **Override** checkbox on the left and the value on the right; the
+value is only forwarded to fTetWild when its checkbox is on. With all
+overrides off, fTetWild runs at its own defaults.
 
 | UI label               | Python / TOML key         | Default   | Description                                                          |
 | ---------------------- | ------------------------- | --------- | -------------------------------------------------------------------- |
@@ -421,6 +479,19 @@ own default is used. In this example **Edge Length Factor** and
 **Optimize** are overridden; the rest stay at defaults.
 ```
 
+#### TetGen Overrides
+
+When **TetGen** is selected, the override rows switch to TetGen's
+interior controls. TetGen always preserves the input surface exactly, so
+these tune only the interior refinement. Each row uses the same
+**Override** checkbox pattern: the value is forwarded only when its box
+is on, and the rest of the time TetGen runs at its own defaults.
+
+| UI label                   | Python / TOML key    | Default | Description                                                          |
+| -------------------------- | -------------------- | ------- | -------------------------------------------------------------------- |
+| **Min Radius-Edge Ratio**  | `tetgen_min_ratio`   | 2.0     | Quality bound; smaller forces rounder interior cells (`-q`).         |
+| **Max Tet Volume**         | `tetgen_max_volume`  | 0.0     | Caps interior cell size in object units (`-a`); 0 leaves it uncapped. |
+
 ## Rod-Specific
 
 | UI label                   | Python / TOML key   | Default   | Description                                       |
@@ -440,6 +511,60 @@ shells: pick **Flat / Straight** to keep the analytic rest angle (shell
 hinge θ₀ = 0, rod θ₀ = π), or **From Initial Geometry** to take the
 rest angle from the input pose.
 
+## PDRD-Specific
+
+**PDRD** (Painless Differentiable Rotation Dynamics) is an exactly-rigid
+body type. It exposes only density, friction, and contact settings. There
+is no Young's modulus, Poisson ratio, bend, shrink, strain limit, or
+inflate, no rigidity or stiffness control (the body is exactly rigid, not
+a stiff penalty), and PDRD bodies are not tetrahedralized.
+
+| UI label                  | Python / TOML key | Default | Description                                                                  |
+| ------------------------- | ----------------- | ------- | ---------------------------------------------------------------------------- |
+| **Density (kg/m³)**       | `pdrd_density`    | 100.0   | Volumetric density, kg/m³. Mass is the density times the enclosed mesh volume. |
+
+Density is the only material number a PDRD body exposes: it sets the mass
+(and, through the rest shape, the rotational inertia), which is what
+determines how the body responds to gravity, contact, and pins. The motion
+is exactly rigid at any mesh resolution, so there is no stiffness or
+rigidity value to tune.
+
+:::{admonition} Under the hood
+:class: toggle
+
+Each PDRD body is solved in reduced 6-DOF coordinates (translation plus
+rotation): every Newton iteration fits the single best-fit rigid transform
+to the body and reconstructs its surface from that transform, so the body
+stays exactly rigid by construction rather than through a stiff penalty.
+:::
+
+### Hinge Joints
+
+A PDRD body can be turned into a **hinge**: its position is pinned and its
+rotation is locked to a single principal (PCA) axis of its rest shape, so
+the body spins on that axis like a wheel on an axle. This is a per-object
+setting, so each body in one PDRD group can hinge on its own axle (for
+example, a train of gears that each turn on their own pin while tooth
+contact passes torque from one to the next).
+
+The free axle is chosen by **principal axis** of the rest shape: `0` is
+the largest extent, `1` the middle, and `2` the thinnest extent (the
+usual axle for a flat gear or disk, and the default). From the Python API
+a hinge is set per object with `Group.set_hinge`; from the MCP layer use
+the `set_pdrd_hinge` tool. Pass `enable=False` to clear the hinge and let
+the body move freely again.
+
+```python
+from bl_ext.user_default.ppf_contact_solver.ops.api import solver
+
+gears = solver.create_group("Gears", type="PDRD")
+gears.add("GearA")
+gears.set_hinge("GearA", pca_axis=2)   # spin on the thinnest axis
+```
+
+The hinge is a per-object property, not a group material attribute, so it
+does not appear in the **Material Params** table above.
+
 :::{note}
 **Young's modulus behaves non-conventionally.** The solver divides the
 entered Young's modulus by density internally. The practical effect is that
@@ -447,9 +572,31 @@ animated behavior is invariant to density alone: doubling density without
 touching Young's modulus produces the same motion (the mass doubles, but
 the effective stiffness scales with it). This decouples "how heavy the
 material is" from "how stiff it looks", so you can tune stiffness and mass
-independently. The shipped material profiles (`Cotton`, `Silk`, `Steel`, …)
-are tuned to physically meaningful values with that normalization in mind.
+independently. The example material presets in this guide (`Cotton`, `Silk`, `Steel`, …)
+use physically meaningful values with that normalization in mind.
 :::
+
+### Density-Normalized (Pa/ρ)
+
+Below the **Young's Modulus** field on **Shell**, **Solid**, and **Rod**
+groups is a **Density-Normalized (Pa/ρ)** checkbox that sets what the
+number you type means.
+
+| UI label                       | Python / TOML key              | Default | Description                                                                |
+| ------------------------------ | ------------------------------ | ------- | -------------------------------------------------------------------------- |
+| **Density-Normalized (Pa/ρ)**  | `young_mod_density_normalized` | `True`  | On: Young's modulus is the solver's native Pa/ρ. Off: a true value in Pa.  |
+
+When it is **on** (the default), the Young's modulus is a
+density-normalized value in Pa/ρ, the solver's native convention:
+changing a body's density alone leaves its motion unchanged, and the
+field label reads **(Pa/ρ)**. Keep it on to match existing scenes and the
+example presets in this guide.
+
+When you turn it **off**, you enter a true Young's modulus in pascals (for
+example a value from a material reference table); the add-on divides it by
+this group's density before sending it to the solver, so a denser body of
+the same material is correspondingly stiffer to move. The field label
+flips to **(Pa)** to show which convention is active.
 
 ## Contact Gap and Contact Offset
 
@@ -515,8 +662,8 @@ the same toggle.
 ## Material Profiles
 
 A **material profile** is a named set of material parameters saved to a
-TOML file. The add-on ships an example material profile with the following
-presets:
+TOML file with the **Save** icon. A single file can hold any number of
+presets; profiles like these are easy to build:
 
 | Preset   | Type       | Notes                                                               |
 | -------- | ---------- | ------------------------------------------------------------------- |
@@ -584,13 +731,14 @@ contact_offset_rat = 0.0
 bend = 2.0
 shrink = 1.0
 enable_strain_limit = true
-strain_limit = 0.05
+strain_limit_percent = 5.0
 stitch_stiffness = 1.0
 ```
 
 Only the keys you include are applied; missing keys keep their current
 value on the group. You don't have to list every field for a preset to be
-valid. See `Silk` or `Static` in the shipped file for minimal examples.
+valid — a `Static` collider preset, for instance, can carry just a
+`friction` value.
 
 ## Blender Python API
 

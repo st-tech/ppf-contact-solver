@@ -57,10 +57,13 @@ pub enum SceneLoopsError {
 //         stitch_vert.append(src); stitch_vert.append(target)
 //         stitch_edge.append([idx0, idx1])
 //
-// `vert` is (n_vert, 3) f64. `stitch_ind` is (n_stitch, 4) i64.
-// `stitch_w` is (n_stitch, 4) f64. The `_w` row is laid out
-// `[w_src, w_t0, w_t1, w_t2]` with `w[0]` ignored on the source side
-// (the stitch is target-targeting; the source vertex is taken verbatim).
+// `vert` is (n_vert, 3) f64. `stitch_ind` is (n_stitch, 6) i64.
+// `stitch_w` is (n_stitch, 6) f64. Each row is laid out
+// `[s0, s1, s2, t0, t1, t2]` / `[ws0, ws1, ws2, wt0, wt1, wt2]`: the
+// source endpoint is the barycentric point over (s0, s1, s2) with
+// weights (ws0..ws2), the target endpoint is the barycentric point over
+// (t0, t1, t2) with weights (wt0..wt2). A non-SOLID source degenerates
+// to s0=s1=s2 with ws=[1, 0, 0], recovering the single source vertex.
 //
 // Returns (stitch_vert_flat (2*n_stitch * 3), stitch_edge_flat (n_stitch * 2)).
 // `stitch_edge` indices are absolute, i.e., `len(vert) + 2*i` and
@@ -73,26 +76,32 @@ pub fn stitch_preview_lines(
     n_stitch: usize,
 ) -> (Vec<f64>, Vec<u32>) {
     debug_assert!(vert.len() == n_vert * 3);
-    debug_assert!(stitch_ind.len() == n_stitch * 4);
-    debug_assert!(stitch_w.len() == n_stitch * 4);
+    debug_assert!(stitch_ind.len() == n_stitch * 6);
+    debug_assert!(stitch_w.len() == n_stitch * 6);
 
     let mut out_vert = vec![0.0_f64; 2 * n_stitch * 3];
     let mut out_edge = vec![0_u32; n_stitch * 2];
 
     for i in 0..n_stitch {
-        let s = i * 4;
-        let i_src = stitch_ind[s] as usize;
-        let i0 = stitch_ind[s + 1] as usize;
-        let i1 = stitch_ind[s + 2] as usize;
-        let i2 = stitch_ind[s + 3] as usize;
-        let w1 = stitch_w[s + 1];
-        let w2 = stitch_w[s + 2];
-        let w3 = stitch_w[s + 3];
+        let s = i * 6;
+        let s0 = stitch_ind[s] as usize;
+        let s1 = stitch_ind[s + 1] as usize;
+        let s2 = stitch_ind[s + 2] as usize;
+        let t0 = stitch_ind[s + 3] as usize;
+        let t1 = stitch_ind[s + 4] as usize;
+        let t2 = stitch_ind[s + 5] as usize;
+        let ws0 = stitch_w[s];
+        let ws1 = stitch_w[s + 1];
+        let ws2 = stitch_w[s + 2];
+        let wt0 = stitch_w[s + 3];
+        let wt1 = stitch_w[s + 4];
+        let wt2 = stitch_w[s + 5];
 
         for d in 0..3 {
-            out_vert[6 * i + d] = vert[3 * i_src + d];
+            out_vert[6 * i + d] =
+                ws0 * vert[3 * s0 + d] + ws1 * vert[3 * s1 + d] + ws2 * vert[3 * s2 + d];
             out_vert[6 * i + 3 + d] =
-                w1 * vert[3 * i0 + d] + w2 * vert[3 * i1 + d] + w3 * vert[3 * i2 + d];
+                wt0 * vert[3 * t0 + d] + wt1 * vert[3 * t1 + d] + wt2 * vert[3 * t2 + d];
         }
         let idx0 = (n_vert + 2 * i) as u32;
         out_edge[2 * i] = idx0;
@@ -749,10 +758,10 @@ mod tests {
             0.0, 1.0, 0.0,
             0.0, 0.0, 1.0,
         ];
-        // src=0, t0=1, t1=2, t2=3
-        let stitch_ind: Vec<i64> = vec![0, 1, 2, 3];
-        // ws=0.0, w1=0.5, w2=0.25, w3=0.25
-        let stitch_w: Vec<f64> = vec![0.0, 0.5, 0.25, 0.25];
+        // 6-wide: degenerate source [0,0,0], target tri (1,2,3).
+        let stitch_ind: Vec<i64> = vec![0, 0, 0, 1, 2, 3];
+        // source ws=[1,0,0], target wt=[0.5,0.25,0.25]
+        let stitch_w: Vec<f64> = vec![1.0, 0.0, 0.0, 0.5, 0.25, 0.25];
 
         let (sv, se) = stitch_preview_lines(&vert, 4, &stitch_ind, &stitch_w, 1);
         // src is vert[0] = (0,0,0).

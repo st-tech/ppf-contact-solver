@@ -1,0 +1,183 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fabric preset calibration report</title><style>
+body{font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
+ margin:0;background:#f4f5f7;color:#1c1e21}
+header{background:#23272e;color:#fff;padding:22px 32px}
+header h1{margin:0 0 8px;font-size:22px}
+header p,header li{color:#c8cdd4;font-size:13px;line-height:1.5}
+header ul{margin:6px 0;max-width:1000px}
+.wrap{padding:24px 32px}
+table.summary{border-collapse:collapse;margin:8px 0 24px;font-size:13px;background:#fff}
+table.summary th,table.summary td{border:1px solid #d9dce1;padding:6px 12px;text-align:right}
+table.summary th{background:#eef0f3}
+table.summary td:first-child,table.summary th:first-child{text-align:left}
+.card{background:#fff;border:1px solid #e0e3e8;border-radius:8px;margin:0 0 22px;
+ padding:16px 18px;box-shadow:0 1px 2px rgba(0,0,0,.05)}
+.card h2{margin:0 0 8px;font-size:18px}
+.row{display:flex;flex-wrap:wrap;gap:18px}
+.fig{flex:1 1 320px}
+.fig img{width:100%;height:auto;border:1px solid #e6e8ec;border-radius:6px;background:#fff}
+.fig .cap{font-size:12px;color:#555;margin-top:6px}
+.metrics{font-size:13px;color:#333;margin:6px 0 12px}
+.metrics b{color:#111}
+footer{padding:18px 32px;color:#666;font-size:12px;line-height:1.6}
+code{background:#eceef1;padding:1px 4px;border-radius:3px}
+</style></head>
+<body>
+<header>
+  <h1>Fabric preset calibration report</h1>
+  <p>How each bundled fabric preset behaves: how much it drapes, how much it
+  droops under its own weight, and how easily it stretches. Each fabric is shown
+  with simulated images and its parameters.</p>
+  <ul>
+    <li><b>Drape</b>: a round fabric sheet hangs over a smaller disc. The drape
+    coefficient is how much of its flat area the shadow still covers: a soft,
+    drapey fabric collapses into deep folds and covers little (low&nbsp;%), while
+    a stiff fabric stays spread out (high&nbsp;%). The values match published
+    measurements for each fabric. The fold count is the number of waves around
+    the rim (approximate).</li>
+    <li><b>Bending</b>: a 9&nbsp;cm strip is held at one end
+    and droops under gravity. The tip droop angle shows bending stiffness: a
+    stiffer fabric droops less.</li>
+    <li><b>Stretch</b>: the young-mod and Poisson values describe how the fabric
+    stretches in its plane. Silk and wool stretch more easily; denim and leather
+    barely stretch.</li>
+  </ul>
+</header>
+<div class="wrap">
+<table class='summary'><tr><th>Fabric</th><th>Drape DC %</th><th>Target %</th><th>Folds</th><th>Bend droop</th><th>bend</th><th>young-mod</th><th>Poisson</th></tr><tr><td>Silk</td><td>34.8</td><td>20-40</td><td>14</td><td>80.4&deg;</td><td>1.42</td><td>500</td><td>0.4</td></tr><tr><td>Flag</td><td>27.0</td><td>20-40</td><td>12</td><td>83.7&deg;</td><td>0.83</td><td>1000</td><td>0.4</td></tr><tr><td>Cotton</td><td>70.1</td><td>60-76</td><td>12</td><td>66.9&deg;</td><td>4.3</td><td>5500</td><td>0.35</td></tr><tr><td>Wool</td><td>61.7</td><td>40-70</td><td>10</td><td>69.6&deg;</td><td>3.67</td><td>2000</td><td>0.4</td></tr><tr><td>Denim</td><td>85.4</td><td>70-90</td><td>8</td><td>48.9&deg;</td><td>10.0</td><td>10000</td><td>0.25</td></tr><tr><td>Leather</td><td>67.1</td><td>47-70</td><td>16</td><td>78.0&deg;</td><td>1.8</td><td>13000</td><td>0.4</td></tr></table>
+
+<div class="card">
+  <h2>Silk</h2>
+  <div class="metrics">
+    Drape coefficient <b>34.8%</b>
+    &nbsp;|&nbsp; observed folds <b>14</b>
+    &nbsp;|&nbsp; cantilever tip droop <b>80.4&deg;</b>
+    &nbsp;|&nbsp; bend <code>1.42</code>,
+    young-mod <code>500</code>,
+    Poisson <code>0.4</code>
+  </div>
+  <div class="row">
+    <div class="fig"><img src="report_images/Silk_top.png" alt="Silk drape top"/>
+      <div class="cap">Looking straight down at the draped fabric. The shaded
+      area is its shadow (the drape coefficient); the wavy edge is its folds.</div></div>
+    <div class="fig"><img src="report_images/Silk_oblique.png" alt="Silk drape oblique"/>
+      <div class="cap">The same drape seen at an angle, showing the folds.</div></div>
+    <div class="fig"><img src="report_images/Silk_side.png" alt="Silk cantilever"/>
+      <div class="cap">A strip held at the left, drooping under gravity. The blue
+      line is its centerline; its angle from horizontal is the droop.</div></div>
+  </div>
+</div>
+<div class="card">
+  <h2>Flag</h2>
+  <div class="metrics">
+    Drape coefficient <b>27.0%</b>
+    &nbsp;|&nbsp; observed folds <b>12</b>
+    &nbsp;|&nbsp; cantilever tip droop <b>83.7&deg;</b>
+    &nbsp;|&nbsp; bend <code>0.83</code>,
+    young-mod <code>1000</code>,
+    Poisson <code>0.4</code>
+  </div>
+  <div class="row">
+    <div class="fig"><img src="report_images/Flag_top.png" alt="Flag drape top"/>
+      <div class="cap">Looking straight down at the draped fabric. The shaded
+      area is its shadow (the drape coefficient); the wavy edge is its folds.</div></div>
+    <div class="fig"><img src="report_images/Flag_oblique.png" alt="Flag drape oblique"/>
+      <div class="cap">The same drape seen at an angle, showing the folds.</div></div>
+    <div class="fig"><img src="report_images/Flag_side.png" alt="Flag cantilever"/>
+      <div class="cap">A strip held at the left, drooping under gravity. The blue
+      line is its centerline; its angle from horizontal is the droop.</div></div>
+  </div>
+</div>
+<div class="card">
+  <h2>Cotton</h2>
+  <div class="metrics">
+    Drape coefficient <b>70.1%</b>
+    &nbsp;|&nbsp; observed folds <b>12</b>
+    &nbsp;|&nbsp; cantilever tip droop <b>66.9&deg;</b>
+    &nbsp;|&nbsp; bend <code>4.3</code>,
+    young-mod <code>5500</code>,
+    Poisson <code>0.35</code>
+  </div>
+  <div class="row">
+    <div class="fig"><img src="report_images/Cotton_top.png" alt="Cotton drape top"/>
+      <div class="cap">Looking straight down at the draped fabric. The shaded
+      area is its shadow (the drape coefficient); the wavy edge is its folds.</div></div>
+    <div class="fig"><img src="report_images/Cotton_oblique.png" alt="Cotton drape oblique"/>
+      <div class="cap">The same drape seen at an angle, showing the folds.</div></div>
+    <div class="fig"><img src="report_images/Cotton_side.png" alt="Cotton cantilever"/>
+      <div class="cap">A strip held at the left, drooping under gravity. The blue
+      line is its centerline; its angle from horizontal is the droop.</div></div>
+  </div>
+</div>
+<div class="card">
+  <h2>Wool</h2>
+  <div class="metrics">
+    Drape coefficient <b>61.7%</b>
+    &nbsp;|&nbsp; observed folds <b>10</b>
+    &nbsp;|&nbsp; cantilever tip droop <b>69.6&deg;</b>
+    &nbsp;|&nbsp; bend <code>3.67</code>,
+    young-mod <code>2000</code>,
+    Poisson <code>0.4</code>
+  </div>
+  <div class="row">
+    <div class="fig"><img src="report_images/Wool_top.png" alt="Wool drape top"/>
+      <div class="cap">Looking straight down at the draped fabric. The shaded
+      area is its shadow (the drape coefficient); the wavy edge is its folds.</div></div>
+    <div class="fig"><img src="report_images/Wool_oblique.png" alt="Wool drape oblique"/>
+      <div class="cap">The same drape seen at an angle, showing the folds.</div></div>
+    <div class="fig"><img src="report_images/Wool_side.png" alt="Wool cantilever"/>
+      <div class="cap">A strip held at the left, drooping under gravity. The blue
+      line is its centerline; its angle from horizontal is the droop.</div></div>
+  </div>
+</div>
+<div class="card">
+  <h2>Denim</h2>
+  <div class="metrics">
+    Drape coefficient <b>85.4%</b>
+    &nbsp;|&nbsp; observed folds <b>8</b>
+    &nbsp;|&nbsp; cantilever tip droop <b>48.9&deg;</b>
+    &nbsp;|&nbsp; bend <code>10.0</code>,
+    young-mod <code>10000</code>,
+    Poisson <code>0.25</code>
+  </div>
+  <div class="row">
+    <div class="fig"><img src="report_images/Denim_top.png" alt="Denim drape top"/>
+      <div class="cap">Looking straight down at the draped fabric. The shaded
+      area is its shadow (the drape coefficient); the wavy edge is its folds.</div></div>
+    <div class="fig"><img src="report_images/Denim_oblique.png" alt="Denim drape oblique"/>
+      <div class="cap">The same drape seen at an angle, showing the folds.</div></div>
+    <div class="fig"><img src="report_images/Denim_side.png" alt="Denim cantilever"/>
+      <div class="cap">A strip held at the left, drooping under gravity. The blue
+      line is its centerline; its angle from horizontal is the droop.</div></div>
+  </div>
+</div>
+<div class="card">
+  <h2>Leather</h2>
+  <div class="metrics">
+    Drape coefficient <b>67.1%</b>
+    &nbsp;|&nbsp; observed folds <b>16</b>
+    &nbsp;|&nbsp; cantilever tip droop <b>78.0&deg;</b>
+    &nbsp;|&nbsp; bend <code>1.8</code>,
+    young-mod <code>13000</code>,
+    Poisson <code>0.4</code>
+  </div>
+  <div class="row">
+    <div class="fig"><img src="report_images/Leather_top.png" alt="Leather drape top"/>
+      <div class="cap">Looking straight down at the draped fabric. The shaded
+      area is its shadow (the drape coefficient); the wavy edge is its folds.</div></div>
+    <div class="fig"><img src="report_images/Leather_oblique.png" alt="Leather drape oblique"/>
+      <div class="cap">The same drape seen at an angle, showing the folds.</div></div>
+    <div class="fig"><img src="report_images/Leather_side.png" alt="Leather cantilever"/>
+      <div class="cap">A strip held at the left, drooping under gravity. The blue
+      line is its centerline; its angle from horizontal is the droop.</div></div>
+  </div>
+</div>
+</div>
+<footer>
+  Drape coefficients follow the Cusick method (BS 5058 / ISO 9073-9); cantilever
+  bending follows ASTM D1388. Per-fabric reference values and citations are in
+  the calibration folder.
+</footer>
+</body></html>

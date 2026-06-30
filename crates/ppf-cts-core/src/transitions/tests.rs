@@ -3,11 +3,11 @@
 // Review: Ryoichi Ando (ryoichi.ando@zozo.com)
 // License: Apache v2.0
 //
-// 1:1 port of server/test_transitions.py. Each Python test function
-// becomes one Rust `#[test]`. Same fixtures, same assertions. The
-// Python tests are still being run on every commit (see
-// server/test_transitions.py); these Rust tests are the parity
-// guarantee that `transition()` here behaves identically.
+// Historically ported from the now-removed server/test_transitions.py
+// (deleted in the Rust migration). Each former Python test function
+// became one Rust `#[test]`, with the same fixtures and assertions.
+// These Rust tests are now the sole source of truth for `transition()`
+// behavior.
 
 use super::transition;
 use crate::effects::Effect;
@@ -33,6 +33,7 @@ fn new_project_no_data() {
             has_param: false,
             has_app: false,
             is_resumable: false,
+            has_crashed: false,
             upload_id: String::new(),
             data_hash: String::new(),
             param_hash: String::new(),
@@ -57,6 +58,7 @@ fn new_project_with_data() {
             has_param: true,
             has_app: false,
             is_resumable: false,
+            has_crashed: false,
             upload_id: String::new(),
             data_hash: String::new(),
             param_hash: String::new(),
@@ -80,6 +82,7 @@ fn new_project_with_existing_app() {
             has_param: true,
             has_app: true,
             is_resumable: true,
+            has_crashed: false,
             upload_id: String::new(),
             data_hash: String::new(),
             param_hash: String::new(),
@@ -89,6 +92,59 @@ fn new_project_with_existing_app() {
     assert_eq!(s2.build, Build::Built);
     assert!(s2.resumable);
     assert!(!has_effect(&fx, |e| matches!(e, Effect::DoLoadApp { .. })));
+}
+
+#[test]
+fn reconnect_after_crash_reconstructs_failed() {
+    // A restarted server has no in-memory Solver::Failed; the has_crashed flag
+    // (from status.cbor) must rebuild it so the status reads FAILED, and
+    // with checkpoints present (is_resumable) the addon shows
+    // "Failed (Resumable)" instead of a bare "Resumable".
+    let s = ServerState::default();
+    let (s2, _) = transition(
+        s,
+        Event::ProjectSelected {
+            name: "test".into(),
+            root: "/tmp/test".into(),
+            has_data: true,
+            has_param: true,
+            has_app: true,
+            is_resumable: true,
+            has_crashed: true,
+            upload_id: String::new(),
+            data_hash: String::new(),
+            param_hash: String::new(),
+            total_frames: 0,
+        },
+    );
+    assert_eq!(s2.build, Build::Built);
+    assert_eq!(s2.solver, Solver::Failed);
+    assert!(s2.resumable);
+    assert_eq!(s2.status_string(), "FAILED");
+}
+
+#[test]
+fn reconnect_crash_without_build_stays_idle() {
+    // No app build on disk: status_string masks solver behind NO_BUILD and
+    // a crash can't resume, so don't reconstruct Failed.
+    let s = ServerState::default();
+    let (s2, _) = transition(
+        s,
+        Event::ProjectSelected {
+            name: "test".into(),
+            root: "/tmp/test".into(),
+            has_data: true,
+            has_param: true,
+            has_app: false,
+            is_resumable: false,
+            has_crashed: true,
+            upload_id: String::new(),
+            data_hash: String::new(),
+            param_hash: String::new(),
+            total_frames: 0,
+        },
+    );
+    assert_eq!(s2.solver, Solver::Idle);
 }
 
 #[test]
@@ -111,6 +167,7 @@ fn same_project_refreshes_data() {
             has_param: true,
             has_app: false,
             is_resumable: false,
+            has_crashed: false,
             upload_id: String::new(),
             data_hash: String::new(),
             param_hash: String::new(),
@@ -133,6 +190,7 @@ fn project_selected_stamps_upload_id() {
             has_param: true,
             has_app: false,
             is_resumable: false,
+            has_crashed: false,
             upload_id: "abc123".into(),
             data_hash: String::new(),
             param_hash: String::new(),
@@ -160,6 +218,7 @@ fn same_project_refreshes_upload_id() {
             has_param: true,
             has_app: false,
             is_resumable: false,
+            has_crashed: false,
             upload_id: "new".into(),
             data_hash: String::new(),
             param_hash: String::new(),
@@ -248,11 +307,26 @@ fn build_from_uploaded() {
         build: Build::None,
         ..Default::default()
     };
-    let (s2, fx) = transition(s, Event::BuildRequested);
+    let (s2, fx) = transition(s, Event::BuildRequested { preserve_output: false });
     assert_eq!(s2.build, Build::Building);
     assert_eq!(s2.build_progress, 0.0);
     assert_eq!(s2.error, "");
-    assert!(has_effect(&fx, |e| matches!(e, Effect::DoSpawnBuild)));
+    assert!(has_effect(&fx, |e| matches!(e, Effect::DoSpawnBuild { .. })));
+}
+
+#[test]
+fn build_forwards_preserve_output() {
+    let s = ServerState {
+        data: Data::Uploaded,
+        build: Build::None,
+        ..Default::default()
+    };
+    let (_s2, fx) = transition(s, Event::BuildRequested { preserve_output: true });
+    let preserve = fx.iter().find_map(|e| match e {
+        Effect::DoSpawnBuild { preserve_output } => Some(*preserve_output),
+        _ => None,
+    });
+    assert_eq!(preserve, Some(true));
 }
 
 #[test]
@@ -261,7 +335,7 @@ fn build_rejected_no_data() {
         data: Data::Empty,
         ..Default::default()
     };
-    let (s2, fx) = transition(s.clone(), Event::BuildRequested);
+    let (s2, fx) = transition(s.clone(), Event::BuildRequested { preserve_output: false });
     assert_eq!(s2, s);
     assert!(fx.is_empty());
 }
@@ -273,7 +347,7 @@ fn build_rejected_already_building() {
         build: Build::Building,
         ..Default::default()
     };
-    let (s2, fx) = transition(s.clone(), Event::BuildRequested);
+    let (s2, fx) = transition(s.clone(), Event::BuildRequested { preserve_output: false });
     assert_eq!(s2, s);
     assert!(fx.is_empty());
 }
@@ -351,9 +425,9 @@ fn rebuild_after_built() {
         build: Build::Built,
         ..Default::default()
     };
-    let (s2, fx) = transition(s, Event::BuildRequested);
+    let (s2, fx) = transition(s, Event::BuildRequested { preserve_output: false });
     assert_eq!(s2.build, Build::Building);
-    assert!(has_effect(&fx, |e| matches!(e, Effect::DoSpawnBuild)));
+    assert!(has_effect(&fx, |e| matches!(e, Effect::DoSpawnBuild { .. })));
 }
 
 // ---------------------------------------------------------------------------
@@ -403,13 +477,49 @@ fn resume() {
         resumable: true,
         ..Default::default()
     };
-    let (s2, fx) = transition(s, Event::ResumeRequested);
+    let (s2, fx) = transition(s, Event::ResumeRequested { from_frame: None });
     assert_eq!(s2.solver, Solver::Running);
     let launch = fx.iter().find_map(|e| match e {
         Effect::DoLaunchSolver { resume_from } => Some(*resume_from),
         _ => None,
     });
     assert_eq!(launch, Some(Some(-1)));
+}
+
+#[test]
+fn resume_from_specific_frame() {
+    let s = ServerState {
+        build: Build::Built,
+        solver: Solver::Idle,
+        resumable: true,
+        ..Default::default()
+    };
+    let (s2, fx) = transition(s, Event::ResumeRequested { from_frame: Some(80) });
+    assert_eq!(s2.solver, Solver::Running);
+    let launch = fx.iter().find_map(|e| match e {
+        Effect::DoLaunchSolver { resume_from } => Some(*resume_from),
+        _ => None,
+    });
+    assert_eq!(launch, Some(Some(80)));
+}
+
+#[test]
+fn resume_after_failed_simulation() {
+    // A crash sets solver=Failed but leaves the checkpoints on disk, so
+    // the user must still be able to resume from a saved state.
+    let s = ServerState {
+        build: Build::Built,
+        solver: Solver::Failed,
+        resumable: true,
+        ..Default::default()
+    };
+    let (s2, fx) = transition(s, Event::ResumeRequested { from_frame: Some(20) });
+    assert_eq!(s2.solver, Solver::Running);
+    let launch = fx.iter().find_map(|e| match e {
+        Effect::DoLaunchSolver { resume_from } => Some(*resume_from),
+        _ => None,
+    });
+    assert_eq!(launch, Some(Some(20)));
 }
 
 #[test]
@@ -420,7 +530,7 @@ fn resume_rejected_not_resumable() {
         resumable: false,
         ..Default::default()
     };
-    let (s2, _) = transition(s.clone(), Event::ResumeRequested);
+    let (s2, _) = transition(s.clone(), Event::ResumeRequested { from_frame: None });
     assert_eq!(s2, s);
 }
 
@@ -547,7 +657,7 @@ fn resume_resets_initialized() {
         initialized: true,
         ..Default::default()
     };
-    let (s2, _) = transition(s, Event::ResumeRequested);
+    let (s2, _) = transition(s, Event::ResumeRequested { from_frame: None });
     assert_eq!(s2.solver, Solver::Running);
     assert!(!s2.initialized, "resume clears the prior run's initialized flag");
 }
@@ -899,6 +1009,7 @@ fn project_selected_carries_total_frames_for_new_project() {
             has_param: true,
             has_app: true,
             is_resumable: true,
+            has_crashed: false,
             upload_id: String::new(),
             data_hash: String::new(),
             param_hash: String::new(),
@@ -934,6 +1045,7 @@ fn project_selected_same_project_rehydrates_total_frames_when_lost() {
             has_param: true,
             has_app: true,
             is_resumable: true,
+            has_crashed: false,
             upload_id: String::new(),
             data_hash: String::new(),
             param_hash: String::new(),
@@ -967,6 +1079,7 @@ fn project_selected_same_project_does_not_clobber_live_total_frames() {
             has_param: true,
             has_app: true,
             is_resumable: true,
+            has_crashed: false,
             upload_id: String::new(),
             data_hash: String::new(),
             param_hash: String::new(),

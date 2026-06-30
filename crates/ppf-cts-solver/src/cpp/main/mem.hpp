@@ -76,6 +76,20 @@ VecVec<T> malloc_device(const VecVec<T> &host_src, unsigned alloc_factor = 1) {
                                         dev_dst.nnz_allocated);
         dev_dst.offset = malloc_device<unsigned>(
             host_src.offset, host_src.size + 1, dev_dst.offset_allocated);
+    } else if (host_src.size) {
+        // Sized but empty (no nnz): a valid CSR matrix still needs an offset
+        // array of size+1 (all zeros) so per-row reads `offset[i]..offset[i+1]`
+        // are well-defined empty ranges. A faceless SAND grain cloud hits this:
+        // its fixed-Hessian transpose table has one row per grain but no
+        // off-diagonal entries, so nnz == 0 while size > 0. Leaving offset null
+        // here makes the matvec read a null pointer (illegal access).
+        dev_dst.size = host_src.size;
+        dev_dst.nnz = 0;
+        dev_dst.nnz_allocated = 0;
+        dev_dst.offset_allocated = (host_src.size + 1) * alloc_factor;
+        dev_dst.data = nullptr;
+        dev_dst.offset = malloc_device<unsigned>(
+            host_src.offset, host_src.size + 1, dev_dst.offset_allocated);
     } else {
         dev_dst.size = 0;
         dev_dst.nnz = 0;

@@ -72,6 +72,9 @@ templates_path = ["_templates"]
 exclude_patterns = [
     "_build", "Thumbs.db", ".DS_Store", ".venv", "**/.venv",
     "blender_addon/debug/**",
+    # Pre-rendered fabric calibration report; copied verbatim via
+    # html_extra_path, not processed as a source document.
+    "static_html/**",
 ]
 
 language = "en"
@@ -101,7 +104,11 @@ html_context = {
     "source_repo": "ppf-contact-solver",
 }
 html_static_path = ["_static"]
-html_extra_path = ["blender_addon/images/gallery", "blender_addon/gallery_blends"]
+# static_html/ holds the pre-rendered fabric calibration report; its contents
+# (fabric-report/) are copied verbatim into the site root, so the report is
+# served at /fabric-report/index.html.
+html_extra_path = ["blender_addon/images/gallery", "blender_addon/gallery_blends",
+                   "static_html"]
 html_css_files = ["custom.css"]
 
 # -- Options for todo extension ----------------------------------------------

@@ -165,9 +165,12 @@ try:
     # nothing on disk uses) instead of state_<N>.bin.gz.
     scene_info = dh.com.response.get("scene_info", {})
     last_saved_str = str(scene_info.get("Last Saved", ""))
+    # The server comma-groups "Last Saved" (matching the other count
+    # rows), so strip separators before comparing against the raw
+    # saved_frame to stay correct once a saved frame crosses 1000.
     dh.record(
         "scene_info_last_saved_matches",
-        last_saved_str == str(saved_frame),
+        last_saved_str.replace(",", "") == str(saved_frame),
         {"reported": last_saved_str, "expected": str(saved_frame),
          "scene_info_keys": sorted(scene_info.keys())},
     )

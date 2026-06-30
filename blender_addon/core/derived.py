@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from typing import Optional
 
+from .protocol import SERVER_BUSY_STATUSES, SIM_RUNNING_STATUSES
+
 
 # ---------------------------------------------------------------------------
 # Sim running
@@ -25,7 +27,7 @@ def is_sim_running_from_response(response: Optional[dict]) -> bool:
     """
     if not response:
         return False
-    return response.get("status") in {"BUSY", "SAVE_AND_QUIT"}
+    return response.get("status") in SIM_RUNNING_STATUSES
 
 
 def is_server_busy_from_response(response: Optional[dict]) -> bool:
@@ -38,6 +40,6 @@ def is_server_busy_from_response(response: Optional[dict]) -> bool:
     """
     if not response:
         return False
-    return response.get("status") in {"BUSY", "SAVE_AND_QUIT", "BUILDING"}
+    return response.get("status") in SERVER_BUSY_STATUSES
 
 

@@ -181,7 +181,7 @@ def migrate_legacy_data() -> str:
                                 cs, separators=(",", ":")
                             )
                             migrated_pairs.append("cross_stitch_json")
-                    except (json.JSONDecodeError, Exception):
+                    except (json.JSONDecodeError, ValueError):
                         pass
 
         total = (

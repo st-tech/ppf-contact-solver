@@ -69,13 +69,13 @@ sweeps, live previews, interactive inspection), not just step away.
 
 ## The Jupyter Row
 
-The main panel's **JupyterLab** section has three buttons:
+The Solver panel's **JupyterLab** section has three buttons:
 
-| Button     | What it does                                                                  |
-| ---------- | ----------------------------------------------------------------------------- |
-| **Export** | Write the template notebook onto the solver host                              |
-| **Open**   | Open `http://localhost:<port>/lab/tree/<path>` in your browser                |
-| **Delete** | Remove the notebook file from the solver host                                 |
+| Button       | What it does                                                                  |
+| ------------ | ----------------------------------------------------------------------------- |
+| **Export**   | Write the template notebook onto the solver host                              |
+| **Open URL** | Open `http://localhost:<port>/lab/tree/<path>` in your browser                |
+| **Delete**   | Remove the notebook file from the solver host                                 |
 
 ```{figure} ../../images/jupyterlab/jupyterlab_row.png
 :alt: JupyterLab section inside the Solver panel
@@ -91,12 +91,12 @@ once an export exists, and **Delete** removes the server-side file.
 The filename must end with `.ipynb`. Writes go through the solver
 connection, not through Jupyter's REST API.
 
-**Open** is enabled once an export exists. It does not check that the
+**Open URL** is enabled once an export exists. It does not check that the
 file still exists on the server; if you deleted it manually, you will
 get a 404 in the browser.
 
 **Delete** removes the server-side file and clears the add-on's record
-of the last export, which disables **Open** again.
+of the last export, which disables **Open URL** again.
 
 ## The Generated Notebook
 

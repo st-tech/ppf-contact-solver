@@ -114,6 +114,7 @@ template <class T> struct Vec {
             result.allocated = alloc_factor * n;
             CUDA_HANDLE_ERROR(
                 cudaMalloc(&result.data, result.allocated * sizeof(T)));
+            ++g_device_alloc_count;
             result.size = n;
         }
         return result;
@@ -124,6 +125,7 @@ template <class T> struct Vec {
             result.allocated = n;
             CUDA_HANDLE_ERROR(
                 cudaMalloc(&result.data, result.allocated * sizeof(T)));
+            ++g_device_alloc_count;
             result.size = 0;
         }
         return result;
@@ -131,6 +133,7 @@ template <class T> struct Vec {
     bool free() {
         if (data) {
             CUDA_HANDLE_ERROR(cudaFree((void *)data));
+            ++g_device_free_count;
             data = nullptr;
             return true;
         }

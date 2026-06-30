@@ -22,7 +22,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
 mod common;
-use common::{read_to_eof, spawn_server};
+use common::{read_to_eof, spawn_server, spawn_server_with_data_root};
 
 // BDAT is a vestigial path: the addon defines the constant in
 // `core/protocol.py` but never sends the header, and `handle_bdat`
@@ -52,9 +52,16 @@ async fn data_receive_streams_multi_chunk_payload() {
     // crosses the 32 KiB read buffer several times so we'd notice
     // either a busted `read` loop (truncated body) or a regression to
     // the `tokio::fs::read(...)` whole-file pre-load.
-    let (addr, cancel) = spawn_server().await;
+    //
+    // The transport anchors `path` under `make_root(name)`, so pin the
+    // engine's `data_root` to a tempdir and plant the file at
+    // `<data_root>/<name>/...` where the resolver can reach it.
     let dir = tempfile::tempdir().unwrap();
-    let target_path = dir.path().join("big.bin");
+    let (addr, cancel) =
+        spawn_server_with_data_root(Some(dir.path().to_path_buf())).await;
+    let project_root = dir.path().join("big");
+    tokio::fs::create_dir_all(&project_root).await.unwrap();
+    let target_path = project_root.join("big.bin");
     let mut payload = Vec::with_capacity(200 * 1024);
     for i in 0..(200 * 1024usize) {
         // Position-dependent bytes so a truncation or chunk swap is
@@ -84,9 +91,12 @@ async fn data_receive_streams_multi_chunk_payload() {
 
 #[tokio::test]
 async fn data_send_then_receive_roundtrips_payload() {
-    let (addr, cancel) = spawn_server().await;
+    // `path` is anchored under `make_root(name)`, so pin `data_root` to
+    // a tempdir; `<data_root>/<name>/blob.bin` is the sandboxed target.
     let dir = tempfile::tempdir().unwrap();
-    let target_path = dir.path().join("blob.bin");
+    let (addr, cancel) =
+        spawn_server_with_data_root(Some(dir.path().to_path_buf())).await;
+    let target_path = dir.path().join("blob").join("blob.bin");
     let payload = b"ROUND-TRIP-PAYLOAD".to_vec();
 
     // 1. data_send writes the file.
@@ -162,12 +172,18 @@ async fn data_send_rejects_pickle_basenames() {
 
 #[tokio::test]
 async fn data_receive_missing_file_returns_error() {
-    let (addr, cancel) = spawn_server().await;
+    // Path under the project root but pointing at a file that does not
+    // exist: it clears the sandbox check, so the handler reaches the
+    // metadata probe and answers `File not found` (not `SandboxEscape`).
+    let dir = tempfile::tempdir().unwrap();
+    let (addr, cancel) =
+        spawn_server_with_data_root(Some(dir.path().to_path_buf())).await;
+    let missing = dir.path().join("x").join("this-file-should-not-exist-xyz12345");
 
     let header = serde_json::json!({
         "request": "data_receive",
         "name": "x",
-        "path": "/tmp/this-file-should-not-exist-xyz12345",
+        "path": missing.to_string_lossy().to_string(),
     });
     let mut s = TcpStream::connect(addr).await.unwrap();
     s.write_all(b"JSON").await.unwrap();
@@ -178,6 +194,77 @@ async fn data_receive_missing_file_returns_error() {
     let body = std::str::from_utf8(&bytes).unwrap().trim_end();
     let response: Value = serde_json::from_str(body).expect(body);
     assert_eq!(response["error"], "File not found");
+
+    let _ = cancel.send(());
+}
+
+#[tokio::test]
+async fn data_send_blocks_path_outside_project_root() {
+    // An absolute `path` outside the project root (anything other than
+    // `<data_root>/<name>/...`) must be rejected before any disk write,
+    // so a client cannot use data_send to clobber arbitrary files.
+    let dir = tempfile::tempdir().unwrap();
+    let (addr, cancel) =
+        spawn_server_with_data_root(Some(dir.path().to_path_buf())).await;
+    let escape = dir.path().join("other").join("evil.bin");
+
+    let header = serde_json::json!({
+        "request": "data_send",
+        "name": "proj",
+        "path": escape.to_string_lossy().to_string(),
+        "size": 4,
+    });
+    let mut s = TcpStream::connect(addr).await.unwrap();
+    s.write_all(b"JSON").await.unwrap();
+    s.write_all(format!("{header}\n").as_bytes()).await.unwrap();
+    s.shutdown().await.unwrap();
+
+    let bytes = read_to_eof(&mut s).await;
+    let body = std::str::from_utf8(&bytes).unwrap().trim_end();
+    let response: Value = serde_json::from_str(body).expect(body);
+    assert!(
+        response["error"]
+            .as_str()
+            .unwrap()
+            .contains("escapes sandbox"),
+        "got: {body}"
+    );
+    assert!(
+        !escape.exists(),
+        "data_send must not create files outside the project root"
+    );
+
+    let _ = cancel.send(());
+}
+
+#[tokio::test]
+async fn data_receive_blocks_path_outside_project_root() {
+    // Symmetric arbitrary-read guard: an absolute `path` outside the
+    // project root is rejected rather than streamed back to the client.
+    let dir = tempfile::tempdir().unwrap();
+    let (addr, cancel) =
+        spawn_server_with_data_root(Some(dir.path().to_path_buf())).await;
+
+    let header = serde_json::json!({
+        "request": "data_receive",
+        "name": "proj",
+        "path": "/etc/passwd",
+    });
+    let mut s = TcpStream::connect(addr).await.unwrap();
+    s.write_all(b"JSON").await.unwrap();
+    s.write_all(format!("{header}\n").as_bytes()).await.unwrap();
+    s.shutdown().await.unwrap();
+
+    let bytes = read_to_eof(&mut s).await;
+    let body = std::str::from_utf8(&bytes).unwrap().trim_end();
+    let response: Value = serde_json::from_str(body).expect(body);
+    assert!(
+        response["error"]
+            .as_str()
+            .unwrap()
+            .contains("escapes sandbox"),
+        "got: {body}"
+    );
 
     let _ = cancel.send(());
 }

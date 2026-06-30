@@ -59,7 +59,7 @@ plus the shared **Project Name** field. **Connect** is highlighted.
 | Port | `22` | SSH port. |
 | User | `""` | Remote user. Leave empty to use SSH config's `User`. |
 | SSH Key | `~/.ssh/id_ed25519` or `~/.ssh/id_rsa` | Private key file. |
-| Remote Path | `/root/ppf-contact-solver` | Remote solver directory (must contain the `ppf-cts-server` binary). |
+| Remote Path | `""` (e.g. `/root/ppf-contact-solver`) | Remote solver directory (must contain the `ppf-cts-server` binary). |
 
 The remote `ppf-cts-server` port is fixed at `9090` in SSH modes; the panel
 does not expose a Server Port field here (it is only editable in

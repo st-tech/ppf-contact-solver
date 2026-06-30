@@ -3,9 +3,7 @@
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
 # License: Apache v2.0
 
-import numpy as np
-
-from . import _swap_axes, _to_solver
+from . import _normalize_and_scale, _swap_axes, _to_solver
 
 
 _DYN_PARAM_SOLVER_KEYS = {
@@ -15,6 +13,27 @@ _DYN_PARAM_SOLVER_KEYS = {
     "AIR_FRICTION": "air-friction",
     "VERTEX_AIR_DAMP": "isotropic-air-friction",
 }
+
+
+# "Active Until frame N" means frame < N is active, frame >= N is inactive.
+# The cutoff sits half a frame before N's time: 1 frame to map the 1-based
+# "Active Until N" to a < N boundary, plus half a frame margin so all substeps
+# of the transition TO frame N see the collider as off. The displayed state at
+# frame N carries no residual collider effect, and f32 drift at the boundary
+# can't leak an extra frame through.
+_COLLIDER_CUTOFF_MARGIN_FRAMES = 1.5
+
+
+def _active_duration_cutoff(item, fps):
+    """Encode a collider's active-duration cutoff in seconds.
+
+    Shared by wall and sphere encoding so the half-frame boundary margin
+    (see _COLLIDER_CUTOFF_MARGIN_FRAMES) stays identical for both kinds.
+    Returns -1.0 when the collider has no active-duration limit.
+    """
+    if not item.enable_active_duration:
+        return -1.0
+    return max(0.0, (float(item.active_duration) - _COLLIDER_CUTOFF_MARGIN_FRAMES) / fps)
 
 
 def _encode_dyn_params(state, fps):
@@ -38,12 +57,7 @@ def _encode_dyn_params(state, fps):
                 if dyn_item.param_type == "GRAVITY":
                     value = _swap_axes(state.gravity_3d)
                 elif dyn_item.param_type == "WIND":
-                    wind_dir = np.array([w for w in state.wind_direction], dtype=np.float64)
-                    wind_norm = np.linalg.norm(wind_dir)
-                    if wind_norm > 0:
-                        wind_dir = wind_dir / wind_norm
-                    wind_blender = wind_dir * float(state.wind_strength)
-                    value = _swap_axes(wind_blender)
+                    value = _swap_axes(_normalize_and_scale(state.wind_direction, state.wind_strength))
                 elif dyn_item.param_type == "AIR_DENSITY":
                     value = [float(state.air_density)]
                 elif dyn_item.param_type == "AIR_FRICTION":
@@ -59,12 +73,7 @@ def _encode_dyn_params(state, fps):
                 elif dyn_item.param_type == "GRAVITY":
                     value = _swap_axes(kf.gravity_value)
                 elif dyn_item.param_type == "WIND":
-                    wind_dir = np.array([w for w in kf.wind_direction_value], dtype=np.float64)
-                    wind_norm = np.linalg.norm(wind_dir)
-                    if wind_norm > 0:
-                        wind_dir = wind_dir / wind_norm
-                    wind_blender = wind_dir * float(kf.wind_strength_value)
-                    value = _swap_axes(wind_blender)
+                    value = _swap_axes(_normalize_and_scale(kf.wind_direction_value, kf.wind_strength_value))
                 else:
                     value = [float(kf.scalar_value)]
 
@@ -78,7 +87,7 @@ def _encode_dyn_params(state, fps):
 
 
 def _encode_invisible_colliders(state, fps):
-    """Encode invisible colliders as a dict for the pickle.
+    """Encode invisible colliders as a dict for the CBOR scene payload.
 
     Returns:
         dict with "walls" and "spheres" lists, or None if empty.
@@ -92,16 +101,9 @@ def _encode_invisible_colliders(state, fps):
                 "contact_gap": float(item.contact_gap),
                 "friction": float(item.friction),
                 "thickness": float(item.thickness),
-                # "Active Until frame N" means frame < N is active, frame >= N
-                # is inactive. The cutoff sits half a frame before N's time so
-                # all substeps of the transition TO frame N see the collider
-                # as off — the displayed state at frame N carries no residual
-                # collider effect, and f32 drift at the boundary can't leak an
-                # extra frame through.
-                "active_duration": (
-                    max(0.0, (float(item.active_duration) - 1.5) / fps)
-                    if item.enable_active_duration else -1.0
-                ),
+                # Half-frame boundary margin shared with sphere encoding; see
+                # _active_duration_cutoff / _COLLIDER_CUTOFF_MARGIN_FRAMES.
+                "active_duration": _active_duration_cutoff(item, fps),
                 "keyframes": [],
             }
             for i, kf in enumerate(item.keyframes):
@@ -123,12 +125,9 @@ def _encode_invisible_colliders(state, fps):
                 "contact_gap": float(item.contact_gap),
                 "friction": float(item.friction),
                 "thickness": float(item.thickness),
-                # See wall encoding above: half-frame margin so frame >=
-                # active_duration is cleanly inactive.
-                "active_duration": (
-                    max(0.0, (float(item.active_duration) - 1.5) / fps)
-                    if item.enable_active_duration else -1.0
-                ),
+                # Same half-frame boundary margin as walls; see
+                # _active_duration_cutoff / _COLLIDER_CUTOFF_MARGIN_FRAMES.
+                "active_duration": _active_duration_cutoff(item, fps),
                 "keyframes": [],
             }
             for i, kf in enumerate(item.keyframes):

@@ -8,10 +8,11 @@
 
 use std::path::PathBuf;
 
-use serde_json::Value;
+use serde_json::{json, Value};
 
 use crate::config::EngineConfig;
 use ppf_cts_core::state::{ServerState, Solver};
+use ppf_cts_formats::files::{session_data_dir, session_dir};
 
 mod scene_info;
 mod shape;
@@ -26,7 +27,8 @@ mod summary;
 ///     running with a known `total_frames`.
 ///   * `scene_info` when `<root>/scene_info.json` exists.
 ///   * `summary` while the solver is `Running` / `Saving`.
-///   * `average_summary` when the solver is idle and log files exist.
+///   * `average_summary` in any non-active state (`Idle` or `Failed`)
+///     when log files exist.
 pub fn build_response(state: &ServerState, config: &EngineConfig) -> Value {
     let mut m = shape::base_map(state, config);
     shape::insert_progress(&mut m, state);
@@ -36,7 +38,17 @@ pub fn build_response(state: &ServerState, config: &EngineConfig) -> Value {
             m.insert("scene_info".into(), v);
         }
 
-        let info_path = PathBuf::from(&state.root).join("session");
+        // The full ascending list of resumable checkpoint frames. Always
+        // present (possibly empty) when a root is set, so the addon's
+        // Resume dialog can populate its checkpoint list independently of
+        // whether `scene_info.json` exists yet.
+        let saved: Vec<Value> = scene_info::list_saved_state_frames(&state.root)
+            .into_iter()
+            .map(|n| json!(n))
+            .collect();
+        m.insert("saved_states".into(), Value::Array(saved));
+
+        let info_path = session_dir(&PathBuf::from(&state.root));
         match state.solver {
             Solver::Running | Solver::Saving => {
                 let live = summary::build_live_summary(
@@ -48,8 +60,8 @@ pub fn build_response(state: &ServerState, config: &EngineConfig) -> Value {
             }
             _ => {
                 let pairs = summary::average_summary_pairs(&config.log_filenames);
-                let avg =
-                    summary::build_average_summary(&info_path.join("output").join("data"), &pairs);
+                let data_dir = session_data_dir(&PathBuf::from(&state.root));
+                let avg = summary::build_average_summary(&data_dir, &pairs);
                 if !avg.is_empty() {
                     m.insert("average_summary".into(), Value::Object(avg));
                 }
@@ -244,7 +256,82 @@ mod tests {
             ..Default::default()
         };
         let r = build_response(&s, &cfg);
-        assert_eq!(r["summary"]["pcg-iter"], "9");
+        assert_eq!(r["summary"]["pcg-iter"], "9.00");
+    }
+
+    #[test]
+    fn live_summary_averages_per_iteration_channels_over_latest_step() {
+        // Per-Newton-iteration channels (matrix-assembly, num-contact,
+        // pcg-iter, pcg-linsolve) are averaged over the latest step (all
+        // rows sharing the last timestamp), not just the last row. Here
+        // step t=0 had one iteration; step t=1 had three.
+        let dir = tempfile::tempdir().unwrap();
+        let data = dir.path().join("session").join("output").join("data");
+        std::fs::create_dir_all(&data).unwrap();
+        std::fs::write(data.join("advance.matrix_assembly.out"), "0 5\n1 8\n1 12\n1 16\n").unwrap();
+        std::fs::write(data.join("advance.num_contact.out"), "0 10\n1 30\n1 40\n1 50\n").unwrap();
+        std::fs::write(data.join("advance.iter.out"), "0 2\n1 3\n1 4\n1 5\n").unwrap();
+        std::fs::write(data.join("advance.linsolve.out"), "0 1\n1 100\n1 140\n1 180\n").unwrap();
+        let s = ServerState {
+            root: dir.path().to_string_lossy().into_owned(),
+            data: Data::Uploaded,
+            build: Build::Built,
+            solver: Solver::Running,
+            frame: 1,
+            ..Default::default()
+        };
+        let r = build_response(&s, &EngineConfig::default());
+        assert_eq!(r["summary"]["matrix-assembly"], "12ms"); // avg(8,12,16)
+        // Sub-thousand count averages render with a fixed two decimals
+        // (even when the average is whole).
+        assert_eq!(r["summary"]["num-contact"], "40.00"); // avg(30,40,50)
+        assert_eq!(r["summary"]["pcg-iter"], "4.00"); // avg(3,4,5)
+        assert_eq!(r["summary"]["pcg-linsolve"], "140ms"); // avg(100,140,180)
+    }
+
+    #[test]
+    fn live_summary_abbreviates_large_count_channels() {
+        // Count averages at or above 1000 get a k/M suffix so the cell
+        // reads `12.44k` instead of a long digit run like `12439.30`.
+        let dir = tempfile::tempdir().unwrap();
+        let data = dir.path().join("session").join("output").join("data");
+        std::fs::create_dir_all(&data).unwrap();
+        std::fs::write(data.join("advance.num_contact.out"), "0 12439.3\n").unwrap();
+        std::fs::write(data.join("advance.iter.out"), "0 1500\n").unwrap();
+        let s = ServerState {
+            root: dir.path().to_string_lossy().into_owned(),
+            data: Data::Uploaded,
+            build: Build::Built,
+            solver: Solver::Running,
+            frame: 1,
+            ..Default::default()
+        };
+        let r = build_response(&s, &EngineConfig::default());
+        assert_eq!(r["summary"]["num-contact"], "12.44k");
+        assert_eq!(r["summary"]["pcg-iter"], "1.50k");
+    }
+
+    #[test]
+    fn live_summary_reports_toi_advanced_and_dyn_consumed() {
+        // toi-advanced (advanced fractional step size) and dyn-consumed
+        // (contact-Hessian memory ratio) are ratios in [0, 1], rendered
+        // as percentages. dyn-consumed is live-only.
+        let dir = tempfile::tempdir().unwrap();
+        let data = dir.path().join("session").join("output").join("data");
+        std::fs::create_dir_all(&data).unwrap();
+        std::fs::write(data.join("advance.toi_advanced.out"), "0 0.5\n1 0.95\n").unwrap();
+        std::fs::write(data.join("advance.dyn_consumed.out"), "0 0.1\n1 0.42\n").unwrap();
+        let s = ServerState {
+            root: dir.path().to_string_lossy().into_owned(),
+            data: Data::Uploaded,
+            build: Build::Built,
+            solver: Solver::Running,
+            frame: 1,
+            ..Default::default()
+        };
+        let r = build_response(&s, &EngineConfig::default());
+        assert_eq!(r["summary"]["toi-advanced"], "95.00%");
+        assert_eq!(r["summary"]["dyn-consumed"], "42.00%");
     }
 
     #[test]
@@ -370,6 +457,8 @@ mod tests {
         assert_eq!(info["FPS"], "60");
         assert_eq!(info["Simulated Frames"], "3");
         assert_eq!(info["Last Saved"], "12");
+        // The full ascending checkpoint list rides alongside scene_info.
+        assert_eq!(r["saved_states"], json!([5, 12]));
     }
 
     #[test]
@@ -388,5 +477,38 @@ mod tests {
         let info = r["scene_info"].as_object().expect("scene_info present");
         assert_eq!(info["Simulated Frames"], "0");
         assert_eq!(info["Last Saved"], "None");
+    }
+
+    #[test]
+    fn saved_states_empty_array_when_no_checkpoints() {
+        let dir = tempfile::tempdir().unwrap();
+        // A root with an empty `session/output/` and no scene_info.json:
+        // `saved_states` must still be present as an empty array.
+        std::fs::create_dir_all(dir.path().join("session").join("output")).unwrap();
+        let s = ServerState {
+            root: dir.path().to_string_lossy().into_owned(),
+            data: Data::Uploaded,
+            build: Build::Built,
+            solver: Solver::Idle,
+            ..Default::default()
+        };
+        let r = build_response(&s, &EngineConfig::default());
+        let m = r.as_object().unwrap();
+        assert!(m.contains_key("saved_states"));
+        assert_eq!(r["saved_states"], json!([]));
+    }
+
+    #[test]
+    fn saved_states_absent_when_no_root() {
+        // With no root set, the whole root-derived block is skipped, so
+        // `saved_states` must not appear at all.
+        let s = ServerState {
+            data: Data::Uploaded,
+            build: Build::Built,
+            solver: Solver::Idle,
+            ..Default::default()
+        };
+        let r = build_response(&s, &EngineConfig::default());
+        assert!(!r.as_object().unwrap().contains_key("saved_states"));
     }
 }

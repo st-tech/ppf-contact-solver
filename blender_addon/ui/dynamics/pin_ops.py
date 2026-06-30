@@ -15,6 +15,27 @@ from ..state import iterate_active_object_groups
 from .utils import get_group_from_index
 
 
+def pin_already_exists(group, obj_uuid: str, vg_name: str) -> bool:
+    """Return True when *group* already holds a pin for (obj_uuid, vg_name).
+
+    Identity is keyed on the object UUID plus the decoded vertex-group
+    name, never on the raw encoded identifier. The identifier embeds the
+    object's display name, so an object (or content-hashed vertex group)
+    rename changes the stored string while the logical pin is unchanged.
+    Keying on UUID + decoded name keeps this consistent with
+    _raw_create_pin and the MCP handler add_pin_vertex_group.
+    """
+    from ...models.groups import decode_vertex_group_identifier
+
+    for item in group.pin_vertex_groups:
+        if item.object_uuid != obj_uuid:
+            continue
+        _, item_vg = decode_vertex_group_identifier(item.name)
+        if item_vg == vg_name:
+            return True
+    return False
+
+
 class OBJECT_OT_CreatePinVertexGroup(Operator):
     """Create a vertex group from selected vertices and add it to the pin list"""
 
@@ -151,7 +172,7 @@ class OBJECT_OT_CreatePinVertexGroup(Operator):
 
         # Add to pin list
         from ...core.uuid_registry import get_or_create_object_uuid, compute_vg_hash
-        from ...models.groups import encode_vertex_group_identifier, decode_vertex_group_identifier
+        from ...models.groups import encode_vertex_group_identifier
         obj_uuid = get_or_create_object_uuid(obj)
         if not obj_uuid:
             self.report({"ERROR"}, f"'{obj.name}' is not writable (library-linked)")
@@ -159,15 +180,7 @@ class OBJECT_OT_CreatePinVertexGroup(Operator):
         new_hash = str(compute_vg_hash(obj, name))
         # Duplicate check by UUID + vg_name — consistent with _raw_create_pin
         # and MCP handler add_pin_vertex_group.
-        already_exists = False
-        for item in group.pin_vertex_groups:
-            if item.object_uuid != obj_uuid:
-                continue
-            _, item_vg = decode_vertex_group_identifier(item.name)
-            if item_vg == name:
-                already_exists = True
-                break
-        if not already_exists:
+        if not pin_already_exists(group, obj_uuid, name):
             identifier = encode_vertex_group_identifier(obj.name, name)
             item = group.pin_vertex_groups.add()
             item.name = identifier
@@ -202,58 +215,58 @@ class OBJECT_OT_AddPinVertexGroup(Operator):
         if identifier == "NONE":
             return {"CANCELLED"}
 
-        existing_identifiers = {vg.name for vg in group.pin_vertex_groups}
-        if identifier not in existing_identifiers:
-            from ...models.groups import decode_vertex_group_identifier
-            from ...core.uuid_registry import get_or_create_object_uuid, compute_vg_hash, get_object_by_uuid
+        from ...models.groups import decode_vertex_group_identifier, encode_vertex_group_identifier
+        from ...core.uuid_registry import get_or_create_object_uuid, compute_vg_hash, get_object_by_uuid
 
+        obj_name, vg_name = decode_vertex_group_identifier(identifier)
+        # The identifier came from the UUID-keyed vertex-group dropdown
+        # (get_vertex_group_items).  Resolve by iterating assigned
+        # objects purely by UUID + vertex-group existence.
+        # The decoded obj_name is a display label only — never the
+        # identity gate.
+        obj = None
+        if obj_name and vg_name:
+            for assigned in group.assigned_objects:
+                if not assigned.uuid:
+                    raise ValueError(
+                        f"pin_ops: assigned object has empty UUID"
+                        f" (name={getattr(assigned, 'name', '?')})"
+                    )
+                candidate = get_object_by_uuid(assigned.uuid)
+                if candidate is None:
+                    continue
+                # Curves store pins as custom properties, not vertex groups
+                if candidate.type == "CURVE":
+                    has_vg = f"_pin_{vg_name}" in candidate
+                else:
+                    has_vg = (
+                        hasattr(candidate, "vertex_groups")
+                        and vg_name in (vg.name for vg in candidate.vertex_groups)
+                    )
+                if has_vg:
+                    obj = candidate
+                    if candidate.name == obj_name:
+                        break  # exact name still matches — prefer it
+        if not obj:
+            self.report({"ERROR"}, "Could not resolve pin object by UUID")
+            return {"CANCELLED"}
+
+        resolved_uuid = get_or_create_object_uuid(obj)
+        if not resolved_uuid:
+            self.report({"ERROR"}, f"'{obj.name}' is not writable (library-linked)")
+            return {"CANCELLED"}
+
+        # Duplicate check by (resolved UUID, vg_name) — consistent with
+        # CreatePinVertexGroup, _raw_create_pin, and the MCP handler. The
+        # stored identifier embeds the display object name, so a raw
+        # string compare would let a rename slip the same logical pin past
+        # this guard and add it twice.
+        if not pin_already_exists(group, resolved_uuid, vg_name):
             item = group.pin_vertex_groups.add()
-            item.name = identifier
-
-            obj_name, vg_name = decode_vertex_group_identifier(identifier)
-            # The identifier came from the UUID-keyed vertex-group dropdown
-            # (get_vertex_group_items).  Resolve by iterating assigned
-            # objects purely by UUID + vertex-group existence.
-            # The decoded obj_name is a display label only — never the
-            # identity gate.
-            obj = None
-            if obj_name and vg_name:
-                for assigned in group.assigned_objects:
-                    if not assigned.uuid:
-                        raise ValueError(
-                            f"pin_ops: assigned object has empty UUID"
-                            f" (name={getattr(assigned, 'name', '?')})"
-                        )
-                    candidate = get_object_by_uuid(assigned.uuid)
-                    if candidate is None:
-                        continue
-                    # Curves store pins as custom properties, not vertex groups
-                    if candidate.type == "CURVE":
-                        has_vg = f"_pin_{vg_name}" in candidate
-                    else:
-                        has_vg = (
-                            hasattr(candidate, "vertex_groups")
-                            and vg_name in (vg.name for vg in candidate.vertex_groups)
-                        )
-                    if has_vg:
-                        obj = candidate
-                        if candidate.name == obj_name:
-                            break  # exact name still matches — prefer it
-            if obj:
-                resolved_uuid = get_or_create_object_uuid(obj)
-                if not resolved_uuid:
-                    # Object is library-linked; remove the half-built item
-                    group.pin_vertex_groups.remove(len(group.pin_vertex_groups) - 1)
-                    self.report({"ERROR"}, f"'{obj.name}' is not writable (library-linked)")
-                    return {"CANCELLED"}
-                item.object_uuid = resolved_uuid
-                if vg_name:
-                    item.vg_hash = str(compute_vg_hash(obj, vg_name))
-            else:
-                # No assigned object resolved — remove the half-built item
-                group.pin_vertex_groups.remove(len(group.pin_vertex_groups) - 1)
-                self.report({"ERROR"}, "Could not resolve pin object by UUID")
-                return {"CANCELLED"}
+            item.name = encode_vertex_group_identifier(obj.name, vg_name)
+            item.object_uuid = resolved_uuid
+            if vg_name:
+                item.vg_hash = str(compute_vg_hash(obj, vg_name))
 
         apply_object_overlays()
         return {"FINISHED"}
@@ -283,6 +296,35 @@ class OBJECT_OT_RemovePinVertexGroup(Operator):
             group.pin_vertex_groups_index = safe_update_index(index, len(group.pin_vertex_groups))
 
         apply_object_overlays()
+        return {"FINISHED"}
+
+
+class OBJECT_OT_MovePinVertexGroup(Operator):
+    """Move the selected pin up or down in the list.
+
+    Pin order matters: when pins overlap (share vertices), the pin lower
+    in the list takes precedence for the shared vertices.
+    """
+
+    bl_idname = "object.move_pin_vertex_group"
+    bl_label = "Move Pin"
+    bl_options = {"REGISTER", "UNDO"}
+
+    group_index: bpy.props.IntProperty(options={'HIDDEN'})  # pyright: ignore
+    direction: bpy.props.IntProperty()  # pyright: ignore  # -1 = up, 1 = down
+
+    def execute(self, context):
+        scene = context.scene
+        group = get_group_from_index(scene, self.group_index)
+        if group is None:
+            return {"CANCELLED"}
+        idx = group.pin_vertex_groups_index
+        n = len(group.pin_vertex_groups)
+        new_idx = idx + self.direction
+        if idx < 0 or idx >= n or new_idx < 0 or new_idx >= n:
+            return {"CANCELLED"}
+        group.pin_vertex_groups.move(idx, new_idx)
+        group.pin_vertex_groups_index = new_idx
         return {"FINISHED"}
 
 
@@ -569,12 +611,13 @@ class OBJECT_OT_MakePinKeyframe(Operator):
         # apparently because of a slot-binding edge case when fcurves
         # are added one array-index at a time.
         scene_frame = scene.frame_current
-        pin_indices = sorted({
-            int(v.index)
-            for v in obj.data.vertices
-            for g in v.groups
-            if g.group == vg.index and g.weight > 0
-        })
+        # Use the shared membership helper so the keyframed vertex set
+        # matches the set the solver pins, the overlay highlights, and
+        # the encoder reads. A vertex group attached via Add Pin (rather
+        # than Create Pin) can contain weight-0 members; filtering by
+        # weight here would silently drop those boundary vertices from
+        # the keyframed animation while the encoder still pins them.
+        pin_indices = sorted(get_vertices_in_group(obj, vg))
         inserted = 0
         for vi in pin_indices:
             if obj.data.vertices[vi].keyframe_insert(data_path="co"):
@@ -1011,6 +1054,7 @@ classes = (
     OBJECT_OT_CreatePinVertexGroup,
     OBJECT_OT_AddPinVertexGroup,
     OBJECT_OT_RemovePinVertexGroup,
+    OBJECT_OT_MovePinVertexGroup,
     OBJECT_OT_RenamePinVertexGroup,
     OBJECT_OT_SelectPinVertices,
     OBJECT_OT_DeselectPinVertices,

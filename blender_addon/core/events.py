@@ -32,8 +32,18 @@ class ConnectRequested(Event):
 
 @dataclass(frozen=True)
 class Connected(Event):
-    """Background thread successfully established the connection."""
+    """Background thread successfully established the connection.
+
+    ``session_id`` and ``saved_session_id`` are computed by the
+    ``EffectRunner`` (which owns the uuid mint and the ``bpy`` read) and
+    passed in as data so the ``transition()`` arm that consumes them stays
+    pure and deterministic. ``session_id`` is the freshly minted id for
+    this connect; ``saved_session_id`` is the id stored in the scene at
+    last save (empty when none), used to emit the reconcile log.
+    """
     remote_root: str = ""
+    session_id: str = ""
+    saved_session_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -117,7 +127,14 @@ class RunRequested(Event):
 
 @dataclass(frozen=True)
 class ResumeRequested(Event):
-    """User requested simulation resume."""
+    """User requested simulation resume.
+
+    ``from_frame`` is ``None`` to resume from the latest checkpoint
+    (the historical behavior), or an explicit frame index to resume
+    from that saved checkpoint.
+    """
+
+    from_frame: int | None = None
 
 
 @dataclass(frozen=True)
@@ -171,6 +188,10 @@ class BuildPipelineRequested(Event):
     data_hash: str = ""
     param_hash: str = ""
     message: str = ""
+    # When True the chained build keeps the session/output/ checkpoints
+    # in place (a resume-rebuild that re-decodes edited scene input);
+    # False is a fresh build that wipes the output directory.
+    preserve_output: bool = False
 
 
 @dataclass(frozen=True)

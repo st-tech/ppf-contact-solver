@@ -80,10 +80,15 @@ def run_python_script(code: str):
         }
 
     except Exception as e:
+        # Set a top-level "status": "error" so the mcp_handler wrapper passes
+        # the dict through unchanged (it checks for "status") and the MCP client
+        # sees status='error'. Returning the dict (instead of raising MCPError)
+        # preserves the captured pre-exception stdout, which the bare raise path
+        # would discard.
         return {
+            "status": "error",
             "message": f"Python script execution failed: {str(e)}",
             "output": captured_output.getvalue(),
-            "success": False,
             "error": str(e),
         }
 

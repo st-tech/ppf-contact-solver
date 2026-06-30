@@ -78,6 +78,6 @@ def install_debug_patches() -> None:
         cache_root = os.path.join(self._root, ".cash")
         os.makedirs(cache_root, exist_ok=True)
         if hasattr(self, "_mesh_manager"):
-            self._mesh_manager._cache_root = cache_root  # type: ignore[attr-defined]
+            self._mesh_manager.set_cache_dir(cache_root)
 
     frontend.BlenderApp.__init__ = _patched_init  # type: ignore[assignment]

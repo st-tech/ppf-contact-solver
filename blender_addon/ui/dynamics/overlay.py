@@ -16,6 +16,7 @@ from .overlay_geometry import (
     DirectionPreviewManager,
     _build_collider_batches,
     _build_operation_batches,
+    _build_pdrd_hinge_batches,
     _build_pin_data,
     _build_rod_batches,
     _build_snap_batches,
@@ -48,6 +49,7 @@ _overlay_cache = {
     "op_labels": [],
     "collider_batches": [],
     "velocity_batches": [],
+    "velocity_labels": [],
     "violation_batches": [],
     "violation_labels": [],
     "violation_version": -1,
@@ -55,6 +57,12 @@ _overlay_cache = {
 
 # Zoom delta that triggers rebuild of view-scaled batches.
 _VIEW_DISTANCE_TOL = 0.05
+
+# On-screen point sizes for the POINTS overlays drawn at the uniform draw site.
+# These tuples intentionally carry no per-point size, so the size is applied
+# here via the shader uniform.
+_OP_POINT_SIZE = 8.0
+_VIOLATION_POINT_SIZE = 16.0
 
 _direction_manager = DirectionPreviewManager()
 
@@ -116,21 +124,31 @@ def draw_overlay_callback():
     # pinned mesh is being edited so the pin overlay tracks the drag
     # in real time. Cost is bounded by ``_build_pin_data`` over the
     # active groups, which is the same cost as a normal frame change.
+    # Iterate the objects actually in Edit Mode (``objects_in_mode`` is
+    # usually empty, occasionally one, never the whole scene) and test
+    # membership against the assigned set, rather than walking every
+    # assigned object and resolving it per redraw. A quiet redraw on a
+    # large scene then pays O(objects-in-edit) instead of O(assigned),
+    # which is the difference between a free check and ~46ms on a
+    # 1.6k-object net.
     any_pin_obj_in_edit = False
     try:
-        for grp in iterate_active_object_groups(scene):
-            if grp.object_type == "STATIC":
-                continue
-            for obj_ref in grp.assigned_objects:
-                if not obj_ref.included:
-                    continue
-                from ...core.uuid_registry import resolve_assigned
-                ob = resolve_assigned(obj_ref)
-                if ob is not None and ob.type == "MESH" and ob.mode == "EDIT":
-                    any_pin_obj_in_edit = True
-                    break
-            if any_pin_obj_in_edit:
-                break
+        edited = [
+            ob for ob in getattr(context, "objects_in_mode", ())
+            if ob.type == "MESH" and ob.mode == "EDIT"
+        ]
+        if edited:
+            from ...core.uuid_registry import get_object_uuid
+            pinned_uuids = {
+                obj_ref.uuid
+                for grp in iterate_active_object_groups(scene)
+                if grp.object_type != "STATIC"
+                for obj_ref in grp.assigned_objects
+                if obj_ref.included and obj_ref.uuid
+            }
+            any_pin_obj_in_edit = any(
+                get_object_uuid(ob) in pinned_uuids for ob in edited
+            )
     except Exception:
         any_pin_obj_in_edit = False
     rod_needs_rebuild = (
@@ -147,8 +165,13 @@ def draw_overlay_callback():
         or abs(view_distance - cached_view_distance)
            > _VIEW_DISTANCE_TOL * cached_view_distance
     )
+    # Fetched lazily by the first rebuild block that needs it and reused by
+    # the later ones, so a quiet redraw (no rebuild fires) makes zero calls
+    # while a rebuild frame fetches the (identical) depsgraph exactly once.
+    depsgraph = None
     if rod_needs_rebuild:
-        depsgraph = context.evaluated_depsgraph_get()
+        if depsgraph is None:
+            depsgraph = context.evaluated_depsgraph_get()
         rebuilt_rod = False
         rebuilt_pin = False
         rebuilt_snap = False
@@ -220,6 +243,16 @@ def draw_overlay_callback():
 
         grouped: dict[tuple, list] = {}
         for vertex, size, color in snap_points:
+            # Clip only points behind the camera (ndc.w <= 0), matching the
+            # pin_data block. Without this, snap markers behind the camera
+            # render as oversized degenerate dots under program_point_size.
+            clip = (
+                projection_matrix
+                @ view_matrix
+                @ Vector((vertex[0], vertex[1], vertex[2], 1.0))
+            )
+            if clip.w <= 0:
+                continue
             grouped.setdefault((float(size), tuple(color)), []).append(vertex)
         for (size, color), verts in grouped.items():
             batch = batch_for_shader(shader, "POINTS", {"pos": verts})
@@ -346,15 +379,28 @@ def draw_overlay_callback():
     if view_needs_rebuild:
         try:
             if hide_pin_operations:
-                _overlay_cache["op_batches"] = []
-                _overlay_cache["op_labels"] = []
+                op_batches, op_labels = [], []
             else:
-                depsgraph = context.evaluated_depsgraph_get()
+                if depsgraph is None:
+                    depsgraph = context.evaluated_depsgraph_get()
                 op_batches, op_labels = _build_operation_batches(
                     scene, depsgraph, view_distance,
                 )
-                _overlay_cache["op_batches"] = op_batches
-                _overlay_cache["op_labels"] = op_labels
+            # PDRD hinge axle gizmos. Drawn at the same TRIS site as pin
+            # operations but independent of `hide_pin_operations`: a hinge is
+            # a structural joint, not a pin op.
+            try:
+                if depsgraph is None:
+                    depsgraph = context.evaluated_depsgraph_get()
+                h_batches, h_labels = _build_pdrd_hinge_batches(
+                    scene, depsgraph, view_distance,
+                )
+                op_batches = op_batches + h_batches
+                op_labels = op_labels + h_labels
+            except Exception:
+                pass
+            _overlay_cache["op_batches"] = op_batches
+            _overlay_cache["op_labels"] = op_labels
         except Exception:
             _overlay_cache["op_batches"] = []
             _overlay_cache["op_labels"] = []
@@ -374,7 +420,7 @@ def draw_overlay_callback():
             if prim_type == "POINTS":
                 point_shader.bind()
                 point_shader.uniform_float("color", color)
-                point_shader.uniform_float("size", 8.0)
+                point_shader.uniform_float("size", _OP_POINT_SIZE)
                 batch.draw(point_shader)
             else:
                 tri_shader.bind()
@@ -417,7 +463,8 @@ def draw_overlay_callback():
         if v_ver != _overlay_cache["violation_version"]:
             _overlay_cache["violation_version"] = v_ver
             if v_list:
-                depsgraph = context.evaluated_depsgraph_get()
+                if depsgraph is None:
+                    depsgraph = context.evaluated_depsgraph_get()
                 vb, vl = _build_violation_batches(scene, depsgraph, v_list)
                 _overlay_cache["violation_batches"] = vb
                 _overlay_cache["violation_labels"] = vl
@@ -442,7 +489,7 @@ def draw_overlay_callback():
             if prim_type == "POINTS":
                 point_shader.bind()
                 point_shader.uniform_float("color", color)
-                point_shader.uniform_float("size", 16.0)
+                point_shader.uniform_float("size", _VIOLATION_POINT_SIZE)
                 batch.draw(point_shader)
             else:
                 tri_shader.bind()

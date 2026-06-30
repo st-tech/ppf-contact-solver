@@ -15,7 +15,8 @@ pub const HEADER_TCMD: &[u8; 4] = b"TCMD";
 
 /// 4-byte JSON header. Followed by a single newline-terminated JSON
 /// document; `request` field selects the sub-handler (upload_atomic,
-/// data_send, data_receive, notebook_send, notebook_delete).
+/// upload_notify, data_send, data_receive, notebook_send,
+/// notebook_delete).
 pub const HEADER_JSON: &[u8; 4] = b"JSON";
 
 /// 4-byte binary-data header. Currently a stub; the addon doesn't
@@ -67,13 +68,21 @@ where
 /// Chunk size for `read_exact_n_chunked`. 32 KB.
 const RECV_CHUNK: usize = 32 * 1024;
 
+/// Cap on the up-front reservation in `read_exact_n_chunked`. The Vec
+/// still grows via `extend_from_slice` as data arrives, so correctness
+/// is unchanged; this only bounds the initial allocation so an
+/// untrusted `n` cannot request a multi-terabyte buffer before the
+/// first byte is read. Callers should still reject oversized declared
+/// sizes up front (see MAX_PAYLOAD_BYTES); this is defense-in-depth.
+const MAX_RECV_RESERVE: usize = 256 * 1024;
+
 /// Read `n` bytes in 32 KB chunks. Avoids one giant allocation for
 /// multi-MB pickles.
 pub async fn read_exact_n_chunked<R>(reader: &mut R, n: usize) -> std::io::Result<Vec<u8>>
 where
     R: AsyncReadExt + Unpin,
 {
-    let mut out = Vec::with_capacity(n);
+    let mut out = Vec::with_capacity(n.min(MAX_RECV_RESERVE));
     let mut remaining = n;
     let mut buf = [0u8; RECV_CHUNK];
     while remaining > 0 {
@@ -141,5 +150,21 @@ mod tests {
         let mut r = BufReader::new(cur);
         let err = read_line(&mut r, 16).await.unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    }
+
+    // A huge declared `n` must not trigger an up-front multi-terabyte
+    // reservation (which would abort the process). The reservation is
+    // capped at MAX_RECV_RESERVE, so with a short reader the call
+    // simply streams what it can and then reports a truncated read.
+    #[tokio::test]
+    async fn read_exact_n_chunked_caps_upfront_reservation() {
+        let cur = Cursor::new(vec![0u8; 64]);
+        let mut r = BufReader::new(cur);
+        // A petabyte-scale declared size: the old `with_capacity(n)`
+        // would abort here; the capped reservation lets us reach the
+        // EOF path instead.
+        let huge = 1usize << 50;
+        let err = read_exact_n_chunked(&mut r, huge).await.unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::UnexpectedEof);
     }
 }

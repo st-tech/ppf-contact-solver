@@ -11,6 +11,7 @@ from ...models.collection_utils import (
     sort_keyframes_by_frame,
     validate_no_duplicate_frame,
 )
+from ...models.defaults import SCENE_PARAM_ALIASES
 from ...models.groups import get_addon_data
 from .._api_markers import blender_api
 
@@ -223,10 +224,8 @@ class _SceneProxy:
     def __setattr__(self, key, value):
         bpy.ops.zozo_contact_solver.set(key=str(key), value=str(value))
 
-    _ALIASES = {"gravity": "gravity_3d"}
-
     def __getattr__(self, key):
-        key = self._ALIASES.get(key, key)
+        key = SCENE_PARAM_ALIASES.get(key, key)
         scene = bpy.context.scene
         addon_data = get_addon_data(scene)
         if hasattr(addon_data.state, key):

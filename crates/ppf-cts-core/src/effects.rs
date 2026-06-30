@@ -3,16 +3,19 @@
 // Review: Ryoichi Ando (ryoichi.ando@zozo.com)
 // License: Apache v2.0
 //
-// Typed effect enum for the server state machine. Direct 1:1 port of
-// server/effects.py. Effects describe side-effects to perform; they
-// carry no behavior. The executor (in ppf-cts-server) is the only
-// place they're actually run.
+// Typed effect enum for the server state machine. Historically ported
+// from the now-removed server/effects.py (Rust is now authoritative).
+// Effects describe side-effects to perform; they carry no behavior.
+// The executor (in ppf-cts-server) is the only place they're actually
+// run.
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Effect {
     // ---- Build effects ----
-    /// Spawn the background build task.
-    DoSpawnBuild,
+    /// Spawn the background build task. `preserve_output` flows to the
+    /// build worker as `--preserve-output`, keeping `session/output/`
+    /// checkpoints in place for a resume-rebuild.
+    DoSpawnBuild { preserve_output: bool },
     /// Signal the build task to stop (via CancellationToken).
     DoCancelBuild,
 

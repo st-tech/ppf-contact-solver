@@ -11,12 +11,31 @@ This module provides decorators that eliminate boilerplate code by automatically
 import functools
 import inspect
 import re
+import types
 
 from collections.abc import Callable
 from typing import Any, Union, get_type_hints
 
 # Registry for all decorated handlers
 _handler_registry: dict[str, dict[str, Any]] = {}
+
+# Known docstring section headers that terminate the Args section.
+_DOCSTRING_SECTION_HEADERS = {
+    "args",
+    "arguments",
+    "parameters",
+    "returns",
+    "return",
+    "raises",
+    "yields",
+    "yield",
+    "examples",
+    "example",
+    "note",
+    "notes",
+    "see also",
+    "attributes",
+}
 
 
 # Custom exceptions for clean error handling
@@ -26,10 +45,6 @@ class MCPError(Exception):
 
 class ValidationError(MCPError):
     """Exception for parameter validation errors."""
-
-
-class ConnectionError(MCPError):
-    """Exception for connection-related errors."""
 
 
 def parse_docstring(func: Callable) -> dict[str, Any]:
@@ -47,35 +62,76 @@ def parse_docstring(func: Callable) -> dict[str, Any]:
         return {"description": "", "parameters": {}}
 
     doc = inspect.cleandoc(func.__doc__)
-    lines = doc.split("\n")
+    # Keep the raw lines so indentation is available for terminating the
+    # Args section and for detecting wrapped (continuation) descriptions.
+    raw_lines = doc.split("\n")
 
     # Extract description (first line)
-    description = lines[0].strip() if lines else ""
+    description = raw_lines[0].strip() if raw_lines else ""
 
     # Parse Args section
     parameters = {}
     in_args_section = False
+    args_indent = 0
+    last_param = None
+    last_param_indent = 0
 
-    for line in lines:
-        line = line.strip()
+    for raw_line in raw_lines:
+        stripped = raw_line.strip()
+        indent = len(raw_line) - len(raw_line.lstrip())
+        header = stripped.rstrip(":").lower()
 
         # Detect Args section
-        if line.lower() in ["args:", "arguments:", "parameters:"]:
+        if (
+            header in ("args", "arguments", "parameters")
+            and stripped.endswith(":")
+        ):
             in_args_section = True
+            args_indent = indent
+            last_param = None
             continue
 
-        # End of Args section
-        if in_args_section and line and not line.startswith(" ") and ":" not in line:
+        if not in_args_section:
+            continue
+
+        # A known section header (Returns:, Raises:, etc.) at the same or
+        # lower indentation than Args: ends the section. Don't terminate
+        # merely because a line lacks a colon.
+        if stripped and indent <= args_indent and header in _DOCSTRING_SECTION_HEADERS:
             break
 
+        if not stripped:
+            continue
+
         # Parse parameter line: "param_name: description"
-        if in_args_section and ":" in line:
-            match = re.match(r"(\w+):\s*(.+)", line)
-            if match:
-                param_name, param_desc = match.groups()
-                parameters[param_name] = param_desc.strip()
+        match = re.match(r"(\w+):\s*(.+)", stripped)
+        if match:
+            param_name, param_desc = match.groups()
+            parameters[param_name] = param_desc.strip()
+            last_param = param_name
+            last_param_indent = indent
+        elif last_param is not None and indent > last_param_indent:
+            # Wrapped continuation of the previous parameter's description.
+            parameters[last_param] = f"{parameters[last_param]} {stripped}".strip()
+        else:
+            # Free-form text that is not a parameter or a continuation;
+            # stop attaching lines to the previous parameter.
+            last_param = None
 
     return {"description": description, "parameters": parameters}
+
+
+def _union_args(python_type: Any) -> tuple | None:
+    """Return the member types of a Union, or None if not a Union.
+
+    Covers both the typing.Union form (Optional[T], Union[A, B]) and the
+    PEP 604 'A | B' form (types.UnionType), which has no typing.Union origin.
+    """
+    if getattr(python_type, "__origin__", None) is Union:
+        return python_type.__args__
+    if isinstance(python_type, types.UnionType):
+        return python_type.__args__
+    return None
 
 
 def get_json_schema_type(python_type: type) -> dict[str, Any]:
@@ -87,13 +143,16 @@ def get_json_schema_type(python_type: type) -> dict[str, Any]:
     Returns:
         JSON Schema type definition
     """
-    # Handle Union types (Optional[T] is Union[T, None])
-    if hasattr(python_type, "__origin__") and python_type.__origin__ is Union:
-        args = python_type.__args__
-        # Optional[T] -> just use T
-        if len(args) == 2 and type(None) in args:
-            non_none_type = args[0] if args[1] is type(None) else args[1]
-            return get_json_schema_type(non_none_type)
+    # Handle Union types (Optional[T] is Union[T, None]); also the PEP 604
+    # 'T | None' form, which is a types.UnionType with no typing.Union origin.
+    union_args = _union_args(python_type)
+    if union_args is not None:
+        non_none = [arg for arg in union_args if arg is not type(None)]
+        # Optional[T] / 'T | None' -> just use T
+        if len(non_none) == 1:
+            return get_json_schema_type(non_none[0])
+        # Genuine multi-member union -> advertise the alternatives.
+        return {"anyOf": [get_json_schema_type(arg) for arg in non_none]}
 
     # Handle List types
     if hasattr(python_type, "__origin__") and python_type.__origin__ is list:
@@ -235,8 +294,34 @@ def validate_and_convert_args(func: Callable, args: dict[str, Any]) -> dict[str,
                         value = float(value)
                     elif expected_type is str and not isinstance(value, str):
                         value = str(value)
-                    elif expected_type is bool and isinstance(value, str | int):
-                        value = bool(value)
+                    elif expected_type is bool:
+                        # Parse booleans explicitly: bool("false")/bool("0") are
+                        # truthy, so the builtin would invert the False case.
+                        if isinstance(value, str):
+                            normalized = value.strip().lower()
+                            if normalized in ("true", "1", "yes", "on"):
+                                value = True
+                            elif normalized in ("false", "0", "no", "off", ""):
+                                value = False
+                            else:
+                                raise ValidationError(
+                                    f"Parameter '{param_name}' must be a boolean, "
+                                    f"got {value!r}"
+                                )
+                        elif isinstance(value, int):
+                            # bool is a subclass of int; native bool never
+                            # reaches this branch (handled by isinstance above).
+                            if value in (0, 1):
+                                value = bool(value)
+                            else:
+                                raise ValidationError(
+                                    f"Parameter '{param_name}' must be 0 or 1 for "
+                                    f"boolean, got {value!r}"
+                                )
+                        else:
+                            raise ValidationError(
+                                f"Parameter '{param_name}' must be of type bool"
+                            )
                     else:
                         raise ValidationError(
                             f"Parameter '{param_name}' must be of type {expected_type.__name__}"
@@ -310,7 +395,6 @@ def mcp_handler(func: Callable) -> Callable:
     _handler_registry[handler_name] = {
         "func": wrapper,  # Store the wrapper, not the original function
         "schema": schema,
-        "category": "general",
     }
 
     # Preserve original function for introspection
@@ -332,10 +416,6 @@ def connection_handler(func: Callable) -> Callable:
     """
     decorated = mcp_handler(func)
 
-    # Update category
-    if func.__name__ in _handler_registry:
-        _handler_registry[func.__name__]["category"] = "connection"
-
     @functools.wraps(decorated)
     def wrapper(args: dict[str, Any]) -> dict[str, Any]:
         # Import here to avoid circular imports
@@ -352,6 +432,12 @@ def connection_handler(func: Callable) -> Callable:
 
         return decorated(args)
 
+    # mcp_handler already registered the inner wrapper; re-point the registry
+    # entry at this guarded outer wrapper so the connection check is actually
+    # dispatched (handlers are resolved exclusively via the registry).
+    if func.__name__ in _handler_registry:
+        _handler_registry[func.__name__]["func"] = wrapper
+
     return wrapper
 
 
@@ -362,31 +448,23 @@ def group_handler(func: Callable) -> Callable:
         func: Function to decorate
 
     Returns:
-        Decorated function with group validation helpers
+        Decorated function (currently equivalent to ``mcp_handler``; no extra behavior)
     """
     decorated = mcp_handler(func)
-
-    # Update category
-    if func.__name__ in _handler_registry:
-        _handler_registry[func.__name__]["category"] = "group"
 
     return decorated
 
 
 def simulation_handler(func: Callable) -> Callable:
-    """Decorator for handlers that require server status checks.
+    """Decorator for simulation-related handlers.
 
     Args:
         func: Function to decorate
 
     Returns:
-        Decorated function with simulation status validation
+        Decorated function (currently equivalent to ``mcp_handler``; no extra behavior)
     """
     decorated = mcp_handler(func)
-
-    # Update category
-    if func.__name__ in _handler_registry:
-        _handler_registry[func.__name__]["category"] = "simulation"
 
     return decorated
 
@@ -398,13 +476,9 @@ def debug_handler(func: Callable) -> Callable:
         func: Function to decorate
 
     Returns:
-        Decorated function with debug category
+        Decorated function (currently equivalent to ``mcp_handler``; no extra behavior)
     """
     decorated = mcp_handler(func)
-
-    # Update category
-    if func.__name__ in _handler_registry:
-        _handler_registry[func.__name__]["category"] = "debug"
 
     return decorated
 
@@ -416,13 +490,9 @@ def remote_handler(func: Callable) -> Callable:
         func: Function to decorate
 
     Returns:
-        Decorated function with remote category
+        Decorated function (currently equivalent to ``mcp_handler``; no extra behavior)
     """
     decorated = mcp_handler(func)
-
-    # Update category
-    if func.__name__ in _handler_registry:
-        _handler_registry[func.__name__]["category"] = "remote"
 
     return decorated
 

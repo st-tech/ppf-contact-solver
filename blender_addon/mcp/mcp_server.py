@@ -7,7 +7,6 @@ import time
 
 from http.server import ThreadingHTTPServer
 
-from ..core.utils import get_timer_wait_time
 from ..models.defaults import DEFAULT_MCP_PORT
 from .http_handler import MCPRequestHandler
 from .server_utils import is_port_available, wait_for_port_release
@@ -23,6 +22,8 @@ class BlenderMCPServer:
         self.running = False
         self.port = DEFAULT_MCP_PORT
         self.shutdown_event = threading.Event()
+        self._bind_ready = threading.Event()
+        self._bind_error = None
 
     def is_running(self):
         """Check if the MCP server is currently running."""
@@ -65,6 +66,11 @@ class BlenderMCPServer:
         self.running = True
         self.shutdown_event.clear()  # Reset shutdown event
 
+        # Reset bind signaling before launching the thread so start() observes
+        # only this run's result (and never a stale set() from a prior start).
+        self._bind_error = None
+        self._bind_ready.clear()
+
         def run_server():
             try:
                 self.server = ThreadingHTTPServer(
@@ -84,13 +90,27 @@ class BlenderMCPServer:
                 # Use timeout to make shutdown more responsive
                 self.server.timeout = 1.0
 
+            except Exception as e:
+                # Construction/bind failed: report the real error to start()
+                # instead of letting it infer success from a port probe.
+                self._bind_error = e
+                print(f"MCP Server error: {e}")
+                self._bind_ready.set()
+                self.running = False
+                self.shutdown_event.set()
+                print("MCP Server: Server thread exiting")
+                return
+
+            # Server is fully constructed and bound; signal start() to return.
+            self._bind_ready.set()
+
+            try:
                 while self.running and not self.shutdown_event.is_set():
                     try:
                         self.server.handle_request()
                     except OSError:
                         # Socket was closed, exit gracefully
                         break
-
             except Exception as e:
                 print(f"MCP Server error: {e}")
             finally:
@@ -101,17 +121,22 @@ class BlenderMCPServer:
         self.thread = threading.Thread(target=run_server, daemon=True)
         self.thread.start()
 
-        # Give the server a moment to start and verify it's running
-        time.sleep(get_timer_wait_time())
-
-        # Verify the server actually started
-        if not is_port_available(port):
-            # Server should have bound to the port
-            print(f"MCP Server: Confirmed running on port {port}")
-        else:
-            # Something went wrong
+        # Wait for the thread to actually finish binding (or fail), instead of
+        # sleeping a fixed interval and re-probing the port (which races the
+        # async bind and cannot tell our listener from a foreign one).
+        ready = self._bind_ready.wait(timeout=5.0)
+        if not ready:
             self.running = False
-            raise Exception(f"MCP Server: Failed to bind to port {port}")
+            raise Exception(
+                f"MCP Server: Timed out waiting for bind on port {port}"
+            )
+        if self._bind_error is not None:
+            self.running = False
+            raise Exception(
+                f"MCP Server: Failed to bind to port {port}: {self._bind_error}"
+            )
+
+        print(f"MCP Server: Confirmed running on port {port}")
 
     def stop(self):
         """Stop the MCP server with proper coordination and error handling."""

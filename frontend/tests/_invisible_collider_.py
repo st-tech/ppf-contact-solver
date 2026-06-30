@@ -41,6 +41,9 @@ class MockWall:
     def get_entry(self):
         return [(self._position, 0.0)]
 
+    def is_static_collider(self) -> bool:
+        return len(self.get_entry()) == 1
+
     @property
     def normal(self):
         return self._normal
@@ -63,6 +66,9 @@ class MockSphere:
 
     def get_entry(self):
         return [(self._center, self._radius, 0.0)]
+
+    def is_static_collider(self) -> bool:
+        return len(self.get_entry()) == 1
 
     @property
     def is_inverted(self):

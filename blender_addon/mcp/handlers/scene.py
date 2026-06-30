@@ -99,15 +99,7 @@ def remove_invisible_collider(index: int):
     Args:
         index: Zero-based index as reported by list_invisible_colliders.
     """
-    state = bpy.context.scene.zozo_contact_solver.state
-    n = len(state.invisible_colliders)
-    if index < 0 or index >= n:
-        raise MCPError(f"Collider index {index} out of range (0..{n - 1})")
-    state.invisible_colliders.remove(index)
-    if state.invisible_colliders_index >= len(state.invisible_colliders):
-        state.invisible_colliders_index = max(0, len(state.invisible_colliders) - 1)
-    from ...models.groups import invalidate_overlays
-    invalidate_overlays()
+    _call(mutation.remove_invisible_collider, index)
     return f"Removed collider at index {index}"
 
 

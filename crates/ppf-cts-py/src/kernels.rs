@@ -27,22 +27,9 @@ use numpy::{
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
 
-fn vec3(arr: &PyReadonlyArray1<'_, f64>, name: &str) -> PyResult<[f64; 3]> {
-    let s = arr
-        .as_slice()
-        .map_err(|_| PyTypeError::new_err(format!("{name} must be C-contiguous")))?;
-    if s.len() != 3 {
-        return Err(PyValueError::new_err(format!(
-            "{name} must have length 3, got {}",
-            s.len()
-        )));
-    }
-    Ok([s[0], s[1], s[2]])
-}
-
 #[pyfunction]
 #[pyo3(signature = (vertices, is_pinned, wall_pos, wall_normal_unit))]
-pub fn check_wall_violations(
+pub fn check_wall_violations_single(
     py: Python<'_>,
     vertices: PyReadonlyArray2<'_, f64>,
     is_pinned: PyReadonlyArray1<'_, bool>,
@@ -71,8 +58,8 @@ pub fn check_wall_violations(
             n_verts
         )));
     }
-    let wp = vec3(&wall_pos, "wall_pos")?;
-    let wn = vec3(&wall_normal_unit, "wall_normal_unit")?;
+    let wp = crate::utils_py::vec3(&wall_pos, "wall_pos")?;
+    let wn = crate::utils_py::vec3(&wall_normal_unit, "wall_normal_unit")?;
 
     let out = py.allow_threads(|| ic::check_wall_violations(v_slice, p_slice, wp, wn));
     Ok(out)
@@ -383,6 +370,9 @@ pub fn check_self_intersection(
             tris: t_slice,
             is_collider: coll,
             rod_edges: rod,
+            // Standalone utility binding (tests / _intersection_.py); the PDRD
+            // body filter is applied only in the scene-build assemble path.
+            tri_body_id: None,
         })
     });
     Ok(pairs)

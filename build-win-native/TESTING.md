@@ -17,7 +17,7 @@ The testing process uses two Windows instances:
 
 Both instances should have:
 - Windows Server 2025
-- NVIDIA GPU (e.g., L4 on G6e instances)
+- NVIDIA GPU (e.g., L40S on G6e instances)
 - NVIDIA driver installed
 - SSH access configured
 
@@ -128,7 +128,8 @@ bundle.bat /nopause
 ```
 
 This creates a self-contained distribution in `build-win-native\dist\` containing:
-- `target\release\ppf-contact-solver.exe` - legacy CUDA driver binary (the Blender addon's `WIN_NATIVE` backend separately spawns `ppf-cts-server.exe`, which `bundle.bat` does not yet copy)
+- `target\release\ppf-cts-server.exe` - Rust solver host (the Blender addon's `WIN_NATIVE` backend)
+- `target\release\ppf-contact-solver.exe` - CUDA solver driver binary
 - `bin\` - DLLs (libsimbackend_cuda.dll, cudart64_12.dll)
 - `python\` - Embedded Python environment
 - `mingit\` - MinGit for repository cloning

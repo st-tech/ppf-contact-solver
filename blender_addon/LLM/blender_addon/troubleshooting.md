@@ -10,11 +10,17 @@ This file condenses `docs/blender_addon/troubleshooting.md` into a self-containe
 - Why: the add-on vendors both packages but only populates the vendored copies on demand.
 - Fix: click **Install Paramiko** (or **Install Docker**) on the main panel; it runs `pip install` in a background thread.
 
+### "No module named cbor2"
+
+- You see: a popup or raised `ModuleNotFoundError` / `Cbor2NotInstalledError` mentioning `cbor2` at Transfer time, or a `cbor2` install prompt on the main panel before connecting. cbor2 encodes every Transfer regardless of backend.
+- Why: cbor2 ships as a per-ABI wheel (`cbor2==6.0.1`) in `blender_manifest.toml` and is installed into Blender's extension site-packages when the packaged extension is installed through Blender's installer. It is not present if the add-on was copied in manually, or a 5.0->5.1 settings migration carried it over without reinstalling its wheels.
+- Fix: reinstall the extension through Blender (**Get Extensions** or **Install from Disk**) so its bundled wheel is installed, or click **Install cbor2** on the main panel. The button pip-installs the matching `cbor2==6.0.1` wheel for the running interpreter into Blender's user `scripts/addons/modules/` dir (on `sys.path`); same paths and last-resort `pip install --target` recipe as the next entry.
+
 ### Install operator hangs or fails
 
 - You see: install modal never returns, or closes with `Failed to install paramiko` / `Failed to install docker`.
 - Why: `pip` subprocess returned non-zero (network error, no compiler for a C extension, write-denied target), or it exceeded the 120 s internal timeout.
-- Fix: check Blender system console for full `pip` stderr. Verify the add-on directory is writable; as a last resort run `python -m pip install --target <addon>/lib paramiko docker`.
+- Fix: check Blender system console for full `pip` stderr. Verify the install target is writable; the target is Blender's user `scripts/addons/modules/` dir (macOS: `~/Library/Application Support/Blender/<ver>/scripts/addons/modules/`, Linux: `~/.config/blender/<ver>/scripts/addons/modules/`, Windows: `%APPDATA%\Blender Foundation\Blender\<ver>\scripts\addons\modules\`). As a last resort run `python -m pip install --target <that path> paramiko docker`.
 
 ## Connection: Local
 
@@ -149,7 +155,7 @@ Note: **Save** overwrites the currently selected entry and rewrites the whole fi
 ### Status: "Protocol version mismatch"
 
 - You see: this exact status.
-- Why: the server reports a wire version other than `0.02`.
+- Why: the server reports a wire version other than `0.10`.
 - Fix: rebuild the solver from a revision that matches the add-on, or update the add-on.
 
 ### "Remote path not found (.../ppf-cts-server)."
@@ -248,6 +254,12 @@ Note: **Save** overwrites the currently selected entry and rewrites the whole fi
 - You see: encoder aborts transfer with this ValueError.
 - Why: two active groups reference mesh objects that share a name. The encoder uses the object name as routing key and cannot disambiguate duplicates.
 - Fix: rename one of the two objects.
+
+### `ValueError: Object '...' has N isolated vertex(es)` (substring "isolated vert")
+
+- You see: transfer aborts with this ValueError naming the object, the count, and up to eight vertex indices.
+- Why: a Static collider mesh has vertices that belong to no triangle (no face). The solver averages each collider vertex's contact parameters over its incident faces and aborts when a vertex has none. Common in imported models with stray points.
+- Fix: click **Remove Isolated Vertices** under the error (operator `ssh.remove_isolated_vertices`), or over MCP call `remove_isolated_static_vertices` (preview first with `detect_isolated_static_vertices`); or in Edit Mode run Select > All by Trait > Loose Geometry, then Mesh > Delete > Loose. Transfer again.
 
 ### "Objects missing UUID" / "Stale UUID references"
 

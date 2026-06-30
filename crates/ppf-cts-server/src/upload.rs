@@ -23,9 +23,9 @@ use ppf_cts_formats::files::{DATA_HASH_FILE, PARAM_HASH_FILE, UPLOAD_ID_FILE};
 ///
 /// Resolution order:
 ///   1. `config.data_root` (set in tests via `EngineConfig`):
-///      `<override>/git-<branch>/<name>`.
+///      `<override>/<name>` (flat -- no git-<branch> segment).
 ///   2. `PPF_CTS_DATA_ROOT` env var (set by the test rig orchestrator):
-///      `<env>/git-<branch>/<name>`.
+///      `<env>/<name>` (flat -- no git-<branch> segment).
 ///   3. POSIX: `~/.local/share/ppf-cts/git-<branch>/<name>`.
 ///   4. Windows: `<repo_root>/local/share/ppf-cts/git-<branch>/<name>`.
 ///
@@ -60,17 +60,29 @@ pub fn make_root(name: &str, config: &crate::EngineConfig) -> PathBuf {
     data_dir.join(name)
 }
 
+/// Resolve the repo root from the running binary, or `None` when it
+/// can't be recovered. The binary lives at
+/// `<repo>/target/release/ppf-cts-server`, so walk three parents up
+/// (file -> release -> target -> root). Returns `None` inside
+/// `cargo test`, where the test binary lives somewhere unrelated to the
+/// repo root. Callers keep their own fallback so the single definition
+/// of the parent-walk depth is shared without changing each site's
+/// fallback behavior.
+pub(crate) fn repo_root_from_exe_opt() -> Option<PathBuf> {
+    std::env::current_exe().ok().and_then(|exe| {
+        exe.parent()
+            .and_then(|p| p.parent())
+            .and_then(|p| p.parent())
+            .map(Path::to_path_buf)
+    })
+}
+
 fn repo_root_from_exe() -> PathBuf {
-    // Binary at <repo>/target/release/ppf-cts-server; walk three
-    // parents up. Falls back to cwd when current_exe can't be
-    // resolved (e.g. inside `cargo test`, where the test binary lives
-    // somewhere unrelated to the repo root).
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(root) = exe.parent().and_then(|p| p.parent()).and_then(|p| p.parent()) {
-            return root.to_path_buf();
-        }
-    }
-    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+    // Falls back to cwd when current_exe can't be resolved (e.g. inside
+    // `cargo test`, where the test binary lives somewhere unrelated to
+    // the repo root).
+    repo_root_from_exe_opt()
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
 }
 
 fn resolve_branch(repo_root: &Path) -> String {
@@ -118,13 +130,26 @@ fn param_hash_path(root: impl AsRef<Path>) -> PathBuf {
     root.as_ref().join(PARAM_HASH_FILE)
 }
 
+/// Per-write temp-file suffix: process id plus nanoseconds since the
+/// UNIX epoch. Shared by the sync `atomic_write` here and the async
+/// wire-layer stagers (`wire::data`, `wire::upload`) so all three agree
+/// on one `tmp.{pid}.{nanos}` naming scheme. The suffix only needs to
+/// avoid collisions between concurrent writers in the same directory;
+/// the `unwrap_or(0)` on a clock that predates the epoch is harmless
+/// because the pid still disambiguates and the rename is atomic.
+pub(crate) fn temp_suffix() -> String {
+    format!(
+        "{}.{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    )
+}
+
 fn atomic_write(path: &Path, content: &str) -> io::Result<()> {
-    let pid = std::process::id();
-    let ns = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    let tmp = path.with_extension(format!("tmp.{pid}.{ns}"));
+    let tmp = path.with_extension(format!("tmp.{}", temp_suffix()));
     {
         let mut f = fs::File::create(&tmp)?;
         f.write_all(content.as_bytes())?;
@@ -138,6 +163,23 @@ fn atomic_write(path: &Path, content: &str) -> io::Result<()> {
             Err(e)
         }
     }
+}
+
+/// Async single-file atomic stage: write `bytes` to `tmp`, then rename
+/// onto `final_`, removing `tmp` if the rename fails. Unlike the sync
+/// `atomic_write` above this does NOT fsync: the wire payloads it backs
+/// can be hundreds of MB and the cross-restart durability that the tiny
+/// id/hash metadata needs is not worth the latency here. Callers own
+/// the `tmp` name (build it with `temp_suffix`); this helper only
+/// stages and commits the one file, so it is unsuitable for the
+/// multi-file two-phase commit in `wire::upload`.
+pub(crate) async fn stage_and_rename(tmp: &Path, final_: &Path, bytes: &[u8]) -> io::Result<()> {
+    tokio::fs::write(tmp, bytes).await?;
+    if let Err(e) = tokio::fs::rename(tmp, final_).await {
+        let _ = tokio::fs::remove_file(tmp).await;
+        return Err(e);
+    }
+    Ok(())
 }
 
 // `read_text_file` and the `read_*` helpers below are only exercised

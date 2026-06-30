@@ -3,7 +3,7 @@
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
 # License: Apache v2.0
 
-"""Pin operations, PinHolder, PinData, SpinData, and pin TOML helpers.
+"""Pin operations, PinHolder, PinData, and pin TOML helpers.
 
 Split out of ``_scene_.py``: these classes describe pin animation
 (MoveBy, MoveTo, Spin, Scale, Torque, TransformKeyframes) and the
@@ -16,25 +16,6 @@ from typing import Optional
 import numpy as np
 
 from . import _rust  # type: ignore[attr-defined]
-
-
-@dataclass
-class SpinData:
-    """Represents spinning data for a set of vertices."""
-
-    center: np.ndarray
-    axis: np.ndarray
-    angular_velocity: float
-    t_start: float
-    t_end: float
-
-
-@dataclass
-class PinKeyframe:
-    """Represents a single keyframe for pinned vertices."""
-
-    position: np.ndarray
-    time: float
 
 
 class Operation:
@@ -73,11 +54,7 @@ class MoveByOperation(Operation):
 
     def apply(self, vertex: np.ndarray, time: float) -> np.ndarray:
         """Apply position delta to current vertex position over time range."""
-        if self.bezier_handles is not None:
-            hr, hl = self.bezier_handles
-            handles = ((float(hr[0]), float(hr[1])), (float(hl[0]), float(hl[1])))
-        else:
-            handles = None
+        handles = _nested_bezier_handles(self)
         return _rust.scene_move_by_apply(
             np.ascontiguousarray(vertex, dtype=np.float64),
             np.ascontiguousarray(self.delta, dtype=np.float64),
@@ -101,11 +78,7 @@ class MoveToOperation(Operation):
 
     def apply(self, vertex: np.ndarray, time: float) -> np.ndarray:
         """Overwrite vertex positions with target over time range."""
-        if self.bezier_handles is not None:
-            hr, hl = self.bezier_handles
-            handles = ((float(hr[0]), float(hr[1])), (float(hl[0]), float(hl[1])))
-        else:
-            handles = None
+        handles = _nested_bezier_handles(self)
         return _rust.scene_move_to_apply(
             np.ascontiguousarray(vertex, dtype=np.float64),
             np.ascontiguousarray(self.target, dtype=np.float64),
@@ -241,6 +214,12 @@ class PinData:
     unpin_time: Optional[float] = None
     transition: str = "linear"
     pull_strength: float = 0.0
+    # Optional per-vertex pull weight (np.ndarray, length == len(index),
+    # aligned to index). When set, the solver uses it per vertex instead
+    # of the scalar pull_strength, so one holder can pull different
+    # vertices with different (graceful, diffused) strengths. Exported as
+    # pin-pullw-{i}.bin alongside pin-ind-{i}.bin.
+    pull_weights: Optional[np.ndarray] = None
     # Per-pin scale on the moving (kinematic) constraint force; 1.0
     # leaves it unchanged. Applied solver-side only to kinematic pins.
     pin_stiffness: float = 1.0
@@ -250,6 +229,27 @@ class PinData:
     # never asked for these pins, so the preview should not render them
     # as pin markers.
     hide_in_preview: bool = False
+    # Set on a PULL holder whose move ops were built from a captured
+    # deformation (Capture Deformation). When true, the scene builder also
+    # emits a time-varying rest shape: the captured target trajectory is
+    # blended (per-vertex by pull weight) into the rest pose per frame, so
+    # the dynamic body's stress-free shape follows the deformation instead of
+    # fighting it. Only meaningful for pull pins on SOLID/SHELL groups.
+    rest_shape_track: bool = False
+
+
+def _nested_bezier_handles(op_or_handles):
+    """Repackage `bezier_handles = ((hr_x, hr_y), (hl_x, hl_y))` into the
+    nested float tuple the Rust `*_apply` kernels expect
+    (`Option<((f64, f64), (f64, f64))>`), or None for linear fallback.
+    Accepts either an op carrying the attribute or the handles directly,
+    mirroring `_flatten_bezier_handles`.
+    """
+    h = getattr(op_or_handles, "bezier_handles", op_or_handles)
+    if h is None:
+        return None
+    hr, hl = h
+    return ((float(hr[0]), float(hr[1])), (float(hl[0]), float(hl[1])))
 
 
 def _flatten_bezier_handles(op: "Operation"):
@@ -344,7 +344,19 @@ def _pin_to_toml_dict(pin: "PinData") -> dict:
 
 
 class PinHolder:
-    """Class to manage pinning behavior of objects."""
+    """Class to manage pinning behavior of objects.
+
+    ``self._data`` (a Python :class:`PinData`) is canonical: every export
+    path (``_pin_to_toml_dict``, the scene builder, the decoder) reads and
+    mutates it directly, and it is the sole source for the FixedScene
+    export. ``self._rust`` is a discardable parallel validator that runs the
+    same argument checks on the subset of fields it carries: ``index``,
+    ``transition``, ``unpin_time``, ``pull_strength``, ``pin_group_id``, and
+    ``operations``. It does NOT track the Python-only fields
+    ``pin_stiffness``, ``pull_weights``, and ``rest_shape_track`` (the Rust
+    ``PinData`` struct has no such fields), so those are validated and
+    stored on ``_data`` alone.
+    """
 
     _pin_counter = 0
 
@@ -363,11 +375,15 @@ class PinHolder:
             operations=[],
             pin_group_id=pin_group_id,
         )
-        # Parallel Rust mirror, kept in lockstep with `self._data`.
-        # Builder methods route validation through the mirror first;
-        # downstream callers (decoder, scene builder) keep reading the
-        # Python `PinData` dataclass, so we hand them an authoritative
-        # Python view that the Rust holder validated.
+        # Parallel Rust validator for the fields it carries (index,
+        # transition, unpin_time, pull_strength, pin_group_id, operations).
+        # It is NOT a full lockstep mirror: the Python-only fields
+        # (pin_stiffness, pull_weights, rest_shape_track) have no
+        # counterpart in the Rust PinData and are validated on
+        # `self._data` alone. Builder methods route the mirrored fields
+        # through the validator first; downstream callers (decoder, scene
+        # builder) read the canonical Python `PinData` dataclass, never the
+        # mirror, so the mirror is discardable after validation.
         self._rust = _rust.PinHolder(list(indices), pin_group_id)
 
     def __getstate__(self) -> dict:
@@ -522,6 +538,23 @@ class PinHolder:
                     f"transform_keyframes segment {i}: unsupported "
                     f"interpolation '{interp}'. Supported: {sorted(allowed)}"
                 )
+            # A BEZIER segment needs both control handles.  The Rust mirror
+            # rejects a handle-less BEZIER rather than fabricating handles
+            # (which would silently change the interpolated motion), so we
+            # reject up front here too to keep the contract consistent.
+            if interp == "BEZIER":
+                for key in ("handle_right", "handle_left"):
+                    handle = s.get(key)
+                    if handle is None:
+                        raise ValueError(
+                            f"transform_keyframes segment {i}: BEZIER "
+                            f"segment missing '{key}'"
+                        )
+                    if len(handle) != 2:
+                        raise ValueError(
+                            f"transform_keyframes segment {i}: '{key}' "
+                            f"must be a length-2 sequence"
+                        )
         local_arr = np.asarray(local_vert, dtype=np.float64)
         translations_arr = [np.asarray(t, dtype=np.float64) for t in translations]
         quaternions_arr = [np.asarray(q, dtype=np.float64) for q in quaternions]
@@ -646,6 +679,26 @@ class PinHolder:
         self._data.pull_strength = strength
         return self
 
+    def pull_per_vertex(self, weights) -> "PinHolder":
+        """Set a per-vertex pull weight array (aligned to ``self.index``).
+
+        Overrides the scalar :meth:`pull` strength per vertex on the solver
+        side (exported as ``pin-pullw-{i}.bin``). Keep a positive scalar
+        ``pull()`` too: it stays the holder's classification marker (soft
+        pull vs hard fix) for the velocity set. ``pull_weights`` is a
+        Python-only field: the Rust validator does not carry it, so the
+        mirror is left on the scalar and only ``self._data`` is updated
+        here (and ``self._data`` is what feeds the FixedScene export).
+        """
+        w = np.asarray(weights, dtype=np.float32).reshape(-1)
+        if len(w) != len(self._data.index):
+            raise ValueError(
+                "pull_per_vertex: weights length "
+                f"{len(w)} must match pin index count {len(self._data.index)}"
+            )
+        self._data.pull_weights = w
+        return self
+
     def spin(
         self,
         center: Optional[list[float]] = None,
@@ -755,6 +808,17 @@ class PinHolder:
     def pull_strength(self) -> float:
         """Get pull force strength."""
         return self._data.pull_strength
+
+    @property
+    def pull_weights(self):
+        """Get the optional per-vertex pull weight array (or None)."""
+        return self._data.pull_weights
+
+    @property
+    def rest_shape_track(self) -> bool:
+        """Whether this pull holder drives a time-varying rest shape from a
+        captured deformation (see ``PinData.rest_shape_track``)."""
+        return self._data.rest_shape_track
 
     @property
     def pin_stiffness(self) -> float:

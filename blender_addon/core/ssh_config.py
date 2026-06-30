@@ -6,6 +6,13 @@ import os
 import fnmatch
 
 
+# Per-resolve trace logging is off by default because resolve_ssh_config runs
+# on every SSH connect and would otherwise print the user's identity_file
+# (private-key path) to the console each time. Set PPF_SSH_CONFIG_DEBUG=1 to
+# enable the verbose trace.
+_DEBUG = os.environ.get("PPF_SSH_CONFIG_DEBUG", "") not in ("", "0")
+
+
 @dataclass
 class SSHConfigEntry:
     """Resolved SSH configuration for a host."""
@@ -126,7 +133,7 @@ def _parse_ssh_config_file(
             hosts.append(current_host)
 
     except Exception as e:
-        print(f"[SSH Config] Error parsing {config_path}: {e}")
+        _log(f"Error parsing {config_path}: {e}")
 
     return hosts
 
@@ -163,17 +170,20 @@ def resolve_ssh_config(
     Returns:
         SSHConfigEntry with resolved connection parameters
     """
-    _log(f"Resolving SSH config for host: {host}")
+    if _DEBUG:
+        _log(f"Resolving SSH config for host: {host}")
 
     ssh_dir = os.path.expanduser("~/.ssh")
     if config_path is None:
         config_path = os.path.join(ssh_dir, "config")
 
-    _log(f"Using config file: {config_path}")
+    if _DEBUG:
+        _log(f"Using config file: {config_path}")
 
     # If config file doesn't exist, return defaults
     if not os.path.exists(config_path):
-        _log(f"Config file does not exist, returning defaults")
+        if _DEBUG:
+            _log("Config file does not exist, returning defaults")
         return SSHConfigEntry(
             hostname=host, port=default_port, user=None, identity_file=None
         )
@@ -182,7 +192,8 @@ def resolve_ssh_config(
     visited: set = set()
     all_hosts = _parse_ssh_config_file(config_path, ssh_dir, visited)
 
-    _log(f"Parsed {len(all_hosts)} host entries from config")
+    if _DEBUG:
+        _log(f"Parsed {len(all_hosts)} host entries from config")
 
     # SSH config uses first-match semantics, but later entries can fill in
     # values not set by earlier matches. Wildcard (*) entries apply to all.
@@ -197,7 +208,11 @@ def resolve_ssh_config(
         if not matches:
             continue
 
-        _log(f"Matched pattern {host_config.patterns} -> hostname={host_config.hostname}, user={host_config.user}")
+        if _DEBUG:
+            _log(
+                f"Matched pattern {host_config.patterns} -> "
+                f"hostname={host_config.hostname}, user={host_config.user}"
+            )
 
         # Fill in values that haven't been set yet (first match wins)
         if resolved_hostname is None and host_config.hostname is not None:
@@ -216,6 +231,10 @@ def resolve_ssh_config(
         identity_file=resolved_identity_file,
     )
 
-    _log(f"Resolved: hostname={result.hostname}, port={result.port}, user={result.user}, identity_file={result.identity_file}")
+    if _DEBUG:
+        _log(
+            f"Resolved: hostname={result.hostname}, port={result.port}, "
+            f"user={result.user}, identity_file={result.identity_file}"
+        )
 
     return result

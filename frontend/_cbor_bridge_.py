@@ -13,6 +13,8 @@ the few fields that the decoder treats as numpy arrays.
 
 from __future__ import annotations
 
+import pickle
+
 import cbor2
 
 import numpy as np
@@ -41,6 +43,16 @@ KIND_VERTEX_MAP = "VertexMap"
 KIND_SURFACE_MAP = "SurfaceMap"
 KIND_APP_STATE = "AppState"
 KIND_FIXED_SESSION = "FixedSession"
+
+# Inner format version of the surface-map payload (the frame-embedding
+# maps produced by ``_bvh_.frame_mapping``). Bumped when that math changes
+# in an incompatible way. v2: switched from in-plane barycentric weights to
+# frame-embedding coefs. The frontend producers/consumers
+# (``_mesh_._tetrahedralize`` cache, ``_scene_.FixedScene.export_fixed`` envelope,
+# and :func:`loads_surface_map` below) all reference this constant. The addon
+# consumer ``blender_addon/core/effect_runner.py`` does not import frontend/,
+# so it keeps its own literal ``2`` that must be bumped in lockstep.
+SURFACE_MAP_VERSION = 2
 
 
 class CborSchemaError(RuntimeError):
@@ -89,11 +101,19 @@ def dumps_envelope(kind: str, payload) -> bytes:
 
 
 def loads_envelope(blob: bytes, expected_kind: str):
-    """Decode a CBOR envelope and return its raw payload.
+    """Decode a CBOR envelope and return its raw payload. **Test-only reader.**
 
     No type-specific rehydration; callers handle rehydration themselves
     (e.g. unpickling opaque bytes for ``KIND_APP_STATE``, casting
     ndarray-shaped lists for ``KIND_VERTEX_MAP``).
+
+    Live decode paths use the kind-specific loaders instead
+    (:func:`loads_scene`, :func:`loads_param`, :func:`loads_vertex_map`,
+    :func:`loads_surface_map`, :func:`loads_pickle_blob`); the only
+    callers of this generic reader are the round-trip tests, where it
+    pairs with :func:`dumps_envelope`. Note that :func:`dumps_envelope`
+    itself is NOT test-only: it is the live producer used by the
+    frontend writers.
     """
     env = cbor2.loads(blob)
     return _unwrap(env, expected_kind)
@@ -131,6 +151,8 @@ def _rehydrate_scene_object(obj: dict) -> None:
     """
     if obj.get("vert") is not None:
         obj["vert"] = np.asarray(obj["vert"], dtype=np.float32)
+    if obj.get("bend_rest_vert") is not None:
+        obj["bend_rest_vert"] = np.asarray(obj["bend_rest_vert"], dtype=np.float32)
     if obj.get("face") is not None:
         obj["face"] = np.asarray(obj["face"], dtype=np.uint32)
     if obj.get("edge") is not None:
@@ -187,6 +209,38 @@ def loads_param(blob: bytes) -> dict:
     return payload
 
 
+def load_param_file(path: str) -> dict:
+    """Read a ``param.pickle`` file and return its decoded payload.
+
+    Owns the open + read + byte-sniff + dispatch that the decoder sites
+    would otherwise repeat: CBOR envelopes route through
+    :func:`loads_param`, legacy raw-pickle files through ``pickle.loads``.
+    Extension validation stays at the call sites (it is not uniform: the
+    populate() ftetwild peek does not validate), so this helper does not
+    fold it in.
+    """
+    with open(path, "rb") as f:
+        blob = f.read()
+    if is_cbor(blob):
+        return loads_param(blob)
+    return pickle.loads(blob)
+
+
+def load_scene_file(path: str) -> list:
+    """Read a ``data.pickle`` file and return its decoded scene payload.
+
+    Scene-side twin of :func:`load_param_file`: CBOR envelopes route
+    through :func:`loads_scene`, legacy raw-pickle files through
+    ``pickle.loads``. As with the param reader, extension validation is
+    left to the call site.
+    """
+    with open(path, "rb") as f:
+        blob = f.read()
+    if is_cbor(blob):
+        return loads_scene(blob)
+    return pickle.loads(blob)
+
+
 def loads_vertex_map(blob: bytes) -> dict:
     """Decode a CBOR vertex-map envelope (``map.pickle`` payload).
 
@@ -218,7 +272,7 @@ def loads_surface_map(blob: bytes) -> dict:
         raise CborSchemaError("surface-map payload must be a map")
     inner_version = payload.get("version")
     maps = payload.get("maps")
-    if inner_version != 2 or not isinstance(maps, dict):
+    if inner_version != SURFACE_MAP_VERSION or not isinstance(maps, dict):
         raise CborSchemaError(
             f"surface-map inner format unsupported: version={inner_version!r}"
         )
@@ -298,3 +352,18 @@ def loads_pickle_blob(blob: bytes, expected_kind: str) -> bytes:
     raise CborSchemaError(
         f"{expected_kind} payload must be bytes or map, got {type(payload).__name__}"
     )
+
+
+def load_pickle_payload(path: str, expected_kind: str):
+    """Read a saved pickle file (CBOR-enveloped or raw) and unpickle it.
+
+    ``loads_pickle_blob`` handles both the current dict-shaped payload
+    and the older raw-bytes envelopes left on disk by earlier builds, so
+    a single sniff routes both formats. Files predating the CBOR
+    envelope are still plain pickle and are read back directly.
+    """
+    with open(path, "rb") as f:
+        blob = f.read()
+    if is_cbor(blob):
+        return pickle.loads(loads_pickle_blob(blob, expected_kind))
+    return pickle.loads(blob)

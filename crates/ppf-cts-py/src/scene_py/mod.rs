@@ -20,8 +20,7 @@
 //   * `validators`:  cold-tail validators / arithmetic helpers, mesh
 //                    literals
 //   * `pin_ops`:     MoveBy / MoveTo / Spin / Scale /
-//                    TransformKeyframe / TransformAnimation apply +
-//                    group_vertex_alias
+//                    TransformKeyframe / TransformAnimation apply
 //   * `build`:       `Scene.build` full-body assembly +
 //                    shell shrink/strain conflict
 //   * `fixed_init`:  `FixedScene.__init__` validation pipeline
@@ -73,18 +72,16 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(easing_geom::scene_all_vertices_pinned, m)?)?;
     m.add_function(wrap_pyfunction!(easing_geom::scene_uv_from_directions, m)?)?;
     // validators
-    m.add_function(wrap_pyfunction!(validators::scene_validate_merge_pair_uuids, m)?)?;
     m.add_function(wrap_pyfunction!(validators::scene_validate_surface_map_key, m)?)?;
     m.add_function(wrap_pyfunction!(validators::scene_validate_param_key_no_underscore, m)?)?;
     m.add_function(wrap_pyfunction!(validators::scene_axis_letter_to_index, m)?)?;
+    m.add_function(wrap_pyfunction!(validators::scene_model_name_to_id, m)?)?;
     m.add_function(wrap_pyfunction!(validators::scene_reduce_axis_bound, m)?)?;
     m.add_function(wrap_pyfunction!(validators::scene_validate_time_window, m)?)?;
     m.add_function(wrap_pyfunction!(validators::scene_is_supported_dyn_color, m)?)?;
     m.add_function(wrap_pyfunction!(validators::scene_wall_move_by_position, m)?)?;
     m.add_function(wrap_pyfunction!(validators::scene_sphere_move_by_entry, m)?)?;
     m.add_function(wrap_pyfunction!(validators::scene_validate_collider_time, m)?)?;
-    m.add_function(wrap_pyfunction!(validators::scene_validate_sphere_time, m)?)?;
-    m.add_function(wrap_pyfunction!(validators::scene_fixed_scene_has_violations, m)?)?;
     m.add_function(wrap_pyfunction!(validators::scene_fixed_scene_report_entries, m)?)?;
     m.add_function(wrap_pyfunction!(validators::scene_validate_known_param_name, m)?)?;
     m.add_function(wrap_pyfunction!(validators::scene_validate_collider_not_already_added, m)?)?;
@@ -110,7 +107,6 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(pin_ops::scene_scale_apply, m)?)?;
     m.add_function(wrap_pyfunction!(pin_ops::scene_transform_keyframe_apply, m)?)?;
     m.add_function(wrap_pyfunction!(pin_ops::scene_transform_animation_evaluate, m)?)?;
-    m.add_function(wrap_pyfunction!(pin_ops::scene_group_vertex_alias, m)?)?;
     // build
     m.add_function(wrap_pyfunction!(build::scene_build_fixed, m)?)?;
     m.add_function(wrap_pyfunction!(
@@ -133,5 +129,13 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(loops::scene_per_object_axis_bound, m)?)?;
     m.add_function(wrap_pyfunction!(loops::scene_concat_i64_lists, m)?)?;
     m.add_function(wrap_pyfunction!(loops::scene_validate_cross_stitch_names, m)?)?;
+    // Single source of truth for the collision-window cap, exported so the
+    // Python builder imports it instead of re-declaring the literal. Shared
+    // with the solver's collision-window table builder and the GPU-side
+    // `#define MAX_COLLISION_WINDOWS` in cpp/main/main.cu.
+    m.add(
+        "MAX_COLLISION_WINDOWS",
+        ppf_cts_core::datamodel::object::MAX_COLLISION_WINDOWS,
+    )?;
     Ok(())
 }

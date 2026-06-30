@@ -6,9 +6,9 @@
 // End-to-end test for the engine + monitor pipeline.
 // Sets up a real filesystem (tempdir), drives the state machine via
 // the public `dispatch` API to put the engine into Solver::Running,
-// then writes solver output files (vert_*.bin, finished.txt,
-// intersection_records.json) and asserts the monitor task picks them
-// up and dispatches the corresponding events.
+// then writes solver output files (vert_*.bin, the terminal status.cbor
+// record, intersection_records.json) and asserts the monitor task picks
+// them up and dispatches the corresponding events.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -16,6 +16,7 @@ use std::time::Duration;
 
 use ppf_cts_core::events::Event;
 use ppf_cts_core::state::{Build, Data, Solver};
+use ppf_cts_formats::status::{self, CrashKind, Outcome, Phase, RunStatus};
 use ppf_cts_server::config::EngineConfig;
 use ppf_cts_server::monitor::spawn_monitor;
 use ppf_cts_server::{DefaultExecutor, EffectExecutor, ServerEngine};
@@ -23,38 +24,47 @@ use ppf_cts_server::{DefaultExecutor, EffectExecutor, ServerEngine};
 mod common;
 use common::wait_until;
 
-fn write_finished(root: &Path) {
+fn out_dir(root: &Path) -> std::path::PathBuf {
     let out = root.join("session/output");
     std::fs::create_dir_all(&out).unwrap();
-    std::fs::write(out.join("finished.txt"), "ok").unwrap();
+    out
 }
 
-fn write_vert(root: &Path, n: i32) {
-    let out = root.join("session/output");
-    std::fs::create_dir_all(&out).unwrap();
-    std::fs::write(out.join(format!("vert_{n}.bin")), b"frame").unwrap();
+/// A live-run record. `pid` is this test process, so the monitor's
+/// PID-scoped liveness check sees the run as alive and never synthesizes
+/// a crash from a non-terminal record.
+fn live_status(frame: i32, phase: Phase) -> RunStatus {
+    RunStatus {
+        phase,
+        frame,
+        sim_time: 0.0,
+        resumable: false,
+        outcome: None,
+        seq: frame as u64 + 1,
+        pid: std::process::id(),
+        launch_id: "testlaunch00".into(),
+        emulated: true,
+    }
 }
 
-fn write_crash(root: &Path) {
-    let session = root.join("session");
-    std::fs::create_dir_all(&session).unwrap();
-    std::fs::write(
-        session.join("error.log"),
-        b"### intersection detected at tri 42\n",
-    )
-    .unwrap();
+/// Solver-authored progress record (the source of truth the monitor reads).
+fn stage_running(root: &Path, frame: i32) {
+    status::write_progress(&out_dir(root), &live_status(frame, Phase::Running)).unwrap();
 }
 
-fn write_save_and_quit_sentinel(root: &Path) {
-    let out = root.join("session/output");
-    std::fs::create_dir_all(&out).unwrap();
-    std::fs::write(out.join("save_and_quit"), b"").unwrap();
+fn stage_saving(root: &Path, frame: i32) {
+    status::write_progress(&out_dir(root), &live_status(frame, Phase::Saving)).unwrap();
+}
+
+/// Solver-authored terminal record.
+fn stage_terminal(root: &Path, frame: i32, outcome: Outcome) {
+    let mut rec = live_status(frame, Phase::Ended);
+    rec.outcome = Some(outcome);
+    status::write_terminal(&out_dir(root), &rec).unwrap();
 }
 
 fn write_state_checkpoint(root: &Path, n: i32) {
-    let out = root.join("session/output");
-    std::fs::create_dir_all(&out).unwrap();
-    std::fs::write(out.join(format!("state_{n}.bin.gz")), b"ckpt").unwrap();
+    std::fs::write(out_dir(root).join(format!("state_{n}.bin.gz")), b"ckpt").unwrap();
 }
 
 /// Drive the engine into `solver = Running` for `name=p, root=<dir>`
@@ -90,14 +100,15 @@ async fn monitor_detects_frame_updates() {
     drive_to_running(&engine, "p", dir.path());
     let _h = spawn_monitor(engine.clone(), executor);
 
-    // Drop a few vert files; the monitor should pick up the max.
+    // Solver advances; the monitor picks up the latest frame from the
+    // status record it rewrites in place each frame.
     for n in [1, 3, 7] {
-        write_vert(dir.path(), n);
+        stage_running(dir.path(), n);
     }
 
     // Wait up to ~500 ms for the monitor to observe.
     let _ = wait_until(|| engine.state().frame == 7, Duration::from_millis(500)).await;
-    assert_eq!(engine.state().frame, 7, "monitor should pick up max frame");
+    assert_eq!(engine.state().frame, 7, "monitor should pick up the latest frame");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -113,9 +124,8 @@ async fn monitor_dispatches_finished_on_finished_file() {
     drive_to_running(&engine, "p", dir.path());
     let _h = spawn_monitor(engine.clone(), executor);
 
-    // Solver finishes: it would write final vert + finished.txt.
-    write_vert(dir.path(), 10);
-    write_finished(dir.path());
+    // Solver finishes: it writes a terminal Finished record at frame 10.
+    stage_terminal(dir.path(), 10, Outcome::Finished);
 
     let _ = wait_until(
         || engine.state().solver == Solver::Idle,
@@ -143,13 +153,17 @@ async fn monitor_reports_crash_after_grace_period() {
     let executor: Arc<dyn EffectExecutor> = Arc::new(DefaultExecutor::new());
 
     drive_to_running(&engine, "p", dir.path());
-    // Stage the crash signature before the monitor starts so it's on
-    // disk the moment the grace period elapses. The monitor must
-    // suppress the crash signal during the grace period and emit it
-    // only after the window closes. (The crash check runs ahead of
-    // the `solver_busy` check, so a crashed solver is reported as
-    // SolverCrashed even when its process has already exited.)
-    write_crash(dir.path());
+    // The solver wrote a terminal Crashed record. A terminal outcome is
+    // authoritative (no grace / liveness needed): the monitor reports
+    // SolverCrashed straight from the record.
+    stage_terminal(
+        dir.path(),
+        0,
+        Outcome::Crashed {
+            sub_kind: CrashKind::Intersection,
+            detail: "near tri 42".into(),
+        },
+    );
     let monitor = spawn_monitor(engine.clone(), executor);
 
     let _ = wait_until(
@@ -182,10 +196,11 @@ async fn monitor_marks_resumable_when_state_files_exist_at_finish() {
     let _h = spawn_monitor(engine.clone(), executor);
 
     // Solver wrote a checkpoint then finished cleanly. The monitor
-    // should fire SolverFinished{resumable=true}, which the state
-    // machine surfaces on `state.resumable`.
+    // should fire SolverFinished{resumable=true} (finish_solver scans
+    // state_*.bin.gz), which the state machine surfaces on
+    // `state.resumable`.
     write_state_checkpoint(dir.path(), 5);
-    write_finished(dir.path());
+    stage_terminal(dir.path(), 5, Outcome::Finished);
 
     let _ = wait_until(
         || engine.state().solver == Solver::Idle,
@@ -214,9 +229,10 @@ async fn monitor_dispatches_saving_when_sentinel_appears() {
     drive_to_running(&engine, "p", dir.path());
     let _h = spawn_monitor(engine.clone(), executor);
 
-    // Solver writes the save_and_quit sentinel; the monitor must
-    // observe it and dispatch SolverSaving.
-    write_save_and_quit_sentinel(dir.path());
+    // Solver enters the saving phase (in response to a save_and_quit
+    // request); the monitor reads phase=Saving from the live record and
+    // dispatches SolverSaving.
+    stage_saving(dir.path(), 0);
 
     let _ = wait_until(
         || engine.state().solver == Solver::Saving,

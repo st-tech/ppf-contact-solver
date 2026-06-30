@@ -4,7 +4,7 @@
 // License: Apache v2.0
 //
 // FixedScene.__init__ assembly. Mirrors the body of the Python
-// constructor in frontend/_scene_.py:1594-1819. The Python path runs
+// constructor in frontend/_scene_.py. The Python path runs
 // four checks (self-intersection, rod-tri offset, contact-offset,
 // invisible-collider) and a small derived-data pass (per-tri area +
 // face-to-vertex weights). All of that lives here now; the Python
@@ -54,6 +54,12 @@ pub struct AssembleInput<'a> {
     pub tri_is_collider: &'a [bool],
     /// `(K,)` bool, collider rod edges.
     pub rod_is_collider: &'a [bool],
+    /// `(M,)` per-tri 1-based PDRD rigid-body id (0 = not a member of any
+    /// rigid body). Dynamic triangles only; static colliders are appended
+    /// with id 0 in the combined self-intersection check. Two triangles of
+    /// the same nonzero body are an intra-rigid-body self-intersection and
+    /// are tolerated (skipped). Empty slice = treat every triangle as 0.
+    pub tri_body_id: &'a [i32],
     /// `(M,)` per-tri contact-offset; empty when no offsets are set.
     pub tri_offset: &'a [f64],
     /// `(K,)` per-rod contact-offset; empty when no offsets are set.
@@ -186,9 +192,8 @@ pub fn fixed_scene_assemble(input: AssembleInput<'_>) -> Result<AssembleOutput, 
 
     // Step 2. Rod-tri offset pre-check (fatal; bubbles up as Err).
     let has_tri_offset = !input.tri_offset.is_empty() && input.tri_offset.iter().any(|&o| o > 0.0);
-    let has_rod_offset = !input.rod_offset.is_empty() && input.rod_offset.iter().any(|&o| o > 0.0);
 
-    if !input.rod_offset.is_empty() && n_rods > 0 && n_tris > 0 {
+    if !input.rod_offset.is_empty() && n_rods > 0 {
         let rods_u32: Vec<[u32; 2]> = (0..n_rods)
             .map(|i| [input.rod[2 * i] as u32, input.rod[2 * i + 1] as u32])
             .collect();
@@ -201,48 +206,62 @@ pub fn fixed_scene_assemble(input: AssembleInput<'_>) -> Result<AssembleOutput, 
                 ]
             })
             .collect();
-        let tri_off: Vec<f64> = if input.tri_offset.is_empty() {
-            vec![]
-        } else {
-            input.tri_offset.to_vec()
-        };
+        let tri_off: Vec<f64> = input.tri_offset.to_vec();
         let rod_off: Vec<f64> = input.rod_offset.to_vec();
         sb::rod_tri_contact_offset_check(&dyn_verts, &rods_u32, &tris_u32, &tri_off, &rod_off)
             .map_err(AssembleError::RodTriOffset)?;
     }
 
-    // Step 3. Self-intersection (dynamic + static combined).
+    // Step 3. Self-intersection (dynamic + static combined). The body-id
+    // array mirrors the collider array: dynamic tris carry their PDRD body
+    // id (0 = not rigid), static colliders are appended as 0 (never rigid),
+    // so an intra-rigid-body self-intersection is tolerated while rigid-vs-
+    // anything-else is still reported. An empty `tri_body_id` (no PDRD
+    // bodies in the scene) collapses to all-zeros = the old behavior.
     if n_tris > 0 {
-        let (combined_verts, combined_tris, combined_is_collider): (Vec<f64>, Vec<i32>, Vec<bool>) =
-            if let (Some(sv), Some(st)) = (input.static_verts, input.static_tris) {
-                if !st.is_empty() {
-                    let n_dyn = n_verts;
-                    let mut cv = dyn_verts.clone();
-                    cv.extend_from_slice(sv);
-                    let mut ct = input.tri.to_vec();
-                    let mut sti = st.to_vec();
-                    for v in sti.iter_mut() {
-                        *v += n_dyn as i32;
-                    }
-                    ct.extend_from_slice(&sti);
-                    let mut cc = input.tri_is_collider.to_vec();
-                    let n_static_tri = st.len() / 3;
-                    cc.extend(std::iter::repeat_n(true, n_static_tri));
-                    (cv, ct, cc)
-                } else {
-                    (
-                        dyn_verts.clone(),
-                        input.tri.to_vec(),
-                        input.tri_is_collider.to_vec(),
-                    )
+        let dyn_body_id: Vec<i32> = if input.tri_body_id.is_empty() {
+            vec![0; n_tris]
+        } else {
+            input.tri_body_id.to_vec()
+        };
+        let (combined_verts, combined_tris, combined_is_collider, combined_body_id): (
+            Vec<f64>,
+            Vec<i32>,
+            Vec<bool>,
+            Vec<i32>,
+        ) = if let (Some(sv), Some(st)) = (input.static_verts, input.static_tris) {
+            if !st.is_empty() {
+                let n_dyn = n_verts;
+                let mut cv = dyn_verts.clone();
+                cv.extend_from_slice(sv);
+                let mut ct = input.tri.to_vec();
+                let mut sti = st.to_vec();
+                for v in sti.iter_mut() {
+                    *v += n_dyn as i32;
                 }
+                ct.extend_from_slice(&sti);
+                let mut cc = input.tri_is_collider.to_vec();
+                let n_static_tri = st.len() / 3;
+                cc.extend(std::iter::repeat_n(true, n_static_tri));
+                let mut cb = dyn_body_id.clone();
+                cb.extend(std::iter::repeat_n(0, n_static_tri));
+                (cv, ct, cc, cb)
             } else {
                 (
                     dyn_verts.clone(),
                     input.tri.to_vec(),
                     input.tri_is_collider.to_vec(),
+                    dyn_body_id.clone(),
                 )
-            };
+            }
+        } else {
+            (
+                dyn_verts.clone(),
+                input.tri.to_vec(),
+                input.tri_is_collider.to_vec(),
+                dyn_body_id.clone(),
+            )
+        };
         let rod_for_check: Option<Vec<i32>> = if n_rods > 0 {
             Some(input.rod.to_vec())
         } else {
@@ -253,6 +272,7 @@ pub fn fixed_scene_assemble(input: AssembleInput<'_>) -> Result<AssembleOutput, 
             tris: &combined_tris,
             is_collider: Some(&combined_is_collider),
             rod_edges: rod_for_check.as_deref(),
+            tri_body_id: Some(&combined_body_id),
         });
         if !pairs.is_empty() {
             out.has_self_intersection = true;
@@ -297,9 +317,11 @@ pub fn fixed_scene_assemble(input: AssembleInput<'_>) -> Result<AssembleOutput, 
         }
     }
 
-    // Step 4. Contact-offset (dynamic only).
+    // Step 4. Contact-offset (dynamic only). Any rods at all force the
+    // scan via the `n_rods > 0` disjunct (rod offsets only exist when
+    // n_rods > 0), so an explicit rod-offset term would be redundant.
     let has_elements = n_tris > 0 || n_rods > 0;
-    if has_elements && (has_tri_offset || has_rod_offset || n_rods > 0) {
+    if has_elements && (has_tri_offset || n_rods > 0) {
         let mut combined_is_collider: Vec<bool> = Vec::with_capacity(n_tris + n_rods);
         combined_is_collider.extend_from_slice(input.tri_is_collider);
         combined_is_collider.extend_from_slice(input.rod_is_collider);
@@ -502,29 +524,28 @@ pub fn fixed_scene_assemble(input: AssembleInput<'_>) -> Result<AssembleOutput, 
         && !out.has_wall_violation
         && !out.has_sphere_violation
     {
+        // Build the u32 triangle table once and reuse it for both the
+        // area pass and the face-to-vert weights. With n_tris == 0 the
+        // range is empty, so this is an empty Vec (the has_dyn_color
+        // branch relies on that to produce zero-length weights).
+        let tris_u32: Vec<[u32; 3]> = (0..n_tris)
+            .map(|i| {
+                [
+                    input.tri[3 * i] as u32,
+                    input.tri[3 * i + 1] as u32,
+                    input.tri[3 * i + 2] as u32,
+                ]
+            })
+            .collect();
         if n_tris > 0 {
-            let tris_u32: Vec<[u32; 3]> = (0..n_tris)
-                .map(|i| {
-                    [
-                        input.tri[3 * i] as u32,
-                        input.tri[3 * i + 1] as u32,
-                        input.tri[3 * i + 2] as u32,
-                    ]
-                })
-                .collect();
             out.area = sb::triangle_areas(input.vert_local, &tris_u32);
         }
         if input.has_dyn_color {
-            let tris_u32: Vec<[u32; 3]> = (0..n_tris)
-                .map(|i| {
-                    [
-                        input.tri[3 * i] as u32,
-                        input.tri[3 * i + 1] as u32,
-                        input.tri[3 * i + 2] as u32,
-                    ]
-                })
-                .collect();
-            out.face_to_vert_weights = Some(sb::face_to_vert_weights(n_verts, &tris_u32, 1e-4));
+            out.face_to_vert_weights = Some(sb::face_to_vert_weights(
+                n_verts,
+                &tris_u32,
+                sb::FACE_TO_VERT_WEIGHT_EPS,
+            ));
         }
     }
 
@@ -543,6 +564,7 @@ mod tests {
             tri: &[],
             rod: &[],
             tri_is_collider: &[],
+            tri_body_id: &[],
             rod_is_collider: &[],
             tri_offset: &[],
             rod_offset: &[],
@@ -582,6 +604,7 @@ mod tests {
             tri: &tri,
             rod: &[],
             tri_is_collider: &tri_collider,
+            tri_body_id: &[],
             rod_is_collider: &[],
             tri_offset: &[],
             rod_offset: &[],
@@ -615,6 +638,7 @@ mod tests {
             tri: &tri,
             rod: &[],
             tri_is_collider: &tri_collider,
+            tri_body_id: &[],
             rod_is_collider: &[],
             tri_offset: &[],
             rod_offset: &[],
@@ -628,7 +652,7 @@ mod tests {
         let out = fixed_scene_assemble(input).unwrap();
         let w = out.face_to_vert_weights.as_ref().unwrap();
         assert_eq!(w.len(), 3);
-        let expected = 1.0 / (1.0 + 1e-4);
+        let expected = 1.0 / (1.0 + sb::FACE_TO_VERT_WEIGHT_EPS);
         for &v in w {
             assert!((v - expected).abs() < 1e-12);
         }
@@ -654,6 +678,7 @@ mod tests {
             tri: &[],
             rod: &[],
             tri_is_collider: &[],
+            tri_body_id: &[],
             rod_is_collider: &[],
             tri_offset: &[],
             rod_offset: &[],
@@ -693,6 +718,7 @@ mod tests {
             tri: &[],
             rod: &[],
             tri_is_collider: &[],
+            tri_body_id: &[],
             rod_is_collider: &[],
             tri_offset: &[],
             rod_offset: &[],
@@ -727,6 +753,7 @@ mod tests {
             tri: &[],
             rod: &[],
             tri_is_collider: &[],
+            tri_body_id: &[],
             rod_is_collider: &[],
             tri_offset: &[],
             rod_offset: &[],
@@ -764,6 +791,7 @@ mod tests {
             tri: &[],
             rod: &[],
             tri_is_collider: &[],
+            tri_body_id: &[],
             rod_is_collider: &[],
             tri_offset: &[],
             rod_offset: &[],
@@ -807,6 +835,7 @@ mod tests {
             tri: &tri,
             rod: &[],
             tri_is_collider: &tri_collider,
+            tri_body_id: &[],
             rod_is_collider: &[],
             tri_offset: &[],
             rod_offset: &[],
@@ -845,6 +874,7 @@ mod tests {
             tri: &tri,
             rod: &[],
             tri_is_collider: &tri_collider,
+            tri_body_id: &[],
             rod_is_collider: &[],
             tri_offset: &[],
             rod_offset: &[],
@@ -886,6 +916,7 @@ mod tests {
             tri: &[],
             rod: &[],
             tri_is_collider: &[],
+            tri_body_id: &[],
             rod_is_collider: &[],
             tri_offset: &[],
             rod_offset: &[],
@@ -920,6 +951,7 @@ mod tests {
             tri: &[],
             rod: &rod,
             tri_is_collider: &[],
+            tri_body_id: &[],
             rod_is_collider: &rod_collider,
             tri_offset: &[],
             rod_offset: &[],
@@ -961,6 +993,7 @@ mod tests {
             tri: &tri,
             rod: &[],
             tri_is_collider: &tri_collider,
+            tri_body_id: &[],
             rod_is_collider: &[],
             tri_offset: &[],
             rod_offset: &[],

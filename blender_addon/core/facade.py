@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..models.defaults import DEFAULT_SERVER_PORT
+from ..models.defaults import DEFAULT_SERVER_PORT, DEFAULT_SSH_KEEPALIVE_INTERVAL
 from .effect_runner import EffectRunner
 from .engine import Engine
 from .events import (
@@ -96,7 +96,7 @@ class CommunicatorFacade:
         path,
         container=None,
         server_port=DEFAULT_SERVER_PORT,
-        keepalive_interval=30,
+        keepalive_interval=DEFAULT_SSH_KEEPALIVE_INTERVAL,
     ):
         from .ssh_config import resolve_ssh_config
 
@@ -134,7 +134,7 @@ class CommunicatorFacade:
             server_port=server_port,
         ))
 
-    def connect_win_native(self, path, port):
+    def connect_win_native(self, path, port=DEFAULT_SERVER_PORT):
         self._dispatch_and_tick(ConnectRequested(
             backend_type="win_native",
             config={"path": path},
@@ -188,12 +188,35 @@ class CommunicatorFacade:
             self._runner.clear_fetched_frames()
         self._dispatch_and_tick(RunRequested())
 
-    def resume(self, context=None):
+    def resume(self, context=None, from_frame=None):
         if context:
             from ..models.groups import get_addon_data
             fetched = get_addon_data(context.scene).state.convert_fetched_frames_to_list()
+            if from_frame is not None:
+                # Drop locally-cached frames past the resume point: the
+                # solver overwrites the tail from from_frame onward, so
+                # the post-resume fetch must re-pull those frames.
+                fetched = [f for f in fetched if f <= from_frame]
             self._runner.set_fetched_frames(fetched)
-        self._dispatch_and_tick(ResumeRequested())
+        self._dispatch_and_tick(ResumeRequested(from_frame=from_frame))
+
+    def saved_state_frames(self) -> list[int]:
+        """Resumable checkpoint frames from the latest server response.
+
+        Reads the ``saved_states`` array the server attaches to every
+        status response when a root is set (see
+        ``response::build_response``). Returns a sorted, de-duplicated
+        list of frame indices, skipping any malformed entry. Empty when
+        no checkpoint has been saved yet (or no response cached).
+        """
+        raw = self._runner._response_cache.get("saved_states", []) or []
+        frames = []
+        for n in raw:
+            try:
+                frames.append(int(n))
+            except (TypeError, ValueError):
+                continue
+        return sorted(set(frames))
 
     def fetch(self, context=None):
         if context:
@@ -224,7 +247,8 @@ class CommunicatorFacade:
         ))
 
     def build_pipeline(self, data=b"", param=b"",
-                       data_hash="", param_hash="", message=""):
+                       data_hash="", param_hash="", message="",
+                       preserve_output=False):
         """Atomic upload + build in a single engine-driven pipeline.
 
         Replaces the old modal-orchestrated data_send → param_send →
@@ -234,11 +258,17 @@ class CommunicatorFacade:
         ``encoder.mesh.compute_data_hash`` and
         ``encoder.params.compute_param_hash``); pass empty for whichever
         payload is itself empty.
+
+        ``preserve_output=True`` requests a resume-rebuild that keeps the
+        ``session/output/`` checkpoints in place so a resume can re-decode
+        edited scene input without discarding already-simulated frames;
+        the default ``False`` is a fresh build that wipes the output dir.
         """
         from .events import BuildPipelineRequested
         self._dispatch_and_tick(BuildPipelineRequested(
             data=data, param=param,
             data_hash=data_hash, param_hash=param_hash, message=message,
+            preserve_output=preserve_output,
         ))
 
     def upload_only(self, data=b"", param=b"",
@@ -300,7 +330,20 @@ class CommunicatorFacade:
             info.server_running = s.server == Server.RUNNING
             info.remote_root = s.remote_root
             info.instance = self._runner.backend  # For SSH alive check
+            # getattr keeps this safe if a backend lacks the property; it is
+            # the authoritative source for docker-over-ssh detection.
+            info.container = getattr(self._runner.backend, "container", "")
         return info
+
+    def normalized_remote_root(self) -> str:
+        """Remote root with any trailing slash stripped, ``''`` when unset.
+
+        Only win_native normalizes the root at connect time; the ssh,
+        docker, and local backends pass the raw user-typed path through,
+        so a trailing slash would yield a double slash when joined into
+        an f-string. Callers also treat ``''`` as "not connected".
+        """
+        return self.connection.remote_root.rstrip("/")
 
     @property
     def response(self) -> dict[str, Any]:
@@ -419,6 +462,7 @@ _last_tick_status = [None]
 # monotonic timestamp when the snapshot last advanced; if it sits longer
 # than _WATCHDOG_TIMEOUT_S we dispatch FetchFailed.
 _WATCHDOG_TIMEOUT_S = 30.0
+_TICK_INTERVAL_S = 0.25  # persistent-timer poll cadence
 _last_progress_key: tuple | None = None
 _stuck_since: float = 0.0
 
@@ -482,7 +526,7 @@ def _persistent_tick() -> float:
     # crossover), do nothing. Touching PropertyGroup state during an
     # active reload can segfault Blender.
     if not _addon_ready:
-        return 0.25
+        return _TICK_INTERVAL_S
     try:
         # Keep the frame-pump modal alive. It can die on file-open or
         # reload teardown; this re-invokes it so apply_animation +
@@ -500,7 +544,7 @@ def _persistent_tick() -> float:
         # tick only does Python-side engine polling and event dispatch.
         if _engine_is_idle():
             _watchdog_reset()
-            return 0.25
+            return _TICK_INTERVAL_S
         from .events import PollTick
         engine.dispatch(PollTick())
         tick()
@@ -515,7 +559,7 @@ def _persistent_tick() -> float:
     except Exception as e:
         import logging
         logging.error(f"Engine tick error: {e}")
-    return 0.25  # Re-run every 0.25s
+    return _TICK_INTERVAL_S  # Re-run every 0.25s
 
 
 def ensure_engine_timer() -> None:
@@ -532,7 +576,7 @@ def ensure_engine_timer() -> None:
     runner.restart()
     if not _persistent_timer_registered:
         import bpy  # pyright: ignore
-        bpy.app.timers.register(_persistent_tick, first_interval=0.25, persistent=True)
+        bpy.app.timers.register(_persistent_tick, first_interval=_TICK_INTERVAL_S, persistent=True)
         _persistent_timer_registered = True
 
 

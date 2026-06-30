@@ -12,6 +12,8 @@
 // Python reference exactly; the `_bezier_progress` function in the
 // production code uses the same iteration count and stop criterion.
 
+use crate::datamodel::interp_consts::{BEZIER_NEWTON_DERIV_EPS, BEZIER_NEWTON_ITERS};
+
 #[derive(Debug, Clone, PartialEq)]
 #[derive(Default)]
 pub enum TransitionKind {
@@ -33,14 +35,14 @@ pub fn bezier_progress(t: f64, right_handle: [f64; 2], left_handle: [f64; 2]) ->
     let (p1x, p1y) = (right_handle[0], right_handle[1]);
     let (p2x, p2y) = (left_handle[0], left_handle[1]);
     let mut u = t;
-    for _ in 0..8 {
+    for _ in 0..BEZIER_NEWTON_ITERS {
         let omu = 1.0 - u;
         let omu2 = omu * omu;
         let u2 = u * u;
         let u3 = u2 * u;
         let bx = 3.0 * omu2 * u * p1x + 3.0 * omu * u2 * p2x + u3;
         let dbx = 3.0 * omu2 * p1x + 6.0 * omu * u * (p2x - p1x) + 3.0 * u2 * (1.0 - p2x);
-        if dbx.abs() < 1e-10 {
+        if dbx.abs() < BEZIER_NEWTON_DERIV_EPS {
             break;
         }
         u -= (bx - t) / dbx;

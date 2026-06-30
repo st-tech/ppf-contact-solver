@@ -412,6 +412,22 @@ __device__ bool FixedCSRMat::push(unsigned i, unsigned j, const Mat3x3f &val) {
     return found;
 }
 
+// Accumulate `val` directly into a precomputed value slot, skipping the
+// per-block row search push() performs. `slot` is the index into `value`
+// returned by the host-side slot precomputation (builder.rs, matching the
+// CVecVec row-major layout: offset[i] + position-of-j-in-row-i). atomicAdd
+// keeps it safe to fold onto a slot another source might also touch. Used by
+// the folded PDRD assembly to keep the per-body fill O(N^2) instead of O(N^3).
+__device__ void FixedCSRMat::push_at(unsigned slot, const Mat3x3f &val) {
+    float *ptr = (float *)(value.data + slot);
+    for (unsigned ii = 0; ii < 9; ++ii) {
+        float y = Map<const Vec9f>(val.data())[ii];
+        if (y) {
+            atomicAdd(ptr + ii, y);
+        }
+    }
+}
+
 __device__ bool FixedCSRMat::exists(unsigned i, unsigned j) const {
     bool found = false;
     if (i <= j) {

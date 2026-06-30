@@ -48,9 +48,11 @@ from . import bl_pin_compose_full
 from . import bl_pin_op_type_enum_stable
 from . import bl_pin_capture_deformation
 from . import bl_pin_capture_deformation_persistence
+from . import bl_recapture_all_deformations
 from . import bl_geonode_deform_input
 from . import bl_geonode_capture_range_frame_count
 from . import bl_static_smooth_by_angle_no_capture
+from . import bl_static_keyframe_capture_hint
 from . import bl_pin_stiffness_travel
 from . import bl_bake_aborts_unfetched
 from . import bl_pin_make_keyframe_writes_fcurves
@@ -68,12 +70,22 @@ from . import bl_fetch_clear_refetch
 from . import bl_geometry_hash
 from . import bl_param_change
 from . import bl_friction_mode
+from . import bl_young_mod_density_normalize
 from . import bl_save_resume
+from . import bl_resume_from_frame
+from . import bl_save_state_on_finish
 from . import bl_load_disconnect
 from . import bl_open_mainfile_disconnect
 from . import bl_param_dirty
 from . import bl_run_consistency
 from . import bl_drape_ready_to_run
+from . import bl_emulated_elastic_drape
+from . import bl_sand_emulated_roundtrip
+from . import bl_emulated_angular_spin
+from . import bl_emulated_world_spin
+from . import bl_bend_reference_shell
+from . import bl_bend_reference_rod
+from . import bl_bend_reference_rod_curve
 from . import bl_shallow_copy
 from . import bl_shared_object_data
 from . import bl_transition_chains
@@ -85,7 +97,10 @@ from . import bl_chain_reconnect
 from . import bl_chain_data_evolution
 from . import bl_chain_server_restart_after_run
 from . import bl_pc2_migration
-from . import bl_ngon_rejection
+from . import bl_ngon_triangulation
+from . import bl_duplicate_face_rejection
+from . import bl_hanging_stitch_vertex_rejection
+from . import bl_isolated_vertex_rejection
 from . import bl_upload_id_desync_recovery
 from . import bl_mesh_cache_self_heal
 from . import bl_live_frame_end_tracking
@@ -99,7 +114,43 @@ from . import bl_static_op_anim
 from . import bl_multi_group
 from . import bl_collider_keyframes
 from . import bl_stitch_merge
+from . import bl_post_snap_toggle
+from . import bl_solid_solid_stitch
+from . import bl_static_stitch
+from . import bl_shell_static_stitch
+from . import bl_static_snap_guard
 from . import bl_velocity_keyframes
+
+# world_scaling coordinate round-trip suite. The Rust solver scales all
+# input geometry by state.world_scaling on ingest and divides per-frame
+# output back by it, so authored-scale geometry / motion must survive the
+# round-trip. Kinematic rigs diff against the scale-agnostic frontend
+# reference; scale-invariance rigs run the same scene at two sizes and
+# assert the 10x relationship; an encoder rig checks relative-vs-absolute
+# gap scaling; a resume rig checks no double-scaling across a checkpoint.
+from . import bl_world_scaling_move_by
+from . import bl_world_scaling_move_by_shrink
+from . import bl_world_scaling_spin
+from . import bl_world_scaling_spin_absolute
+from . import bl_world_scaling_scale_op
+from . import bl_world_scaling_static_pin
+from . import bl_world_scaling_shell_drape
+from . import bl_world_scaling_velocity
+from . import bl_world_scaling_velocity_schedule
+from . import bl_world_scaling_solid_tet
+from . import bl_world_scaling_rod
+from . import bl_world_scaling_sand
+from . import bl_world_scaling_multi_group
+from . import bl_world_scaling_colliders
+from . import bl_world_scaling_encoder_scales
+from . import bl_world_scaling_resume
+from . import bl_world_scaling_pdrd
+
+from . import bl_pdrd_hinge
+from . import bl_pdrd_anchor_release
+from . import bl_pdrd_driven_translate
+from . import bl_pdrd_driven_rotate_vertex
+from . import bl_pdrd_panel_draws
 from . import bl_bake_animation
 from . import bl_mcp_roundtrip
 from . import bl_addon_reload_handoff
@@ -109,6 +160,10 @@ from . import bl_intersection_records_roundtrip
 from . import bl_violation_overlay_classification
 from . import bl_self_intersection_build_reject
 from . import bl_solid_zero_volume_reject
+from . import bl_solid_fix_weight_threshold
+from . import bl_tetgen_solid_build
+from . import bl_solid_overlap_pin_last_wins
+from . import bl_pin_reorder_and_gating
 
 # Copy/paste roundtrip coverage. Material Params and Pin Operations
 # expose COPYDOWN / PASTEDOWN buttons backed by a WindowManager-scoped
@@ -117,6 +172,7 @@ from . import bl_solid_zero_volume_reject
 from . import bl_copy_paste_material_params
 from . import bl_copy_paste_pin_ops
 from . import bl_copy_paste_cross_type_material
+from . import bl_material_preset_apply
 
 # Operator-poll regression: the Transfer button used to remain
 # clickable for one event-loop tick after Run.execute because its
@@ -133,6 +189,14 @@ from . import bl_progress_fetching
 # Realtime Statistics: the live ``summary`` dict the addon panel
 # renders inside the "Realtime Statistics" box during a sim.
 from . import bl_realtime_stats_shown
+
+# Abort resolution: a pending abort keeps polling until the solver is
+# confirmed terminal, so "Aborting..." never sticks (com.busy() clears).
+from . import bl_abort_resolves
+
+# Clear-Local-Animation enable signal: stateless, fast object-modifier scan
+# (scene_has_solver_cache) that reflects cache presence on every redraw.
+from . import bl_clear_anim_poll
 
 
 REGISTRY = {
@@ -171,9 +235,11 @@ REGISTRY = {
     "bl_pin_op_type_enum_stable": bl_pin_op_type_enum_stable,
     "bl_pin_capture_deformation": bl_pin_capture_deformation,
     "bl_pin_capture_deformation_persistence": bl_pin_capture_deformation_persistence,
+    "bl_recapture_all_deformations": bl_recapture_all_deformations,
     "bl_geonode_deform_input": bl_geonode_deform_input,
     "bl_geonode_capture_range_frame_count": bl_geonode_capture_range_frame_count,
     "bl_static_smooth_by_angle_no_capture": bl_static_smooth_by_angle_no_capture,
+    "bl_static_keyframe_capture_hint": bl_static_keyframe_capture_hint,
     "bl_pin_stiffness_travel": bl_pin_stiffness_travel,
     "bl_bake_aborts_unfetched": bl_bake_aborts_unfetched,
     "bl_pin_make_keyframe_writes_fcurves": bl_pin_make_keyframe_writes_fcurves,
@@ -189,12 +255,22 @@ REGISTRY = {
     "bl_geometry_hash": bl_geometry_hash,
     "bl_param_change": bl_param_change,
     "bl_friction_mode": bl_friction_mode,
+    "bl_young_mod_density_normalize": bl_young_mod_density_normalize,
     "bl_save_resume": bl_save_resume,
+    "bl_resume_from_frame": bl_resume_from_frame,
+    "bl_save_state_on_finish": bl_save_state_on_finish,
     "bl_load_disconnect": bl_load_disconnect,
     "bl_open_mainfile_disconnect": bl_open_mainfile_disconnect,
     "bl_param_dirty": bl_param_dirty,
     "bl_run_consistency": bl_run_consistency,
     "bl_drape_ready_to_run": bl_drape_ready_to_run,
+    "bl_emulated_elastic_drape": bl_emulated_elastic_drape,
+    "bl_sand_emulated_roundtrip": bl_sand_emulated_roundtrip,
+    "bl_emulated_angular_spin": bl_emulated_angular_spin,
+    "bl_emulated_world_spin": bl_emulated_world_spin,
+    "bl_bend_reference_shell": bl_bend_reference_shell,
+    "bl_bend_reference_rod": bl_bend_reference_rod,
+    "bl_bend_reference_rod_curve": bl_bend_reference_rod_curve,
     "bl_shallow_copy": bl_shallow_copy,
     "bl_shared_object_data": bl_shared_object_data,
     "bl_transition_chains": bl_transition_chains,
@@ -206,7 +282,10 @@ REGISTRY = {
     "bl_chain_data_evolution": bl_chain_data_evolution,
     "bl_chain_server_restart_after_run": bl_chain_server_restart_after_run,
     "bl_pc2_migration": bl_pc2_migration,
-    "bl_ngon_rejection": bl_ngon_rejection,
+    "bl_ngon_triangulation": bl_ngon_triangulation,
+    "bl_duplicate_face_rejection": bl_duplicate_face_rejection,
+    "bl_hanging_stitch_vertex_rejection": bl_hanging_stitch_vertex_rejection,
+    "bl_isolated_vertex_rejection": bl_isolated_vertex_rejection,
 
     # Tier 1: bug-fix-driven coverage (commits ea4303cb, 92546e18, a8766a08,
     # ff0d20ca, ...).
@@ -228,7 +307,37 @@ REGISTRY = {
     "bl_multi_group": bl_multi_group,
     "bl_collider_keyframes": bl_collider_keyframes,
     "bl_stitch_merge": bl_stitch_merge,
+    "bl_post_snap_toggle": bl_post_snap_toggle,
+    "bl_solid_solid_stitch": bl_solid_solid_stitch,
+    "bl_static_stitch": bl_static_stitch,
+    "bl_shell_static_stitch": bl_shell_static_stitch,
+    "bl_static_snap_guard": bl_static_snap_guard,
     "bl_velocity_keyframes": bl_velocity_keyframes,
+
+    # world_scaling coordinate round-trip suite.
+    "bl_world_scaling_move_by": bl_world_scaling_move_by,
+    "bl_world_scaling_move_by_shrink": bl_world_scaling_move_by_shrink,
+    "bl_world_scaling_spin": bl_world_scaling_spin,
+    "bl_world_scaling_spin_absolute": bl_world_scaling_spin_absolute,
+    "bl_world_scaling_scale_op": bl_world_scaling_scale_op,
+    "bl_world_scaling_static_pin": bl_world_scaling_static_pin,
+    "bl_world_scaling_shell_drape": bl_world_scaling_shell_drape,
+    "bl_world_scaling_velocity": bl_world_scaling_velocity,
+    "bl_world_scaling_velocity_schedule": bl_world_scaling_velocity_schedule,
+    "bl_world_scaling_solid_tet": bl_world_scaling_solid_tet,
+    "bl_world_scaling_rod": bl_world_scaling_rod,
+    "bl_world_scaling_sand": bl_world_scaling_sand,
+    "bl_world_scaling_multi_group": bl_world_scaling_multi_group,
+    "bl_world_scaling_colliders": bl_world_scaling_colliders,
+    "bl_world_scaling_encoder_scales": bl_world_scaling_encoder_scales,
+    "bl_world_scaling_resume": bl_world_scaling_resume,
+    "bl_world_scaling_pdrd": bl_world_scaling_pdrd,
+
+    "bl_pdrd_hinge": bl_pdrd_hinge,
+    "bl_pdrd_anchor_release": bl_pdrd_anchor_release,
+    "bl_pdrd_driven_translate": bl_pdrd_driven_translate,
+    "bl_pdrd_driven_rotate_vertex": bl_pdrd_driven_rotate_vertex,
+    "bl_pdrd_panel_draws": bl_pdrd_panel_draws,
     "bl_bake_animation": bl_bake_animation,
 
     # Tier 3: nice-to-have coverage that needed extra rig plumbing
@@ -247,11 +356,16 @@ REGISTRY = {
     "bl_violation_overlay_classification": bl_violation_overlay_classification,
     "bl_self_intersection_build_reject": bl_self_intersection_build_reject,
     "bl_solid_zero_volume_reject": bl_solid_zero_volume_reject,
+    "bl_solid_fix_weight_threshold": bl_solid_fix_weight_threshold,
+    "bl_tetgen_solid_build": bl_tetgen_solid_build,
+    "bl_solid_overlap_pin_last_wins": bl_solid_overlap_pin_last_wins,
+    "bl_pin_reorder_and_gating": bl_pin_reorder_and_gating,
 
     # Copy/paste clipboards (Material Params, Pin Operations).
     "bl_copy_paste_material_params": bl_copy_paste_material_params,
     "bl_copy_paste_pin_ops": bl_copy_paste_pin_ops,
     "bl_copy_paste_cross_type_material": bl_copy_paste_cross_type_material,
+    "bl_material_preset_apply": bl_material_preset_apply,
 
     # Operator-poll regression for Transfer-during-Run.
     "bl_transfer_disabled_during_run": bl_transfer_disabled_during_run,
@@ -263,6 +377,12 @@ REGISTRY = {
 
     # Realtime Statistics box.
     "bl_realtime_stats_shown": bl_realtime_stats_shown,
+
+    # Abort-state resolution.
+    "bl_abort_resolves": bl_abort_resolves,
+
+    # Clear-Local-Animation stateless enable signal.
+    "bl_clear_anim_poll": bl_clear_anim_poll,
 }
 
 

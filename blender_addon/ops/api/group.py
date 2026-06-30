@@ -15,7 +15,7 @@ from .pin import _Pin
 # ---------------------------------------------------------------------------
 
 _PARAM_PROPS = {
-    "solid_model", "shell_model",
+    "solid_model", "shell_model", "rod_model",
     "shell_density", "solid_density", "rod_density",
     "shell_young_modulus", "solid_young_modulus", "rod_young_modulus",
     "shell_poisson_ratio", "solid_poisson_ratio",
@@ -23,13 +23,17 @@ _PARAM_PROPS = {
     "use_group_bounding_box_diagonal",
     "contact_gap", "contact_gap_rat",
     "contact_offset", "contact_offset_rat",
-    "enable_strain_limit", "strain_limit",
+    "enable_strain_limit", "strain_limit_percent",
     "enable_inflate", "inflate_pressure",
     "enable_plasticity", "plasticity", "plasticity_threshold",
     "enable_bend_plasticity", "bend_plasticity", "bend_plasticity_threshold",
-    "bend_rest_angle_source",
+    "bend_rest_angle_source", "bend_rest_from_reference",
     "bend", "shrink", "shrink_x", "shrink_y", "length_factor",
     "stitch_stiffness",
+    # PDRD-specific (used only when the group's object_type is "PDRD").
+    "pdrd_density",
+    # SAND-specific (used only when the group's object_type is "SAND").
+    "sand_grain_radius", "sand_particle_mass", "sand_friction",
 }
 
 
@@ -43,7 +47,9 @@ class _ParamProxy:
 
     Whitelisted attributes:
 
-    - **Solver model**: ``solid_model``, ``shell_model``
+    - **Solver model**: ``solid_model``, ``shell_model``, ``rod_model``
+      (``rod_model`` currently accepts only ``"ARAP"``: the enum has a
+      single item and ROD groups force-pin it to ARAP)
     - **Density**: ``solid_density``, ``shell_density``, ``rod_density``
     - **Young's modulus**: ``solid_young_modulus``, ``shell_young_modulus``,
       ``rod_young_modulus``
@@ -56,7 +62,7 @@ class _ParamProxy:
       ``contact_offset_rat`` * bbox-diagonal; set it to ``False`` to
       consume the absolute ``contact_gap`` / ``contact_offset`` values
       directly.
-    - **Strain limit**: ``enable_strain_limit``, ``strain_limit``
+    - **Strain limit**: ``enable_strain_limit``, ``strain_limit_percent``
     - **Inflation**: ``enable_inflate``, ``inflate_pressure``
     - **Plasticity**: ``enable_plasticity``, ``plasticity``,
       ``plasticity_threshold``
@@ -64,6 +70,11 @@ class _ParamProxy:
       ``bend_plasticity_threshold``, ``bend_rest_angle_source``
     - **Shell-specific**: ``bend``, ``shrink``, ``shrink_x``, ``shrink_y``,
       ``stitch_stiffness``
+    - **PDRD-specific**: ``pdrd_density`` (kg/m^3, volumetric). The PDRD hinge
+      joint is per-object, set via :meth:`set_hinge` (not a group material).
+    - **SAND-specific**: ``sand_grain_radius`` (m, per-grain radius),
+      ``sand_particle_mass`` (g, mass of a single grain), ``sand_friction``
+      (inter-grain friction coefficient).
 
     Example::
 
@@ -72,7 +83,7 @@ class _ParamProxy:
         group.param.shell_model = "ARAP"
 
         # Density (kg/m^3 for solid/shell, kg/m for rod)
-        group.param.solid_density = 1000.0
+        group.param.solid_density = 100.0
         group.param.shell_density = 0.3
         group.param.rod_density = 0.05
 
@@ -94,9 +105,9 @@ class _ParamProxy:
         group.param.contact_gap_rat = 0.1
         group.param.contact_offset_rat = 0.2
 
-        # Strain limit
+        # Strain limit (percentage; 5.0 == 5% allowed stretch)
         group.param.enable_strain_limit = True
-        group.param.strain_limit = 1.05
+        group.param.strain_limit_percent = 5.0
 
         # Inflation
         group.param.enable_inflate = True
@@ -128,9 +139,8 @@ class _ParamProxy:
         gp = object.__getattribute__(self, "_group_proxy")
         group = gp._get_group()
         setattr(group, key, value)
-        for window in bpy.context.window_manager.windows:
-            for area in window.screen.areas:
-                area.tag_redraw()
+        from ...core.utils import redraw_all_windows
+        redraw_all_windows()
 
     def __getattr__(self, key):
         if key not in _PARAM_PROPS:
@@ -278,7 +288,12 @@ class _Group:
     @blender_api
     def set_velocity(self, object_name: str,
                      direction: tuple[float, float, float],
-                     speed: float, frame: int = 1) -> "_Group":
+                     speed: float, frame: int = 1,
+                     angular_axis: "int | str" = "PC3",
+                     angular_speed: float = 0.0,
+                     angular_axis_custom: tuple[float, float, float] = (0.0, 0.0, 1.0),
+                     enable_translational: bool = True,
+                     enable_angular: bool | None = None) -> "_Group":
         """Keyframe a velocity on an object assigned to this group.
 
         Appends an entry to the assigned object's
@@ -294,6 +309,23 @@ class _Group:
             speed: Velocity magnitude in m/s.
             frame: Frame at which the keyframe takes effect.  ``1`` (the
                 default) is the initial-velocity slot.
+            angular_axis: Axis to spin about (SOLID, SHELL, PDRD only).
+                One of ``"PC1"``/``"PC2"``/``"PC3"`` (principal axes,
+                resolved dynamically from the simulated geometry),
+                ``"X"``/``"Y"``/``"Z"`` (fixed world axes), or ``"CUSTOM"``
+                (the ``angular_axis_custom`` vector). Ints ``0``/``1``/``2``
+                are accepted as ``PC1``/``PC2``/``PC3`` for convenience.
+                Ignored when ``angular_speed == 0``.
+            angular_speed: Signed spin speed in degrees per second
+                (0 = no spin).
+            angular_axis_custom: World-space ``(x, y, z)`` axis used when
+                ``angular_axis == "CUSTOM"`` (normalized before use).
+            enable_translational: Overwrite the translational velocity at
+                this frame. When ``False`` the keyframe leaves translation
+                alone (e.g. a pure-spin keyframe).
+            enable_angular: Overwrite the angular velocity at this frame.
+                Defaults to ``True`` when ``angular_speed`` is non-zero,
+                else ``False``. Pass explicitly to override.
 
         Returns:
             ``self`` for chaining.
@@ -308,6 +340,16 @@ class _Group:
             ball.add("Sphere")
             ball.set_velocity("Sphere", direction=(1, 0, 0), speed=2.3)
         """
+        if isinstance(angular_axis, int):
+            angular_axis = {0: "PC1", 1: "PC2", 2: "PC3"}.get(angular_axis, "PC3")
+        angular_axis = str(angular_axis).upper()
+        valid_axes = {"PC1", "PC2", "PC3", "X", "Y", "Z", "CUSTOM"}
+        if angular_axis not in valid_axes:
+            raise ValueError(
+                f"angular_axis must be one of {sorted(valid_axes)} or 0/1/2"
+            )
+        if enable_angular is None:
+            enable_angular = angular_speed != 0.0
         from ...core.uuid_registry import get_or_create_object_uuid
         from ...models.collection_utils import sort_keyframes_by_frame
 
@@ -339,9 +381,73 @@ class _Group:
         kf.frame = frame
         kf.direction = direction
         kf.speed = speed
+        kf.angular_axis = angular_axis
+        kf.angular_speed = float(angular_speed)
+        kf.angular_axis_custom = tuple(float(c) for c in angular_axis_custom)
+        kf.enable_translational = bool(enable_translational)
+        kf.enable_angular = bool(enable_angular)
         target.velocity_keyframes_index = sort_keyframes_by_frame(
             target.velocity_keyframes
         )
+        return self
+
+    @blender_api
+    def set_hinge(self, object_name: str, pca_axis: int = 2,
+                  enable: bool = True) -> "_Group":
+        """Pin a PDRD body assigned to this group as a hinge (per object).
+
+        Locks the body's position and restricts its rotation to one principal
+        (PCA) axis of its rest shape, the building block for gears. The group
+        must be of type ``PDRD``. This is a per-object setting, so different
+        bodies in the same group can be hinged on different axles.
+
+        Args:
+            object_name: Name of an object already added to this group via
+                :meth:`add`.
+            pca_axis: Which principal axis is the free axle: ``0`` (largest
+                extent), ``1`` (middle), or ``2`` (thinnest, the usual axle
+                for a flat gear or disk). Defaults to ``2``.
+            enable: Set ``False`` to clear the hinge and let the body move
+                freely. Defaults to ``True``.
+
+        Returns:
+            ``self`` for chaining.
+
+        Raises:
+            ValueError: If the group is not PDRD, the object is not assigned to
+                it, or ``pca_axis`` is not in ``{0, 1, 2}``.
+
+        Example::
+
+            gears = solver.create_group("Gears", type="PDRD")
+            gears.add("GearA")
+            gears.set_hinge("GearA", pca_axis=2)
+        """
+        from ...core.uuid_registry import get_or_create_object_uuid
+
+        group = self._get_group()
+        if group.object_type != "PDRD":
+            raise ValueError("set_hinge requires a PDRD group")
+        if pca_axis not in (0, 1, 2):
+            raise ValueError(f"pca_axis must be 0, 1 or 2; got {pca_axis!r}")
+
+        obj = bpy.data.objects.get(object_name)
+        obj_uuid = get_or_create_object_uuid(obj) if obj else ""
+        target = None
+        for assigned in group.assigned_objects:
+            if obj_uuid and assigned.uuid == obj_uuid:
+                target = assigned
+                break
+            if not obj_uuid and assigned.name == object_name:
+                target = assigned
+                break
+        if target is None:
+            raise ValueError(
+                f"Object '{object_name}' is not assigned to this group"
+            )
+
+        target.pdrd_hinge_enable = bool(enable)
+        target.pdrd_hinge_axis = str(int(pca_axis))
         return self
 
     # -- Pin management ------------------------------------------------------

@@ -33,9 +33,9 @@ mod tests;
 
 pub use assembly::{
     assemble_dyn_scene, assemble_static_scene, check_shell_shrink_strain_limit_conflict,
-    group_vertex_alias, rod_tri_contact_offset_check, AssembleObject, AssembleObjectStats,
-    AssembleResult, AssembleStaticObject, AssembleStaticResult, CrossStitch,
-    RodTriOffsetViolation, SceneAssemblyError,
+    is_shell_shrink_strain_limit_conflict, rod_tri_contact_offset_check,
+    AssembleObject, AssembleObjectStats, AssembleResult, AssembleStaticObject,
+    AssembleStaticResult, CrossStitch, RodTriOffsetViolation, SceneAssemblyError,
 };
 pub use bbox::{axis_min_max, bbox, bbox_displaced, object_bbox_no_translate};
 pub use color_uv::{
@@ -43,7 +43,10 @@ pub use color_uv::{
     direction_color, DirectionError,
 };
 pub use index_map::{build_index_map, IndexMapObject, IndexMapResult, SceneBuildError};
-pub use mesh_metrics::{area_weighted_center, average_tri_area, face_to_vert_weights, triangle_areas};
+pub use mesh_metrics::{
+    area_weighted_center, average_tri_area, face_to_vert_weights, triangle_areas,
+    FACE_TO_VERT_WEIGHT_EPS,
+};
 pub use pin_kernel::{
     bezier_progress, eased_progress, move_by_apply, move_to_apply, scale_apply, spin_apply,
     transform_animation_evaluate, transform_keyframe_apply, SegInterp,

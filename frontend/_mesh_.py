@@ -10,7 +10,9 @@
 # libraries:
 #
 #   * `trimesh` calls (mesh I/O, decimation, subdivision, torus).
-#   * `pytetwild.tetrahedralize` (subprocess, Python script gen).
+#   * `pytetwild.tetrahedralize` (fTetWild backend; subprocess, Python
+#     script gen) and `tetgen.TetGen` (TetGen backend; in-process,
+#     surface-preserving).
 #   * `triangle.triangulate` (CGAL Python binding).
 #   * `urllib.request` for preset downloads.
 #   * `hashlib.sha256` for cache-key digesting.
@@ -29,6 +31,25 @@ from . import _rust  # type: ignore[attr-defined]
 
 from ._bvh_ import frame_mapping as _frame_mapping
 from ._bvh_ import interpolate_surface as _interpolate_surface
+
+# Shared remediation hint appended to every "no enclosed volume" /
+# tetrahedralization failure raise so the user sees consistent guidance
+# regardless of which check tripped (zero tets, TetGen exception, or the
+# 1-1 surface-preservation checks).
+_SHELL_NOT_SOLID_HINT = (
+    "Assign thin, open, coplanar, or non-manifold surfaces to a SHELL "
+    "group instead of SOLID, or use the fTetWild backend."
+)
+
+# Empirical target-density factor for triangulate: scales the requested
+# triangle count into a per-triangle area budget. Keep the value stable to
+# preserve triangulate cache keys (it feeds the cache-path string).
+_TRIANGULATE_AREA_SCALE = 1.6
+
+# Minimum |V| below which a tet is treated as numerically degenerate during
+# surface extraction. Matches the Rust default in mesh_py.rs and is shared by
+# both the fTetWild and TetGen backends so the two cannot drift apart.
+_MIN_TET_VOLUME = 1e-15
 
 
 def create_mobius(
@@ -75,6 +96,16 @@ class MeshManager:
     def create(self) -> "CreateManager":
         """Get the mesh creation manager."""
         return self._create
+
+    def set_cache_dir(self, path: str):
+        """Redirect the cache directory for both this manager and its
+        :class:`CreateManager`. The latter is required because ``create.tri``
+        derives the tetra cache path from ``CreateManager._cache_dir``, so
+        updating ``self._cache_dir`` alone would leave the tetra cache pointed
+        at the original location.
+        """
+        self._cache_dir = path
+        self._create._cache_dir = path
 
     def export(self, V: np.ndarray, F: np.ndarray, path: str):
         """Export a mesh given by vertices ``V`` and faces ``F`` to a file."""
@@ -158,14 +189,14 @@ class MeshManager:
             self._cache_dir,
         )
 
-    def cylinder(self, r: float, min_x: float, max_x: float, n: int):
+    def cylinder(self, r: float, min_x: float, max_x: float, n: int) -> "TriMesh":
         """Create a cylinder along the x-axis."""
         dx, ny, dy = _rust.mesh_cylinder_dx_ny_dy(
             float(min_x), float(max_x), int(n), float(r)
         )
         V = _rust.mesh_generate_cylinder_verts(int(n), int(ny), float(min_x), float(dx), float(dy), float(r))
         F = _rust.mesh_generate_cylinder_faces(int(n), int(ny))
-        return V, F
+        return TriMesh.create(V, F, self._cache_dir)
 
     def cone(
         self,
@@ -429,7 +460,12 @@ class TriMesh(tuple[np.ndarray, np.ndarray]):
 
     def decimate(self, target_tri: int) -> "TriMesh":
         """Reduce the number of triangles in the mesh to the target count."""
-        assert target_tri < self[1].shape[0]
+        current_tri = self[1].shape[0]
+        if target_tri >= current_tri:
+            # Nothing to reduce: the requested count meets or exceeds the
+            # current triangle count, so return the mesh unchanged rather
+            # than asking trimesh to "decimate" upward.
+            return self
         cache_path = self.cache_path(f"decimate__{target_tri}")
         cached = self.load_cache(cache_path)
         if cached is None:
@@ -482,7 +518,7 @@ class TriMesh(tuple[np.ndarray, np.ndarray]):
 
     def triangulate(self, target: int = 1024, min_angle: float = 20) -> "TriMesh":
         """Triangulate a closed 2D line shape."""
-        area = 1.6 * self._compute_area(self[0]) / target
+        area = _TRIANGULATE_AREA_SCALE * self._compute_area(self[0]) / target
         cache_path = self.cache_path(f"triangulate__{area}_{min_angle}")
         cached = self.load_cache(cache_path)
         if cached is None:
@@ -502,21 +538,44 @@ class TriMesh(tuple[np.ndarray, np.ndarray]):
             return cached
 
     def tetrahedralize(self, *args, **kwargs) -> TetMesh:
-        """Tetrahedralize a surface triangle mesh using fTetWild."""
+        """Tetrahedralize a surface triangle mesh.
+
+        The ``backend`` kwarg selects the mesher:
+
+        * ``"ftetwild"`` (default): fTetWild via :mod:`pytetwild`. Tolerant
+          of open, cracked, or non-manifold input, but it resamples the
+          surface, so the original vertices survive only through a
+          frame-embedding surface map.
+        * ``"tetgen"``: TetGen with boundary-preserving switches
+          (``nobisect`` / ``-Y``). The input surface is carried through
+          unchanged, giving an exact 1-1 map from input vertices to the
+          tet surface (asserted in :meth:`_assert_tetgen_surface_unchanged`).
+          Requires a clean, closed, manifold input.
+
+        The ``status_interval`` kwarg (default 5.0s) controls how often
+        ``status_callback`` emits a progress line; it applies only to the
+        fTetWild backend, which runs in a polled subprocess. The TetGen
+        backend runs synchronously in-process and emits a single status, so
+        ``status_interval`` has no effect there.
+        """
         status_callback = kwargs.pop("status_callback", None)
         status_interval = float(kwargs.pop("status_interval", 5.0))
         # Build the cache-key arg string in Rust to keep formatting
-        # logic out of Python.
+        # logic out of Python. ``backend`` (when present) rides in the
+        # kwargs here, so fTetWild and TetGen results cache under distinct
+        # keys; an fTetWild-default mesh carries no ``backend`` kwarg and
+        # so keeps its pre-existing cache key.
         arg_strs = [str(a) for a in args]
         kwarg_pairs = [(str(k), str(v)) for k, v in kwargs.items()]
         arg_str = _rust.mesh_tetrahedralize_arg_str(arg_strs, kwarg_pairs)
         cache_path = self.cache_path(
             f"{self.hash}_tetrahedralize_{arg_str}.npz"
         )
-        # Bumped when the surface-mapping math changes in an incompatible way.
-        # v2: switched from in-plane barycentric weights to frame-embedding
-        # coefs (fixes tet-surface shrink after simulation).
-        _SURFACE_MAP_VERSION = 2
+        backend = str(kwargs.pop("backend", "ftetwild")).lower()
+        # Source of truth for the surface-map format version. Imported lazily
+        # so this module doesn't pull cbor2 at import time. The npz key name
+        # ``map_version`` stays unchanged for on-disk back-compat.
+        from ._cbor_bridge_ import SURFACE_MAP_VERSION as _SURFACE_MAP_VERSION
 
         if os.path.exists(cache_path):
             if status_callback is not None:
@@ -529,7 +588,13 @@ class TriMesh(tuple[np.ndarray, np.ndarray]):
                 tet_mesh.set_surface_mapping(
                     data["map_tri_indices"], data["map_coefs"]
                 )
-            elif "map_tri_indices" in data:
+            if not tet_mesh.has_surface_mapping():
+                # No current-version map was attached above. This covers an
+                # older-version cache (map_tri_indices present but a stale
+                # map_version) as well as a legacy cache that wrote only
+                # vert/tet/tri with no map keys at all. Rebuild the map from
+                # scratch and re-save with the current version so later
+                # interpolate_surface / decoder surface reconstruction works.
                 new_tri_indices, new_coefs = _frame_mapping(
                     self[0], data["vert"], tri
                 )
@@ -545,24 +610,111 @@ class TriMesh(tuple[np.ndarray, np.ndarray]):
                 )
             return tet_mesh
         else:
-            import pytetwild  # noqa: F401
+            if backend == "tetgen":
+                vert, tri, tet = self._tetrahedralize_tetgen(
+                    kwargs, status_callback
+                )
+            elif backend == "ftetwild":
+                vert, tri, tet = self._tetrahedralize_ftetwild(
+                    kwargs, status_callback, status_interval
+                )
+            else:
+                raise ValueError(
+                    f"Unknown tetrahedralize backend {backend!r}; "
+                    "expected 'ftetwild' or 'tetgen'."
+                )
 
-            # Whitelist + default fTetWild kwargs in Rust to keep the
-            # subprocess script stable against stray keys from callers.
-            _ftw_pairs_in = [(str(k), repr(v)) for k, v in kwargs.items()]
-            ftw_pairs = _rust.mesh_ftetwild_kwargs(_ftw_pairs_in)
-            kwargs_literal = ", ".join(f"{k}={v}" for k, v in ftw_pairs)
+            # Both backends can return zero tets (or only-degenerate tets
+            # that were filtered during surface extraction) when the input
+            # mesh has no enclosed volume, e.g. a single flat plane assigned
+            # to a SOLID group. Without this guard the next call would feed
+            # an empty surface into ``frame_mapping`` and panic with
+            # "index out of bounds: the len is 0 but the index is 0".
+            if tet.shape[0] == 0:
+                raise ValueError(
+                    "Tetrahedralization produced no tetrahedra: the input mesh "
+                    "has no enclosed volume (likely flat, coplanar, or "
+                    "non-manifold). " + _SHELL_NOT_SOLID_HINT
+                )
 
-            # Run fTetWild in a subprocess to avoid holding the GIL.
-            import subprocess as _sp
-            import tempfile as _tf
+            tri_indices, coefs = _frame_mapping(self[0], vert, tri)
 
-            with _tf.NamedTemporaryFile(suffix=".npz", delete=False) as _in_f:
-                input_path = _in_f.name
-                np.savez(_in_f, vert=self[0], tri=self[1])
-            output_path = input_path + ".out.npz"
+            np.savez(
+                cache_path,
+                vert=vert,
+                tet=tet,
+                tri=tri,
+                map_tri_indices=tri_indices,
+                map_coefs=coefs,
+                map_version=_SURFACE_MAP_VERSION,
+            )
+            return TetMesh((vert, tri, tet)).set_surface_mapping(
+                tri_indices, coefs
+            )
 
-            tet_script = f"""
+    def _tetrahedralize_ftetwild(self, kwargs, status_callback, status_interval):
+        """Tetrahedralize with fTetWild (pytetwild) in a subprocess.
+
+        Returns ``(vert, tri, tet)`` after degenerate-tet filtering and
+        surface extraction. fTetWild resamples the surface, so the input
+        vertices are recovered later through the frame-embedding map.
+
+        The temp .npz files and the child process are cleaned up in a
+        ``finally`` block so a failure inside the savez, the poll loop (e.g.
+        a raising ``status_callback``), or the result load cannot leak a
+        temp file or orphan the fTetWild child.
+        """
+        # Run fTetWild in a subprocess to avoid holding the GIL.
+        import tempfile as _tf
+
+        with _tf.NamedTemporaryFile(suffix=".npz", delete=False) as _in_f:
+            input_path = _in_f.name
+        output_path = input_path + ".out.npz"
+
+        # Cleared up front so the finally never reaps a child from a prior
+        # call; _run_ftetwild_subprocess assigns it once the child spawns.
+        self._ftw_proc = None
+        try:
+            np.savez(input_path, vert=self[0], tri=self[1])
+            return self._run_ftetwild_subprocess(
+                input_path,
+                output_path,
+                kwargs,
+                status_callback,
+                status_interval,
+            )
+        finally:
+            # Reap a still-running child (e.g. a status_callback raised
+            # mid-poll) so it does not orphan, then remove both temp files
+            # exactly once whatever path we leave through.
+            proc = self._ftw_proc
+            if proc is not None and proc.poll() is None:
+                proc.kill()
+                proc.wait()
+            self._ftw_proc = None
+            for p in (input_path, output_path):
+                if os.path.exists(p):
+                    os.unlink(p)
+
+    def _run_ftetwild_subprocess(
+        self, input_path, output_path, kwargs, status_callback, status_interval
+    ):
+        """Spawn the fTetWild subprocess and return the extracted surface.
+
+        Temp-file and child-process cleanup is handled by the caller's
+        ``finally`` block; this method only drives the subprocess and loads
+        its result.
+        """
+        import pytetwild  # noqa: F401
+        import subprocess as _sp
+
+        # Whitelist + default fTetWild kwargs in Rust to keep the
+        # subprocess script stable against stray keys from callers.
+        _ftw_pairs_in = [(str(k), repr(v)) for k, v in kwargs.items()]
+        ftw_pairs = _rust.mesh_ftetwild_kwargs(_ftw_pairs_in)
+        kwargs_literal = ", ".join(f"{k}={v}" for k, v in ftw_pairs)
+
+        tet_script = f"""
 import sys, os, numpy as np
 data = np.load({input_path!r})
 V, F = data["vert"], data["tri"]
@@ -586,68 +738,132 @@ if os.path.exists("__tracked_surface.stl"):
     os.remove("__tracked_surface.stl")
 np.savez({output_path!r}, vert=vert, tet=tet)
 """
-            proc = _sp.Popen(
-                [sys.executable, "-c", tet_script],
-                stdout=_sp.DEVNULL, stderr=_sp.DEVNULL,
-            )
-            start_time = time.time()
-            while proc.poll() is None:
+        proc = _sp.Popen(
+            [sys.executable, "-c", tet_script],
+            stdout=_sp.DEVNULL, stderr=_sp.DEVNULL,
+        )
+        # Expose the child so the caller's finally can reap it if the poll
+        # loop below leaves through an exception (e.g. a raising callback).
+        self._ftw_proc = proc
+        start_time = time.time()
+        while proc.poll() is None:
+            try:
+                proc.wait(timeout=status_interval)
+            except _sp.TimeoutExpired:
+                pass
+            if proc.poll() is None and status_callback is not None:
+                elapsed = time.time() - start_time
+                status_callback(f"running fTetWild ({elapsed:.0f}s elapsed)")
+
+        if proc.returncode != 0:
+            raise RuntimeError(f"fTetWild subprocess failed (exit code {proc.returncode})")
+
+        # NpzFile keeps the .npz open (a ZipFile handle); on Windows that
+        # blocks unlink with WinError 32. Use `with` so the handle is closed
+        # before the caller's finally tries to delete the file.
+        with np.load(output_path) as out_data:
+            vert = out_data["vert"]
+            tet = out_data["tet"]
+
+        return _rust.mesh_tet_extract_surface(
+            np.ascontiguousarray(vert, dtype=np.float64),
+            np.ascontiguousarray(tet, dtype=np.int32),
+            _MIN_TET_VOLUME,
+        )
+
+    def _tetrahedralize_tetgen(self, kwargs, status_callback):
+        """Tetrahedralize with TetGen, preserving the input surface 1-1.
+
+        ``nobisect`` (``-Y``) forbids Steiner points on the input
+        boundary, so every input vertex survives and the surface stays
+        identical; quality refinement only inserts interior points. The
+        result is verified to be an exact 1-1 input-to-surface map.
+
+        Returns ``(vert, tri, tet)`` after degenerate-tet filtering and
+        surface extraction.
+        """
+        import tetgen
+
+        if status_callback is not None:
+            status_callback("running TetGen")
+
+        V = np.ascontiguousarray(self[0], dtype=np.float64)
+        F = np.ascontiguousarray(self[1], dtype=np.int32)
+        n_input = len(V)
+
+        tg_kwargs = {"order": 1, "nobisect": True, "quality": True}
+        if "min_ratio" in kwargs:
+            tg_kwargs["minratio"] = float(kwargs["min_ratio"])
+        if "max_volume" in kwargs:
+            tg_kwargs["maxvolume"] = float(kwargs["max_volume"])
+
+        tg = tetgen.TetGen(V, F)
+        # tetgen returns (nodes, elems, ...); index rather than unpack so
+        # it survives the extra trailing arrays newer versions return.
+        try:
+            if sys.platform == "win32":
+                result = tg.tetrahedralize(**tg_kwargs)
+            else:
+                # Suppress verbose C++ output from TetGen, matching fTetWild.
+                devnull_fd = os.open(os.devnull, os.O_WRONLY)
+                old1, old2 = os.dup(1), os.dup(2)
                 try:
-                    proc.wait(timeout=status_interval)
-                except _sp.TimeoutExpired:
-                    pass
-                if proc.poll() is None and status_callback is not None:
-                    elapsed = time.time() - start_time
-                    status_callback(f"running fTetWild ({elapsed:.0f}s elapsed)")
+                    os.dup2(devnull_fd, 1)
+                    os.dup2(devnull_fd, 2)
+                    result = tg.tetrahedralize(**tg_kwargs)
+                finally:
+                    os.dup2(old1, 1)
+                    os.dup2(old2, 2)
+                    os.close(devnull_fd)
+                    os.close(old1)
+                    os.close(old2)
+        except Exception as e:
+            # TetGen rejects coplanar / open / non-manifold input outright
+            # (e.g. "All vertices are coplanar"). Re-raise as ValueError so
+            # the decoder prepends the object name and the message matches
+            # the fTetWild zero-volume guidance.
+            raise ValueError(
+                f"TetGen failed to tetrahedralize the input surface "
+                f"({type(e).__name__}: {e}). The TetGen backend needs a "
+                "clean, closed, manifold mesh with enclosed volume. "
+                + _SHELL_NOT_SOLID_HINT
+            ) from e
+        vert, tet = result[0], result[1]
 
-            if proc.returncode != 0:
-                os.unlink(input_path)
-                if os.path.exists(output_path):
-                    os.unlink(output_path)
-                raise RuntimeError(f"fTetWild subprocess failed (exit code {proc.returncode})")
+        vert, tri, tet = _rust.mesh_tet_extract_surface(
+            np.ascontiguousarray(vert, dtype=np.float64),
+            np.ascontiguousarray(tet, dtype=np.int32),
+            _MIN_TET_VOLUME,
+        )
+        self._assert_tetgen_surface_unchanged(vert, tri, V, n_input)
+        return vert, tri, tet
 
-            # NpzFile keeps the .npz open (a ZipFile handle); on Windows
-            # that blocks the os.unlink below with WinError 32. Use `with`
-            # so the handle is closed before we try to delete the file.
-            with np.load(output_path) as out_data:
-                vert = out_data["vert"]
-                tet = out_data["tet"]
-            os.unlink(input_path)
-            os.unlink(output_path)
+    def _assert_tetgen_surface_unchanged(self, vert, tri, input_vert, n_input):
+        """Verify TetGen carried the input surface through as an exact 1-1 map.
 
-            vert, tri, tet = _rust.mesh_tet_extract_surface(
-                np.ascontiguousarray(vert, dtype=np.float64),
-                np.ascontiguousarray(tet, dtype=np.int32),
-                1e-15,
+        The contract the user relies on: every input vertex coincides with
+        exactly one tet-surface vertex and the surface has no extra
+        vertices, so ``frame_mapping`` reconstructs each input position
+        exactly (it lands on a surface-triangle corner). This is
+        order-independent: it compares the surface vertex set against the
+        input vertex set rather than assuming TetGen kept the input
+        ordering.
+        """
+        surf_used = np.unique(tri)
+        if len(surf_used) != n_input:
+            raise ValueError(
+                "TetGen did not preserve the input surface 1-1: the tet "
+                f"surface references {len(surf_used)} vertices but the input "
+                f"surface has {n_input}. The TetGen backend needs a clean, "
+                "closed, manifold mesh. " + _SHELL_NOT_SOLID_HINT
             )
-
-            # fTetWild can return zero tets (or only-degenerate tets that
-            # were filtered above) when the input mesh has no enclosed
-            # volume, e.g. a single flat plane assigned to a SOLID group.
-            # Without this guard the next call would feed an empty
-            # surface into ``frame_mapping`` and panic with
-            # "index out of bounds: the len is 0 but the index is 0".
-            if tet.shape[0] == 0:
-                raise ValueError(
-                    "Tetrahedralization produced no tetrahedra: the input mesh "
-                    "has no enclosed volume (likely flat, coplanar, or "
-                    "non-manifold). Assign thin or open surfaces to a SHELL "
-                    "group instead of SOLID."
-                )
-
-            tri_indices, coefs = _frame_mapping(self[0], vert, tri)
-
-            np.savez(
-                cache_path,
-                vert=vert,
-                tet=tet,
-                tri=tri,
-                map_tri_indices=tri_indices,
-                map_coefs=coefs,
-                map_version=_SURFACE_MAP_VERSION,
-            )
-            return TetMesh((vert, tri, tet)).set_surface_mapping(
-                tri_indices, coefs
+        surf_vert = vert[surf_used]
+        si = np.lexsort((surf_vert[:, 2], surf_vert[:, 1], surf_vert[:, 0]))
+        ii = np.lexsort((input_vert[:, 2], input_vert[:, 1], input_vert[:, 0]))
+        if not np.allclose(surf_vert[si], input_vert[ii], rtol=0.0, atol=1e-9):
+            raise ValueError(
+                "TetGen moved input surface vertices, so the map to the input "
+                "mesh is not an exact 1-1 correspondence. " + _SHELL_NOT_SOLID_HINT
             )
 
     def recompute_hash(self) -> "TriMesh":

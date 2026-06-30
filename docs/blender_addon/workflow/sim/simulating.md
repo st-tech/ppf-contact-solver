@@ -35,7 +35,8 @@ indicators, and controls:
    buttons are stacked vertically in this order:
    - **Transfer**. Uploads geometry and parameters to the solver.
    - **Run**. Starts the simulation.
-   - **Resume**. Continues a paused or partially completed run.
+   - **Resume**. Opens a checkpoint picker and continues an existing run
+     from a saved state, without re-uploading or rebuilding.
    - **Update Params**. Re-uploads parameters without resending geometry.
    - **Fetch All Animation**. Downloads simulation results.
    - **Bake Animation** / **Bake Single Frame**. Convert the fetched
@@ -60,8 +61,8 @@ indicators, and controls:
 
 Buttons that are not applicable to the current state are grayed out. For
 example, **Run** is grayed out until a successful **Transfer** has
-completed, and **Resume** is grayed out unless a simulation has been
-paused or partially run.
+completed, and **Resume** is grayed out unless the server still holds at
+least one saved state to continue from.
 
 ## The Buttons
 
@@ -69,7 +70,7 @@ paused or partially run.
 | ------------------------- | -------------------------------------------------------------------- |
 | **Transfer**              | Multi-stage pipeline: delete existing remote data → send mesh → send params → build. |
 | **Run**                   | Warns on stale mesh hash, clears existing animation, starts the solve. |
-| **Resume**                | Resumes a paused / partially-run simulation.                         |
+| **Resume**                | Opens a checkpoint picker and continues an existing run from a saved state. No re-upload, no rebuild. |
 | **Update Params**         | Re-encodes and uploads parameters, then rebuilds. No geometry resend. |
 | **Fetch All Animation**   | Downloads per-frame vertex data and applies it as PC2 animation.     |
 | **Clear Local Animation** | Removes simulation keyframes and `ContactSolverCache` modifiers. Preserves pin keyframes. |
@@ -139,9 +140,22 @@ Once the simulation starts:
    blue progress bar appears on the **Backend Communicator** panel
    above, labeled with the same status.
 2. Live counters appear on **Backend Communicator** in two blocks.
-   **Realtime Statistics** shows the current `frame`, `time-per-frame`
-   and `time-per-step` wall-clock, `num-contact`, `newton-steps`,
-   `pcg-iter`, and `stretch`. **Scene Info** tracks `Simulated Frames`
+   **Realtime Statistics** shows the current `frame` plus several rows,
+   grouped by what they measure:
+   - *Timing (wall-clock):* `time-per-frame`, `time-per-step`,
+     `matrix-assembly`, `pcg-linsolve`, `line-search`.
+   - *Counts:* `num-contact`, `newton-steps`, `pcg-iter`.
+   - *Ratios:* `toi`, `toi-advanced`, `dyn-consumed`, and `stretch`
+     (`stretch` appears only when the run actually stretches shells or
+     rods).
+   - *Host:* `GPU Util`, `VRAM Usage`, `CPU Usage`, `RAM Usage` (shown
+     only when the solver host reports them).
+
+   Large counts are abbreviated with a `k`, `M`, or `B` suffix
+   (`12.44k` rather than a long digit run). The per-iteration rows
+   (`matrix-assembly`, `num-contact`, `pcg-iter`, `pcg-linsolve`,
+   `line-search`, `toi`) are averaged over the latest step rather than
+   showing a single iteration. **Scene Info** tracks `Simulated Frames`
    against `Total Frames` so you can see how far through the run you
    are.
 3. When the simulation completes, the status line returns to **"Ready
@@ -150,7 +164,7 @@ Once the simulation starts:
    above the Solver panel, directing you at the next step.
 
 ```{figure} ../../images/simulating/sim_in_progress.png
-:alt: Backend Communicator panel mid-solve. Status "Simulation Running...", blue progress bar, Realtime Statistics block showing frame, time-per-frame, time-per-step, num-contact, newton-steps, pcg-iter, stretch, and Scene Info with Simulated Frames 96 of 240
+:alt: Backend Communicator panel mid-solve. Status "Simulation Running...", blue progress bar, Realtime Statistics block showing frame, timing rows (time-per-frame, time-per-step, matrix-assembly, pcg-linsolve, line-search), count rows (num-contact, newton-steps, pcg-iter), ratio rows (toi, toi-advanced, dyn-consumed, stretch), host rows (GPU Util, VRAM Usage, CPU Usage, RAM Usage), and Scene Info with Simulated Frames 96 of 240
 :width: 500px
 
 Backend Communicator mid-solve: the status line reads *Simulation
@@ -170,6 +184,14 @@ live counters collapse into an **Average Statistics** block, and
 Solver panel tells you exactly how many frames are still on the remote
 and which button to press next.
 ```
+
+Once a run is no longer live, the same box switches its title to
+**Average Statistics** and shows the run summarized over all simulated
+frames instead of the latest step: the timing rows become per-frame
+averages, the count rows become averages (with `num-contact` reported as
+its peak), and the ratio rows are averaged. This block stays available
+after the run as long as the solver still has its log data, so you can
+read the overall cost of a solve without watching it live.
 
 ### Fetch
 
@@ -240,6 +262,10 @@ edits:
 The **Mesh hash mismatch** warning in the next section is the add-on's
 safety net: if you skip **Transfer** after a topology change, it shows
 up before **Run** or **Fetch** and tells you to re-transfer.
+
+If a run is slow to converge, the **Preconditioner** scene parameter
+(Block Jacobi by default, or Schwarz) is one knob worth trying; see
+[Preconditioner](../params/scene.md#preconditioner).
 
 ## "Groups Have Changed" Warning
 
@@ -330,12 +356,16 @@ closed Blender" from "this is a fresh run on a different server".
 
 ## Auto-Save and Graceful Shutdown
 
-Two related features:
+Three related features:
 
 - **Auto-save** (the **Auto Save** and **Auto Save Interval** fields on
-  the Scene Configuration → Advanced Params sub-panel): when enabled,
-  the solver periodically dumps its state so a crash or disconnect does
-  not cost all the progress. This runs inside the server process.
+  the Scene Configuration → Save and Checkpoints sub-panel): when
+  enabled, the solver periodically dumps its state so a crash or
+  disconnect does not cost all the progress. This runs inside the server
+  process.
+- **Save State on Finish** (same sub-panel): saves a state on the final
+  frame before the solver exits, so a completed run stays resumable even
+  when auto-save is off.
 - **Save & Quit**: a one-shot operator that asks the server to flush
   state and exit cleanly. After **Save & Quit**, the next reconnect can
   pick up the run where it left off.
@@ -343,20 +373,46 @@ Two related features:
 **Terminate** does not flush state. Use it when the simulation is
 misbehaving and you want it gone.
 
+### Resuming a Run
+
+**Resume** continues a run the server already holds, without re-uploading
+geometry or rebuilding. Click it and a checkpoint picker opens, listing
+the saved states the server has on disk. Each entry is shown as a Blender
+1-based frame, matching **Last Saved** in **Scene Info**. Pick one and the
+solver continues from that frame; frames before the chosen point are kept,
+and frames after it are overwritten.
+
+Because **Resume** reuses the state already on the server, it refuses when
+the scene has drifted from what the server last received:
+
+- If the **geometry** changed, **Resume** stops and asks you to
+  **Transfer** then **Run** for a fresh simulation. The cached state no
+  longer matches the mesh.
+- If only the **parameters** changed, **Resume** stops and asks you to
+  press **Update Params** first. **Update Params** re-sends parameters and
+  rebuilds while preserving the saved checkpoints, so you can **Resume**
+  immediately afterward.
+
+For **Resume** to have anything to offer, the server must hold at least
+one saved state. That comes from **Auto Save**, from **Save State on
+Finish**, from explicit per-frame **Save Checkpoints**, or from
+**Save & Quit**. With no saved state, **Resume** stays grayed out.
+
 ### Recovery Scenarios
 
-The behavior depends on *who* failed. Three cases cover the common
+The behavior depends on *who* failed. Four cases cover the common
 ones; the table shows the first move in each.
 
 | What happened                                                         | What the solver has on disk | What to do next                                                                                       |
 | --------------------------------------------------------------------- | --------------------------- | ----------------------------------------------------------------------------------------------------- |
 | You closed Blender or lost the network mid-run. Solver kept running.  | Everything up to "now".     | Reopen the .blend, **Connect**, **Fetch All Animation**. If still running, leave it. If it finished while you were gone, fetch picks up the rest. |
-| You clicked **Terminate** or killed the run.                          | Frames up to terminate.     | The solver transitions to **Resumable**. Click **Resume** to continue from the last completed frame, or **Run** to clear the animation and restart. |
-| Solver process crashed (segfault, OOM, server reboot).                | Whatever was auto-saved (if **Auto Save** was on) or just the frames already written. | Reconnect and **Start Server**. If auto-save snapshots exist, the solver comes up **Resumable** and **Resume** picks up from the last snapshot. If not, press **Run** to re-simulate. |
+| You clicked **Terminate** or killed the run.                          | Frames up to terminate, plus any saved states. | The solver transitions to **Resumable**. Click **Resume**, pick a saved state, and continue; or **Run** to clear the animation and restart. |
+| The run failed (a frame did not converge). | Frames up to the failure, plus any saved states. | The status line reads **Simulation Failed**, but it stays resumable while at least one saved state exists. Click **Resume** and pick an earlier state to continue past the trouble spot, or fix the scene and **Run** again. |
+| Solver process crashed (segfault, OOM, server reboot).                | Whatever was auto-saved (if **Auto Save** was on) or just the frames already written. | Reconnect and **Start Server**. If saved states exist, the solver comes up **Resumable** and **Resume** lets you pick one. If not, press **Run** to re-simulate. |
 
 **Auto Save** is what distinguishes "lose a few seconds of solve" from
-"redo the last hour" in the third case. It's on the Scene Configuration
-→ Advanced Params panel; enable it before long runs and leave the
+"redo the last hour" in the crash case. It's on the Scene Configuration
+→ Save and Checkpoints panel; enable it before long runs and leave the
 default interval for most scenes.
 
 If **Fetch** finds a **session ID mismatch** at reconnect, the remote
@@ -370,7 +426,7 @@ to the host where the original run lives.
 When you restart Blender while a previous `ppf-cts-server` is still
 listening on the configured port (typical for Windows Native, where
 the add-on owns the spawn), **Connect** does not error out: the add-on
-probes the port with a protocol-0.04 ping, and if the response
+probes the port with a minimal TCMD ping, and if the response
 identifies a live `ppf-cts-server`, it attaches to that process
 instead of spawning a new one. Your previous run is still there,
 ready to **Fetch**. SSH and Docker backends always start the server
@@ -428,7 +484,7 @@ solver.terminate_simulation()       # no flush, immediate
 | --------------------- | ---------------------------- |
 | Transfer              | `solver.transfer`            |
 | Run                   | `solver.run`                 |
-| Resume                | `solver.resume`              |
+| Resume                | `solver.resume_from`         |
 | Update Params         | `solver.update_params`       |
 | Fetch All Animation   | `solver.fetch_remote_data`   |
 | Clear Local Animation | `solver.clear_animation`     |

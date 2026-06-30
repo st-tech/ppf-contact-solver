@@ -39,9 +39,9 @@ fn read_n3_f64_to_vec<'py>(
 }
 
 fn read_uv_buf<'py>(arr: &Bound<'py, PyAny>) -> PyResult<(Vec<f64>, usize)> {
-    // UV is a list[np.ndarray] in Python; each entry has 6 elements
-    // (either shape (3,2) or fallback (2,3)). We accept a single
-    // (n_faces, 6) f64 numpy array as the kernel input form.
+    // Python stacks the per-face UV list into a single (n_faces, 6) f64
+    // array (each row is one face's flattened (3,2) UV). We accept that
+    // (n_faces, 6) array as the kernel input form.
     let view = arr.extract::<PyReadonlyArray2<'py, f64>>().map_err(|_| {
         PyTypeError::new_err("uv must be (n_faces, 6) ndarray of float64")
     })?;
@@ -81,13 +81,12 @@ fn read_uv_buf<'py>(arr: &Bound<'py, PyAny>) -> PyResult<(Vec<f64>, usize)> {
 ///     (dyn + static) in original insertion order.
 ///   * `map_by_name`: dict[str, ndarray(int64)]
 ///   * `concat_count`: int
-///   * `has_merge`: bool
 ///   * `cross_stitches`: list of dicts {source_name, target_name,
 ///     ind: (k, 4) int, w: (k, 4) f64}
 #[pyfunction]
 #[pyo3(signature = (
     dyn_objects, static_objects, dmap_order, map_by_name, concat_count,
-    has_merge, cross_stitches,
+    cross_stitches,
 ))]
 #[allow(clippy::too_many_arguments)]
 pub(super) fn scene_build_fixed<'py>(
@@ -97,7 +96,6 @@ pub(super) fn scene_build_fixed<'py>(
     dmap_order: &Bound<'py, PyList>,
     map_by_name: &Bound<'py, PyDict>,
     concat_count: usize,
-    has_merge: bool,
     cross_stitches: &Bound<'py, PyList>,
 ) -> PyResult<Bound<'py, PyDict>> {
     // ----- decode dyn objects -----
@@ -118,6 +116,7 @@ pub(super) fn scene_build_fixed<'py>(
         stitch_ind_cols: usize,
         stitch_w: Option<Vec<f64>>,
         stitch_w_cols: usize,
+        stitch_stiffness: f64,
         position: [f64; 3],
     }
     let mut dyn_owned: Vec<OwnedDyn> = Vec::with_capacity(dyn_objects.len());
@@ -188,12 +187,12 @@ pub(super) fn scene_build_fixed<'py>(
                 let view = item
                     .extract::<PyReadonlyArray2<'_, i64>>()
                     .map_err(|_| {
-                        PyTypeError::new_err("stitch_ind must be (M, 3) or (M, 4) int64")
+                        PyTypeError::new_err("stitch_ind must be (M, 3), (M, 4), or (M, 6) int64")
                     })?;
                 let s = view.shape();
-                if s.len() != 2 || (s[1] != 3 && s[1] != 4) {
+                if s.len() != 2 || (s[1] != 3 && s[1] != 4 && s[1] != 6) {
                     return Err(PyValueError::new_err(format!(
-                        "stitch_ind must be (M, 3) or (M, 4), got {s:?}"
+                        "stitch_ind must be (M, 3), (M, 4), or (M, 6), got {s:?}"
                     )));
                 }
                 let slice = view
@@ -208,12 +207,12 @@ pub(super) fn scene_build_fixed<'py>(
                 let view = item
                     .extract::<PyReadonlyArray2<'_, f64>>()
                     .map_err(|_| {
-                        PyTypeError::new_err("stitch_w must be (M, 2) or (M, 4) float64")
+                        PyTypeError::new_err("stitch_w must be (M, 2), (M, 4), or (M, 6) float64")
                     })?;
                 let s = view.shape();
-                if s.len() != 2 || (s[1] != 2 && s[1] != 4) {
+                if s.len() != 2 || (s[1] != 2 && s[1] != 4 && s[1] != 6) {
                     return Err(PyValueError::new_err(format!(
-                        "stitch_w must be (M, 2) or (M, 4), got {s:?}"
+                        "stitch_w must be (M, 2), (M, 4), or (M, 6), got {s:?}"
                     )));
                 }
                 let slice = view
@@ -223,6 +222,11 @@ pub(super) fn scene_build_fixed<'py>(
             }
             _ => (None, 0),
         };
+        let stitch_stiffness: f64 = d
+            .get_item("stitch_stiffness")?
+            .map(|v| v.extract())
+            .transpose()?
+            .unwrap_or(1.0);
         dyn_owned.push(OwnedDyn {
             name,
             obj_type,
@@ -240,6 +244,7 @@ pub(super) fn scene_build_fixed<'py>(
             stitch_ind_cols,
             stitch_w,
             stitch_w_cols,
+            stitch_stiffness,
             position,
         });
     }
@@ -323,6 +328,7 @@ pub(super) fn scene_build_fixed<'py>(
         ind: Vec<i64>,
         weights: Vec<f64>,
         k: usize,
+        stitch_stiffness: f64,
     }
     let mut cs_owned: Vec<OwnedCross> = Vec::with_capacity(cross_stitches.len());
     for cs in cross_stitches.iter() {
@@ -342,11 +348,11 @@ pub(super) fn scene_build_fixed<'py>(
             .ok_or_else(|| PyValueError::new_err("missing 'ind'"))?;
         let view_i = ind_item
             .extract::<PyReadonlyArray2<'_, i64>>()
-            .map_err(|_| PyTypeError::new_err("cross stitch ind must be (K, 4) int64"))?;
+            .map_err(|_| PyTypeError::new_err("cross stitch ind must be (K, 6) int64"))?;
         let s = view_i.shape();
-        if s.len() != 2 || s[1] != 4 {
+        if s.len() != 2 || s[1] != 6 {
             return Err(PyValueError::new_err(format!(
-                "cross stitch ind must be (K, 4), got {s:?}"
+                "cross stitch ind must be (K, 6), got {s:?}"
             )));
         }
         let ind = view_i
@@ -358,23 +364,35 @@ pub(super) fn scene_build_fixed<'py>(
             .ok_or_else(|| PyValueError::new_err("missing 'w'"))?;
         let view_w = w_item
             .extract::<PyReadonlyArray2<'_, f64>>()
-            .map_err(|_| PyTypeError::new_err("cross stitch w must be (K, 4) float64"))?;
+            .map_err(|_| PyTypeError::new_err("cross stitch w must be (K, 6) float64"))?;
         let s2 = view_w.shape();
-        if s2.len() != 2 || s2[1] != 4 {
+        if s2.len() != 2 || s2[1] != 6 {
             return Err(PyValueError::new_err(format!(
-                "cross stitch w must be (K, 4), got {s2:?}"
+                "cross stitch w must be (K, 6), got {s2:?}"
+            )));
+        }
+        if s2[0] != s[0] {
+            return Err(PyValueError::new_err(format!(
+                "cross stitch w rows {} must match ind rows {}",
+                s2[0], s[0]
             )));
         }
         let weights = view_w
             .as_slice()
             .map_err(|_| PyTypeError::new_err("cross stitch w must be C-contiguous"))?
             .to_vec();
+        let stitch_stiffness: f64 = d
+            .get_item("stitch_stiffness")?
+            .map(|v| v.extract())
+            .transpose()?
+            .unwrap_or(1.0);
         cs_owned.push(OwnedCross {
             source_name,
             target_name,
             ind,
             weights,
             k: s[0],
+            stitch_stiffness,
         });
     }
 
@@ -398,6 +416,7 @@ pub(super) fn scene_build_fixed<'py>(
             stitch_ind_cols: o.stitch_ind_cols,
             stitch_w: o.stitch_w.as_deref(),
             stitch_w_cols: o.stitch_w_cols,
+            stitch_stiffness: o.stitch_stiffness,
             position: o.position,
         })
         .collect();
@@ -409,6 +428,7 @@ pub(super) fn scene_build_fixed<'py>(
             ind: c.ind.as_slice(),
             weights: c.weights.as_slice(),
             k: c.k,
+            stitch_stiffness: c.stitch_stiffness,
         })
         .collect();
     let static_view: Vec<sb::AssembleStaticObject> = static_owned
@@ -429,7 +449,6 @@ pub(super) fn scene_build_fixed<'py>(
                 &dyn_view,
                 &map_owned,
                 concat_count,
-                has_merge,
                 &dmap_owned,
                 &cs_view,
             )
@@ -501,14 +520,18 @@ pub(super) fn scene_build_fixed<'py>(
     )?;
 
     // Stitches.
-    let n_st = dyn_result.concat_stitch_ind.len() / 4;
+    let n_st = dyn_result.concat_stitch_ind.len() / 6;
     let st_ind_arr =
-        ndarray::Array2::from_shape_vec((n_st, 4), dyn_result.concat_stitch_ind)
+        ndarray::Array2::from_shape_vec((n_st, 6), dyn_result.concat_stitch_ind)
             .map_err(|e| PyValueError::new_err(format!("reshape failed: {e}")))?;
     out.set_item("concat_stitch_ind", st_ind_arr.into_pyarray(py))?;
-    let st_w_arr = ndarray::Array2::from_shape_vec((n_st, 4), dyn_result.concat_stitch_w)
+    let st_w_arr = ndarray::Array2::from_shape_vec((n_st, 6), dyn_result.concat_stitch_w)
         .map_err(|e| PyValueError::new_err(format!("reshape failed: {e}")))?;
     out.set_item("concat_stitch_w", st_w_arr.into_pyarray(py))?;
+    out.set_item(
+        "concat_stitch_stiffness",
+        PyArray1::<f32>::from_vec(py, dyn_result.concat_stitch_stiffness),
+    )?;
 
     out.set_item("rod_count", dyn_result.rod_count)?;
     out.set_item("shell_count", dyn_result.shell_count)?;

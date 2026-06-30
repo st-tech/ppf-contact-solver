@@ -19,7 +19,7 @@
 //! - [`parsers`], [`extra`], [`utils`], [`cancel`] (incl. the
 //!   [`CancelHandle`] re-export): support helpers.
 //!
-//! Wire and persistence types live in [`ppf_cts_formats`]; PyO3
+//! Wire and persistence types live in `ppf-cts-formats`; PyO3
 //! bindings in `ppf-cts-py`; the tokio engine host in `ppf-cts-server`.
 
 pub mod cancel;

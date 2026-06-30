@@ -62,7 +62,7 @@ pub fn insert_progress(m: &mut Map<String, Value>, state: &ServerState) {
             "info".into(),
             Value::String(format!(
                 "Simulation Running, frame {}/{}",
-                state.frame, state.total_frames
+                frame, state.total_frames
             )),
         );
     }

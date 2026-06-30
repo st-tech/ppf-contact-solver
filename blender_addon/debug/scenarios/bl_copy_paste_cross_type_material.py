@@ -28,6 +28,10 @@
 #   - solid_* fields on B retained their pre-paste values (the filter
 #     rejected them because the source is SHELL, not SOLID).
 #   - rod_* fields on B retained their pre-paste values.
+#   - pdrd_* fields on B retained their pre-paste values (the filter
+#     rejected them because the source is SHELL, not PDRD).
+#   - sand_* fields on B retained their pre-paste values (the filter
+#     rejected them because the source is SHELL, not SAND).
 #   - All MATERIAL_CLIPBOARD_EXCLUDE fields on B retained their pre-
 #     paste values (identity, profile bindings, UI toggles).
 
@@ -166,6 +170,10 @@ try:
             return "shell"
         if name.startswith("rod_"):
             return "rod"
+        if name.startswith("pdrd_"):
+            return "pdrd"
+        if name.startswith("sand_"):
+            return "sand"
         return "shared"
 
     # Perturb A and B independently. ``salt=1`` for A, ``salt=2`` for B
@@ -209,6 +217,10 @@ try:
     solid_preserved = []
     rod_clobbered = []
     rod_preserved = []
+    pdrd_clobbered = []
+    pdrd_preserved = []
+    sand_clobbered = []
+    sand_preserved = []
     excluded_clobbered = []
     excluded_preserved = []
 
@@ -235,17 +247,20 @@ try:
                  else shell_unchanged).append({"name": name,
                                                "expected_from_a": a_val,
                                                "actual": after})
-        else:  # solid / rod
-            # Filter rejects; expect B to retain its pre-paste value.
+        else:  # solid / rod / pdrd / sand
+            # Filter rejects (source is SHELL); expect B to retain its
+            # pre-paste value.
+            preserved = {"solid": solid_preserved, "rod": rod_preserved,
+                         "pdrd": pdrd_preserved, "sand": sand_preserved}[klass]
+            clobbered = {"solid": solid_clobbered, "rod": rod_clobbered,
+                         "pdrd": pdrd_clobbered, "sand": sand_clobbered}[klass]
             if _values_close(after, before):
-                (solid_preserved if klass == "solid"
-                 else rod_preserved).append(name)
+                preserved.append(name)
             else:
-                (solid_clobbered if klass == "solid"
-                 else rod_clobbered).append({"name": name,
-                                             "before_b": before,
-                                             "after": after,
-                                             "from_a": a_val})
+                clobbered.append({"name": name,
+                                  "before_b": before,
+                                  "after": after,
+                                  "from_a": a_val})
 
     dh.record(
         "shared_fields_transferred_from_A",
@@ -270,6 +285,18 @@ try:
         not rod_clobbered and len(rod_preserved) > 0,
         {"preserved_count": len(rod_preserved),
          "clobbered": rod_clobbered[:8]},
+    )
+    dh.record(
+        "pdrd_fields_preserved_on_B",
+        not pdrd_clobbered and len(pdrd_preserved) > 0,
+        {"preserved_count": len(pdrd_preserved),
+         "clobbered": pdrd_clobbered[:8]},
+    )
+    dh.record(
+        "sand_fields_preserved_on_B",
+        not sand_clobbered and len(sand_preserved) > 0,
+        {"preserved_count": len(sand_preserved),
+         "clobbered": sand_clobbered[:8]},
     )
     dh.record(
         "identity_and_ui_fields_preserved_on_B",

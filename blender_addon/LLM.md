@@ -44,8 +44,9 @@ The repo contains:
     kernels (no PyO3, no I/O).
   - `ppf-cts-formats`: wire / file schema (`envelope.rs` + `kinds/`),
     shared by every consumer of the encoded scene.
-  - `ppf-cts-py`: PyO3 binding crate that compiles via maturin to the
-    `_ppf_cts_py` Python module.
+  - `ppf-cts-py`: PyO3 binding crate that `cargo build --release`
+    compiles to the `_ppf_cts_py` cdylib in `target/<profile>/`, loaded
+    directly by `frontend` (no maturin, no wheel).
   - `ppf-cts-server`: standalone Rust binary (`ppf-cts-server`) that
     embeds the in-process Python `frontend` package and exposes the
     TCP / CBOR protocol the add-on talks to over SSH / Docker / Windows-native transports.
@@ -100,7 +101,7 @@ Install, UI tour, and the first end-to-end simulation. Load when:
 - You need prerequisites (Blender 5.0+, NVIDIA GPU + CUDA, Python /
   Docker / SSH availability).
 
-### `LLM/blender_addon/connections.md` (~585 lines, longest aside from parameters.md)
+### `LLM/blender_addon/connections.md` (~585 lines)
 
 How to wire Blender to a solver backend. Four backends, plus connection
 profiles. Load when:
@@ -120,14 +121,15 @@ profiles. Load when:
 - Connection profile TOML format and how it maps across backend
   types.
 
-### `LLM/blender_addon/scene.md` (~310 lines)
+### `LLM/blender_addon/scene.md` (~350 lines)
 
 Object groups and how you tell the solver which Blender objects
 matter. Load when:
 
-- User asks about the four group types (Shell / Solid / Rod / Static)
-  and what each accepts (meshes only; Rod also accepts Bezier curves;
-  Static is collision-only).
+- User asks about the six group types (Shell / Solid / Rod / PDRD /
+  Static / Sand) and what each accepts (meshes only; Rod also accepts
+  Bezier curves; PDRD is an exactly-rigid body, no tetrahedralization;
+  Static is collision-only; Sand is a granular body of loose grains).
 - Questions about the 32-slot group model and why it survives file
   save/load.
 - How to assign an object to a group, remove it, toggle Include,
@@ -145,13 +147,13 @@ matter. Load when:
   changes. Exposed as MCP tools `capture_static_deformation`,
   `clear_static_deformation`, and `get_static_deformation_status`.
 - Overlay colors per group type (Solid red, Shell green, Rod yellow,
-  Static blue).
+  PDRD magenta, Static blue, Sand tan).
 - **Modifier behavior**: the solver reads `obj.data.vertices`, so
   Subdivision Surface / Bevel / Remesh / Solidify modifiers are
   ignored at transfer time (apply them first if you want the
   subdivided topology).
 
-### `LLM/blender_addon/constraints.md` (~480 lines)
+### `LLM/blender_addon/constraints.md` (~505 lines)
 
 Everything that constrains vertices or objects on top of the base
 group. Load when:
@@ -174,7 +176,7 @@ group. Load when:
 - **Snap & merge**: making two meshes meet cleanly at a seam; merge
   pairs with and without snapping; cross-stitch anchor data.
 
-### `LLM/blender_addon/parameters.md` (~670 lines)
+### `LLM/blender_addon/parameters.md` (~760 lines)
 
 Three parameter surfaces: scene (whole-sim), material (per group),
 dynamic (keyframed). Load when:
@@ -194,17 +196,21 @@ dynamic (keyframed). Load when:
 - **Contact Gap vs Contact Offset**: physical meaning (gap = barrier
   reach; offset = per-group padding summed across participants);
   absolute vs ratio-of-bbox-diagonal via `use_group_bounding_box_diagonal`.
-- **fTetWild overrides** (Solid only): Edge Length Factor, Epsilon,
-  Stop Energy, Max Opt Iterations, Optimize, Simplify Input, Coarsen
-  Output, each gated by its own `ftetwild_override_<field>`
-  checkbox.
+- **Tetrahedralizer** (Solid only), per object like Velocity Overwrite:
+  an Object dropdown picks the mesh, then a backend picker (fTetWild
+  default, or TetGen which preserves the input surface 1-1). fTetWild
+  overrides: Edge Length Factor, Epsilon, Stop Energy, Max Opt
+  Iterations, Optimize, Simplify Input, Coarsen Output. TetGen
+  overrides: Min Radius-Edge Ratio, Max Tet Volume. Each gated by its
+  own `<backend>_override_<field>` checkbox; settings live on the
+  AssignedObject.
 - **Dynamic parameters**: keyframed gravity, wind, air density, air
   friction, vertex air damp; `use_hold` step semantics vs
   interpolated behavior; keyframe construction via `.dyn(param).key(...)`.
 - Scene and material profile TOML files (always written by the Save
   icon, not by hand; schema shown for inspection).
 
-### `LLM/blender_addon/simulation.md` (~600 lines)
+### `LLM/blender_addon/simulation.md` (~630 lines)
 
 The Transfer → Run → Fetch day-to-day loop, caching, baking, and
 JupyterLab integration. Load when:
@@ -231,7 +237,7 @@ JupyterLab integration. Load when:
 - **JupyterLab**: running the solver from a notebook on the same
   host, and mixing notebook + Blender sessions.
 
-### `LLM/blender_addon/integrations.md` (~635 lines)
+### `LLM/blender_addon/integrations.md` (~705 lines)
 
 
 Programmatic surfaces: MCP server (for LLMs) and Python API (for
@@ -281,9 +287,9 @@ Developer tooling (not end-user workflows). Load when:
   `--no-overlay`).
 - Related ports: 8765 (reload server), 9633 (MCP).
 
-### `LLM/blender_addon/mcp_tools_reference.md` (~870 lines)
+### `LLM/blender_addon/mcp_tools_reference.md` (~1065 lines)
 
-Every MCP tool exposed by the add-on (111 tools in 10 categories:
+Every MCP tool exposed by the add-on (120 tools in 10 categories:
 Connection, Group, Object operations, Simulation, Scene, Dynamic
 parameters, Remote, Console, Debug, Blender). Each entry has the full
 typed signature, parameter list with descriptions, and return notes.
@@ -306,7 +312,7 @@ Load when:
 Bundled MCP reference for the live handler surface in
 `blender_addon/mcp/handlers/*.py` and `blender_addon/mcp/blender_handlers.py`.
 
-### `LLM/blender_addon/python_api_reference.md` (~745 lines)
+### `LLM/blender_addon/python_api_reference.md` (~880 lines)
 
 Every class, method, and attribute on the `solver` singleton you get
 from `from bl_ext.user_default.ppf_contact_solver.ops.api import solver`. Classes: `Solver`,
@@ -359,7 +365,7 @@ primary home and the secondary homes so you don't miss anything.
 | Invisible colliders                       | constraints.md        | parameters.md (referenced from scene profiles section), integrations.md (Python API) |
 | Snap & merge                              | constraints.md        | scene.md (briefly, in Static Objects), integrations.md |
 | Active collision windows                  | scene.md              | parameters.md (the toggle lives in Material Params) |
-| Object group types (SHELL/SOLID/ROD/STATIC) | scene.md            | parameters.md (per-type param tables), constraints.md (curve pins live on ROD only) |
+| Object group types (SHELL/SOLID/ROD/PDRD/STATIC/SAND) | scene.md  | parameters.md (per-type param tables), constraints.md (curve pins live on ROD only) |
 | Static group Transform ops                | scene.md              | constraints.md (Move By / Spin / Scale share the operation semantics with pin ops) |
 | Armature / Lattice / Shape Key driven Static colliders (Capture Deformation) | scene.md | mcp_tools_reference.md (`capture_static_deformation`, `clear_static_deformation`, `get_static_deformation_status`) |
 | Modifier stack behavior                   | scene.md              | simulation.md (the cache modifier is installed post-Fetch) |

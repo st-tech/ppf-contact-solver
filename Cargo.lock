@@ -1040,9 +1040,12 @@ name = "ppf-cts-formats"
 version = "0.1.0"
 dependencies = [
  "ciborium",
+ "libc",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 1.0.69",
+ "windows-sys",
 ]
 
 [[package]]

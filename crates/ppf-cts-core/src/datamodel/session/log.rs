@@ -64,6 +64,30 @@ pub fn latest_log_value(path: &Path) -> Option<f64> {
     read_log_numbers(path).last().map(|(_x, y)| *y)
 }
 
+/// Average of the values written for the latest simulation step.
+///
+/// The solver stamps every row with the step's simulation time
+/// (`SimpleLog::set(prm.time)`, once per `advance`), so all the rows a
+/// step emits share one timestamp and are contiguous at the tail of the
+/// file. For per-Newton-iteration channels (num-contact, matrix-assembly,
+/// pcg-iter, pcg-linsolve) a step writes several rows; the live summary
+/// wants the step's average, not just the last iteration's value. Returns
+/// `None` when the file has no numeric rows.
+pub fn latest_step_average(path: &Path) -> Option<f64> {
+    let pairs = read_log_numbers(path);
+    let (last_t, _) = *pairs.last()?;
+    let group: Vec<f64> = pairs
+        .iter()
+        .rev()
+        .take_while(|(t, _)| *t == last_t)
+        .map(|(_, y)| *y)
+        .collect();
+    if group.is_empty() {
+        return None;
+    }
+    Some(group.iter().sum::<f64>() / group.len() as f64)
+}
+
 // ---------------------------------------------------------------------------
 // Solver error analysis. Mirrors
 // `FixedSession._analyze_solver_error`. Pure CPU-bound string scan
@@ -135,7 +159,16 @@ pub fn analyze_solver_error(log_lines: &[String], err_lines: &[String]) -> Optio
 // ---------------------------------------------------------------------------
 // SessionLog.summary / average_summary formatters.
 
-use super::format::{convert_integer, convert_time};
+use super::format::{
+    convert_average_count, convert_integer, convert_ratio, convert_time, format_stretch, is_whole,
+};
+
+/// Convert a max-sigma value into the `stretch` summary row. Delegates
+/// the percentage formatting and `<= 0` cutoff to `format_stretch` so
+/// the stretch convention lives in a single place.
+pub fn stretch_entry(sigma: f64) -> Option<(String, String)> {
+    format_stretch(sigma).map(|v| ("stretch".to_string(), v))
+}
 
 /// Build the "latest values" summary dict from already-fetched raw
 /// metric values. `None` for any metric leaves it unrepresented in
@@ -158,16 +191,20 @@ pub fn format_log_summary(
     out.push(("num-contact".to_string(), convert_integer(num_contact)));
     out.push(("newton-steps".to_string(), convert_integer(newton_steps)));
     out.push(("pcg-iter".to_string(), convert_integer(pcg_iter)));
-    if let Some(s) = max_sigma {
-        if s > 0.0 {
-            out.push(("stretch".to_string(), format!("{:.2}%", 100.0 * (s - 1.0))));
-        }
-    }
+    out.extend(max_sigma.and_then(stretch_entry));
     out
 }
 
 /// Build the "average over run" summary dict. Each input is `Option`
 /// because the underlying `.out` file may not exist (skip the metric).
+/// `matrix_assembly_ms_avg`, `pcg_linsolve_ms_avg`, `toi_advanced_avg`,
+/// `dyn_consumed_max`, `line_search_ms_avg`, and `toi_avg` are appended to
+/// the parameter list (not interleaved) so existing positional callers keep
+/// working; in the output they sit next to their siblings (matrix-assembly
+/// after time-per-step, dyn-consumed (max) after num-contact (max),
+/// pcg-linsolve after pcg-iter, line-search and toi after that, toi-advanced
+/// before stretch).
+#[allow(clippy::too_many_arguments)]
 pub fn format_log_average_summary(
     time_per_frame_ms_avg: Option<f64>,
     time_per_step_ms_avg: Option<f64>,
@@ -175,6 +212,12 @@ pub fn format_log_average_summary(
     newton_steps_avg: Option<f64>,
     pcg_iter_avg: Option<f64>,
     max_sigma_avg: Option<f64>,
+    matrix_assembly_ms_avg: Option<f64>,
+    pcg_linsolve_ms_avg: Option<f64>,
+    toi_advanced_avg: Option<f64>,
+    dyn_consumed_max: Option<f64>,
+    line_search_ms_avg: Option<f64>,
+    toi_avg: Option<f64>,
 ) -> Vec<(String, String)> {
     let mut out = Vec::new();
     if let Some(v) = time_per_frame_ms_avg {
@@ -183,33 +226,63 @@ pub fn format_log_average_summary(
     if let Some(v) = time_per_step_ms_avg {
         out.push(("time-per-step".to_string(), convert_time(v)));
     }
+    if let Some(v) = matrix_assembly_ms_avg {
+        out.push(("matrix-assembly".to_string(), convert_time(v)));
+    }
     if let Some(v) = num_contact_max {
         out.push(("num-contact (max)".to_string(), convert_integer(v.round())));
+    }
+    if let Some(v) = dyn_consumed_max {
+        out.push(("dyn-consumed (max)".to_string(), convert_ratio(v)));
     }
     if let Some(v) = newton_steps_avg {
         out.push(("newton-steps".to_string(), format!("{v:.2}")));
     }
     if let Some(v) = pcg_iter_avg {
-        out.push(("pcg-iter".to_string(), format!("{v:.2}")));
+        out.push(("pcg-iter".to_string(), convert_average_count(v)));
     }
-    if let Some(v) = max_sigma_avg {
-        if v > 0.0 {
-            out.push(("stretch".to_string(), format!("{:.2}%", 100.0 * (v - 1.0))));
-        }
+    if let Some(v) = pcg_linsolve_ms_avg {
+        out.push(("pcg-linsolve".to_string(), convert_time(v)));
     }
+    if let Some(v) = line_search_ms_avg {
+        out.push(("line-search".to_string(), convert_time(v)));
+    }
+    if let Some(v) = toi_avg {
+        out.push(("toi".to_string(), convert_ratio(v)));
+    }
+    if let Some(v) = toi_advanced_avg {
+        out.push(("toi-advanced".to_string(), convert_ratio(v)));
+    }
+    out.extend(max_sigma_avg.and_then(stretch_entry));
     out
 }
 
 /// Read the metric values from a `data_dir` containing `<name>.out`
 /// SimpleLog files. Returns `(time_per_frame_avg_ms,
 /// time_per_step_avg_ms, num_contact_max, newton_steps_avg,
-/// pcg_iter_avg, max_sigma_avg)`. Each is `None` when the
-/// corresponding `<filename>` did not exist or contained no numeric
+/// pcg_iter_avg, max_sigma_avg, matrix_assembly_avg_ms,
+/// pcg_linsolve_avg_ms, toi_advanced_avg, dyn_consumed_max,
+/// line_search_avg_ms, toi_avg)`. Each is `None` when
+/// the corresponding `<filename>` did not exist or contained no numeric
 /// rows.
+#[allow(clippy::type_complexity)]
 fn read_log_average_metrics(
     data_dir: &Path,
     log_filenames: &[(&str, &str)],
-) -> (Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>) {
+) -> (
+    Option<f64>,
+    Option<f64>,
+    Option<f64>,
+    Option<f64>,
+    Option<f64>,
+    Option<f64>,
+    Option<f64>,
+    Option<f64>,
+    Option<f64>,
+    Option<f64>,
+    Option<f64>,
+    Option<f64>,
+) {
     fn lookup<'a>(name: &str, log_filenames: &'a [(&'a str, &'a str)]) -> Option<&'a str> {
         log_filenames
             .iter()
@@ -242,6 +315,12 @@ fn read_log_average_metrics(
         avg(data_dir, "newton-steps", log_filenames),
         avg(data_dir, "pcg-iter", log_filenames),
         avg(data_dir, "max-sigma", log_filenames),
+        avg(data_dir, "matrix-assembly", log_filenames),
+        avg(data_dir, "pcg-linsolve", log_filenames),
+        avg(data_dir, "toi-advanced", log_filenames),
+        maximum(data_dir, "dyn-consumed", log_filenames),
+        avg(data_dir, "line-search", log_filenames),
+        avg(data_dir, "toi", log_filenames),
     )
 }
 
@@ -255,8 +334,9 @@ pub fn average_summary_from_disk(
     if !data_dir.is_dir() {
         return Vec::new();
     }
-    let (tpf, tps, nc, ns, pi, ms) = read_log_average_metrics(data_dir, log_filenames);
-    format_log_average_summary(tpf, tps, nc, ns, pi, ms)
+    let (tpf, tps, nc, ns, pi, ms, ma, pl, ta, dc, ls, toi) =
+        read_log_average_metrics(data_dir, log_filenames);
+    format_log_average_summary(tpf, tps, nc, ns, pi, ms, ma, pl, ta, dc, ls, toi)
 }
 
 /// Squash a (x, y) row into the most natural numeric type, preserving
@@ -264,9 +344,7 @@ pub fn average_summary_from_disk(
 /// Returns `(x, y, x_is_int, y_is_int)`; the binding can map the
 /// flags onto `int` vs `float` Python objects.
 pub fn float_or_int_pair(x: f64, y: f64) -> (f64, f64, bool, bool) {
-    let xi = x.is_finite() && x.fract() == 0.0;
-    let yi = y.is_finite() && y.fract() == 0.0;
-    (x, y, xi, yi)
+    (x, y, is_whole(x), is_whole(y))
 }
 
 /// Compose `<info_path>/output/data/<filename>` given a `name ->
@@ -306,11 +384,7 @@ pub fn log_tail_path(info_path: &Path, stream: LogStream) -> PathBuf {
 pub(super) fn read_log_numbers_squashed(path: &Path) -> Vec<(f64, f64, bool, bool)> {
     read_log_numbers(path)
         .into_iter()
-        .map(|(x, y)| {
-            let xi = x.is_finite() && x.fract() == 0.0;
-            let yi = y.is_finite() && y.fract() == 0.0;
-            (x, y, xi, yi)
-        })
+        .map(|(x, y)| float_or_int_pair(x, y))
         .collect()
 }
 

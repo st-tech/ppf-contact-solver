@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import importlib.util
 import sys
+import types
 from pathlib import Path
 
 import numpy as np
@@ -38,11 +39,27 @@ def _load_addon_encoder():
 
     Side-steps blender_addon's relative-import init chain so we can
     drive the same dumps_envelope() the addon will call at upload time.
+    The encoder's lazy ``from ..module import get_cbor2`` is satisfied by
+    registering minimal stub parent packages, so we never import
+    blender_addon's bpy-dependent __init__ chain.
     """
-    spec = importlib.util.spec_from_file_location(
-        "ppf_cts_addon_cbor_encode_fixturegen", ADDON_ENCODER
-    )
+    def _ensure_pkg(name):
+        if name not in sys.modules:
+            pkg = types.ModuleType(name)
+            pkg.__path__ = []  # mark as a package so submodules resolve
+            sys.modules[name] = pkg
+        return sys.modules[name]
+
+    _ensure_pkg("blender_addon")
+    _ensure_pkg("blender_addon.core")
+    _ensure_pkg("blender_addon.core.encoder")
+    core_module = _ensure_pkg("blender_addon.core.module")
+    core_module.get_cbor2 = lambda: __import__("cbor2")
+
+    fqname = "blender_addon.core.encoder.cbor_encode"
+    spec = importlib.util.spec_from_file_location(fqname, ADDON_ENCODER)
     mod = importlib.util.module_from_spec(spec)
+    sys.modules[fqname] = mod
     spec.loader.exec_module(mod)
     return mod
 
@@ -173,7 +190,6 @@ def make_param_payload() -> dict:
         "cg-tol": np.float32(1e-3),
         "include-face-mass": False,
         "disable-contact": False,
-        "stitch-stiffness": np.float32(1.0),
         # SHELL group present, so inactive-momentum populated:
         "inactive-momentum": 0.5,
     }
@@ -223,7 +239,7 @@ def make_param_payload() -> dict:
             0: {
                 "unpin_time": 1.0,
                 "pull_strength": 50.0,
-                "pin_group_id": 1,
+                "pin_group_id": "uuid-shell-1:vg-a",
                 "operations": [
                     {"type": "spin", "t_start": 0.0, "t_end": 2.0,
                      "transition": "linear", "center": [0.0, 0.0, 0.0],
@@ -239,20 +255,13 @@ def make_param_payload() -> dict:
         },
     }
 
-    merge_pairs = [
-        ("cloth_a", "cloth_b", 1.0, "uuid-shell-1", "uuid-shell-2"),
-        ("legacy_a", "legacy_b", 0.5, None, None),  # legacy: no uuid
-    ]
-
-    explicit_merge_pairs = [
-        {"source_uuid": "uuid-shell-1", "target_uuid": "uuid-rod-1",
-         "pairs": [[0, 0], [1, 1]]},
-    ]
-
     cross_stitch = [
         {"source_uuid": "uuid-shell-2", "target_uuid": "uuid-solid-1",
-         "ind": [[0, 1, 2, 3]],
-         "w": [[0.1, 0.4, 0.3, 0.2]],
+         # 6-wide barycentric-barycentric: degenerate shell source
+         # [0, 0, 0] / [1, 0, 0], target bary over solid tri (1, 2, 3).
+         "ind": [[0, 0, 0, 1, 2, 3]],
+         "w": [[1.0, 0.0, 0.0, 0.1, 0.4, 0.3]],
+         "source_points": [[0.0, 0.0, 0.0]],
          "target_points": [[1.0, 2.0, 3.0]],
          "stitch_stiffness": 0.75},
     ]
@@ -280,8 +289,6 @@ def make_param_payload() -> dict:
             (solid_group_params, ["block"], ["uuid-solid-1"]),
         ],
         "pin_config": pin_config,
-        "merge_pairs": merge_pairs,
-        "explicit_merge_pairs": explicit_merge_pairs,
         "cross_stitch": cross_stitch,
         "invisible_colliders": invisible_colliders,
     }

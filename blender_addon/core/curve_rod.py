@@ -82,6 +82,86 @@ def _eval_rational_bezier(cps, ws, t):
 
 
 
+# Per-type subdivision. Bezier CPs lie on the curve, so one sample per
+# CP (t = 0, 1) is enough resolution: edge length matches CP spacing, the
+# simulation evolves CP positions directly, and the round-trip fit
+# collapses to identity. NURBS CPs do *not* lie on the curve in general
+# (the curve passes through arcs of the rational Bezier basis), so we
+# still need interior samples per arc for the simulation to track the
+# curve shape; keep t = 0, 1/3, 2/3, 1 there. POLY has one sample per
+# point unconditionally.
+_BEZIER_T_VALUES = (0.0, 1.0)
+_NURBS_T_VALUES = (0.0, 1.0 / 3.0, 2.0 / 3.0, 1.0)
+
+
+def _spline_param_entries(s):
+    """Single source of truth for one spline's sampling topology.
+
+    Yields the per-spline metadata dict (type, n_cp, cyclic, and for
+    NURBS order + weights) with its ``params`` list of ``[index, t]``
+    entries, defining the t-value lists, n_segs / n_arcs formulas and
+    skip rules exactly once. Both :func:`sample_curve` (geometry +
+    params) and :func:`compute_params` (params only) consume this so the
+    two can never drift out of alignment. Degenerate or unsupported
+    splines (< 2 points, non BEZIER/NURBS/POLY) return ``None`` and
+    contribute no meta entry, matching the prior ``>= 2`` guards.
+    """
+    is_cyclic = s.use_cyclic_u
+    params = []  # (segment_or_arc_index, local_t) per vertex
+
+    if s.type == "BEZIER" and len(s.bezier_points) >= 2:
+        n_cp = len(s.bezier_points)
+        n_segs = n_cp if is_cyclic else n_cp - 1
+        for k in range(n_segs):
+            for t in _BEZIER_T_VALUES:
+                if k > 0 and t == 0.0:
+                    continue  # shared with previous segment's t=1
+                if is_cyclic and k == n_segs - 1 and t == 1.0:
+                    continue  # shared with first vertex
+                params.append([k, t])
+        return {
+            "type": "BEZIER",
+            "n_cp": n_cp,
+            "cyclic": is_cyclic,
+            "params": params,
+        }
+
+    if s.type == "NURBS" and len(s.points) >= 2:
+        n_cp = len(s.points)
+        order = s.order_u
+        degree = order - 1
+        step = degree
+        wt = [s.points[i].co[3] for i in range(n_cp)]
+        n_arcs = n_cp // step if is_cyclic else max(1, (n_cp - 1) // step)
+        for a in range(n_arcs):
+            for t in _NURBS_T_VALUES:
+                if a > 0 and t == 0.0:
+                    continue
+                if is_cyclic and a == n_arcs - 1 and t == 1.0:
+                    continue
+                params.append([a, t])
+        return {
+            "type": "NURBS",
+            "n_cp": n_cp,
+            "cyclic": is_cyclic,
+            "order": order,
+            "weights": wt,
+            "params": params,
+        }
+
+    if s.type == "POLY" and len(s.points) >= 2:
+        for i in range(len(s.points)):
+            params.append([i, 0.0])
+        return {
+            "type": "POLY",
+            "n_cp": len(s.points),
+            "cyclic": is_cyclic,
+            "params": params,
+        }
+
+    return None
+
+
 def sample_curve(obj, world_matrix):
     """Sample all splines of a curve object into rod vertices + edges.
 
@@ -91,6 +171,11 @@ def sample_curve(obj, world_matrix):
     to satisfy). NURBS arcs sample at t = 0, 1/3, 2/3, 1 because NURBS
     CPs are off-curve and the simulation needs interior points per arc
     to track the curve shape. POLY uses its points directly.
+
+    The sampling topology (which [index, t] pairs are emitted per spline)
+    comes from :func:`_spline_param_entries`, shared with
+    :func:`compute_params`, so geometry and params stay aligned. This
+    function only adds the per-vertex world-space evaluation.
 
     Args:
         obj: Blender curve object
@@ -106,91 +191,43 @@ def sample_curve(obj, world_matrix):
     all_edges = []
     splines_meta = []
 
-    # Per-type subdivision. Bezier CPs lie on the curve, so one sample
-    # per CP (t = 0, 1) is enough resolution: edge length matches CP
-    # spacing, the simulation evolves CP positions directly, and the
-    # round-trip fit collapses to identity. NURBS CPs do *not* lie on
-    # the curve in general (the curve passes through arcs of the
-    # rational Bezier basis), so we still need interior samples per arc
-    # for the simulation to track the curve shape; keep t = 0, 1/3,
-    # 2/3, 1 there. POLY has one sample per point unconditionally.
-    bezier_t_values = [0.0, 1.0]
-    nurbs_t_values = [0.0, 1.0 / 3.0, 2.0 / 3.0, 1.0]
-
     for s in obj.data.splines:
+        meta = _spline_param_entries(s)
+        if meta is None:
+            continue
+        is_cyclic = meta["cyclic"]
+        params = meta["params"]
         spline_verts = []
-        params = []  # (segment_or_arc_index, local_t) per vertex
-        is_cyclic = s.use_cyclic_u
 
-        if s.type == "BEZIER" and len(s.bezier_points) >= 2:
+        if meta["type"] == "BEZIER":
             bps = s.bezier_points
-            n_cp = len(bps)
-            n_segs = n_cp if is_cyclic else n_cp - 1
-            seg_t_values = bezier_t_values
-
-            for k in range(n_segs):
+            n_cp = meta["n_cp"]
+            for k, t in params:
                 p0 = bps[k].co
                 h0 = bps[k].handle_right
                 h1 = bps[(k + 1) % n_cp].handle_left
                 p1 = bps[(k + 1) % n_cp].co
-                for t in seg_t_values:
-                    if k > 0 and t == 0.0:
-                        continue  # shared with previous segment's t=1
-                    if is_cyclic and k == n_segs - 1 and t == 1.0:
-                        continue  # shared with first vertex
-                    pt = _eval_bezier(p0, h0, h1, p1, t)
-                    spline_verts.append(mat @ pt)
-                    params.append([k, t])
+                spline_verts.append(mat @ _eval_bezier(p0, h0, h1, p1, t))
 
-            splines_meta.append({
-                "type": "BEZIER",
-                "n_cp": n_cp,
-                "cyclic": is_cyclic,
-                "params": params,
-            })
-
-        elif s.type == "NURBS" and len(s.points) >= 2:
+        elif meta["type"] == "NURBS":
             pts = s.points
-            n_cp = len(pts)
-            order = s.order_u
-            degree = order - 1
+            n_cp = meta["n_cp"]
+            degree = meta["order"] - 1
             step = degree
             cp = [Vector((p.co[0], p.co[1], p.co[2])) for p in pts]
-            wt = [p.co[3] for p in pts]
-            n_arcs = n_cp // step if is_cyclic else max(1, (n_cp - 1) // step)
-            seg_t_values = nurbs_t_values
-
-            for a in range(n_arcs):
+            wt = meta["weights"]
+            for a, t in params:
                 arc_cp = [cp[(a * step + d) % n_cp] for d in range(degree + 1)]
                 arc_w = [wt[(a * step + d) % n_cp] for d in range(degree + 1)]
-                for t in seg_t_values:
-                    if a > 0 and t == 0.0:
-                        continue
-                    if is_cyclic and a == n_arcs - 1 and t == 1.0:
-                        continue
-                    spline_verts.append(mat @ _eval_rational_bezier(arc_cp, arc_w, t))
-                    params.append([a, t])
+                spline_verts.append(mat @ _eval_rational_bezier(arc_cp, arc_w, t))
 
-            splines_meta.append({
-                "type": "NURBS",
-                "n_cp": n_cp,
-                "cyclic": is_cyclic,
-                "order": order,
-                "weights": wt,
-                "params": params,
-            })
-
-        elif s.type == "POLY" and len(s.points) >= 2:
-            for i, p in enumerate(s.points):
+        elif meta["type"] == "POLY":
+            pts = s.points
+            for i, _t in params:
+                p = pts[i]
                 spline_verts.append(mat @ Vector((p.co[0], p.co[1], p.co[2])))
-                params.append([i, 0.0])
 
-            splines_meta.append({
-                "type": "POLY",
-                "n_cp": len(s.points),
-                "cyclic": is_cyclic,
-                "params": params,
-            })
+        splines_meta.append(meta)
 
         # Build edges
         if len(spline_verts) >= 2:
@@ -214,48 +251,14 @@ def compute_params(obj):
     segment at t = 0, 1 (one sample per CP, edge length equals CP
     spacing); NURBS samples each arc at t = 0, 1/3, 2/3, 1 because the
     CPs themselves are off-curve and interior samples are needed for
-    the sim to track the arc shape.
+    the sim to track the arc shape. The per-spline param topology comes
+    from :func:`_spline_param_entries`, shared with :func:`sample_curve`.
     """
-    bezier_t_values = [0.0, 1.0]
-    nurbs_t_values = [0.0, 1.0 / 3.0, 2.0 / 3.0, 1.0]
     splines_meta = []
     for s in obj.data.splines:
-        is_cyclic = s.use_cyclic_u
-        params = []
-
-        if s.type == "BEZIER" and len(s.bezier_points) >= 2:
-            n_cp = len(s.bezier_points)
-            n_segs = n_cp if is_cyclic else n_cp - 1
-            for k in range(n_segs):
-                for t in bezier_t_values:
-                    if k > 0 and t == 0.0:
-                        continue
-                    if is_cyclic and k == n_segs - 1 and t == 1.0:
-                        continue
-                    params.append([k, t])
-            splines_meta.append({"type": "BEZIER", "n_cp": n_cp, "cyclic": is_cyclic, "params": params})
-
-        elif s.type == "NURBS" and len(s.points) >= 2:
-            n_cp = len(s.points)
-            order = s.order_u
-            degree = order - 1
-            step = degree
-            wt = [s.points[i].co[3] for i in range(n_cp)]
-            n_arcs = n_cp // step if is_cyclic else max(1, (n_cp - 1) // step)
-            for a in range(n_arcs):
-                for t in nurbs_t_values:
-                    if a > 0 and t == 0.0:
-                        continue
-                    if is_cyclic and a == n_arcs - 1 and t == 1.0:
-                        continue
-                    params.append([a, t])
-            splines_meta.append({"type": "NURBS", "n_cp": n_cp, "cyclic": is_cyclic, "order": order, "weights": wt, "params": params})
-
-        elif s.type == "POLY" and len(s.points) >= 2:
-            for i in range(len(s.points)):
-                params.append([i, 0.0])
-            splines_meta.append({"type": "POLY", "n_cp": len(s.points), "cyclic": is_cyclic, "params": params})
-
+        meta = _spline_param_entries(s)
+        if meta is not None:
+            splines_meta.append(meta)
     return {"splines": splines_meta}
 
 

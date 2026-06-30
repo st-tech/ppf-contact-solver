@@ -45,6 +45,15 @@ checkboxes, removing objects, deleting the group) works the same as
 for Solid/Shell/Rod groups. See
 [Object Groups](object_groups.md) for the shared UI surface.
 
+::::{note}
+**A Static collider mesh must have no stray vertices.** A point that
+belongs to no face, often left behind by an imported model, makes
+**Transfer** stop with an "isolated vert" error. Click **Remove Isolated
+Vertices** under the error, or in Edit Mode use **Select > All by Trait >
+Loose Geometry** then **Mesh > Delete > Loose**, and Transfer again. See
+[Transfer, run, fetch](../../troubleshooting.md).
+::::
+
 ## Moving a Static Object
 
 Static meshes do not deform in the simulation, but they can still
@@ -231,9 +240,9 @@ velocity overwrite) is hidden.
 | **Contact Offset Ratio**             | `contact_offset_rat`              | 0.0     | Contact offset as a fraction of the group's bounding-box diagonal.    |
 
 See [Material Parameters](../params/material.md#contact-gap-absolute-vs-ratio)
-for the full story on absolute vs ratio contact gap, and
-[`Static`](../params/material.md) in the shipped material-profile TOML for
-a minimal example.
+for the full story on absolute vs ratio contact gap, and the
+[`Static`](../params/material.md#material-profiles) profile example there
+for a minimal collider material.
 
 :::{note}
 **Static groups have no collision windows.** The

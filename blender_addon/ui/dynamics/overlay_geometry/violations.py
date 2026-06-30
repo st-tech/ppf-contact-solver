@@ -7,6 +7,8 @@ import gpu  # pyright: ignore
 
 from mathutils import Vector  # pyright: ignore
 
+from ....core.transform import _to_blender
+
 from .primitives import _line_to_tris
 
 
@@ -50,7 +52,7 @@ def _build_violation_batches(scene, depsgraph, violations):
 
     def _solver_to_blender(pos):
         """Convert solver Y-up position to Blender Z-up."""
-        return Vector((pos[0], -pos[2], pos[1]))
+        return Vector(_to_blender(pos))
 
     labels = []
 

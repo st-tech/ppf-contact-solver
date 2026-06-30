@@ -4,7 +4,6 @@
 # License: Apache v2.0
 
 import os
-import time
 
 import bpy  # pyright: ignore
 
@@ -18,18 +17,21 @@ from ..core.animation import (
     clear_animation_data,
     prepare_animation_targets,
 )
-from ..core.async_op import AsyncOperator
+from ..core import encode_progress
+from ..core.async_op import AsyncOperator, StageAbort
 from ..core.client import RemoteStatus
 from ..core.client import communicator as com
 from ..core.derived import is_server_busy_from_response as is_running
 from ..core.encoder import prepare_upload
-from ..core.encoder.mesh import compute_data_hash
-from ..core.encoder.params import compute_param_hash
+from ..core.module import Cbor2NotInstalledError
+from ..core.encoder.mesh import compute_data_hash, encode_obj_with_hash
+from ..core.encoder.params import compute_param_hash, encode_param_with_hash
 from ..core.pc2 import (
     MODIFIER_NAME,
+    get_pc2_dir,
     get_pc2_path,
     has_mesh_cache,
-    object_pc2_key,
+    object_pc2_key_readonly,
 )
 from ..core.uuid_registry import get_object_uuid
 from ..core.utils import (
@@ -39,13 +41,55 @@ from ..core.utils import (
 from ..models.groups import (
     get_addon_data,
     has_addon_data,
+    has_simulatable_dynamics,
     iterate_active_object_groups,
 )
 from .dynamics.bake_ops import bake_progress_snapshot, is_bake_running
+from .dynamics.pin_capture_ops import (
+    is_pin_capture_running,
+    pin_capture_progress_snapshot,
+)
 from .dynamics.static_deform_ops import (
     capture_progress_snapshot,
     is_capture_running,
 )
+
+# Shared wire payload and user-facing message for a remote-data delete.
+# Referenced by both TransferRequestMixin.request_delete and
+# SOLVER_OT_DeleteRemoteData.execute so the literals stay in one place.
+_DELETE_QUERY = {"request": "delete"}
+_DELETE_MESSAGE = "Deleting Remote Data..."
+
+# Character width of the ASCII progress-bar fallback used when the Blender
+# build lacks the native ``UILayout.progress`` widget. Shared by the bake,
+# capture, and pin-capture progress blocks via ``_ascii_bar``.
+_ASCII_BAR_WIDTH = 20
+
+
+def _ascii_bar(factor: float) -> str:
+    """Render a ``factor`` in ``[0, 1]`` as a fixed-width ASCII progress bar
+    like ``[#####...............]`` for builds without ``progress``."""
+    filled = int(round(factor * _ASCII_BAR_WIDTH))
+    return "[" + "#" * filled + "." * (_ASCII_BAR_WIDTH - filled) + "]"
+
+
+def _draw_progress(layout, done, total, status_text, icon, abort_op):
+    """Draw one progress block (status label, native ``progress`` bar with an
+    ASCII fallback, and an abort operator) into a fresh sub-box of ``layout``.
+
+    Shared by the bake, capture, and pin-capture sites so the divide-by-zero
+    guard and the ``progress``-widget fallback live in one place.
+    """
+    factor = (done / total) if total > 0 else 0.0
+    prog_box = layout.box()
+    prog_box.label(text=status_text, icon=icon)
+    label_text = f"{int(factor * 100)}% ({done}/{total})"
+    try:
+        prog_box.progress(factor=factor, type="BAR", text=label_text)
+    except (AttributeError, TypeError):
+        bar = _ascii_bar(factor)
+        prog_box.label(text=f"{bar} {label_text}")
+    prog_box.operator(abort_op, icon="X")
 
 
 def _find_missing_pc2_paths(context) -> list[str]:
@@ -66,14 +110,25 @@ def _find_missing_pc2_paths(context) -> list[str]:
     if not bpy.data.filepath:
         return []
 
-    missing: list[str] = []
-    seen: set[str] = set()
+    # Fast common-case gate: this warning exists for the "data folder
+    # moved/gone" case (a rename or OS-copy of the .blend leaves the current
+    # project's PC2 directory empty). So if that directory holds ANY cache
+    # file, the data is present and nothing is missing -- return immediately
+    # without touching a single object. ``os.scandir`` + ``any`` early-exits
+    # on the first ``.pc2`` entry, so this is ~one cheap syscall instead of
+    # the O(objects) scan below, which now runs ONLY in the rare folder-gone
+    # state (exactly when the enumerated list is actually wanted for display).
+    try:
+        with os.scandir(get_pc2_dir()) as _it:
+            if any(_e.name.endswith(".pc2") for _e in _it):
+                return []
+    except OSError:
+        pass  # directory absent -> fall through and enumerate what's missing
 
-    def _push(path: str) -> None:
-        if path and path not in seen:
-            seen.add(path)
-            missing.append(path)
-
+    # Collect every referenced PC2 path in deterministic order first, then
+    # resolve existence with ONE directory listing per referenced directory
+    # rather than an ``os.path.exists`` per file.
+    candidates: list[str] = []
     saw_modifier = False
     for obj in bpy.data.objects:
         if obj.type != "MESH":
@@ -83,16 +138,19 @@ def _find_missing_pc2_paths(context) -> list[str]:
             continue
         saw_modifier = True
         # Modifier's stored filepath — what MESH_CACHE plays back from.
-        abs_path = bpy.path.abspath(mod.filepath)
-        if not os.path.exists(abs_path):
-            _push(abs_path)
+        candidates.append(bpy.path.abspath(mod.filepath))
         # Basename-derived canonical path — what the overlay/heal/bake
         # code paths read. Diverges from mod.filepath after a rename or
         # OS-copy of the .blend (mod.filepath still points at the old
         # data/<basename>/ folder, canonical now targets the new one).
-        canonical = get_pc2_path(object_pc2_key(obj))
-        if not os.path.exists(canonical):
-            _push(canonical)
+        # Read-only key: draw must never mutate, and the side-effecting
+        # variant runs an O(N) duplicate scan per object (O(N^2) overall,
+        # ~0.6s on a 1.6k-object scene). An object that owns a cache was
+        # already assigned a UUID at capture time, so an empty key here
+        # means "no cache" and the canonical check is skipped.
+        key = object_pc2_key_readonly(obj)
+        if key:
+            candidates.append(get_pc2_path(key))
 
     if not saw_modifier:
         return []
@@ -109,9 +167,29 @@ def _find_missing_pc2_paths(context) -> list[str]:
         uid = get_object_uuid(obj)
         if not uid or uid not in active_uuids:
             continue
-        curve_path = get_pc2_path(object_pc2_key(obj))
-        if not os.path.exists(curve_path):
-            _push(curve_path)
+        candidates.append(get_pc2_path(uid))
+
+    # Resolve existence per directory: one os.listdir() per unique dir, then
+    # membership in that set (an absent dir lists as empty -> all missing,
+    # matching the prior os.path.exists semantics). Order/dedup preserved so
+    # ``missing[0]`` stays the first referenced path.
+    listings: dict[str, set] = {}
+    missing: list[str] = []
+    seen: set[str] = set()
+    for path in candidates:
+        if not path or path in seen:
+            continue
+        seen.add(path)
+        directory = os.path.dirname(path)
+        names = listings.get(directory)
+        if names is None:
+            try:
+                names = set(os.listdir(directory))
+            except OSError:
+                names = set()
+            listings[directory] = names
+        if os.path.basename(path) not in names:
+            missing.append(path)
 
     return missing
 
@@ -179,6 +257,20 @@ def _warn_if_mesh_topology_stale(op, context) -> None:
             pass
 
 
+def _staged_encode_active() -> bool:
+    """True while a Transfer/Run staged encode is running its modal stages.
+
+    ``AsyncOperator.start_stages`` publishes an encode-progress run
+    synchronously inside ``execute`` but only dispatches to the engine on its
+    final stage, so ``engine.state.busy`` (which the action polls otherwise
+    rely on to disable each other) stays False for the whole encode window.
+    The action operators add ``not _staged_encode_active()`` to their poll so
+    a second Transfer / Run / Update Params / Resume cannot start while an
+    encode is still staging.
+    """
+    return encode_progress.is_active()
+
+
 def _check_project_name_sync(context) -> str:
     """Detect project-name drift between UI and the active connection.
 
@@ -244,7 +336,7 @@ class TransferRequestMixin:
 
     def request_delete(self):
         self._mode = "delete"
-        com.query({"request": "delete"}, "Deleting Remote Data...")
+        com.query(_DELETE_QUERY, _DELETE_MESSAGE)
 
 
 class SOLVER_PT_SolverPanel(Panel):
@@ -262,18 +354,14 @@ class SOLVER_PT_SolverPanel(Panel):
         root = get_addon_data(context.scene)
         state = root.state
         layout = self.layout
-        has_dynamic = any(
-            group.object_type in ("SOLID", "SHELL", "ROD")
-            and len(group.assigned_objects) > 0
-            for group in iterate_active_object_groups(context.scene)
-        )
+        has_dynamic = has_simulatable_dynamics(context.scene)
         box = layout.box()
         row = box.row()
         row.operator(SOLVER_OT_Transfer.bl_idname, icon="EXPORT")
         row.operator(SOLVER_OT_UpdateParams.bl_idname, icon="OPTIONS")
         row = box.row()
         row.operator(SOLVER_OT_Run.bl_idname, icon="PLAY")
-        row.operator(SOLVER_OT_Resume.bl_idname, icon="PLAY")
+        row.operator(SOLVER_OT_ResumeFrom.bl_idname, icon="PREV_KEYFRAME")
 
         row = box.row()
         row.operator(SOLVER_OT_FetchData.bl_idname, icon="IMPORT")
@@ -312,32 +400,32 @@ class SOLVER_PT_SolverPanel(Panel):
                 col.label(text=path)
 
         if is_bake_running():
-            done, total, status, n_objs = bake_progress_snapshot()
-            factor = (done / total) if total > 0 else 0.0
-            prog_box = box.box()
-            prog_box.label(text=status or "Baking...", icon="TIME")
-            label_text = f"{int(factor * 100)}% ({done}/{total})"
-            try:
-                prog_box.progress(factor=factor, type="BAR", text=label_text)
-            except (AttributeError, TypeError):
-                filled = int(round(factor * 20))
-                bar = "[" + "#" * filled + "." * (20 - filled) + "]"
-                prog_box.label(text=f"{bar} {label_text}")
-            prog_box.operator("solver.bake_abort", icon="X")
+            done, total, status, _ = bake_progress_snapshot()
+            _draw_progress(
+                box, done, total, status or "Baking...", "TIME", "solver.bake_abort"
+            )
 
         if is_capture_running():
             done, total, status, _ = capture_progress_snapshot()
-            factor = (done / total) if total > 0 else 0.0
-            prog_box = box.box()
-            prog_box.label(text=status or "Capturing...", icon="REC")
-            label_text = f"{int(factor * 100)}% ({done}/{total})"
-            try:
-                prog_box.progress(factor=factor, type="BAR", text=label_text)
-            except (AttributeError, TypeError):
-                filled = int(round(factor * 20))
-                bar = "[" + "#" * filled + "." * (20 - filled) + "]"
-                prog_box.label(text=f"{bar} {label_text}")
-            prog_box.operator("solver.capture_abort", icon="X")
+            _draw_progress(
+                box,
+                done,
+                total,
+                status or "Capturing...",
+                "REC",
+                "solver.capture_abort",
+            )
+
+        if is_pin_capture_running():
+            done, total, status, _ = pin_capture_progress_snapshot()
+            _draw_progress(
+                box,
+                done,
+                total,
+                status or "Capturing pin...",
+                "REC",
+                "solver.pin_capture_abort",
+            )
 
         # Show missing frames warning (not during simulation)
         response = com.info.response
@@ -375,6 +463,17 @@ class SOLVER_PT_SolverPanel(Panel):
             if run_ready:
                 row = box.row()
                 row.label(text="Clear local animation before running", icon="INFO")
+
+        # Deformation caches: batch re-capture / clear of every STATIC-collider
+        # deform cache and every animated-pin capture. Plain (always-expanded)
+        # box so both actions are always visible; each button's poll() greys it
+        # out when there is nothing to capture / clear.
+        box = layout.box()
+        box.label(text="Deformations", icon="MOD_SIMPLEDEFORM")
+        box.operator(
+            SOLVER_OT_RecaptureAllDeformations.bl_idname, icon="FILE_REFRESH"
+        )
+        box.operator(SOLVER_OT_ClearAllDeformations.bl_idname, icon="TRASH")
 
         # JupyterLab expandable box
         box = layout.box()
@@ -435,11 +534,7 @@ class SOLVER_OT_Transfer(AsyncOperator):
     @classmethod
     def poll(cls, context):
         response = com.info.response
-        has_dynamic = any(
-            group.object_type in ("SOLID", "SHELL", "ROD")
-            and len(group.assigned_objects) > 0
-            for group in iterate_active_object_groups(context.scene)
-        )
+        has_dynamic = has_simulatable_dynamics(context.scene)
         # ``status.ready()`` is a protocol-version check only; it
         # returns True for every active operation (BUILDING, FETCHING,
         # STARTING_SOLVER, ...). ``status.in_progress()`` is the
@@ -451,6 +546,7 @@ class SOLVER_OT_Transfer(AsyncOperator):
         return (
             has_dynamic
             and not com.busy()
+            and not _staged_encode_active()
             and com.is_connected()
             and com.is_server_running()
             and com.info.status.ready()
@@ -473,24 +569,50 @@ class SOLVER_OT_Transfer(AsyncOperator):
         # decide what cached artifacts (tetrahedralization, BVH, mesh
         # caches) remain valid for the new payload. To wipe everything,
         # the user has a dedicated "Delete Remote Data" button.
+        #
+        # The scene encode runs on the main thread and can take seconds on
+        # heavy scenes, so split it across staged modal ticks: the panel
+        # shows a labeled progress bar from the moment of the click instead
+        # of a frozen cursor, and the geometry / parameter / upload phases
+        # are each named as they run. See AsyncOperator.start_stages.
+        self._mode = "pipeline"
+        self._payload = {}
+        self.start_stages(context, [
+            ("Encoding scene geometry...", self._stage_encode_geometry),
+            ("Encoding parameters...", self._stage_encode_params),
+            ("Uploading scene...", self._stage_upload),
+        ])
+        return {"RUNNING_MODAL"}
+
+    def _stage_encode_geometry(self, context):
         try:
-            data, param, data_hash, param_hash = prepare_upload(context)
-        except ValueError as e:
-            self.report({"ERROR"}, str(e))
+            data, data_hash = encode_obj_with_hash(context)
+        except (Cbor2NotInstalledError, ValueError) as e:
             com.set_error(str(e))
-            return {"CANCELLED"}
-        # Local fetched animation is keyed by the previous upload's
-        # data; new data invalidates it, so drop it before kicking the
-        # pipeline (matches the prior NO_DATA fast-path behavior).
+            raise StageAbort(str(e))
+        self._payload["data"] = data
+        self._payload["data_hash"] = data_hash
+
+    def _stage_encode_params(self, context):
+        try:
+            param, param_hash = encode_param_with_hash(context)
+        except (Cbor2NotInstalledError, ValueError) as e:
+            com.set_error(str(e))
+            raise StageAbort(str(e))
+        self._payload["param"] = param
+        self._payload["param_hash"] = param_hash
+
+    def _stage_upload(self, context):
+        # Local fetched animation is keyed by the previous upload's data;
+        # new data invalidates it, so drop it before kicking the pipeline
+        # (matches the prior NO_DATA fast-path behavior).
         com.animation.clear()
         com.build_pipeline(
-            data=data, param=param,
-            data_hash=data_hash, param_hash=param_hash,
+            data=self._payload["data"], param=self._payload["param"],
+            data_hash=self._payload["data_hash"],
+            param_hash=self._payload["param_hash"],
             message="Uploading scene...",
         )
-        self._mode = "pipeline"
-        self.setup_modal(context)
-        return {"RUNNING_MODAL"}
 
     def is_complete(self) -> bool:
         if self._mode != "pipeline":
@@ -499,31 +621,13 @@ class SOLVER_OT_Transfer(AsyncOperator):
             return False
         return com.info.status != RemoteStatus.BUILDING
 
+    def is_cancelled(self) -> bool:
+        return com.is_aborting()
+
     def on_complete(self, context):
-        self.report({"INFO"}, "Build completed successfully.")
-
-    def modal(self, context, event):
         from ..models.console import console as _console
-        if event.type != "TIMER":
-            return {"PASS_THROUGH"}
-        if com.is_aborting():
-            self.cleanup_modal(context)
-            redraw_all_areas(context)
-            return {"CANCELLED"}
-        if time.time() - self._start_time > self.timeout:
-            self.cleanup_modal(context)
-            self.on_timeout(context)
-            redraw_all_areas(context)
-            return {"CANCELLED"}
-
-        redraw_all_areas(context)
-
-        if self.is_complete():
-            _console.write(f"[Transfer] complete: {com.info.status.value}")
-            self.cleanup_modal(context)
-            self.on_complete(context)
-            return {"FINISHED"}
-        return {"PASS_THROUGH"}
+        _console.write(f"[Transfer] complete: {com.info.status.value}")
+        self.report({"INFO"}, "Build completed successfully.")
 
 
 class SOLVER_OT_Run(AsyncOperator):
@@ -543,6 +647,7 @@ class SOLVER_OT_Run(AsyncOperator):
         response = com.info.response
         base = (
             not com.busy()
+            and not _staged_encode_active()
             and status in (
                 RemoteStatus.READY,
                 RemoteStatus.RESUMABLE,
@@ -556,40 +661,76 @@ class SOLVER_OT_Run(AsyncOperator):
         )
         return base
 
+    def invoke(self, context, event):
+        # Guard against running on an emulated (CPU stub, no CUDA) server:
+        # that build is for the test rig and produces no real physics.
+        # The flag is mirrored from the server's ``hardware.emulated`` onto
+        # AppState on every status poll. Only the interactive button path
+        # reaches invoke(); MCP / headless callers go straight to execute()
+        # (EXEC context), so the rig is never blocked by a dialog.
+        from ..core.facade import engine
+        if engine.state.emulated:
+            return context.window_manager.invoke_props_dialog(
+                self, width=420, title="Emulation Mode", confirm_text="Run Anyway",
+            )
+        return self.execute(context)
+
+    def draw(self, context):
+        layout = self.layout
+        col = layout.column(align=True)
+        col.label(text="The server is running in EMULATION mode.", icon="ERROR")
+        col.label(text="The CPU stub backend (test rig only) produces")
+        col.label(text="no real physics. Are you sure you want to run?")
+
     def execute(self, context):
+        error = _check_project_name_sync(context)
+        if error:
+            self.report({"ERROR"}, error)
+            return {"CANCELLED"}
         _warn_if_mesh_topology_stale(self, context)
-        # Click-time consistency check: refuse the run when the live
-        # encoded data or params no longer match what the server
-        # echoed on its last status response. This is the *only*
-        # drift gate -- ``poll`` deliberately ignores hashes so the
-        # button is always actionable, and the user lands on this
-        # report when their edits haven't been pushed yet. "data"
-        # diverges -> Transfer; "param" diverges -> Update Params.
+        # The click-time drift check re-encodes the scene (compute_data_hash),
+        # which is the same heavy main-thread work as Transfer, so stage it
+        # behind a labeled progress bar instead of freezing on the click. The
+        # final stage starts the solver; after it the modal waits on the sim.
+        self.start_stages(context, [
+            ("Checking scene geometry...", self._stage_check_geometry),
+            ("Checking parameters...", self._stage_check_params),
+            ("Starting solver...", self._stage_start_run),
+        ])
+        return {"RUNNING_MODAL"}
+
+    def _stage_check_geometry(self, context):
+        # Refuse the run when the live encoded data no longer matches what
+        # the server echoed on its last status response. ``poll`` deliberately
+        # ignores hashes so the button is always actionable; the user lands
+        # here when their geometry edits haven't been pushed yet.
         try:
             local_data = compute_data_hash(context)
         except ValueError as e:
-            self.report({"ERROR"}, str(e))
-            return {"CANCELLED"}
-        local_param = compute_param_hash(context)
+            raise StageAbort(str(e))
         from ..core.facade import engine
         server_data = engine.state.server_data_hash
-        server_param = engine.state.server_param_hash
         if server_data and local_data != server_data:
-            self.report({"ERROR"},
-                        "Geometry has changed since the last transfer. "
-                        "Click \"Transfer\" to re-upload before running.")
-            return {"CANCELLED"}
+            raise StageAbort(
+                "Geometry has changed since the last transfer. "
+                "Click \"Transfer\" to re-upload before running."
+            )
+
+    def _stage_check_params(self, context):
+        local_param = compute_param_hash(context)
+        from ..core.facade import engine
+        server_param = engine.state.server_param_hash
         if server_param and local_param != server_param:
-            self.report({"ERROR"},
-                        "Parameters have changed since the last transfer. "
-                        "Click \"Update Params\" before running.")
-            return {"CANCELLED"}
+            raise StageAbort(
+                "Parameters have changed since the last transfer. "
+                "Click \"Update Params\" before running."
+            )
+
+    def _stage_start_run(self, context):
         prepare_animation_targets(context, clear_existing=True)
         if context.screen and context.screen.is_animation_playing:
             bpy.ops.screen.animation_cancel(restore_frame=False)
         com.run(context)
-        self.setup_modal(context)
-        return {"RUNNING_MODAL"}
 
     def is_complete(self) -> bool:
         status = com.info.status
@@ -614,16 +755,26 @@ class SOLVER_OT_Resume(AsyncOperator):
             return False
         status = com.info.status
         response = com.info.response
+        # Resume stays available not only in the normal RESUMABLE state but also
+        # after a failed simulation, as long as the server still holds at least
+        # one saved checkpoint to load from. saved_state_frames() reads the
+        # cached status response (no network), so this is cheap for poll().
         return (
             not com.busy()
-            and status == RemoteStatus.RESUMABLE
+            and not _staged_encode_active()
+            and status in (RemoteStatus.RESUMABLE, RemoteStatus.SIMULATION_FAILED)
             and com.is_connected()
             and com.is_server_running()
             and com.info.status.ready()
             and not is_running(response)
+            and len(com.saved_state_frames()) > 0
         )
 
     def execute(self, context):
+        error = _check_project_name_sync(context)
+        if error:
+            self.report({"ERROR"}, error)
+            return {"CANCELLED"}
         _warn_if_mesh_topology_stale(self, context)
         if context.screen and context.screen.is_animation_playing:
             bpy.ops.screen.animation_cancel(restore_frame=False)
@@ -639,13 +790,152 @@ class SOLVER_OT_Resume(AsyncOperator):
         )
 
 
+class SOLVER_OT_ResumeFrom(AsyncOperator):
+    """Resume the simulation from a chosen saved checkpoint.
+
+    Opens a dialog listing the server's saved checkpoint frames. On
+    confirm it guards against geometry/topology drift (a fresh run is
+    required when geometry changed), warns when only materials changed
+    (those will not apply on resume), re-encodes the parameters with a
+    preserve-output build that keeps the already-simulated frames, and
+    once the build completes resumes the solver from the chosen frame.
+    Frames before the chosen point are kept; the rest are overwritten.
+    """
+
+    bl_idname = "solver.resume_from"
+    bl_label = "Resume"
+
+    timeout: float = 120.0
+    auto_redraw: bool = True
+
+    @classmethod
+    def poll(cls, _):
+        if is_bake_running():
+            return False
+        status = com.info.status
+        response = com.info.response
+        # Resume stays available not only in the normal RESUMABLE state but also
+        # after a failed simulation, as long as the server still holds at least
+        # one saved checkpoint to load from. saved_state_frames() reads the
+        # cached status response (no network), so this is cheap for poll().
+        return (
+            not com.busy()
+            and not _staged_encode_active()
+            and status in (RemoteStatus.RESUMABLE, RemoteStatus.SIMULATION_FAILED)
+            and com.is_connected()
+            and com.is_server_running()
+            and com.info.status.ready()
+            and not is_running(response)
+            and len(com.saved_state_frames()) > 0
+        )
+
+    def invoke(self, context, event):
+        # Run the drift guards BEFORE opening the checkpoint picker, so the user
+        # is told to Transfer / Update Params up front instead of after choosing
+        # a checkpoint. Resume does NOT re-upload or rebuild; it continues the
+        # simulation already on the server from the chosen checkpoint (a rebuild
+        # happens only on "Transfer" or "Update Params"). So, like Run, refuse
+        # when the live encoding has drifted from what the server last echoed: a
+        # geometry change invalidates the cached state entirely (a fresh
+        # Transfer + Run is required), and a param change must be pushed via
+        # "Update Params" (which preserves the checkpoints) before resuming.
+        error = _check_project_name_sync(context)
+        if error:
+            self.report({"ERROR"}, error)
+            return {"CANCELLED"}
+        _warn_if_mesh_topology_stale(self, context)
+        # The drift check re-encodes the scene on the main thread (the same
+        # heavy work as Transfer). It runs before the checkpoint picker dialog
+        # opens, so the panel's encode bar is not reachable from here; drive
+        # the cursor's progress indicator instead so the click is not a silent
+        # freeze. The encode is the fast path now (see the encoder perf fixes),
+        # so this is brief.
+        wm = context.window_manager
+        wm.progress_begin(0.0, 2.0)
+        try:
+            wm.progress_update(0.0)
+            try:
+                local_data = compute_data_hash(context)
+            except ValueError as e:
+                self.report({"ERROR"}, str(e))
+                return {"CANCELLED"}
+            wm.progress_update(1.0)
+            local_param = compute_param_hash(context)
+            wm.progress_update(2.0)
+        finally:
+            wm.progress_end()
+        from ..core.facade import engine
+        server_data = engine.state.server_data_hash
+        server_param = engine.state.server_param_hash
+        if server_data and local_data != server_data:
+            self.report({"ERROR"},
+                        "Geometry has changed; resume is not possible. Click "
+                        "\"Transfer\" and \"Run\" for a fresh simulation.")
+            return {"CANCELLED"}
+        if server_param and local_param != server_param:
+            self.report({"ERROR"},
+                        "Parameters have changed since the last transfer. Click "
+                        "\"Update Params\" before resuming.")
+            return {"CANCELLED"}
+        state = get_addon_data(context.scene).state
+        state.checkpoint_frames.clear()
+        for frame in com.saved_state_frames():
+            item = state.checkpoint_frames.add()
+            item.frame = int(frame)
+        state.checkpoint_frames_index = (
+            len(state.checkpoint_frames) - 1 if len(state.checkpoint_frames) else -1
+        )
+        return context.window_manager.invoke_props_dialog(self, width=420)
+
+    def draw(self, context):
+        state = get_addon_data(context.scene).state
+        layout = self.layout
+        if len(state.checkpoint_frames):
+            layout.label(text="Resume from saved checkpoint:")
+            layout.template_list(
+                "SOLVER_UL_CheckpointFrames", "",
+                state, "checkpoint_frames",
+                state, "checkpoint_frames_index",
+                rows=4,
+            )
+        else:
+            layout.label(text="No saved checkpoints available.", icon="ERROR")
+
+    def execute(self, context):
+        # Drift guards already ran in invoke() (before the picker opened); the
+        # modal dialog blocks scene edits, so nothing can drift in between. Here
+        # we only resolve the chosen checkpoint and resume.
+        state = get_addon_data(context.scene).state
+        frames = state.convert_checkpoint_frames_to_list()
+        index = int(state.checkpoint_frames_index)
+        if not frames or index < 0 or index >= len(frames):
+            self.report({"ERROR"}, "Select a checkpoint frame to resume from.")
+            return {"CANCELLED"}
+        from_frame = int(frames[index])
+        if context.screen and context.screen.is_animation_playing:
+            bpy.ops.screen.animation_cancel(restore_frame=False)
+        com.resume(context, from_frame=from_frame)
+        self.setup_modal(context)
+        return {"RUNNING_MODAL"}
+
+    def is_complete(self) -> bool:
+        status = com.info.status
+        return status not in (
+            RemoteStatus.SIMULATION_IN_PROGRESS,
+            RemoteStatus.STARTING_SOLVER,
+        )
+
+    def is_cancelled(self) -> bool:
+        return com.is_aborting()
+
+
 class SOLVER_OT_UpdateParams(AsyncOperator):
     """Update the parameters of the solver."""
 
     bl_idname = "solver.update_params"
     bl_label = "Update Params on Remote"
 
-    _mode = "param"
+    _mode = None
     timeout: float = 120.0
     auto_redraw: bool = True
 
@@ -663,6 +953,7 @@ class SOLVER_OT_UpdateParams(AsyncOperator):
                     RemoteStatus.SIMULATION_FAILED,
                 )
             )
+            and not _staged_encode_active()
             and com.is_connected()
             and com.is_server_running()
             and com.info.status.ready()
@@ -686,7 +977,7 @@ class SOLVER_OT_UpdateParams(AsyncOperator):
         if error:
             self.report({"ERROR"}, error)
             return {"CANCELLED"}
-        remote_root = com.connection.remote_root.rstrip("/")
+        remote_root = com.normalized_remote_root()
         if not remote_root:
             self.report({"ERROR"}, "Not connected; cannot send parameters")
             return {"CANCELLED"}
@@ -694,7 +985,7 @@ class SOLVER_OT_UpdateParams(AsyncOperator):
             _, param_data, _, param_hash = prepare_upload(
                 context, want_data=False, want_param=True,
             )
-        except ValueError as e:
+        except (Cbor2NotInstalledError, ValueError) as e:
             self.report({"ERROR"}, str(e))
             return {"CANCELLED"}
         # Upload param-only atomically + auto-build. data_size=0 tells
@@ -708,6 +999,7 @@ class SOLVER_OT_UpdateParams(AsyncOperator):
         com.build_pipeline(
             data=b"", param=param_data,
             param_hash=param_hash,
+            preserve_output=True,
             message="Updating parameters...",
         )
         self._mode = "pipeline"
@@ -721,30 +1013,11 @@ class SOLVER_OT_UpdateParams(AsyncOperator):
             return False
         return com.info.status != RemoteStatus.BUILDING
 
+    def is_cancelled(self) -> bool:
+        return com.is_aborting()
+
     def on_complete(self, context):
         self.report({"INFO"}, "Build completed successfully.")
-
-    def modal(self, context, event):
-        if event.type != "TIMER":
-            return {"PASS_THROUGH"}
-        if com.is_aborting():
-            self.cleanup_modal(context)
-            redraw_all_areas(context)
-            return {"CANCELLED"}
-        if time.time() - self._start_time > self.timeout:
-            self.cleanup_modal(context)
-            self.on_timeout(context)
-            redraw_all_areas(context)
-            return {"CANCELLED"}
-
-        redraw_all_areas(context)
-
-        if self.is_complete():
-            self.cleanup_modal(context)
-            self.on_complete(context)
-            return {"FINISHED"}
-
-        return {"PASS_THROUGH"}
 
 
 class SOLVER_OT_ClearAnimation(Operator):
@@ -762,22 +1035,240 @@ class SOLVER_OT_ClearAnimation(Operator):
         response = com.info.response
         if is_running(response):
             return False
-        # Check if any assigned object has a MESH_CACHE modifier (mesh or
-        # curve). Includes STATIC groups — UI-op static objects carry a
-        # cache too when animated via move/spin/scale.
-        for group in iterate_active_object_groups(context.scene):
-            for assigned in group.assigned_objects:
-                from ..core.uuid_registry import resolve_assigned
-                obj = resolve_assigned(assigned)
-                if obj and has_mesh_cache(obj):
-                    return True
-        return False
+        # Recomputed on every redraw (and again via SOLVER_OT_Run.poll, which
+        # gates on this result) -- stateless, so it can never go stale the way
+        # a memoized flag can. scene_has_solver_cache scans object modifiers
+        # directly, which is ~100x cheaper than resolving every assigned
+        # object by UUID, so the full scan stays well under a millisecond even
+        # on scenes with thousands of objects.
+        from ..core.pc2 import scene_has_solver_cache
+        return scene_has_solver_cache()
 
     def execute(self, context):
         if context.screen and context.screen.is_animation_playing:
             bpy.ops.screen.animation_cancel(restore_frame=False)
         context.scene.frame_set(1)
         clear_animation_data(context)
+        return {"FINISHED"}
+
+
+class SOLVER_OT_RecaptureAllDeformations(Operator):
+    """Re-capture deformation for every deforming STATIC collider and every
+    animated pin in one pass, so you don't have to capture each one by hand
+    before Transfer. Runs the static-collider captures first, then the pin
+    captures (the two share the depsgraph and can't run at once); progress
+    and an Abort button appear below while it runs."""
+
+    bl_idname = "solver.recapture_all_deformations"
+    bl_label = "Re-capture All Deformations"
+
+    _PHASE_STATIC = "STATIC"
+    _PHASE_PIN = "PIN"
+
+    @classmethod
+    def poll(cls, context):
+        # Disabled while any capture/bake is already in flight, and (the
+        # "no capturable objects" case) when nothing across the active
+        # groups needs a deformation capture. Cheap, draw-safe predicates
+        # only: this runs on every panel redraw.
+        if is_bake_running() or is_capture_running() or is_pin_capture_running():
+            return False
+        # Fast stateless poll: early-returns on the first capturable static
+        # via the cached uuid resolver (no per-object name reconciliation),
+        # instead of building the full list with resolve_assigned per redraw.
+        from .dynamics.static_deform_ops import scene_has_capturable_static
+        from .dynamics.pin_capture_ops import collect_capturable_pins
+        return bool(
+            scene_has_capturable_static(context)
+            or collect_capturable_pins(context, cheap=True)
+        )
+
+    def execute(self, context):
+        from .dynamics.static_deform_ops import collect_capturable_static_objects
+        from .dynamics.pin_capture_ops import collect_capturable_pins
+
+        static_objs = collect_capturable_static_objects(context, allow_eval=True)
+        pin_specs = collect_capturable_pins(context)
+        self._queue = []
+        if static_objs:
+            self._queue.append((self._PHASE_STATIC, static_objs))
+        if pin_specs:
+            self._queue.append((self._PHASE_PIN, pin_specs))
+        if not self._queue:
+            self.report({"WARNING"}, "No deformations to capture")
+            return {"CANCELLED"}
+        self._phase = None
+        self._summary = {"objs": 0, "pins": 0}
+        if not self._start_next(context):
+            self.report({"WARNING"}, "Nothing to capture")
+            return {"CANCELLED"}
+        wm = context.window_manager
+        self._timer = wm.event_timer_add(0.01, window=context.window)
+        wm.modal_handler_add(self)
+        redraw_all_areas(context)
+        return {"RUNNING_MODAL"}
+
+    def _start_next(self, context) -> bool:
+        """Pop the next queued phase and start its job. Returns True once a
+        job is running, False when the queue is exhausted (or the remaining
+        phases all failed to start, each reported as a warning)."""
+        from .dynamics import pin_capture_ops as pc
+        from .dynamics import static_deform_ops as sd
+
+        while self._queue:
+            kind, payload = self._queue.pop(0)
+            if kind == self._PHASE_STATIC:
+                ok, err = sd.start_capture_for_objects(context, payload)
+            else:
+                ok, err = pc.start_capture_for_pins(context, payload)
+            if ok:
+                self._phase = kind
+                return True
+            if err:
+                self.report({"WARNING"}, err)
+        self._phase = None
+        return False
+
+    def modal(self, context, event):
+        if event.type != "TIMER":
+            return {"PASS_THROUGH"}
+        from .dynamics import pin_capture_ops as pc
+        from .dynamics import static_deform_ops as sd
+
+        try:
+            if self._phase == self._PHASE_STATIC:
+                more, aborted, err = sd.advance_capture(context)
+                if aborted:
+                    return self._abort(context, err)
+                if not more:
+                    n_objs, _ = sd.finalize_capture(context)
+                    self._summary["objs"] += n_objs
+                    sd.cleanup_capture(context)
+                    if not self._start_next(context):
+                        return self._finish(context)
+                redraw_all_areas(context)
+                return {"RUNNING_MODAL"}
+            elif self._phase == self._PHASE_PIN:
+                more, aborted, err = pc.advance_pin_capture(context)
+                if aborted:
+                    return self._abort(context, err)
+                if not more:
+                    n_pins, _ = pc.finalize_pin_capture(context)
+                    self._summary["pins"] += n_pins
+                    pc.cleanup_pin_capture(context)
+                    if not self._start_next(context):
+                        return self._finish(context)
+                redraw_all_areas(context)
+                return {"RUNNING_MODAL"}
+            return self._finish(context)
+        except Exception as exc:  # noqa: BLE001 — must restore state
+            self._cleanup_active(context)
+            redraw_all_areas(context)
+            self.report({"ERROR"}, f"Re-capture failed: {exc}")
+            return self._end_timer(context, {"CANCELLED"})
+
+    def _cleanup_active(self, context):
+        from .dynamics import pin_capture_ops as pc
+        from .dynamics import static_deform_ops as sd
+
+        if self._phase == self._PHASE_STATIC:
+            sd.cleanup_capture(context)
+        elif self._phase == self._PHASE_PIN:
+            pc.cleanup_pin_capture(context)
+        self._phase = None
+
+    def _abort(self, context, err):
+        self._cleanup_active(context)
+        redraw_all_areas(context)
+        if err:
+            self.report({"ERROR"}, err)
+        else:
+            self.report({"INFO"}, "Re-capture aborted")
+        return self._end_timer(context, {"CANCELLED"})
+
+    def _finish(self, context):
+        redraw_all_areas(context)
+        parts = []
+        if self._summary["objs"]:
+            parts.append(f"{self._summary['objs']} object(s)")
+        if self._summary["pins"]:
+            parts.append(f"{self._summary['pins']} pin(s)")
+        target = ", ".join(parts) if parts else "nothing"
+        self.report({"INFO"}, f"Re-captured deformation for {target}")
+        return self._end_timer(context, {"FINISHED"})
+
+    def _end_timer(self, context, retval):
+        wm = context.window_manager
+        timer = getattr(self, "_timer", None)
+        if timer is not None:
+            wm.event_timer_remove(timer)
+            self._timer = None
+        return retval
+
+    def cancel(self, context):
+        self._cleanup_active(context)
+        self._end_timer(context, {"CANCELLED"})
+
+
+class SOLVER_OT_ClearAllDeformations(Operator):
+    """Delete every captured deformation cache in one pass: all STATIC-collider
+    deform caches and all animated-pin captures across the active groups. The
+    objects keep their deformers, so Re-capture All Deformations rebuilds the
+    caches."""
+
+    bl_idname = "solver.clear_all_deformations"
+    bl_label = "Clear All Deformations"
+    bl_options = {"UNDO"}
+
+    @classmethod
+    def poll(cls, context):
+        # Disabled while a capture/bake is in flight, and (the "nothing to
+        # clear" case) when no cache exists across the active groups.
+        if is_bake_running() or is_capture_running() or is_pin_capture_running():
+            return False
+        # Stateless and fast: a global static-deform-cache check (in-memory +
+        # one directory scan) instead of resolving every STATIC object by
+        # UUID and stat-ing its PC2 per redraw. The pin side is already cheap.
+        from ..core.pc2 import scene_has_static_deform_cache
+        from .dynamics.pin_capture_ops import collect_pins_with_captured_anim
+        return bool(
+            scene_has_static_deform_cache()
+            or collect_pins_with_captured_anim(context)
+        )
+
+    def execute(self, context):
+        from ..core.pc2 import remove_static_deform_pc2
+        from .dynamics.static_deform_ops import collect_objects_with_deform_cache
+        from .dynamics.pin_capture_ops import (
+            clear_captured_pin,
+            collect_pins_with_captured_anim,
+        )
+
+        n_objs = 0
+        for obj in collect_objects_with_deform_cache(context):
+            remove_static_deform_pc2(obj)
+            n_objs += 1
+        # Snapshot the pin specs before clearing (clearing only flips flags /
+        # removes files, so indices stay valid, but snapshotting is clearer).
+        n_pins = 0
+        for gi, pi in collect_pins_with_captured_anim(context):
+            if clear_captured_pin(context, gi, pi):
+                n_pins += 1
+
+        # One overlay refresh + invalidation after the whole batch.
+        from .dynamics.overlay import apply_object_overlays
+        from ..models.groups import invalidate_overlays
+        apply_object_overlays()
+        invalidate_overlays()
+        redraw_all_areas(context)
+
+        parts = []
+        if n_objs:
+            parts.append(f"{n_objs} object(s)")
+        if n_pins:
+            parts.append(f"{n_pins} pin(s)")
+        target = ", ".join(parts) if parts else "nothing"
+        self.report({"INFO"}, f"Cleared deformation cache for {target}")
         return {"FINISHED"}
 
 
@@ -974,7 +1465,7 @@ class SOLVER_OT_DeleteRemoteData(AsyncOperator):
         )
 
     def execute(self, context):
-        com.query({"request": "delete"}, "Deleting Remote Data...")
+        com.query(_DELETE_QUERY, _DELETE_MESSAGE)
         self.setup_modal(context)
         return {"RUNNING_MODAL"}
 
@@ -994,7 +1485,10 @@ classes = (
     SOLVER_OT_Transfer,
     SOLVER_OT_Run,
     SOLVER_OT_Resume,
+    SOLVER_OT_ResumeFrom,
     SOLVER_OT_ClearAnimation,
+    SOLVER_OT_RecaptureAllDeformations,
+    SOLVER_OT_ClearAllDeformations,
     SOLVER_OT_MigratePC2Folder,
     SOLVER_OT_UpdateParams,
     SOLVER_OT_DeleteRemoteData,

@@ -20,6 +20,14 @@
 #   * the project name is held to a stricter rule (find_invalid_name_char):
 #     no spaces, special characters, or path separators. The same warning
 #     line and poll gate apply.
+#   * core.utils.windows_path_too_long projects the deepest cache-file path
+#     the build writes under a Windows solver root and flags it when it
+#     reaches MAX_PATH (260), and ui.main_panel._draw_long_path_warning emits
+#     the two-line warning for it. This turns the bare mid-Transfer
+#     FileNotFoundError on an over-long Windows path into a warning shown when
+#     the path is set. The warning is suppressed when long-path support is
+#     enabled system-wide (core.utils.windows_long_paths_enabled), since the
+#     limit no longer applies there.
 
 from __future__ import annotations
 
@@ -148,6 +156,60 @@ try:
         name_good_ret is False and len(fl_name_good.labels) == 0,
         {"ret": name_good_ret, "labels": fl_name_good.labels},
     )
+
+    # ---- Windows long-path projection + warning ----
+    wptl = utils.windows_path_too_long
+    # The path from the original bug report: 64-char root + "violet" project
+    # projects to the 264-char tetra-cache path that failed.
+    long_root = ("C:" + bs + "Users" + bs + "alexa" + bs + "Desktop" + bs
+                 + "ppf-contact-solver-2026-06-01-13-25-win64")
+    record("longpath_flags_reported_case", wptl(long_root, "violet") == 264,
+           {"v": wptl(long_root, "violet")})
+    record("longpath_silent_on_short_root", wptl("C:" + bs + "dev", "violet") is None,
+           {"v": wptl("C:" + bs + "dev", "violet")})
+    record("longpath_silent_on_empty", wptl("", "violet") is None,
+           {"v": wptl("", "violet")})
+    # A short root can still overflow via a long project name.
+    record("longpath_flags_long_project_name",
+           wptl("C:" + bs + "dev", "x" * 120) is not None,
+           {"v": wptl("C:" + bs + "dev", "x" * 120)})
+
+    # windows_long_paths_enabled() gates the warning; force both states so the
+    # draw checks are independent of the host's actual registry setting.
+    record("longpaths_enabled_is_bool",
+           isinstance(utils.windows_long_paths_enabled(), bool),
+           {"v": utils.windows_long_paths_enabled()})
+
+    _orig_lpe = main_panel.windows_long_paths_enabled
+    try:
+        main_panel.windows_long_paths_enabled = lambda: False
+        fl_long = _FakeLayout()
+        long_ret = main_panel._draw_long_path_warning(fl_long, long_root, "violet")
+        record(
+            "longpath_warning_drawn_when_disabled",
+            long_ret is True and len(fl_long.labels) == 2
+            and fl_long.labels[0][1] == "ERROR",
+            {"ret": long_ret, "labels": fl_long.labels},
+        )
+        fl_short = _FakeLayout()
+        short_ret = main_panel._draw_long_path_warning(fl_short, "C:" + bs + "dev", "violet")
+        record(
+            "longpath_warning_silent_on_short",
+            short_ret is False and len(fl_short.labels) == 0,
+            {"ret": short_ret, "labels": fl_short.labels},
+        )
+        # With long paths enabled the limit no longer applies: stay silent
+        # even for the over-long root.
+        main_panel.windows_long_paths_enabled = lambda: True
+        fl_enabled = _FakeLayout()
+        enabled_ret = main_panel._draw_long_path_warning(fl_enabled, long_root, "violet")
+        record(
+            "longpath_warning_silent_when_longpaths_enabled",
+            enabled_ret is False and len(fl_enabled.labels) == 0,
+            {"ret": enabled_ret, "labels": fl_enabled.labels},
+        )
+    finally:
+        main_panel.windows_long_paths_enabled = _orig_lpe
 
     # ---- Connect button poll() gate on project name ----
     # Hold a known-clean LOCAL path so only the project name varies.

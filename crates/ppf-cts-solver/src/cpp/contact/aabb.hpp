@@ -81,7 +81,7 @@ __device__ unsigned query(const BVH &bvh, Vec<AABB> aabb, F op, T query) {
     unsigned count = 0;
     unsigned head = 0;
     if (bvh.node.size) {
-        stack[head++] = bvh.node.size - 1;
+        stack[head++] = bvh.root;
         while (head) {
             unsigned index = stack[--head];
             if (op.test(aabb[index], query)) {

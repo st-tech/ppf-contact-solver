@@ -20,83 +20,33 @@ fn fsa_read_u32_1d(arr: &Bound<'_, PyAny>, name: &str) -> PyResult<Vec<u32>> {
     crate::utils_py::read_index_array_1d_u32(arr, name)
 }
 
-fn fsa_read_i32_2d_flat(
+// Reads a `(M, COLS)` int index array as a flat `Vec<i32>`, delegating
+// to the shared `read_index_array_allow_empty` cascade so the
+// dtype-acceptance and empty-array shape rules live in one place. The
+// sole caller (`FixedScene` in `_scene_.py`) always passes int32, including empty
+// tri/rod/static_tris as `np.zeros((0, COLS), dtype=np.int32)`, so the
+// cascade accepts every real input.
+fn fsa_read_i32_2d_flat<const COLS: usize>(
     arr: &Bound<'_, PyAny>,
-    cols: usize,
     name: &str,
 ) -> PyResult<Vec<i32>> {
-    if let Ok(view) = arr.extract::<PyReadonlyArray2<'_, i32>>() {
-        let s = view.shape();
-        if s.len() != 2 || (s[0] > 0 && s[1] != cols) {
-            return Err(PyValueError::new_err(format!(
-                "{name} must have shape (M, {cols}), got {s:?}"
-            )));
-        }
-        return Ok(view
-            .as_slice()
-            .map_err(|_| PyTypeError::new_err(format!("{name} must be C-contiguous")))?
-            .to_vec());
-    }
-    if let Ok(view) = arr.extract::<PyReadonlyArray2<'_, i64>>() {
-        let s = view.shape();
-        if s.len() != 2 || (s[0] > 0 && s[1] != cols) {
-            return Err(PyValueError::new_err(format!(
-                "{name} must have shape (M, {cols}), got {s:?}"
-            )));
-        }
-        return Ok(view
-            .as_slice()
-            .map_err(|_| PyTypeError::new_err(format!("{name} must be C-contiguous")))?
-            .iter()
-            .map(|&v| v as i32)
-            .collect());
-    }
-    if let Ok(view) = arr.extract::<PyReadonlyArray2<'_, u32>>() {
-        let s = view.shape();
-        if s.len() != 2 || (s[0] > 0 && s[1] != cols) {
-            return Err(PyValueError::new_err(format!(
-                "{name} must have shape (M, {cols}), got {s:?}"
-            )));
-        }
-        return Ok(view
-            .as_slice()
-            .map_err(|_| PyTypeError::new_err(format!("{name} must be C-contiguous")))?
-            .iter()
-            .map(|&v| v as i32)
-            .collect());
-    }
-    if let Ok(view) = arr.extract::<PyReadonlyArray2<'_, u64>>() {
-        let s = view.shape();
-        if s.len() != 2 || (s[0] > 0 && s[1] != cols) {
-            return Err(PyValueError::new_err(format!(
-                "{name} must have shape (M, {cols}), got {s:?}"
-            )));
-        }
-        return Ok(view
-            .as_slice()
-            .map_err(|_| PyTypeError::new_err(format!("{name} must be C-contiguous")))?
-            .iter()
-            .map(|&v| v as i32)
-            .collect());
-    }
-    if let Ok(view) = arr.extract::<PyReadonlyArray2<'_, f64>>() {
-        let s = view.shape();
-        if s[0] == 0 {
-            return Ok(Vec::new());
-        }
-        return Err(PyValueError::new_err(format!(
-            "{name} float dtype only allowed when rows == 0; got shape {s:?}"
-        )));
-    }
-    Err(PyTypeError::new_err(format!(
-        "{name} must be a 2-D numpy array of int dtype"
-    )))
+    crate::utils_py::read_index_array_allow_empty::<i32, COLS>(arr, name)
 }
 
 fn fsa_read_bool_1d(arr: &Bound<'_, PyAny>, name: &str) -> PyResult<Vec<bool>> {
     let view = arr
         .extract::<PyReadonlyArray1<'_, bool>>()
         .map_err(|_| PyTypeError::new_err(format!("{name} must be a 1-D bool numpy array")))?;
+    Ok(view
+        .as_slice()
+        .map_err(|_| PyTypeError::new_err(format!("{name} must be C-contiguous")))?
+        .to_vec())
+}
+
+fn fsa_read_i32_1d(arr: &Bound<'_, PyAny>, name: &str) -> PyResult<Vec<i32>> {
+    let view = arr
+        .extract::<PyReadonlyArray1<'_, i32>>()
+        .map_err(|_| PyTypeError::new_err(format!("{name} must be a 1-D int32 numpy array")))?;
     Ok(view
         .as_slice()
         .map_err(|_| PyTypeError::new_err(format!("{name} must be C-contiguous")))?
@@ -145,6 +95,7 @@ fn fsa_read_f64_2d_flat(
     tri,
     rod,
     tri_is_collider,
+    tri_body_id,
     rod_is_collider,
     tri_offset,
     rod_offset,
@@ -164,6 +115,7 @@ pub(super) fn scene_fixed_scene_assemble<'py>(
     tri: &Bound<'py, PyAny>,
     rod: &Bound<'py, PyAny>,
     tri_is_collider: &Bound<'py, PyAny>,
+    tri_body_id: &Bound<'py, PyAny>,
     rod_is_collider: &Bound<'py, PyAny>,
     tri_offset: Vec<f64>,
     rod_offset: Vec<f64>,
@@ -195,16 +147,17 @@ pub(super) fn scene_fixed_scene_assemble<'py>(
         .map_err(|_| PyTypeError::new_err("displacement must be C-contiguous"))?
         .to_vec();
     let dmap = fsa_read_u32_1d(vert_dmap, "vert_dmap")?;
-    let tri_flat = fsa_read_i32_2d_flat(tri, 3, "tri")?;
-    let rod_flat = fsa_read_i32_2d_flat(rod, 2, "rod")?;
+    let tri_flat = fsa_read_i32_2d_flat::<3>(tri, "tri")?;
+    let rod_flat = fsa_read_i32_2d_flat::<2>(rod, "rod")?;
     let tri_coll = fsa_read_bool_1d(tri_is_collider, "tri_is_collider")?;
+    let tri_body = fsa_read_i32_1d(tri_body_id, "tri_body_id")?;
     let rod_coll = fsa_read_bool_1d(rod_is_collider, "rod_is_collider")?;
     let static_verts_vec: Option<Vec<f64>> = match static_verts {
         Some(arr) => Some(fsa_read_f64_2d_flat(arr, 3, "static_verts")?),
         None => None,
     };
     let static_tris_vec: Option<Vec<i32>> = match static_tris {
-        Some(arr) => Some(fsa_read_i32_2d_flat(arr, 3, "static_tris")?),
+        Some(arr) => Some(fsa_read_i32_2d_flat::<3>(arr, "static_tris")?),
         None => None,
     };
 
@@ -230,6 +183,7 @@ pub(super) fn scene_fixed_scene_assemble<'py>(
             tri: &tri_flat,
             rod: &rod_flat,
             tri_is_collider: &tri_coll,
+            tri_body_id: &tri_body,
             rod_is_collider: &rod_coll,
             tri_offset: &tri_offset,
             rod_offset: &rod_offset,

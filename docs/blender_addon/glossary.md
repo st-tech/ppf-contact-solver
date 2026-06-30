@@ -81,7 +81,7 @@ documentation, grouped by subject and alphabetized within each group.
 **Snap**
 : KDTree-based vertex alignment that translates object A so its nearest
   vertices land on object B's nearest vertices. Typically followed by a
-  merge pair registration and, for shell+solid pairs, a stitch stiffness.
+  merge pair registration.
 
 **Solid**
 : Group type for volumetric deformable bodies.
@@ -92,9 +92,12 @@ documentation, grouped by subject and alphabetized within each group.
   Blender transform keyframes rather than by the solver.
 
 **Stitch stiffness**
-: Per-merge-pair compliance value that softens the stitch when a solid is
-  involved. Pure shell-shell and rod-rod pairs merge vertices exactly and
-  do not expose a stiffness slider.
+: Strength of the soft force that holds a stitch together, set
+  per-merge-pair (or per-group for loose edges), default 1.0. The stitch
+  is always a soft force, never an exact weld, and is exposed for every
+  supported pair: Shell-Shell, Shell-Solid, Rod-Shell, Rod-Solid,
+  Rod-Rod, Solid-Solid, and any dynamic group stitched to a Static
+  collider.
 
 **Torque**
 : A pin **Operation** that applies rotational force around an axis derived
@@ -113,6 +116,13 @@ documentation, grouped by subject and alphabetized within each group.
   animation: shape keys and fcurves on meshes, or per-control-point
   keyframes on curves. The baked result renders without the add-on
   installed. See [Baking Animation](workflow/sim/baking.md).
+
+**Checkpoint**
+: A saved, resumable solver state captured at a chosen frame. Add frames
+  to the **Save Checkpoints** list to have the solver write a checkpoint
+  at each, or let **Auto Save** record them at a fixed interval. Saved
+  checkpoints are what the **Resume From** picker lists, so the
+  simulation can be continued from any of them later.
 
 **Constitutive model**
 : The mathematical model that governs how a group deforms (for example
@@ -156,9 +166,22 @@ documentation, grouped by subject and alphabetized within each group.
   **material profile** (one group's material parameters). Loaded and
   saved from the profile dropdown next to the relevant panel.
 
+**Rayleigh damping**
+: Velocity-dependent energy loss proportional to a group's material
+  stiffness, set per group by **Deformation Damping** and **Bending
+  Damping** (both default 0.0, which disables it). It calms
+  high-frequency jitter without slowing down the bulk motion of the
+  body. Deformation Damping applies to Solid, Shell, and Rod groups;
+  Bending Damping applies to Shell and Rod groups only. This is distinct
+  from air damping, which acts on the whole scene.
+
 **Resume**
-: Continues a paused or partially completed simulation from the last
-  completed frame, preserving earlier results.
+: Continues a paused or partially completed simulation from a saved
+  state, preserving earlier results. The **Resume** button picks up from
+  the last completed frame, while **Resume From** opens a checkpoint
+  picker so you can choose which saved frame to continue from. Both stay
+  available after a failed run as long as the solver still holds at least
+  one saved checkpoint.
 
 **Run**
 : Starts the simulation on the remote solver. Warns on a stale mesh hash
@@ -170,8 +193,9 @@ documentation, grouped by subject and alphabetized within each group.
   See [Scene Parameters](workflow/params/scene.md).
 
 **Solver state**
-: The status surfaced by the Solver panel: Connected, Ready, Running,
-  Complete, or Fetched.
+: The status surfaced by the Solver panel: Disconnected, Ready to Run,
+  Simulation Running..., Resumable, Fetching Animation..., or Simulation
+  Failed.
 
 **Transfer**
 : Uploads geometry, pins, colliders, and every parameter to the solver
@@ -227,7 +251,7 @@ documentation, grouped by subject and alphabetized within each group.
   dispatched with `tools/call`. Goes through the same validation layer as
   the sidebar buttons.
 
-**Protocol 0.04**
+**Protocol 0.10**
 : The current wire protocol version between the add-on and the
   `ppf-cts-server` binary. TCMD requests carry a 4-byte big-endian length
   prefix between the `b"TCMD"` header and the payload, and the server

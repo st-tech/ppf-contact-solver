@@ -16,19 +16,22 @@ members = [
     "crates/ppf-cts-server",
     "crates/ppf-cts-solver",
 ]
-# `cargo build --release` at the workspace root builds the two binary
-# crates: the CUDA solver driver (binary: `ppf-contact-solver`, package:
-# `ppf-cts-solver`) and the tokio-based solver host (`ppf-cts-server`).
-# build-win-native/build.bat and the Linux build paths both rely on
-# `cargo build --release` at root producing both binaries in
-# `target/release/`. ppf-cts-core and ppf-cts-formats are libraries
-# (built transitively as deps); ppf-cts-py is a PyO3 cdylib that needs
-# `maturin develop --release` from `crates/ppf-cts-py/` to install the
-# wheel into the active Python venv. See `build-all.sh` at the repo
-# root for one-shot.
+# `cargo build --release` at the workspace root builds three artifacts:
+# the CUDA solver driver (binary: `ppf-contact-solver`, package:
+# `ppf-cts-solver`), the tokio-based solver host (`ppf-cts-server`), and
+# the PyO3 extension cdylib `_ppf_cts_py` (package: `ppf-cts-py`). All
+# three land in `target/release/`; build-win-native/build.bat and the
+# Linux build paths rely on this. ppf-cts-core and ppf-cts-formats are
+# libraries (built transitively as deps). ppf-cts-py is built as a plain
+# cargo cdylib: there is no maturin wheel step. `frontend/__init__.py`
+# loads `target/<profile>/lib_ppf_cts_py.{so,dylib}` (or `_ppf_cts_py.dll`
+# on Windows) directly via importlib, so it is never installed into a venv
+# or site-packages. On macOS (no nvcc) use `cargo build-emul` for the
+# emulated backend (see .cargo/config.toml).
 default-members = [
     "crates/ppf-cts-solver",
     "crates/ppf-cts-server",
+    "crates/ppf-cts-py",
 ]
 # eigsys/eig-rust stays on its own (separate Cargo.toml outside this
 # workspace) because its nalgebra major version diverges from ours and

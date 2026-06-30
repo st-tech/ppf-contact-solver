@@ -7,8 +7,7 @@
 // frontend/_bvh_.py's `frame_mapping` and `interpolate_surface`
 // public functions, plus the inner machinery they need:
 //
-//   * `closest_point_on_triangle`  (originally lives in
-//     frontend/_proximity_.py:28-94, Ericson Voronoi-region method).
+//   * `closest_point_on_triangle`  (Ericson Voronoi-region method).
 //   * `build_bvh`                  (Morton sort + midpoint split).
 //   * `closest_triangle_index`     (BVH traversal with bbox early-exit).
 //
@@ -25,7 +24,7 @@
 use rayon::prelude::*;
 
 use super::constants::BVH_STACK_CAP;
-use super::geom_util::{bbox_overlap, dot3, point_to_bbox_dist_sq, sub3};
+use super::geom_util::{bbox_overlap, cross3, dot3, point_to_bbox_dist_sq, sub3};
 
 const FRAME_DEGEN_EPS: f64 = 1e-20;
 const DEFAULT_MAX_LEAF: usize = 8;
@@ -35,9 +34,8 @@ const DEFAULT_MAX_LEAF: usize = 8;
 //
 // Voronoi-region method from Ericson, "Real-Time Collision Detection".
 // Returns (closest_point, barycentric_coords) where `bary[i]` is the
-// weight on vertex i ∈ {a, b, c}. Identical branching to
-// frontend/_proximity_.py:28-94 so on-edge / on-vertex tie-breaking
-// matches the Python implementation byte-for-byte.
+// weight on vertex i ∈ {a, b, c}. On-edge / on-vertex tie-breaking
+// follows the Ericson Voronoi-region branching.
 
 #[inline]
 pub(crate) fn closest_point_on_triangle(
@@ -653,6 +651,23 @@ pub(crate) fn closest_triangle_index(
 //   [c1, c2]ᵀ = G⁻¹ [(p-x0)·b1, (p-x0)·b2]ᵀ   with Gram G = [[b1·b1, b1·b2], [b1·b2, b2·b2]]
 // Cramer's rule gives det(G) = ‖b1 × b2‖² = n_sq.
 
+/// Solve the triangle frame at (x0, x1, x2): the two edge vectors
+/// b1 = x1-x0, b2 = x2-x0, their cross product n = b1×b2, and
+/// n_sq = ‖n‖² (which is also det(G) for the Gram solve). Shared by
+/// frame_mapping (projection) and interpolate_surface (reconstruction)
+/// so the normal sign and the n_sq used by the FRAME_DEGEN_EPS guard
+/// stay identical in both directions. The degenerate branch itself is
+/// left to each caller because the two differ: frame_mapping zeroes all
+/// coefs while interpolate_surface keeps the in-plane terms.
+#[inline]
+fn tri_frame(x0: [f64; 3], x1: [f64; 3], x2: [f64; 3]) -> ([f64; 3], [f64; 3], [f64; 3], f64) {
+    let b1 = sub3(x1, x0);
+    let b2 = sub3(x2, x0);
+    let n = cross3(b1, b2);
+    let n_sq = dot3(n, n);
+    (b1, b2, n, n_sq)
+}
+
 /// Compute the BVH then, for each input point, find its closest
 /// triangle and return (tri_index, frame_coefs). Coefs are flat
 /// row-major (n_orig * 3); the caller reshapes to (n_orig, 3) numpy.
@@ -675,30 +690,9 @@ pub fn frame_mapping(
         return (vec![-1; n_orig], vec![0.0; n_orig * 3]);
     }
 
-    // Build per-tri centroids + bboxes for the BVH.
-    let mut tri_centroids = vec![0.0f64; n_new_tri * 3];
-    let mut tri_bb_min = vec![0.0f64; n_new_tri * 3];
-    let mut tri_bb_max = vec![0.0f64; n_new_tri * 3];
-    tri_centroids
-        .par_chunks_mut(3)
-        .zip(tri_bb_min.par_chunks_mut(3))
-        .zip(tri_bb_max.par_chunks_mut(3))
-        .enumerate()
-        .for_each(|(i, ((c, lo), hi))| {
-            let t0 = new_tri_flat[3 * i] as usize;
-            let t1 = new_tri_flat[3 * i + 1] as usize;
-            let t2 = new_tri_flat[3 * i + 2] as usize;
-            for d in 0..3 {
-                let v0 = new_vert_flat[3 * t0 + d];
-                let v1 = new_vert_flat[3 * t1 + d];
-                let v2 = new_vert_flat[3 * t2 + d];
-                c[d] = (v0 + v1 + v2) / 3.0;
-                lo[d] = v0.min(v1).min(v2);
-                hi[d] = v0.max(v1).max(v2);
-            }
-        });
-
-    let bvh = build_bvh(&tri_centroids, &tri_bb_min, &tri_bb_max, DEFAULT_MAX_LEAF);
+    // Build the BVH over the target triangles (per-tri centroids +
+    // bboxes are computed inside build_tri_bvh).
+    let bvh = build_tri_bvh(new_vert_flat, new_tri_flat);
 
     // Per-point: closest-tri + frame coefs. Output is (tri_idx, c1, c2, c3).
     let mut tri_indices = vec![0i32; n_orig];
@@ -726,22 +720,17 @@ pub fn frame_mapping(
                 new_vert_flat[3 * t0 + 1],
                 new_vert_flat[3 * t0 + 2],
             ];
-            let b1 = [
-                new_vert_flat[3 * t1] - x0[0],
-                new_vert_flat[3 * t1 + 1] - x0[1],
-                new_vert_flat[3 * t1 + 2] - x0[2],
+            let x1 = [
+                new_vert_flat[3 * t1],
+                new_vert_flat[3 * t1 + 1],
+                new_vert_flat[3 * t1 + 2],
             ];
-            let b2 = [
-                new_vert_flat[3 * t2] - x0[0],
-                new_vert_flat[3 * t2 + 1] - x0[1],
-                new_vert_flat[3 * t2 + 2] - x0[2],
+            let x2 = [
+                new_vert_flat[3 * t2],
+                new_vert_flat[3 * t2 + 1],
+                new_vert_flat[3 * t2 + 2],
             ];
-            let n = [
-                b1[1] * b2[2] - b1[2] * b2[1],
-                b1[2] * b2[0] - b1[0] * b2[2],
-                b1[0] * b2[1] - b1[1] * b2[0],
-            ];
-            let n_sq = n[0] * n[0] + n[1] * n[1] + n[2] * n[2];
+            let (b1, b2, n, n_sq) = tri_frame(x0, x1, x2);
 
             if n_sq < FRAME_DEGEN_EPS {
                 coef_row[0] = 0.0;
@@ -769,6 +758,12 @@ pub fn frame_mapping(
 
 /// Reconstruct world positions from the frame embedding. Includes
 /// the degenerate-deformed-triangle fallback that drops the c3 term.
+///
+/// Callers must filter the `frame_mapping` empty-target sentinel:
+/// rows whose `tri_indices[i] < 0` have no source triangle (see
+/// `frame_mapping`'s `n_new_tri == 0` path) and are left at the
+/// zero output position here rather than indexing with a wrapped
+/// `usize`.
 pub fn interpolate_surface(
     deformed_vert_flat: &[f64],
     surf_tri_flat: &[i32],
@@ -780,7 +775,15 @@ pub fn interpolate_surface(
 
     let mut out = vec![0.0f64; n * 3];
     out.par_chunks_mut(3).enumerate().for_each(|(i, row)| {
-        let ti = tri_indices[i] as usize;
+        // Guard the frame_mapping `-1` sentinel (empty target surface)
+        // before indexing: `-1 as usize` would wrap to usize::MAX and
+        // panic on surf_tri_flat. Leave `row` at its zero init, which
+        // matches frame_mapping's zero coefs for the no-mapping case.
+        let ti_signed = tri_indices[i];
+        if ti_signed < 0 {
+            return;
+        }
+        let ti = ti_signed as usize;
         let t0 = surf_tri_flat[3 * ti] as usize;
         let t1 = surf_tri_flat[3 * ti + 1] as usize;
         let t2 = surf_tri_flat[3 * ti + 2] as usize;
@@ -793,27 +796,22 @@ pub fn interpolate_surface(
             deformed_vert_flat[3 * t0 + 1],
             deformed_vert_flat[3 * t0 + 2],
         ];
-        let b1 = [
-            deformed_vert_flat[3 * t1] - x0[0],
-            deformed_vert_flat[3 * t1 + 1] - x0[1],
-            deformed_vert_flat[3 * t1 + 2] - x0[2],
+        let x1 = [
+            deformed_vert_flat[3 * t1],
+            deformed_vert_flat[3 * t1 + 1],
+            deformed_vert_flat[3 * t1 + 2],
         ];
-        let b2 = [
-            deformed_vert_flat[3 * t2] - x0[0],
-            deformed_vert_flat[3 * t2 + 1] - x0[1],
-            deformed_vert_flat[3 * t2 + 2] - x0[2],
+        let x2 = [
+            deformed_vert_flat[3 * t2],
+            deformed_vert_flat[3 * t2 + 1],
+            deformed_vert_flat[3 * t2 + 2],
         ];
-        let n = [
-            b1[1] * b2[2] - b1[2] * b2[1],
-            b1[2] * b2[0] - b1[0] * b2[2],
-            b1[0] * b2[1] - b1[1] * b2[0],
-        ];
-        let n_sq = n[0] * n[0] + n[1] * n[1] + n[2] * n[2];
+        let (b1, b2, n, n_sq) = tri_frame(x0, x1, x2);
 
         if n_sq < FRAME_DEGEN_EPS {
             // Degenerate deformed triangle: drop the normal term to
             // avoid NaN. c2 was relative to a normal that no longer
-            // exists. Matches frontend/_bvh_.py:642-648.
+            // exists.
             row[0] = x0[0] + c0 * b1[0] + c1 * b2[0];
             row[1] = x0[1] + c0 * b1[1] + c1 * b2[1];
             row[2] = x0[2] + c0 * b1[2] + c1 * b2[2];

@@ -10,8 +10,23 @@ import numpy as np
 from mathutils import Vector  # pyright: ignore
 
 from ...models.groups import decode_vertex_group_identifier
-from ..utils import get_vertices_in_group, world_matrix
-from . import _swap_axes, _to_solver
+from ..utils import (
+    get_vertices_in_group,
+    pin_covers_all_vertices,
+    world_matrix,
+)
+from . import _swap_axes, _to_solver, resolve_fps
+
+
+def _solver_rot_matrix(obj):
+    """Translation-stripped solver world matrix (rotation+scale only).
+
+    The solver stores vertices in untranslated space and tracks object
+    translation separately as displacement, so vertex-derived positions
+    must drop the translation component. See README "Solver space
+    convention".
+    """
+    return world_matrix(obj).to_3x3().to_4x4()
 
 
 def _get_point_co(obj, idx):
@@ -76,7 +91,7 @@ def _max_towards_center(obj, vg_name, state, direction, frame=None, eps=1e-3):
     selected_indices = [pin_indices[i] for i in range(len(pin_indices)) if mask[i]]
     # Compute centroid in solver space without translation (solver adds
     # displacement separately, so positions must be in untranslated space).
-    solver_mat = world_matrix(obj).to_3x3().to_4x4()
+    solver_mat = _solver_rot_matrix(obj)
     solver_positions = np.array([list(solver_mat @ _get_point_co(obj, i)) for i in selected_indices])
     centroid = solver_positions.mean(axis=0)
     if frame is not None:
@@ -146,13 +161,15 @@ def _collect_pin_vertex_fcurve_frames(obj, vg_name):
     return sorted(frames), lookup
 
 
-def _encode_pin_config(context, groups, state):
-    """Encode pin vertex group config and animation."""
-    fps = (
-        bpy.context.scene.render.fps
-        if state.use_frame_rate_in_output
-        else int(state.frame_rate)
-    )
+def _encode_pin_config(context, groups, state, fps=None):
+    """Encode pin vertex group config and animation.
+
+    ``fps`` is resolved once by ``_build_param_dict`` and threaded in so the
+    whole param build shares a single frame rate; callers that omit it (e.g.
+    debug scenarios) fall back to resolving it here.
+    """
+    if fps is None:
+        fps = resolve_fps(state)
     # Collect per-object pin config (duration, pull, operations) keyed by vertex index
     # Structure: {obj_name: {vertex_index: {"unpin_time": ..., "pull_strength": ..., "operations": [...]}}}
     pin_config = {}
@@ -164,7 +181,12 @@ def _encode_pin_config(context, groups, state):
             # EMBEDDED_MOVE (the fcurve-keyframed-pin sentinel) lives
             # in ``operations``, so ``has_operations`` already covers
             # the keyframed-pin case alongside Move/Spin/Scale/Torque.
-            if (not pin_item.use_pin_duration and not pin_item.use_pull
+            # SOLID is never skipped on the plain-pin condition: a static
+            # (no duration / no pull / no ops) hard-intent SOLID pin must still
+            # emit a cfg so it can carry the fix_weight_threshold toggle to the
+            # decoder. Non-SOLID keeps the original skip.
+            if (group.object_type != "SOLID"
+                    and not pin_item.use_pin_duration and not pin_item.use_pull
                     and not has_operations):
                 continue
             from ..uuid_registry import resolve_pin, get_or_create_object_uuid
@@ -203,6 +225,21 @@ def _encode_pin_config(context, groups, state):
                 cfg["unpin_time"] = float(pin_item.pin_duration) / fps
             if pin_item.use_pull:
                 cfg["pull_strength"] = float(pin_item.pull_strength)
+            # A captured deformation on a SOLID group can drive a time-varying
+            # rest shape so the dynamic body settles into the motion instead of
+            # fighting it. Applies to BOTH pin modes - a pull pin (weak soft
+            # pull) and a fixed pin (strong FixPair barrier) track the same rest
+            # shape; only the pin constraint differs. This is OPT-IN via the
+            # per-pin "Track Rest-Pose Deformation" toggle. Gated on a FULL pin
+            # (every vertex in the group): with the whole mesh captured, the
+            # rest pose is the captured deformation itself (every sim vertex is
+            # driven), so there is no partial-pin reconstruction and no boundary
+            # tear. SOLID only.
+            if (getattr(pin_item, "track_rest_pose_deformation", False)
+                    and getattr(pin_item, "has_captured_anim", False)
+                    and group.object_type == "SOLID"
+                    and pin_covers_all_vertices(obj, vg_name)):
+                cfg["rest_shape_track"] = True
             # Per-pin stiffness scale for the moving (kinematic) pin
             # constraint force. Always emitted; the solver applies it
             # only when the pin is kinematic. Defaults to 1.0 server-side
@@ -215,7 +252,7 @@ def _encode_pin_config(context, groups, state):
                 centroid_blender = None
                 pin_indices = _get_pin_indices(obj, vg_name)
                 if pin_indices:
-                    mat = world_matrix(obj).to_3x3().to_4x4()
+                    mat = _solver_rot_matrix(obj)
                     positions = [mat @ _get_point_co(obj, i) for i in pin_indices]
                     n = len(positions)
                     centroid_blender = [
@@ -260,10 +297,10 @@ def _encode_pin_config(context, groups, state):
                             if op.spin_center_vertex < 0:
                                 raise ValueError(
                                     f"Pin '{vg_name}' on '{obj_name}': "
-                                    "Spin center vertex not set — pick a vertex in Edit Mode"
+                                    "Spin center vertex not set: pick a vertex in Edit Mode"
                                 )
                             op_dict["center_mode"] = "absolute"
-                            mat_nt = world_matrix(obj).to_3x3().to_4x4()
+                            mat_nt = _solver_rot_matrix(obj)
                             op_dict["center"] = list(mat_nt @ _get_point_co(obj, op.spin_center_vertex))
                         else:
                             op_dict["center_mode"] = "absolute"
@@ -296,10 +333,10 @@ def _encode_pin_config(context, groups, state):
                             if op.scale_center_vertex < 0:
                                 raise ValueError(
                                     f"Pin '{vg_name}' on '{obj_name}': "
-                                    "Scale center vertex not set — pick a vertex in Edit Mode"
+                                    "Scale center vertex not set: pick a vertex in Edit Mode"
                                 )
                             op_dict["center_mode"] = "absolute"
-                            mat_nt = world_matrix(obj).to_3x3().to_4x4()
+                            mat_nt = _solver_rot_matrix(obj)
                             op_dict["center"] = list(mat_nt @ _get_point_co(obj, op.scale_center_vertex))
                         else:
                             op_dict["center_mode"] = "absolute"
@@ -478,6 +515,15 @@ def _encode_pin_config(context, groups, state):
             # Tag with group identity so solver can merge torque vertices
             cfg["pin_group_id"] = f"{obj_uuid}:{vg_name}"
             cfg["obj_uuid"] = obj_uuid
+            # SOLID hard-pin surface/soft split threshold (per pin). The
+            # decoder always splits a hard-intent partial-pin SOLID holder
+            # (interior fix pins crash the solver); this scalar only sets how
+            # much of the SURFACE is hard vs soft skirt. 0 = whole pinned
+            # surface region hard. Irrelevant to pull pins / non-SOLID.
+            if group.object_type == "SOLID":
+                cfg["fix_weight_threshold"] = float(
+                    getattr(pin_item, "fix_weight_threshold", 0.5)
+                )
             # For curves we must match the sampled-vertex index space used
             # by ``info["pin"]`` in encoder/mesh.py (the solver's
             # ``pin_holder.index``). Otherwise spin/move_by configs are

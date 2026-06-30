@@ -57,6 +57,17 @@ pub use executor::{DefaultExecutor, EffectExecutor};
 /// `frontend` decoder disagrees about payload shape; an un-bumped
 /// version there silently mis-decodes instead of erroring.
 ///
+/// 0.09: additive scene / dyn-param fields for the per-object bending
+/// reference rest shape and the angular velocity overwrite.
+/// `ObjectInfo` gains an optional `bend_rest_vert` (guarded by a
+/// `has_bend_rest_vert` count) carrying per-object reference rest
+/// positions for hinge rest angles, and the dyn-param table gains
+/// `angular_velocity:<dmap>` / `angular_velocity_world:<dmap>` keyframe
+/// streams (principal-axis spins resolved from live geometry, and fixed
+/// world-axis spins). The new fields are optional, so an old decoder
+/// silently drops the bending reference and the spins instead of
+/// erroring; the handshake forces the matching pair.
+///
 /// 0.08: co-located transfer. When the addon and server share a
 /// machine (`local` / `win_native` backends), the addon writes
 /// `data.pickle` / `param.pickle` straight to the project root on
@@ -107,4 +118,4 @@ pub use executor::{DefaultExecutor, EffectExecutor};
 /// to signal end-of-input, but tokio on Windows did not surface that
 /// half-close as `Ok(0)` to AsyncRead, so the server's read loop
 /// hung forever and the connection sat in FIN_WAIT_2 indefinitely.
-pub const PROTOCOL_VERSION: &str = "0.08";
+pub const PROTOCOL_VERSION: &str = "0.10";

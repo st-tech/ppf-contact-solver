@@ -24,6 +24,8 @@
 # ``KeyboardInterrupt``, BlenderApp.populate().make() unwinds, and we
 # exit with code 130 so the parent can distinguish cancel from crash.
 
+import json
+import os
 import signal
 import sys
 import traceback
@@ -64,6 +66,12 @@ def main(argv: list[str]) -> int:
         return 2
     name = argv[1]
     root = argv[2]
+    # Optional trailing flag: when present, the build re-decodes the scene
+    # input while keeping the solver `output/` subtree (saved checkpoints),
+    # so a resume can pick up edited animation without wiping the states.
+    # Parsed from argv[3:] to leave the `<name> <root>` positional contract
+    # intact.
+    preserve_output = "--preserve-output" in argv[3:]
 
     signal.signal(signal.SIGTERM, _on_sigterm)
 
@@ -78,7 +86,6 @@ def main(argv: list[str]) -> int:
 
         # Imported lazily so ``ERROR`` can still be reported if the
         # frontend package or its dependencies fail to import.
-        import os
         from frontend import BlenderApp
 
         app = BlenderApp(name, progress_callback=_progress)
@@ -96,33 +103,35 @@ def main(argv: list[str]) -> int:
             cache_root = os.path.join(root, ".cash")
             os.makedirs(cache_root, exist_ok=True)
             if hasattr(app, "_mesh_manager"):
-                # `MeshManager` reads from `_cache_dir`, not `_cache_root`.
-                # The previous typo silently no-op'd this override:
-                # `MeshManager._cache_dir` stayed pointed at the canonical
-                # path BlenderApp.__init__ computed via `blender_app_paths`,
-                # so the per-project tet cache lived at one location while
-                # the upload pickles lived at another. On a fresh project
-                # name (or after the canonical cache was lost), every build
-                # re-ran fTetWild from scratch and that's intrinsically
-                # non-deterministic across runs. Two builds of the same
-                # SOLID mesh produced different tet hulls (~1% size
+                # `set_cache_dir` redirects BOTH `MeshManager._cache_dir`
+                # and its `CreateManager._cache_dir`. The tetra cache path
+                # is derived through `create.tri(...)` off the latter, so
+                # updating only `MeshManager._cache_dir` left the per-project
+                # tet cache pointed at the canonical path
+                # `BlenderApp.__init__` computed via `blender_app_paths`,
+                # while the upload pickles lived next to the project root.
+                # On a fresh project name (or after the canonical cache was
+                # lost), every build re-ran fTetWild from scratch and that's
+                # intrinsically non-deterministic across runs. Two builds of
+                # the same SOLID mesh produced different tet hulls (~1% size
                 # difference); for a SHELL tucked inside the SOLID's
                 # contact-gap zone, that difference flipped the kite
                 # between "free" and "in contact" and the user saw the
                 # kite locally wrinkle "for no reason."
-                app._mesh_manager._cache_dir = cache_root
-        app.populate().make()
+                app._mesh_manager.set_cache_dir(cache_root)
+        app.populate().make(preserve_output=preserve_output)
         # Forward static build metadata the response builder needs to
         # publish solver progress (frame / total_frames). Pulled from
         # the FixedSession's resolved param set so static + dyn merges
-        # are respected. Best-effort: a missing or non-int `frames` is
-        # surfaced as a debug log on the parent side.
+        # are respected. Read once here so the META line and the
+        # scene_info "Total Frames" row share one value and one guard.
+        # Best-effort: a missing or non-int `frames` becomes None.
         try:
             total_frames = int(app.session._param.get("frames"))
-            if total_frames > 0:
-                _emit(f"META frames={total_frames}")
         except (AttributeError, TypeError, ValueError):
-            pass
+            total_frames = None
+        if total_frames is not None and total_frames > 0:
+            _emit(f"META frames={total_frames}")
         # Drop a scene_info.json next to the project so ppf-cts-server's
         # response builder can splice it into every status response. The
         # build runs in this subprocess, so any field derived from the
@@ -130,7 +139,6 @@ def main(argv: list[str]) -> int:
         # addon's panel renders this dict as the "Scene Info" box after
         # a successful build.
         try:
-            import json
             info: dict[str, str] = {}
             fmt = lambda n: f"{n:,}"
             fs = app._fixed_scene
@@ -180,12 +188,11 @@ def main(argv: list[str]) -> int:
             # Dynamic rows ("Simulated Frames" / "Last Saved") are added
             # by the response builder per poll, since they change as the
             # solver runs.
+            if total_frames is not None and total_frames > 0:
+                info["Total Frames"] = fmt(total_frames)
             try:
                 fss = app.session
                 if fss is not None and getattr(fss, "_param", None) is not None:
-                    frames = fss._param.get("frames")
-                    if frames is not None:
-                        info["Total Frames"] = fmt(int(frames))
                     fps = fss._param.get("fps")
                     if fps is not None:
                         info["FPS"] = str(int(fps))
@@ -204,7 +211,11 @@ def main(argv: list[str]) -> int:
         return 130
     except SystemExit as exc:
         # Honor explicit exit codes, but route any error message through
-        # the wire format so the parent can surface it.
+        # the wire format so the parent can surface it. A bare
+        # ``sys.exit()`` / ``raise SystemExit`` leaves ``exc.code`` None,
+        # which by Python convention means success, so map it to 0.
+        if exc.code is None:
+            return 0
         code = int(exc.code) if isinstance(exc.code, int) else 1
         if exc.code and not isinstance(exc.code, int):
             _emit(f"ERROR {exc.code}")
@@ -220,8 +231,6 @@ def main(argv: list[str]) -> int:
         violations = getattr(exc, "violations", None)
         if violations:
             try:
-                import json
-                import os
                 with open(os.path.join(root, "build_violations.json"), "w") as fp:
                     json.dump({"violations": violations}, fp)
             except Exception as werr:  # best-effort; never mask the build error

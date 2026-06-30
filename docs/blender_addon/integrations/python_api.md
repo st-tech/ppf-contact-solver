@@ -101,7 +101,6 @@ for g in solver.get_groups():
 | `set_overlay_color(r, g, b, a=1.0)`   | Set and enable the viewport overlay color                     |
 | `create_pin(obj, vg)`                 | Pin a vertex group; returns a pin proxy (see below)           |
 | `get_pins()`                          | List every pin in this group as pin proxies                   |
-| `clear_keyframes()`                   | Shortcut for `pin.clear_keyframes()` on every pin             |
 | `delete()`                            | Remove this group                                             |
 | `.param.<name>`                       | Whitelisted material/contact parameter access                 |
 | `.uuid`                               | UUID string, stable across renames                            |
@@ -143,31 +142,28 @@ cloth.create_pin("Shirt", "HemPins").pull(strength=2.0)
 | Method                                                          | Purpose                                                   |
 | --------------------------------------------------------------- | --------------------------------------------------------- |
 | `pull(strength=1.0)`                                            | Switch to a soft pull force                               |
-| `move(delta, frame=None)`                                       | Translate the pinned verts; auto-keyframes when `frame` given |
+| `stiffness(value=1.0)`                                          | Scale a moving pin's kinematic constraint force           |
 | `move_by(delta, frame_start, frame_end, transition="LINEAR")`   | Ramp a translation over a frame range                     |
 | `spin(axis, angular_velocity, flip, center*, frame_start, frame_end, transition)` | Rotate about a derived pivot          |
 | `scale(factor, center*, frame_start, frame_end, transition)`    | Scale from a derived pivot                                |
 | `torque(magnitude, axis_component="PC3", flip, frame_start, frame_end)` | PCA-axis torque                                   |
-| `unpin(frame)`                                                  | Release the pin at `frame`; also blocks later `move(frame=N≥frame)` |
-| `clear_keyframes()`                                             | Drop all positional keyframes for this pin's verts        |
+| `unpin(frame)`                                                  | Release the pin at `frame`                                |
 | `delete()`                                                      | Remove this pin from its group                            |
 
 `transition` is `"LINEAR"` or `"SMOOTH"`. `torque`'s `axis_component`
 is `"PC1"` / `"PC2"` / `"PC3"`.
 
-### `move` with Auto-Keyframing
+### `move_by` over a Frame Range
 
-The first `move(...)` call with a `frame=` argument auto-keyframes the
-current vertex positions at the current scene frame before applying
-`delta` and keyframing again at `frame`. Subsequent calls only keyframe
-at the target frame. Calls with `frame >= unpin_frame` are silently
-ignored, which is handy when you want to leave the pin released cleanly.
+`move_by` ramps a translation of the pinned vertices by `delta` over the
+`frame_start`–`frame_end` range, with a `"LINEAR"` or `"SMOOTH"`
+transition. Pair it with `unpin` to release the pin once the move
+completes.
 
 ```python
 pin = cloth.create_pin("Shirt", "SleevePins")
-pin.unpin(frame=30)
-pin.move(delta=(0, 0, 0.5), frame=20)   # keyframed; under the unpin frame
-pin.move(delta=(0, 0, 0.5), frame=40)   # ignored; past unpin
+pin.move_by(delta=(0, 0, 0.5), frame_start=10, frame_end=30, transition="SMOOTH")
+pin.unpin(frame=40)   # release after the move finishes
 ```
 
 ### Center-Mode Inference for `spin` and `scale`

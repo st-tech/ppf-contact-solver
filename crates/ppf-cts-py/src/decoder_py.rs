@@ -12,12 +12,12 @@ use std::path::{Path, PathBuf};
 
 use ndarray::Array2;
 use numpy::{
-    IntoPyArray, PyArray1, PyArray2, PyArrayMethods, PyReadonlyArray1, PyReadonlyArray2,
+    IntoPyArray, PyArray2, PyArrayMethods, PyReadonlyArray1, PyReadonlyArray2,
     PyUntypedArrayMethods,
 };
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyList, PySlice};
+use pyo3::types::{PyDict, PyList};
 
 use ppf_cts_core::datamodel::decoder as dec;
 
@@ -89,35 +89,30 @@ pub fn summarize_tetra_jobs(jobs: &Bound<'_, PyList>) -> PyResult<String> {
     Ok(dec::summarize_tetra_jobs(&job_views))
 }
 
-/// Project anchor points onto the closest target triangle and emit
-/// the per-anchor stitch row (`ind`, `w`).
+/// Project anchor points onto the closest triangle of one mesh and emit
+/// the per-anchor triangle + barycentric weights.
 ///
 /// Inputs:
 /// - `target_face`: `(F, 3)` int64 triangle indices.
 /// - `target_pos`: `(P, 3)` float64 vertex positions (world space).
 /// - `anchors`: `(K, 3)` float64 anchor positions.
-/// - `src_indices`: `(K,)` int64 source-side vertex ids.
 ///
-/// Returns `(ind, w)`: `(M, 4)` int64 and `(M, 4)` float32, where
-/// `M <= K` (anchors that fall on a fully degenerate mesh are dropped).
+/// Returns `(tri, bary)`: `(M, 3)` int64 triangle ids and `(M, 3)`
+/// float32 barycentric weights, where `M <= K` (anchors that fall on a
+/// fully degenerate mesh are dropped). This is the per-side primitive;
+/// the 6-slot stitch row (source slots `[0..2]`, target slots `[3..5]`)
+/// is assembled by the caller.
 #[pyfunction]
-#[pyo3(signature = (target_face, target_pos, anchors, src_indices))]
+#[pyo3(signature = (target_face, target_pos, anchors))]
 pub fn barycentric_project_anchors<'py>(
     py: Python<'py>,
     target_face: PyReadonlyArray2<'py, i64>,
     target_pos: PyReadonlyArray2<'py, f64>,
     anchors: PyReadonlyArray2<'py, f64>,
-    src_indices: PyReadonlyArray1<'py, i64>,
 ) -> PyResult<(Bound<'py, PyArray2<i64>>, Bound<'py, PyArray2<f32>>)> {
     let _f = require_n_by_k::<_, 3>(&target_face, "target_face")?;
     let _p = require_n_by_k::<_, 3>(&target_pos, "target_pos")?;
-    let n_a = require_n_by_k::<_, 3>(&anchors, "anchors")?;
-    let n_s = src_indices.shape()[0];
-    if n_s != n_a {
-        return Err(PyValueError::new_err(format!(
-            "src_indices length {n_s} doesn't match anchors rows {n_a}"
-        )));
-    }
+    let _a = require_n_by_k::<_, 3>(&anchors, "anchors")?;
 
     let face = target_face
         .as_slice()
@@ -128,25 +123,22 @@ pub fn barycentric_project_anchors<'py>(
     let an = anchors
         .as_slice()
         .map_err(|_| PyTypeError::new_err("anchors must be C-contiguous"))?;
-    let si = src_indices
-        .as_slice()
-        .map_err(|_| PyTypeError::new_err("src_indices must be C-contiguous"))?;
 
-    let rows = py.allow_threads(|| dec::barycentric_project_anchors(face, pos, an, si));
-    let m = rows.ind.len();
-    let mut ind_flat = Vec::with_capacity(m * 4);
-    let mut w_flat = Vec::with_capacity(m * 4);
-    for r in &rows.ind {
-        ind_flat.extend_from_slice(r);
+    let rows = py.allow_threads(|| dec::barycentric_project_anchors(face, pos, an));
+    let m = rows.tri.len();
+    let mut tri_flat = Vec::with_capacity(m * 3);
+    let mut bary_flat = Vec::with_capacity(m * 3);
+    for r in &rows.tri {
+        tri_flat.extend_from_slice(r);
     }
-    for r in &rows.w {
-        w_flat.extend_from_slice(r);
+    for r in &rows.bary {
+        bary_flat.extend_from_slice(r);
     }
-    let ind_arr = Array2::<i64>::from_shape_vec((m, 4), ind_flat)
-        .map_err(|e| PyValueError::new_err(format!("ind reshape failed: {e}")))?;
-    let w_arr = Array2::<f32>::from_shape_vec((m, 4), w_flat)
-        .map_err(|e| PyValueError::new_err(format!("w reshape failed: {e}")))?;
-    Ok((ind_arr.into_pyarray(py), w_arr.into_pyarray(py)))
+    let tri_arr = Array2::<i64>::from_shape_vec((m, 3), tri_flat)
+        .map_err(|e| PyValueError::new_err(format!("tri reshape failed: {e}")))?;
+    let bary_arr = Array2::<f32>::from_shape_vec((m, 3), bary_flat)
+        .map_err(|e| PyValueError::new_err(format!("bary reshape failed: {e}")))?;
+    Ok((tri_arr.into_pyarray(py), bary_arr.into_pyarray(py)))
 }
 
 /// Compute the per-Blender-vertex closest simulation surface vertex
@@ -373,6 +365,9 @@ pub fn closest_vertex_index<'py>(
     target: PyReadonlyArray1<'py, f64>,
 ) -> PyResult<usize> {
     let _n = require_n_by_k::<_, 3>(&verts, "verts")?;
+    if _n == 0 {
+        return Err(PyValueError::new_err("verts must have at least one row"));
+    }
     if target.shape()[0] != 3 {
         return Err(PyValueError::new_err(format!(
             "target must have shape (3,), got {:?}",
@@ -419,66 +414,6 @@ pub fn keyframe_translation_segments<'py>(
     let out = PyList::empty(py);
     for (t_start, t_end, d) in segs {
         out.append((t_start, t_end, (d[0], d[1], d[2])))?;
-    }
-    Ok(out)
-}
-
-/// Walk a `param.pickle` group list and build the `uuid -> ftetwild
-/// kwargs` map the populate phase consumes. Mirrors the Python loop
-/// in `BlenderApp.populate`.
-///
-/// Each `group_entry` is expected to be a tuple/list of length >=3:
-/// `(params_dict, objects, uuids, ...)`. Entries that are too short
-/// or have empty UUIDs are skipped (matching the Python guard).
-#[pyfunction]
-#[pyo3(signature = (group_entries))]
-pub fn extract_ftetwild_by_uuid<'py>(
-    py: Python<'py>,
-    group_entries: &Bound<'_, PyList>,
-) -> PyResult<Bound<'py, PyDict>> {
-    let out = PyDict::new(py);
-    for entry in group_entries.iter() {
-        // `entry[0]` -> params, `entry[2]` -> uuids.
-        let len_obj = entry.len()?;
-        if len_obj < 3 {
-            continue;
-        }
-        let params = entry.get_item(0)?;
-        let uuids = entry.get_item(2)?;
-        let kw_obj = if params.is_none() {
-            None
-        } else {
-            // params.get("ftetwild") may itself be None.
-            let params_dict = params
-                .downcast::<PyDict>()
-                .map_err(|_| PyTypeError::new_err("group entry params must be a dict"))?;
-            params_dict.get_item("ftetwild")?
-        };
-        let kw = match kw_obj {
-            Some(kw) if !kw.is_none() => {
-                let dct = kw
-                    .downcast::<PyDict>()
-                    .map_err(|_| {
-                        PyTypeError::new_err("ftetwild value must be a dict")
-                    })?
-                    .clone();
-                dct
-            }
-            _ => continue,
-        };
-        if kw.len() == 0 {
-            continue;
-        }
-        let uuid_list = uuids
-            .downcast::<PyList>()
-            .map_err(|_| PyTypeError::new_err("uuids must be a list"))?;
-        for uuid_item in uuid_list.iter() {
-            let uuid: String = uuid_item.extract()?;
-            if uuid.is_empty() {
-                continue;
-            }
-            out.set_item(uuid, &kw)?;
-        }
     }
     Ok(out)
 }
@@ -582,6 +517,90 @@ pub fn dedup_and_rebuild_tetra_jobs<'py>(
     Ok((jobs, work_delta))
 }
 
+/// Re-project one side of a 6-slot cross-stitch onto its solver tet
+/// surface. A SOLID object is re-tetrahedralized at build time, so the
+/// snap-time surface indices do not map to the solver mesh; the side's
+/// per-row world anchors (`points_key` in the entry: `"source_points"`
+/// or `"target_points"`) are projected onto the object's tet surface
+/// (`V`/`F` in its `obj_info`) to recover the correct triangle +
+/// barycentric weights.
+///
+/// Returns `Some((tri_flat, bary_flat))` of length `n_rows * 3`, aligned
+/// per row, or `None` when the side needs no projection (anchors absent
+/// or mis-sized) or the tet surface dropped every anchor (degenerate).
+/// The caller treats `None` for a SOLID side as a hard skip of the
+/// entry, since keeping snap-time indices would generate ghost forces.
+fn project_stitch_side<'py>(
+    py: Python<'py>,
+    np: &Bound<'py, PyModule>,
+    entry: &Bound<'py, PyDict>,
+    info: &Bound<'py, PyDict>,
+    points_key: &str,
+    n_rows: usize,
+) -> PyResult<Option<(Vec<i64>, Vec<f32>)>> {
+    let points = match entry.get_item(points_key)? {
+        Some(v) => v,
+        None => return Ok(None),
+    };
+    let pts_len: usize = points.len().unwrap_or(0);
+    if pts_len != n_rows {
+        return Ok(None);
+    }
+    let pos_v = info
+        .get_item("V")?
+        .ok_or_else(|| PyValueError::new_err("solid obj_info missing V"))?;
+    let face_f = info
+        .get_item("F")?
+        .ok_or_else(|| PyValueError::new_err("solid obj_info missing F"))?;
+    let pos: Bound<'py, PyArray2<f64>> = np
+        .call_method1("ascontiguousarray", (
+            np.call_method1("asarray", (pos_v,))?
+                .call_method1("astype", ("float64",))?,
+        ))?
+        .downcast_into::<PyArray2<f64>>()
+        .map_err(|_| PyTypeError::new_err("obj_info V must be (N, 3) f64"))?;
+    let face: Bound<'py, PyArray2<i64>> = np
+        .call_method1("ascontiguousarray", (
+            np.call_method1("asarray", (face_f,))?
+                .call_method1("astype", ("int64",))?,
+        ))?
+        .downcast_into::<PyArray2<i64>>()
+        .map_err(|_| PyTypeError::new_err("obj_info F must be (M, 3) i64"))?;
+    let anchors: Bound<'py, PyArray2<f64>> = np
+        .call_method1("ascontiguousarray", (
+            np.call_method1("asarray", (points,))?
+                .call_method1("astype", ("float64",))?,
+        ))?
+        .downcast_into::<PyArray2<f64>>()
+        .map_err(|_| PyTypeError::new_err("stitch points must be (K, 3) f64"))?;
+    let face_view = face.readonly();
+    let pos_view = pos.readonly();
+    let anchors_view = anchors.readonly();
+    let tf = face_view
+        .as_slice()
+        .map_err(|_| PyTypeError::new_err("F must be C-contiguous"))?;
+    let tp = pos_view
+        .as_slice()
+        .map_err(|_| PyTypeError::new_err("V must be C-contiguous"))?;
+    let an = anchors_view
+        .as_slice()
+        .map_err(|_| PyTypeError::new_err("points must be C-contiguous"))?;
+    let rows = py.allow_threads(|| dec::barycentric_project_anchors(tf, tp, an));
+    if rows.tri.len() != n_rows {
+        // Degenerate tet surface dropped every anchor; leave side as-is.
+        return Ok(None);
+    }
+    let mut tri_flat = Vec::with_capacity(n_rows * 3);
+    let mut bary_flat = Vec::with_capacity(n_rows * 3);
+    for r in &rows.tri {
+        tri_flat.extend_from_slice(r);
+    }
+    for r in &rows.bary {
+        bary_flat.extend_from_slice(r);
+    }
+    Ok(Some((tri_flat, bary_flat)))
+}
+
 /// Apply a batch of explicit cross-stitch entries to a scene's
 /// `_cross_stitch` list. Replaces the per-entry Python `for entry in
 /// param_decoder.cross_stitch: ...` loop in `BlenderApp.make()`
@@ -647,108 +666,121 @@ pub fn cross_stitch_apply_batch<'py>(
             .expect("validated above")
             .downcast_into::<PyDict>()
             .map_err(|_| PyTypeError::new_err("target obj_info entry must be a dict"))?;
-        let is_solid = match target_info_dict.get_item("type")? {
+        let source_info_dict = source_info
+            .expect("validated above")
+            .downcast_into::<PyDict>()
+            .map_err(|_| PyTypeError::new_err("source obj_info entry must be a dict"))?;
+        let target_is_solid = match target_info_dict.get_item("type")? {
+            Some(t) => t.extract::<String>().unwrap_or_default() == "SOLID",
+            None => false,
+        };
+        let source_is_solid = match source_info_dict.get_item("type")? {
             Some(t) => t.extract::<String>().unwrap_or_default() == "SOLID",
             None => false,
         };
 
-        if is_solid {
-            let target_points = match entry.get_item("target_points")? {
-                Some(v) => v,
-                None => continue,
-            };
-            let tp_len: usize = target_points.len().unwrap_or(0);
-            if tp_len != ind_len {
-                continue;
-            }
-            let target_pos_v = target_info_dict
-                .get_item("V")?
-                .ok_or_else(|| PyValueError::new_err("target_info missing V"))?;
-            let target_face_f = target_info_dict
-                .get_item("F")?
-                .ok_or_else(|| PyValueError::new_err("target_info missing F"))?;
-            let target_pos: Bound<'py, PyArray2<f64>> = np
+        // Read the 6-wide baseline rows the snap encoder produced: source
+        // slots [0..2] = degenerate [si, si, si] / [1, 0, 0], target slots
+        // [3..5] = the snap-time target barycentric. A SOLID side does not
+        // map its snap-time surface indices to the solver tet mesh, so it
+        // is re-projected below; a non-SOLID (SHELL/ROD) side keeps its
+        // snap-time slots verbatim (its mesh == the solver mesh).
+        let base_ind: Vec<i64> = {
+            let a = np
                 .call_method1("ascontiguousarray", (
-                    np.call_method1("asarray", (target_pos_v,))?
-                        .call_method1("astype", ("float64",))?,
-                ))?
-                .downcast_into::<PyArray2<f64>>()
-                .map_err(|_| PyTypeError::new_err("target_pos must be (N, 3) f64"))?;
-            let target_face: Bound<'py, PyArray2<i64>> = np
-                .call_method1("ascontiguousarray", (
-                    np.call_method1("asarray", (target_face_f,))?
+                    np.call_method1("asarray", (&ind_arr,))?
                         .call_method1("astype", ("int64",))?,
                 ))?
                 .downcast_into::<PyArray2<i64>>()
-                .map_err(|_| PyTypeError::new_err("target_face must be (M, 3) i64"))?;
-            let anchors: Bound<'py, PyArray2<f64>> = np
+                .map_err(|_| PyTypeError::new_err("cross stitch ind must be (K, 6) int64"))?;
+            let v = a.readonly();
+            let s = v.shape();
+            if s.len() != 2 || s[1] != 6 {
+                return Err(PyValueError::new_err(format!(
+                    "cross stitch ind must be (K, 6), got {s:?}"
+                )));
+            }
+            v.as_slice()
+                .map_err(|_| PyTypeError::new_err("cross stitch ind must be C-contiguous"))?
+                .to_vec()
+        };
+        let base_w: Vec<f32> = {
+            let a = np
                 .call_method1("ascontiguousarray", (
-                    np.call_method1("asarray", (target_points,))?
-                        .call_method1("astype", ("float64",))?,
+                    np.call_method1("asarray", (&w_arr,))?
+                        .call_method1("astype", ("float32",))?,
                 ))?
-                .downcast_into::<PyArray2<f64>>()
-                .map_err(|_| PyTypeError::new_err("target_points must be (K, 3) f64"))?;
-            // src_indices = ind[:, 0], contiguous int64. The first
-            // tuple element must be a real slice; ``py.None()`` is
-            // interpreted by numpy as ``np.newaxis`` (adding a leading
-            // axis) instead of ``:``, leaving src_col 2D and tripping
-            // the (K,) downcast below.
-            let full_slice = PySlice::full(py);
-            let src_col = ind_arr
-                .call_method1("__getitem__", ((&full_slice, 0usize),))
-                .or_else(|_| {
-                    // Fallback: use numpy slicing via np.asarray + indexing
-                    np.call_method1("asarray", (&ind_arr,))?
-                        .call_method1("__getitem__", ((&full_slice, 0usize),))
-                })?;
-            let src_indices: Bound<'py, PyArray1<i64>> = np
-                .call_method1("ascontiguousarray", (
-                    np.call_method1("asarray", (src_col,))?
-                        .call_method1("astype", ("int64",))?,
-                ))?
-                .downcast_into::<PyArray1<i64>>()
-                .map_err(|_| PyTypeError::new_err("src_indices must be (K,) i64"))?;
-
-            let target_face_view = target_face.readonly();
-            let target_pos_view = target_pos.readonly();
-            let anchors_view = anchors.readonly();
-            let src_indices_view = src_indices.readonly();
-            let tf = target_face_view
-                .as_slice()
-                .map_err(|_| PyTypeError::new_err("target_face must be C-contiguous"))?;
-            let tp = target_pos_view
-                .as_slice()
-                .map_err(|_| PyTypeError::new_err("target_pos must be C-contiguous"))?;
-            let an = anchors_view
-                .as_slice()
-                .map_err(|_| PyTypeError::new_err("anchors must be C-contiguous"))?;
-            let si = src_indices_view
-                .as_slice()
-                .map_err(|_| PyTypeError::new_err("src_indices must be C-contiguous"))?;
-            let stitch =
-                py.allow_threads(|| dec::barycentric_project_anchors(tf, tp, an, si));
-            if stitch.ind.is_empty() {
-                continue;
+                .downcast_into::<PyArray2<f32>>()
+                .map_err(|_| PyTypeError::new_err("cross stitch w must be (K, 6) float32"))?;
+            let v = a.readonly();
+            let s = v.shape();
+            if s.len() != 2 || s[1] != 6 {
+                return Err(PyValueError::new_err(format!(
+                    "cross stitch w must be (K, 6), got {s:?}"
+                )));
             }
-            // Reshape rust result into (K, 4) numpy arrays.
-            let n_rows = stitch.ind.len();
-            let mut ind_flat: Vec<i64> = Vec::with_capacity(n_rows * 4);
-            for row in &stitch.ind {
-                ind_flat.extend_from_slice(row);
-            }
-            let mut w_flat: Vec<f32> = Vec::with_capacity(n_rows * 4);
-            for row in &stitch.w {
-                w_flat.extend_from_slice(row);
-            }
-            let ind_new = ndarray::Array2::<i64>::from_shape_vec((n_rows, 4), ind_flat)
-                .map_err(|e| PyValueError::new_err(format!("ind reshape: {e}")))?
-                .into_pyarray(py);
-            let w_new = ndarray::Array2::<f32>::from_shape_vec((n_rows, 4), w_flat)
-                .map_err(|e| PyValueError::new_err(format!("w reshape: {e}")))?
-                .into_pyarray(py);
-            ind_arr = ind_new.into_any();
-            w_arr = w_new.into_any();
+            v.as_slice()
+                .map_err(|_| PyTypeError::new_err("cross stitch w must be C-contiguous"))?
+                .to_vec()
+        };
+        let n_rows = base_ind.len() / 6;
+        if n_rows == 0 {
+            continue;
         }
+
+        let src_proj = if source_is_solid {
+            project_stitch_side(py, &np, entry, &source_info_dict, "source_points", n_rows)?
+        } else {
+            None
+        };
+        let tgt_proj = if target_is_solid {
+            project_stitch_side(py, &np, entry, &target_info_dict, "target_points", n_rows)?
+        } else {
+            None
+        };
+
+        // A SOLID side with no usable projection (missing anchors/geometry
+        // or a degenerate tet surface) would otherwise keep snap-time
+        // surface indices that don't map to the solver mesh -> ghost
+        // forces. Skip the whole entry rather than emit a wrong stitch.
+        if (source_is_solid && src_proj.is_none()) || (target_is_solid && tgt_proj.is_none()) {
+            continue;
+        }
+
+        // Merge: source slots [0..2] from src_proj or the baseline,
+        // target slots [3..5] from tgt_proj or the baseline.
+        let mut ind_flat: Vec<i64> = Vec::with_capacity(n_rows * 6);
+        let mut w_flat: Vec<f32> = Vec::with_capacity(n_rows * 6);
+        for r in 0..n_rows {
+            match &src_proj {
+                Some((tri, bary)) => {
+                    ind_flat.extend_from_slice(&tri[3 * r..3 * r + 3]);
+                    w_flat.extend_from_slice(&bary[3 * r..3 * r + 3]);
+                }
+                None => {
+                    ind_flat.extend_from_slice(&base_ind[6 * r..6 * r + 3]);
+                    w_flat.extend_from_slice(&base_w[6 * r..6 * r + 3]);
+                }
+            }
+            match &tgt_proj {
+                Some((tri, bary)) => {
+                    ind_flat.extend_from_slice(&tri[3 * r..3 * r + 3]);
+                    w_flat.extend_from_slice(&bary[3 * r..3 * r + 3]);
+                }
+                None => {
+                    ind_flat.extend_from_slice(&base_ind[6 * r + 3..6 * r + 6]);
+                    w_flat.extend_from_slice(&base_w[6 * r + 3..6 * r + 6]);
+                }
+            }
+        }
+        let ind_new = ndarray::Array2::<i64>::from_shape_vec((n_rows, 6), ind_flat)
+            .map_err(|e| PyValueError::new_err(format!("ind reshape: {e}")))?
+            .into_pyarray(py);
+        let w_new = ndarray::Array2::<f32>::from_shape_vec((n_rows, 6), w_flat)
+            .map_err(|e| PyValueError::new_err(format!("w reshape: {e}")))?
+            .into_pyarray(py);
+        ind_arr = ind_new.into_any();
+        w_arr = w_new.into_any();
 
         let stitch_stiffness: f64 = match entry.get_item("stitch_stiffness")? {
             Some(v) => v.extract().unwrap_or(1.0f64),
@@ -787,7 +819,6 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(validate_param_group_has_uuids, m)?)?;
     m.add_function(wrap_pyfunction!(validate_param_object_uuid, m)?)?;
     m.add_function(wrap_pyfunction!(validate_scene_object_identity, m)?)?;
-    m.add_function(wrap_pyfunction!(extract_ftetwild_by_uuid, m)?)?;
     m.add_function(wrap_pyfunction!(closest_vertex_index, m)?)?;
     m.add_function(wrap_pyfunction!(keyframe_translation_segments, m)?)?;
     m.add_function(wrap_pyfunction!(validate_static_anim_xor_ops, m)?)?;

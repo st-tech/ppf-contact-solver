@@ -97,6 +97,14 @@ template <typename T, typename Y> struct PointEdgeSquaredDist {
     }
 };
 
+template <typename T, typename Y> struct PointPointSquaredDist {
+    __device__ float operator()(const Mat3x2<T> &x) {
+        const Vec3<T> &p = x.col(0);
+        const Vec3<T> &q = x.col(1);
+        return Y((p - q).dot(p - q));
+    }
+};
+
 template <typename T, typename Y> struct PointTriangleSquaredDist {
     __device__ float operator()(const Mat3x4<T> &x) {
         const Vec3<T> &p = x.col(0);
@@ -153,6 +161,27 @@ __device__ float point_edge_ccd(const Vec3f &p0, const Vec3f &p1,
     if (u_max) {
         PointEdgeSquaredDist<float, float> dist_func;
         return ccd_helper<PointEdgeSquaredDist<float, float>, float, 3, 3>(
+            x0, dx, u_max, dist_func, offset, param);
+    } else {
+        return param.line_search_max_t;
+    }
+}
+
+__device__ float point_point_ccd(const Vec3f &p0, const Vec3f &p1,
+                                 const Vec3f &q0, const Vec3f &q1,
+                                 float offset, const ParamSet &param) {
+    Vec3f dp = p1 - p0;
+    Vec3f dq = q1 - q0;
+    Mat3x2f x0;
+    Mat3x2f dx;
+    x0 << p0, q0;
+    dx << dp, dq;
+    centerize<float, 3, 2>(x0);
+    centerize<float, 3, 2>(dx);
+    float u_max = max_relative_u<float, 3, 2>(dx);
+    if (u_max) {
+        PointPointSquaredDist<float, float> dist_func;
+        return ccd_helper<PointPointSquaredDist<float, float>, float, 3, 2>(
             x0, dx, u_max, dist_func, offset, param);
     } else {
         return param.line_search_max_t;

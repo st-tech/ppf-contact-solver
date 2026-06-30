@@ -8,17 +8,28 @@ import math
 from mathutils import Vector  # pyright: ignore
 
 
+def _orthonormal_basis(axis):
+    """Return two perpendicular unit vectors spanning the plane normal to *axis*.
+
+    Assumes a pre-normalized unit *axis*. Crosses with the world Z up vector
+    unless *axis* is nearly aligned with Z (abs(z) >= 0.9), in which case it
+    crosses with X to avoid a degenerate (near-zero) cross product.
+    """
+    if abs(axis.z) < 0.9:
+        perp1 = axis.cross(Vector((0, 0, 1))).normalized()
+    else:
+        perp1 = axis.cross(Vector((1, 0, 0))).normalized()
+    perp2 = axis.cross(perp1).normalized()
+    return perp1, perp2
+
+
 def _line_to_tris(v1, v2, thickness):
     """Convert a line segment into two triangles (a thin quad) for guaranteed thickness."""
     d = (v2 - v1)
     if d.length < 1e-9:
         return []
     d_norm = d.normalized()
-    if abs(d_norm.z) < 0.9:
-        perp = d_norm.cross(Vector((0, 0, 1))).normalized()
-    else:
-        perp = d_norm.cross(Vector((1, 0, 0))).normalized()
-    perp2 = d_norm.cross(perp).normalized()
+    perp, perp2 = _orthonormal_basis(d_norm)
     off1 = perp * thickness
     off2 = perp2 * thickness
     # Two quads (4 faces) for cross-shaped thickness visible from any angle
@@ -32,14 +43,18 @@ def _line_to_tris(v1, v2, thickness):
     return tris
 
 
-def _generate_sphere_wireframe(radius=1.0, thickness=0.005, segments=16, rings=8):
-    """Generate triangle-based wireframe for a UV sphere (TRIS primitive).
+def _sphere_grid(radius=1.0, segments=16, rings=8,
+                 theta_min=-math.pi / 2, theta_max=math.pi / 2):
+    """Build a UV-sphere latitude/longitude grid as a list of ring rows.
 
-    Uses _line_to_tris so line thickness is guaranteed on all platforms.
+    Each ring row is a list of *segments* Vectors. Latitude sweeps from
+    *theta_min* to *theta_max* over *rings* steps (rings + 1 rows). The default
+    range covers the full sphere; a partial range yields a spherical cap, e.g.
+    theta_max=0.0 gives the lower hemisphere.
     """
     grid = []
     for i in range(rings + 1):
-        theta = math.pi * i / rings - math.pi / 2
+        theta = theta_min + (theta_max - theta_min) * i / rings
         ring_row = []
         for j in range(segments):
             phi = 2 * math.pi * j / segments
@@ -48,6 +63,14 @@ def _generate_sphere_wireframe(radius=1.0, thickness=0.005, segments=16, rings=8
             z = radius * math.sin(theta)
             ring_row.append(Vector((x, y, z)))
         grid.append(ring_row)
+    return grid
+
+
+def _sphere_wire_lines(grid, segments, rings, thickness):
+    """Thicken a sphere grid's ring (latitude) and meridian (longitude) lines.
+
+    Returns a flat TRIS vertex list built with _line_to_tris.
+    """
     tris = []
     # Ring lines (latitude)
     for i in range(rings + 1):
@@ -60,19 +83,18 @@ def _generate_sphere_wireframe(radius=1.0, thickness=0.005, segments=16, rings=8
     return tris
 
 
+def _generate_sphere_wireframe(radius=1.0, thickness=0.005, segments=16, rings=8):
+    """Generate triangle-based wireframe for a UV sphere (TRIS primitive).
+
+    Uses _line_to_tris so line thickness is guaranteed on all platforms.
+    """
+    grid = _sphere_grid(radius=radius, segments=segments, rings=rings)
+    return _sphere_wire_lines(grid, segments, rings, thickness)
+
+
 def _generate_sphere_fill(radius=1.0, segments=16, rings=8):
     """Generate vertex list for a filled UV sphere (TRIS primitive)."""
-    grid = []
-    for i in range(rings + 1):
-        theta = math.pi * i / rings - math.pi / 2
-        ring_row = []
-        for j in range(segments):
-            phi = 2 * math.pi * j / segments
-            x = radius * math.cos(theta) * math.cos(phi)
-            y = radius * math.cos(theta) * math.sin(phi)
-            z = radius * math.sin(theta)
-            ring_row.append(Vector((x, y, z)))
-        grid.append(ring_row)
+    grid = _sphere_grid(radius=radius, segments=segments, rings=rings)
     tris = []
     for i in range(rings):
         for j in range(segments):
@@ -86,19 +108,31 @@ def _generate_sphere_fill(radius=1.0, segments=16, rings=8):
     return tris
 
 
-def _max_towards_centroid(vertices, direction, eps=1e-3):
-    """Compute centroid of vertices furthest towards a direction."""
+def _max_towards_selected(vertices, direction, eps=1e-3):
+    """Return the vertices furthest towards a direction.
+
+    Normalizes *direction*, projects every position onto it, and keeps the
+    vertices whose projection is within *eps* of the maximum. Returns the
+    matching Vectors from *vertices* (same objects, in order). Returns an
+    empty list when there are no vertices or *direction* is degenerate.
+    """
     import numpy as _np
     if not vertices or direction.length < 1e-6:
-        return sum(vertices, Vector((0, 0, 0))) / max(len(vertices), 1)
+        return []
     d = direction.normalized()
     positions = _np.array([list(v) for v in vertices])
     projections = positions @ _np.array(d)
     max_val = projections.max()
     mask = projections > max_val - eps
-    selected = positions[mask]
-    c = selected.mean(axis=0)
-    return Vector((c[0], c[1], c[2]))
+    return [vertices[i] for i in range(len(vertices)) if mask[i]]
+
+
+def _max_towards_centroid(vertices, direction, eps=1e-3):
+    """Compute centroid of vertices furthest towards a direction."""
+    if not vertices or direction.length < 1e-6:
+        return sum(vertices, Vector((0, 0, 0))) / max(len(vertices), 1)
+    selected = _max_towards_selected(vertices, direction, eps=eps)
+    return sum(selected, Vector((0, 0, 0))) / len(selected)
 
 
 def _generate_arrow(direction, shaft_length=1.2, shaft_thickness=0.01,
@@ -110,11 +144,7 @@ def _generate_arrow(direction, shaft_length=1.2, shaft_thickness=0.01,
     shaft_tris = _line_to_tris(origin, tip, shaft_thickness)
 
     # Perpendicular vectors for cone base
-    if abs(d.z) < 0.9:
-        perp1 = d.cross(Vector((0, 0, 1))).normalized()
-    else:
-        perp1 = d.cross(Vector((1, 0, 0))).normalized()
-    perp2 = d.cross(perp1).normalized()
+    perp1, perp2 = _orthonormal_basis(d)
 
     apex = d * (shaft_length + cone_length)
     cone_segments = 8
@@ -136,11 +166,7 @@ def _generate_arrow(direction, shaft_length=1.2, shaft_thickness=0.01,
 def _generate_circle(center, axis, radius, segments=32, thickness=0.005):
     """Generate a 3D circle perpendicular to axis as triangle-based lines."""
     axis_n = axis.normalized()
-    if abs(axis_n.z) < 0.9:
-        perp1 = axis_n.cross(Vector((0, 0, 1))).normalized()
-    else:
-        perp1 = axis_n.cross(Vector((1, 0, 0))).normalized()
-    perp2 = axis_n.cross(perp1).normalized()
+    perp1, perp2 = _orthonormal_basis(axis_n)
 
     points = []
     for i in range(segments):
@@ -157,11 +183,7 @@ def _generate_circle(center, axis, radius, segments=32, thickness=0.005):
 def _generate_rotation_arc(center, axis, radius, angular_velocity, thickness=0.008):
     """Generate an arc with arrow head showing rotation direction."""
     axis_n = axis.normalized()
-    if abs(axis_n.z) < 0.9:
-        perp1 = axis_n.cross(Vector((0, 0, 1))).normalized()
-    else:
-        perp1 = axis_n.cross(Vector((1, 0, 0))).normalized()
-    perp2 = axis_n.cross(perp1).normalized()
+    perp1, perp2 = _orthonormal_basis(axis_n)
 
     arc_angle = math.radians(270)
     sign = 1 if angular_velocity >= 0 else -1
@@ -183,11 +205,7 @@ def _generate_rotation_arc(center, axis, radius, angular_velocity, thickness=0.0
         cone_length = radius * 0.15
         cone_radius = radius * 0.06
         apex = points[-1] + tangent * cone_length
-        if abs(tangent.z) < 0.9:
-            cp1 = tangent.cross(Vector((0, 0, 1))).normalized()
-        else:
-            cp1 = tangent.cross(Vector((1, 0, 0))).normalized()
-        cp2 = tangent.cross(cp1).normalized()
+        cp1, cp2 = _orthonormal_basis(tangent)
         base_points = []
         for i in range(8):
             angle = 2 * math.pi * i / 8
@@ -213,11 +231,7 @@ def _generate_vertex_arrow(start, end, thickness=0.003):
     cone_radius = thickness * 3
     shaft_end = end - direction * cone_length
     tris = _line_to_tris(start, shaft_end, thickness)
-    if abs(direction.z) < 0.9:
-        cp1 = direction.cross(Vector((0, 0, 1))).normalized()
-    else:
-        cp1 = direction.cross(Vector((1, 0, 0))).normalized()
-    cp2 = direction.cross(cp1).normalized()
+    cp1, cp2 = _orthonormal_basis(direction)
     base_center = end - direction * cone_length
     base_points = []
     for i in range(6):
@@ -250,5 +264,13 @@ def _compute_pca_axes(vertices):
     eigenvalues, eigenvectors = np.linalg.eigh(cov)
     idx = np.argsort(eigenvalues)[::-1]
     eigenvectors = eigenvectors[:, idx]
+    # Canonicalize each eigenvector's sign so a signed angular speed has a
+    # well-defined handedness that matches the solver's resolve_principal_axis:
+    # the component of largest magnitude is made positive.
+    for k in range(eigenvectors.shape[1]):
+        col = eigenvectors[:, k]
+        j = int(np.argmax(np.abs(col)))
+        if col[j] < 0:
+            eigenvectors[:, k] = -col
     centroid_vec = Vector((float(centroid_np[0]), float(centroid_np[1]), float(centroid_np[2])))
     return centroid_vec, eigenvectors

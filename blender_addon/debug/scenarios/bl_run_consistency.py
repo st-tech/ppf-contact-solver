@@ -6,10 +6,13 @@
 # End-to-end of the Run-button click-time consistency check.
 #
 # There is no client-side hash cache and ``Run.poll`` never compares
-# hashes; the only drift gate is the click-time recompute inside
-# ``SOLVER_OT_Run.execute``. Both subtests below drive ``execute``
-# with a stub ``self`` so we can capture the ``self.report`` payload
-# Blender would surface to the user.
+# hashes; the only drift gate is the click-time recompute, now staged
+# inside ``SOLVER_OT_Run.execute`` -> ``start_stages``. The geometry and
+# parameter checks each run as a modal stage and raise ``StageAbort`` on
+# drift, which the modal turns into a ``self.report`` ERROR + CANCELLED.
+# Each subtest drives ``execute`` with a staged stub ``self`` and then
+# ``drain_stages`` to pump those ticks, so we can capture the
+# ``self.report`` payload Blender would surface to the user.
 #
 # Subtests:
 #   A. fresh_transfer_run_enabled
@@ -21,22 +24,25 @@
 #
 #   B. param_drift_run_click_reports_error
 #         Mutating ``gravity_3d`` makes ``compute_param_hash`` diverge
-#         from ``engine.state.server_param_hash``. ``Run.poll`` still
-#         returns True (poll deliberately ignores hashes), and
-#         ``execute`` reports an ERROR pointing at "Update Params"
-#         and returns CANCELLED.
+#         from ``engine.state.server_param_hash``. ``execute`` returns
+#         RUNNING_MODAL; the drained staged param check ends CANCELLED
+#         with an ERROR pointing at "Update Params", the solver never
+#         starts, and ``Run.poll`` is True again (the button stays
+#         actionable; poll deliberately ignores hashes).
 #
 #   C. update_params_re_enables_run
 #         After ``solver.update_params``, the server stores the new
 #         param hash and echoes it on the next status response. The
-#         live ``compute_param_hash`` lines up with the new echo and
-#         a fresh ``execute`` no longer trips the param error.
+#         live ``compute_param_hash`` lines up with the new echo, so a
+#         fresh ``execute`` + ``drain_stages`` runs every stage (no
+#         param error) and the final stage starts the solver.
 #
 #   D. data_drift_run_click_reports_error
 #         A bmesh-driven topology change makes ``compute_data_hash``
-#         diverge. ``Run.execute`` reports a "Transfer" error and
-#         returns CANCELLED (the data path is the louder of the two
-#         click-time errors because re-transferring is the only fix).
+#         diverge. The staged geometry check aborts first, so the drained
+#         run ends CANCELLED with a "Transfer" error (the data path is the
+#         louder of the two click-time errors because re-transferring is
+#         the only fix).
 
 from __future__ import annotations
 
@@ -66,19 +72,6 @@ SERVER_PORT = <<SERVER_PORT>>
 def _solver_run_op():
     return __import__(pkg + ".ui.solver",
                       fromlist=["SOLVER_OT_Run"]).SOLVER_OT_Run
-
-
-class _StubSelf:
-    # Run.execute calls only self.report and self.setup_modal; both
-    # are easy to fake so we can capture what the user would see in
-    # the UI without actually starting a solver run.
-    def __init__(self):
-        self.captured = []
-        self.modal_set_up = False
-    def report(self, kind, msg):
-        self.captured.append((tuple(kind), msg))
-    def setup_modal(self, ctx):
-        self.modal_set_up = True
 
 
 try:
@@ -146,24 +139,34 @@ try:
     )
 
     # ----- B: param drift, click-time error ------------------------
+    # execute() returns RUNNING_MODAL and stages the drift checks; the
+    # param-check stage aborts the drained run with an "Update Params"
+    # ERROR. The solver must not start, and the button re-enables (poll
+    # ignores hashes) once the aborted run clears the encode-progress gate.
     root.state.gravity_3d = (0.0, 0.0, -4.9)
     s = dh.facade.engine.state
     fresh_param_b = encoder_params.compute_param_hash(bpy.context)
-    stub_b = _StubSelf()
+    stub_b = dh.staged_stub(Run)
     verdict_b = Run.execute(stub_b, bpy.context)
-    error_b = next((m for k, m in stub_b.captured if "ERROR" in k), "")
+    final_b = stub_b.drain_stages(bpy.context)
+    error_b = stub_b.error("Update Params")
+    s = dh.facade.engine.state
+    poll_after_b = bool(Run.poll(bpy.context))
     dh.record(
         "B_param_drift_run_click_reports_error",
-        bool(Run.poll(bpy.context))
+        verdict_b == {"RUNNING_MODAL"}
+        and final_b == {"CANCELLED"}
         and fresh_param_b != s.server_param_hash
-        and verdict_b == {"CANCELLED"}
-        and "Update Params" in error_b
-        and not stub_b.modal_set_up,
+        and bool(error_b)
+        and s.solver.name != "STARTING"
+        and poll_after_b,
         {
-            "poll": bool(Run.poll(bpy.context)),
+            "verdict": list(verdict_b),
+            "final": list(final_b) if final_b else None,
+            "poll_after": poll_after_b,
             "fresh_param": fresh_param_b[:12],
             "server_param": s.server_param_hash[:12],
-            "verdict": list(verdict_b),
+            "solver": s.solver.name,
             "error": error_b[:120],
         },
     )
@@ -181,27 +184,32 @@ try:
         time.sleep(0.3)
     s = dh.facade.engine.state
     fresh_param_c = encoder_params.compute_param_hash(bpy.context)
+    # ``Run.poll`` snapshotted *before* execute -- once the drained stages
+    # pass the drift gates the final stage calls ``com.run``, which starts
+    # the solver and (legitimately) flips poll False thereafter.
     poll_pre_run_c = bool(Run.poll(bpy.context))
-    stub_c = _StubSelf()
+    stub_c = dh.staged_stub(Run)
     verdict_c = Run.execute(stub_c, bpy.context)
-    param_error_c = next(
-        (m for k, m in stub_c.captured
-         if "ERROR" in k and "Update Params" in m), "")
-    # ``Run.poll`` is checked *before* ``execute`` -- once execute
-    # passes the drift gates it calls ``com.run`` which kicks off
-    # the solver, after which poll legitimately returns False
-    # because the base "not is_running" guard fires.
+    final_c = stub_c.drain_stages(bpy.context)
+    param_error_c = stub_c.error("Update Params")
+    s = dh.facade.engine.state
     dh.record(
         "C_update_params_re_enables_run",
         fresh_param_c == s.server_param_hash
         and not param_error_c
         and poll_pre_run_c
-        and stub_c.modal_set_up,
+        and verdict_c == {"RUNNING_MODAL"}
+        and final_c is None
+        and stub_c.modal_set_up
+        and s.solver.name in ("STARTING", "RUNNING"),
         {
             "fresh_param": fresh_param_c[:12],
             "server_param": s.server_param_hash[:12],
             "poll_pre_run": poll_pre_run_c,
+            "verdict": list(verdict_c),
+            "final": list(final_c) if final_c else None,
             "modal_set_up": stub_c.modal_set_up,
+            "solver": s.solver.name,
             "captured": stub_c.captured[:3],
         },
     )
@@ -215,17 +223,20 @@ try:
     plane.data.update()
     s = dh.facade.engine.state
     fresh_data_d = encoder_mesh.compute_data_hash(bpy.context)
-    stub_d = _StubSelf()
+    stub_d = dh.staged_stub(Run)
     verdict_d = Run.execute(stub_d, bpy.context)
-    error_d = next((m for k, m in stub_d.captured if "ERROR" in k), "")
+    final_d = stub_d.drain_stages(bpy.context)
+    error_d = stub_d.error("Transfer")
+    s = dh.facade.engine.state
     dh.record(
         "D_data_drift_run_click_reports_error",
-        verdict_d == {"CANCELLED"}
-        and "Transfer" in error_d
-        and fresh_data_d != s.server_data_hash
-        and not stub_d.modal_set_up,
+        verdict_d == {"RUNNING_MODAL"}
+        and final_d == {"CANCELLED"}
+        and bool(error_d)
+        and fresh_data_d != s.server_data_hash,
         {
             "verdict": list(verdict_d),
+            "final": list(final_d) if final_d else None,
             "error": error_d[:120],
             "fresh_data": fresh_data_d[:12],
             "server_data": s.server_data_hash[:12],

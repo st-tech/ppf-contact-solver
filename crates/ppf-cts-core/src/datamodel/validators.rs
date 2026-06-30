@@ -22,20 +22,14 @@
 /// the style used by `datamodel::decoder::validate::DecoderValidationError`.
 #[derive(Debug, thiserror::Error)]
 pub enum ValidatorError {
-    /// Raised by `validate_merge_pair_uuids` for the first invalid
-    /// `(source_uuid, target_uuid)` entry.
-    #[error("merge pair [{i}] missing required source/target uuid: source_uuid='{src}' target_uuid='{tgt}'")]
-    MergePairUuid { i: usize, src: String, tgt: String },
     #[error("set_surface_map requires a non-empty object UUID key")]
     SurfaceMapKeyEmpty,
     #[error("Key cannot contain underscore. Use '-' instead.")]
     ParamKeyHasUnderscore,
     #[error("t_end must be greater than t_start")]
     TimeWindowNotPositive,
-    #[error("time must be greater than the last time")]
-    ColliderTimeNotIncreasing,
     #[error("time must be greater than the last time. last time is {prev:.6}")]
-    SphereTimeNotIncreasing { prev: f64 },
+    ColliderTimeNotIncreasing { prev: f64 },
     #[error("unknown parameter {name}")]
     UnknownParamName { name: String },
     #[error("{kind} already exists")]
@@ -60,24 +54,6 @@ pub enum ValidatorError {
     ParamTimeNotIncreasing,
     #[error("Session {name} does not exist")]
     SessionMissing { name: String },
-}
-
-/// Validate a list of `(source_uuid, target_uuid)` pairs the same way
-/// `Scene.set_explicit_merge_pairs` does. Returns the index of the
-/// first invalid entry (and its uuids), or `Ok(())` when all are good.
-/// Mirrors the validation portion only; the caller still owns the pair
-/// list itself.
-pub fn validate_merge_pair_uuids(pairs: &[(String, String)]) -> Result<(), ValidatorError> {
-    for (i, (src, tgt)) in pairs.iter().enumerate() {
-        if src.is_empty() || tgt.is_empty() {
-            return Err(ValidatorError::MergePairUuid {
-                i,
-                src: src.clone(),
-                tgt: tgt.clone(),
-            });
-        }
-    }
-    Ok(())
 }
 
 /// Validate a non-empty surface-map key. Mirrors the `if not name:`
@@ -112,22 +88,15 @@ pub fn validate_time_window(t_start: f64, t_end: f64) -> Result<(), ValidatorErr
     }
 }
 
-/// Validate that `time` is strictly greater than `prev_time`.
-/// Used by both Wall and Sphere; the format differs for Sphere because
-/// the message includes the previous time.
+/// Validate that `time` is strictly greater than `prev_time`. This is
+/// the canonical strict-increasing-time predicate shared by both the
+/// Wall and Sphere keyframe paths: the in-Rust `Wall::check_time`/
+/// `Sphere::check_time` builders and the single PyO3 wrapper delegate
+/// here. The message includes the previous time so the caller can
+/// report the offending boundary.
 pub fn validate_collider_time(prev_time: f64, time: f64) -> Result<(), ValidatorError> {
     if time <= prev_time {
-        Err(ValidatorError::ColliderTimeNotIncreasing)
-    } else {
-        Ok(())
-    }
-}
-
-/// Strict-monotonic time check that includes the prior time in the
-/// message. Mirrors the `Sphere._check_time` formatter exactly.
-pub fn validate_sphere_time(prev_time: f64, time: f64) -> Result<(), ValidatorError> {
-    if time <= prev_time {
-        Err(ValidatorError::SphereTimeNotIncreasing { prev: prev_time })
+        Err(ValidatorError::ColliderTimeNotIncreasing { prev: prev_time })
     } else {
         Ok(())
     }
@@ -222,8 +191,10 @@ pub fn validate_object_not_static(is_static: bool) -> Result<(), ValidatorError>
     }
 }
 
-/// `Scene.select` lookup. Mirrors `if name not in self._object: raise
-/// Exception(f"object {name} does not exist")`.
+/// `Scene.select` lookup: errors when `name` is not in `self._object`,
+/// with message `object {name} does not exist`. The PyO3 boundary
+/// surfaces this lookup-miss as `KeyError` (`SceneSelectMissing` ->
+/// `PyKeyError` in `ppf-cts-py::errors`).
 pub fn validate_scene_select(exists: bool, name: &str) -> Result<(), ValidatorError> {
     if exists {
         Ok(())
@@ -234,8 +205,10 @@ pub fn validate_scene_select(exists: bool, name: &str) -> Result<(), ValidatorEr
     }
 }
 
-/// `ParamManager.dyn` lookup. Mirrors `if key not in self._param.key_list():
-/// raise ValueError(f"Key {key} does not exist")`.
+/// `ParamManager.dyn` lookup: errors when `key` is not in
+/// `self._param.key_list()`, with message `Key {key} does not exist`.
+/// The PyO3 boundary surfaces this lookup-miss as `KeyError`
+/// (`ParamKeyMissing` -> `PyKeyError` in `ppf-cts-py::errors`).
 pub fn validate_param_key_exists(exists: bool, key: &str) -> Result<(), ValidatorError> {
     if exists {
         Ok(())
@@ -256,8 +229,10 @@ pub fn validate_param_time_strictly_increasing(prev: f64, next: f64) -> Result<(
     }
 }
 
-/// `SessionManager.select` lookup. Mirrors `if name not in self._sessions:
-/// raise ValueError(f"Session {name} does not exist")`.
+/// `SessionManager.select` lookup: errors when `name` is not in
+/// `self._sessions`, with message `Session {name} does not exist`. The
+/// PyO3 boundary surfaces this lookup-miss as `KeyError`
+/// (`SessionMissing` -> `PyKeyError` in `ppf-cts-py::errors`).
 pub fn validate_session_exists(exists: bool, name: &str) -> Result<(), ValidatorError> {
     if exists {
         Ok(())
@@ -271,23 +246,6 @@ pub fn validate_session_exists(exists: bool, name: &str) -> Result<(), Validator
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn merge_pair_validation_ok() {
-        let pairs = vec![("a".to_string(), "b".to_string()), ("c".into(), "d".into())];
-        assert!(validate_merge_pair_uuids(&pairs).is_ok());
-    }
-
-    #[test]
-    fn merge_pair_validation_reports_first_bad_index() {
-        let pairs = vec![
-            ("a".to_string(), "b".to_string()),
-            ("".to_string(), "x".to_string()),
-            ("y".to_string(), "".to_string()),
-        ];
-        let err = validate_merge_pair_uuids(&pairs).unwrap_err();
-        assert!(matches!(err, ValidatorError::MergePairUuid { i: 1, .. }));
-    }
 
     #[test]
     fn surface_map_key_validation() {
@@ -320,11 +278,8 @@ mod tests {
         assert!(validate_collider_time(1.0, 2.0).is_ok());
         let err = validate_collider_time(1.0, 1.0).unwrap_err();
         assert!(err.to_string().contains("greater than the last time"));
-    }
-
-    #[test]
-    fn sphere_time_check_includes_prev() {
-        let err = validate_sphere_time(1.5, 1.0).unwrap_err();
+        // The unified message keeps the previous time in the text.
+        let err = validate_collider_time(1.5, 1.0).unwrap_err();
         assert!(err.to_string().contains("1.500000"));
     }
 

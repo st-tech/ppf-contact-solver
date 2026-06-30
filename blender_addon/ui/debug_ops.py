@@ -19,7 +19,10 @@ from bpy.types import Operator  # pyright: ignore
 from ..core.async_op import AsyncOperator
 from ..core.utils import redraw_all_areas
 from ..models.console import console
-from ..models.groups import get_addon_data, iterate_active_object_groups
+from ..models.groups import (
+    get_addon_data,
+    has_simulatable_dynamics,
+)
 from ..ui.solver import TransferRequestMixin
 
 test_data = None
@@ -105,7 +108,7 @@ class DEBUG_OT_DataSend(AsyncOperator):
         state = get_addon_data(context.scene).state
         test_data = os.urandom(state.data_size * 1024 * 1024)
         # Remote is always Linux; build a POSIX path regardless of local OS.
-        remote_root = com.connection.remote_root.rstrip("/")
+        remote_root = com.normalized_remote_root()
         if not remote_root:
             self.report({"ERROR"}, "Not connected; cannot send test data")
             return {"CANCELLED"}
@@ -178,11 +181,7 @@ class DEBUG_OT_TransferWithoutBuild(TransferRequestMixin, AsyncOperator):
     @classmethod
     def poll(cls, context):
         response = com.info.response
-        has_dynamic = any(
-            group.object_type in ("SOLID", "SHELL", "ROD")
-            and len(group.assigned_objects) > 0
-            for group in iterate_active_object_groups(context.scene)
-        )
+        has_dynamic = has_simulatable_dynamics(context.scene)
         return (
             has_dynamic
             and not com.busy()

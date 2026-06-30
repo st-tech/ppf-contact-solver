@@ -16,6 +16,8 @@
 // builds a known input, runs the same numpy expression in the
 // comments, and asserts the result within 1e-12.
 
+use crate::datamodel::easing::bezier_progress;
+use crate::datamodel::interp_consts::SLERP_LINEAR_BLEND_DOT_THRESHOLD;
 use ndarray::Array2;
 
 pub type Quat = [f64; 4]; // (w, x, y, z)
@@ -52,7 +54,7 @@ pub fn slerp(q0: Quat, q1: Quat, t: f64) -> Quat {
         q1 = [-q1[0], -q1[1], -q1[2], -q1[3]];
         dot = -dot;
     }
-    if dot > 0.9995 {
+    if dot > SLERP_LINEAR_BLEND_DOT_THRESHOLD {
         let r = [
             q0[0] + t * (q1[0] - q0[0]),
             q0[1] + t * (q1[1] - q0[1]),
@@ -191,6 +193,80 @@ pub fn apply_transform_to_verts(
     out
 }
 
+/// Evaluate a sparse TRS keyframe timeline for a single local vertex and
+/// return its world position offset by `-rest_t`.
+///
+/// `times` must be sorted ascending. Below the first key the pose holds at
+/// key 0; above the last key it holds at the last key. Inside a segment the
+/// per-segment `interp` code selects the progress curve:
+/// `0` = linear (raw), `1` = Bezier (eased via `bezier_progress` with the
+/// segment's `[r0, r1, l0, l1]` handles), `2` = constant (progress 0, holds
+/// the segment's start key). Translation and scale lerp; rotation slerps.
+/// The result is `R(q) * (S .* local) + T - rest_t`, matching
+/// `apply_transform_to_verts` minus the rest-translation offset. Both
+/// `kernels::scene_build::pin_kernel::transform_keyframe_apply` (preview)
+/// and the solver crate route through this so they stay bit-identical.
+#[allow(clippy::too_many_arguments)]
+pub fn transform_keyframes_step(
+    local: Vec3,
+    times: &[f64],
+    translations: &[[f64; 3]],
+    quaternions: &[[f64; 4]],
+    scales: &[[f64; 3]],
+    interps: &[u8],
+    handles: &[[f64; 4]],
+    rest_t: Vec3,
+    time: f64,
+) -> Vec3 {
+    let n = times.len();
+    let (t_arr, q_arr, s_arr) = if time <= times[0] {
+        (translations[0], quaternions[0], scales[0])
+    } else if time >= times[n - 1] {
+        (translations[n - 1], quaternions[n - 1], scales[n - 1])
+    } else {
+        let mut idx = n - 2;
+        for k in 0..n - 1 {
+            if time >= times[k] && time < times[k + 1] {
+                idx = k;
+                break;
+            }
+        }
+        let raw = (time - times[idx]) / (times[idx + 1] - times[idx]);
+        let code = interps.get(idx).copied().unwrap_or(0);
+        let h = handles[idx];
+        let progress = match code {
+            0 => raw,                                       // LINEAR
+            1 => bezier_progress(raw, [h[0], h[1]], [h[2], h[3]]), // BEZIER
+            2 => 0.0,                                       // CONSTANT
+            other => panic!("Unknown transform_keyframes interp code {other}"),
+        };
+        let inv = 1.0 - progress;
+        let t_a = translations[idx];
+        let t_b = translations[idx + 1];
+        let s_a = scales[idx];
+        let s_b = scales[idx + 1];
+        let t_i = [
+            inv * t_a[0] + progress * t_b[0],
+            inv * t_a[1] + progress * t_b[1],
+            inv * t_a[2] + progress * t_b[2],
+        ];
+        let s_i = [
+            inv * s_a[0] + progress * s_b[0],
+            inv * s_a[1] + progress * s_b[1],
+            inv * s_a[2] + progress * s_b[2],
+        ];
+        let q_i = slerp(quaternions[idx], quaternions[idx + 1], progress);
+        (t_i, q_i, s_i)
+    };
+    let r = quat_to_mat3(q_arr);
+    let sl = [s_arr[0] * local[0], s_arr[1] * local[1], s_arr[2] * local[2]];
+    [
+        r[0][0] * sl[0] + r[0][1] * sl[1] + r[0][2] * sl[2] + t_arr[0] - rest_t[0],
+        r[1][0] * sl[0] + r[1][1] * sl[1] + r[1][2] * sl[2] + t_arr[1] - rest_t[1],
+        r[2][0] * sl[0] + r[2][1] * sl[1] + r[2][2] * sl[2] + t_arr[2] - rest_t[2],
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -310,5 +386,128 @@ mod tests {
         assert!(out[[0, 0]].abs() < 1e-12);
         assert!(out[[0, 1]].abs() < 1e-12);
         assert!((out[[0, 2]] - (-1.0)).abs() < 1e-12);
+    }
+
+    // Reference re-implementation of the previously inlined solver-branch
+    // math (segment search, T/S lerp, slerp, quat-to-mat3, R*S*local+T-rest).
+    // The new helper must reproduce it bit-for-bit so the unify carries no
+    // numerical change.
+    fn inlined_reference(
+        local: Vec3,
+        times: &[f64],
+        translations: &[[f64; 3]],
+        quaternions: &[[f64; 4]],
+        scales: &[[f64; 3]],
+        interps: &[u8],
+        handles: &[[f64; 4]],
+        rest_t: Vec3,
+        time: f64,
+    ) -> Vec3 {
+        let n = times.len();
+        let (t_arr, q_arr, s_arr) = if time <= times[0] {
+            (translations[0], quaternions[0], scales[0])
+        } else if time >= times[n - 1] {
+            (translations[n - 1], quaternions[n - 1], scales[n - 1])
+        } else {
+            let mut idx = n - 2;
+            for k in 0..n - 1 {
+                if time >= times[k] && time < times[k + 1] {
+                    idx = k;
+                    break;
+                }
+            }
+            let raw = (time - times[idx]) / (times[idx + 1] - times[idx]);
+            let code = interps.get(idx).copied().unwrap_or(0);
+            let h = handles[idx];
+            let progress = match code {
+                0 => raw,
+                1 => bezier_progress(raw, [h[0], h[1]], [h[2], h[3]]),
+                2 => 0.0,
+                other => panic!("Unknown transform_keyframes interp code {other}"),
+            };
+            let t_a = translations[idx];
+            let t_b = translations[idx + 1];
+            let s_a = scales[idx];
+            let s_b = scales[idx + 1];
+            let t_i = [
+                (1.0 - progress) * t_a[0] + progress * t_b[0],
+                (1.0 - progress) * t_a[1] + progress * t_b[1],
+                (1.0 - progress) * t_a[2] + progress * t_b[2],
+            ];
+            let s_i = [
+                (1.0 - progress) * s_a[0] + progress * s_b[0],
+                (1.0 - progress) * s_a[1] + progress * s_b[1],
+                (1.0 - progress) * s_a[2] + progress * s_b[2],
+            ];
+            let q_i = slerp(quaternions[idx], quaternions[idx + 1], progress);
+            (t_i, q_i, s_i)
+        };
+        let (w, x, y, z) = (q_arr[0], q_arr[1], q_arr[2], q_arr[3]);
+        let r = [
+            [
+                1.0 - 2.0 * (y * y + z * z),
+                2.0 * (x * y - w * z),
+                2.0 * (x * z + w * y),
+            ],
+            [
+                2.0 * (x * y + w * z),
+                1.0 - 2.0 * (x * x + z * z),
+                2.0 * (y * z - w * x),
+            ],
+            [
+                2.0 * (x * z - w * y),
+                2.0 * (y * z + w * x),
+                1.0 - 2.0 * (x * x + y * y),
+            ],
+        ];
+        let sl = [s_arr[0] * local[0], s_arr[1] * local[1], s_arr[2] * local[2]];
+        [
+            r[0][0] * sl[0] + r[0][1] * sl[1] + r[0][2] * sl[2] + t_arr[0] - rest_t[0],
+            r[1][0] * sl[0] + r[1][1] * sl[1] + r[1][2] * sl[2] + t_arr[1] - rest_t[1],
+            r[2][0] * sl[0] + r[2][1] * sl[1] + r[2][2] * sl[2] + t_arr[2] - rest_t[2],
+        ]
+    }
+
+    #[test]
+    fn transform_keyframes_step_matches_inlined() {
+        let local = [0.7, -0.3, 1.2];
+        let times = [0.0, 1.0, 2.5];
+        let translations = [[0.0, 0.0, 0.0], [1.0, 2.0, -1.0], [3.0, -1.0, 0.5]];
+        let q0 = [1.0, 0.0, 0.0, 0.0];
+        let q1 = axis_angle_to_quat([0.0, 1.0, 0.0], 90.0);
+        let q2 = axis_angle_to_quat([0.3, 0.6, 0.7], 47.0);
+        let quaternions = [q0, q1, q2];
+        let scales = [[1.0, 1.0, 1.0], [2.0, 0.5, 1.5], [0.8, 1.2, 1.0]];
+        // Segment 0 = Bezier, segment 1 = Constant.
+        let interps = [1u8, 2u8, 0u8];
+        let handles = [[0.42, 0.0, 0.58, 1.0], [0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0]];
+        let rest_t = [0.1, -0.2, 0.05];
+        for &time in &[-0.5, 0.0, 0.4, 1.0, 1.8, 2.5, 3.0] {
+            let got = transform_keyframes_step(
+                local,
+                &times,
+                &translations,
+                &quaternions,
+                &scales,
+                &interps,
+                &handles,
+                rest_t,
+                time,
+            );
+            let want = inlined_reference(
+                local,
+                &times,
+                &translations,
+                &quaternions,
+                &scales,
+                &interps,
+                &handles,
+                rest_t,
+                time,
+            );
+            for k in 0..3 {
+                assert_eq!(got[k], want[k], "mismatch at time {time} axis {k}");
+            }
+        }
     }
 }

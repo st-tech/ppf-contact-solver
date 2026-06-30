@@ -10,6 +10,7 @@ from typing import Optional
 import numpy as np
 
 from . import _rust  # type: ignore[attr-defined]
+from ._utils_ import _as_c
 
 
 def check_self_intersection(
@@ -43,10 +44,10 @@ def check_self_intersection(
         pairs. Empty list if no intersections are found.
     """
     return _rust.check_self_intersection(
-        np.ascontiguousarray(V, dtype=np.float64),
-        np.ascontiguousarray(F, dtype=np.int32),
-        np.ascontiguousarray(is_collider, dtype=bool) if is_collider is not None else None,
-        np.ascontiguousarray(rod_edges, dtype=np.int32)
+        _as_c(V, np.float64),
+        _as_c(F, np.int32),
+        _as_c(is_collider, bool),
+        _as_c(rod_edges, np.int32)
         if rod_edges is not None and len(rod_edges) > 0
         else None,
     )

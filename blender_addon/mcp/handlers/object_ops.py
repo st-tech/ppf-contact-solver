@@ -11,12 +11,18 @@ from typing import Optional
 import bpy  # pyright: ignore
 
 from ...models.collection_utils import safe_update_index, sort_keyframes_by_frame
+from ...models.defaults import MAX_COLLISION_WINDOWS
 from ..decorators import (
     MCPError,
     ValidationError,
     group_handler,
+    mcp_handler,
 )
-from .group import get_active_group_by_uuid_helper
+from .group import (
+    get_active_group_by_uuid_helper,
+    resolve_assigned_with_index,
+    _parse_pin_identifier,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -30,24 +36,10 @@ def _resolve_assigned(group_uuid: str, object_name: str):
     Raises MCPError if the group is unknown, the object is missing, or the
     object is not a member of the group.
     """
-    group = get_active_group_by_uuid_helper(group_uuid)
-    from ...core.uuid_registry import get_object_uuid
-
-    obj = bpy.data.objects.get(object_name)
-    if not obj:
-        raise MCPError(f"Object '{object_name}' not found in scene")
-    obj_uuid = get_object_uuid(obj)
-    if not obj_uuid:
-        raise MCPError(f"Object '{object_name}' has no UUID")
-    for assigned in group.assigned_objects:
-        if assigned.uuid == obj_uuid:
-            return group, assigned, obj_uuid
-    raise MCPError(f"Object '{object_name}' not in group {group_uuid}")
-
-
-def _parse_pin_identifier(vertex_group_identifier: str) -> tuple[str, str]:
-    from ...models.groups import parse_pin_identifier
-    return parse_pin_identifier(vertex_group_identifier, ValidationError)
+    group, assigned, _, obj_uuid = resolve_assigned_with_index(
+        group_uuid, object_name
+    )
+    return group, assigned, obj_uuid
 
 
 def _resolve_pin(group, vertex_group_identifier: str):
@@ -74,24 +66,12 @@ def _resolve_pin(group, vertex_group_identifier: str):
     )
 
 
-def _check_vec3(name: str, v):
-    from ...core.utils import check_vec3
-    return check_vec3(name, v, ValidationError)
+from ._helpers import check_vec3_validation as _check_vec3
 
 
 # ---------------------------------------------------------------------------
 # Pin settings
 # ---------------------------------------------------------------------------
-
-
-_PIN_SETTABLE = {
-    "included",
-    "use_pin_duration",
-    "pin_duration",
-    "use_pull",
-    "pull_strength",
-    "pin_stiffness",
-}
 
 
 @group_handler
@@ -610,6 +590,52 @@ def clear_static_ops(group_uuid: str, object_name: str):
 
 
 # ---------------------------------------------------------------------------
+# PDRD hinge joint (per object)
+# ---------------------------------------------------------------------------
+
+
+@group_handler
+def set_pdrd_hinge(
+    group_uuid: str,
+    object_name: str,
+    enable: bool = True,
+    pca_axis: int = 2,
+):
+    """Pin a PDRD body as a hinge (per object).
+
+    Locks the body's position and restricts its rotation to one principal
+    (PCA) axis of its rest shape, the building block for gears. The group must
+    be of type PDRD. Per-object, so each body in a group can be hinged on its
+    own axle.
+
+    Args:
+        group_uuid: UUID of the PDRD group
+        object_name: Name of the assigned object
+        enable: Pin the body (True) or release it so it moves freely (False)
+        pca_axis: Free axle: 0 (largest extent), 1 (middle), 2 (thinnest, the
+            usual axle for a flat gear or disk)
+    """
+    group, assigned, obj_uuid = _resolve_assigned(group_uuid, object_name)
+    if group.object_type != "PDRD":
+        raise ValidationError("set_pdrd_hinge requires a PDRD group")
+    if int(pca_axis) not in (0, 1, 2):
+        raise ValidationError("pca_axis must be 0, 1 or 2")
+    assigned.pdrd_hinge_enable = bool(enable)
+    assigned.pdrd_hinge_axis = str(int(pca_axis))
+    return {
+        "message": (
+            f"{'Hinged' if enable else 'Released'} '{object_name}'"
+            f" (axle PC{int(pca_axis) + 1})"
+        ),
+        "group_uuid": group_uuid,
+        "object_name": object_name,
+        "object_uuid": obj_uuid,
+        "pdrd_hinge_enable": bool(enable),
+        "pdrd_hinge_axis": str(int(pca_axis)),
+    }
+
+
+# ---------------------------------------------------------------------------
 # Velocity keyframes (initial velocity driven by keyframed vectors)
 # ---------------------------------------------------------------------------
 
@@ -621,6 +647,11 @@ def add_velocity_keyframe(
     frame: int,
     direction: list[float],
     speed: float,
+    angular_axis: "int | str" = "PC3",
+    angular_speed: float = 0.0,
+    angular_axis_custom: list[float] | None = None,
+    enable_translational: bool = True,
+    enable_angular: bool | None = None,
 ):
     """Add a velocity keyframe at the given frame for an assigned object.
 
@@ -630,11 +661,35 @@ def add_velocity_keyframe(
         frame: Blender frame number (>= 1)
         direction: [x, y, z] direction vector (normalized at runtime)
         speed: Velocity magnitude (m/s)
+        angular_axis: Axis to spin about (solid/shell/PDRD). One of
+            "PC1"/"PC2"/"PC3" (principal axes, resolved dynamically from the
+            geometry), "X"/"Y"/"Z" (fixed world axes), or "CUSTOM" (the
+            angular_axis_custom vector). Ints 0/1/2 map to PC1/PC2/PC3.
+            Ignored when angular_speed == 0.
+        angular_speed: Signed spin speed in degrees per second (0 = no spin).
+        angular_axis_custom: World [x, y, z] axis used when angular_axis ==
+            "CUSTOM" (normalized before use). Defaults to [0, 0, 1].
+        enable_translational: Overwrite the translational velocity at this
+            frame (False = leave translation alone, e.g. a pure spin).
+        enable_angular: Overwrite the angular velocity at this frame. Defaults
+            to True when angular_speed is non-zero, else False.
     """
     _, assigned, obj_uuid = _resolve_assigned(group_uuid, object_name)
     if frame < 1:
         raise ValidationError("frame must be >= 1")
     direction = _check_vec3("direction", direction)
+    if isinstance(angular_axis, int):
+        angular_axis = {0: "PC1", 1: "PC2", 2: "PC3"}.get(angular_axis, "PC3")
+    angular_axis = str(angular_axis).upper()
+    if angular_axis not in {"PC1", "PC2", "PC3", "X", "Y", "Z", "CUSTOM"}:
+        raise ValidationError(
+            "angular_axis must be PC1/PC2/PC3, X/Y/Z, CUSTOM, or 0/1/2"
+        )
+    if angular_axis_custom is None:
+        angular_axis_custom = [0.0, 0.0, 1.0]
+    angular_axis_custom = _check_vec3("angular_axis_custom", angular_axis_custom)
+    if enable_angular is None:
+        enable_angular = float(angular_speed) != 0.0
 
     for kf in assigned.velocity_keyframes:
         if kf.frame == frame:
@@ -644,6 +699,11 @@ def add_velocity_keyframe(
     kf.frame = frame
     kf.direction = direction
     kf.speed = float(speed)
+    kf.angular_axis = angular_axis
+    kf.angular_speed = float(angular_speed)
+    kf.angular_axis_custom = tuple(float(c) for c in angular_axis_custom)
+    kf.enable_translational = bool(enable_translational)
+    kf.enable_angular = bool(enable_angular)
     assigned.velocity_keyframes_index = sort_keyframes_by_frame(
         assigned.velocity_keyframes
     )
@@ -720,7 +780,9 @@ def clear_velocity_keyframes(group_uuid: str, object_name: str):
     _, assigned, _ = _resolve_assigned(group_uuid, object_name)
     removed = len(assigned.velocity_keyframes)
     assigned.velocity_keyframes.clear()
-    assigned.velocity_keyframes_index = 0
+    assigned.velocity_keyframes_index = safe_update_index(
+        -1, len(assigned.velocity_keyframes)
+    )
     from ...models.groups import invalidate_overlays
     invalidate_overlays()
     return {
@@ -733,9 +795,6 @@ def clear_velocity_keyframes(group_uuid: str, object_name: str):
 # ---------------------------------------------------------------------------
 # Collision windows (per-object intervals where contact is active)
 # ---------------------------------------------------------------------------
-
-
-MAX_COLLISION_WINDOWS = 8
 
 
 @group_handler
@@ -847,7 +906,9 @@ def clear_collision_windows(group_uuid: str, object_name: str):
     _, assigned, _ = _resolve_assigned(group_uuid, object_name)
     removed = len(assigned.collision_windows)
     assigned.collision_windows.clear()
-    assigned.collision_windows_index = 0
+    assigned.collision_windows_index = safe_update_index(
+        -1, len(assigned.collision_windows)
+    )
     return {
         "message": f"Cleared {removed} collision windows on '{object_name}'",
         "group_uuid": group_uuid,
@@ -882,7 +943,7 @@ def capture_static_deformation(group_uuid: str, object_name: str):
         object_name: Name of the assigned mesh to capture
     """
     from .group import get_group_index_by_uuid
-    group, assigned, obj_uuid = _resolve_assigned(group_uuid, object_name)
+    group, _, idx, obj_uuid = resolve_assigned_with_index(group_uuid, object_name)
     if group.object_type != "STATIC":
         raise MCPError(
             f"Group {group_uuid} is {group.object_type}; capture requires STATIC"
@@ -900,13 +961,6 @@ def capture_static_deformation(group_uuid: str, object_name: str):
 
     # Select the assigned-object row in the UI so the modal operator
     # picks up the right object via group.assigned_objects_index.
-    idx = -1
-    for i, a in enumerate(group.assigned_objects):
-        if a.uuid == obj_uuid:
-            idx = i
-            break
-    if idx < 0:
-        raise MCPError(f"Object '{object_name}' not in group {group_uuid}")
     group.assigned_objects_index = idx
 
     group_index = get_group_index_by_uuid(group_uuid)
@@ -938,19 +992,12 @@ def clear_static_deformation(group_uuid: str, object_name: str):
         object_name: Name of the assigned mesh
     """
     from .group import get_group_index_by_uuid
-    group, assigned, obj_uuid = _resolve_assigned(group_uuid, object_name)
+    group, _, idx, obj_uuid = resolve_assigned_with_index(group_uuid, object_name)
     if group.object_type != "STATIC":
         raise MCPError(
             f"Group {group_uuid} is {group.object_type}; clear requires STATIC"
         )
 
-    idx = -1
-    for i, a in enumerate(group.assigned_objects):
-        if a.uuid == obj_uuid:
-            idx = i
-            break
-    if idx < 0:
-        raise MCPError(f"Object '{object_name}' not in group {group_uuid}")
     group.assigned_objects_index = idx
 
     group_index = get_group_index_by_uuid(group_uuid)
@@ -1169,4 +1216,181 @@ def get_pin_deformation_status(
         "has_captured_anim_flag": bool(
             getattr(pin_item, "has_captured_anim", False)
         ),
+    }
+
+
+# Map each tet override kwarg to its (value field, override flag). Setting a
+# value also flips the override flag on; the encoder only forwards a field
+# when its flag is set (see core/encoder/params.py:_encode_obj_tet_kwargs),
+# otherwise the backend default applies.
+_TET_OVERRIDE_FIELDS = {
+    "ftetwild_edge_length_fac": "ftetwild_override_edge_length_fac",
+    "ftetwild_epsilon": "ftetwild_override_epsilon",
+    "ftetwild_stop_energy": "ftetwild_override_stop_energy",
+    "ftetwild_num_opt_iter": "ftetwild_override_num_opt_iter",
+    "ftetwild_optimize": "ftetwild_override_optimize",
+    "ftetwild_simplify": "ftetwild_override_simplify",
+    "ftetwild_coarsen": "ftetwild_override_coarsen",
+    "tetgen_min_ratio": "tetgen_override_min_ratio",
+    "tetgen_max_volume": "tetgen_override_max_volume",
+}
+
+
+@group_handler
+def set_object_tet_settings(
+    group_uuid: str,
+    object_name: str,
+    tet_backend: Optional[str] = None,
+    ftetwild_edge_length_fac: Optional[float] = None,
+    ftetwild_epsilon: Optional[float] = None,
+    ftetwild_stop_energy: Optional[float] = None,
+    ftetwild_num_opt_iter: Optional[int] = None,
+    ftetwild_optimize: Optional[bool] = None,
+    ftetwild_simplify: Optional[bool] = None,
+    ftetwild_coarsen: Optional[bool] = None,
+    tetgen_min_ratio: Optional[float] = None,
+    tetgen_max_volume: Optional[float] = None,
+):
+    """Set the per-object tetrahedralizer backend and overrides.
+
+    SOLID meshes are tetrahedralized at build time, and each object in a group
+    picks its backend and overrides independently (ignored for non-SOLID
+    objects). Passing any override value also enables that override; an
+    override left unset keeps the backend default.
+
+    Args:
+        group_uuid: UUID of the group containing the object.
+        object_name: Name of the assigned object in the group.
+        tet_backend: "FTETWILD" (tolerant remesher, default) or "TETGEN"
+            (preserves the input surface exactly, needs a clean closed manifold).
+        ftetwild_edge_length_fac: fTetWild ideal tet edge length as a fraction
+            of the bounding-box diagonal.
+        ftetwild_epsilon: fTetWild envelope size as a fraction of the bbox diagonal.
+        ftetwild_stop_energy: fTetWild AMIPS energy threshold (larger is faster).
+        ftetwild_num_opt_iter: fTetWild maximum optimization passes.
+        ftetwild_optimize: Improve cell quality (slower).
+        ftetwild_simplify: Simplify the input surface before tetrahedralization.
+        ftetwild_coarsen: Coarsen the input surface.
+        tetgen_min_ratio: TetGen minimum radius-edge ratio.
+        tetgen_max_volume: TetGen maximum tet volume (0 = uncapped).
+    """
+    group, assigned, obj_uuid = _resolve_assigned(group_uuid, object_name)
+
+    updated: dict = {}
+    if tet_backend is not None:
+        backend = tet_backend.upper()
+        if backend not in {"FTETWILD", "TETGEN"}:
+            raise MCPError("tet_backend must be 'FTETWILD' or 'TETGEN'")
+        assigned.tet_backend = backend
+        updated["tet_backend"] = backend
+
+    values = {
+        "ftetwild_edge_length_fac": ftetwild_edge_length_fac,
+        "ftetwild_epsilon": ftetwild_epsilon,
+        "ftetwild_stop_energy": ftetwild_stop_energy,
+        "ftetwild_num_opt_iter": ftetwild_num_opt_iter,
+        "ftetwild_optimize": ftetwild_optimize,
+        "ftetwild_simplify": ftetwild_simplify,
+        "ftetwild_coarsen": ftetwild_coarsen,
+        "tetgen_min_ratio": tetgen_min_ratio,
+        "tetgen_max_volume": tetgen_max_volume,
+    }
+    for field, value in values.items():
+        if value is None:
+            continue
+        setattr(assigned, field, value)
+        setattr(assigned, _TET_OVERRIDE_FIELDS[field], True)
+        updated[field] = value
+
+    return {
+        "message": f"Updated tetrahedralizer settings for '{object_name}'",
+        "group_uuid": group_uuid,
+        "object_uuid": obj_uuid,
+        "updated": updated,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Isolated (faceless / stray) vertex cleanup on STATIC colliders.
+# A STATIC collider vertex in no face has no incident faces to average contact
+# parameters over, so the solver aborts the build (Transfer raises a ValueError
+# whose message contains "isolated vert"). These mirror the "Remove Isolated
+# Vertices" panel button: detect previews, remove deletes. Scene-wide over all
+# active STATIC colliders, matching the button. Light bmesh edit, synchronous.
+# ---------------------------------------------------------------------------
+
+
+@mcp_handler
+def detect_isolated_static_vertices():
+    """Report stray faceless vertices on active STATIC colliders that block Transfer.
+
+    Scans every included, active STATIC collider mesh for vertices that
+    belong to no triangle (no face). The solver build aborts on these, and
+    Transfer reports a ValueError naming the object and the vertex indices.
+    Read-only; pair with remove_isolated_static_vertices to delete them.
+    """
+    from ...ui.geometry_cleanup_ops import _static_isolated_offenders
+
+    offenders = _static_isolated_offenders(bpy.context)
+    objects = [
+        {
+            "object_name": obj.name,
+            "isolated_count": len(idx),
+            "isolated_indices": idx,
+        }
+        for obj, idx in offenders.items()
+    ]
+    return {
+        "message": (
+            f"Found isolated vertices on {len(objects)} STATIC collider(s)"
+            if objects
+            else "No isolated vertices on STATIC colliders"
+        ),
+        "objects": objects,
+        "object_count": len(objects),
+        "total_isolated": sum(o["isolated_count"] for o in objects),
+    }
+
+
+@mcp_handler
+def remove_isolated_static_vertices():
+    """Delete stray faceless vertices from active STATIC colliders so the scene transfers.
+
+    Removes only vertices that belong to no triangle (with their loose
+    edges); faces are untouched. Mirrors the Remove Isolated Vertices panel
+    button and scans every included, active STATIC collider. Run
+    detect_isolated_static_vertices first to preview what will be deleted.
+    """
+    from ...ui.geometry_cleanup_ops import (
+        _delete_vertices,
+        _static_isolated_offenders,
+    )
+
+    if bpy.context.mode != "OBJECT":
+        try:
+            bpy.ops.object.mode_set(mode="OBJECT")
+        except RuntimeError:
+            pass
+
+    offenders = _static_isolated_offenders(bpy.context)
+    if not offenders:
+        return {
+            "message": "No isolated vertices found on STATIC colliders",
+            "removed_total": 0,
+            "objects": [],
+        }
+
+    results, total = [], 0
+    for obj, indices in offenders.items():
+        removed = _delete_vertices(obj, indices)
+        total += removed
+        results.append({"object_name": obj.name, "removed": removed})
+
+    from ...core.client import communicator as com
+
+    com.set_error("")
+    return {
+        "message": f"Removed {total} isolated vertex(es). Transfer again.",
+        "removed_total": total,
+        "objects": results,
     }

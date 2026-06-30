@@ -7,7 +7,7 @@ from .colliders import (
     _build_collider_batches,
     _resolve_scene_dyn_params,
 )
-from .operations import _build_operation_batches
+from .operations import _build_operation_batches, _build_pdrd_hinge_batches
 from .pins import (
     _build_pin_data,
     _build_rod_batches,
@@ -23,6 +23,7 @@ __all__ = [
     "DirectionPreviewManager",
     "_build_collider_batches",
     "_build_operation_batches",
+    "_build_pdrd_hinge_batches",
     "_build_pin_data",
     "_build_rod_batches",
     "_build_snap_batches",

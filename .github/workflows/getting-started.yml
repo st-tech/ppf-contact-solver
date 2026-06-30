@@ -2,67 +2,432 @@
 # Code: Claude Code and Codex
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
 # License: Apache v2.0
+#
+# Builds the real CUDA ppf-contact-solver and runs the single headless example
+# (examples/headless.py) end-to-end on a GPU. Like the per-example workflows
+# (see template/aws-template.yml), the GitHub-hosted ubuntu-latest runner is only
+# an orchestrator: it assumes an AWS OIDC role, launches one ephemeral Deep
+# Learning GPU EC2 instance, drives it over an EC2 Instance Connect SSH tunnel,
+# and always terminates it. The GPU must be Ampere-or-newer (sm_86+): the CUDA
+# build ships an sm_86 SASS anchor plus compute_86 PTX that only JITs forward, so
+# the default g6/g6e (L4/L40S, sm_89) instances run it while an older card (e.g.
+# a T4, sm_75) has no runnable kernel image.
 
 name: Getting Started
 
 on:
   workflow_dispatch:
+    inputs:
+      instance_type:
+        description: 'EC2 instance type'
+        required: true
+        default: 'g6e.2xlarge'
+        type: choice
+        options:
+          - g6.2xlarge
+          - g6e.2xlarge
+      region:
+        description: 'AWS Region'
+        required: true
+        default: 'us-east-2'
+        type: choice
+        options:
+          - us-east-1
+          - us-east-2
+          - ap-northeast-1
 
 jobs:
   headless:
-    runs-on: ppf-contact-solver-NVIDIA
-    timeout-minutes: 60
+    name: Run headless on GPU Instance
+    runs-on: ubuntu-latest
+    # EC2 boot + AMI/VPC lookup + full real-CUDA cargo build now happen inside
+    # the job (not on a pre-provisioned runner), so allow generous headroom.
+    timeout-minutes: 90
     permissions:
+      id-token: write
       contents: read
 
+    env:
+      AWS_REGION: ${{ github.event.inputs.region }}
+      INSTANCE_TYPE: ${{ github.event.inputs.instance_type }}
+      BRANCH: ${{ github.ref_name }}
+      WORKDIR: /home/ubuntu
+      USER: ubuntu
+
     steps:
-      - name: check out repo
+      - name: Show input parameters
+        run: |
+          echo "## Input Parameters"
+          echo "Branch: ${{ github.ref_name }}"
+          echo "Instance Type: ${{ github.event.inputs.instance_type }}"
+          echo "Region: ${{ github.event.inputs.region }}"
+
+      - name: Checkout repository
         uses: actions/checkout@v5
 
-      - name: install NVIDIA driver and CUDA toolkit
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-duration-seconds: 21600
+
+      - name: Verify AWS authentication
         run: |
-          curl -fSsL -O https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2004/x86_64/cuda-keyring_1.1-1_all.deb
-          sudo dpkg -i cuda-keyring_1.1-1_all.deb
-          sudo apt-get update
-          sudo apt-get -y install cuda-toolkit-12-8
+          echo "Testing AWS authentication..."
+          aws sts get-caller-identity
+          echo "AWS Region: $AWS_REGION"
+          echo "Instance Type: $INSTANCE_TYPE"
+          echo "Branch: $BRANCH"
 
-      - name: check GPU
-        run: nvidia-smi
-
-      - name: warmup
-        run: python3 warmup.py --skip-confirmation
-
-      - name: build
-        run: ~/.cargo/bin/cargo build --release
-
-      - name: build + install ppf-cts-py wheel
-        # The frontend hard-imports `_ppf_cts_py`; without the maturin
-        # build the headless run fails at import time. Mirrors the step
-        # in blender.yml.
+      - name: Find Deep Learning AMI and network resources
+        id: setup
         run: |
+          echo "Finding latest Deep Learning AMI with GPU support..."
+          AMI_ID=$(aws ec2 describe-images \
+            --owners amazon \
+            --filters \
+              "Name=name,Values=Deep Learning Base OSS Nvidia Driver GPU AMI (Ubuntu 24.04)*" \
+              "Name=state,Values=available" \
+              "Name=architecture,Values=x86_64" \
+            --query 'sort_by(Images, &CreationDate)[-1].ImageId' \
+            --region "$AWS_REGION" \
+            --output text)
+
+          if [ "$AMI_ID" = "None" ] || [ -z "$AMI_ID" ]; then
+            echo "ERROR: Deep Learning AMI not found in region $AWS_REGION"
+            exit 1
+          fi
+          echo "AMI_ID=$AMI_ID" >> $GITHUB_OUTPUT
+          echo "Found AMI: $AMI_ID"
+
+          # Get GitHub Actions dedicated VPC, subnet, and security group
+          VPC_ID=$(aws ec2 describe-vpcs --filters "Name=tag:Name,Values=github-actions-vpc" --query 'Vpcs[0].VpcId' --output text)
+          SUBNET_ID=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$VPC_ID" --query 'Subnets[0].SubnetId' --output text)
+          SG_ID=$(aws ec2 describe-security-groups --filters "Name=vpc-id,Values=$VPC_ID" "Name=group-name,Values=github-actions-sg" --query 'SecurityGroups[0].GroupId' --output text)
+
+          if [ "$VPC_ID" = "None" ] || [ -z "$VPC_ID" ]; then
+            echo "ERROR: github-actions-vpc not found in region $AWS_REGION"
+            exit 1
+          fi
+
+          echo "::add-mask::$VPC_ID"
+          echo "::add-mask::$SUBNET_ID"
+          echo "::add-mask::$SG_ID"
+          echo "SUBNET_ID=$SUBNET_ID" >> $GITHUB_OUTPUT
+          echo "SG_ID=$SG_ID" >> $GITHUB_OUTPUT
+          echo "VPC: $VPC_ID, Subnet: $SUBNET_ID, SG: $SG_ID"
+
+      - name: Generate unique identifiers and SSH key
+        id: ids
+        run: |
+          TIMESTAMP=$(date +%Y%m%d%H%M%S)
+          RANDOM_SUFFIX=$(head /dev/urandom | tr -dc a-z0-9 | head -c 6)
+          TEMP_INSTANCE_ID="temp-${TIMESTAMP}-${RANDOM_SUFFIX}"
+          echo "TIMESTAMP=$TIMESTAMP" >> $GITHUB_OUTPUT
+          echo "TEMP_INSTANCE_ID=$TEMP_INSTANCE_ID" >> $GITHUB_OUTPUT
+          echo "Temporary Instance ID: $TEMP_INSTANCE_ID"
+
+          # Generate SSH key early so we can embed it in user-data
+          rm -f /tmp/ec2key /tmp/ec2key.pub
+          ssh-keygen -t rsa -f /tmp/ec2key -N "" -q
+          echo "SSH key generated"
+
+      - name: Create user data script
+        run: |
+          SSH_PUBKEY=$(cat /tmp/ec2key.pub)
+          cat > /tmp/user-data.sh << EOF
+          #!/bin/bash
+          set -x
+          exec > >(tee /var/log/user-data.log) 2>&1
+
+          echo "=== User Data Script Started ==="
+
+          # Wait for system to be ready
+          sleep 5
+
+          # Setup SSH key for persistent authentication (no 60s expiry)
+          mkdir -p /home/ubuntu/.ssh
+          echo "${SSH_PUBKEY}" >> /home/ubuntu/.ssh/authorized_keys
+          chown -R ubuntu:ubuntu /home/ubuntu/.ssh
+          chmod 700 /home/ubuntu/.ssh
+          chmod 600 /home/ubuntu/.ssh/authorized_keys
+          echo "SSH key installed permanently"
+
+          # Verify nvidia-smi is available
+          if command -v nvidia-smi &> /dev/null; then
+              echo "NVIDIA drivers confirmed"
+              nvidia-smi
+          else
+              echo "Warning: nvidia-smi not found"
+          fi
+
+          # Create workspace directory
+          mkdir -p /home/ubuntu/workspace
+          chown -R ubuntu:ubuntu /home/ubuntu/workspace
+
+          nvidia-smi | tee /tmp/nvidia-smi-output.txt
+          touch /tmp/setup-complete
+          echo "=== User Data Script Complete ==="
+          EOF
+
+      - name: Launch EC2 instance
+        id: instance
+        run: |
+          echo "Launching EC2 instance..."
+
+          # Base64 encode for AWS
+          USER_DATA=$(base64 -w 0 /tmp/user-data.sh)
+
+          INSTANCE_ID=$(aws ec2 run-instances \
+            --image-id "${{ steps.setup.outputs.AMI_ID }}" \
+            --instance-type "$INSTANCE_TYPE" \
+            --subnet-id "${{ steps.setup.outputs.SUBNET_ID }}" \
+            --security-group-ids "${{ steps.setup.outputs.SG_ID }}" \
+            --associate-public-ip-address \
+            --user-data "$USER_DATA" \
+            --block-device-mappings "DeviceName=/dev/sda1,Ebs={VolumeSize=256,VolumeType=gp3,DeleteOnTermination=true}" \
+            --tag-specifications \
+              "ResourceType=instance,Tags=[\
+                {Key=Name,Value=gpu-runner-${{ steps.ids.outputs.TIMESTAMP }}},\
+                {Key=ManagedBy,Value=GitHubActions},\
+                {Key=Purpose,Value=GPURunner},\
+                {Key=Workflow,Value=${{ github.workflow }}},\
+                {Key=RunId,Value=${{ github.run_id }}},\
+                {Key=Branch,Value=${{ env.BRANCH }}},\
+                {Key=Example,Value=getting-started}\
+              ]" \
+              "ResourceType=volume,Tags=[\
+                {Key=Name,Value=gpu-runner-${{ steps.ids.outputs.TIMESTAMP }}-volume},\
+                {Key=ManagedBy,Value=GitHubActions},\
+                {Key=Purpose,Value=GPURunner},\
+                {Key=Workflow,Value=${{ github.workflow }}},\
+                {Key=Example,Value=getting-started}\
+              ]" \
+            --instance-initiated-shutdown-behavior terminate \
+            --query 'Instances[0].InstanceId' \
+            --region "$AWS_REGION" \
+            --output text)
+
+          echo "INSTANCE_ID=$INSTANCE_ID" >> $GITHUB_OUTPUT
+          echo "Instance launched: $INSTANCE_ID"
+
+      - name: Wait for instance and establish tunnel
+        run: |
+          INSTANCE_ID="${{ steps.instance.outputs.INSTANCE_ID }}"
+          echo "Waiting for instance to be running..."
+          aws ec2 wait instance-running --instance-ids "$INSTANCE_ID" --region "$AWS_REGION"
+
+          echo "Instance is running, waiting for user-data to complete..."
+
+          # Wait for setup-complete (user-data finished, SSH key installed)
+          MAX_ATTEMPTS=60
+          for i in $(seq 1 $MAX_ATTEMPTS); do
+            # Open tunnel temporarily
+            aws ec2-instance-connect open-tunnel \
+              --instance-id "$INSTANCE_ID" \
+              --local-port 2222 &
+            TUNNEL_PID=$!
+            sleep 3
+
+            # Check if setup is complete (includes SSH connectivity check)
+            if ssh -i /tmp/ec2key -p 2222 \
+              -o StrictHostKeyChecking=no \
+              -o UserKnownHostsFile=/dev/null \
+              -o ConnectTimeout=5 \
+              ubuntu@localhost "test -f /tmp/setup-complete && echo READY" 2>/dev/null | grep -q READY; then
+              echo "Instance setup completed on attempt $i"
+              kill $TUNNEL_PID 2>/dev/null || true
+              break
+            fi
+
+            kill $TUNNEL_PID 2>/dev/null || true
+
+            if [ $i -eq $MAX_ATTEMPTS ]; then
+              echo "Setup timeout after $MAX_ATTEMPTS attempts, continuing anyway..."
+              break
+            fi
+
+            echo "Attempt $i/$MAX_ATTEMPTS: Setup not complete, waiting 10s..."
+            sleep 10
+          done
+
+          # Save instance ID for subsequent steps
+          echo "$INSTANCE_ID" > /tmp/instance_id.txt
+
+      - name: Create archive of repository
+        run: |
+          echo "Creating repository archive..."
+          git archive --format=tar.gz --output=/tmp/repo.tar.gz HEAD
+
+      - name: Transfer repository to instance
+        run: |
+          echo "Transferring repository to instance..."
+          INSTANCE_ID=$(cat /tmp/instance_id.txt)
+
+          aws ec2-instance-connect open-tunnel \
+            --instance-id "$INSTANCE_ID" \
+            --local-port 2222 &
+          TUNNEL_PID=$!
+          sleep 5
+
+          rsync -avz -e "ssh -i /tmp/ec2key -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" \
+            /tmp/repo.tar.gz ubuntu@localhost:${WORKDIR}/
+
+          ssh -i /tmp/ec2key -p 2222 \
+            -o StrictHostKeyChecking=no \
+            -o UserKnownHostsFile=/dev/null \
+            ubuntu@localhost \
+            "cd ${WORKDIR} && tar -xzf repo.tar.gz && rm repo.tar.gz"
+
+          kill $TUNNEL_PID 2>/dev/null || true
+
+      - name: Setup Python environment and run warmup
+        run: |
+          echo "Setting up Python environment and running warmup.py..."
+          INSTANCE_ID=$(cat /tmp/instance_id.txt)
+
+          aws ec2-instance-connect open-tunnel \
+            --instance-id "$INSTANCE_ID" \
+            --local-port 2222 &
+          TUNNEL_PID=$!
+          sleep 5
+
+          ssh -i /tmp/ec2key -p 2222 \
+            -o StrictHostKeyChecking=no \
+            -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 \
+            -o ServerAliveCountMax=10 \
+            ubuntu@localhost << 'ENDSSH'
+          set -e
+          cd ${WORKDIR}
+
+          # Run warmup.py
+          echo "Running warmup.py..."
+          python3 warmup.py --skip-confirmation
+
+          echo "Warmup completed"
+          ENDSSH
+
+          kill $TUNNEL_PID 2>/dev/null || true
+
+      - name: Build Rust project
+        run: |
+          echo "Building the real CUDA solver with cargo..."
+          INSTANCE_ID=$(cat /tmp/instance_id.txt)
+
+          aws ec2-instance-connect open-tunnel \
+            --instance-id "$INSTANCE_ID" \
+            --local-port 2222 &
+          TUNNEL_PID=$!
+          sleep 5
+
+          ssh -i /tmp/ec2key -p 2222 \
+            -o StrictHostKeyChecking=no \
+            -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 \
+            -o ServerAliveCountMax=10 \
+            ubuntu@localhost << 'ENDSSH'
+          set -e
+          cd ${WORKDIR}
+
+          # Setup Rust environment (cargo is not on the non-login SSH PATH)
           source "$HOME/.cargo/env"
-          source ~/.local/share/ppf-cts/venv/bin/activate
-          pip install --upgrade maturin
-          cd crates/ppf-cts-py
-          maturin develop --release
-          python -c "import _ppf_cts_py as m; print('schema_version', m.schema_version())"
 
-      - name: run headless
+          # Default features = the REAL CUDA backend. Never pass
+          # --features emulated / --no-default-features here: the emulated
+          # backend has no physics and would overwrite target/release.
+          echo "Running cargo build --release..."
+          cargo build --release
+
+          echo "Cargo build completed"
+          ENDSSH
+
+          kill $TUNNEL_PID 2>/dev/null || true
+
+      - name: Verify ppf-cts-py importable via frontend
+        # `cargo build --release` above builds the PyO3 cdylib into
+        # target/release/. frontend/__init__.py loads that cdylib by
+        # absolute path and registers it as `_ppf_cts_py`, so any python
+        # that imports `frontend` first can then use the Rust extension.
         run: |
-          echo "getting-started" > frontend/.CI
-          export PYTHONPATH=$PWD
-          ~/.local/share/ppf-cts/venv/bin/python examples/headless.py
+          echo "Verifying ppf-cts-py importable via frontend on remote..."
+          INSTANCE_ID=$(cat /tmp/instance_id.txt)
+
+          aws ec2-instance-connect open-tunnel \
+            --instance-id "$INSTANCE_ID" \
+            --local-port 2222 &
+          TUNNEL_PID=$!
+          sleep 5
+
+          ssh -i /tmp/ec2key -p 2222 \
+            -o StrictHostKeyChecking=no \
+            -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 \
+            -o ServerAliveCountMax=10 \
+            ubuntu@localhost << 'ENDSSH'
+          set -e
+          cd ${WORKDIR}
+          source ~/.local/share/ppf-cts/venv/bin/activate
+          python -c "from frontend import _rust as m; print('schema_version', m.schema_version())"
+          echo "ppf-cts-py verified"
+          ENDSSH
+
+          kill $TUNNEL_PID 2>/dev/null || true
+
+      - name: Run headless
+        run: |
+          echo "Running examples/headless.py on the GPU instance..."
+          INSTANCE_ID=$(cat /tmp/instance_id.txt)
+
+          aws ec2-instance-connect open-tunnel \
+            --instance-id "$INSTANCE_ID" \
+            --local-port 2222 &
+          TUNNEL_PID=$!
+          sleep 5
+
+          ssh -i /tmp/ec2key -p 2222 \
+            -o StrictHostKeyChecking=no \
+            -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 \
+            -o ServerAliveCountMax=10 \
+            ubuntu@localhost \
+            "set -o pipefail && mkdir -p /tmp/ci && echo 'getting-started' > ${WORKDIR}/frontend/.CI && cd ${WORKDIR} && source ~/.local/share/ppf-cts/venv/bin/activate && PYTHONPATH=${WORKDIR} python3 examples/headless.py 2>&1 | tee /tmp/ci/headless.log"
+
+          kill $TUNNEL_PID 2>/dev/null || true
 
       - name: Collect results
         if: success() || failure()
         run: |
           echo "Collecting results..."
           mkdir -p ci
-          if [ -d "/tmp/ci" ]; then
-            rsync -av --exclude='*.bin' --exclude='*.pickle' /tmp/ci/ ./ci/
-          fi
+          INSTANCE_ID=$(cat /tmp/instance_id.txt)
+
+          aws ec2-instance-connect open-tunnel \
+            --instance-id "$INSTANCE_ID" \
+            --local-port 2222 &
+          TUNNEL_PID=$!
+          sleep 5
+
+          # Delete large binary files on remote before copying to save bandwidth
+          ssh -i /tmp/ec2key -p 2222 \
+            -o StrictHostKeyChecking=no \
+            -o UserKnownHostsFile=/dev/null \
+            ubuntu@localhost \
+            "find ~/.cache/ppf-cts/ci -type f \( -name '*.bin' -o -name '*.pickle' -o -name '*.ply' -o -name '*.gz' \) -delete 2>/dev/null" || true
+
+          # Copy CI output from ppf-cts cache directory
+          rsync -avz -e "ssh -i /tmp/ec2key -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" \
+            ubuntu@localhost:~/.cache/ppf-cts/ci/ ./ci/ || echo "No ppf-cts CI files found"
+
+          # Also copy logs from /tmp/ci
+          rsync -avz -e "ssh -i /tmp/ec2key -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" \
+            ubuntu@localhost:/tmp/ci/ ./ci/ || echo "No log files found"
+
+          kill $TUNNEL_PID 2>/dev/null || true
+
           echo "## Collected Files:"
-          ls -la ci/ || echo "No files collected"
+          ls -laR ci/ | head -100 || echo "No files collected"
 
       - name: Upload artifact
         if: success() || failure()
@@ -71,3 +436,63 @@ jobs:
           name: ci-getting-started
           path: ci
           retention-days: 3
+
+      - name: GPU information
+        if: success() || failure()
+        run: |
+          echo "Getting GPU information..."
+          INSTANCE_ID=$(cat /tmp/instance_id.txt)
+
+          aws ec2-instance-connect open-tunnel \
+            --instance-id "$INSTANCE_ID" \
+            --local-port 2222 &
+          TUNNEL_PID=$!
+          sleep 5
+
+          ssh -i /tmp/ec2key -p 2222 \
+            -o StrictHostKeyChecking=no \
+            -o UserKnownHostsFile=/dev/null \
+            ubuntu@localhost \
+            "nvidia-smi" || echo "Failed to get GPU info"
+
+          kill $TUNNEL_PID 2>/dev/null || true
+
+      - name: Cleanup - SSH keys
+        if: always()
+        continue-on-error: true
+        run: |
+          # Clean up SSH keys
+          rm -f /tmp/ec2key /tmp/ec2key.pub /tmp/instance_id.txt
+
+      - name: Re-authenticate for cleanup
+        if: always()
+        continue-on-error: true
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-duration-seconds: 21600
+
+      - name: Cleanup - Terminate Instance
+        if: always()
+        continue-on-error: true
+        run: |
+          if [ -n "${{ steps.instance.outputs.INSTANCE_ID }}" ]; then
+            echo "Initiating instance termination: ${{ steps.instance.outputs.INSTANCE_ID }}"
+            aws ec2 terminate-instances \
+              --instance-ids "${{ steps.instance.outputs.INSTANCE_ID }}" \
+              --region "$AWS_REGION" || true
+            echo "Termination initiated. Instance will terminate in the background."
+          else
+            echo "No instance to terminate"
+          fi
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "## Workflow Summary"
+          echo "- Region: $AWS_REGION"
+          echo "- Instance Type: $INSTANCE_TYPE"
+          echo "- Branch: $BRANCH"
+          echo "- Example: getting-started"
+          echo "- Instance ID: ${{ steps.instance.outputs.INSTANCE_ID || 'Not launched' }}"

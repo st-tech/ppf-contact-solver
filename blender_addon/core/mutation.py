@@ -83,7 +83,7 @@ def add_merge_pair(object_a: str, object_b: str) -> dict[str, Any]:
     with _mutation_lock:
         _, uuid_a = _resolve_writable(object_a)
         _, uuid_b = _resolve_writable(object_b)
-        _raw_add_merge_pair(object_a, object_b)
+        _raw_add_merge_pair(object_a, uuid_a, object_b, uuid_b)
         return {
             "object_a": object_a,
             "object_b": object_b,
@@ -117,7 +117,7 @@ def remove_merge_pair(object_a: str, object_b: str) -> dict[str, Any]:
             raise MutationError(
                 f"no merge pair exists between '{object_a}' and '{object_b}'"
             )
-        _raw_remove_merge_pair(object_a, object_b)
+        _raw_remove_merge_pair(object_a, uuid_a, object_b, uuid_b)
         return {
             "object_a": object_a,
             "object_b": object_b,
@@ -146,7 +146,7 @@ def snap_to_vertices(object_a: str, object_b: str) -> dict[str, Any]:
     with _mutation_lock:
         _, uuid_a = _resolve_writable(object_a)
         _, uuid_b = _resolve_writable(object_b)
-        _raw_snap(object_a, object_b)
+        _raw_snap(object_a, uuid_a, object_b, uuid_b)
         return {
             "object_a": object_a,
             "object_b": object_b,
@@ -194,6 +194,25 @@ def add_invisible_sphere(
             "invert": bool(invert),
             "hemisphere": bool(hemisphere),
         }
+
+
+def remove_invisible_collider(index: int) -> dict[str, Any]:
+    """Remove a single invisible collider by its zero-based list index."""
+    import bpy  # pyright: ignore
+
+    try:
+        idx = int(index)
+    except (TypeError, ValueError):
+        raise MutationError(f"index must be an int, got {index!r}")
+
+    with _mutation_lock:
+        from ..models.groups import get_addon_data
+        state = get_addon_data(bpy.context.scene).state
+        n = len(state.invisible_colliders)
+        if n == 0 or idx < 0 or idx >= n:
+            raise MutationError(f"collider index {idx} out of range (0..{n - 1})")
+        _raw_remove_invisible_collider(idx)
+        return {"removed": idx}
 
 
 def clear_invisible_colliders() -> dict[str, Any]:
@@ -252,17 +271,10 @@ def create_pin(group_uuid: str, object_name: str, vertex_group_name: str) -> dic
         }
 
 
-def _raw_add_merge_pair(object_a: str, object_b: str) -> None:
+def _raw_add_merge_pair(object_a: str, uuid_a: str, object_b: str, uuid_b: str) -> None:
     import bpy  # pyright: ignore
-    from .uuid_registry import get_or_create_object_uuid
     from ..models.groups import get_addon_data
     state = get_addon_data(bpy.context.scene).state
-    obj_a = bpy.data.objects.get(object_a)
-    obj_b = bpy.data.objects.get(object_b)
-    uuid_a = get_or_create_object_uuid(obj_a) if obj_a else ""
-    uuid_b = get_or_create_object_uuid(obj_b) if obj_b else ""
-    if not uuid_a or not uuid_b:
-        return
     for pair in state.merge_pairs:
         if (pair.object_a_uuid == uuid_a and pair.object_b_uuid == uuid_b) or (
             pair.object_a_uuid == uuid_b and pair.object_b_uuid == uuid_a
@@ -278,19 +290,12 @@ def _raw_add_merge_pair(object_a: str, object_b: str) -> None:
     apply_object_overlays()
 
 
-def _raw_remove_merge_pair(object_a: str, object_b: str) -> None:
+def _raw_remove_merge_pair(object_a: str, uuid_a: str, object_b: str, uuid_b: str) -> None:
     import bpy  # pyright: ignore
-    from .uuid_registry import get_or_create_object_uuid
     from ..models.groups import get_addon_data
     from ..models.collection_utils import safe_update_index
     state = get_addon_data(bpy.context.scene).state
-    # Resolve names to UUIDs so the comparison is rename-safe.
-    obj_a = bpy.data.objects.get(object_a)
-    obj_b = bpy.data.objects.get(object_b)
-    uuid_a = get_or_create_object_uuid(obj_a) if obj_a else ""
-    uuid_b = get_or_create_object_uuid(obj_b) if obj_b else ""
-    if not uuid_a or not uuid_b:
-        return
+    # Compare by UUID so the match is rename-safe.
     for i in range(len(state.merge_pairs)):
         pair = state.merge_pairs[i]
         if (pair.object_a_uuid == uuid_a and pair.object_b_uuid == uuid_b) or (
@@ -323,21 +328,12 @@ def _raw_get_merge_pairs() -> list[tuple[str, str]]:
     return [(p.object_a, p.object_b) for p in state.merge_pairs]
 
 
-def _raw_snap(object_a: str, object_b: str) -> None:
+def _raw_snap(object_a: str, uuid_a: str, object_b: str, uuid_b: str) -> None:
     import bpy  # pyright: ignore
-    from .uuid_registry import get_or_create_object_uuid
     from ..models.groups import get_addon_data
     state = get_addon_data(bpy.context.scene).state
-    obj_a = bpy.data.objects.get(object_a)
-    obj_b = bpy.data.objects.get(object_b)
-    if not obj_a or not obj_b:
-        return
-    uid_a = get_or_create_object_uuid(obj_a)
-    uid_b = get_or_create_object_uuid(obj_b)
-    if not uid_a or not uid_b:
-        return
-    state.snap_object_a = uid_a
-    state.snap_object_b = uid_b
+    state.snap_object_a = uuid_a
+    state.snap_object_b = uuid_b
     bpy.ops.object.snap_to_vertices()
 
 
@@ -353,6 +349,18 @@ def _raw_add_sphere(position, radius, invert: bool = False, hemisphere: bool = F
         builder.invert()
     if hemisphere:
         builder.hemisphere()
+
+
+def _raw_remove_invisible_collider(index: int) -> None:
+    import bpy  # pyright: ignore
+    from ..models.groups import get_addon_data, invalidate_overlays
+    from ..models.collection_utils import safe_update_index
+    state = get_addon_data(bpy.context.scene).state
+    state.invisible_colliders.remove(index)
+    state.invisible_colliders_index = safe_update_index(
+        state.invisible_colliders_index, len(state.invisible_colliders)
+    )
+    invalidate_overlays()
 
 
 def _raw_clear_invisible_colliders() -> None:

@@ -189,7 +189,7 @@ curated values.
 If the user asks for a stiff, low-stretch cloth, the common recipe is:
 
 - `enable_strain_limit = true`
-- `strain_limit = 0.05` (≈ 5 %)
+- `strain_limit_percent = 5.0` (5% stretch)
 
 The rest of the defaults can stay as-is unless the user calls them
 out. See [Strain Limit](../workflow/params/material.md#strain-limit)

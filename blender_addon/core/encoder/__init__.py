@@ -3,7 +3,24 @@
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
 # License: Apache v2.0
 
+import bpy  # pyright: ignore
+
 from ..transform import _normalize_and_scale, _swap_axes, _to_solver
+
+
+def resolve_fps(state) -> float:
+    """Resolve the frame rate used for frame->time conversion.
+
+    Honors the scene render fps when ``use_frame_rate_in_output`` is set,
+    otherwise falls back to the explicit per-output ``frame_rate``. Shared
+    by every encoder module so the fps source lives in one place.
+    """
+    return (
+        bpy.context.scene.render.fps
+        if state.use_frame_rate_in_output
+        else int(state.frame_rate)
+    )
+
 
 from .mesh import (  # noqa: E402
     compute_data_hash,
@@ -22,6 +39,7 @@ __all__ = [
     "_swap_axes",
     "_to_solver",
     "_normalize_and_scale",
+    "resolve_fps",
     "encode_obj",
     "compute_data_hash",
     "compute_mesh_hash",

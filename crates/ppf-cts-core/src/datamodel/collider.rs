@@ -106,10 +106,14 @@ impl Wall {
     }
 
     fn check_time(&self, time: f64) -> Result<(), ColliderError> {
+        // `validators::validate_collider_time` is the canonical
+        // strict-increasing-time predicate (also used by the PyO3 path);
+        // delegate to it so the comparison lives in one place. Keep the
+        // empty-list branch local since the validator has no such case.
         match self.entries.last() {
             None => Err(ColliderError::Empty),
-            Some(e) if time <= e.time => Err(ColliderError::TimeNotMonotonic),
-            _ => Ok(()),
+            Some(e) => super::validators::validate_collider_time(e.time, time)
+                .map_err(|_| ColliderError::TimeNotMonotonic),
         }
     }
 }
@@ -198,10 +202,15 @@ impl Sphere {
     }
 
     fn check_time(&self, time: f64) -> Result<(), ColliderError> {
+        // Route through the same canonical predicate as `Wall::check_time`.
+        // This builder maps any failure to the plain `TimeNotMonotonic`
+        // error and discards the validator's message, so the prev-time
+        // suffix in `validate_collider_time` is only observed on the PyO3
+        // path.
         match self.entries.last() {
             None => Err(ColliderError::Empty),
-            Some(e) if time <= e.time => Err(ColliderError::TimeNotMonotonic),
-            _ => Ok(()),
+            Some(e) => super::validators::validate_collider_time(e.time, time)
+                .map_err(|_| ColliderError::TimeNotMonotonic),
         }
     }
 }

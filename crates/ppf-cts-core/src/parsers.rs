@@ -169,7 +169,15 @@ impl ParseState {
                 if matches!(label.as_str(), "File" | "Author" | "License" | "https") {
                     return;
                 }
-                let value = content[colon + 1..].trim().to_string();
+                // Match the Python reference (`content.split(":")` then
+                // `fields[1].strip()`): keep only the segment between the
+                // first and second colon, not the entire remainder. A field
+                // like `// Map: a:b:c` yields value "a", not "a:b:c".
+                let rest = &content[colon + 1..];
+                let value = match rest.find(':') {
+                    Some(i) => rest[..i].trim().to_string(),
+                    None => rest.trim().to_string(),
+                };
                 self.fields.insert(label, value);
             }
             return;
@@ -277,6 +285,27 @@ logging.mark("original_name");
         assert!(!out.contains_key("original-name"));
         let entry = &out["override-key"];
         assert!(!entry.fields.contains_key("Map"), "Map field should be consumed");
+    }
+
+    #[test]
+    fn field_value_truncates_at_second_colon() {
+        // Matches the Python reference (`fields[1].strip()`): a field
+        // value keeps only the segment between the first and second
+        // colon, so `// Map: a:b:c` yields the key "a", not "a:b:c".
+        let dir = tempfile::tempdir().unwrap();
+        write_file(
+            dir.path(),
+            "colon.rs",
+            r#"
+// Name: original_name
+// Map: a:b:c
+logging.mark("original_name");
+"#,
+        );
+        let out = get_logging_docstrings(dir.path());
+        assert!(out.contains_key("a"));
+        assert!(!out.contains_key("a-b-c"));
+        assert!(!out.contains_key("original-name"));
     }
 
     #[test]

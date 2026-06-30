@@ -58,8 +58,25 @@ impl<E: std::fmt::Debug> From<ciborium::de::Error<E>> for FormatError {
 }
 
 pub fn to_cbor<T: Serialize>(kind: &str, payload: &T) -> Result<Vec<u8>, FormatError> {
+    to_cbor_with_version(SCHEMA_VERSION, kind, payload)
+}
+
+pub fn from_cbor<T: DeserializeOwned>(kind: &str, bytes: &[u8]) -> Result<T, FormatError> {
+    from_cbor_with_version(SCHEMA_VERSION, kind, bytes)
+}
+
+/// Encode a payload under an EXPLICIT envelope version instead of the
+/// shared [`SCHEMA_VERSION`]. Used by payloads that evolve on their own
+/// cadence (e.g. [`crate::status::RunStatus`]) so bumping their layout
+/// does not invalidate every other CBOR file on disk. Cross-language
+/// wire payloads (Scene / Param) keep using [`to_cbor`].
+pub fn to_cbor_with_version<T: Serialize>(
+    version: u32,
+    kind: &str,
+    payload: &T,
+) -> Result<Vec<u8>, FormatError> {
     let env = Envelope {
-        version: SCHEMA_VERSION,
+        version,
         kind: kind.to_string(),
         payload,
     };
@@ -68,17 +85,30 @@ pub fn to_cbor<T: Serialize>(kind: &str, payload: &T) -> Result<Vec<u8>, FormatE
     Ok(buf)
 }
 
-pub fn from_cbor<T: DeserializeOwned>(kind: &str, bytes: &[u8]) -> Result<T, FormatError> {
+/// Decode a payload, refusing any envelope whose version does not match
+/// `expected_version` (the per-kind counterpart of [`from_cbor`]). A
+/// newer-versioned record yields [`FormatError::VersionMismatch`] rather
+/// than a silent mis-parse.
+pub fn from_cbor_with_version<T: DeserializeOwned>(
+    expected_version: u32,
+    kind: &str,
+    bytes: &[u8],
+) -> Result<T, FormatError> {
     let env: Envelope<T> = ciborium::from_reader(bytes)?;
-    check_envelope_meta(&env.version, &env.kind, kind)?;
+    check_envelope_meta(&env.version, expected_version, &env.kind, kind)?;
     Ok(env.payload)
 }
 
-fn check_envelope_meta(version: &u32, found_kind: &str, expected_kind: &str) -> Result<(), FormatError> {
-    if *version != SCHEMA_VERSION {
+fn check_envelope_meta(
+    version: &u32,
+    expected_version: u32,
+    found_kind: &str,
+    expected_kind: &str,
+) -> Result<(), FormatError> {
+    if *version != expected_version {
         return Err(FormatError::VersionMismatch {
             found: *version,
-            expected: SCHEMA_VERSION,
+            expected: expected_version,
         });
     }
     if found_kind != expected_kind {

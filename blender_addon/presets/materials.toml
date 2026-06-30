@@ -1,0 +1,171 @@
+# blender_addon/presets/materials.toml
+#
+# Bundled material presets for the ZOZO Contact Solver Blender addon. Selected
+# from the Material Params box; the preset menu is FILTERED by the group's
+# current Type (object_type below), and applying a preset never changes the Type.
+# Adding a material is a TOML edit only - no code change.
+#
+# Convention (see calibration/ for the methodology and sources):
+#  - SHELL (fabrics): young_mod_density_normalized = true. shell_young_modulus is
+#    a CALIBRATED wire membrane stiffness (NOT a textbook Pa; real fabric has no
+#    clean bulk modulus). bend / strain_limit_percent are calibrated against
+#    published Cusick drape coefficients by calibration/cusick_drape/. Shell bend
+#    is also RESOLUTION-INDEPENDENT in the solver (the per-hinge stiffness scales
+#    as |edge|^2/area, the convergent Discrete Shells coefficient), so the same
+#    bend value gives the same drape regardless of mesh density; these calibrated
+#    values hold across resolutions.
+#    shell_density: shell bend is DENSITY-NORMALIZED in the solver (like
+#    young-mod), so changing shell_density does NOT change the draped/bent shape;
+#    bend alone sets it. Density is therefore a free knob the user can tweak (it
+#    only affects inertia/contact, not the shape), so it ships at a uniform 1.0
+#    kg/m^2: a well-conditioned default that lets a light fabric be mixed with
+#    dense bodies without the mass-ratio blowup a real silk GSM (~0.06) would
+#    cause. Real GSM values per fabric are recorded in the plan for reference.
+#  - SOLID (soft deformable): young_mod_density_normalized = true, like SHELL.
+#    solid_young_modulus is the DENSITY-NORMALIZED modulus E/density (= the wire
+#    value the solver consumes), so it preserves the same deformation as the real
+#    material. solid_density is fixed at 100.0: a wide spread of real volumetric
+#    densities gave a mass-ratio spread that ill-conditioned mixed-material
+#    systems, so density is a free knob (affects only inertia/contact, not the
+#    static shape) shipped at a uniform 100.0 kg/m^3. Real E (Pa) is recorded per
+#    material.
+#  - PDRD (near-rigid bodies) have NO presets: an exactly-rigid body differs only
+#    by density (shipped uniform) and friction, so there is nothing to calibrate.
+#    Set pdrd_density and friction directly on the group.
+#  - 'description' = dropdown tooltip; 'object_type' = menu filter. Neither is
+#    written onto the group by apply (object_type is filter-only).
+
+# ---- SHELL (fabrics) ----------------------------------------------------------
+[Silk]
+description = "Light, fluid silk: very drapey, smooth, low friction"
+object_type = "SHELL"
+shell_model = "BARAFF_WITKIN"
+shell_density = 1.0
+shell_young_modulus = 500.0
+young_mod_density_normalized = true
+shell_poisson_ratio = 0.4
+bend = 1.42
+friction = 0.25
+enable_strain_limit = true
+strain_limit_percent = 6.0
+
+[Flag]
+description = "Lightweight synthetic banner cloth: light, limp, low friction"
+object_type = "SHELL"
+shell_model = "BARAFF_WITKIN"
+shell_density = 1.0
+shell_young_modulus = 1000.0
+young_mod_density_normalized = true
+shell_poisson_ratio = 0.4
+bend = 0.83
+friction = 0.30
+enable_strain_limit = true
+strain_limit_percent = 4.0
+
+[Cotton]
+description = "Plain woven cotton: medium stiffness and drape"
+object_type = "SHELL"
+shell_model = "BARAFF_WITKIN"
+shell_density = 1.0
+shell_young_modulus = 5500.0
+young_mod_density_normalized = true
+shell_poisson_ratio = 0.35
+bend = 4.3
+friction = 0.35
+enable_strain_limit = true
+strain_limit_percent = 5.0
+
+[Wool]
+description = "Woven wool suiting: soft membrane, lofty (higher bend)"
+object_type = "SHELL"
+shell_model = "BARAFF_WITKIN"
+shell_density = 1.0
+shell_young_modulus = 2000.0
+young_mod_density_normalized = true
+shell_poisson_ratio = 0.4
+bend = 3.67
+friction = 0.40
+enable_strain_limit = true
+strain_limit_percent = 8.0
+
+[Denim]
+description = "Heavy cotton twill: stiff, barely stretches"
+object_type = "SHELL"
+shell_model = "BARAFF_WITKIN"
+shell_density = 1.0
+shell_young_modulus = 10000.0
+young_mod_density_normalized = true
+shell_poisson_ratio = 0.25
+bend = 10.0
+friction = 0.50
+enable_strain_limit = true
+strain_limit_percent = 3.0
+
+[Leather]
+description = "Garment leather: heavy, high bending rigidity, low stretch"
+object_type = "SHELL"
+shell_model = "BARAFF_WITKIN"
+shell_density = 1.0
+shell_young_modulus = 13000.0
+young_mod_density_normalized = true
+shell_poisson_ratio = 0.4
+bend = 1.8
+friction = 0.50
+enable_strain_limit = true
+strain_limit_percent = 2.0
+
+# ---- SOLID (soft deformable: density-normalized E/density, density fixed 100.0) --
+[Rubber]
+description = "Vulcanized rubber (~3 MPa): soft, near-incompressible, grippy"
+object_type = "SOLID"
+solid_model = "ARAP"
+# real: E = 3000000 Pa (for reference)
+solid_density = 100.0
+solid_young_modulus = 2727.3  # density-normalized = real E / real density
+young_mod_density_normalized = true
+solid_poisson_ratio = 0.49
+friction = 0.85
+
+[Silicone]
+description = "Silicone elastomer / PDMS (~2 MPa): very soft, near-incompressible"
+object_type = "SOLID"
+solid_model = "ARAP"
+# real: E = 2000000 Pa (for reference)
+solid_density = 100.0
+solid_young_modulus = 1941.7  # density-normalized = real E / real density
+young_mod_density_normalized = true
+solid_poisson_ratio = 0.49
+friction = 0.45
+
+[Foam]
+description = "Flexible polyurethane foam (~50 kPa): light, springy"
+object_type = "SOLID"
+solid_model = "ARAP"
+# real: E = 50000 Pa (for reference)
+solid_density = 100.0
+solid_young_modulus = 1111.1  # density-normalized = real E / real density
+young_mod_density_normalized = true
+solid_poisson_ratio = 0.30
+friction = 0.50
+
+[Sponge]
+description = "Dry cellulose sponge (~0.3 MPa): soft, porous"
+object_type = "SOLID"
+solid_model = "ARAP"
+# real: E = 300000 Pa (for reference)
+solid_density = 100.0
+solid_young_modulus = 3000.0  # density-normalized = real E / real density
+young_mod_density_normalized = true
+solid_poisson_ratio = 0.20
+friction = 0.50
+
+[Jelly]
+description = "Gelatin / ballistic gel (~150 kPa): very soft, wobbly, slippery"
+object_type = "SOLID"
+solid_model = "ARAP"
+# real: E = 150000 Pa (for reference)
+solid_density = 100.0
+solid_young_modulus = 144.2  # density-normalized = real E / real density
+young_mod_density_normalized = true
+solid_poisson_ratio = 0.49
+friction = 0.10

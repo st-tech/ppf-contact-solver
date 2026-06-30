@@ -87,21 +87,22 @@ def _is_bakeable(obj) -> bool:
 
 
 def _has_animated_objects(context) -> bool:
-    """Poll helper: True when at least one dynamic object has animation."""
+    """Poll helper: True when at least one dynamic object has animation.
+
+    Runs on every panel redraw. After the live server-state guards it uses
+    the fast, stateless ``scene_has_solver_cache`` scan: a ContactSolverCache
+    modifier lives only on solver-managed objects (STATIC UI move/spin/scale
+    ops produce one too), and scanning object modifiers is ~100x cheaper than
+    resolving every assigned object by UUID. Recomputed every call, so it
+    never goes stale.
+    """
     if com.busy() or com.animation.frame:
         return False
     response = com.info.response
     if is_running(response):
         return False
-    # STATIC groups are included: UI move/spin/scale ops produce PC2 +
-    # ContactSolverCache too, and those modifiers must be cleaned up by
-    # Bake Animation just like SOLID/SHELL/ROD ones.
-    for group in iterate_active_object_groups(context.scene):
-        for assigned in group.assigned_objects:
-            from ...core.uuid_registry import resolve_assigned
-            if _is_bakeable(resolve_assigned(assigned)):
-                return True
-    return False
+    from ...core.pc2 import scene_has_solver_cache
+    return scene_has_solver_cache()
 
 
 def _has_unfetched_frames(scene) -> bool:

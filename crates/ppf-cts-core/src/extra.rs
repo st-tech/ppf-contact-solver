@@ -54,9 +54,12 @@ pub struct CipcStitchMesh {
     pub faces: Vec<i32>,
     pub n_faces: usize,
     /// `(n_stitch, 4)` index quadruple `[i0, i1, i2, i2]` (last
-    /// repeats per the Python source).
+    /// repeats per the Python source). This is the legacy single-source
+    /// wire form; `assemble_dyn_scene` Step 6 pads it to the 6-wide
+    /// barycentric-barycentric layout `[i0, i0, i0, i1, i2, i2]`.
     pub stitch_index: Vec<i32>,
-    /// `(n_stitch, 4)` weight quadruple `[1.0, 1-w, w, 0.0]`.
+    /// `(n_stitch, 4)` weight quadruple `[1.0, 1-w, w, 0.0]`; padded to
+    /// `[1, 0, 0, 1-w, w, 0]` (source degenerate) by assembly Step 6.
     pub stitch_weight: Vec<f64>,
     pub n_stitch: usize,
 }

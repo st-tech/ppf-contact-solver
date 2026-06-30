@@ -3,32 +3,31 @@
 // Review: Ryoichi Ando (ryoichi.ando@zozo.com)
 // License: Apache v2.0
 //
-// Background tokio task that polls the project's session/output dir
-// and dispatches solver-monitor events into the engine. The three
-// presence checks delegate to core helpers:
-//   * `Utils.busy()` external-solver detection routes to
-//     `core::utils::solver_busy`, which scans for live `ppf-contact`
-//     processes via sysinfo.
-//   * `app.is_saving_in_progress()` save-flag detection routes to
-//     `core::datamodel::is_saving_in_progress`, which checks for the
-//     `save_and_quit` sentinel under `<root>/session/output/`.
-//   * `app.resumable()` checkpoint check routes to
-//     `core::datamodel::project_resumable`, which checks for any
-//     `state_<N>.bin.gz` checkpoint under the same directory.
-//
-// This module covers the file-watching half (frame counting,
-// finished.txt, error.log, intersection_records.json).
+// Background tokio task that polls the project and dispatches
+// solver-monitor events into the engine. Classification reads the
+// solver-authored `status.cbor` record (`ppf_cts_formats::status`) as the
+// single source of truth: phase + terminal Outcome drive
+// frame/initialized/saving/finished/crashed, and a missing terminal
+// Outcome with the owning process confirmed dead (the liveness lock is
+// free AND the owning pid is gone, via `status::lock`) is an abrupt crash
+// by construction. The global `solver_busy` scan is used only to adopt an
+// externally-launched run and as the liveness gate when a record cannot
+// be read (torn / not yet written); `project_resumable` reports whether a
+// `state_<N>.bin.gz` checkpoint exists.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use ppf_cts_core::datamodel::{is_saving_in_progress, project_resumable};
+use ppf_cts_core::datamodel::project_resumable;
 use ppf_cts_core::events::Event;
 use ppf_cts_core::state::{Build, Data, Solver};
 use ppf_cts_formats::files::{
-    DATA_PICKLE, FINISHED, INITIALIZE_FINISH, PARAM_PICKLE,
+    session_dir as session_dir_for, session_output_dir, DATA_PICKLE, INTERSECTION_RECORDS_JSON,
+    PARAM_PICKLE, STDOUT_LOG, TERMINATE_REQUEST,
 };
+use ppf_cts_formats::status::{self, lock, CrashKind, Outcome, Phase};
+use ppf_cts_formats::FormatError;
 // Test rig spawns peer workers as sibling processes; the
 // emulated-feature build narrows the busy check to descendants only
 // so a foreign worker's solver doesn't trip our liveness watchdog.
@@ -39,7 +38,7 @@ use ppf_cts_core::utils::solver_busy;
 use serde::Deserialize;
 
 use crate::engine::ServerEngine;
-use crate::executor::EffectExecutor;
+use crate::executor::{dispatch_with_executor, EffectExecutor};
 
 /// Spawn the monitor task. Returns a `JoinHandle` so the caller can
 /// await it on shutdown. The task runs forever; drop the handle
@@ -98,10 +97,12 @@ async fn tick(
         let root = PathBuf::from(&s.root);
         let has_data_on_disk = root.join(DATA_PICKLE).exists()
             && root.join(PARAM_PICKLE).exists();
-        let effects = engine.dispatch(Event::ExternalSolverAdopted { has_data_on_disk });
-        for fx in effects {
-            executor.execute(fx, engine).await;
-        }
+        dispatch_with_executor(
+            engine,
+            executor,
+            Event::ExternalSolverAdopted { has_data_on_disk },
+        )
+        .await;
         s = engine.state();
         // Past-date the start instant so the grace check below treats
         // the long-running external solver as already past its window.
@@ -115,14 +116,13 @@ async fn tick(
 
     // Post-mortem external adoption. Mirror of the live-adoption block
     // above for the case where an external run (typically command.sh /
-    // a JupyterLab notebook) has already finished by the time the
-    // engine first sees the root: the process is gone so solver_busy()
-    // is false, but `finished.txt` + `vert_*.bin` are sitting on disk.
-    // Without this the addon's Fetch poll stays disabled because
-    // state.frame is still 0 even though the run is complete.
+    // a JupyterLab notebook) has already reached a terminal outcome by
+    // the time the engine first sees the root: the process is gone so
+    // solver_busy() is false, but its terminal status.cbor is on disk.
+    // Reading the record (instead of finished.txt) also reports a
+    // crashed external run as Failed instead of silently finished.
     // Guard with state.frame == 0 so we fire exactly once per fresh
-    // adoption; once we dispatch SolverFrameUpdated below the frame
-    // count becomes > 0 and this branch stops triggering.
+    // adoption.
     if s.solver == Solver::Idle
         && s.build != Build::Building
         && !s.root.is_empty()
@@ -130,20 +130,30 @@ async fn tick(
         && s.frame == 0
     {
         let root = PathBuf::from(&s.root);
-        let output_dir = root.join("session").join("output");
-        if output_dir.join(FINISHED).exists() {
-            let final_frame = count_frames(&root);
-            if final_frame > 0 {
-                let effects = engine.dispatch(Event::SolverFrameUpdated {
-                    frame: final_frame,
-                });
-                for fx in effects {
-                    executor.execute(fx, engine).await;
+        if let Ok(Some(rec)) = status::read(&output_dir(&root)) {
+            if let Some(outcome) = rec.outcome {
+                if rec.frame > 0 {
+                    dispatch_with_executor(
+                        engine,
+                        executor,
+                        Event::SolverFrameUpdated { frame: rec.frame },
+                    )
+                    .await;
                 }
-                let resumable = project_resumable(&root);
-                let effects = engine.dispatch(Event::SolverFinished { resumable });
-                for fx in effects {
-                    executor.execute(fx, engine).await;
+                match outcome {
+                    Outcome::Crashed { sub_kind, detail } => {
+                        let error = render_crash(sub_kind, &detail, &root);
+                        report_crash(engine, executor, ctx, &root, error).await?;
+                    }
+                    _ => {
+                        let resumable = rec.resumable || project_resumable(&root);
+                        dispatch_with_executor(
+                            engine,
+                            executor,
+                            Event::SolverFinished { resumable },
+                        )
+                        .await;
+                    }
                 }
                 s = engine.state();
                 ctx.last_solver_state = s.solver;
@@ -177,132 +187,215 @@ async fn tick(
         return Ok(());
     }
     let root = PathBuf::from(&s.root);
-
-    let frame = count_frames(&root);
-    if frame != s.frame {
-        let effects = engine.dispatch(Event::SolverFrameUpdated { frame });
-        for fx in effects {
-            executor.execute(fx, engine).await;
-        }
-    }
-
-    // Detect the in-process `initialize()` finish. The solver writes
-    // `<output>/initialize_finish.txt` immediately after `initialize()`
-    // returns true and before the per-frame loop starts. Flipping
-    // `initialized` here lets the addon promote the local solver state
-    // from STARTING to RUNNING without waiting for the first frame's
-    // advance to complete (which can be several seconds under heavy
-    // contact load). The flag is reset to false on Start/Resume/
-    // Terminate/SolverFinished/SolverCrashed, so we only dispatch when
-    // currently false. The simulator removes the file at the start of
-    // each `run()`, so a second run in a chain scenario gets a fresh
-    // observation window.
-    if !s.initialized
-        && root.join("session").join("output").join(INITIALIZE_FINISH).exists()
-    {
-        let effects = engine.dispatch(Event::SolverInitialized);
-        for fx in effects {
-            executor.execute(fx, engine).await;
-        }
-    }
-
-    // `finished.txt` is the solver's clean-exit marker. Once it's
-    // there we transition to Idle/Failed depending on the saving
-    // path.
-    let finished = root
-        .join("session")
-        .join("output")
-        .join(FINISHED)
-        .exists();
-
-    if finished {
-        // Edge: catch the last frame the solver wrote between ticks.
-        let final_frame = count_frames(&root);
-        if final_frame != engine.state().frame {
-            let effects = engine.dispatch(Event::SolverFrameUpdated { frame: final_frame });
-            for fx in effects {
-                executor.execute(fx, engine).await;
-            }
-        }
-
-        // Saving path always produces a resumable checkpoint by
-        // construction. Otherwise consult the on-disk state files
-        // (`state_<N>.bin.gz`) via `project_resumable`.
-        let resumable = if s.solver == Solver::Saving {
-            true
-        } else {
-            project_resumable(&root)
-        };
-        let effects = engine.dispatch(Event::SolverFinished { resumable });
-        for fx in effects {
-            executor.execute(fx, engine).await;
-        }
-        // Snap the local state mirror back to Idle so the next
-        // Idle → Running edge (e.g. the second run in a chain
-        // scenario) fires the grace-timer reset below. Without this
-        // the engine briefly returns to Idle and back to Running
-        // between ticks, the monitor never observes the Idle pass,
-        // and the new run inherits stale solver_started_at from the
-        // first.
-        ctx.last_solver_state = Solver::Idle;
-        ctx.solver_started_at = None;
-        return Ok(());
-    }
-
+    let out_dir = output_dir(&root);
     let elapsed_ok = ctx
         .solver_started_at
         .map(|t| t.elapsed() >= Duration::from_millis(grace_ms))
         .unwrap_or(false);
 
-    // Crash detection from error.log when the solver should be live
-    // but evidence of failure exists. Apply the startup grace period.
-    if elapsed_ok {
-        if let Some(error) = check_solver_error(&root)? {
-            let violations = read_intersection_violations(&root)?;
-            let effects = engine.dispatch(Event::SolverCrashed { error, violations });
-            for fx in effects {
-                executor.execute(fx, engine).await;
+    // The solver-authored status record (status.cbor) is the single source
+    // of truth. A clean exit ALWAYS writes a terminal Outcome, so a missing
+    // terminal plus the owning process confirmed dead (the liveness lock is
+    // free AND the owning pid is gone) is an abrupt crash by construction.
+    // No log scraping, no sentinel files, no substring tables.
+    match status::read(&out_dir) {
+        Ok(Some(rec)) => {
+            // Progress + the in-process initialize() finish come straight
+            // from the record the solver updates as it runs.
+            if rec.frame != s.frame {
+                dispatch_with_executor(
+                    engine,
+                    executor,
+                    Event::SolverFrameUpdated { frame: rec.frame },
+                )
+                .await;
             }
-            ctx.last_solver_state = Solver::Idle;
-            ctx.solver_started_at = None;
-            return Ok(());
+            if !s.initialized && rec.phase != Phase::Starting {
+                dispatch_with_executor(engine, executor, Event::SolverInitialized).await;
+            }
+            match rec.outcome {
+                Some(Outcome::Finished) => {
+                    finish_solver(engine, executor, ctx, &root, false).await;
+                }
+                Some(Outcome::SavedAndQuit) => {
+                    finish_solver(engine, executor, ctx, &root, true).await;
+                }
+                // Intentional terminate, or an opaque-but-clean terminal
+                // stop written by a newer solver this build does not
+                // recognize: never a crash.
+                Some(Outcome::Terminated { .. }) | Some(Outcome::Unknown { .. }) => {
+                    finish_solver(engine, executor, ctx, &root, false).await;
+                }
+                Some(Outcome::Crashed { sub_kind, detail }) => {
+                    let error = render_crash(sub_kind, &detail, &root);
+                    report_crash(engine, executor, ctx, &root, error).await?;
+                }
+                None => {
+                    // No terminal outcome yet: live, or died abruptly. The
+                    // lock and the owning PID are the crux, and the check is
+                    // PID-scoped so a second unrelated solver (e.g. another
+                    // run sharing the same host) cannot suppress it.
+                    let alive =
+                        lock::is_held_by_other(&out_dir) || lock::pid_alive(rec.pid);
+                    if alive {
+                        if rec.phase == Phase::Saving && s.solver == Solver::Running {
+                            dispatch_with_executor(engine, executor, Event::SolverSaving)
+                                .await;
+                        }
+                    } else if elapsed_ok {
+                        if terminate_intended(&out_dir, engine) {
+                            // Intentional stop whose host left no terminal
+                            // record: a hard kill, a Windows uncatchable
+                            // terminate, or the mid-tick race the in-memory
+                            // Idle covers. Clean, never a crash.
+                            finish_solver(engine, executor, ctx, &root, false).await;
+                        } else {
+                            let error = format!(
+                                "Solver exited abnormally: pid {} stopped after frame {} \
+                                 without writing a terminal outcome (segfault / OOM-kill / \
+                                 unrecoverable abort)",
+                                rec.pid, rec.frame
+                            );
+                            report_crash(engine, executor, ctx, &root, error).await?;
+                        }
+                    }
+                    // else: grace not elapsed or signals disagree -> wait.
+                }
+            }
         }
-    }
-
-    // External-solver liveness via `solver_busy` (mirrors
-    // `Utils.busy()`). After the grace period, if no `ppf-contact`
-    // process is alive the solver has exited without writing
-    // `finished.txt` and without leaving a crash signature in
-    // error.log. Treat the saving path as a clean checkpoint, the
-    // running path as a clean exit whose resumability comes from
-    // the on-disk state files.
-    if elapsed_ok && !solver_busy() {
-        let resumable = if s.solver == Solver::Saving {
-            true
-        } else {
-            project_resumable(&root)
-        };
-        let effects = engine.dispatch(Event::SolverFinished { resumable });
-        for fx in effects {
-            executor.execute(fx, engine).await;
+        Ok(None) => {
+            // No record yet: the solver process is spawned but has not
+            // reached status_writer::init. If the grace window elapsed and
+            // the process is already gone with no terminate intent, it died
+            // before initializing (a launch / exec failure).
+            if elapsed_ok && !solver_busy() && !terminate_intended(&out_dir, engine) {
+                report_crash(
+                    engine,
+                    executor,
+                    ctx,
+                    &root,
+                    "Solver exited before initializing (no status record written)".into(),
+                )
+                .await?;
+            }
         }
-        ctx.last_solver_state = Solver::Idle;
-        ctx.solver_started_at = None;
-        return Ok(());
-    }
-
-    // Save-in-progress detection via the `save_and_quit` sentinel
-    // (`is_saving_in_progress`). The transition from Running to
-    // Saving is one-way; we only fire the event on the first tick
-    // that observes the file.
-    if s.solver == Solver::Running && is_saving_in_progress(&root) {
-        let effects = engine.dispatch(Event::SolverSaving);
-        for fx in effects {
-            executor.execute(fx, engine).await;
+        Err(FormatError::VersionMismatch { found, expected }) => {
+            // Single-version fleet: should not happen. Surface it rather
+            // than silently misreading a newer record.
+            log::error!(
+                target: "ppf::monitor",
+                "status.cbor schema mismatch (found {found}, expected {expected}); \
+                 solver and server are out of sync"
+            );
+        }
+        Err(_) => {
+            // Torn / zero-length record: a non-terminal record whose write
+            // was interrupted. No pid is available from a failed read, so
+            // the process scan gates the liveness verdict; it still
+            // distinguishes a deliberate stop from a crash.
+            if elapsed_ok && !solver_busy() {
+                if terminate_intended(&out_dir, engine) {
+                    finish_solver(engine, executor, ctx, &root, false).await;
+                } else if engine.state().solver == Solver::Saving {
+                    finish_solver(engine, executor, ctx, &root, true).await;
+                } else {
+                    report_crash(
+                        engine,
+                        executor,
+                        ctx,
+                        &root,
+                        "Solver exited abnormally with a truncated status record".into(),
+                    )
+                    .await?;
+                }
+            }
         }
     }
 
     Ok(())
+}
+
+/// Finish the active solver run: decide resumability (the saving path
+/// always produces a resumable checkpoint by construction; otherwise
+/// consult the on-disk `state_<N>.bin.gz` files via `project_resumable`),
+/// dispatch `SolverFinished`, then snap the local state mirror back to
+/// Idle so the next Idle → Running edge (e.g. the second run in a chain
+/// scenario) fires the grace-timer reset. Both the terminal-outcome branch
+/// (from the status.cbor record) and the liveness-exit branch share this
+/// rule, so it lives in one
+/// place. The post-mortem external-adoption block intentionally does
+/// not call this: it always treats the run as resumable and skips the
+/// edge-state reset.
+async fn finish_solver(
+    engine: &ServerEngine,
+    executor: &dyn EffectExecutor,
+    ctx: &mut MonitorContext,
+    root: &Path,
+    saving: bool,
+) {
+    let resumable = if saving {
+        true
+    } else {
+        project_resumable(root)
+    };
+    dispatch_with_executor(engine, executor, Event::SolverFinished { resumable }).await;
+    ctx.last_solver_state = Solver::Idle;
+    ctx.solver_started_at = None;
+}
+
+/// Report an abnormal solver exit: read any intersection violations,
+/// dispatch `SolverCrashed`, then snap the local edge-state mirror back to
+/// Idle (like `finish_solver`) so the next Idle -> Running edge re-arms the
+/// grace timer. The durable crash record is the solver-authored terminal
+/// `Crashed` in `status.cbor`; reconnect reads that, so there is no
+/// separate crash marker to write here.
+async fn report_crash(
+    engine: &ServerEngine,
+    executor: &dyn EffectExecutor,
+    ctx: &mut MonitorContext,
+    root: &Path,
+    error: String,
+) -> Result<(), MonitorError> {
+    let violations = read_intersection_violations(root)?;
+    dispatch_with_executor(engine, executor, Event::SolverCrashed { error, violations }).await;
+    ctx.last_solver_state = Solver::Idle;
+    ctx.solver_started_at = None;
+    Ok(())
+}
+
+/// True iff the run was intentionally stopped, so a non-terminal record
+/// must not be reclassified as a crash. Two signals: the server wrote a
+/// `terminate_request` before killing (durable, survives a reconnect), or
+/// a Terminate already moved the engine to Idle. `dispatch` commits the
+/// Running -> Idle transition before its DoKillSolver effect runs, so the
+/// engine state is already Idle here even for a terminate that landed
+/// mid-tick (the mid-tick race the interim fix handled).
+fn terminate_intended(out_dir: &Path, engine: &ServerEngine) -> bool {
+    out_dir.join(TERMINATE_REQUEST).exists() || engine.state().solver == Solver::Idle
+}
+
+/// Human-readable crash string for a structured `Crashed{kind, detail}`:
+/// the kind summary (the single message table, replacing the two drifted
+/// substring tables), the solver's own detail, and a tail of stdout.log
+/// as supplementary context (never as the classifier).
+fn render_crash(kind: CrashKind, detail: &str, root: &Path) -> String {
+    let tail = read_log_tail(root);
+    if tail.is_empty() {
+        format!("{}: {detail}", kind.summary())
+    } else {
+        format!(
+            "{}: {detail}\n--- Solver Log (last {CRASH_TAIL_LINES} lines) ---\n{tail}",
+            kind.summary()
+        )
+    }
+}
+
+/// Last `CRASH_TAIL_LINES` lines of `stdout.log`, or empty if absent.
+fn read_log_tail(root: &Path) -> String {
+    let path = session_dir(root).join(STDOUT_LOG);
+    let lines = read_lines_if_exists(&path).unwrap_or_default();
+    let start = lines.len().saturating_sub(CRASH_TAIL_LINES);
+    lines[start..].join("\n")
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -316,89 +409,25 @@ pub enum MonitorError {
 // ---------------------------------------------------------------------------
 // Filesystem helpers.
 
-/// Count `vert_*.bin` files in `<root>/session/output/`. Returns the
-/// max frame number seen, or 0.
-pub(crate) fn count_frames(root: &Path) -> i32 {
-    let dir = root.join("session").join("output");
-    let entries = match std::fs::read_dir(&dir) {
-        Ok(e) => e,
-        Err(_) => return 0,
-    };
-    let mut max_num: i32 = 0;
-    for entry in entries.flatten() {
-        let name = entry.file_name();
-        let name = match name.to_str() {
-            Some(s) => s,
-            None => continue,
-        };
-        if let Some(rest) = name.strip_prefix("vert_") {
-            if let Some(num_str) = rest.strip_suffix(".bin") {
-                if let Ok(n) = num_str.parse::<i32>() {
-                    if n > max_num {
-                        max_num = n;
-                    }
-                }
-            }
-        }
-    }
-    max_num
+/// `<root>/session`, the per-project session directory.
+fn session_dir(root: &Path) -> PathBuf {
+    session_dir_for(root)
 }
 
-/// Detect a crash by analyzing `error.log` and `stdout.log`. Returns
-/// `Some(error_string)` when a crash is detected, `None` otherwise.
-pub(crate) fn check_solver_error(root: &Path) -> Result<Option<String>, MonitorError> {
-    let session = root.join("session");
-    let output_dir = session.join("output");
-    if output_dir.join(FINISHED).exists() {
-        return Ok(None); // normal completion
-    }
-    let err_path = session.join("error.log");
-    let log_path = session.join("stdout.log");
-
-    let err_lines: Vec<String> = read_lines_if_exists(&err_path)?;
-    let mut log_lines: Vec<String> = read_lines_if_exists(&log_path)?;
-    if log_lines.len() > 200 {
-        let drop = log_lines.len() - 200;
-        log_lines.drain(..drop);
-    }
-
-    let err_content = err_lines.join("").trim().to_string();
-    if err_content.is_empty() || err_content.eq_ignore_ascii_case("terminated") {
-        return Ok(None); // user-initiated terminate, not a crash
-    }
-
-    let mut reason = "Solver crashed unexpectedly";
-    let patterns: &[(&str, &str)] = &[
-        ("### intersection detected", "Intersection detected"),
-        ("### ccd failed", "CCD failed"),
-        ("### cg failed", "Linear solver failed"),
-        ("failed to advance", "Solver crashed"),
-        ("panic", "Solver panic"),
-        ("assert", "Assertion failed"),
-    ];
-    for line in log_lines.iter().chain(err_lines.iter()) {
-        let low = line.to_lowercase();
-        for (pat, msg) in patterns {
-            if low.contains(pat) {
-                reason = msg;
-                break;
-            }
-        }
-    }
-
-    let tail_start = log_lines.len().saturating_sub(32);
-    let tail = log_lines[tail_start..].join("");
-    Ok(Some(format!(
-        "{reason}\n--- Solver Log (last 32 lines) ---\n{tail}--- Solver Error Log ---\n{err_content}"
-    )))
+/// `<root>/session/output`, the canonical location this module keys off
+/// (frame files, finished.txt, error markers, intersection records).
+fn output_dir(root: &Path) -> PathBuf {
+    session_output_dir(root)
 }
+
+/// How many trailing `stdout.log` lines are folded into a crash report as
+/// supplementary context (never as the classifier). The crash string
+/// interpolates this same const so the prose can't desync from the slice.
+const CRASH_TAIL_LINES: usize = 32;
 
 /// Read intersection records from `intersection_records.json`.
 pub(crate) fn read_intersection_violations(root: &Path) -> Result<Vec<String>, MonitorError> {
-    let path = root
-        .join("session")
-        .join("output")
-        .join("intersection_records.json");
+    let path = output_dir(root).join(INTERSECTION_RECORDS_JSON);
     if !path.exists() {
         return Ok(vec![]);
     }
@@ -421,16 +450,15 @@ pub(crate) fn read_intersection_violations(root: &Path) -> Result<Vec<String>, M
 
 #[derive(Debug, Deserialize)]
 struct IntersectionFile {
+    // The on-disk JSON also carries a redundant `count`; serde ignores
+    // unknown keys by default, so we only model what we read.
     #[serde(default)]
     records: Vec<serde_json::Value>,
-    #[serde(default)]
-    #[allow(dead_code)]
-    count: Option<i64>,
 }
 
 fn read_lines_if_exists(path: &Path) -> std::io::Result<Vec<String>> {
     match std::fs::read_to_string(path) {
-        Ok(s) => Ok(s.lines().map(|l| format!("{l}\n")).collect()),
+        Ok(s) => Ok(s.lines().map(str::to_owned).collect()),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(vec![]),
         Err(e) => Err(e),
     }
@@ -439,67 +467,6 @@ fn read_lines_if_exists(path: &Path) -> std::io::Result<Vec<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn touch(path: &Path) {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).unwrap();
-        }
-        std::fs::File::create(path).unwrap();
-    }
-
-    #[test]
-    fn count_frames_picks_max_index() {
-        let dir = tempfile::tempdir().unwrap();
-        let out = dir.path().join("session/output");
-        std::fs::create_dir_all(&out).unwrap();
-        for n in [1, 5, 12, 7] {
-            touch(&out.join(format!("vert_{n}.bin")));
-        }
-        // Distractor files should be ignored.
-        touch(&out.join("vert_garbage.bin"));
-        touch(&out.join("foo.bin"));
-        assert_eq!(count_frames(dir.path()), 12);
-    }
-
-    #[test]
-    fn count_frames_empty_or_missing() {
-        let dir = tempfile::tempdir().unwrap();
-        assert_eq!(count_frames(dir.path()), 0);
-        std::fs::create_dir_all(dir.path().join("session/output")).unwrap();
-        assert_eq!(count_frames(dir.path()), 0);
-    }
-
-    #[test]
-    fn check_solver_error_quiet_when_finished_present() {
-        let dir = tempfile::tempdir().unwrap();
-        let out = dir.path().join("session/output");
-        std::fs::create_dir_all(&out).unwrap();
-        touch(&out.join("finished.txt"));
-        // Error log content should be ignored when finished.txt exists.
-        std::fs::write(dir.path().join("session/error.log"), "Segfault\n").unwrap();
-        assert!(check_solver_error(dir.path()).unwrap().is_none());
-    }
-
-    #[test]
-    fn check_solver_error_reports_intersection_pattern() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(dir.path().join("session/output")).unwrap();
-        std::fs::write(
-            dir.path().join("session/error.log"),
-            "### intersection detected near tri 42\n",
-        )
-        .unwrap();
-        let err = check_solver_error(dir.path()).unwrap().unwrap();
-        assert!(err.starts_with("Intersection detected"), "got: {err}");
-    }
-
-    #[test]
-    fn check_solver_error_silent_on_terminated() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(dir.path().join("session/output")).unwrap();
-        std::fs::write(dir.path().join("session/error.log"), "Terminated\n").unwrap();
-        assert!(check_solver_error(dir.path()).unwrap().is_none());
-    }
 
     #[test]
     fn read_intersection_violations_parses() {

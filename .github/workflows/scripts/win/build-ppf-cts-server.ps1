@@ -13,8 +13,9 @@
 # build.
 #
 # Reuses the portable MSVC and Rust toolchain that build.bat already
-# prepared under build-win-native\, the same pattern that
-# install-ppf-cts-py.ps1 follows.
+# prepared under build-win-native\. build.bat's `cargo build --release`
+# also produces the PyO3 cdylib (target\release\_ppf_cts_py.dll), so no
+# separate Python extension build is needed.
 
 $ErrorActionPreference = "Stop"
 

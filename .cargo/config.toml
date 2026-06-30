@@ -1,0 +1,14 @@
+# File: .cargo/config.toml
+# Code: Claude Code
+# Review: Ryoichi Ando (ryoichi.ando@zozo.com)
+# License: Apache v2.0
+
+[alias]
+# CUDA-free (emulated) full build for hosts without nvcc (macOS, or any
+# machine deliberately exercising the CPU stub backend). Builds the same
+# default-members as `cargo build --release` (solver + server + the
+# `_ppf_cts_py` cdylib) but swaps the CUDA backend for the emulated one.
+# On a real CUDA host just run `cargo build --release` (no alias needed).
+# This replaces the old build-all.sh: there is no maturin/wheel step, the
+# cdylib lands in target/release/ and frontend/__init__.py loads it directly.
+build-emul = "build --release --no-default-features --features ppf-cts-solver/emulated,ppf-cts-server/emulated"

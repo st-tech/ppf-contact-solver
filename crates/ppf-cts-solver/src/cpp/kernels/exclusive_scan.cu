@@ -14,18 +14,6 @@ namespace kernels {
 // Block size for exclusive scan operations
 static const unsigned SCAN_BLOCK_SIZE = 256;
 
-__device__ __host__ inline unsigned umin(unsigned a, unsigned b) {
-    return (a < b) ? a : b;
-}
-
-__device__ __host__ unsigned nextPowerOf2(unsigned n) {
-    unsigned power = 1;
-    while (power < n) {
-        power <<= 1;
-    }
-    return power;
-}
-
 __global__ void block_scan_kernel(unsigned *d_data, unsigned *d_block_sums,
                                   unsigned n) {
     extern __shared__ unsigned warp_excl[];
@@ -83,64 +71,6 @@ __global__ void block_scan_kernel(unsigned *d_data, unsigned *d_block_sums,
     }
 }
 
-__global__ void add_block_offsets_kernel(unsigned *d_data,
-                                         unsigned *d_block_sums, unsigned n) {
-    unsigned idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (blockIdx.x > 0 && idx < n) {
-        d_data[idx] += d_block_sums[blockIdx.x - 1];
-    }
-}
-
-__global__ void blelloch_single_block_kernel(unsigned *data, unsigned n,
-                                             unsigned *total_sum) {
-    extern __shared__ unsigned temp[];
-
-    unsigned tid = threadIdx.x;
-    unsigned offset = 1;
-
-    temp[2 * tid] = (2 * tid < n) ? data[2 * tid] : 0;
-    temp[2 * tid + 1] = (2 * tid + 1 < n) ? data[2 * tid + 1] : 0;
-
-    unsigned d = nextPowerOf2(n);
-
-    for (unsigned stride = d >> 1; stride > 0; stride >>= 1) {
-        __syncthreads();
-
-        if (tid < stride) {
-            unsigned ai = offset * (2 * tid + 1) - 1;
-            unsigned bi = offset * (2 * tid + 2) - 1;
-            temp[bi] += temp[ai];
-        }
-        offset *= 2;
-    }
-    if (tid == 0 && total_sum != nullptr) {
-        *total_sum = temp[d - 1];
-        temp[d - 1] = 0;
-    }
-    for (unsigned stride = 1; stride < d; stride *= 2) {
-        offset >>= 1;
-        __syncthreads();
-
-        if (tid < stride) {
-            unsigned ai = offset * (2 * tid + 1) - 1;
-            unsigned bi = offset * (2 * tid + 2) - 1;
-
-            unsigned t = temp[ai];
-            temp[ai] = temp[bi];
-            temp[bi] += t;
-        }
-    }
-
-    __syncthreads();
-
-    if (2 * tid < n) {
-        data[2 * tid] = temp[2 * tid];
-    }
-    if (2 * tid + 1 < n) {
-        data[2 * tid + 1] = temp[2 * tid + 1];
-    }
-}
-
 __global__ void add_group_offsets_kernel(unsigned *data, unsigned n,
                                          const unsigned *parent,
                                          unsigned parent_n) {
@@ -163,7 +93,8 @@ __global__ void add_block_base_offsets_kernel(unsigned *d_data,
     d_data[idx] += d_block_excl[blockIdx.x];
 }
 
-unsigned exclusive_scan(unsigned *d_data, unsigned n) {
+static unsigned exclusive_scan_impl(unsigned *d_data, unsigned n,
+                                    bool want_total) {
     if (n == 0) {
         return 0;
     }
@@ -222,7 +153,8 @@ unsigned exclusive_scan(unsigned *d_data, unsigned n) {
         CUDA_HANDLE_ERROR(cudaGetLastError());
     }
 
-    block_scan_kernel<<<1, G, shmem>>>(level_ptr[levels - 1], d_total,
+    block_scan_kernel<<<1, G, shmem>>>(level_ptr[levels - 1],
+                                       want_total ? d_total : nullptr,
                                        level_n[levels - 1]);
     CUDA_HANDLE_ERROR(cudaGetLastError());
 
@@ -239,10 +171,26 @@ unsigned exclusive_scan(unsigned *d_data, unsigned n) {
                                                           n);
     CUDA_HANDLE_ERROR(cudaGetLastError());
 
+    if (!want_total) {
+        // The radix-sort path discards the grand total, so skip the blocking
+        // device-to-host copy. The scan written into d_data is identical to the
+        // want_total path; same-default-stream ordering against the caller's
+        // kernels (not the deleted copy) is the read-after-write dependency.
+        return 0;
+    }
+
     unsigned total_sum = 0;
     CUDA_HANDLE_ERROR(cudaMemcpy(&total_sum, d_total, sizeof(unsigned),
                                  cudaMemcpyDeviceToHost));
     return total_sum;
+}
+
+unsigned exclusive_scan(unsigned *d_data, unsigned n) {
+    return exclusive_scan_impl(d_data, n, /*want_total=*/true);
+}
+
+void exclusive_scan_nocopy(unsigned *d_data, unsigned n) {
+    (void)exclusive_scan_impl(d_data, n, /*want_total=*/false);
 }
 
 } // namespace kernels

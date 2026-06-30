@@ -9,11 +9,12 @@
 // What it adds on top of the bare `ParamHolder` from
 // crates/ppf-cts-core/src/datamodel/params.rs:
 //   * A `default_param` snapshot for `clear_all` to restore from.
-//   * Dynamic-parameter overrides keyed by time:
-//       `dyn(key)` selects a key,
-//       `time(t)` advances the cursor (strictly increasing),
-//       `change(value)` / `hold()` records (t, value) into the
-//       per-key list.
+//   * Dynamic-parameter overrides keyed by time. The time cursor
+//     (`dyn(key)` / `time(t)` / `change(value)` / `hold()`) lives in
+//     the frontend Python `ParamManager`; it assembles the per-key
+//     `[(0.0, initial), (t, value), ...]` list and ships it here via
+//     `inject_dyn_entries`. The Rust side stores and serializes that
+//     list but does not host its own cursor.
 //   * `to_toml_string()` produces the same `[param]` body the
 //     Python `export(path)` writes to `param.toml`.
 //
@@ -37,13 +38,9 @@ pub enum ParamManagerError {
     UnderscoreInKey,
     #[error("Key {0} does not exist")]
     UnknownKey(String),
-    #[error("Key is not set")]
-    NoKeySelected,
     #[error("I/O failure: {0}")]
     Io(#[from] std::io::Error),
-    #[error("Time must be increasing")]
-    NonMonotonicTime,
-    #[error("Value must be float, bool, or list. {0:?} is given.")]
+    #[error("Value must be float, int, bool, or list. {0:?} is given.")]
     UnsupportedDynValue(ParamValue),
 }
 
@@ -52,8 +49,6 @@ pub struct ParamManager {
     holder: ParamHolder,
     default: ParamHolder,
     dyn_param: BTreeMap<String, Vec<(f64, ParamValue)>>,
-    current_key: Option<String>,
-    current_time: f64,
 }
 
 impl ParamManager {
@@ -64,8 +59,6 @@ impl ParamManager {
             default: holder.clone(),
             holder,
             dyn_param: BTreeMap::new(),
-            current_key: None,
-            current_time: 0.0,
         }
     }
 
@@ -114,72 +107,6 @@ impl ParamManager {
         Ok(self)
     }
 
-    /// Select the dynamic-parameter cursor key and reset the time
-    /// cursor to 0.
-    pub fn dyn_select(&mut self, key: &str) -> Result<&mut Self, ParamManagerError> {
-        if !self.holder.key_list().contains(&key) {
-            return Err(ParamManagerError::UnknownKey(key.to_string()));
-        }
-        self.current_time = 0.0;
-        self.current_key = Some(key.to_string());
-        Ok(self)
-    }
-
-    /// Advance the dynamic-parameter time cursor. Strictly monotonic;
-    /// equal times are rejected.
-    pub fn time(&mut self, time: f64) -> Result<&mut Self, ParamManagerError> {
-        if time <= self.current_time {
-            return Err(ParamManagerError::NonMonotonicTime);
-        }
-        self.current_time = time;
-        Ok(self)
-    }
-
-    /// Record a `(time, value)` override at the cursor. If this is the
-    /// first entry for the key, the initial-default
-    /// `(0.0, current_value)` is seeded first so the entry list is
-    /// `[(0.0, initial), (t, value)]`.
-    pub fn change(&mut self, value: ParamValue) -> Result<&mut Self, ParamManagerError> {
-        let key = self
-            .current_key
-            .clone()
-            .ok_or(ParamManagerError::NoKeySelected)?;
-        let entry = self.dyn_param.entry(key.clone()).or_default();
-        if entry.is_empty() {
-            let initial = self
-                .holder
-                .get(&key)
-                .map_err(|_| ParamManagerError::UnknownKey(key.clone()))?
-                .clone();
-            entry.push((0.0, initial));
-        }
-        entry.push((self.current_time, value));
-        Ok(self)
-    }
-
-    /// Snapshot the current value at the cursor. Identical to
-    /// `change(current_value)` but spelled separately so the user's
-    /// intent in `time(t).hold()` reads naturally.
-    pub fn hold(&mut self) -> Result<&mut Self, ParamManagerError> {
-        let key = self
-            .current_key
-            .clone()
-            .ok_or(ParamManagerError::NoKeySelected)?;
-        let value_to_hold: ParamValue = if let Some(entry) = self.dyn_param.get(&key) {
-            entry.last().map(|(_, v)| v.clone()).unwrap_or_else(|| {
-                self.holder
-                    .get(&key).cloned()
-                    .unwrap_or(ParamValue::Bool(false))
-            })
-        } else {
-            self.holder
-                .get(&key)
-                .map_err(|_| ParamManagerError::UnknownKey(key.clone()))?
-                .clone()
-        };
-        self.change(value_to_hold)
-    }
-
     /// Read a current parameter value.
     pub fn get(&self, key: &str) -> Result<&ParamValue, ParamManagerError> {
         self.holder
@@ -192,17 +119,13 @@ impl ParamManager {
         self.holder.items()
     }
 
-    /// Dynamic-param entries by key.
-    pub fn dyn_param(&self) -> &BTreeMap<String, Vec<(f64, ParamValue)>> {
-        &self.dyn_param
-    }
-
     /// Bulk-replace the dynamic-parameter entries for a single key. The
-    /// caller has already serialized the `(time, value)` list, so we
-    /// skip the public `dyn_select + time + change` chain (which
-    /// rejects `t == 0.0` for the first entry because it would equal
-    /// the freshly-reset cursor). Used by the PyO3 binding when the
-    /// frontend handed us a pre-built `_dyn_param` dict.
+    /// caller has already serialized the `(time, value)` list (the
+    /// frontend Python `ParamManager` owns the dyn/time/change/hold time
+    /// cursor and ships the assembled `_dyn_param` dict here), so the
+    /// pre-built list already starts at `(0.0, initial)`. This is the
+    /// only path the frontend export takes; the Rust side does not host
+    /// its own cursor state machine.
     pub fn inject_dyn_entries(
         &mut self,
         key: &str,
@@ -288,6 +211,21 @@ impl ParamManager {
                             "{} {}",
                             format_float_python(*time),
                             format_float_python(*f),
+                        );
+                    }
+                    ParamValue::Int(i) => {
+                        // Int-typed keys (frames, min-newton-steps, etc.) can
+                        // be seeded into the dyn list (the first entry is the
+                        // current value), so emit them as floats to match the
+                        // toml path and the solver's f64 dyn_param reader. Note
+                        // the solver's apply_dyn_param has no arm for int keys,
+                        // so a dynamic int override exports but is not honored
+                        // at runtime; this arm only unblocks the export.
+                        let _ = writeln!(
+                            &mut out,
+                            "{} {}",
+                            format_float_python(*time),
+                            format_float_python(*i as f64),
                         );
                     }
                     ParamValue::Bool(b) => {
@@ -376,67 +314,43 @@ mod tests {
     fn clear_all_drops_dyn_param_too() {
         let mut p = ParamManager::new();
         p.set("dt", Some(ParamValue::Float(0.005))).unwrap();
-        p.dyn_select("playback").unwrap();
-        p.time(1.0).unwrap();
-        p.change(ParamValue::Float(0.5)).unwrap();
-        assert!(!p.dyn_param().is_empty());
+        p.inject_dyn_entries(
+            "playback",
+            vec![(0.0, ParamValue::Float(1.0)), (1.0, ParamValue::Float(0.5))],
+        )
+        .unwrap();
+        assert!(!p.to_dyn_param_string().unwrap().is_empty());
 
         p.clear_all();
         assert_eq!(p.get("dt").unwrap(), &ParamValue::Float(1e-3));
-        assert!(p.dyn_param().is_empty());
-    }
-
-    #[test]
-    fn dyn_change_seeds_initial_entry() {
-        let mut p = ParamManager::new();
-        p.dyn_select("playback").unwrap();
-        p.time(2.0).unwrap();
-        p.change(ParamValue::Float(0.5)).unwrap();
-        let entries = &p.dyn_param()["playback"];
-        // [(0.0, initial), (2.0, 0.5)]
-        assert_eq!(entries.len(), 2);
-        assert_eq!(entries[0].0, 0.0);
-        assert_eq!(entries[0].1, ParamValue::Float(1.0)); // playback default
-        assert_eq!(entries[1], (2.0, ParamValue::Float(0.5)));
-    }
-
-    #[test]
-    fn time_must_strictly_increase() {
-        let mut p = ParamManager::new();
-        p.dyn_select("dt").unwrap();
-        p.time(1.0).unwrap();
-        let err = p.time(1.0).unwrap_err();
-        assert!(matches!(err, ParamManagerError::NonMonotonicTime));
-        let err = p.time(0.5).unwrap_err();
-        assert!(matches!(err, ParamManagerError::NonMonotonicTime));
+        assert!(p.to_dyn_param_string().unwrap().is_empty());
     }
 
     #[test]
     fn dyn_chain_replays_python_example() {
-        // From _session_.py docstring:
+        // The frontend Python ParamManager owns the dyn/time/change/hold
+        // cursor; it assembles this list (from the _session_.py docstring
         //   session.param.dyn("playback")
         //                .time(2.99).hold()
         //                .time(3.0).change(0.1)
+        // ) and ships it here via inject_dyn_entries. Verify the injected
+        // list round-trips through the serialization path.
         let mut p = ParamManager::new();
-        p.dyn_select("playback").unwrap();
-        p.time(2.99).unwrap();
-        p.hold().unwrap();
-        p.time(3.0).unwrap();
-        p.change(ParamValue::Float(0.1)).unwrap();
+        p.inject_dyn_entries(
+            "playback",
+            vec![
+                (0.0, ParamValue::Float(1.0)),
+                (2.99, ParamValue::Float(1.0)),
+                (3.0, ParamValue::Float(0.1)),
+            ],
+        )
+        .unwrap();
 
-        let entries = &p.dyn_param()["playback"];
-        // [(0.0, 1.0), (2.99, 1.0), (3.0, 0.1)]
-        assert_eq!(entries.len(), 3);
-        assert_eq!(entries[0], (0.0, ParamValue::Float(1.0)));
-        assert_eq!(entries[1], (2.99, ParamValue::Float(1.0)));
-        assert_eq!(entries[2], (3.0, ParamValue::Float(0.1)));
-    }
-
-    #[test]
-    fn change_without_dyn_select_errors() {
-        let mut p = ParamManager::new();
-        let err = p.change(ParamValue::Float(0.5)).unwrap_err();
-        assert!(matches!(err, ParamManagerError::NoKeySelected));
+        let dyn_str = p.to_dyn_param_string().unwrap();
+        assert!(dyn_str.starts_with("[playback]"));
+        assert!(dyn_str.contains("0.0 1.0\n"));
+        assert!(dyn_str.contains("2.99 1.0\n"));
+        assert!(dyn_str.contains("3.0 0.1\n"));
     }
 
     #[test]
@@ -486,28 +400,16 @@ mod tests {
     }
 
     #[test]
-    fn dyn_export_produces_expected_format() {
-        let mut p = ParamManager::new();
-        p.dyn_select("playback").unwrap();
-        p.time(2.99).unwrap();
-        p.hold().unwrap();
-        p.time(3.0).unwrap();
-        p.change(ParamValue::Float(0.1)).unwrap();
-
-        let dyn_str = p.to_dyn_param_string().unwrap();
-        // Expected: [playback]\n0.0 1.0\n2.99 1.0\n3.0 0.1\n
-        assert!(dyn_str.starts_with("[playback]"));
-        assert!(dyn_str.contains("0.0 1.0\n"));
-        assert!(dyn_str.contains("2.99 1.0\n"));
-        assert!(dyn_str.contains("3.0 0.1\n"));
-    }
-
-    #[test]
     fn dyn_export_handles_vec3() {
         let mut p = ParamManager::new();
-        p.dyn_select("gravity").unwrap();
-        p.time(1.0).unwrap();
-        p.change(ParamValue::Vec3([0.0, 9.8, 0.0])).unwrap();
+        p.inject_dyn_entries(
+            "gravity",
+            vec![
+                (0.0, ParamValue::Vec3([0.0, -9.8, 0.0])),
+                (1.0, ParamValue::Vec3([0.0, 9.8, 0.0])),
+            ],
+        )
+        .unwrap();
         let dyn_str = p.to_dyn_param_string().unwrap();
         assert!(dyn_str.contains("1.0 0.0 9.8 0.0\n"), "got: {dyn_str}");
     }
@@ -515,12 +417,34 @@ mod tests {
     #[test]
     fn dyn_export_handles_bool() {
         let mut p = ParamManager::new();
-        p.dyn_select("disable-contact").unwrap();
-        p.time(1.0).unwrap();
-        p.change(ParamValue::Bool(true)).unwrap();
+        p.inject_dyn_entries(
+            "disable-contact",
+            vec![
+                (0.0, ParamValue::Bool(false)),
+                (1.0, ParamValue::Bool(true)),
+            ],
+        )
+        .unwrap();
         let dyn_str = p.to_dyn_param_string().unwrap();
         // bool serialises as 0.0 or 1.0, same as Python's float(val).
         assert!(dyn_str.contains("1.0 1.0\n"), "got: {dyn_str}");
+    }
+
+    #[test]
+    fn dyn_export_handles_int() {
+        let mut p = ParamManager::new();
+        p.inject_dyn_entries(
+            "min-newton-steps",
+            vec![
+                (0.0, ParamValue::Int(0)),
+                (1.0, ParamValue::Int(32)),
+            ],
+        )
+        .unwrap();
+        let dyn_str = p.to_dyn_param_string().unwrap();
+        // int serialises as a float, same as Python's float(val) and the
+        // toml path; the solver's dyn_param reader parses scalars as f64.
+        assert!(dyn_str.contains("1.0 32.0\n"), "got: {dyn_str}");
     }
 
     #[test]

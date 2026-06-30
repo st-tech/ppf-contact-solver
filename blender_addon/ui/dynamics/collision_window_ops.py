@@ -8,9 +8,8 @@ from bpy.types import Operator  # pyright: ignore
 
 from ...core.utils import redraw_all_areas
 from ...models.collection_utils import safe_update_index
+from ...models.defaults import MAX_COLLISION_WINDOWS
 from .utils import get_assigned_by_selection_uuid, get_group_from_index
-
-MAX_COLLISION_WINDOWS = 8
 
 
 def _get_selected_assigned(group):
@@ -44,8 +43,10 @@ class OBJECT_OT_AddCollisionWindow(Operator):
         item = assigned.collision_windows.add()
         item.frame_start = 1
         item.frame_end = 60
-        # Keep list ordered so overlap/range checks on the encoder side get
-        # entries in timeline order.
+        # Select the newly added window. Window order does not matter: the
+        # encoder emits (start, end) pairs in storage order and the solver
+        # treats them as an unordered set (active if the time falls in ANY
+        # window).
         new_idx = len(assigned.collision_windows) - 1
         assigned.collision_windows_index = new_idx
 

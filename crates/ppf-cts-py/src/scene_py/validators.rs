@@ -14,23 +14,13 @@ use numpy::IntoPyArray;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
+use ppf_cts_core::datamodel::elastic_model as elastic_model_core;
 use ppf_cts_core::datamodel::mesh as mesh_core;
 use ppf_cts_core::datamodel::scene as scene_helpers;
 use ppf_cts_core::datamodel::session as session_core;
 use ppf_cts_core::datamodel::validators as validators_core;
 
 use crate::errors::into_py_err;
-
-/// Validate the `pairs` list passed into `Scene.set_explicit_merge_pairs`.
-/// Inputs are pre-extracted `(source_uuid, target_uuid)` tuples so the
-/// PyO3 boundary doesn't have to walk Python dicts. Raises ValueError
-/// with the same wording the Python source emitted on the first bad
-/// entry.
-#[pyfunction]
-#[pyo3(signature = (pairs))]
-pub(super) fn scene_validate_merge_pair_uuids(pairs: Vec<(String, String)>) -> PyResult<()> {
-    validators_core::validate_merge_pair_uuids(&pairs).map_err(into_py_err)
-}
 
 /// Validate a non-empty surface-map key. Raises ValueError matching
 /// `Scene.set_surface_map`'s message.
@@ -53,6 +43,18 @@ pub(super) fn scene_validate_param_key_no_underscore(key: &str) -> PyResult<()> 
 #[pyo3(signature = (axis))]
 pub(super) fn scene_axis_letter_to_index(axis: &str) -> PyResult<usize> {
     scene_helpers::axis_letter_to_index(axis).map_err(PyValueError::new_err)
+}
+
+/// Map an elastic model name (`"arap"`, `"stvk"`, `"baraff-witkin"`,
+/// `"snhk"`) to the u8 id the solver reads back. Authoritative table is
+/// in `ppf_cts_core::datamodel::elastic_model`, so the Python exporter
+/// and the solver share one encoding. Raises ValueError on an unknown
+/// name, matching the old inline `assert` in `FixedScene` (`_scene_.py`).
+#[pyfunction]
+#[pyo3(signature = (name))]
+pub(super) fn scene_model_name_to_id(name: &str) -> PyResult<u8> {
+    elastic_model_core::model_name_to_id(name)
+        .ok_or_else(|| PyValueError::new_err(format!("Unknown elastic model name: {name}")))
 }
 
 /// Reduce a per-object min-or-max stream into a scalar bound. `kind`
@@ -112,43 +114,14 @@ pub(super) fn scene_sphere_move_by_entry(
     scene_helpers::sphere_move_by_entry(prev_position, prev_radius, delta)
 }
 
-/// Wall._check_time. Raises Exception with the same wording the
-/// Python source emits.
+/// Strict-increasing keyframe-time check shared by `Wall._check_time`
+/// and `Sphere._check_time`. Raises a `ValueError` whose message
+/// includes the previous time.
 #[pyfunction]
 #[pyo3(signature = (prev_time, time))]
 pub(super) fn scene_validate_collider_time(prev_time: f64, time: f64) -> PyResult<()> {
     validators_core::validate_collider_time(prev_time, time)
         .map_err(into_py_err)
-}
-
-/// Sphere._check_time, including the previous time in the message.
-#[pyfunction]
-#[pyo3(signature = (prev_time, time))]
-pub(super) fn scene_validate_sphere_time(prev_time: f64, time: f64) -> PyResult<()> {
-    validators_core::validate_sphere_time(prev_time, time)
-        .map_err(into_py_err)
-}
-
-/// FixedScene.has_violations: 4-way OR of the violation flags.
-#[pyfunction]
-#[pyo3(signature = (
-    has_self_intersection,
-    has_contact_offset_violation,
-    has_wall_violation,
-    has_sphere_violation,
-))]
-pub(super) fn scene_fixed_scene_has_violations(
-    has_self_intersection: bool,
-    has_contact_offset_violation: bool,
-    has_wall_violation: bool,
-    has_sphere_violation: bool,
-) -> bool {
-    scene_helpers::fixed_scene_has_violations(
-        has_self_intersection,
-        has_contact_offset_violation,
-        has_wall_violation,
-        has_sphere_violation,
-    )
 }
 
 /// `WallParam.set` / `SphereParam.set` "unknown parameter" guard.

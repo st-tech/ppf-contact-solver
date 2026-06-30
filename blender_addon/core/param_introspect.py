@@ -13,21 +13,31 @@
 _SCALAR_RNA_TYPES = frozenset({"BOOLEAN", "INT", "FLOAT", "STRING", "ENUM"})
 
 # ObjectGroup fields that must NEVER be copied: identity (uuid/name/
-# index), TOML profile binding, UI toggles, dynamic enums whose items
-# depend on per-group context, computed caches, and per-assigned-
-# object collections. Anything not in this set is treated as a
-# material parameter and flows through copy/paste automatically.
+# index), the model classification (object_type, which selects the
+# prefix filter rather than being a material param), TOML profile
+# binding, UI toggles, dynamic enums whose items depend on per-group
+# context, computed caches, and per-assigned-object collections.
+# Anything not in this set is treated as a material parameter and
+# flows through copy/paste automatically.
 MATERIAL_CLIPBOARD_EXCLUDE = frozenset({
     "name",
     "uuid",
     "index",
+    "object_type",
+    "assigned_objects_index",
+    "pin_vertex_groups_index",
     "active",
     "material_profile_path",
     "material_profile_selection",
+    "material_preset_selection",
     "pin_profile_path",
     "pin_profile_selection",
     "velocity_object_selection",
     "collision_window_object_selection",
+    "tet_object_selection",
+    "pdrd_hinge_object_selection",
+    "bend_ref_object_selection",
+    "pdrd_hinge_visualize",
     "preview_velocity",
     "computed_contact_gap",
     "computed_contact_offset",
@@ -35,8 +45,8 @@ MATERIAL_CLIPBOARD_EXCLUDE = frozenset({
     "show_overlay_color",
     "show_stats",
     "show_pin",
-    "show_pin_overlay",
     "pin_overlay_size",
+    "show_pdrd_hinge",
     "show_group",
     "pin_vertex_group_items",
 })
@@ -84,6 +94,10 @@ def material_param_applies(name: str, object_type: str) -> bool:
         return object_type == "SHELL"
     if name.startswith("rod_"):
         return object_type == "ROD"
+    if name.startswith("pdrd_"):
+        return object_type == "PDRD"
+    if name.startswith("sand_"):
+        return object_type == "SAND"
     return True
 
 

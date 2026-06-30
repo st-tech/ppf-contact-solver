@@ -7,9 +7,11 @@ Two separate steps that work together:
   leaving just enough contact gap to avoid interpenetration. In the same
   pass it also captures stitch anchors for **every A-vertex within reach
   of B**, not just the single closest one.
-- **Merge** is a solver-side stitch constraint between two objects. At
-  transfer time it becomes a cross-object constraint that keeps the two
-  meshes joined during the simulation.
+- **Merge** is a solver-side soft stitch between two objects. At transfer
+  time it becomes a cross-object stitch force that holds the two meshes
+  together during the simulation. It is a force, not a weld: stitched
+  vertices are pulled toward their targets but never share the same point,
+  so a small contact gap always remains.
 
 You typically snap *and* merge in sequence (the snap operator creates the
 merge pair automatically), but the two concepts are independent and can be
@@ -88,16 +90,18 @@ joined.
 ```
 
 ```{figure} ../../images/snap_merge/snap_after.png
-:alt: After Snap A to B. The magenta PatchA has translated along the X axis and now sits flush against the blue PatchB, left-edge to right-edge, in the same plane. Together they read as a single seamless 2x1 rectangle, with every vertex on the shared seam coincident.
+:alt: After Snap A to B. The magenta PatchA has translated along the X axis and now sits a small contact gap from the blue PatchB, left-edge to right-edge, in the same plane. Together they read as a single 2x1 rectangle, with each seam vertex on PatchA tied to its counterpart on PatchB rather than merged into one point.
 :width: 520px
 
 **After `Snap A to B`.** PatchA has translated along the X axis in
-world space until its nearest vertex lands on PatchB. Because both
-patches are **Shell**, the gap rule is "merge exactly": PatchA's
-left edge now coincides with PatchB's right edge and every seam
-vertex is shared, so the two patches read as a single seamless 2x1
-rectangle. The merge pair is registered automatically and the
-per-vertex stitch anchors are captured behind the scenes.
+world space until its nearest vertex sits a small contact gap from
+PatchB. The two patches are not welded: every seam vertex on PatchA
+is tied to its counterpart on PatchB by a recorded soft stitch, and
+the stitch force together with the contact barrier settle into
+balance across that small gap, so the patches read as a single 2x1
+rectangle while staying separate meshes. The merge pair is
+registered automatically and the per-vertex stitch anchors are
+captured behind the scenes.
 ```
 
 As soon as at least one merge pair exists, a second box labeled
@@ -106,9 +110,10 @@ As soon as at least one merge pair exists, a second box labeled
 - A UIList showing each pair, with both object names per row.
 - A **Remove Merge Pair** button below the list (disabled unless a row
   is selected).
-- A **Stitch Stiffness** slider, **only shown when the selected pair
-  involves a Solid**. Sheet-sheet (Shell-Shell) and rod-rod pairs
-  merge vertices exactly, so stiffness has no meaning for them.
+- A **Stitch Stiffness** slider, shown for **every supported pair**.
+  All stitches are soft and mass-scaled, so the slider applies to
+  Shell-Shell and Rod-Rod pairs the same way it applies to the
+  Solid-involved pairs. Raise it to hold a seam together more firmly.
 
 A separate **Visualization** panel further down the sidebar exposes a
 **Hide all snaps** toggle that hides or shows the merge-pair / stitch
@@ -117,14 +122,14 @@ overlay in the viewport.
 ### Gap Rules
 
 The solver needs a small separation between the two meshes at rest,
-otherwise contact barriers start flagging penetration on frame 1. The snap
-operator picks the gap based on the group types of A and B:
+otherwise contact barriers start flagging penetration on frame 1. Because
+every stitch is a soft force rather than a weld, the snap operator always
+leaves a positive gap; stitched vertices are never coincident. The same
+rule applies to **all supported pairs**:
 
 | A type ↔ B type          | Applied gap                                                                             |
 | ------------------------ | --------------------------------------------------------------------------------------- |
-| Shell ↔ Shell            | **No gap**. Vertices merge exactly.                                                     |
-| Rod ↔ Rod                | **No gap**. Vertices merge exactly.                                                     |
-| Any other pair           | The larger of the two groups' **Contact Gap** values plus both groups' **Contact Offset**. |
+| Any supported pair       | The sum of both groups' **Contact Gap** and **Contact Offset** values, plus a small safety margin so the closest pair starts just outside the contact band. |
 
 ### Cross-Stitch Anchors
 
@@ -137,12 +142,12 @@ a target triangle (or a single target vertex for rod pairs) with
 barycentric weights, so the stitch survives later mesh edits until the
 topology itself changes.
 
-The reach-threshold is derived from the applied gap (roughly `2 × gap`),
-which is why coinciding geometries work best: vertices that are already
-on top of each other are well within threshold, while distant vertices
-are ignored.  You can see the captured set as **yellow dots connected by
-thin yellow lines** in the viewport overlay (toggle with **Hide all
-snaps** in the Visualization panel).
+The reach-threshold is derived from the applied gap (a small multiple of
+it), which is why coinciding geometries work best: vertices that are
+already on top of each other are well within threshold, while distant
+vertices are ignored.  You can see the captured set as **yellow dots
+connected by thin yellow lines** in the viewport overlay (toggle with
+**Hide all snaps** in the Visualization panel).
 
 ```{figure} ../../images/snap_merge/stitch_overlay.png
 :alt: Yellow stitch-pair overlay between the two subdivided plane patches. PatchA (magenta) has been pulled straight down in Z after the snap, exposing vertical yellow stitch lines connecting every seam vertex of PatchA to the matching seam vertex of PatchB (blue). The two patches were originally shifted along the X axis only, so every vertex along PatchB's right edge has a counterpart on PatchA's left edge.
@@ -152,9 +157,39 @@ After `Snap A to B`, every A-vertex within reach-threshold of B
 becomes a stitch anchor. For this X-axis-only shift, the entire
 shared seam qualifies, so the overlay draws one yellow stitch per
 seam-vertex pair. **PatchA has been pulled straight down in Z after
-the snap** to make the pairs visible; the stitches themselves remain
-attached to the original coincident seam positions.
+the snap** to make the pairs visible; the stitches themselves stay
+tied to the original seam positions, separated by the small contact
+gap rather than coincident.
 ```
+
+### Stitching to a Static collider
+
+A dynamic **Shell**, **Solid**, or **Rod** can be stitched onto a
+**Static** collider, which lets you pin part of a moving mesh to a piece
+of fixed geometry (for example tacking a sleeve to a static mannequin
+panel). Pick the dynamic object as one side and the Static as the other,
+then snap as usual.
+
+The Static side is treated as the target that stays put: snap never moves
+a Static collider, even if you set it as **Object A**. Instead, the
+dynamic object is the one translated into place, and the contact gap is
+left between them just as for any other pair. The stitch force then holds
+the dynamic mesh against the fixed surface during the solve.
+
+### Post Snap Exactly
+
+**Post Snap Exactly** is a global toggle (not per-pair), found below the
+**Merge Pairs** box. It is **on by default**.
+
+Because stitches are soft forces, the simulated result keeps a small
+contact gap at every seam. When **Post Snap Exactly** is on, fetching a
+frame moves each stitched vertex exactly onto its stitch target, so seams
+read as fully joined in the viewport. When it is off, the raw simulated
+gap is kept, showing the true soft-stitch separation between the parts.
+
+The toggle applies to **all stitch pairs at once**, and it only affects
+what you see after fetching; it does not change how the solver computes
+the simulation.
 
 ## Merge Pairs Without Snapping
 
@@ -164,11 +199,11 @@ during the solve. Each pair has:
 | UI label              | Python / TOML key   | Description                                                                                                                               |
 | --------------------- | ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
 | **Object A / B**      | `object_a` / `object_b` | The two mesh objects.                                                                                                                 |
-| **Stitch Stiffness**  | `stitch_stiffness`  | Per-pair stiffness. **Only shown for pairs involving a Solid.** Sheet-sheet (Shell-Shell) and rod-rod pairs merge vertices exactly, so stiffness has no meaning. |
+| **Stitch Stiffness**  | `stitch_stiffness`  | Per-pair stiffness of the soft stitch force. Shown for every supported pair; raise it to hold the seam together more firmly. |
 | **Show Stitch**       | `show_stitch`       | Overlay toggle for the viewport stitch preview.                                                                                           |
 
 Merge pairs referencing deleted or unassigned objects are cleaned up
-automatically on the next depsgraph update.
+automatically as the scene updates.
 
 ## Blender Python API
 
@@ -208,15 +243,15 @@ you hit that error.
 Snap is a one-shot alignment:
 
 1. Finds the closest pair of vertices between objects A and B.
-2. Translates A in world space (parent-safe) along the approach
-   direction so the two vertices line up, plus the gap-rule distance and
-   a small float32 safety margin.
+2. Translates the moving object in world space (parent-safe) along the
+   approach direction so the closest pair ends a small positive gap apart:
+   the summed `contact_gap + contact_offset` of both groups, scaled by a
+   safety factor (1.1x) plus a tiny floor so the pair starts just outside
+   the contact barrier's activation band and never coincident. A Static
+   collider is never the moved object; the dynamic side moves instead.
 3. Records per-vertex barycentric anchor data for every A-vertex close
-   enough to B to participate in a stitch.
-
-For the no-gap pairings (Shell-Shell, Rod-Rod) the anchor-capture
-threshold falls back to `max(gap_a, gap_b)` so nearby vertices still
-enter the stitch even though the final separation is zero.
+   enough to B to participate in a stitch (within a small multiple of the
+   applied gap).
 
 **Cross-stitch anchor data**
 

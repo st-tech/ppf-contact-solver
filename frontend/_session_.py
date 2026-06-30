@@ -17,7 +17,6 @@ tests, and Blender integration import names directly from
 """
 
 import asyncio
-import copy
 import os
 import pickle
 import platform
@@ -48,6 +47,11 @@ from ._utils_ import Utils, get_export_base_path
 
 if TYPE_CHECKING:
     from ._plot_ import Plot
+
+
+# Shared default cadence (seconds) for the FixedSession UI poll loops
+# (preview render, table refresh, terminal log stream).
+UI_POLL_INTERVAL_SEC = 0.1
 
 
 class SessionManager:
@@ -300,7 +304,7 @@ class FixedSession:
             fixed_session.export.animation().zip()
     """
 
-    def __init__(self, session: "Session"):
+    def __init__(self, session: "Session", preserve_output: bool = False):
         """Initialize the FixedSession from a parent Session.
 
         Deletes any prior on-disk session directory, exports the fixed
@@ -308,15 +312,19 @@ class FixedSession:
 
         Args:
             session (Session): The parent session object.
+            preserve_output (bool): When True, keep the solver ``output/``
+                subtree (saved checkpoints and the save sentinel) while
+                re-exporting the scene input, so a resume can re-decode
+                edited animation without wiping the states.
 
         Raises:
             ValueError: If the parent session has no fixed scene.
         """
         self._session = session
         self._process: Optional[subprocess.Popen] = None
-        self._update_preview_interval = 0.1
-        self._update_terminal_interval = 0.1
-        self._update_table_interval = 0.1
+        self._update_preview_interval = UI_POLL_INTERVAL_SEC
+        self._update_terminal_interval = UI_POLL_INTERVAL_SEC
+        self._update_table_interval = UI_POLL_INTERVAL_SEC
         self._info = SessionInfo(session.name).set_path(
             os.path.join(session.app_root, session.name)
         )
@@ -331,8 +339,10 @@ class FixedSession:
             "stitch": False,
         }
         if self.fixed_scene is not None:
-            self.delete()
-            self.fixed_scene.export_fixed(self.info.path, True)
+            self.delete(preserve_output=preserve_output)
+            self.fixed_scene.export_fixed(
+                self.info.path, True, preserve_output=preserve_output
+            )
         else:
             raise ValueError("Scene and param must be initialized")
         self._cmd_path = self.export.shell_command(self._param)
@@ -489,20 +499,46 @@ class FixedSession:
         """
         return _rust.analyze_solver_error(list(log_lines), list(err_lines))
 
-    def delete(self):
+    def delete(self, preserve_output: bool = False):
         """Delete the session.
+
+        Args:
+            preserve_output (bool): When True, clear every direct child of
+                the session directory except the solver ``output/`` subtree
+                (saved checkpoints and the save sentinel), so a resume can
+                re-decode edited scene input without losing the states.
+                When False, remove the whole session directory.
 
         Example:
             Remove the on-disk session directory before a clean rerun::
 
                 session.delete()
         """
-        _rust.delete_session_dir(self.info.path)
+        if preserve_output:
+            _rust.delete_session_dir_keep_output(self.info.path)
+        else:
+            _rust.delete_session_dir(self.info.path)
 
     def _check_ready(self):
         """Check if the session is ready."""
         if self.fixed_scene is None:
             raise ValueError("Scene must be initialized")
+
+    def _marker_with_stderr(self, marker_name: str) -> bool:
+        """Print any stderr lines, then report whether ``marker_name`` exists.
+
+        Args:
+            marker_name (str): The marker file name to look for in the output
+                directory.
+
+        Returns:
+            bool: ``True`` if the marker exists, ``False`` otherwise.
+        """
+        error = self.get.log.stderr()
+        if len(error) > 0:
+            for line in error:
+                print(line)
+        return _rust.marker_exists(self.output.path, marker_name)
 
     def finished(self) -> bool:
         """Check if the session has finished.
@@ -519,11 +555,7 @@ class FixedSession:
                 if app.ci:
                     assert session.finished()
         """
-        error = self.get.log.stderr()
-        if len(error) > 0:
-            for line in error:
-                print(line)
-        return _rust.marker_exists(self.output.path, "finished.txt")
+        return self._marker_with_stderr("finished.txt")
 
     def initialize_finished(self) -> bool:
         """Check if the session initialization has finished.
@@ -540,11 +572,7 @@ class FixedSession:
                 while not session.initialize_finished():
                     time.sleep(1)
         """
-        error = self.get.log.stderr()
-        if len(error) > 0:
-            for line in error:
-                print(line)
-        return _rust.marker_exists(self.output.path, "initialize_finish.txt")
+        return self._marker_with_stderr("initialize_finish.txt")
 
     def resume(
         self,
@@ -569,9 +597,6 @@ class FixedSession:
                 session.resume()                 # latest saved frame
                 session.resume(frame=120)        # specific saved frame
         """
-        if self._param is None:
-            print("Session is not yet started")
-            return self
         target = _rust.select_resume_frame(self.get.saved(), int(frame))
         if target is None:
             if frame == -1:
@@ -632,27 +657,20 @@ class FixedSession:
         nvidia_smi_dir = os.path.join(self.info.path, "nvidia-smi")
         os.makedirs(nvidia_smi_dir, exist_ok=True)
 
-        nvidia_smi_path = os.path.join(nvidia_smi_dir, "nvidia-smi.txt")
-        try:
-            result = subprocess.run(
-                ["nvidia-smi"], capture_output=True, text=True, timeout=10
-            )
-            if result.returncode == 0:
-                with open(nvidia_smi_path, "w") as f:
-                    f.write(result.stdout)
-        except (subprocess.TimeoutExpired, FileNotFoundError) as e:
-            print(f"Warning: Could not export nvidia-smi output: {e}")
+        def _dump_nvidia_smi(args: list[str], out_filename: str):
+            out_path = os.path.join(nvidia_smi_dir, out_filename)
+            try:
+                result = subprocess.run(
+                    args, capture_output=True, text=True, timeout=10
+                )
+                if result.returncode == 0:
+                    with open(out_path, "w") as f:
+                        f.write(result.stdout)
+            except (subprocess.TimeoutExpired, FileNotFoundError) as e:
+                print(f"Warning: Could not export {' '.join(args)} output: {e}")
 
-        nvidia_smi_q_path = os.path.join(nvidia_smi_dir, "nvidia-smi-q.txt")
-        try:
-            result = subprocess.run(
-                ["nvidia-smi", "-q"], capture_output=True, text=True, timeout=10
-            )
-            if result.returncode == 0:
-                with open(nvidia_smi_q_path, "w") as f:
-                    f.write(result.stdout)
-        except (subprocess.TimeoutExpired, FileNotFoundError) as e:
-            print(f"Warning: Could not export nvidia-smi -q output: {e}")
+        _dump_nvidia_smi(["nvidia-smi"], "nvidia-smi.txt")
+        _dump_nvidia_smi(["nvidia-smi", "-q"], "nvidia-smi-q.txt")
 
         if os.path.exists(self.save_and_quit_file_path()):
             os.remove(self.save_and_quit_file_path())
@@ -670,8 +688,6 @@ class FixedSession:
 
         frame = self.get.saved()
         if frame and not force:
-            from IPython.display import display
-
             self.print(f"Solver has saved states. Resuming from {max(frame)}")
             return self.resume(max(frame), True, blocking)
 
@@ -686,7 +702,7 @@ class FixedSession:
                     shutil.rmtree(export_path)
 
             log_path, err_path = _rust.stdout_error_log_paths(self.info.path)
-            which = "windows" if platform.system() == "Windows" else "unix"
+            which = Utils.platform_which()
             command = _rust.solver_subprocess_command(self._cmd_path, load, which)
             with open(log_path, "w") as stdout_file, open(err_path, "w") as stderr_file:
                 if platform.system() == "Windows":  # Windows
@@ -739,8 +755,6 @@ class FixedSession:
                     else:
                         raise ValueError(_rust.solver_failed_to_start_message(rc))
             if blocking:
-                while not os.path.exists(log_path) and not os.path.exists(err_path):
-                    time.sleep(1)
                 if process.poll() is not None:
                     log_lines = _rust.read_lines_with_newlines(log_path)
                     err_lines = _rust.read_lines_with_newlines(err_path)
@@ -775,6 +789,11 @@ class FixedSession:
                 print(">>> Waiting for solver to finish...")
                 total_frames = self._param.get("frames")
                 assert isinstance(total_frames, int)
+                # Fast-check mode forces frames=1 in the exported param.toml
+                # (see the Rust to_toml_string override), so mirror it here or
+                # the progress bar would never reach its configured total.
+                if Utils.is_fast_check():
+                    total_frames = 1
                 with tqdm(total=total_frames, desc="progress") as pbar:
                     last_frame = 0
                     while process.poll() is None:
@@ -1063,7 +1082,7 @@ class FixedSession:
             return None
 
     def animate(
-        self, options: Optional[dict] = None, engine: str = "threejs"
+        self, options: Optional[dict] = None, engine: str = "threejs",
     ) -> "FixedSession":
         """Show the animation inside a Jupyter notebook.
 
@@ -1098,8 +1117,9 @@ class FixedSession:
             if fixed_scene is None:
                 raise ValueError("Scene must be initialized")
             else:
+                vert0 = fixed_scene.vertex(True)
                 plot = fixed_scene.preview(
-                    fixed_scene.vertex(True),
+                    vert0,
                     options,
                     show_slider=False,
                     engine=engine,
@@ -1452,6 +1472,21 @@ class Session:
         if self._fixed_scene is None:
             raise ValueError("Scene must be initialized")
 
+    def delete(self):
+        """Delete the on-disk session directory.
+
+        The path matches :attr:`FixedSession.info.path`, so this removes the
+        same directory whether or not :meth:`build` has run. The rust helper
+        tolerates a missing directory, so deleting a never-built session is a
+        no-op.
+
+        Example:
+            Remove the on-disk session directory before a clean rerun::
+
+                session.delete()
+        """
+        _rust.delete_session_dir(os.path.join(self._app_root, self._name))
+
     def init(self, scene: FixedScene) -> "Session":
         """Attach a fixed scene to this session.
 
@@ -1470,12 +1505,18 @@ class Session:
         self._fixed_scene = scene
         return self
 
-    def build(self) -> FixedSession:
+    def build(self, preserve_output: bool = False) -> FixedSession:
         """Build and persist a :class:`FixedSession` from this session.
 
         Pickles the built session into its directory and creates a symlink
         (or a ``.txt`` fallback on Windows without symlink privileges) under
         the data dir for convenient access.
+
+        Args:
+            preserve_output (bool): When True, keep the solver ``output/``
+                subtree (saved checkpoints) while re-exporting the scene
+                input, so a resume can re-decode edited animation without
+                wiping the states.
 
         Returns:
             FixedSession: The newly built fixed session.
@@ -1487,7 +1528,7 @@ class Session:
                 fixed_session = session.build()
                 fixed_session.start(blocking=True)
         """
-        self._fixed_session = FixedSession(self)
+        self._fixed_session = FixedSession(self, preserve_output=preserve_output)
         symlink_name = _rust.session_build_symlink_name(
             self._app_name,
             self._name,

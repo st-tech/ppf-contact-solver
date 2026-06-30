@@ -1,7 +1,7 @@
 # ZOZO's Contact Solver 🫶
 
 A contact solver for physics-based simulations
-involving 👚 shells, 🪵 solids and 🪢 rods. Started as an in-house physics engine at [ZOZO, Inc.](https://corp.zozo.com/en/), the largest fashion e-commerce company in Japan, and now evolving with the community.
+involving 👚 shells, 🪵 solids, 🪢 rods, 🧱 rigid bodies and ⏳ sand. Started as an in-house physics engine at [ZOZO, Inc.](https://corp.zozo.com/en/), the largest fashion e-commerce company in Japan, and now evolving with the community.
 
 [![Getting Started](https://github.com/st-tech/ppf-contact-solver/actions/workflows/getting-started.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/getting-started.yml)
 [![All Examples](https://github.com/st-tech/ppf-contact-solver/actions/workflows/run-all-once.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/run-all-once.yml)
@@ -12,7 +12,7 @@ involving 👚 shells, 🪵 solids and 🪢 rods. Started as an in-house physics
 [![Blender CI](https://github.com/st-tech/ppf-contact-solver/actions/workflows/blender.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/blender.yml)
 ![solver_logo](./asset/image/teaser-image.jpg)
 
-> 🤖 We **highly** respect that readers expect to hear the author's original voice and tone, which we work to retain throughout. Our use of LLMs is clarified in [(Markdown)](./articles/llm_transparency.md).
+> 🤖 **LLM Transparency:** We **highly** respect that readers expect to hear the author's original voice and tone, which we work to retain throughout. Our use of LLMs is clarified in [(Markdown)](./articles/llm_transparency.md).
 
 ## 👀 Quick Look
 
@@ -35,6 +35,7 @@ involving 👚 shells, 🪵 solids and 🪢 rods. Started as an in-house physics
 - **🚲 Cache Efficient**: All on the GPU runs in single precision. No double precision.
 - **🥼 Not Rubbery**: Triangles never extend beyond strict upper bounds (e.g., 1%).
 - **📐 Finite Element Method**: We use FEM for deformables and symbolic force jacobians.
+- **📊 Parameters Calibrated**: Fabric presets match real measurements [(Report)](https://st-tech.github.io/ppf-contact-solver/fabric-report/index.html).
 - **⚔️ Highly Stressed**: We run GitHub Actions to run stress tests [10 times in a row](#️-ten-consecutive-runs).
 - **🚀 Massively Parallel**: Both contact and elasticity solvers are run on the GPU.
 - **🪟 Windows Executable**: No installation wizard shown. Just unzip and run [(Video)](https://zozo.box.com/s/9rthkw122fyss5qxuf5mie9xywg7jzdz).
@@ -99,35 +100,12 @@ involving 👚 shells, 🪵 solids and 🪢 rods. Started as an in-house physics
 
 ## 📝 Change History
 
+- (2026.06.30) Added rigidbody support based on [Painless Differentiable Rotation Dynamics](https://dl.acm.org/doi/10.1145/3730944).
+- (2026.06.30) Added sand support.
+- (2026.06.30) Achieved 2x performance improvement [with help of feedback from @Hurleyworks](https://github.com/st-tech/ppf-contact-solver/discussions/86).
 - (2026.04.30) Added a Blender Add-on support. See the [documentation](https://st-tech.github.io/ppf-contact-solver).
-- (2025.12.18) Added native Windows standalone executable build support [(Video)](https://zozo.box.com/s/9rthkw122fyss5qxuf5mie9xywg7jzdz).
-- (2025.11.26) Added [large-woven.ipynb](./examples/large-woven.ipynb) [(Video)](https://zozo.box.com/s/kc81msjfo4yw9eozn8i8bean0gbph0pj) to [large scale examples](#️-large-scale-examples).
-- (2025.11.12) Added [five-twist.ipynb](./examples/five-twist.ipynb) [(Video)](https://zozo.box.com/s/36h8jpu5vcgc5t4xln2l68afj7izsx4h) and [large-five-twist.ipynb](./examples/large-five-twist.ipynb) [(Video)](https://zozo.box.com/s/v62q7cbfnpl3hufwwy2nmewyes2w1iw6) showcasing over 180M count. See [large scale examples](#️-large-scale-examples).
-- (2025.10.03) Massive refactor of the codebase [(Markdown)](./articles/refactor_202510.md). Note that this change includes breaking changes to our Python APIs.
-- (2025.08.09) Added a hindsight note in [eigensystem analysis](./articles/eigensys.md) to acknowledge prior work by [Poya et al. (2023)](https://romeric.github.io/).
-- (2025.05.01) Simulation states now can be saved and loaded [(Video)](https://zozo.box.com/s/7v0exrbptvfli4o4z91pqtmz0tehdn62).
 
-<details>
-<summary>More history records</summary>
-- (2025.04.02) Added 9 examples. See the [catalogue](#️-catalogue).
-- (2025.03.03) Added a [budget table on AWS](#-budget-table-on-aws).
-- (2025.02.28) Added a [reference branch and a Docker image of our TOG paper](#-technical-materials).
-- (2025.02.26) Added Floating Point-Rounding Errors in ACCD in [hindsight](./articles/hindsight.md).
-- (2025.02.07) Updated the [trapped example](./examples/trapped.ipynb) [(Video)](https://zozo.box.com/s/lnnyeqrvm86rxnwyjxhojfj0jgm5nphn) with squishy balls.
-- (2025.03.03) Added a [budget table on AWS](#-budget-table-on-aws).
-- (2025.02.28) Added a [reference branch and a Docker image of our TOG paper](#-technical-materials).
-- (2025.02.26) Added Floating Point-Rounding Errors in ACCD in [hindsight](./articles/hindsight.md).
-- (2025.02.07) Updated the [trapped example](./examples/trapped.ipynb) [(Video)](https://zozo.box.com/s/lnnyeqrvm86rxnwyjxhojfj0jgm5nphn) with squishy balls.
-- (2025.1.8) Added a [domino example](./examples/domino.ipynb) [(Video)](https://zozo.box.com/s/p5ksfqja1ew3c6vntco5zq6g0kgf7xoo).
-- (2025.1.5) Added a [single twist example](./examples/twist.ipynb) [(Video)](https://zozo.box.com/s/4phoyyeertd2mcfv436kp2ojmo1x0eio).
-- (2024.12.31) Added full documentation for Python APIs, parameters, and log files [(GitHub Pages)](https://st-tech.github.io/ppf-contact-solver).
-- (2024.12.27) Line search for strain limiting is improved [(Markdown)](./articles/bug.md#new-strain-limiting-line-search)
-- (2024.12.23) Added [(Bug Fixes and Updates)](./articles/bug.md)
-- (2024.12.21) Added a [house of cards example](./examples/cards.ipynb) [(Video)](https://zozo.box.com/s/7c114pua0107xkz4nc3bwfdzpkhgn1o9)
-- (2024.12.18) Added a [frictional contact example](./examples/friction.ipynb): armadillo sliding on the slope [(Video)](https://zozo.box.com/s/15r5o7rrowwtbrsrjjpj35v8xt92ufhr)
-- (2024.12.18) Added a [hindsight](./articles/hindsight.md) noting that the tilt angle was not $30^\circ$, but rather $26.57^\circ$
-- (2024.12.16) Removed thrust dependencies to fix runtime errors for the driver version `560.94` [(Issue Link)](https://github.com/st-tech/ppf-contact-solver/issues/1)
-</details>
+📚 For the complete change history, see [articles/changes.md](./articles/changes.md).
 
 ## 🎓 Technical Materials
 
@@ -364,7 +342,7 @@ vg.add(corner_indices, 1.0, "REPLACE")
 cloth = solver.create_group("Cloth", type="SHELL")
 cloth.add("Sheet")
 cloth.param.enable_strain_limit = True
-cloth.param.strain_limit = 0.05
+cloth.param.strain_limit_percent = 5.0
 cloth.param.bend = 1
 
 ball = solver.create_group("Ball", type="STATIC")
@@ -551,7 +529,7 @@ This will output something like:
    > fillin_pass...0 msec
 ```
 
-If you would like to read `stderr`, you can do so using `session.get.stderr()` (if it exists).
+If you would like to read `stderr`, you can do so using `session.get.log.stderr()` (if it exists).
 This returns `list[str]`.
 All the log files are updated in real-time and can be fetched right after the simulation starts; you don't have to wait until it finishes.
 
@@ -605,26 +583,26 @@ Below is a table summarizing the estimated costs for running our examples on a N
 
 | **Example** | **Cost** | **Time** | **#Frame** | **#Vert** | **#Face** | **#Tet** | **#Rod** | **Max Strain** |
 |--------------|-------|-------|-----|--------|--------|--------|---------|-----|
-| trapped      | $0.37 | 22.6m | 300 | 263K   | 299K   | 885K   | ```N/A```     | ```N/A``` |
-| twist        | $0.91 | 55m   | 500 | 203K   | 406K   | ```N/A```    | ```N/A```     | ```N/A``` |
-| stack        | $0.60 | 36.2m | 120 | 166.7K | 327.7K | 8.8K   | ```N/A```     | 5%  |
-| trampoline   | $0.74 | 44.5m | 120 | 56.8K  | 62.2K  | 158.0K | ```N/A```     | 1%  |
-| needle       | $0.31 | 18.4m | 120 | 86K    | 168.9K | 8.8K   | ```N/A```     | 5%  |
-| cards        | $0.29 | 17.5m | 300 | 8.7K   | 13.8K  | 1.9K   | ```N/A```     | 5%  |
-| domino       | $0.12 | 4.3m  | 250 | 0.5K   | 0.8K   | ```N/A```    | ```N/A```     | ```N/A``` |
-| drape        | $0.10 | 3.5m  | 100 | 81.9K  | 161.3K | ```N/A```    | ```N/A```     | 5% |
-| curtain      | $0.33 | 19.6m | 300 | 64K    | 124K   | ```N/A```    | ```N/A```     | 5% |
-| friction     | $0.17 | 10m   | 700 | 1.1K   | ```N/A```    | 1K     | ```N/A```     | ```N/A``` |
-| hang         | $0.12 | 7.5m  | 200 | 16.3K  | 32.2K  | ```N/A```    | ```N/A```     | 1%  |
-| belt         | $0.19 | 11.4m | 200 | 12.3K  | 23.3K  | ```N/A```    | ```N/A```     | 5%  |
-| codim        | $0.36 | 21.6m | 240 | 122.7K | 90K    | 474.1K | 1.3K    | ```N/A``` |
-| fishingknot  | $0.38 | 22.5m | 830 | 19.6K  | 36.9K  | ```N/A```    | ```N/A```     | 5%  |
-| fitting      | $0.03 | 1.54m | 240 | 28.4K  | 54.9K  | ```N/A```    | ```N/A```     | 10% |
-| noodle       | $0.14 | 8.45m | 240 | 116.2K | ```N/A```    | ```N/A```    | 116.2K  | ```N/A``` |
-| ribbon       | $0.23 | 13.9m | 480 | 34.9K  | 52.9K  | 8.8K   | ```N/A```     | 5%  |
-| woven        | $0.58 | 34.6m | 450 | 115.6K | ```N/A```    | ```N/A```    | 115.4K  | ```N/A``` |
-| yarn         | $0.01 | 0.24m | 120 | 28.5K  | ```N/A```    | ```N/A```    | 28.5K   | ```N/A``` |
-| roller       | $0.03 | 2.08m | 240 | 21.4K  | 22.2K  | 61.0K  | ```N/A```     | ```N/A``` |
+| trapped      | $0.08 | 4.66m | 300 | 135.4K | 216.5K | 416.5K | ```N/A```     | ```N/A``` |
+| twist        | $0.37 | 22.4m | 430 | 204.0K | 406.8K | ```N/A```    | ```N/A```     | ```N/A``` |
+| stack        | $0.28 | 16.5m | 120 | 167.4K | 327.7K | 12.7K  | ```N/A```     | 5%  |
+| trampoline   | $0.13 | 8.03m | 60  | 36.4K  | 56.8K  | 78.2K  | ```N/A```     | 1%  |
+| needle       | $0.20 | 11.7m | 120 | 86.8K  | 169.0K | 12.7K  | ```N/A```     | 5%  |
+| cards        | $0.08 | 4.54m | 180 | 9.4K   | 13.9K  | 6.0K   | ```N/A```     | ```N/A``` |
+| domino       | $0.06 | 3.38m | 250 | 0.5K   | 0.8K   | 0.3K   | ```N/A```     | ```N/A``` |
+| drape        | $0.04 | 2.67m | 100 | 81.9K  | 161.3K | ```N/A```    | ```N/A```     | 5% |
+| curtain      | $0.18 | 10.6m | 300 | 64.0K  | 124.2K | ```N/A```    | ```N/A```     | 5% |
+| friction     | $0.16 | 9.63m | 850 | 3.3K   | 4.3K   | 12.0K  | ```N/A```     | ```N/A``` |
+| hang         | $0.14 | 8.54m | 200 | 16.4K  | 32.3K  | ```N/A```    | ```N/A```     | 1%  |
+| belt         | $0.08 | 5.09m | 200 | 12.3K  | 23.3K  | ```N/A```    | ```N/A```     | 5%  |
+| codim        | $0.11 | 6.80m | 240 | 61.6K  | 73.6K  | 234.5K | 1.3K    | ```N/A``` |
+| fishingknot  | $0.08 | 4.89m | 350 | 19.6K  | 36.9K  | ```N/A```    | ```N/A```     | 5%  |
+| fitting      | $0.02 | 1.26m | 240 | 28.5K  | 54.9K  | ```N/A```    | ```N/A```     | 10% |
+| noodle       | $0.09 | 5.25m | 240 | 116.3K | ```N/A```    | ```N/A```    | 116.2K  | ```N/A``` |
+| ribbon       | $0.25 | 14.8m | 480 | 35.6K  | 53.0K  | 12.6K  | ```N/A```     | ```N/A``` |
+| woven        | $0.39 | 23.2m | 450 | 115.6K | ```N/A```    | ```N/A```    | 115.4K  | ```N/A``` |
+| yarn         | $0.01 | 0.25m | 120 | 28.6K  | ```N/A```    | ```N/A```    | 28.5K   | ```N/A``` |
+| roller       | $0.04 | 2.64m | 180 | 6.2K   | 11.0K  | 7.1K   | ```N/A```     | ```N/A``` |
 
 #### 🏗️ Large Scale Examples
 
@@ -678,14 +656,12 @@ The runner types are described as follows:
 
 ### [![Getting Started](https://github.com/st-tech/ppf-contact-solver/actions/workflows/getting-started.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/getting-started.yml)
 
-The tested runner of this action is the Ubuntu NVIDIA GPU-Optimized Image for AI and HPC with an NVIDIA Tesla T4 (16 GB VRAM) with Driver version ``570.133.20``.
-This is not a self-hosted runner, meaning that each time the runner launches, all environments are fresh. 🌱
+This action builds the solver and runs a single headless example from start to finish on a freshly launched `g6e.2xlarge` AWS instance, so every run starts from a clean environment. 🌱
 
 ### [![All Examples](https://github.com/st-tech/ppf-contact-solver/actions/workflows/run-all-once.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/run-all-once.yml) [![All Examples (Windows Native)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/run-all-once-win.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/run-all-once-win.yml)
 
-We use the GitHub-hosted runner, but the actual simulation runs on a `g6e.2xlarge` AWS instance.
-Since we start with a fresh instance, the environment is clean every time.
-We take advantage of the ability to deploy on the cloud; this action is performed in parallel, which reduces the total action time.
+Like the Getting Started action, these build the solver and run the examples from start to finish on freshly launched `g6e.2xlarge` AWS instances, so every run starts from a clean environment.
+Each example runs in parallel on its own instance, which reduces the total action time. 🌱
 
 ### [![Blender CI](https://github.com/st-tech/ppf-contact-solver/actions/workflows/blender.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/blender.yml)
 
@@ -704,7 +680,7 @@ Please note that these artifacts will be deleted after a month.
 ### ⚔️ Ten Consecutive Runs
 
 We know that you can't judge the reliability of contact resolution by simply watching a single success video example.
-To ensure greater transparency, we implemented GitHub Actions to run many of our examples via automated GitHub Actions, not just once, but **10 times in a row** for both Docker and Windows.
+To ensure greater transparency, we implemented GitHub Actions to run many of our examples via automated GitHub Actions, not just once, but **10 times in a row** for both Linux and Windows.
 This means that **a single failure out of 10 tests is considered a failure of the entire test suite!**
 Also, we apply small jitters to the position of objects in the scene, so **at each run, the scene is slightly different.**
 
@@ -818,11 +794,19 @@ Below, we describe how to deploy our solver on major cloud services. These instr
 </tr>
 <tr>
 <td width="50%" valign="top"><a href="https://www.youtube.com/watch?v=VOORiyip4_c"><img src="https://img.youtube.com/vi/VOORiyip4_c/maxresdefault.jpg" alt="The Worst Bug In Games Is Now Gone Forever"></a></td>
-<td width="50%" valign="top"></td>
+<td width="50%" valign="top"><a href="https://www.youtube.com/watch?v=hM9vI36qXW0"><img src="https://img.youtube.com/vi/hM9vI36qXW0/maxresdefault.jpg" alt="NUEVA Simulacion de Telas PERFECTAS en Blender"></a></td>
 </tr>
 <tr>
 <td valign="top"><a href="https://www.youtube.com/watch?v=VOORiyip4_c"><em>The Worst Bug In Games Is Now Gone Forever</em></a> by <a href="https://www.youtube.com/@TwoMinutePapers">Two Minute Papers</a>.</td>
-<td valign="top"></td>
+<td valign="top"><a href="https://www.youtube.com/watch?v=hM9vI36qXW0"><em>NUEVA Simulacion de Telas PERFECTAS en Blender</em></a> by <a href="https://www.youtube.com/@MinerDesign">MinerDesign</a>.</td>
+</tr>
+<tr>
+<td width="50%" valign="top"><a href="https://www.youtube.com/watch?v=wPjqsq0N0ns"><img src="https://img.youtube.com/vi/wPjqsq0N0ns/maxresdefault.jpg" alt="Blender Now Has Mind-blowing Physics!"></a></td>
+<td width="50%" valign="top"><a href="https://www.youtube.com/watch?v=0huIwBTcKHU&t=108s"><img src="https://img.youtube.com/vi/0huIwBTcKHU/maxresdefault.jpg" alt="Blender Physics Just Got Insane"></a></td>
+</tr>
+<tr>
+<td valign="top"><a href="https://www.youtube.com/watch?v=wPjqsq0N0ns"><em>Blender Now Has Mind-blowing Physics!</em></a> by <a href="https://www.youtube.com/@DECODEDVFX">DECODED</a>.</td>
+<td valign="top"><a href="https://www.youtube.com/watch?v=0huIwBTcKHU&t=108s"><em>Blender Physics Just Got Insane</em></a> by <a href="https://www.youtube.com/@CGDive">CGDive</a>.</td>
 </tr>
 </table>
 

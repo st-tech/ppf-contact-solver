@@ -18,6 +18,17 @@ from ._session_ import FixedSession, Session
 from ._utils_ import Utils
 
 
+# Per-vertex pull / barycentric weight prune cutoff: a tet vertex is "kept"
+# (pinned) only when its mapped weight exceeds this. Shared by the SOLID
+# pin-mapping and intent-classification paths so the cutoff lives in one place.
+_PIN_WEIGHT_EPS = 1e-4
+
+# Partial-pin SOLID hard/soft split default: a kept surface vertex is hard
+# (FixPair) when its full weight is at or above this, soft (PullPair) below.
+# Used as the cfg "fix_weight_threshold" fallback.
+_DEFAULT_FIX_WEIGHT_THRESHOLD = 0.5
+
+
 @dataclass
 class ObjectInfo:
     """Per-object metadata recorded by :class:`SceneDecoder.populate_objects`.
@@ -27,6 +38,8 @@ class ObjectInfo:
     * ``SOLID``  populates ``vert``, ``V``, ``F``, and optionally ``orig_to_sim``.
     * ``SHELL``  populates ``vert``, ``V`` (== ``vert``), ``F``.
     * ``ROD``    populates ``vert`` only; ``V`` and ``F`` stay ``None``.
+    * ``SAND``   populates ``vert`` only (a faceless point cloud); ``V``
+      and ``F`` stay ``None``.
 
     The Rust ``cross_stitch_apply_batch`` consumer reads via dict access,
     so :meth:`to_dict` is used at the FFI boundary.
@@ -98,6 +111,7 @@ class BlenderApp:
         self._session = None
         self._fixed_scene = None
         self._fixed_session = None
+        self._param_decoder = None
 
     def __getstate__(self):
         state = self.__dict__.copy()
@@ -196,25 +210,52 @@ class BlenderApp:
             self._asset_manager,
             self._mesh_manager,
         )
-        # Peek at param.pickle for per-group fTetWild overrides so
-        # populate_objects can pass them into tetrahedralize() at build
-        # time. The full param.pickle is applied later in make(). Fan the
-        # group-level kwargs dict out to every UUID in the group via
-        # the Rust helper so this loop stays aligned with the
-        # ParamDecoder traversal.
+        # Decode param.pickle once and stash the decoder so make() can
+        # reuse it rather than re-reading and re-parsing the same file.
+        # We peek at the parsed data here for per-object tetrahedralizer
+        # overrides so populate_objects can pass them into
+        # tetrahedralize() at build time; full parameter application is
+        # deferred to make(). The encoder keys the per-group ``ftetwild``
+        # entry by object UUID (mirroring ``velocity``), so each object
+        # can pick its own backend (fTetWild or TetGen) and per-field
+        # overrides.
         ftetwild_by_uuid: dict = {}
         param_path = os.path.join(self._root, "param.pickle")
         if os.path.exists(param_path):
-            # See ``frontend/_cbor_bridge_.py`` for the byte-sniff contract.
-            from . import _cbor_bridge_ as _cbor
-
-            with open(param_path, "rb") as _pf:
-                _blob = _pf.read()
-            if _cbor.is_cbor(_blob):
-                _pdata = _cbor.loads_param(_blob)
-            else:
-                _pdata = pickle.loads(_blob)
-            ftetwild_by_uuid = _rust.extract_ftetwild_by_uuid(_pdata.get("group", []))
+            self._param_decoder = ParamDecoder().set_path(param_path)
+            for _entry in self._param_decoder._data.get("group", []):
+                if not _entry:
+                    continue
+                _params = _entry[0]
+                _ftw = _params.get("ftetwild") if isinstance(_params, dict) else None
+                if isinstance(_ftw, dict):
+                    for _uuid, _kw in _ftw.items():
+                        if isinstance(_kw, dict) and _kw:
+                            ftetwild_by_uuid[_uuid] = _kw
+        # A STATIC collider that participates in a cross-stitch must be
+        # reachable by the stitch index space, which addresses only the
+        # dynamic vertex namespace (map_by_name -> concat_vert -> eval_x). A
+        # non-moving STATIC is otherwise a disjoint contact-only collision
+        # mesh, so we pre-scan the cross-stitch endpoints here and promote any
+        # such STATIC into the dynamic all-pinned namespace at populate time
+        # (it stays kinematically frozen via immovable fixed pins). The
+        # cross_stitch list is loaded eagerly by ParamDecoder.set_path.
+        #
+        # This pre-scan reads the RAW param entries; promotion must happen at
+        # populate time (build partitions dyn vs static from the finalized pin
+        # structure), before cross_stitch_apply_batch runs in make(). So a
+        # STATIC named by an entry that apply_batch later drops (e.g. a SOLID
+        # source lacking source_points) is still promoted: a benign frozen
+        # dynamic collider with no surviving stitch, not an error.
+        stitch_endpoint_uuids: set[str] = set()
+        if self._param_decoder is not None:
+            for _cs in self._param_decoder.cross_stitch:
+                if not isinstance(_cs, dict):
+                    continue
+                for _key in ("source_uuid", "target_uuid"):
+                    _u = _cs.get(_key)
+                    if _u:
+                        stitch_endpoint_uuids.add(_u)
         self._scene_decoder.populate_objects(
             self._scene,
             verbose=self._verbose,
@@ -223,16 +264,23 @@ class BlenderApp:
                 info,
             ),
             ftetwild_by_uuid=ftetwild_by_uuid,
+            stitch_endpoint_uuids=stitch_endpoint_uuids,
         )
         return self
 
-    def make(self) -> "BlenderApp":
+    def make(self, preserve_output: bool = False) -> "BlenderApp":
         """Apply ``param.pickle`` to the populated scene and build a runnable session.
 
         Applies per-object parameters, pin configuration, cross-stitch
-        constraints, explicit merge pairs, and invisible colliders to the
-        scene, then builds the fixed scene and session. The resulting
-        state is persisted to ``app_state.pickle`` on a best-effort basis.
+        constraints, and invisible colliders to the scene, then builds the
+        fixed scene and session. The resulting state is persisted to
+        ``app_state.pickle`` on a best-effort basis.
+
+        Args:
+            preserve_output (bool): When True, keep the solver ``output/``
+                subtree (saved checkpoints) while re-exporting the scene
+                input, so a resume can re-decode edited animation without
+                wiping the states.
 
         Example:
             Finish the build after :meth:`populate`, then run the session::
@@ -248,16 +296,21 @@ class BlenderApp:
         assert os.path.exists(param_path)
 
         self._report_progress(0.65, "Applying object parameters...")
-        param_decoder = ParamDecoder().set_path(param_path)
+        # Reuse the decoder populate() already parsed; construct lazily
+        # for direct make() callers that bypassed populate().
+        param_decoder = self._param_decoder
+        if param_decoder is None:
+            param_decoder = ParamDecoder().set_path(param_path)
         param_decoder.apply_to_objects(self._scene, verbose=self._verbose)
         self._report_progress(0.72, "Applying pin configuration...")
         param_decoder.apply_pin_config(self._scene, verbose=self._verbose)
         if param_decoder.cross_stitch:
             self._report_progress(0.78, "Applying cross-stitch constraints...")
-            # Whole-batch port: Rust validates endpoints, projects
-            # anchors for SOLID targets, builds each canonical dict,
-            # and appends directly to ``self._scene._cross_stitch`` so
-            # no Python-side per-entry append loop survives.
+            # Whole-batch port: Rust validates endpoints, re-projects the
+            # anchors of SOLID source and/or target sides independently onto
+            # their tet surfaces, builds each canonical dict, and appends
+            # directly to ``self._scene._cross_stitch`` so no Python-side
+            # per-entry append loop survives.
             obj_info_dict = {
                 k: v.to_dict() for k, v in self._scene_decoder._object_info.items()
             }
@@ -267,8 +320,6 @@ class BlenderApp:
                 self._scene._cross_stitch,
                 self._verbose,
             )
-        if param_decoder.explicit_merge_pairs:
-            self._scene.set_explicit_merge_pairs(param_decoder.explicit_merge_pairs)
         self._report_progress(0.82, "Applying invisible colliders...")
         param_decoder.apply_invisible_colliders(self._scene, verbose=self._verbose)
         self._report_progress(0.84, "Building scene: preparing objects...")
@@ -286,11 +337,19 @@ class BlenderApp:
             self._data_dirpath,
             "session",
         ).init(self._fixed_scene)
-        self._report_progress(0.97, "Applying session parameters...")
+        self._report_progress(0.95, "Applying session parameters...")
         param_decoder.apply_to_session(self._session, verbose=self._verbose)
-        self._fixed_session = self._session.build()
+        # apply_to_session above just sets parameter values and is cheap; the
+        # heavy tail is session.build() (exports the full solver input to disk
+        # and pickles the session graph) followed by _persist_app_state()
+        # (pickles the whole app). Label each distinctly so the bar moves
+        # through them instead of sitting parked at "Applying session
+        # parameters..." for the entire export/serialize phase.
+        self._report_progress(0.96, "Exporting solver input...")
+        self._fixed_session = self._session.build(preserve_output=preserve_output)
+        self._report_progress(0.99, "Saving build state...")
         self._persist_app_state()
-        self._report_progress(0.97, "Build decode complete.")
+        self._report_progress(1.0, "Build decode complete.")
         return self
 
     def _persist_app_state(self) -> None:
@@ -411,25 +470,15 @@ class ParamDecoder:
                 decoder.apply_to_objects(scene)
         """
         _rust.validate_pickle_extension(filepath)
-        with open(filepath, "rb") as f:
-            blob = f.read()
         from . import _cbor_bridge_ as _cbor
 
-        if _cbor.is_cbor(blob):
-            self._data = _cbor.loads_param(blob)
-        else:
-            self._data = pickle.loads(blob)
+        self._data = _cbor.load_param_file(filepath)
         _rust.validate_param_top_keys(
             "group" in self._data, "scene" in self._data
         )
         self._pin_config = self._data.get("pin_config", {})
-        self._explicit_merge_pairs = self._data.get("explicit_merge_pairs", [])
         self._cross_stitch = self._data.get("cross_stitch", [])
         return self
-
-    @property
-    def explicit_merge_pairs(self) -> list:
-        return self._explicit_merge_pairs
 
     @property
     def cross_stitch(self) -> list:
@@ -476,23 +525,54 @@ class ParamDecoder:
                         print(f"  {key}: {val}")
                     if key == "velocity":
                         if isinstance(val, dict):
-                            v = val.get(obj_uuid) if obj_uuid else None
+                            v = val.get(obj_uuid)
                             if v is not None:
                                 obj.velocity(*v)
                         else:
                             obj.velocity(*val)
                     elif key == "velocity-schedule":
                         if isinstance(val, dict):
-                            s = val.get(obj_uuid) if obj_uuid else None
+                            s = val.get(obj_uuid)
                             if s:
                                 obj.velocity_schedule(s)
                         else:
                             obj.velocity_schedule(val)
+                    elif key == "angular-velocity-schedule":
+                        # Per-UUID list of (t, pca_index, speed_rad) spin
+                        # keyframes; the solver resolves the world axis from
+                        # the live geometry. Same dict-vs-value shape as
+                        # velocity-schedule.
+                        if isinstance(val, dict):
+                            s = val.get(obj_uuid)
+                            if s:
+                                obj.angular_velocity_schedule_pca(s)
+                        else:
+                            obj.angular_velocity_schedule_pca(val)
+                    elif key == "angular-velocity-world-schedule":
+                        # Per-UUID list of (t, [wx, wy, wz]) fixed world-axis
+                        # spins (World X/Y/Z / Custom), already swapped to
+                        # solver space and scaled by speed.
+                        if isinstance(val, dict):
+                            s = val.get(obj_uuid)
+                            if s:
+                                obj.angular_velocity_schedule_world(s)
+                        else:
+                            obj.angular_velocity_schedule_world(val)
                     elif key == "collision-windows":
                         if isinstance(val, dict):
-                            w = val.get(obj_uuid) if obj_uuid else None
+                            w = val.get(obj_uuid)
                             if w:
                                 obj.collision_windows(w)
+                    elif key == "hinge":
+                        # PDRD hinge: pin the body and lock its rotation to a
+                        # principal axis (see Object.hinge). Per-UUID dict like
+                        # velocity; absent / empty means the body stays free.
+                        if isinstance(val, dict):
+                            h = val.get(obj_uuid)
+                            if h is not None:
+                                obj.hinge(int(h))
+                        elif val is not None:
+                            obj.hinge(int(val))
                     elif key == "ftetwild":
                         # Consumed at populate-time via the param.pickle peek;
                         # no per-object ParamHolder slot by design (would
@@ -592,17 +672,34 @@ class ParamDecoder:
             # this a keyframed N-vertex pin became N one-vertex holders,
             # each carrying every keyframe op -> N*M solver pin files.
             self._regroup_pin_holders(dyn_obj, obj_cfg)
+            self._split_solid_holder_by_threshold(dyn_obj, obj_cfg, verbose)
             for pin_holder in dyn_obj.pin_list:
                 # For solid objects, use stored Blender indices for config lookup
                 lookup_indices = getattr(pin_holder._data, '_blender_pin_indices', None) or pin_holder.index
+                # Resolve ONE cfg for this holder. Prefer a cfg that carries a
+                # captured deformation (``embedded_move_index`` / its
+                # ``rest_shape_track`` flag) over a plain anchor cfg: a SOLID
+                # holder can span both a captured pin and a non-captured anchor
+                # (e.g. a fixed pin-root) in one merged surface mapping, and the
+                # first stored vert is often the anchor. Taking it would drop
+                # the embedded ops AND the rest-shape track for the whole
+                # holder. Falls back to the first non-None cfg when none is
+                # captured (unchanged for pure-anchor / single-intent holders).
+                chosen_vi = None
+                chosen_cfg = None
                 for vi in lookup_indices:
                     cfg = obj_cfg.get(vi)
                     if cfg is None:
                         continue
+                    if chosen_cfg is None:
+                        chosen_vi, chosen_cfg = vi, cfg
+                    if "embedded_move_index" in cfg or cfg.get("rest_shape_track"):
+                        chosen_vi, chosen_cfg = vi, cfg
+                        break
+                if chosen_cfg is not None:
                     self._apply_pin_cfg_entry(
-                        pin_holder, dyn_name, vi, cfg, obj_cfg, verbose,
+                        pin_holder, dyn_name, chosen_vi, chosen_cfg, obj_cfg, verbose,
                     )
-                    break
 
     @staticmethod
     def _regroup_pin_holders(dyn_obj, obj_cfg):
@@ -643,6 +740,275 @@ class ParamDecoder:
         for key in gid_order:
             dyn_obj.pin(gid_verts[key])
 
+    def _split_solid_holder_by_threshold(self, dyn_obj, obj_cfg, verbose=False):
+        """Split a partial-pin SOLID holder into a hard (FixPair) sub-holder
+        and a soft (PullPair) sub-holder.
+
+        Runs UNCONDITIONALLY for every hard-intent partial Poisson holder
+        (no ``pull_strength`` in cfg; carries ``_solid_pin`` + ``_solid_full_w``
+        + ``_solid_surf_mask``). This is a correctness fix, not a feature gate:
+        an interior fix pin is a zero-diagonal CG nan (the solver assembles the
+        fix barrier over surface verts only and gates off inertia for fix
+        pins), so interior driven verts must ALWAYS become soft pull. The
+        per-pin ``fix_weight_threshold`` (cfg, default
+        ``_DEFAULT_FIX_WEIGHT_THRESHOLD``) only controls the
+        SURFACE hard/soft split: 0 makes every surface driven vert hard and the
+        interior soft (the legacy "pinned surface is rigid" intent, minus the
+        interior nan); higher values soften the low-weight surface skirt.
+
+        Each sub-holder reuses the shared full ``S_t`` / ``M`` operators with
+        its own full-axis ``keep`` mask; the move-op builder slices
+        ``positions[:, keep, :]`` so the masks must live on that full axis.
+
+        The helper owns the pull calls because a hard-intent cfg carries no
+        ``pull_strength``, so ``_apply_pin_cfg_entry``'s pull block never fires
+        for these holders. Idempotent via ``_solid_split_done``. Never pins an
+        empty index list.
+        """
+        import numpy as np
+
+        def _carry(sub, src):
+            sub._data._blender_pin_indices = list(
+                getattr(src, "_blender_pin_indices", []) or []
+            )
+            sub._data._tet_V = getattr(src, "_tet_V", None)
+            sub._data._blender_vert = getattr(src, "_blender_vert", None)
+            sub._data._solid_split_done = True
+
+        for holder in list(dyn_obj.pin_list):
+            d = holder._data
+            if getattr(d, "_solid_split_done", False):
+                continue
+            # cfg lookup: first stored Blender pin index that has a cfg entry
+            # (mirrors the per-holder loop in apply_pin_config).
+            lookup = getattr(d, "_blender_pin_indices", None) or holder.index
+            cfg = None
+            for vi in lookup:
+                c = obj_cfg.get(vi)
+                if c is not None:
+                    cfg = c
+                    break
+            if cfg is None:
+                continue
+            # Mixed-intent full-pin harmonic holder: a later HARD pin (e.g.
+            # pin-root) overwrote the pull cfg on a subset of verts via
+            # last-wins, so some surface verts are hard (no pull_strength) and
+            # some are pull. The single harmonic holder would otherwise take
+            # the first vertex's intent (pull) for ALL verts, leaving the hard
+            # verts never fixed. Extract those hard SURFACE verts into a
+            # FixPair holder (held at rest) so they are rigidly fixed; the
+            # original holder stays the pull holder (its pull surface +
+            # interior keep following the captured target). Hard verts are
+            # surface-only, so the FixPair is safe (interior fix => CG nan),
+            # and a static hard pin has no captured track so it holds at rest
+            # (the pull holder already pulls those verts toward rest too, so
+            # there is no conflict; the FixPair just makes them rigid).
+            harmonic = getattr(d, "_harmonic", None)
+            simw = getattr(d, "_sim_blender_weights", None)
+            if harmonic is not None and simw is not None:
+                n_surf = int(harmonic[0])
+                surf_sim = list(holder.index[:n_surf])
+                hard_sim, hard_blender, pull_blender = [], set(), set()
+                for j in range(min(n_surf, len(simw))):
+                    corners = simw[j] or []
+                    hard_w = sum(w for b, w in corners
+                                 if "pull_strength" not in obj_cfg.get(int(b), {}))
+                    pull_w = sum(w for b, w in corners
+                                 if "pull_strength" in obj_cfg.get(int(b), {}))
+                    for b, w in corners:
+                        if "pull_strength" in obj_cfg.get(int(b), {}):
+                            pull_blender.add(int(b))
+                    if corners and hard_w > pull_w:
+                        hard_sim.append(int(surf_sim[j]))
+                        for b, w in corners:
+                            if "pull_strength" not in obj_cfg.get(int(b), {}):
+                                hard_blender.add(int(b))
+                d._solid_split_done = True
+                if hard_sim and len(hard_sim) < n_surf:
+                    fh = dyn_obj.pin(hard_sim)
+                    fh._data._blender_pin_indices = sorted(hard_blender)
+                    fh._data._tet_V = getattr(d, "_tet_V", None)
+                    fh._data._blender_vert = getattr(d, "_blender_vert", None)
+                    fh._data._solid_split_done = True
+                    # _apply_pin_cfg_entry finds the hard pin's cfg (no
+                    # pull_strength, no captured track) => stationary FixPair
+                    # at rest. The original holder stays the pull holder, but
+                    # the per-holder loop resolves its intent from the FIRST
+                    # stored blender vert, which may now be a hard/root vert
+                    # whose cfg carries neither pull_strength nor a captured
+                    # move (so both would be dropped, freezing the body).
+                    # Re-point its cfg lookup at the pull verts so pull +
+                    # the captured target reliably apply. The captured-move
+                    # builder uses _sim_blender_weights, not this list, so
+                    # narrowing it is safe.
+                    if pull_blender:
+                        d._blender_pin_indices = sorted(pull_blender)
+                    if verbose:
+                        print(f"  solid harmonic mixed: {len(hard_sim)} hard "
+                              f"surf -> FixPair(rest); "
+                              f"{n_surf - len(hard_sim)} pull surf + interior")
+                continue
+            # Gates: only a hard-intent (no pull_strength) partial Poisson
+            # SOLID holder is split. The toggle does NOT gate whether the
+            # split runs (interior fix pins always nan); it only sets thr.
+            if "pull_strength" in cfg:
+                continue  # pure-pull intent never hardens
+            # Torque pins are merged by pin_group_id in the solver; do not
+            # split them into two holders that would share one id.
+            if any(op.get("type") == "torque"
+                   for op in cfg.get("operations", [])):
+                continue
+            sp = getattr(d, "_solid_pin", None)
+            fw = getattr(d, "_solid_full_w", None)
+            df = getattr(d, "_solid_driven_full", None)
+            sm = getattr(d, "_solid_surf_mask", None)
+            if sp is None or fw is None or df is None or sm is None:
+                continue  # full_pin / harmonic / SHELL / ROD: no partial fields
+
+            # Per-pin threshold (default _DEFAULT_FIX_WEIGHT_THRESHOLD;
+            # 0 => every surface driven hard).
+            thr = float(
+                cfg.get("fix_weight_threshold", _DEFAULT_FIX_WEIGHT_THRESHOLD)
+            )
+            keep = np.asarray(sp["keep"])           # full axis, bool
+            full_w = np.asarray(fw)                  # full axis
+            df_arr = np.asarray(df)
+            surf_mask = np.asarray(sm)               # full axis, bool
+            # Hard FixPairs are SURFACE-ONLY: the solver assembles the fix
+            # barrier over surface verts only and gates off inertia for fix
+            # pins, so an interior fix pin would be a zero-diagonal CG nan.
+            # Interior high-weight verts fall through to soft pull (safe: pull
+            # is assembled over all verts and weight*I keeps the diagonal > 0).
+            # Intent-aware hardening: a pull-intent surface vert (its Blender
+            # corners are dominated by pull pins) must NEVER harden. Such verts
+            # share this merged holder only because a hard pin-root overlaps
+            # the pull region; freezing them strands the captured target so the
+            # body sits at initial geometry instead of following the deformer.
+            # Classify each driven surface vert by its stored Blender corners
+            # (mirrors the full-pin harmonic mixed-intent path above).
+            simw = getattr(d, "_sim_blender_weights", None)
+            n_surf_driven = int(surf_mask.sum())
+            # Three-way intent classification of each driven SURFACE vert by
+            # its stored Blender corners:
+            #   * static anchor (pin-root): corners carry NEITHER pull_strength
+            #     NOR a captured track -> a stationary FixPair held at rest,
+            #     NEVER driven by the captured diffusion. (Otherwise S_t's
+            #     least-squares extrapolates the moving pin's motion onto the
+            #     anchor region and it drifts.)
+            #   * pull follow: pull-strength corners dominate -> soft PullPair
+            #     toward the captured target;
+            #   * captured-fix follow: a captured corner with no pull (a fixed
+            #     barrier pin) -> hard FixPair that follows the captured target.
+            # Distinguishing "no pull" from "no pull AND no capture" is what
+            # lets a FIXED captured pin coexist with a static pin-root: both
+            # lack pull_strength, so the old pull-only test merged them and the
+            # anchor followed the pin.
+            pull_surf = np.zeros(len(df_arr), dtype=bool)
+            static_surf = np.zeros(len(df_arr), dtype=bool)
+            if simw is not None:
+                for j in range(min(n_surf_driven, len(simw))):
+                    corners = simw[j] or []
+                    if not corners:
+                        continue
+                    pw = sum(w for b, w in corners
+                             if "pull_strength" in obj_cfg.get(int(b), {}))
+                    static_w = sum(
+                        w for b, w in corners
+                        if "pull_strength" not in obj_cfg.get(int(b), {})
+                        and "embedded_move_index" not in obj_cfg.get(int(b), {})
+                    )
+                    follow_w = sum(w for b, w in corners) - static_w
+                    if static_w > follow_w:
+                        static_surf[j] = True
+                    elif pw > follow_w - pw:   # pull dominates the captured part
+                        pull_surf[j] = True
+            # Static is SURFACE-only (an interior fix pin is a zero-diagonal CG
+            # nan; pin-root is painted on the surface anyway).
+            static_keep = keep & surf_mask & static_surf
+            hard_keep = (keep & (full_w >= thr) & surf_mask
+                         & ~pull_surf & ~static_surf)
+            soft_keep = keep & ~hard_keep & ~static_keep
+            static_index = [int(df_arr[k]) for k in range(len(df_arr))
+                            if static_keep[k]]
+            hard_index = [int(df_arr[k]) for k in range(len(df_arr))
+                          if hard_keep[k]]
+            soft_index = [int(df_arr[k]) for k in range(len(df_arr))
+                          if soft_keep[k]]
+
+            # Blender-vert partitions for cfg re-pointing. Follow sub-holders
+            # resolve their cfg from a captured/pull vert (so pull_strength +
+            # rest_shape_track + the captured ops apply); the static FixPair
+            # resolves from a pin-root vert (no captured track => held at rest).
+            bpi = list(getattr(d, "_blender_pin_indices", []) or [])
+
+            def _is_static_cfg(vi):
+                c = obj_cfg.get(int(vi), {})
+                return ("pull_strength" not in c
+                        and "embedded_move_index" not in c)
+
+            follow_blender = sorted(vi for vi in bpi if not _is_static_cfg(vi))
+            static_blender = sorted(vi for vi in bpi if _is_static_cfg(vi))
+            # Re-point each follow sub-holder at the cfg of ITS OWN intent. A
+            # follow vert is either pull (has ``pull_strength``) or captured-fix
+            # (has ``embedded_move_index`` only). The hard FixPair MUST resolve a
+            # captured-fix cfg, otherwise _apply_pin_cfg_entry sees a pull vert's
+            # ``pull_strength`` and overrides its pull(0.0) into a soft pull; the
+            # soft PullPair MUST resolve a pull cfg so the pull_strength scaling
+            # applies. Without this split, both holders shared ``follow_blender``
+            # and the first vertex's intent leaked across (wrong for a SOLID that
+            # mixes captured-fix and pull pins). Fall back to the combined list
+            # when a category has no vertex of its own.
+            pull_blender = [
+                vi for vi in follow_blender
+                if "pull_strength" in obj_cfg.get(int(vi), {})
+            ]
+            fix_blender = [
+                vi for vi in follow_blender
+                if "pull_strength" not in obj_cfg.get(int(vi), {})
+            ]
+            hard_blender = fix_blender or follow_blender
+            soft_blender = pull_blender or follow_blender
+
+            # Rebuild this object's holders from the three categories. Each
+            # non-empty category becomes its own holder (``pin([])`` is never
+            # called), replacing the original merged holder.
+            dyn_obj.pin_list.remove(holder)
+            d._solid_split_done = True
+            if static_index:
+                fa = dyn_obj.pin(static_index)
+                _carry(fa, d)
+                if static_blender:
+                    fa._data._blender_pin_indices = static_blender
+                # No _solid_pin => no captured ops; the pin-root cfg carries no
+                # embedded move, so this stays a stationary FixPair at rest.
+                fa.pull(0.0)
+            if hard_index:
+                h = dyn_obj.pin(hard_index)
+                _carry(h, d)
+                h._data._solid_pin = {"S_t": sp["S_t"], "M": sp["M"],
+                                      "keep": hard_keep, "n_input": sp["n_input"],
+                                      "rest_full": sp.get("rest_full")}
+                if hard_blender:
+                    h._data._blender_pin_indices = hard_blender
+                h.pull(0.0)  # FixPair barrier; its captured ops make it kinematic
+            if soft_index:
+                s = dyn_obj.pin(soft_index)
+                _carry(s, d)
+                s._data._solid_pin = {"S_t": sp["S_t"], "M": sp["M"],
+                                      "keep": soft_keep, "n_input": sp["n_input"],
+                                      "rest_full": sp.get("rest_full")}
+                s_w = full_w[soft_keep].astype(np.float32)
+                # Compacted per-vertex weight for the cfg pass's pull scaling.
+                s._data._solid_pin_weights = s_w
+                if soft_blender:
+                    s._data._blender_pin_indices = soft_blender
+                s.pull(1.0)
+                s.pull_per_vertex(s_w)
+            if verbose:
+                print(f"  solid split (capture-aware) @ thr={thr:.3f}: "
+                      f"{len(static_index)} static-rest / {len(hard_index)} "
+                      f"hard-follow / {len(soft_index)} soft-follow")
+
     def _apply_pin_cfg_entry(self, pin_holder, dyn_name, vi, cfg, obj_cfg,
                              verbose):
         """Apply a single pin-config entry to ``pin_holder``."""
@@ -652,9 +1018,25 @@ class ParamDecoder:
                 print(f"  {dyn_name}[{vi}]: unpin_time={cfg['unpin_time']}")
         if "pull_strength" in cfg:
             pin_holder.pull(cfg["pull_strength"])
+            # Partial-pin SOLID: scale the diffused [0,1] per-vertex weight
+            # field by pull_strength so each tet vertex is pulled with
+            # strength pull_strength * weight (the scalar pull() above is
+            # kept as the soft-vs-hard classification marker).
+            sp_weights = getattr(pin_holder._data, "_solid_pin_weights", None)
+            if sp_weights is not None:
+                import numpy as np
+                pin_holder.pull_per_vertex(
+                    float(cfg["pull_strength"]) * np.asarray(sp_weights)
+                )
         if "pin_stiffness" in cfg:
             pin_holder._data.pin_stiffness = float(cfg["pin_stiffness"])
         if "pin_group_id" in cfg:
+            # pin_group_id is a mirrored field, but the decode-time override
+            # writes only the canonical _data; the Rust validator mirror is
+            # not updated and may go stale here. That is harmless today
+            # because no consumer (export, scene builder) reads the mirror's
+            # group id, only _data. If export is ever taught to read the
+            # mirror, route this through a setter that updates both.
             pin_holder._data.pin_group_id = cfg["pin_group_id"]
             if verbose:
                 print(f"  {dyn_name}[{vi}]: pin_group_id={cfg['pin_group_id']}")
@@ -691,6 +1073,15 @@ class ParamDecoder:
         # If embedded move wasn't inserted yet (index beyond end), append
         if not embedded_inserted and embedded_move_index >= 0:
             pin_holder._data.operations.extend(embedded_ops)
+        # Flag a captured deformation so the scene builder emits a time-varying
+        # rest shape from this holder's target trajectory. Independent of the
+        # pin constraint type: a pull pin (soft) and a fixed pin (hard FixPair
+        # barrier) BOTH track the rest shape, so the gate is NOT conditioned on
+        # ``pull_strength``. The encoder sets ``rest_shape_track`` only for
+        # has_captured_anim SOLID/SHELL pins, so explicit Move/Spin/fcurve-
+        # keyframed pins never trip it.
+        if cfg.get("rest_shape_track") and embedded_ops:
+            pin_holder._data.rest_shape_track = True
         if verbose:
             print(f"  {dyn_name}[{vi}]: operations={len(pin_holder.operations)}")
 
@@ -698,14 +1089,42 @@ class ParamDecoder:
     def _build_embedded_move_ops(pin_holder, obj_cfg):
         """Build embedded ``MoveByOperation`` segments from ``pin_anim``.
 
-        Each pinned vertex's ``PinData`` carries its own single-entry
-        ``pin_anim`` track (``{vertex_index: PinAnim}``). Consecutive
-        keyframes become ``MoveByOperation`` segments whose ``delta`` is
-        the genuine per-vertex displacement, so the pin deforms — it is
-        not rigidly translated.
+        SHELL / ROD: the holder's sim indices ARE Blender vertex indices,
+        so each pinned vertex carries its own single-entry ``pin_anim``
+        track (``{vertex_index: PinAnim}``) and consecutive keyframes
+        become per-vertex ``MoveByOperation`` deltas. The pin deforms — it
+        is not rigidly translated.
+
+        SOLID: the holder spans simulation surface vertices that do not
+        line up with Blender vertices (fTetWild remeshes the surface), so
+        the holder carries ``_sim_blender_weights`` and the transfer is
+        delegated to :meth:`_build_solid_embedded_move_ops`.
+
+        A partial-pin SOLID holder carries BOTH ``_solid_pin`` (the two-stage
+        Poisson operators with a ``keep`` mask compacting positions to the
+        driven subset = ``holder.index``) AND ``_sim_blender_weights`` (a
+        full-surface inverse map the threshold split uses for intent
+        classification). ``_solid_pin`` must win: its builder slices to the
+        driven subset, whereas ``_build_solid_embedded_move_ops`` emits one
+        delta per surface vertex (full surface, no ``keep``), so taking the
+        ``_sim_blender_weights`` branch here would hand a full-surface-length
+        delta to a driven-subset-length holder ("delta length N mismatch with
+        vertex M"). Full-pin holders never set ``_solid_pin``, so they still
+        reach the harmonic surface+interior builder below.
         """
         import numpy as np
         from ._scene_pin_ import MoveByOperation
+
+        solid_pin = getattr(pin_holder._data, "_solid_pin", None)
+        if solid_pin is not None:
+            return ParamDecoder._build_solid_poisson_move_ops(solid_pin, obj_cfg)
+
+        sim_weights = getattr(pin_holder._data, "_sim_blender_weights", None)
+        if sim_weights is not None:
+            harmonic = getattr(pin_holder._data, "_harmonic", None)
+            return ParamDecoder._build_solid_embedded_move_ops(
+                sim_weights, obj_cfg, harmonic,
+            )
 
         index = list(pin_holder.index)
         n_pin_verts = len(index)
@@ -733,6 +1152,199 @@ class ParamDecoder:
                 pos = np.asarray(track["position"], dtype=np.float64)
                 if pos.shape == (n_frames, 3):
                     positions[:, j, :] = pos
+
+        embedded_ops: list = []
+        for k in range(n_frames - 1):
+            embedded_ops.append(MoveByOperation(
+                delta=np.ascontiguousarray(positions[k + 1] - positions[k]),
+                t_start=times[k],
+                t_end=times[k + 1],
+                transition="linear",
+            ))
+        return embedded_ops
+
+    @staticmethod
+    def _build_solid_embedded_move_ops(sim_weights, obj_cfg, harmonic=None):
+        """Build SOLID capture-deformation MoveBy segments.
+
+        ``sim_weights`` lists, per pinned sim SURFACE vertex (in
+        ``holder.index`` order), the ``(blender_index, weight)`` pairs of
+        the Blender pins that embed onto it; each surface vertex follows the
+        weight-averaged displacement of those pins.
+
+        ``harmonic`` (``(n_surface, M)`` or ``None``) drives the tet
+        INTERIOR when the whole surface is pinned: ``M`` is the harmonic
+        operator (Laplace solve with the surface as Dirichlet boundary), so
+        interior positions are ``M @ surface_positions``. Consecutive deltas
+        then move each interior vertex by the harmonic extension of the
+        surface displacement, from its own rest position (the constant
+        ``M @ surface_rest`` offset cancels in the differences). With both
+        surface and interior prescribed the SOLID is fully kinematic, so its
+        free elastic interior can no longer buckle into self-intersection.
+        ``holder.index`` is ordered ``surface_ids + interior_ids`` to match.
+        """
+        import numpy as np
+        from ._scene_pin_ import MoveByOperation
+
+        n_surf = len(sim_weights)
+
+        # Resolve each contributing Blender vertex's captured track once.
+        blender_tracks: dict = {}
+        times = None
+        for pairs in sim_weights:
+            for b, _w in pairs:
+                if b in blender_tracks:
+                    continue
+                cfg = obj_cfg.get(b)
+                track = cfg.get("pin_anim", {}).get(b) if cfg else None
+                blender_tracks[b] = track
+                if track is not None and times is None:
+                    times = list(track["time"])
+        if times is None or len(times) < 2:
+            return []
+        n_frames = len(times)
+
+        # Surface vertex track = Σ w·pos(b) / Σ w over the embedding Blender
+        # pins. Consecutive deltas cancel the absolute offset, leaving the
+        # weight-averaged displacement the sim vertex follows.
+        surf_pos = np.zeros((n_frames, n_surf, 3), dtype=np.float64)
+        for j, pairs in enumerate(sim_weights):
+            acc = np.zeros((n_frames, 3), dtype=np.float64)
+            wsum = 0.0
+            for b, w in pairs:
+                track = blender_tracks.get(b)
+                if track is None:
+                    continue
+                pos = np.asarray(track["position"], dtype=np.float64)
+                if pos.shape == (n_frames, 3):
+                    acc += w * pos
+                    wsum += w
+            if wsum > 0.0:
+                surf_pos[:, j, :] = acc / wsum
+
+        if harmonic is not None:
+            _, M = harmonic
+            M = np.asarray(M, dtype=np.float64)
+            # Interior = harmonic extension of the surface positions.
+            interior_pos = np.einsum("is,fsc->fic", M, surf_pos)
+            positions = np.concatenate([surf_pos, interior_pos], axis=1)
+        else:
+            positions = surf_pos
+
+        embedded_ops: list = []
+        for k in range(n_frames - 1):
+            embedded_ops.append(MoveByOperation(
+                delta=np.ascontiguousarray(positions[k + 1] - positions[k]),
+                t_start=times[k],
+                t_end=times[k + 1],
+                transition="linear",
+            ))
+        return embedded_ops
+
+    @staticmethod
+    def _rigid_fit(P, Q):
+        """Best rigid ``R, t`` (Kabsch) mapping rest points ``P`` onto captured
+        ``Q`` (unweighted). Falls back to a pure translation (``R = I``) for a
+        degenerate set (fewer than 3 points) so a rank-deficient fit never adds
+        a bogus rotation. ``R`` maps ``P`` to ``Q``: ``Q ~= P @ R.T + t``.
+        """
+        import numpy as np
+
+        if P.shape[0] == 0:
+            return np.eye(3), np.zeros(3)
+        cp = P.mean(axis=0)
+        cq = Q.mean(axis=0)
+        if P.shape[0] < 3:
+            return np.eye(3), cq - cp
+        H = (P - cp).T @ (Q - cq)
+        U, _s, Vt = np.linalg.svd(H)
+        D = np.eye(3)
+        if np.linalg.det(Vt.T @ U.T) < 0.0:
+            D[2, 2] = -1.0
+        R = Vt.T @ D @ U.T
+        return R, cq - R @ cp
+
+    @staticmethod
+    def _build_solid_poisson_move_ops(solid_pin, obj_cfg):
+        """Build MoveBy segments for a partially-pinned SOLID via the
+        two-stage Poisson operators.
+
+        ``solid_pin`` carries ``S_t`` (surface least-squares operator,
+        n_surf x n_input), ``M`` (interior harmonic operator or None), and a
+        ``keep`` mask selecting the driven tet verts (holder.index order =
+        surface + interior). Only PINNED input verts have captured tracks; the
+        others sit at 0 and are zeroed by ``S_t``'s ``W = diag(pinned)``.
+
+        Rigid-aware diffusion. ``S_t`` / ``M`` are linear, so diffusing the
+        absolute captured positions directly does NOT reproduce a rigid input
+        motion: a least-squares fit of a rotation over a partial pin set has no
+        partition-of-unity / affine precision, so it extrapolates non-rigidly
+        (the linear-blend-skinning shrinkage) and injects a spurious bend that
+        grows with the rotation angle into BOTH the pulled targets and the
+        captured rest shape. So per frame, factor the rigid motion ``R_g, t_g``
+        out of the pinned inputs, diffuse only the residual, and recombine
+        ``rigid(rest) + diffuse(residual)``. A rigid capture has zero residual,
+        so every driven tet vert lands exactly on ``R_g rest + t_g``. When
+        ``S_t`` does reproduce rigids this is identical to the old direct
+        diffusion, so only the spurious component changes.
+        """
+        import numpy as np
+        from ._scene_pin_ import MoveByOperation
+
+        S_t = np.asarray(solid_pin["S_t"], dtype=np.float64)
+        M = solid_pin["M"]
+        keep = np.asarray(solid_pin["keep"])
+        n_input = int(solid_pin["n_input"])
+
+        # Gather captured per-Blender-vertex tracks (input space).
+        tracks: dict = {}
+        times = None
+        for b, cfg in obj_cfg.items():
+            track = cfg.get("pin_anim", {}).get(b) if cfg else None
+            if track is not None:
+                tracks[int(b)] = np.asarray(track["position"], dtype=np.float64)
+                if times is None:
+                    times = list(track["time"])
+        if times is None or len(times) < 2:
+            return []
+        n_frames = len(times)
+
+        d_frame = np.zeros((n_frames, n_input, 3), dtype=np.float64)
+        for b, pos in tracks.items():
+            if 0 <= b < n_input and pos.shape == (n_frames, 3):
+                d_frame[:, b, :] = pos
+        if M is not None:
+            M = np.asarray(M, dtype=np.float64)
+
+        def diffuse(vec_in):
+            # vec_in: (n_input,3) -> (n_surf[+n_int],3) via S_t then M.
+            surf = np.einsum("si,ic->sc", S_t, vec_in)
+            if M is None:
+                return surf
+            return np.concatenate([surf, np.einsum("is,sc->ic", M, surf)], axis=0)
+
+        # Rigid reference = the solver's TRUE tet rest on the driven_full axis.
+        # The MoveBy deltas accumulate onto rest0[holder.index] downstream (the
+        # pull target and the captured rest shape), so the rigid part must carry
+        # that exact rest. Falling back to the S_t-diffused rest (older payloads
+        # without ``rest_full``) leaves a small rest/LS-fit mismatch that the
+        # rotation scales back into a bend, so prefer the true rest.
+        pinned = sorted(b for b in tracks if 0 <= b < n_input)
+        rest_in = d_frame[0]
+        rest_full = solid_pin.get("rest_full")
+        rest_full = (
+            np.asarray(rest_full, dtype=np.float64)
+            if rest_full is not None else diffuse(rest_in)
+        )
+        P0 = rest_in[pinned]
+
+        positions = np.empty((n_frames, rest_full.shape[0], 3), dtype=np.float64)
+        for f in range(n_frames):
+            Rg, tg = ParamDecoder._rigid_fit(P0, d_frame[f, pinned])
+            res = np.zeros_like(rest_in)
+            res[pinned] = d_frame[f, pinned] - (P0 @ Rg.T + tg)
+            positions[f] = rest_full @ Rg.T + tg + diffuse(res)
+        positions = positions[:, keep, :]  # align to holder.index
 
         embedded_ops: list = []
         for k in range(n_frames - 1):
@@ -803,12 +1415,12 @@ class ParamDecoder:
         tet_V = getattr(pin_holder._data, '_tet_V', None)
         blender_vert = getattr(pin_holder._data, '_blender_vert', None)
         if tet_V is not None and blender_vert is not None and blender_hint >= 0:
-            import numpy as _np
-            hint_pos = _np.ascontiguousarray(
-                _np.asarray(blender_vert[blender_hint], dtype=_np.float64)
+            import numpy as np
+            hint_pos = np.ascontiguousarray(
+                np.asarray(blender_vert[blender_hint], dtype=np.float64)
             )
-            tet_arr = _np.ascontiguousarray(
-                _np.asarray(tet_V, dtype=_np.float64)
+            tet_arr = np.ascontiguousarray(
+                np.asarray(tet_V, dtype=np.float64)
             )
             sim_hint = int(_rust.closest_vertex_index(tet_arr, hint_pos))
         else:
@@ -842,13 +1454,7 @@ class ParamDecoder:
             print("=== Invisible Colliders ===")
         for w in ic.get("walls", []):
             wall = scene.add.invisible.wall(w["position"], w["normal"])
-            wall.param.set("contact-gap", w.get("contact_gap", 1e-3))
-            wall.param.set("friction", w.get("friction", 0.0))
-            wall.param.set("active-duration", w.get("active_duration", -1.0))
-            thickness = _rust.validate_invisible_collider_thickness(
-                "wall", float(w.get("thickness", 1.0))
-            )
-            wall.param.set("thickness", thickness)
+            _apply_common_collider_params(wall, w, "wall")
             keyframes = w.get("keyframes", [])
             for kf in keyframes[1:]:
                 wall.move_to(kf["position"], kf["time"])
@@ -860,18 +1466,230 @@ class ParamDecoder:
                 sphere.hemisphere()
             if s.get("invert", False):
                 sphere.invert()
-            sphere.param.set("contact-gap", s.get("contact_gap", 1e-3))
-            sphere.param.set("friction", s.get("friction", 0.0))
-            sphere.param.set("active-duration", s.get("active_duration", -1.0))
-            thickness = _rust.validate_invisible_collider_thickness(
-                "sphere", float(s.get("thickness", 1.0))
-            )
-            sphere.param.set("thickness", thickness)
+            _apply_common_collider_params(sphere, s, "sphere")
             keyframes = s.get("keyframes", [])
             for kf in keyframes[1:]:
                 sphere.transform_to(kf["position"], kf["radius"], kf["time"])
             if verbose:
                 print(f"  Sphere: pos={s['position']}, r={s['radius']}, inv={s.get('invert')}, hemi={s.get('hemisphere')}, kf={len(keyframes)}")
+
+
+def _apply_common_collider_params(collider, spec, kind):
+    """Set the shared contact-gap / friction / active-duration / thickness
+    defaults on an invisible wall or sphere collider from ``spec``.
+
+    ``kind`` is the "wall"/"sphere" label passed to the thickness validator.
+    """
+    collider.param.set("contact-gap", spec.get("contact_gap", 1e-3))
+    collider.param.set("friction", spec.get("friction", 0.0))
+    collider.param.set("active-duration", spec.get("active_duration", -1.0))
+    thickness = _rust.validate_invisible_collider_thickness(
+        kind, float(spec.get("thickness", 1.0))
+    )
+    collider.param.set("thickness", thickness)
+
+
+def _graph_laplacian_from_edges(e0, e1, n):
+    """Binary-adjacency graph Laplacian ``L = diag(deg) - A`` (CSR) over the
+    undirected edges ``(e0[i], e1[i])``. Edges are symmetrized and the
+    per-element multiplicity is collapsed to a binary adjacency so ``L`` is
+    the standard graph Laplacian. ``n`` is the vertex count."""
+    import numpy as np
+    import scipy.sparse as sp
+
+    rows = np.concatenate([e0, e1])
+    cols = np.concatenate([e1, e0])
+    adj = sp.coo_matrix(
+        (np.ones(rows.shape[0], dtype=np.float64), (rows, cols)),
+        shape=(n, n),
+    ).tocsr()
+    adj.data[:] = 1.0
+    deg = np.asarray(adj.sum(axis=1)).ravel()
+    return (sp.diags(deg) - adj).tocsr()
+
+
+def _build_harmonic_interior_operator(n_verts, tets, surf_ids, interior_ids):
+    """Operator mapping surface displacements to interior displacements via
+    a graph-Laplace harmonic extension over a tet mesh.
+
+    Solves the discrete Laplace equation with the surface vertices held as
+    Dirichlet boundary conditions: partition the graph Laplacian
+    ``L = D - A`` (``A`` = tet-edge adjacency) into interior (``I``) and
+    surface (``S``) blocks and solve ``L_II u_I = -L_IS u_S``. Returns the
+    dense ``(n_interior, n_surface)`` operator ``M = -L_II^{-1} L_IS`` so the
+    caller applies ``u_I = M u_S`` per frame, or ``None`` when SciPy is
+    unavailable or the solve fails (the caller then falls back to
+    surface-only pinning). ``M`` rows sum to 1 (harmonic functions reproduce
+    constants), so it transfers a displacement field without scaling it.
+    """
+    try:
+        import warnings
+
+        import numpy as np
+        import scipy.sparse.linalg as spla
+    except Exception:
+        return None
+    try:
+        T = np.asarray(tets, dtype=np.int64)
+        if T.ndim != 2 or T.shape[1] != 4:
+            return None
+        inter = np.asarray(interior_ids, dtype=np.int64)
+        surf = np.asarray(surf_ids, dtype=np.int64)
+        if inter.size == 0 or surf.size == 0:
+            return None
+        pairs = ((0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3))
+        e0 = np.concatenate([T[:, a] for a, _ in pairs])
+        e1 = np.concatenate([T[:, b] for _, b in pairs])
+        L = _graph_laplacian_from_edges(e0, e1, n_verts)
+        L_II = L[inter][:, inter].tocsc()
+        L_IS = L[inter][:, surf].tocsc()
+        # A singular L_II (an interior component with no path to the pinned
+        # surface, e.g. an enclosed void) makes spsolve emit a
+        # MatrixRankWarning and return NaN rather than raise. The finite
+        # check below turns that into a clean None (surface-only fallback);
+        # silence the warning so the intentional fallback is not alarming.
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", spla.MatrixRankWarning)
+            M = spla.spsolve(L_II, -L_IS.toarray())
+        M = np.asarray(M, dtype=np.float64)
+        if M.ndim == 1:
+            M = M.reshape(inter.size, surf.size)
+        if M.shape != (inter.size, surf.size) or not np.all(np.isfinite(M)):
+            return None
+        return M
+    except Exception:
+        return None
+
+
+def _surface_graph_laplacian(tris, n_surf):
+    """Graph Laplacian L = D - A over the edges of a triangle mesh (compact
+    surface index space). Binary adjacency, robust to fTetWild slivers (a
+    cotangent Laplacian can go non-finite / negative on degenerate tris)."""
+    import numpy as np
+
+    T = np.asarray(tris, dtype=np.int64).reshape(-1, 3)
+    e0 = np.concatenate([T[:, 0], T[:, 1], T[:, 2]])
+    e1 = np.concatenate([T[:, 1], T[:, 2], T[:, 0]])
+    return _graph_laplacian_from_edges(e0, e1, n_surf)
+
+
+def _build_solid_pin_fields(tet_mesh, F_arr, pin_index, alpha_rel=0.1):
+    """Two-stage diffusion for a PARTIALLY-pinned SOLID. Returns a dict with
+    a per-tet-vertex pull WEIGHT and a per-frame TARGET operator, or ``None``
+    on failure (caller falls back to surface-only).
+
+    Stage 1 (surface, least-squares Poisson): map each input (Blender)
+    vertex to its closest tet-surface triangle (barycentric), then solve
+    ``(B^T W B + alpha L_s) u = B^T W d`` on the tet surface. The WEIGHT
+    field uses ``d = 1`` on pinned input / 0 elsewhere with ``W = I``; the
+    TARGET field uses ``d = captured target`` with ``W = diag(pinned)`` so
+    only pinned input constrains it. The constant operator
+    ``S_t = A_t^{-1} B^T W`` is applied per frame.
+
+    Stage 2 (interior): graph-Laplace harmonic extension of the surface
+    field into the tet interior (reuses :func:`_build_harmonic_interior_operator`).
+    """
+    try:
+        import warnings
+
+        import numpy as np
+        import scipy.sparse as sp
+        import scipy.sparse.linalg as spla
+        from ._bvh_ import frame_mapping
+    except Exception:
+        return None
+    try:
+        bl = getattr(tet_mesh, "_pin_blender_surface", None)
+        if bl is None:
+            return None
+        bl_verts = np.ascontiguousarray(np.asarray(bl[0], dtype=np.float64))
+        bl_tris = np.ascontiguousarray(np.asarray(bl[1], dtype=np.int64))
+        V_local = np.ascontiguousarray(np.asarray(tet_mesh[0], dtype=np.float64))
+        n_tet = V_local.shape[0]
+        sim_surf_ids = np.unique(F_arr.reshape(-1))
+        n_surf = int(sim_surf_ids.size)
+        n_input = int(bl_verts.shape[0])
+        if n_surf == 0 or n_input == 0:
+            return None
+
+        # Compact surface index space (dense re-index of sim_surf_ids).
+        full2cpt = np.full(n_tet, -1, dtype=np.int64)
+        full2cpt[sim_surf_ids] = np.arange(n_surf)
+        F_cpt = full2cpt[F_arr.reshape(-1, 3)]
+        if (F_cpt < 0).any():
+            return None
+        surf_verts = V_local[sim_surf_ids]
+
+        # Stage 1: closest tet-surface triangle per INPUT vertex (forward map).
+        tri_idx, coefs = frame_mapping(bl_verts, surf_verts, F_cpt)
+        rows = np.empty(3 * n_input, dtype=np.int64)
+        cols = np.empty(3 * n_input, dtype=np.int64)
+        data = np.empty(3 * n_input, dtype=np.float64)
+        for a in range(n_input):
+            tri = F_cpt[int(tri_idx[a])]
+            c = coefs[a]
+            w = np.array([1.0 - c[0] - c[1], c[0], c[1]], dtype=np.float64)
+            w = np.clip(w, 0.0, None)
+            s = w.sum()
+            w = (w / s) if s > 1e-12 else np.array([1.0, 0.0, 0.0])
+            for j in range(3):
+                rows[3 * a + j] = a
+                cols[3 * a + j] = int(tri[j])
+                data[3 * a + j] = w[j]
+        B = sp.coo_matrix((data, (rows, cols)), shape=(n_input, n_surf)).tocsr()
+
+        L_s = _surface_graph_laplacian(F_cpt, n_surf)
+        BtB = (B.T @ B).tocsc()
+        diag_btb = BtB.diagonal().mean() if BtB.nnz else 1.0
+        diag_ls = L_s.diagonal().mean() if L_s.nnz else 1.0
+        alpha = alpha_rel * diag_btb / max(diag_ls, 1e-12)
+
+        pin_mask = np.zeros(n_input, dtype=np.float64)
+        pinned = np.asarray(sorted({int(i) for i in pin_index}), dtype=np.int64)
+        pin_mask[pinned[(pinned >= 0) & (pinned < n_input)]] = 1.0
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", spla.MatrixRankWarning)
+            # Weight field (W = I): diffuse the binary pinned mask.
+            A_w = (BtB + alpha * L_s).tocsc()
+            w_surf = spla.spsolve(A_w, B.T @ pin_mask)
+            # Target operator (W = diag(pin_mask)): only pinned input
+            # constrains it; eps*I removes the constant nullspace on surface
+            # components with no pinned input vertex.
+            Wd = sp.diags(pin_mask)
+            BtW = (B.T @ Wd).tocsr()
+            A_t = (BtW @ B + alpha * L_s + 1e-8 * sp.eye(n_surf)).tocsc()
+            S_t = spla.splu(A_t).solve(np.asarray(BtW.todense()))
+        w_surf = np.clip(np.asarray(w_surf, dtype=np.float64), 0.0, 1.0)
+        S_t = np.asarray(S_t, dtype=np.float64)
+        if w_surf.shape[0] != n_surf or S_t.shape != (n_surf, n_input):
+            return None
+        if not (np.all(np.isfinite(w_surf)) and np.all(np.isfinite(S_t))):
+            return None
+
+        # Stage 2: interior harmonic extension of weight + (per-frame) target.
+        surf_ids = [int(s) for s in sim_surf_ids]
+        surf_set = set(surf_ids)
+        interior_ids = [v for v in range(n_tet) if v not in surf_set]
+        M = None
+        interior_w = None
+        if interior_ids:
+            M = _build_harmonic_interior_operator(
+                n_tet, tet_mesh[2], surf_ids, interior_ids,
+            )
+            if M is not None:
+                interior_w = np.clip(M @ w_surf, 0.0, 1.0)
+        return {
+            "surf_ids": surf_ids,
+            "interior_ids": interior_ids if M is not None else [],
+            "w_surf": w_surf,
+            "interior_w": interior_w,
+            "S_t": S_t,
+            "M": M,
+            "n_input": n_input,
+        }
+    except Exception:
+        return None
 
 
 class SceneDecoder:
@@ -900,15 +1718,10 @@ class SceneDecoder:
         self, filepath: str, asset_manager: AssetManager, mesh_manager: MeshManager
     ):
         _rust.validate_pickle_extension(filepath)
-        with open(filepath, "rb") as f:
-            blob = f.read()
         # See ``frontend/_cbor_bridge_.py`` for the byte-sniff contract.
         from . import _cbor_bridge_ as _cbor
 
-        if _cbor.is_cbor(blob):
-            self._data = _cbor.loads_scene(blob)
-        else:
-            self._data = pickle.loads(blob)
+        self._data = _cbor.load_scene_file(filepath)
         self._asset = asset_manager
         self._mesh = mesh_manager
         self._object_info: dict[str, ObjectInfo] = {}  # uuid -> ObjectInfo for stitch generation
@@ -963,10 +1776,10 @@ class SceneDecoder:
                 f"  * name: {name}, vert: {vert.shape}, face: {face.shape if face is not None else 'None'}, uv: {len(uv) if uv is not None else 'None'}"
             )
 
-    def populate_objects(self, scene: Scene, verbose: bool = False, progress_callback=None, ftetwild_by_uuid: dict | None = None) -> Scene:
+    def populate_objects(self, scene: Scene, verbose: bool = False, progress_callback=None, ftetwild_by_uuid: dict | None = None, stitch_endpoint_uuids: set | None = None) -> Scene:
         """Populate ``scene`` with objects from the decoder's pickle data.
 
-        Handles STATIC, SOLID, SHELL, and ROD groups, including canonical
+        Handles STATIC, SOLID, SHELL, ROD, PDRD, and SAND groups, including canonical
         mesh deduplication by UUID, per-instance transforms, cached
         tetrahedralization (with per-UUID fTetWild overrides), pin
         registration with Blender-to-sim surface mapping, and stitches.
@@ -1031,7 +1844,11 @@ class SceneDecoder:
                 F = None
                 if group_type == "STATIC":
                     _obj = self._populate_static(
-                        scene, obj, name, obj_uuid, local_vert, face, transform, verbose,
+                        scene, obj, name, obj_uuid, local_vert, face, transform, vert,
+                        is_stitch_endpoint=bool(
+                            stitch_endpoint_uuids and obj_uuid in stitch_endpoint_uuids
+                        ),
+                        verbose=verbose,
                     )
                 elif group_type == "SOLID":
                     _obj, tet_mesh, V, F = self._populate_solid(
@@ -1047,9 +1864,33 @@ class SceneDecoder:
                     _obj = self._populate_rod(
                         scene, name, obj_uuid, local_vert, edge, transform, vert,
                     )
+                elif group_type == "PDRD":
+                    _obj = self._populate_pdrd(
+                        scene, obj_uuid, mesh_ref, canonical_meshes,
+                        canonical_asset_name, name, local_vert, face, transform, vert,
+                    )
+                elif group_type == "SAND":
+                    _obj = self._populate_sand(
+                        scene, name, obj_uuid, local_vert, transform, vert,
+                    )
                 else:
                     _rust.validate_group_type(group_type)
                     _obj = None
+
+                # Per-object bending reference rest angle (SHELL): the scene
+                # object carries a `bend_rest_vert` local buffer aligned 1:1
+                # with its own vertices. Transform it to world space (matching
+                # `vert`) and hand it to the scene object so the assembler can
+                # scatter it into the concatenated reference-vertex array.
+                if _obj is not None and obj.get("bend_rest_vert") is not None:
+                    import numpy as np
+                    brv = obj["bend_rest_vert"]
+                    brv_world = (
+                        self._apply_transform(brv, transform)
+                        if transform is not None
+                        else np.ascontiguousarray(brv, dtype=np.float32)
+                    )
+                    _obj.set_bend_rest_vert(brv_world)
 
                 self._apply_pin_mapping(
                     obj, _obj, group_type, vert, V, F, tet_mesh, verbose,
@@ -1225,12 +2066,20 @@ class SceneDecoder:
             "progress": progress,
         }
 
-    def _populate_static(self, scene, obj, name, obj_uuid, local_vert, face, transform, verbose):
+    def _populate_static(self, scene, obj, name, obj_uuid, local_vert, face, transform, vert, is_stitch_endpoint=False, verbose=False):
         """STATIC group dispatcher: rest-pose mesh, transform-keyframe
         animation, UI-assigned static ops, or per-vertex deformation
         cache. Returns the Scene Object for downstream pin / stitch
-        passes, or ``None`` for the rest-pose case (no further pin
-        work needed).
+        passes, or ``None`` for a non-stitched rest-pose collider (no
+        further pin work needed).
+
+        ``vert`` is the world-space surface vertices recorded in the
+        ``ObjectInfo`` so a STATIC can be a cross-stitch endpoint (it is
+        SHELL-like: 1:1 indices, never re-projected). ``is_stitch_endpoint``
+        marks a STATIC that appears in a cross-stitch: a non-moving such
+        STATIC is PROMOTED into the dynamic all-pinned namespace (instead of
+        the disjoint collision-mesh pool) so the stitch index can reach its
+        surface, while immovable fixed pins keep it frozen at rest.
         """
         import numpy as np
 
@@ -1269,6 +2118,15 @@ class SceneDecoder:
             # Mark for preview suppression: the shell's pins
             # are implementation detail, not user-chosen.
             _o._is_static_moving = True
+            # Register stitch metadata so a STATIC pin-shell can be a
+            # cross-stitch endpoint. type="STATIC" (not "SOLID") tells the
+            # decoder to keep its barycentric slots verbatim: a STATIC is
+            # never re-tetrahedralized, so its surface indices map 1:1 to
+            # the solver (SHELL-like). Harmless for non-stitched statics
+            # (the decoder only looks up endpoints named in a stitch).
+            self._object_info[obj_uuid] = ObjectInfo(
+                type="STATIC", vert=vert, V=vert, F=face,
+            )
             rest_t = (
                 np.asarray(transform, dtype=np.float64)[:3, 3]
                 if transform is not None
@@ -1387,7 +2245,39 @@ class SceneDecoder:
                     transition="linear",
                 )
             return _obj
-        # Case 4: rest-pose static (plain collision mesh).
+        # Case 4: rest-pose static (never moves).
+        if is_stitch_endpoint:
+            # Promote into the dynamic all-pinned namespace so the cross-stitch
+            # index can address this collider's surface. It is built as the
+            # same zero-stiffness pin-shell the animated cases use, with EVERY
+            # vertex held by an immovable fixed pin (an all-vertex pin carrying
+            # no operations) so it stays kinematically frozen at its rest pose:
+            # a fixed vertex is prescribed exactly (not softly), so there is no
+            # drift. The _force_dynamic flag routes it into dyn_objects at
+            # build (an all-pinned, no-op object would otherwise classify as
+            # static via scene_all_vertices_pinned and fall back to the
+            # unreachable collision-mesh pool). ObjectInfo is registered by
+            # _setup_pin_shell; positive per-vertex mass and the density/young
+            # the solver asserts come from apply_to_objects' clear_all() tri
+            # defaults at make() time (the STATIC encoder prunes those keys).
+            _obj, _ = _setup_pin_shell()
+            _obj.pin()
+            _obj._force_dynamic = True
+            # A promoted STATIC is a cross-stitch TARGET (a collider), never a
+            # CIPC stitch SOURCE. The encoder auto-detects intra-mesh
+            # loose-edge stitches for any mesh (mesh.py:detect_stitch_edges),
+            # so suppress that here: now that this object is returned non-None
+            # (previously a rest-pose static returned None), the post-dispatch
+            # _apply_stitch would otherwise attach a stitch between this
+            # collider's own (all-fixed) vertices. The cross-stitch itself is
+            # unaffected (it flows through result["cross_stitch"], not obj).
+            if obj.get("_resolved_stitch", obj.get("stitch")) is not None and verbose:
+                print(f"      > suppressing intra-mesh stitch on promoted static {name}")
+            obj["_resolved_stitch"] = None
+            obj.pop("stitch", None)
+            return _obj
+        # Non-stitched rest-pose static: a disjoint contact-only collision
+        # mesh (cheap, never solved). No ObjectInfo / promotion needed.
         self._asset.add.tri(name, local_vert, face)
         _static_obj = scene.add(name, obj_uuid)
         if transform is not None:
@@ -1485,6 +2375,27 @@ class SceneDecoder:
             )
             solid_info.orig_to_sim = orig_to_sim
             scene.set_surface_map(obj_uuid, tri_indices, coefs, F)
+            # Stash the source Blender surface (local verts + triangles)
+            # that produced the surface map, so _apply_pin_mapping can build
+            # the INVERSE map (each sim surface vertex -> closest Blender
+            # triangle) and drive every sim surface vertex. The forward
+            # Blender->sim map is not surjective onto sim vertices, so using
+            # it alone leaves some sim surface vertices unpinned. Vertex
+            # indices in tri_mesh match the Blender pin index space (the
+            # forward surface map is already keyed by Blender vertex).
+            if not hasattr(tet_mesh, "_pin_blender_surface"):
+                src_tri = entry.get("tri_mesh")
+                if src_tri is None and reuse_from is not None:
+                    src_tri = object_entries[reuse_from].get("tri_mesh")
+                if src_tri is not None:
+                    tet_mesh._pin_blender_surface = (
+                        np.ascontiguousarray(
+                            np.asarray(src_tri[0], dtype=np.float64)
+                        ),
+                        np.ascontiguousarray(
+                            np.asarray(src_tri[1], dtype=np.int64)
+                        ),
+                    )
         self._object_info[obj_uuid] = solid_info
         return _obj, tet_mesh, V, F
 
@@ -1512,6 +2423,29 @@ class SceneDecoder:
             _obj.set_uv(uv)
         return _obj
 
+    def _populate_pdrd(
+        self, scene, obj_uuid, mesh_ref, canonical_meshes, canonical_asset_name,
+        name, local_vert, face, transform, vert,
+    ):
+        """PDRD group dispatcher: register (or reuse) the tri asset (no
+        tetrahedralization), add the scene instance, flag it as PDRD,
+        and record an ``ObjectInfo`` entry. Returns the Scene Object
+        for the pin / stitch passes.
+        """
+        if mesh_ref and mesh_ref in canonical_meshes:
+            asset_name = canonical_asset_name[mesh_ref]
+        else:
+            asset_name = name
+            self._asset.add.tri(asset_name, local_vert, face)
+        _obj = scene.add(asset_name, obj_uuid)
+        _obj.as_pdrd()
+        if transform is not None:
+            _obj.mat4x4(transform)
+        self._object_info[obj_uuid] = ObjectInfo(
+            type="PDRD", vert=vert, V=vert, F=face,
+        )
+        return _obj
+
     def _populate_rod(self, scene, name, obj_uuid, local_vert, edge, transform, vert):
         """ROD group dispatcher: register the rod asset, add the scene
         instance, and record an ``ObjectInfo`` entry. Returns the Scene
@@ -1523,6 +2457,21 @@ class SceneDecoder:
         if transform is not None:
             _obj.mat4x4(transform)
         self._object_info[obj_uuid] = ObjectInfo(type="ROD", vert=vert)
+        return _obj
+
+    def _populate_sand(self, scene, name, obj_uuid, local_vert, transform, vert):
+        """SAND group dispatcher: register the positions-only points
+        asset (no connectivity), add the scene instance, and record an
+        ``ObjectInfo`` entry. A SAND object is a faceless cloud of loose
+        vertices (one grain per vertex), so there is no surface/tri asset
+        and no PDRD flag. Returns the Scene Object for the pin / stitch
+        passes.
+        """
+        self._asset.add.points(name, local_vert)
+        _obj = scene.add(name, obj_uuid)
+        if transform is not None:
+            _obj.mat4x4(transform)
+        self._object_info[obj_uuid] = ObjectInfo(type="SAND", vert=vert)
         return _obj
 
     def _apply_pin_mapping(self, obj, _obj, group_type, vert, V, F, tet_mesh, verbose):
@@ -1538,56 +2487,241 @@ class SceneDecoder:
             print(f"      > pin: {len(pin_index)}")
         if group_type == "SOLID" and tet_mesh is not None and tet_mesh.has_surface_mapping():
             import numpy as np
-            # Build Blender->sim surface transfer support from the
-            # interpolation map. A pinned Blender surface vertex
-            # contributes to every simulation surface vertex whose
-            # in-plane weight is positive on the mapped triangle.
-            # Frame coefs store (c1, c2, c3); the implicit bary
-            # weights are (1-c1-c2, c1, c2), which reduce to the
-            # old bary weights when c3 ~ 0 (vertex lies on the
-            # triangle). c3 (normal offset) does not affect the
-            # pin transfer support.
-            tri_indices_pin, coefs_pin = tet_mesh.surface_map
-
-            def mapped_surface_vertices(blender_index: int) -> list[int]:
-                ti = tri_indices_pin[blender_index]
-                tri_verts = F[ti]
-                c = coefs_pin[blender_index]
-                w = np.array([1.0 - c[0] - c[1], c[0], c[1]])
-                sim_verts = [
-                    int(tri_verts[k]) for k in range(len(tri_verts))
-                    if w[k] > 1e-4
-                ]
-                if not sim_verts:
-                    sim_verts = [int(tri_verts[int(np.argmax(w))])]
-                return sim_verts
-
-            n_surface_verts = len(vert)
-            if len(pin_index) == n_surface_verts:
-                # Use the transpose of the interpolation map:
-                # collect every simulation surface vertex that
-                # receives positive weight from a pinned Blender
-                # surface vertex.
-                sim_verts = sorted({
-                    vi
-                    for i in pin_index
-                    for vi in mapped_surface_vertices(i)
-                })
-                holder = _obj.pin(sim_verts)
-                holder._data._blender_pin_indices = list(pin_index)
-                holder._data._tet_V = V
-                holder._data._blender_vert = vert
-                if verbose:
-                    print(f"      > pin (mapped surface): {len(sim_verts)} verts")
+            from ._bvh_ import frame_mapping
+            # Drive sim surface vertices from the captured per-Blender-vertex
+            # deformation. fTetWild resamples the surface, so a Blender vertex
+            # does not coincide with a sim vertex. The forward map (Blender
+            # vertex -> its sim triangle) is NOT surjective onto sim vertices:
+            # some sim surface vertices fall in no pinned Blender vertex's
+            # triangle, stay unpinned, and float while neighbors follow the
+            # deformer -> distortion and solver self-intersection.
+            #
+            # Build the INVERSE map instead: for EACH sim surface vertex, its
+            # closest Blender surface triangle with in-plane barycentric
+            # weights (1-c1-c2, c1, c2; the normal offset c3 is irrelevant to
+            # a surface-displacement transfer). The sim vertex follows the
+            # weight-blended displacement of that triangle's PINNED corners.
+            # A sim vertex whose closest triangle has no pinned corner stays
+            # free, so partial and full pins use one code path (full pinning
+            # is just the case where every corner is pinned, hence every sim
+            # surface vertex is covered).
+            pinned = {int(i) for i in pin_index}
+            F_arr = np.ascontiguousarray(np.asarray(F, dtype=np.int64))
+            sim_surf_ids = np.unique(F_arr.reshape(-1))
+            bl = getattr(tet_mesh, "_pin_blender_surface", None)
+            n_blender = int(np.asarray(bl[0]).shape[0]) if bl is not None else 0
+            # Full pin (every Blender surface vertex pinned) keeps the
+            # verified path below unchanged. A PARTIAL pin instead diffuses
+            # a per-vertex pull weight + target via the two-stage Poisson so
+            # the pinned region follows while the rest stays free, with a
+            # graceful transition.
+            full_pin = bl is not None and n_blender > 0 and len(pinned) == n_blender
+            handled = False
+            if not full_pin and bl is not None:
+                fields = _build_solid_pin_fields(tet_mesh, F_arr, pin_index)
+                if fields is not None:
+                    w_surf = fields["w_surf"]
+                    interior_w = fields["interior_w"]
+                    surf_ids = fields["surf_ids"]
+                    interior_ids = fields["interior_ids"]
+                    if interior_w is not None and interior_ids:
+                        full_w = np.concatenate([w_surf, interior_w])
+                        driven_full = surf_ids + interior_ids
+                    else:
+                        full_w = w_surf
+                        driven_full = surf_ids
+                    keep = full_w > _PIN_WEIGHT_EPS
+                    driven = [int(driven_full[k]) for k in range(len(driven_full))
+                              if keep[k]]
+                    if driven:
+                        holder = _obj.pin(driven)
+                        holder._data._blender_pin_indices = list(pin_index)
+                        holder._data._tet_V = V
+                        holder._data._blender_vert = vert
+                        # [0,1] per-driven-vertex weight; _apply_pin_cfg_entry
+                        # scales it by pull_strength and exports pin-pullw.
+                        holder._data._solid_pin_weights = (
+                            full_w[keep].astype(np.float32)
+                        )
+                        holder._data._solid_pin = {
+                            "S_t": fields["S_t"],
+                            "M": fields["M"],
+                            "keep": keep,
+                            "n_input": fields["n_input"],
+                            # True tet rest positions on the driven_full axis
+                            # (surf_ids + interior_ids), in the SOLVER/world
+                            # frame (V = transform @ V_local, the same space as
+                            # the captured tracks and the solver rest verts; NOT
+                            # tet_mesh[0], which is the untransformed local
+                            # frame). The rigid-aware move-op builder carries
+                            # THESE rigidly, not the S_t-diffused rest: the
+                            # MoveBy deltas land on the solver's tet rest, so a
+                            # rigid capture must rotate that exact rest or the
+                            # rest/LS-fit mismatch reappears as a rotation-scaled
+                            # bend.
+                            "rest_full": np.asarray(
+                                V, dtype=np.float64
+                            )[driven_full],
+                        }
+                        # Full-axis arrays (length n_surf+n_interior) the
+                        # fix_weight_threshold split needs. ``keep`` and
+                        # ``_solid_pin_weights`` are the compacted view;
+                        # _build_solid_poisson_move_ops slices positions[:, keep]
+                        # over the FULL axis, so the split masks live there too.
+                        holder._data._solid_full_w = full_w
+                        holder._data._solid_driven_full = list(driven_full)
+                        # Surface mask over the full axis. driven_full is
+                        # surf_ids + interior_ids, so the first len(surf_ids)
+                        # entries are the surface verts (solver tet-index <
+                        # surface_vert_count). Hard FixPairs MUST be surface
+                        # only: the solver assembles the fix barrier/penalty
+                        # over surface_vert_count only (contact.cu) and gates
+                        # off inertia for every fix pin (energy.cu), so an
+                        # interior fix pin has a zero-diagonal block -> CG nan.
+                        # The threshold split keeps interior high-weight verts
+                        # as soft pull instead (pull is assembled over all verts
+                        # and weight*I keeps the diagonal positive).
+                        holder._data._solid_surf_mask = (
+                            np.arange(len(driven_full)) < len(surf_ids)
+                        )
+                        # Per-surface-vertex Blender corners (inverse map),
+                        # aligned to surf_ids / the leading driven_full axis.
+                        # The fix_weight_threshold split uses this to tell
+                        # pull-intent surface verts from hard-intent ones: a
+                        # pull pin overlapping a hard pin-root shares this one
+                        # merged Poisson holder, and hardening its (often
+                        # weight-1.0) verts would freeze them at initial
+                        # geometry and drop the captured target. Mirrors the
+                        # full-pin harmonic mixed-intent path.
+                        try:
+                            _blv, _blt = bl[0], bl[1]
+                            _Vloc = np.ascontiguousarray(
+                                np.asarray(tet_mesh[0], dtype=np.float64)
+                            )
+                            _itri, _icoef = frame_mapping(
+                                _Vloc[sim_surf_ids], _blv, _blt
+                            )
+                            _sbw = []
+                            for _k in range(sim_surf_ids.size):
+                                _tri = _blt[int(_itri[_k])]
+                                _c = _icoef[_k]
+                                _w = (1.0 - _c[0] - _c[1], _c[0], _c[1])
+                                _sbw.append([
+                                    (int(_tri[_j]), float(_w[_j]))
+                                    for _j in range(3)
+                                    if _w[_j] > _PIN_WEIGHT_EPS
+                                    and int(_tri[_j]) in pinned
+                                ])
+                            holder._data._sim_blender_weights = _sbw
+                        except Exception:
+                            holder._data._sim_blender_weights = None
+                        handled = True
+                        if verbose:
+                            kw = full_w[keep]
+                            print(f"      > pin (poisson partial): "
+                                  f"{int(keep.sum())} driven tet verts from "
+                                  f"{len(pinned)} blender pins (weight "
+                                  f"[{kw.min():.2f},{kw.max():.2f}])")
+            if handled:
+                return
+            # sim vertex -> list of (blender_index, weight)
+            support: dict = {}
+            if bl is not None and sim_surf_ids.size:
+                bl_verts, bl_tris = bl[0], bl[1]
+                V_local = np.ascontiguousarray(
+                    np.asarray(tet_mesh[0], dtype=np.float64)
+                )
+                inv_tri, inv_coefs = frame_mapping(
+                    V_local[sim_surf_ids], bl_verts, bl_tris,
+                )
+                for k in range(sim_surf_ids.size):
+                    tri = bl_tris[int(inv_tri[k])]
+                    c = inv_coefs[k]
+                    w = (1.0 - c[0] - c[1], c[0], c[1])
+                    pairs = [
+                        (int(tri[j]), float(w[j]))
+                        for j in range(3)
+                        if w[j] > _PIN_WEIGHT_EPS and int(tri[j]) in pinned
+                    ]
+                    if not pairs:
+                        # Projection landed outside the triangle / on a
+                        # near-zero corner: fall back to the highest-weight
+                        # pinned corner. No pinned corner -> sim vertex free.
+                        cand = [
+                            (int(tri[j]), float(w[j]))
+                            for j in range(3)
+                            if int(tri[j]) in pinned
+                        ]
+                        if cand:
+                            pairs = [max(cand, key=lambda t: t[1])]
+                    if pairs:
+                        support[int(sim_surf_ids[k])] = pairs
             else:
-                # Partial pin: each Blender pin vertex maps to the
-                # simulation surface vertices with positive
-                # interpolation weight.
+                # Defensive fallback (source surface unavailable): forward
+                # map. May under-cover the sim surface.
+                tri_indices_pin, coefs_pin = tet_mesh.surface_map
                 for i in pin_index:
-                    holder = _obj.pin(mapped_surface_vertices(i))
-                    holder._data._blender_pin_indices = [i]
+                    ti = int(tri_indices_pin[int(i)])
+                    tri = F_arr[ti]
+                    c = coefs_pin[int(i)]
+                    w = (1.0 - c[0] - c[1], c[0], c[1])
+                    sv = [int(tri[j]) for j in range(3) if w[j] > _PIN_WEIGHT_EPS]
+                    if not sv:
+                        sv = [int(tri[int(np.argmax(w))])]
+                    for s in sv:
+                        support.setdefault(s, []).append((int(i), 1.0))
+            if support:
+                surf_ids = sorted(support.keys())
+                # When the WHOLE sim surface is driven, it forms a complete
+                # Dirichlet boundary: solve Laplace to drive the tet interior
+                # by the harmonic extension of the surface displacement, so
+                # the SOLID is fully kinematic (like a STATIC shell) and its
+                # free elastic interior cannot buckle into self-intersection.
+                # A partially-pinned surface is not a complete boundary, so
+                # the interior stays free (soft) there.
+                n_tet_verts = int(np.asarray(tet_mesh[0]).shape[0])
+                full_surface = len(surf_ids) == int(sim_surf_ids.size)
+                harmonic_M = None
+                interior_ids: list = []
+                if full_surface and n_tet_verts > len(surf_ids):
+                    surf_set = set(surf_ids)
+                    interior_ids = [
+                        v for v in range(n_tet_verts) if v not in surf_set
+                    ]
+                    harmonic_M = _build_harmonic_interior_operator(
+                        n_tet_verts, tet_mesh[2], surf_ids, interior_ids,
+                    )
+                if harmonic_M is not None:
+                    driven = surf_ids + interior_ids
+                    holder = _obj.pin(driven)
+                    holder._data._blender_pin_indices = list(pin_index)
                     holder._data._tet_V = V
                     holder._data._blender_vert = vert
+                    holder._data._sim_blender_weights = [
+                        support[s] for s in surf_ids
+                    ]
+                    # Interior (holder.index[len(surf_ids):]) follows
+                    # M @ surface; surface keeps its blender transfer.
+                    holder._data._harmonic = (len(surf_ids), harmonic_M)
+                    if verbose:
+                        print(f"      > pin (harmonic solid): {len(surf_ids)} "
+                              f"surface + {len(interior_ids)} interior = "
+                              f"{len(driven)} tet verts (Laplace interior fill)")
+                else:
+                    holder = _obj.pin(surf_ids)
+                    holder._data._blender_pin_indices = list(pin_index)
+                    holder._data._tet_V = V
+                    holder._data._blender_vert = vert
+                    holder._data._sim_blender_weights = [
+                        support[s] for s in surf_ids
+                    ]
+                    if verbose:
+                        why = ("partial surface (interior left elastic)"
+                               if not full_surface
+                               else "harmonic solve unavailable/failed")
+                        print(f"      > pin (inverse mapped): {len(surf_ids)}/"
+                              f"{int(sim_surf_ids.size)} sim surface verts from "
+                              f"{len(pin_index)} blender pins [{why}]")
         else:
             # One holder for the whole pinned set. apply_pin_config
             # later splits it per pin_group_id when the object has

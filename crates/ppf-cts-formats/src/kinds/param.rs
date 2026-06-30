@@ -34,15 +34,6 @@ pub struct ParamPayload {
     #[serde(default)]
     pub pin_config: BTreeMap<String, BTreeMap<i32, PinData>>,
 
-    /// Non-cross-stitch alias merges. 5-tuple
-    /// `(name_a, name_b, stitch_stiffness, uuid_a, uuid_b)` where the
-    /// trailing UUID slots are optional.
-    #[serde(default)]
-    pub merge_pairs: Vec<MergePair>,
-
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub explicit_merge_pairs: Option<Vec<ExplicitMergePair>>,
-
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cross_stitch: Option<Vec<CrossStitch>>,
 
@@ -58,7 +49,6 @@ pub struct ParamPayload {
 }
 
 pub type GroupTriple = (GroupParams, Vec<String>, Vec<String>);
-pub type MergePair = (String, String, f64, Option<String>, Option<String>);
 
 /// Global sim params. Field names mirror the addon's kebab-case keys.
 /// Optional fields here are ones the producer skips conditionally
@@ -83,13 +73,21 @@ pub struct SceneParams {
     pub csrmat_max_nnz: i64,
     pub isotropic_air_friction: f64,
     pub auto_save: i32,
+    /// Comma-separated solver frame indices for explicit save
+    /// checkpoints. Empty string when the producer listed none. Parsed
+    /// by the solver's `SimArgs.checkpoints`.
+    pub checkpoints: String,
     pub line_search_max_t: f64,
     pub constraint_ghat: f64,
     pub cg_max_iter: i32,
     pub cg_tol: f64,
     pub include_face_mass: bool,
     pub disable_contact: bool,
-    pub stitch_stiffness: f64,
+
+    /// Pin the X and Z components above a Y threshold (0.0 disables).
+    /// Producer emits `fix-xz` unconditionally (params.py:84); the
+    /// kebab-case rename maps it to this field.
+    pub fix_xz: f64,
 
     /// `inactive_momentum_frames / fps` when there's a SHELL group;
     /// absent otherwise (params.py:90-91).
@@ -183,7 +181,7 @@ pub struct GroupParams {
 pub struct PinData {
     pub unpin_time: Option<f64>,
     pub pull_strength: Option<f64>,
-    pub pin_group_id: Option<i32>,
+    pub pin_group_id: Option<String>,
 
     /// Per-vertex animation keyframes. Outer key is the *target*
     /// vertex index this pin animates against.
@@ -208,14 +206,6 @@ pub enum PinOperation {
     Scale(ScaleOp),
     MoveBy(MoveByOp),
     Torque(TorqueOp),
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(default)]
-pub struct CommonOpFields {
-    pub t_start: f64,
-    pub t_end: f64,
-    pub transition: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -261,33 +251,31 @@ pub struct TorqueOp {
     pub hint_vertex: i32,
 }
 
-/// SHELL+ROD cross-merge. Producer: params.py:340-377.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct ExplicitMergePair {
-    pub source_uuid: String,
-    pub target_uuid: String,
-    /// `[source_vertex, target_vertex]` index pairs (best-bary chosen
-    /// by the producer).
-    pub pairs: Vec<[i32; 2]>,
-}
-
 /// Soft cross-stitch (anything not SHELL+SHELL or ROD+ROD). Producer:
-/// params.py:380-413. Producer emits arbitrary keys from
-/// `cross_stitch_json` plus `target_points` and `stitch_stiffness`.
+/// params.py:_encode_cross_stitch. Producer emits arbitrary keys from
+/// `cross_stitch_json` plus `source_points`, `target_points`, and
+/// `stitch_stiffness`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct CrossStitch {
     pub source_uuid: String,
     pub target_uuid: String,
 
-    /// Source vertex / face indices. Inner shape is producer-dependent
-    /// (e.g. `(N, 4)` for shell-onto-tet); kept opaque here.
+    /// Barycentric-barycentric index / weight rows, inner shape `(K, 6)`:
+    /// slots 0..2 are the source triangle, slots 3..5 the target triangle.
+    /// Kept opaque here (the decoder reshapes and re-projects per side).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ind: Option<ciborium::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub w: Option<ciborium::Value>,
 
-    /// World-space anchor points (SOLID target only).
+    /// World-space source anchor points (one per row), consumed when the
+    /// source object is SOLID to re-project the source onto its tet surface.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_points: Option<Vec<[f64; 3]>>,
+
+    /// World-space target anchor points (one per row), consumed when the
+    /// target object is SOLID to re-project the target onto its tet surface.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target_points: Option<Vec<[f64; 3]>>,
 
@@ -424,21 +412,5 @@ mod tests {
             .and_then(|m| m.get(&42))
             .expect("vertex 42 entry should round-trip");
         assert_eq!(pd.unpin_time, Some(1.5));
-    }
-
-    #[test]
-    fn merge_pair_optional_uuids() {
-        let payload = ParamPayload {
-            merge_pairs: vec![
-                ("a".into(), "b".into(), 1.0, Some("ua".into()), Some("ub".into())),
-                // name strings only, uuids absent
-                ("c".into(), "d".into(), 0.5, None, None),
-            ],
-            ..Default::default()
-        };
-        let bytes = to_cbor(KIND_PARAM, &payload).unwrap();
-        let back: ParamPayload = from_cbor(KIND_PARAM, &bytes).unwrap();
-        assert_eq!(back.merge_pairs.len(), 2);
-        assert!(back.merge_pairs[1].3.is_none());
     }
 }

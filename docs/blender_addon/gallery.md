@@ -165,7 +165,7 @@ vg.add(corner_indices, 1.0, "REPLACE")
 cloth = solver.create_group("Cloth", type="SHELL")
 cloth.add("Sheet")
 cloth.param.enable_strain_limit = True
-cloth.param.strain_limit = 0.05
+cloth.param.strain_limit_percent = 5.0
 cloth.param.bend = 1
 
 ball = solver.create_group("Ball", type="STATIC")

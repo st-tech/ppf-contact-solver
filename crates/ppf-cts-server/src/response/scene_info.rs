@@ -12,7 +12,7 @@ use serde_json::Value;
 
 use ppf_cts_core::datamodel::scene::fmt_thousands;
 use ppf_cts_core::datamodel::{list_saved_states, list_vertex_frames};
-use ppf_cts_formats::files::SCENE_INFO_JSON;
+use ppf_cts_formats::files::{session_output_dir, SCENE_INFO_JSON};
 
 /// Read `<root>/scene_info.json` and merge two dynamic rows:
 ///   * "Simulated Frames" = count(<output>/vert_*.bin)
@@ -27,7 +27,7 @@ pub fn load_scene_info(root: &str) -> Option<Value> {
     let mut v: Value = serde_json::from_str(&text).ok()?;
     {
         let obj = v.as_object_mut()?;
-        let output_dir = PathBuf::from(root).join("session").join("output");
+        let output_dir = session_output_dir(&PathBuf::from(root));
         let (simulated, last_saved) = scan_output_progress(&output_dir);
         obj.insert(
             "Simulated Frames".into(),
@@ -36,7 +36,10 @@ pub fn load_scene_info(root: &str) -> Option<Value> {
         obj.insert(
             "Last Saved".into(),
             Value::String(match last_saved {
-                Some(n) => n.to_string(),
+                // Comma-group like "Simulated Frames" and "Total Frames"
+                // so all three count rows share one display convention.
+                // The cast is safe for realistic frame counts.
+                Some(n) => fmt_thousands(n as usize),
                 None => "None".to_string(),
             }),
         );
@@ -55,4 +58,17 @@ pub fn scan_output_progress(output_dir: &Path) -> (usize, Option<u64>) {
     let verts = list_vertex_frames(output_dir).len();
     let last_saved = list_saved_states(output_dir).into_iter().max();
     (verts, last_saved)
+}
+
+/// Return the full ascending list of saved-checkpoint frames for `root`.
+///
+/// Each entry is the `N` of a `state_<N>.bin.gz` checkpoint under
+/// `<root>/session/output/`. The Resume dialog uses this list to offer
+/// every frame the solver can resume from. Returns an empty vec when no
+/// checkpoint exists yet (or the output dir is missing).
+pub fn list_saved_state_frames(root: &str) -> Vec<u64> {
+    let output_dir = session_output_dir(&PathBuf::from(root));
+    let mut frames = list_saved_states(&output_dir);
+    frames.sort_unstable();
+    frames
 }

@@ -10,6 +10,7 @@ from bpy.types import Operator  # pyright: ignore
 from ...models.collection_utils import safe_update_index
 from ...models.groups import get_addon_data
 from ..state import (
+    N_MAX_GROUPS,
     ObjectGroup,
     assign_display_indices,
     find_available_group_slot,
@@ -147,9 +148,9 @@ class OBJECT_OT_DeleteAllGroups(Operator):
 
     @classmethod
     def poll(cls, context):
-        return any(
-            group.active for group in iterate_active_object_groups(context.scene)
-        )
+        # iterate_active_object_groups already yields only active groups,
+        # so poll is True iff it yields at least one.
+        return next(iterate_active_object_groups(context.scene), None) is not None
 
     def invoke(self, context, event):
         return context.window_manager.invoke_confirm(self, event)
@@ -159,7 +160,7 @@ class OBJECT_OT_DeleteAllGroups(Operator):
 
         scene = context.scene
 
-        for i in range(32):  # N_MAX_GROUPS
+        for i in range(N_MAX_GROUPS):
             prop_name = f"object_group_{i}"
             group: ObjectGroup | None = getattr(get_addon_data(scene), prop_name, None)
             if group and group.active:
@@ -201,7 +202,8 @@ class OBJECT_OT_AddObjectsToGroup(Operator):
             group_uuid = group.ensure_uuid()
 
             from ...core.utils import (
-                count_ngon_faces, find_linked_duplicate_siblings,
+                count_duplicate_faces,
+                find_linked_duplicate_siblings,
             )
             for obj in list(context.selected_objects):
                 is_acceptable = obj.type == "MESH" or (
@@ -216,6 +218,26 @@ class OBJECT_OT_AddObjectsToGroup(Operator):
                     continue
                 if not is_acceptable or obj_uid in existing_uuids:
                     continue
+
+                # A SAND group accepts ONLY a committed particle mesh: a
+                # faceless cloud of loose vertices (grain centers) with the
+                # ``ppf_particle_mesh`` stamp, no polygons and no edges. A
+                # raw solid mesh must be converted first (Convert To Solid
+                # Particle Mesh in the group panel).
+                if group.object_type == "SAND":
+                    is_particle_mesh = (
+                        obj.type == "MESH"
+                        and obj.get("ppf_particle_mesh")
+                        and len(obj.data.polygons) == 0
+                        and len(obj.data.edges) == 0
+                    )
+                    if not is_particle_mesh:
+                        self.report(
+                            {"ERROR"},
+                            f"Object '{obj.name}' is not a particle mesh. "
+                            f"Convert to particle mesh first.",
+                        )
+                        continue
 
                 # Reject shallow-copied (Alt-D / Linked Duplicate) objects
                 # before they can be assigned. Shared mesh data would let
@@ -235,21 +257,22 @@ class OBJECT_OT_AddObjectsToGroup(Operator):
                     )
                     continue
 
-                # Reject N-gons (polygons with > 4 vertices). The solver
-                # operates on triangles + quads only; the encoder used to
-                # silently fan-triangulate N-gons, which broke vertex-
-                # group / pin / UV correspondence. Make the user
-                # triangulate explicitly so the geometry they see in
-                # the viewport is the geometry the solver runs on.
-                ngon_count = count_ngon_faces(obj)
-                if ngon_count > 0:
+                # Reject doubled geometry (two triangles sharing the same
+                # three vertices). The solver builds a degenerate bending
+                # element from coincident faces and aborts at startup;
+                # this is the airbag/inflate "Merge by Distance leftover"
+                # case. Refuse it here rather than silently dropping faces
+                # the user may have placed intentionally.
+                dup_count = count_duplicate_faces(obj)
+                if dup_count > 0:
                     self.report(
                         {"ERROR"},
-                        f"Object '{obj.name}' has {ngon_count} N-gon face(s) "
-                        f"(polygon with > 4 vertices). The solver supports "
-                        f"only triangles and quads. Apply a Triangulate "
-                        f"modifier or use Mesh > Faces > Triangulate Faces "
-                        f"in Edit Mode before assigning.",
+                        f"Object '{obj.name}' has {dup_count} duplicate "
+                        f"face(s) (two triangles sharing the same three "
+                        f"vertices), usually from doubled geometry. Select "
+                        f"the mesh in Edit Mode and run Mesh > Merge > By "
+                        f"Distance (or delete the duplicate faces) before "
+                        f"assigning.",
                     )
                     continue
 

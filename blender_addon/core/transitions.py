@@ -30,8 +30,17 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from .protocol import PROTOCOL_VERSION
-from .session import new_session_id
+from .protocol import (
+    PROTOCOL_VERSION,
+    STATUS_BUILDING,
+    STATUS_BUSY,
+    STATUS_FAILED,
+    STATUS_NO_BUILD,
+    STATUS_NO_DATA,
+    STATUS_READY,
+    STATUS_RESUMABLE,
+    STATUS_SAVE_AND_QUIT,
+)
 from .state import Activity, AppState, Phase, Server, Solver
 from .events import (
     AbortRequested,
@@ -98,6 +107,16 @@ from .effects import (
 
 
 # ---------------------------------------------------------------------------
+# Tunables
+# ---------------------------------------------------------------------------
+
+# In-flight stale polls to drain during STARTING. Seeded into
+# starting_poll_guard by RunRequested / ResumeRequested and decremented
+# per poll by the post-poll guard in _interpret_response.
+_STARTING_POLL_GUARD_DEPTH = 3
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
@@ -119,29 +138,24 @@ def transition(state: AppState, event: Event) -> tuple[AppState, list[Effect]]:
                 [DoConnect(bt, cfg, sp)],
             )
 
-        case Connected(remote_root=root):
-            # Mint a fresh session id on every successful connect so
+        case Connected(remote_root=root, session_id=sid, saved_session_id=saved):
+            # A fresh session id is minted on every successful connect so
             # downstream artifacts (PC2 headers, modifier binds, remote
-            # directories) can be correlated with THIS run.
-            sid = new_session_id()
+            # directories) can be correlated with THIS run. The id and the
+            # last-saved id both arrive on the event: the EffectRunner owns
+            # the uuid mint and the bpy read, so this arm stays pure and
+            # deterministic. ``sid`` may be empty if the runner could not
+            # mint one; treat it as "" rather than substituting a value.
             effects = [DoValidateRemotePath(), DoQuery(), DoLog(f"Connected (session {sid}).")]
             # Reconcile log: warn the user when the .blend was last
             # saved under a different session so they know the on-disk
             # PC2 files may not correspond to anything on this server.
-            try:
-                import bpy  # pyright: ignore
-                from ..models.groups import get_addon_data, has_addon_data
-                scene = bpy.context.scene
-                if scene is not None and has_addon_data(scene):
-                    saved = get_addon_data(scene).state.last_session_id or ""
-                    if saved and saved != sid:
-                        effects.append(DoLog(
-                            f"Reconcile: previous session {saved} differs "
-                            f"from new session {sid}; cached PC2 files may "
-                            f"not match the remote."
-                        ))
-            except Exception:
-                pass
+            if saved and saved != sid:
+                effects.append(DoLog(
+                    f"Reconcile: previous session {saved} differs "
+                    f"from new session {sid}; cached PC2 files may "
+                    f"not match the remote."
+                ))
             return (
                 replace(
                     state,
@@ -197,29 +211,17 @@ def transition(state: AppState, event: Event) -> tuple[AppState, list[Effect]]:
             )
 
         case ServerStopped():
+            # Deliberate stop: same per-operation status reset as the
+            # transient-loss paths, plus a clear of the last server error
+            # since this was an intentional shutdown.
             return (
-                replace(
-                    state,
-                    server=Server.UNKNOWN,
-                    solver=Solver.NO_DATA,
-                    activity=Activity.IDLE,
-                    progress=0.0,
-                    message="",
-                    server_error="",
-                ),
+                replace(_server_gone(state), server_error=""),
                 [DoClearInterrupt(), DoLog("Server stopped.")],
             )
 
         case ServerLost():
             return (
-                replace(
-                    state,
-                    server=Server.UNKNOWN,
-                    solver=Solver.NO_DATA,
-                    activity=Activity.IDLE,
-                    progress=0.0,
-                    message="",
-                ),
+                _server_gone(state),
                 [DoLog("Server not responding.")],
             )
 
@@ -278,6 +280,17 @@ def transition(state: AppState, event: Event) -> tuple[AppState, list[Effect]]:
             if state.solver in (Solver.RUNNING, Solver.STARTING, Solver.SAVING,
                                 Solver.BUILDING):
                 return state, [DoQuery()]
+            # A pending abort must keep polling until a status response
+            # confirms the solver reached a terminal state; the ServerPolled
+            # handler above turns that into ``activity=IDLE``. The
+            # solver-state branch is not enough: an abort issued while the
+            # solver is already terminal (cancelling a fetch/send/apply, where
+            # the solver stays READY/RESUMABLE the whole time, or a build that
+            # finished just before the abort) leaves ABORTING with no reason
+            # to re-query, so the engine would sit in ABORTING forever and
+            # ``com.busy()`` gate every button (Fetch, Clear, ...) off.
+            if state.activity == Activity.ABORTING:
+                return state, [DoQuery()]
             # Heartbeat probe: when we're connected but the engine
             # thinks the server is UNKNOWN (a transient query failure
             # during Run/Build dispatched ServerLost), let an empty
@@ -332,28 +345,37 @@ def transition(state: AppState, event: Event) -> tuple[AppState, list[Effect]]:
                     state,
                     solver=Solver.STARTING,
                     progress=0.0,
-                    activity=Activity.IDLE,
                     frame=0,
                     error="",
-                    # Drain up to 3 in-flight stale polls before
-                    # accepting a non-BUSY/SAVING response as a real
-                    # finish. See the post-poll guard for the rationale.
-                    starting_poll_guard=3,
+                    # Drain in-flight stale polls before accepting a
+                    # non-BUSY/SAVING response as a real finish. See the
+                    # post-poll guard for the rationale.
+                    starting_poll_guard=_STARTING_POLL_GUARD_DEPTH,
                 ),
                 [DoClearAnimation(), DoClearInterrupt(),
                  DoQuery({"request": "start"})],
             )
 
-        case ResumeRequested() \
-                if state.can_operate and state.solver == Solver.RESUMABLE:
+        case ResumeRequested(from_frame=ff) \
+                if state.can_operate \
+                and state.solver in (Solver.RESUMABLE, Solver.FAILED):
+            # Accept Solver.FAILED as well as RESUMABLE: after a failed
+            # simulation the server still holds the saved checkpoints, so
+            # resuming from one is valid (mirrors RunRequested, which also
+            # accepts FAILED). Without FAILED here the event falls through
+            # and is silently dropped — the dialog's OK does nothing.
             # Same staleness reset as RunRequested. The server's first
             # response after resume will repopulate ``frame`` with the
             # saved frame index; until that lands, ``frame=0`` keeps
             # waiters from false-positive on the pre-save tail.
+            resume_request = {"request": "resume"}
+            if ff is not None:
+                resume_request["resume_from"] = int(ff)
             return (
                 replace(state, solver=Solver.STARTING, progress=0.0,
-                        frame=0, error="", starting_poll_guard=3),
-                [DoClearInterrupt(), DoQuery({"request": "resume"})],
+                        frame=0, error="",
+                        starting_poll_guard=_STARTING_POLL_GUARD_DEPTH),
+                [DoClearInterrupt(), DoQuery(resume_request)],
             )
 
         # ── Terminate / Save-and-quit ──────────────────────
@@ -405,7 +427,8 @@ def transition(state: AppState, event: Event) -> tuple[AppState, list[Effect]]:
         # watched ``com.busy()`` and chained three separate operations
         # (data_send → param_send → build).
         case BuildPipelineRequested(data=d, param=p, data_hash=dh,
-                                    param_hash=ph, message=m) \
+                                    param_hash=ph, message=m,
+                                    preserve_output=po) \
                 if state.can_operate and state.remote_root:
             if not d and not p:
                 return state, [DoLog("BuildPipelineRequested: no payload.")]
@@ -414,6 +437,7 @@ def transition(state: AppState, event: Event) -> tuple[AppState, list[Effect]]:
                     state,
                     activity=Activity.SENDING,
                     pending_build=True,
+                    pending_build_preserve_output=po,
                     progress=0.0,
                     traffic="",
                     message=m or "Uploading scene...",
@@ -456,6 +480,9 @@ def transition(state: AppState, event: Event) -> tuple[AppState, list[Effect]]:
             # (BuildPipelineRequested), kick off the build now. Otherwise
             # the caller just wanted to ship files — return to IDLE.
             if state.pending_build:
+                build_request = {"request": "build"}
+                if state.pending_build_preserve_output:
+                    build_request["preserve_output"] = 1
                 return (
                     replace(
                         state,
@@ -463,12 +490,13 @@ def transition(state: AppState, event: Event) -> tuple[AppState, list[Effect]]:
                         solver=Solver.BUILDING,
                         active_upload_id="",
                         pending_build=False,
+                        pending_build_preserve_output=False,
                         progress=0.0,
                         traffic="",
                         message="",
                     ),
                     [
-                        DoQuery({"request": "build"}),
+                        DoQuery(build_request),
                         DoLog("Upload complete; starting build..."),
                     ],
                 )
@@ -477,6 +505,7 @@ def transition(state: AppState, event: Event) -> tuple[AppState, list[Effect]]:
                     state,
                     activity=Activity.IDLE,
                     pending_build=False,
+                    pending_build_preserve_output=False,
                     progress=0.0,
                     traffic="",
                     message="",
@@ -628,13 +657,23 @@ def transition(state: AppState, event: Event) -> tuple[AppState, list[Effect]]:
 # Maps server status strings to Solver phases.  This replaces the 11-branch
 # elif chain in the old ``_update_status()``.
 _STATUS_MAP: dict[str, Solver] = {
-    "NO_DATA": Solver.NO_DATA,
-    "NO_BUILD": Solver.NO_BUILD,
-    "BUILDING": Solver.BUILDING,
-    "READY": Solver.READY,
-    "RESUMABLE": Solver.RESUMABLE,
-    "FAILED": Solver.FAILED,
+    STATUS_NO_DATA: Solver.NO_DATA,
+    STATUS_NO_BUILD: Solver.NO_BUILD,
+    STATUS_BUILDING: Solver.BUILDING,
+    STATUS_READY: Solver.READY,
+    STATUS_RESUMABLE: Solver.RESUMABLE,
+    STATUS_FAILED: Solver.FAILED,
 }
+
+
+def _remote_log_lines(error_msg: str, prefix: str = "Remote: ") -> list[Effect]:
+    """Split a multi-line server error into one DoLog per line.
+
+    The default ``Remote: `` prefix tags out-of-band server errors in the
+    Console panel; pass ``prefix=""`` to log the raw lines (used for the
+    terminal / build-failure path, where the bare lines are deliberate).
+    """
+    return [DoLog(f"{prefix}{line}") for line in error_msg.split("\n")]
 
 
 def _interpret_response(
@@ -656,15 +695,7 @@ def _interpret_response(
     # mid-simulation server crash or kill.
     if not r:
         return (
-            replace(
-                state,
-                server=Server.UNKNOWN,
-                solver=Solver.NO_DATA,
-                activity=Activity.IDLE,
-                progress=0.0,
-                message="",
-                active_upload_id="",
-            ),
+            _server_gone(state),
             [DoLog("Empty server response.")],
         )
 
@@ -717,6 +748,13 @@ def _interpret_response(
     # treats every client edit as divergent, which is the safe default.
     server_data_hash = str(r.get("data_hash", "") or "")
     server_param_hash = str(r.get("param_hash", "") or "")
+    # Emulated-build flag rides on ``hardware.emulated`` in normal
+    # responses. The minimal error-only reply omits the hardware block,
+    # so fall back to the last-known value rather than resetting it.
+    _hw = r.get("hardware")
+    server_emulated = (
+        bool(_hw.get("emulated", False)) if isinstance(_hw, dict) else state.emulated
+    )
 
     status_str = r.get("status", "")
     error_msg = r.get("error", "")
@@ -747,7 +785,7 @@ def _interpret_response(
     # as a phase transition. Handled explicitly here so a future change
     # to the status-mapping else-branch can't silently break the invariant.
     if not status_str and error_msg:
-        log_effects = [DoLog(f"Remote: {line}") for line in error_msg.split("\n")]
+        log_effects = _remote_log_lines(error_msg)
         return (
             replace(
                 state,
@@ -757,18 +795,19 @@ def _interpret_response(
                 server_upload_id=server_upload_id,
                 server_data_hash=server_data_hash,
                 server_param_hash=server_param_hash,
+                emulated=server_emulated,
             ),
             log_effects,
         )
 
     # Determine solver phase from server status string
-    if status_str == "BUSY":
+    if status_str == STATUS_BUSY:
         solver = (
             Solver.RUNNING
             if initialized or frame >= 1
             else Solver.STARTING
         )
-    elif status_str == "SAVE_AND_QUIT":
+    elif status_str == STATUS_SAVE_AND_QUIT:
         solver = Solver.SAVING
     elif status_str in _STATUS_MAP:
         solver = _STATUS_MAP[status_str]
@@ -801,7 +840,7 @@ def _interpret_response(
     # early — the bl_chain_reconnect (applied=9, total=0) regression.
     #
     # We discard such polls only while ``starting_poll_guard > 0``
-    # (decremented per poll, seeded to 3 by RunRequested /
+    # (decremented per poll, seeded by RunRequested /
     # ResumeRequested). After the guard drains, accept the response
     # so a fast-finish run — solver advances BUSY → READY between two
     # addon polls — surfaces as READY/RESUMABLE instead of getting
@@ -857,15 +896,16 @@ def _interpret_response(
     )
     if error_msg and (is_terminal_with_error or is_build_failure):
         solver = Solver.FAILED
-        for line in error_msg.split("\n"):
-            effects.append(DoLog(line))
+        # Raw lines (no prefix) for the terminal / build-failure path; the
+        # bare-line output here is deliberate, unlike the "Remote: "-tagged
+        # out-of-band errors elsewhere.
+        effects.extend(_remote_log_lines(error_msg, prefix=""))
     # Log newly-raised server errors even in non-terminal solver states
     # (e.g. NO_BUILD without an active build, ping race window) so they
     # surface in the Console panel, not only on the top-of-panel ERROR
     # label.
     elif error_msg and error_msg != state.server_error:
-        for line in error_msg.split("\n"):
-            effects.append(DoLog(f"Remote: {line}"))
+        effects.extend(_remote_log_lines(error_msg))
 
     # --- Solver-driven polling and side-effects ---
     # Poll and fetch decisions are based purely on solver state,
@@ -963,6 +1003,7 @@ def _interpret_response(
             frame=frame,
             version_ok=True,
             starting_poll_guard=starting_poll_guard_after,
+            emulated=server_emulated,
         )
         return new_state, effects
 
@@ -988,6 +1029,7 @@ def _interpret_response(
         server_param_hash=server_param_hash,
         active_upload_id=new_active_upload_id,
         starting_poll_guard=starting_poll_guard_after,
+        emulated=server_emulated,
     )
 
     return new_state, effects
@@ -1000,3 +1042,25 @@ def _interpret_response(
 def _reset_state(state: AppState, error: str = "") -> AppState:
     """Return a clean offline state, preserving nothing."""
     return AppState(error=error)
+
+
+def _server_gone(state: AppState) -> AppState:
+    """Scrub the per-operation status fields after the server stops
+    responding, preserving connection-level fields (remote_root,
+    session_id, backend identity, hashes) for recovery when it returns.
+
+    This is the shared field reset for the "server gone" paths
+    (ServerLost, ServerStopped, empty-response). Do NOT route through
+    _reset_state(): that returns a fresh AppState and would drop the
+    fields needed for reconnection.
+    """
+    return replace(
+        state,
+        server=Server.UNKNOWN,
+        solver=Solver.NO_DATA,
+        activity=Activity.IDLE,
+        progress=0.0,
+        traffic="",
+        message="",
+        active_upload_id="",
+    )

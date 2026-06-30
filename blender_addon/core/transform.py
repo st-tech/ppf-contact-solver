@@ -26,6 +26,15 @@ def _to_solver(v) -> list[float]:
     return [float(v[0]), float(v[2]), float(-v[1])]
 
 
+def _to_blender(v) -> list[float]:
+    """Inverse of ``_to_solver`` / ``_swap_axes`` (solver Y-up → Blender Z-up).
+
+    Use for any solver-space coordinate or direction that must be mapped
+    back into Blender world space (overlay positions, spin/torque axes).
+    """
+    return [float(v[0]), float(-v[2]), float(v[1])]
+
+
 def _normalize_and_scale(direction, strength) -> list[float]:
     """Normalize a direction vector and multiply by strength."""
     d = np.array([float(direction[i]) for i in range(3)], dtype=np.float64)

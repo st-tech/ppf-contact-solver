@@ -34,7 +34,7 @@ use super::bvh::{
     build_tri_bvh, compute_edge_bboxes, extract_edges_with_tri_map, traverse_overlap, Bvh,
 };
 use super::geom_util::{
-    bbox_overlap, cross3, dot3, elements_share_vertex_2_3, elements_share_vertex_3_3, sub3,
+    bbox_overlap, cross3, dot3, elements_share_vertex_2_3, elements_share_vertex_3_3, sub3, vert3,
 };
 
 const COPLANAR_EPS: f64 = 1e-10;
@@ -227,14 +227,11 @@ fn find_edge_tri_intersections(
     edge_bb_max: &[[f64; 3]],
     tri_bvh: &Bvh,
     is_collider_tri: &[bool],
+    tri_body_id: &[i32],
 ) -> Vec<(i32, i32)> {
     let edge = [edges[2 * ei], edges[2 * ei + 1]];
-    let v_at = |idx: i32| -> [f64; 3] {
-        let k = idx as usize;
-        [verts[3 * k], verts[3 * k + 1], verts[3 * k + 2]]
-    };
-    let e0 = v_at(edge[0]);
-    let e1 = v_at(edge[1]);
+    let e0 = vert3(verts, edge[0]);
+    let e1 = vert3(verts, edge[1]);
     let bb_min = &edge_bb_min[ei];
     let bb_max = &edge_bb_max[ei];
 
@@ -255,7 +252,11 @@ fn find_edge_tri_intersections(
         [0, 0, 0]
     };
     let p_v = if has_parent {
-        [v_at(parent_tri[0]), v_at(parent_tri[1]), v_at(parent_tri[2])]
+        [
+            vert3(verts, parent_tri[0]),
+            vert3(verts, parent_tri[1]),
+            vert3(verts, parent_tri[2]),
+        ]
     } else {
         [e0, e1, e0]
     };
@@ -264,12 +265,31 @@ fn find_edge_tri_intersections(
     let edge_is_collider = (parent_tri0 >= 0 && is_collider_tri[parent_tri0 as usize])
         || (parent_tri1 >= 0 && is_collider_tri[parent_tri1 as usize]);
 
+    // The edge's PDRD rigid-body id (0 = not a member of any body). Every
+    // triangle of a body carries the same id, so either parent reports it;
+    // a rod edge (parent < 0) reports 0. Used to skip intra-body pairs.
+    let edge_body_id = if parent_tri0 >= 0 {
+        tri_body_id[parent_tri0 as usize]
+    } else if parent_tri1 >= 0 {
+        tri_body_id[parent_tri1 as usize]
+    } else {
+        0
+    };
+
     let mut out = Vec::new();
     traverse_overlap(tri_bvh, bb_min, bb_max, |ti| {
         if ti == parent_tri0 || ti == parent_tri1 {
             return;
         }
         if edge_is_collider && is_collider_tri[ti as usize] {
+            return;
+        }
+        // Skip intra-PDRD-body edge/triangle pairs: a rigid body never
+        // deforms, so an edge piercing a triangle of the SAME body is a
+        // fixed, physically meaningless self-intersection that must be
+        // tolerated even when the body starts self-tangled. Mirrors the
+        // device-side same_pdrd_body filter in contact.cu.
+        if edge_body_id != 0 && edge_body_id == tri_body_id[ti as usize] {
             return;
         }
         let tri = [
@@ -289,9 +309,9 @@ fn find_edge_tri_intersections(
             return;
         }
 
-        let v0 = v_at(tri[0]);
-        let v1 = v_at(tri[1]);
-        let v2 = v_at(tri[2]);
+        let v0 = vert3(verts, tri[0]);
+        let v1 = vert3(verts, tri[1]);
+        let v2 = vert3(verts, tri[2]);
         let mut intersects = edge_triangle_intersect(e0, e1, v0, v1, v2);
 
         // Coplanar fallback only when there's a real parent
@@ -318,6 +338,14 @@ pub struct IntersectionInput<'a> {
     pub tris: &'a [i32],
     pub is_collider: Option<&'a [bool]>,
     pub rod_edges: Option<&'a [i32]>,
+    /// Optional per-triangle 1-based PDRD rigid-body id (0 = not a member
+    /// of any rigid body). Parallel to `tris`. When two triangles share
+    /// the same nonzero id they belong to the same rigid body, which
+    /// never deforms; an edge of one piercing the other is a fixed,
+    /// physically meaningless self-intersection and is skipped. Mirrors
+    /// the device-side `same_pdrd_body` filter in contact.cu. `None`
+    /// disables the rule (every triangle treated as body 0).
+    pub tri_body_id: Option<&'a [i32]>,
 }
 
 /// Check a triangle mesh for self-intersections, optionally including
@@ -356,13 +384,21 @@ pub fn check_self_intersection(input: IntersectionInput<'_>) -> Vec<(i32, i32)> 
     let tri_bvh = build_tri_bvh(input.verts, input.tris);
     let (edge_bb_min, edge_bb_max) = compute_edge_bboxes(input.verts, &all_edges);
 
-    // Step 4: default is_collider.
+    // Step 4: default is_collider and per-tri PDRD body id.
     let zero_collider: Vec<bool>;
     let is_collider = match input.is_collider {
         Some(s) => s,
         None => {
             zero_collider = vec![false; n_tris];
             &zero_collider
+        }
+    };
+    let zero_body_id: Vec<i32>;
+    let tri_body_id = match input.tri_body_id {
+        Some(s) => s,
+        None => {
+            zero_body_id = vec![0; n_tris];
+            &zero_body_id
         }
     };
 
@@ -381,13 +417,14 @@ pub fn check_self_intersection(input: IntersectionInput<'_>) -> Vec<(i32, i32)> 
                 &edge_bb_max,
                 &tri_bvh,
                 is_collider,
+                tri_body_id,
             )
         })
         .collect();
 
     // Step 6: convert (edge, tri) → (parent, tri); dedup; sort. Rod
-    // hits collected separately and appended at the end (matching
-    // Python output order in frontend/_intersection_.py:679-686).
+    // hits collected separately and appended after triangle-triangle
+    // pairs.
     let mut tri_pairs: BTreeSet<(i32, i32)> = BTreeSet::new();
     let mut rod_pairs: Vec<(i32, i32)> = Vec::new();
     for (ei, ti) in edge_tri_pairs {
@@ -436,6 +473,7 @@ mod tests {
             tris: &tris,
             is_collider: None,
             rod_edges: None,
+            tri_body_id: None,
         });
         assert_eq!(r, vec![(0, 1)]);
     }
@@ -452,6 +490,7 @@ mod tests {
             tris: &tris,
             is_collider: None,
             rod_edges: None,
+            tri_body_id: None,
         });
         assert_eq!(r, vec![(0, 1)]);
     }
@@ -468,6 +507,7 @@ mod tests {
             tris: &tris,
             is_collider: None,
             rod_edges: None,
+            tri_body_id: None,
         });
         assert!(r.is_empty());
     }
@@ -484,6 +524,7 @@ mod tests {
             tris: &tris,
             is_collider: None,
             rod_edges: None,
+            tri_body_id: None,
         });
         assert!(r.is_empty());
     }
@@ -500,6 +541,7 @@ mod tests {
             tris: &tris,
             is_collider: None,
             rod_edges: None,
+            tri_body_id: None,
         });
         assert!(r.is_empty());
     }
@@ -517,6 +559,7 @@ mod tests {
             tris: &tris,
             is_collider: Some(&coll_both),
             rod_edges: None,
+            tri_body_id: None,
         });
         assert!(r.is_empty(), "collider × collider must be skipped");
 
@@ -526,8 +569,55 @@ mod tests {
             tris: &tris,
             is_collider: Some(&coll_one),
             rod_edges: None,
+            tri_body_id: None,
         });
         assert_eq!(r.len(), 1, "mixed collider/dynamic must still report");
+    }
+
+    #[test]
+    fn same_pdrd_body_skipped() {
+        // Two interior-crossing triangles. When both belong to the same
+        // nonzero PDRD body, the pair is a tolerated intra-rigid-body
+        // self-intersection and must be skipped; distinct bodies (or a
+        // body vs. body-0) must still report.
+        let verts = flat3(&[
+            [-1.0, -1.0, 0.0], [1.0, -1.0, 0.0], [0.0, 1.0, 0.0],
+            [0.0, 0.0, -1.0], [0.0, 0.0, 1.0], [0.0, 2.0, 0.0],
+        ]);
+        let tris = flat3i(&[[0, 1, 2], [3, 4, 5]]);
+
+        // Same body (id 1 on both): skipped.
+        let same_body = vec![1, 1];
+        let r = check_self_intersection(IntersectionInput {
+            verts: &verts,
+            tris: &tris,
+            is_collider: None,
+            rod_edges: None,
+            tri_body_id: Some(&same_body),
+        });
+        assert!(r.is_empty(), "same PDRD body must be skipped");
+
+        // Distinct bodies: still reported.
+        let diff_body = vec![1, 2];
+        let r = check_self_intersection(IntersectionInput {
+            verts: &verts,
+            tris: &tris,
+            is_collider: None,
+            rod_edges: None,
+            tri_body_id: Some(&diff_body),
+        });
+        assert_eq!(r.len(), 1, "distinct PDRD bodies must still report");
+
+        // Body vs. non-PDRD (id 0): still reported.
+        let one_body = vec![1, 0];
+        let r = check_self_intersection(IntersectionInput {
+            verts: &verts,
+            tris: &tris,
+            is_collider: None,
+            rod_edges: None,
+            tri_body_id: Some(&one_body),
+        });
+        assert_eq!(r.len(), 1, "rigid body vs. non-rigid must still report");
     }
 
     #[test]
@@ -544,6 +634,7 @@ mod tests {
             tris: &tris,
             is_collider: None,
             rod_edges: Some(&rod),
+            tri_body_id: None,
         });
         assert_eq!(r, vec![(-1, 0)]);
     }

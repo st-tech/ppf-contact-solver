@@ -18,6 +18,7 @@ reload_server = None
 _deferred_timers: list = []
 
 
+@persistent
 def _persist_session_id(*_args):
     """save_pre hook: mirror engine.state.session_id into the scene
     PropertyGroup so the id persists across Blender close/reopen.
@@ -41,6 +42,7 @@ def _persist_session_id(*_args):
         pass
 
 
+@persistent
 def _save_manifest_post(*_args):
     """save_post hook: write the project manifest next to the .blend.
 
@@ -50,6 +52,19 @@ def _save_manifest_post(*_args):
     try:
         from .core.manifest import write_manifest_now
         write_manifest_now()
+    except Exception:
+        pass
+
+
+def _safe_disconnect():
+    """Drop any active server connection, swallowing all errors.
+
+    Shared body for the load_pre handler and the atexit hook so the
+    disconnect sequence stays in one place if it ever gains steps.
+    """
+    try:
+        from .core.facade import communicator
+        communicator.disconnect()
     except Exception:
         pass
 
@@ -74,11 +89,7 @@ def _disconnect_on_load(*_args):
     would silently disable this disconnect on every load after the
     first one.
     """
-    try:
-        from .core.facade import communicator
-        communicator.disconnect()
-    except Exception:
-        pass
+    _safe_disconnect()
 
 
 def _disconnect_at_exit():
@@ -93,13 +104,10 @@ def _disconnect_at_exit():
     keeps alive. Users who want the server gone on exit click Stop
     first.
     """
-    try:
-        from .core.facade import communicator
-        communicator.disconnect()
-    except Exception:
-        pass
+    _safe_disconnect()
 
 
+@persistent
 def _reconcile_manifest_on_load(*_args):
     """load_post hook: auto-migrate legacy data, then reconcile manifest.
 
@@ -244,9 +252,10 @@ def _register_body():
                     if not group.name or "Group Group" in group.name:
                         group.name = f"Group {display_index + 1}"
                         mutated = True
-                        print(f"Cleaned up group name to: {group.name}")
-
-                print("Group cleanup completed")
+                        from .models.console import console
+                        console.write(
+                            f"Cleaned up group name to: {group.name}"
+                        )
         except Exception as e:
             print(f"Group cleanup failed: {e}")
         if mutated:
@@ -364,12 +373,8 @@ def _register_body():
         # Kick the 3D-view panels to redraw so the Start/Stop button
         # reflects the just-restarted server without a manual hover.
         try:
-            wm = bpy.context.window_manager
-            if wm:
-                for window in wm.windows:
-                    for area in window.screen.areas:
-                        if area.type == "VIEW_3D":
-                            area.tag_redraw()
+            from .core.utils import redraw_all_windows
+            redraw_all_windows("VIEW_3D")
         except Exception:
             pass
         return None
@@ -451,12 +456,14 @@ def unregister():
                              bpy.app.handlers.depsgraph_update_post):
             for h in list(handler_list):
                 if getattr(h, "__name__", "") in (
-                    # ``pin_frame_change_handler`` is the dead pin-input
-                    # playback handler from the retired _pininput.pc2
-                    # path; the name stays in the cleanup list so any
-                    # leftover instance from an older addon generation
-                    # gets removed on this reload.
+                    # Dead handlers whose names stay in the cleanup list so any
+                    # leftover instance from an older addon generation is swept
+                    # on this reload. ``pin_frame_change_handler`` is the retired
+                    # _pininput.pc2 playback handler; ``invalidate_full_pin_cache``
+                    # was a short-lived full-pin cache invalidator (a
+                    # depsgraph_update_post callback, removed as discouraged).
                     "curve_frame_change_handler", "pin_frame_change_handler",
+                    "invalidate_full_pin_cache",
                 ):
                     handler_list.remove(h)
         for h in list(bpy.app.handlers.save_post):

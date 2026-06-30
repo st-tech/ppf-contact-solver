@@ -50,14 +50,16 @@ The panel right after a fresh **Create Group** click: a single
 and default material parameters.
 ```
 
-## The Four Group Types
+## Group Types
 
-| Type       | Description                       | Default model    | Available models                           |
-| ---------- | --------------------------------- | ---------------- | ------------------------------------------ |
-| **Shell**  | Thin surfaces (cloth, fabric)     | Baraff-Witkin    | Baraff-Witkin, ARAP                        |
-| **Solid**  | Volumetric bodies                 | ARAP             | Stable NeoHookean, ARAP                    |
-| **Rod**    | 1D structures (ropes, wires)      | ARAP             | ARAP only                                  |
-| **Static** | Non-deforming collision objects   | N/A              | N/A                                        |
+| Type       | Description                          | Default model    | Available models                           |
+| ---------- | ------------------------------------ | ---------------- | ------------------------------------------ |
+| **Shell**  | Thin surfaces (cloth, fabric)        | Baraff-Witkin    | Baraff-Witkin, ARAP                        |
+| **Solid**  | Volumetric bodies                    | ARAP             | Stable NeoHookean, ARAP                    |
+| **Rod**    | 1D structures (ropes, wires)         | ARAP             | ARAP only                                  |
+| **PDRD**   | Rigid bodies (props, rigid shells)      | n/a (rigid)   | n/a                                        |
+| **Sand**   | Granular bodies (sand, loose grains) | n/a (granular)   | n/a                                        |
+| **Static** | Non-deforming collision objects      | N/A              | N/A                                        |
 
 The type controls which material parameters are relevant and which material
 models are available. **Static** groups collapse to just **Friction**
@@ -65,6 +67,16 @@ and **Contact** rows and replace the pin region with a **Transform**
 sub-box that holds per-object **Move By** / **Spin** / **Scale** ops
 (an alternative to Blender transform keyframes). See
 [Static Objects](static_objects.md) for the full surface.
+
+**PDRD** (Painless Differentiable Rotation Dynamics) groups move a surface
+mesh as a single exactly-rigid transform: a translation plus a rotation,
+with no stretch at all. They are cheap and stable for stiff props and rigid
+panels that should hold their shape (furniture, plates, shells, hard parts
+of a rig). PDRD bodies still collide, take pins, and stitch to other
+groups, but they do not bend or stretch like cloth or soft solids. Instead
+of **Young's Modulus** and **Poisson's Ratio**, a PDRD group exposes just
+**Density**, so the only choice is how heavy the body is; its motion is
+exactly rigid, so there is no stiffness or rigidity to set.
 
 **Rod** groups accept both mesh objects and Blender curve objects.
 For a mesh, every edge becomes a rod element at transfer time
@@ -77,13 +89,18 @@ NURBS curves are sampled per arc at four `t` values because NURBS
 CPs are off-curve.
 
 ```{figure} ../../images/object_groups/group_type_matrix.svg
-:alt: Reference matrix with four columns. Shell (green swatch), Solid (red), Rod (yellow), Static (blue). Rows: accepted object types (Shell/Solid/Static: mesh; Rod: mesh + Bezier curves); default material model (Baraff-Witkin for Shell, ARAP for Solid and Rod, none for Static); available material models (Shell offers Baraff-Witkin and ARAP; Solid offers Stable NeoHookean and ARAP; Rod offers ARAP only; Static none); density unit (kg/m² for Shell, kg/m³ for Solid, kg/m for Rod); Young's Modulus (Shell/Solid/Rod, not Static); Poisson's Ratio (Shell and Solid); Bend Stiffness (Shell, with Rod inheriting it); Shrink (Shell anisotropic X/Y, Solid uniform, Rod/Static none); Strain Limit (Shell and Rod); Inflate (Shell only); Friction and Contact Gap (all four); pin storage (Blender vertex groups for Shell/Solid, internal _pin_name custom property on curves for Rod, none for Static which uses a Transform sub-box instead); default overlay color (green, red, yellow, blue).
-:width: 840px
+:alt: Reference matrix with five type columns. Shell (green swatch), Solid (red), Rod (yellow), PDRD (magenta), Static (blue). Rows: accepted object types (Shell/Solid/PDRD/Static: mesh; Rod: mesh + Bezier curves); default material model (Baraff-Witkin for Shell, ARAP for Solid and Rod, none for PDRD and Static); available material models (Shell offers Baraff-Witkin and ARAP; Solid offers Stable NeoHookean and ARAP; Rod offers ARAP only; PDRD and Static offer none); density unit (kg/m² for Shell, kg/m³ for Solid and PDRD, kg/m for Rod; n/a for Static); Young's Modulus (Shell/Solid/Rod, not PDRD or Static); Poisson's Ratio (Shell and Solid); Bend Stiffness (Shell, with Rod inheriting it; not PDRD); Shrink (Shell anisotropic X/Y, Solid uniform, Rod/PDRD/Static none); Strain Limit (Shell and Rod, not PDRD); Inflate (Shell only, not PDRD); Friction and Contact Gap (all five); PDRD exposes only Density (no Young's, Poisson, Bend, Shrink, Strain, or Inflate, and no stiffness control because it is exactly rigid); pin storage (Blender vertex groups for Shell/Solid/PDRD, internal _pin_name custom property on curves for Rod, none for Static which uses a Transform sub-box instead); default overlay color (green, red, yellow, magenta, blue).
+:width: 960px
 
 What each type accepts, models, and exposes. Green check marks mark
 features available in that column; a gray "n/a" marks features that
-are not applicable. **Static** is the thinnest column because the
-solver only uses it for collision: no material model and no
+are not applicable. **PDRD** is a rigid column: it keeps
+**Density**, **Friction**, and **Contact Gap**, but
+drops the deformation parameters (no **Young's Modulus**,
+**Poisson's Ratio**, **Bend Stiffness**, **Shrink**, **Strain
+Limit**, or **Inflate**) and has no stiffness control because the
+body is exactly rigid. **Static** is the thinnest column because
+the solver only uses it for collision: no material model and no
 parameters beyond **Friction** and **Contact Gap**. The **Material
 Params** box in the sidebar reshapes itself automatically to match
 the column you are in.
@@ -247,6 +264,7 @@ Each group gets a default overlay color based on its type:
 | **Solid**  | red `(0.75, 0, 0)`    |
 | **Shell**  | green `(0, 0.75, 0)`  |
 | **Rod**    | yellow `(0.75, 0.75, 0)` |
+| **PDRD**   | magenta `(0.75, 0, 0.75)` |
 | **Static** | blue `(0, 0, 0.75)`   |
 
 ## Duplicating a Group

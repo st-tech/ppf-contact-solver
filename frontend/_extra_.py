@@ -3,8 +3,8 @@
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
 # License: Apache v2.0
 #
-# Wraps `core::extra` from the maturin wheel `_ppf_cts_py`, which is a
-# hard requirement; there is no Python fallback.
+# Wraps `core::extra` from the `_ppf_cts_py` cdylib, which is a hard
+# requirement; there is no Python fallback.
 
 from . import _rust  # type: ignore[attr-defined]
 

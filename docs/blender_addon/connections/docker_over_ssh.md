@@ -39,7 +39,7 @@ and runs every Docker command there.
    (e.g. `ppf-dev`). The add-on runs `docker exec` against this name
    over the SSH session.
 4. Fill **Container Path** with the working directory **inside that
-   container** (default `/root/ppf-contact-solver`). This path
+   container** (e.g. `/root/ppf-contact-solver`). This path
    is not interpreted on the Blender host or on the remote host's
    filesystem -- it is the path seen from inside the container, where
    the `ppf-cts-server` binary lives.
@@ -100,9 +100,9 @@ the pasted command.
 ## Installing paramiko and docker-py
 
 Docker over SSH needs both the `paramiko` and `docker` Python packages.
-The main panel shows **Install Paramiko** and **Install Docker** buttons
-when either is missing; both install into the add-on's private library
-directory.
+The main panel shows **Install Paramiko to Add-on Directory** and
+**Install Docker-Py to Add-on Directory** buttons when either is
+missing; both install into the add-on's private library directory.
 
 ## Troubleshooting
 

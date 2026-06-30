@@ -69,16 +69,6 @@ class DoQuery(Effect):
     request: dict[str, Any] = field(default_factory=dict)
 
 
-@dataclass(frozen=True)
-class DoPollAfter(Effect):
-    """Schedule a ``PollTick`` event after *delay* seconds.
-
-    This replaces the ``while True: time.sleep(0.25); query()`` loops
-    in the old ``_update_status()`` with a non-blocking timer.
-    """
-    delay: float = 0.25
-
-
 # ---------------------------------------------------------------------------
 # Data transfer effects (run on background thread)
 # ---------------------------------------------------------------------------
@@ -116,7 +106,6 @@ class DoReceiveData(Effect):
     caller can pick it up.
     """
     remote_path: str = ""
-    tag: str = ""   # optional label for the caller to identify the response
 
 
 # ---------------------------------------------------------------------------

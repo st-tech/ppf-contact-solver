@@ -3,30 +3,38 @@
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
 # License: Apache v2.0
 #
-# Regression: clicking "Run" used to leave "Transfer" clickable for a
-# window because ``SOLVER_OT_Transfer.poll`` only inspected
-# ``status.ready()`` (a protocol-version check) plus the cached server
-# response. Right after ``Run.execute`` the engine has flipped to
-# STARTING_SOLVER locally but the next ``PollTick`` hasn't round-
-# tripped with the server yet, so ``is_running(response)`` reads the
-# stale READY response and returns False. The fix adds
-# ``not com.info.status.in_progress()`` to Transfer's poll, which
-# rejects every active operation including STARTING_SOLVER.
+# Regression: clicking "Run" must leave no window where "Transfer" (or a
+# second Run / Update Params) stays clickable. Two gates cover the two
+# windows:
+#   1. ``not com.info.status.in_progress()`` on Transfer's poll rejects
+#      every active server operation (BUILDING, FETCHING, STARTING_SOLVER,
+#      ...) even while the cached ``is_running(response)`` still lags at the
+#      stale READY response.
+#   2. ``not _staged_encode_active()`` on every action poll covers the
+#      newer window: ``Run.execute`` now defers the scene encode + solver
+#      start to staged modal ticks and only dispatches on the final stage,
+#      so ``engine.state.busy`` stays False during the encode. The
+#      encode-progress flag (published synchronously by ``start_stages``)
+#      is what disables the buttons for that window.
 #
 # Subtests:
-#   A. transfer_clickable_at_ready: after a successful Transfer +
-#      Build, the system is at READY and Transfer is clickable
-#      (re-transfer is a legitimate action).
-#   B. transfer_disabled_immediately_after_run_click: invoking
-#      ``Run.execute`` flips the engine to STARTING_SOLVER and
-#      Transfer.poll must return False before any further ticks.
-#   C. transfer_disabled_during_simulation_in_progress: after the
-#      engine has caught up via PollTick, the status reaches
+#   A. transfer_clickable_at_ready: after a successful Transfer + Build,
+#      the system is at READY and Transfer is clickable (re-transfer is a
+#      legitimate action).
+#   B. transfer_disabled_during_run_encode: invoking ``Run.execute``
+#      returns RUNNING_MODAL with the engine still READY (the solver start
+#      is staged), yet all three action polls are already False because the
+#      encode-progress gate fired.
+#   B2. transfer_disabled_after_solver_start: draining the staged ticks
+#      dispatches the run, flipping the engine to STARTING_SOLVER; the
+#      buttons stay off with no clickable gap as the gate handoff goes from
+#      encode-progress to ``com.busy()`` / ``status.in_progress()``.
+#   C. transfer_disabled_during_simulation_in_progress: after the engine
+#      has caught up via PollTick, the status reaches
 #      SIMULATION_IN_PROGRESS and Transfer.poll must remain False.
 #
-# Run.poll, UpdateParams.poll, and Transfer.poll are all snapshotted
-# at each phase to make the regression locus explicit if the fix
-# regresses.
+# Run.poll, UpdateParams.poll, and Transfer.poll are all snapshotted at
+# each phase to make the regression locus explicit if a gate regresses.
 
 from __future__ import annotations
 
@@ -50,16 +58,6 @@ result.setdefault("errors", [])
 result.setdefault("checks", {})
 LOCAL_PATH = "<<LOCAL_PATH>>"
 SERVER_PORT = <<SERVER_PORT>>
-
-
-class _StubSelf:
-    def __init__(self):
-        self.captured = []
-        self.modal_set_up = False
-    def report(self, kind, msg):
-        self.captured.append((tuple(kind), msg))
-    def setup_modal(self, ctx):
-        self.modal_set_up = True
 
 
 try:
@@ -86,6 +84,8 @@ try:
     Run = solver_mod.SOLVER_OT_Run
     Transfer = solver_mod.SOLVER_OT_Transfer
     UpdateParams = solver_mod.SOLVER_OT_UpdateParams
+    encode_progress = __import__(pkg + ".core.encode_progress",
+                                 fromlist=["is_active"])
     com = dh.com
 
     data, param, dhash, phash = encoder_pkg.prepare_upload(bpy.context)
@@ -126,34 +126,64 @@ try:
         },
     )
 
-    # ----- B: immediately after Run.execute, Transfer.poll is False
-    # The engine flips to STARTING_SOLVER synchronously; no PollTick
-    # has rounded-tripped with the server yet, so the cached response
-    # still echoes READY. The fix asserts on
-    # ``status.in_progress()`` which knows STARTING_SOLVER counts.
-    stub = _StubSelf()
+    # ----- B: immediately after Run.execute, the sibling buttons are off
+    # execute() returns RUNNING_MODAL and hands the encode + solver start
+    # to staged modal ticks. The engine has NOT flipped to STARTING_SOLVER
+    # yet (that dispatch is on the final stage), so the cached response and
+    # local state both still read READY. During this encode window the
+    # protection comes from the encode-progress gate (``com.busy()`` is
+    # still False because nothing was dispatched), so all three action
+    # polls must already be False.
+    stub = dh.staged_stub(Run)
     verdict = Run.execute(stub, bpy.context)
     s = dh.facade.engine.state
+    encode_active = encode_progress.is_active()
     transfer_b = bool(Transfer.poll(bpy.context))
     run_b = bool(Run.poll(bpy.context))
     update_b = bool(UpdateParams.poll(bpy.context))
     dh.record(
-        "B_transfer_disabled_immediately_after_run_click",
+        "B_transfer_disabled_during_run_encode",
         verdict == {"RUNNING_MODAL"}
         and stub.modal_set_up
+        and encode_active
         and not transfer_b
         and not run_b
         and not update_b
-        and s.solver.name == "STARTING"
-        and com.info.status.name == "STARTING_SOLVER",
+        and s.solver.name == "READY"
+        and com.info.status.name == "READY",
         {
             "verdict": list(verdict),
+            "encode_active": encode_active,
             "transfer_poll": transfer_b,
             "run_poll": run_b,
             "update_params_poll": update_b,
             "solver": s.solver.name,
             "status": com.info.status.name,
             "captured": stub.captured[:2],
+        },
+    )
+
+    # ----- B2: draining the stages starts the solver; buttons stay off
+    # The final stage dispatches the run, so the engine flips to
+    # STARTING_SOLVER and the encode-progress gate clears -- now the
+    # ``com.busy()`` / ``status.in_progress()`` gates keep Transfer off
+    # with no clickable window in between.
+    drain_result = stub.drain_stages(bpy.context)
+    s = dh.facade.engine.state
+    transfer_b2 = bool(Transfer.poll(bpy.context))
+    dh.record(
+        "B2_transfer_disabled_after_solver_start",
+        drain_result is None
+        and not encode_progress.is_active()
+        and s.solver.name == "STARTING"
+        and com.info.status.name == "STARTING_SOLVER"
+        and not transfer_b2,
+        {
+            "drain_result": list(drain_result) if drain_result else None,
+            "encode_active": encode_progress.is_active(),
+            "transfer_poll": transfer_b2,
+            "solver": s.solver.name,
+            "status": com.info.status.name,
         },
     )
 

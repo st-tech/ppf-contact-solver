@@ -10,6 +10,7 @@
 use std::path::{Path, PathBuf};
 
 use ppf_cts_core::events::Event;
+use ppf_cts_formats::files::{session_output_dir, SAVE_AND_QUIT};
 
 use super::dispatch_re_entrant;
 use crate::engine::ServerEngine;
@@ -23,10 +24,7 @@ pub(super) async fn request_save_and_quit(engine: &ServerEngine) {
         dispatch_re_entrant(engine, Event::ErrorOccurred { error: msg }).await;
         return;
     }
-    let path = PathBuf::from(&state.root)
-        .join("session")
-        .join("output")
-        .join("save_and_quit");
+    let path = session_output_dir(&PathBuf::from(&state.root)).join(SAVE_AND_QUIT);
     if let Some(parent) = path.parent() {
         if let Err(e) = std::fs::create_dir_all(parent) {
             log::error!(target: "ppf::session", "DoRequestSaveAndQuit: mkdir {parent:?} failed: {e}");

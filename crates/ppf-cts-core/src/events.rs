@@ -3,9 +3,10 @@
 // Review: Ryoichi Ando (ryoichi.ando@zozo.com)
 // License: Apache v2.0
 //
-// Typed event enum for the server state machine. Direct 1:1 port of
-// server/events.py: every Python event class becomes a Rust enum
-// variant carrying the same fields.
+// Typed event enum for the server state machine. Historically ported
+// from the now-removed server/events.py (Rust is now authoritative):
+// every former Python event class became a Rust enum variant carrying
+// the same fields.
 //
 // Events come from three sources:
 //   1. Client requests parsed from the socket protocol.
@@ -28,6 +29,12 @@ pub enum Event {
         has_param: bool,
         has_app: bool,
         is_resumable: bool,
+        /// The solver-authored `status.cbor` records a crash (a terminal
+        /// Crashed outcome, or a non-terminal record whose owning process
+        /// is gone) not yet superseded by a launch or rebuild. Lets a
+        /// reconnect (which has no in-memory `Solver::Failed`) reconstruct
+        /// the failed state so the status still reads "Failed (Resumable)".
+        has_crashed: bool,
         upload_id: String,
         data_hash: String,
         param_hash: String,
@@ -40,8 +47,12 @@ pub enum Event {
         total_frames: i32,
     },
 
-    /// Client requested a scene build.
-    BuildRequested,
+    /// Client requested a scene build. `preserve_output` keeps the
+    /// `session/output/` checkpoints in place across the rebuild so a
+    /// resume can re-decode edited scene input without discarding the
+    /// already-simulated frames; `false` is a fresh build that wipes
+    /// the output directory (the historical behavior).
+    BuildRequested { preserve_output: bool },
 
     /// Client requested cancellation of an in-progress build.
     CancelBuildRequested,
@@ -49,8 +60,10 @@ pub enum Event {
     /// Client requested simulation start.
     StartRequested,
 
-    /// Client requested simulation resume from the latest checkpoint.
-    ResumeRequested,
+    /// Client requested simulation resume. `from_frame` is `None` to
+    /// resume from the latest checkpoint (the historical behavior), or
+    /// `Some(n)` to resume from frame `n`.
+    ResumeRequested { from_frame: Option<i32> },
 
     /// Client requested solver termination.
     TerminateRequested,

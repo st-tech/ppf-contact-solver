@@ -27,15 +27,24 @@ mod build;
 mod session;
 mod solver;
 
-// Pick the right solver-busy variant per build. The emulated build
-// runs under the test rig where many workers share the same host;
-// using the global scan would let one worker's solver kill another's
-// (the historical `Utils.busy` patch from server/emulator.py addressed
-// the same race on the python side).
+// Pick the right solver-busy + terminate variants per build. The
+// emulated build runs under the test rig where many workers share the
+// same host; using the global scan would let one worker's solver kill
+// another's (the historical `Utils.busy` patch from server/emulator.py
+// addressed the same race on the python side). The check and the kill
+// must be selected as a matched pair: a descendant-only busy check
+// paired with a host-global kill would still SIGTERM every peer
+// worker's solver the moment our own descendant is detected, so we
+// also narrow the terminator to descendants under `emulated`.
 #[cfg(feature = "emulated")]
-use ppf_cts_core::utils::solver_busy_descendants_only as solver_busy_for_check;
+use ppf_cts_core::utils::{
+    solver_busy_descendants_only as solver_busy_for_check,
+    terminate_solver_descendants_only as terminate_solver_for_kill,
+};
 #[cfg(not(feature = "emulated"))]
-use ppf_cts_core::utils::solver_busy as solver_busy_for_check;
+use ppf_cts_core::utils::{
+    solver_busy as solver_busy_for_check, terminate_solver as terminate_solver_for_kill,
+};
 
 /// Trait for processing one effect. Stateless from the trait's
 /// perspective; impls hold whatever state they need internally.
@@ -50,8 +59,9 @@ pub trait EffectExecutor: Send + Sync {
 }
 
 /// Default Rust-native implementation. Frontend-dependent effects
-/// dispatch through tokio tasks; the real build body is being
-/// ported in parallel and currently runs a placeholder loop.
+/// dispatch through tokio tasks; the build effect spawns the Python
+/// build worker and forwards its stdout protocol as engine events
+/// (see `executor::build`).
 pub struct DefaultExecutor;
 
 impl DefaultExecutor {
@@ -89,15 +99,27 @@ impl EffectExecutor for DefaultExecutor {
                 engine.cancel_active_build();
             }
             Effect::DoKillSolver => {
+                // Stamp a durable record of intent before the kill: a
+                // reconnecting server has no in-memory Idle, so it reads
+                // terminate_request to report a clean Terminated instead of
+                // synthesizing a crash from the lock-free + dead-pid crux.
+                // The next launch scrubs it. Best-effort; the in-memory Idle
+                // remains the primary classifier for the live monitor.
+                let root = engine.state().root;
+                if !root.is_empty() {
+                    let p = ppf_cts_formats::files::session_output_dir(std::path::Path::new(&root))
+                        .join(ppf_cts_formats::files::TERMINATE_REQUEST);
+                    let _ = std::fs::write(&p, b"");
+                }
                 if solver_busy_for_check() {
                     log::info!(target: "ppf::solver", "DoKillSolver: terminating active solver");
-                    ppf_cts_core::utils::terminate_solver();
+                    terminate_solver_for_kill();
                 } else {
                     log::debug!(target: "ppf::solver", "DoKillSolver: no solver running");
                 }
             }
-            Effect::DoSpawnBuild => {
-                build::spawn_build_task(engine);
+            Effect::DoSpawnBuild { preserve_output } => {
+                build::spawn_build_task(engine, preserve_output);
             }
             Effect::DoLaunchSolver { resume_from } => {
                 solver::launch_solver(engine, resume_from).await;
@@ -258,7 +280,7 @@ mod tests {
 
         engine.set_project_context("p", "/tmp/p-no-such-dir-{abc}");
         engine.dispatch(Event::upload_landed("uid"));
-        let effects = engine.dispatch(Event::BuildRequested);
+        let effects = engine.dispatch(Event::BuildRequested { preserve_output: false });
         for fx in effects {
             exec.execute(fx, &engine).await;
         }
@@ -424,16 +446,16 @@ mod tests {
         // spawned task drives the build pipeline; we wait for the
         // engine state to settle.
         let exec = DefaultExecutor::new();
-        let effects = engine.dispatch(Event::BuildRequested);
+        let effects = engine.dispatch(Event::BuildRequested { preserve_output: false });
         for fx in effects {
             exec.execute(fx, &engine).await;
         }
         assert_eq!(engine.state().build, Build::Building);
 
-        // Wait long enough for the placeholder pipeline (4 stages
-        // x ~100ms) plus a margin. On systems without a GPU the
-        // pipeline short-circuits to GpuCheckFailed and lands in
-        // Failed; either is an acceptable terminal state for the
+        // Wait long enough for the worker spawn plus build, or for
+        // the no-GPU short-circuit to GpuCheckFailed. On hosts
+        // without a GPU the pipeline short-circuits to Failed; either
+        // Built or Failed is an acceptable terminal state for this
         // plumbing test.
         for _ in 0..30 {
             tokio::time::sleep(Duration::from_millis(100)).await;
@@ -457,7 +479,7 @@ mod tests {
     async fn spawn_build_observes_cancellation() {
         let engine = engine_ready_to_build();
         let exec = DefaultExecutor::new();
-        let effects = engine.dispatch(Event::BuildRequested);
+        let effects = engine.dispatch(Event::BuildRequested { preserve_output: false });
         for fx in effects {
             exec.execute(fx, &engine).await;
         }
@@ -465,9 +487,10 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(20)).await;
         engine.cancel_active_build();
 
-        // The placeholder pipeline polls the cancel token between
-        // stages; cancellation should land within a tick or two.
-        // On a system without a GPU the build may instead exit via
+        // `drive_build_worker` selects on the cancel token while
+        // draining worker stdout and forwards SIGTERM on cancel;
+        // cancellation should land within a tick or two. On a host
+        // without a GPU the build may instead exit via
         // GpuCheckFailed before the cancel is observed, which is
         // also a valid terminal state.
         for _ in 0..30 {
@@ -525,6 +548,7 @@ mod tests {
             &script,
             "demo",
             "/tmp/demo",
+            false,
         )
         .await;
         assert!(
@@ -572,6 +596,7 @@ mod tests {
             &script,
             "demo",
             "/tmp/demo",
+            false,
         )
         .await;
         match outcome {
@@ -626,6 +651,7 @@ mod tests {
             &script,
             "demo",
             "/tmp/demo",
+            false,
         )
         .await;
         assert!(

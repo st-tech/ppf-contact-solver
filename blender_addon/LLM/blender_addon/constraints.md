@@ -418,25 +418,23 @@ Figure: Snap and Merge panel with Object A set to PatchA (moves, magenta) and Ob
 
 Figure: Before Snap A to B. Two identically-subdivided shell patches assigned to Shell groups: PatchB (blue, at the origin) and PatchA (magenta, shifted along the +X axis only; same Y, same Z). Clear gap along the shared edge; the two patches are not yet joined.
 
-Figure: After `Snap A to B`. PatchA has translated along the X axis in world space until its nearest vertex lands on PatchB. Because both patches are Shell, the gap rule is "merge exactly": PatchA's left edge now coincides with PatchB's right edge and every seam vertex is shared, so the two patches read as a single seamless 2x1 rectangle. The merge pair is registered automatically and the per-vertex stitch anchors are captured behind the scenes.
+Figure: After `Snap A to B`. PatchA has translated along the X axis in world space until its seam sits just next to PatchB, a small contact gap apart rather than coincident: the snap records a soft stitch (not an exact weld), and the stitch plus the contact barrier equilibrate across that gap. The merge pair is registered automatically and the per-vertex stitch anchors are captured behind the scenes.
 
 As soon as at least one merge pair exists, a second box labeled Merge Pairs appears below the snap box, containing:
 
 - A UIList showing each pair, with both object names per row.
 - A Remove Merge Pair button below the list (disabled unless a row is selected).
-- A Stitch Stiffness slider, only shown when the selected pair involves a Solid. Sheet-sheet (Shell-Shell) and rod-rod pairs merge vertices exactly, so stiffness has no meaning for them.
+- A Stitch Stiffness slider, shown for every supported soft-stitch pair (Shell-Shell, Shell-Solid, Rod-Shell, Rod-Solid, Rod-Rod, Solid-Solid). All of these are soft, mass-scaled stitches now, so the stiffness applies to each.
 
 A separate Visualization panel further down the sidebar exposes a Hide all snaps toggle that hides or shows the merge-pair / stitch overlay in the viewport.
 
 #### Gap rules
 
-The solver needs a small separation between the two meshes at rest, otherwise contact barriers start flagging penetration on frame 1. The snap operator picks the gap based on the group types of A and B:
+The solver needs a small separation between the two meshes at rest, otherwise contact barriers start flagging penetration on frame 1. The snap applies the same gap rule to every supported pair (the snap produces a soft stitch, not an exact vertex weld, so no pair is left coincident):
 
 | A type ↔ B type          | Applied gap                                                                             |
 | ------------------------ | --------------------------------------------------------------------------------------- |
-| Shell ↔ Shell            | **No gap**. Vertices merge exactly.                                                     |
-| Rod ↔ Rod                | **No gap**. Vertices merge exactly.                                                     |
-| Any other pair           | The larger of the two groups' **Contact Gap** values plus both groups' **Contact Offset**. |
+| All supported pairs      | Both groups' **Contact Gap** plus **Contact Offset**, summed across the two objects (with a small safety margin). The closest pair starts this small distance apart, never coincident, so the soft stitch and the contact barrier equilibrate across the gap. |
 
 #### Cross-stitch anchors
 
@@ -453,7 +451,7 @@ A merge pair alone (without snapping) registers two objects as stitched during t
 | UI label              | Python / TOML key   | Description                                                                                                                               |
 | --------------------- | ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
 | **Object A / B**      | `object_a` / `object_b` | The two mesh objects.                                                                                                                 |
-| **Stitch Stiffness**  | `stitch_stiffness`  | Per-pair stiffness. **Only shown for pairs involving a Solid.** Sheet-sheet (Shell-Shell) and rod-rod pairs merge vertices exactly, so stiffness has no meaning. |
+| **Stitch Stiffness**  | `stitch_stiffness`  | Per-pair stitch stiffness, shown for every supported soft-stitch pair (Shell-Shell, Shell-Solid, Rod-Shell, Rod-Solid, Rod-Rod, Solid-Solid). A direct factor on the stitch force (no mass/dt normalization). For a solid the facing surface vertices stitch; interior vertices are excluded by the snap distance threshold. |
 | **Show Stitch**       | `show_stitch`       | Overlay toggle for the viewport stitch preview.                                                                                           |
 
 Merge pairs referencing deleted or unassigned objects are cleaned up automatically on the next depsgraph update.
@@ -492,7 +490,7 @@ What Snap does. Snap is a one-shot alignment:
 2. Translates A in world space (parent-safe) along the approach direction so the two vertices line up, plus the gap-rule distance and a small float32 safety margin.
 3. Records per-vertex barycentric anchor data for every A-vertex close enough to B to participate in a stitch.
 
-For the no-gap pairings (Shell-Shell, Rod-Rod) the anchor-capture threshold falls back to `max(gap_a, gap_b)` so nearby vertices still enter the stitch even though the final separation is zero.
+The anchor-capture threshold is generous enough (it has a mesh-scale floor) that nearby vertices still enter the stitch even when the contact gaps are tiny and the two objects sit only a small distance apart.
 
 Cross-stitch anchor data. Each merge pair carries the captured anchor payload:
 

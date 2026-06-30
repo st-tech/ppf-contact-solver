@@ -21,7 +21,7 @@ use ppf_cts_core::datamodel::params::{
 /// Coerce a Python value into the heterogeneous `ParamValue`. Mirrors
 /// the union of types `frontend/_param_.py` actually emits: bool, int,
 /// float, list-of-3-floats (gravity / wind), and str.
-fn pyany_to_param_value(value: &Bound<'_, PyAny>) -> PyResult<ParamValue> {
+pub(crate) fn pyany_to_param_value(value: &Bound<'_, PyAny>) -> PyResult<ParamValue> {
     // Bool must come before int (PyBool is a subclass of PyInt).
     if let Ok(b) = value.extract::<bool>() {
         // Reject the case where Python passed an actual `int` whose

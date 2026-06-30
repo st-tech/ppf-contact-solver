@@ -59,7 +59,7 @@ more inputs.
 ## Dynamics Groups
 
 Up to 32 groups. Create a group, pick its type (**Solid** / **Shell** /
-**Rod** / **Static**), assign meshes, set per-group material parameters,
+**Rod** / **Static** / **PDRD** / **Sand**), assign meshes, set per-group material parameters,
 manage pin vertex groups, and attach pin operations (**Move By**,
 **Spin**, **Scale**, **Torque**, **Embedded Move**).
 

@@ -13,6 +13,7 @@
 // per object so the Python wrapper just builds Python objects with
 // the prepared inputs.
 
+use super::super::geom_util::barycentric_clamp_project;
 use std::collections::BTreeSet;
 
 /// Typed errors emitted by the dyn/static scene-assembly kernels.
@@ -43,11 +44,12 @@ pub enum SceneAssemblyError {
 // ---------------------------------------------------------------------------
 // Rod / tri contact-offset proximity check.
 
-/// Rod-tri proximity loop. Walks every rod whose `rod_offset > 0` and
-/// reports the first violating (rod_idx, tri_idx, dist, required)
-/// tuple. Also reports rods whose edge length is shorter than their
-/// offset (in that case the `tri_idx` is `usize::MAX` and
-/// `required = 0.0`).
+/// Rod-tri proximity loop. Walks every rod whose `rod_offset > 0`.
+/// Returns `Err(RodTriOffsetViolation::EdgeShorterThanOffset { offset,
+/// edge_len })` for the first rod whose edge is no longer than its
+/// offset, or `Err(RodTriOffsetViolation::VertexInsideOffset { rod_idx,
+/// tri_idx, dist, required })` for the first rod endpoint lying within
+/// `rod_offset + tri_offset` of a triangle.
 ///
 /// Inputs:
 ///   * `verts`: world-space `(N, 3)` flat f64.
@@ -84,9 +86,8 @@ pub fn rod_tri_contact_offset_check(
     tri_offset: &[f64],
     rod_offset: &[f64],
 ) -> Result<(), RodTriOffsetViolation> {
-    let n_tris = tris.len();
     let n_rods = rods.len();
-    if rod_offset.is_empty() || n_rods == 0 || n_tris == 0 {
+    if rod_offset.is_empty() || n_rods == 0 {
         return Ok(());
     }
     let v = |idx: u32| -> [f64; 3] {
@@ -129,26 +130,13 @@ pub fn rod_tri_contact_offset_check(
                     continue;
                 }
                 let inv_denom = 1.0 / denom;
-                let mut b = (d11 * d20 - d01 * d21) * inv_denom;
-                let mut c = (d00 * d21 - d01 * d20) * inv_denom;
-                let mut a = 1.0 - b - c;
-                a = a.clamp(0.0, 1.0);
-                b = b.clamp(0.0, 1.0);
-                c = c.clamp(0.0, 1.0);
-                let s = a + b + c;
-                let s = if s > 0.0 { s } else { 1.0 };
-                a /= s;
-                b /= s;
-                c /= s;
-                let proj = [
-                    a * v0[0] + b * v1[0] + c * v2[0],
-                    a * v0[1] + b * v1[1] + c * v2[1],
-                    a * v0[2] + b * v1[2] + c * v2[2],
-                ];
-                let dx = p[0] - proj[0];
-                let dy = p[1] - proj[1];
-                let dz = p[2] - proj[2];
-                let dist = (dx * dx + dy * dy + dz * dz).sqrt();
+                let b = (d11 * d20 - d01 * d21) * inv_denom;
+                let c = (d00 * d21 - d01 * d20) * inv_denom;
+                let a = 1.0 - b - c;
+                // Clamp to the triangle and project; this keeps its own
+                // 1e-30 degeneracy gate above so the shared helper only
+                // runs the convex-projection tail.
+                let (_bary, _proj, dist) = barycentric_clamp_project(a, b, c, p, v0, v1, v2);
                 if dist < required {
                     return Err(RodTriOffsetViolation::VertexInsideOffset {
                         rod_idx: ri,
@@ -161,30 +149,6 @@ pub fn rod_tri_contact_offset_check(
         }
     }
     Ok(())
-}
-
-// ---------------------------------------------------------------------------
-// Merge-pair grouping for `Scene.build`.
-
-/// Walk a flat `vertex_alias` map
-/// `{(target_name, target_vi): (source_name, source_vi)}` and regroup
-/// it as `[(source_name, target_name, [(source_vi, target_vi)...])]`
-/// for the index-map kernel.
-pub fn group_vertex_alias(
-    flat: &[((String, i64), (String, i64))],
-) -> Vec<(String, String, Vec<(u32, u32)>)> {
-    use std::collections::HashMap;
-    let mut grouped: HashMap<(String, String), Vec<(u32, u32)>> = HashMap::new();
-    for ((tgt_name, tgt_vi), (src_name, src_vi)) in flat {
-        grouped
-            .entry((src_name.clone(), tgt_name.clone()))
-            .or_default()
-            .push((*src_vi as u32, *tgt_vi as u32));
-    }
-    grouped
-        .into_iter()
-        .map(|((src, tgt), pairs)| (src, tgt, pairs))
-        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -215,10 +179,13 @@ pub struct AssembleObject<'a> {
     pub dynamic_color: u8,
     pub dynamic_intensity: f64,
     pub pinned_indices: &'a [i64], // local indices of pinned verts
-    pub stitch_ind: Option<&'a [i64]>, // flat (M, 3) or (M, 4)
-    pub stitch_ind_cols: usize,        // 3 or 4
-    pub stitch_w: Option<&'a [f64]>,   // flat (M, K) where K = 2 or 4
+    pub stitch_ind: Option<&'a [i64]>, // flat (M, 3), (M, 4), or (M, 6)
+    pub stitch_ind_cols: usize,        // 3, 4, or 6
+    pub stitch_w: Option<&'a [f64]>,   // flat (M, K) where K = 2, 4, or 6
     pub stitch_w_cols: usize,
+    /// Per-object stitch stiffness applied to every stitch row this
+    /// object owns (its loose-edge / intra-object stitches).
+    pub stitch_stiffness: f64,
     pub position: [f64; 3], // displacement entry
 }
 
@@ -236,16 +203,21 @@ pub struct AssembleStaticObject<'a> {
     pub position: [f64; 3], // displacement entry
 }
 
-/// Cross-object stitch entry. `ind` is `(K, 4)` row-major flat
-/// where index 0 belongs to `source_name` and indices 1..3 belong
-/// to `target_name`. `weights` is `(K, 4)`.
+/// Cross-object stitch entry. `ind` is `(K, 6)` row-major flat where
+/// indices 0..2 (source barycentric) belong to `source_name` and
+/// indices 3..5 (target barycentric) belong to `target_name`.
+/// `weights` is `(K, 6)`, source weights in 0..2 and target weights in
+/// 3..5 (each triple sums to 1; a non-SOLID source degenerates to
+/// `[s, s, s]` / `[1, 0, 0]`).
 #[derive(Debug)]
 pub struct CrossStitch<'a> {
     pub source_name: &'a str,
     pub target_name: &'a str,
-    pub ind: &'a [i64],   // K * 4
-    pub weights: &'a [f64], // K * 4
+    pub ind: &'a [i64],   // K * 6
+    pub weights: &'a [f64], // K * 6
     pub k: usize,
+    /// Per-pair stitch stiffness applied to every row of this cross-stitch.
+    pub stitch_stiffness: f64,
 }
 
 /// Per-object output produced by `assemble_dyn_scene`. Used by the
@@ -280,7 +252,7 @@ pub struct AssembleResult {
     pub concat_vert_dmap: Vec<u32>,   // (concat_count,)
     pub concat_color: Vec<f64>,       // (concat_count, 3)
     pub concat_vel: Vec<f64>,         // (concat_count, 3)
-    pub concat_displacement: Vec<f64>, // (n_dyn_with_position, 3) actually all objects
+    pub concat_displacement: Vec<f64>, // (n_objects, 3) flat: one row per object (dyn + static) in insertion order
     pub concat_rod: Vec<u32>,         // (rod_count, 2) flat
     pub concat_tri: Vec<u32>,         // (n_tri, 3) flat
     pub concat_tet: Vec<u32>,         // (n_tet, 4) flat
@@ -289,8 +261,9 @@ pub struct AssembleResult {
     pub concat_dyn_tri_intensity: Vec<f64>,
     pub concat_rod_is_collider: Vec<u8>,
     pub concat_tri_is_collider: Vec<u8>,
-    pub concat_stitch_ind: Vec<i64>,  // (S, 4) flat
-    pub concat_stitch_w: Vec<f64>,    // (S, 4) flat
+    pub concat_stitch_ind: Vec<i64>,  // (S, 6) flat
+    pub concat_stitch_w: Vec<f64>,    // (S, 6) flat
+    pub concat_stitch_stiffness: Vec<f32>, // (S,) one per stitch row
     pub rod_count: usize,
     pub shell_count: usize,
     pub per_object: Vec<(String, AssembleObjectStats)>,
@@ -303,17 +276,11 @@ pub struct AssembleResult {
 /// `dmap` ordering: `(name, index_in_concat_displacement)` for every
 /// object (dyn + static) in the original insertion order. The kernel
 /// emits a flat `concat_displacement` aligned with that ordering.
-///
-/// `has_merge` controls the merge-pair filtering branch: when true,
-/// degenerate rods (e_mapped[0] == e_mapped[1]) and degenerate tris
-/// (mapped indices not unique) are skipped. When false, every entry
-/// passes through.
 #[allow(clippy::too_many_arguments)]
 pub fn assemble_dyn_scene(
     objects: &[AssembleObject<'_>],
     map_by_name: &std::collections::HashMap<String, Vec<i64>>,
     concat_count: usize,
-    has_merge: bool,
     displacement_index: &[(String, [f64; 3])],
     cross_stitches: &[CrossStitch<'_>],
 ) -> Result<AssembleResult, SceneAssemblyError> {
@@ -392,8 +359,8 @@ pub fn assemble_dyn_scene(
 
     // ------------------------------------------------------------------
     // Step 2: rod assembly. Walk every rod-typed object's edges,
-    // remap through map, filter degenerate edges when `has_merge`,
-    // and compute the per-edge collider flag (all endpoints pinned).
+    // remap through map, and compute the per-edge collider flag (all
+    // endpoints pinned).
     for obj in objects {
         if obj.obj_type != "rod" {
             continue;
@@ -409,11 +376,6 @@ pub fn assemble_dyn_scene(
         for e in edges {
             let a = map[e[0] as usize];
             let b = map[e[1] as usize];
-            let drop_degenerate = has_merge && a == b;
-            if drop_degenerate {
-                keep_mask.push(false);
-                continue;
-            }
             keep_mask.push(true);
             out.concat_rod.push(a as u32);
             out.concat_rod.push(b as u32);
@@ -431,8 +393,7 @@ pub fn assemble_dyn_scene(
 
     // ------------------------------------------------------------------
     // Step 3: shell triangles (tri-only objects, no tet). UVs +
-    // dyn-color get appended only here. Filter degenerate tris when
-    // `has_merge`.
+    // dyn-color get appended only here.
     for obj in objects {
         if obj.tets.is_some() || obj.faces.is_none() {
             continue;
@@ -446,11 +407,6 @@ pub fn assemble_dyn_scene(
             let a = map[face[0] as usize];
             let b = map[face[1] as usize];
             let c = map[face[2] as usize];
-            let drop_degenerate = has_merge && (a == b || b == c || a == c);
-            if drop_degenerate {
-                keep_mask.push(false);
-                continue;
-            }
             keep_mask.push(true);
             out.concat_tri.push(a as u32);
             out.concat_tri.push(b as u32);
@@ -495,11 +451,6 @@ pub fn assemble_dyn_scene(
             let a = map[face[0] as usize];
             let b = map[face[1] as usize];
             let c = map[face[2] as usize];
-            let drop_degenerate = has_merge && (a == b || b == c || a == c);
-            if drop_degenerate {
-                keep_mask.push(false);
-                continue;
-            }
             keep_mask.push(true);
             out.concat_tri.push(a as u32);
             out.concat_tri.push(b as u32);
@@ -519,8 +470,7 @@ pub fn assemble_dyn_scene(
     }
 
     // ------------------------------------------------------------------
-    // Step 5: tet assembly. Filter rows where any pair of mapped
-    // indices coincide when `has_merge` is true.
+    // Step 5: tet assembly.
     for obj in objects {
         if obj.tets.is_none() {
             continue;
@@ -533,11 +483,6 @@ pub fn assemble_dyn_scene(
             let b = map[tet[1] as usize];
             let c = map[tet[2] as usize];
             let d = map[tet[3] as usize];
-            let drop_degenerate = has_merge
-                && (a == b || a == c || a == d || b == c || b == d || c == d);
-            if drop_degenerate {
-                continue;
-            }
             out.concat_tet.push(a as u32);
             out.concat_tet.push(b as u32);
             out.concat_tet.push(c as u32);
@@ -550,7 +495,11 @@ pub fn assemble_dyn_scene(
 
     // ------------------------------------------------------------------
     // Step 6: per-object stitches. Map local indices through map and
-    // pad 3-tuple/2-weight entries to 4 columns.
+    // pad legacy 3-tuple / 4-tuple / 2-weight entries to the 6-column
+    // barycentric-barycentric layout. Legacy per-object stitches treat
+    // the source as a single vertex, so the source side degenerates to
+    // [src, src, src] / [1, 0, 0]; the legacy target slots move into the
+    // 3..5 target columns (the weight-shift).
     for obj in objects {
         let (ind, w) = match (obj.stitch_ind, obj.stitch_w) {
             (Some(a), Some(b)) => (a, b),
@@ -569,34 +518,42 @@ pub fn assemble_dyn_scene(
         }
         let map = map_by_name.get(obj.name).unwrap();
         for r in 0..m {
-            // ind row
+            // ind row -> 6-wide [s, s, s, t0, t1, t2]
             let row_ind = &ind[r * obj.stitch_ind_cols..(r + 1) * obj.stitch_ind_cols];
-            let mut padded = [0i64; 4];
-            for (k, &v) in row_ind.iter().enumerate() {
-                padded[k] = map[v as usize];
-            }
-            if obj.stitch_ind_cols == 3 {
-                // Convert 3-index to 4-index: duplicate last vertex.
-                padded[3] = padded[2];
-            }
-            out.concat_stitch_ind.extend_from_slice(&padded);
-            // w row.
-            let row_w = &w[r * obj.stitch_w_cols..(r + 1) * obj.stitch_w_cols];
-            let mut padded_w = [0.0f64; 4];
-            if obj.stitch_w_cols == 4 {
-                padded_w.copy_from_slice(row_w);
+            let mapped: Vec<i64> = row_ind.iter().map(|&v| map[v as usize]).collect();
+            let padded: [i64; 6] = if obj.stitch_ind_cols == 6 {
+                [mapped[0], mapped[1], mapped[2], mapped[3], mapped[4], mapped[5]]
+            } else if obj.stitch_ind_cols == 3 {
+                // legacy [src, t0, t1] -> [src, src, src, t0, t1, t1]
+                [mapped[0], mapped[0], mapped[0], mapped[1], mapped[2], mapped[2]]
             } else {
-                // 2-weight: [1.0, w0, w1, 0.0]; covers 1 or 2 cols too.
-                padded_w[0] = 1.0;
+                // legacy [src, t0, t1, t2] -> [src, src, src, t0, t1, t2]
+                [mapped[0], mapped[0], mapped[0], mapped[1], mapped[2], mapped[3]]
+            };
+            out.concat_stitch_ind.extend_from_slice(&padded);
+            // w row -> 6-wide [1, 0, 0, wt0, wt1, wt2] (source degenerate)
+            let row_w = &w[r * obj.stitch_w_cols..(r + 1) * obj.stitch_w_cols];
+            let mut padded_w = [0.0f64; 6];
+            padded_w[0] = 1.0;
+            if obj.stitch_w_cols == 6 {
+                padded_w.copy_from_slice(row_w);
+            } else if obj.stitch_w_cols == 4 {
+                // legacy [ws, wt0, wt1, wt2] -> [1, 0, 0, wt0, wt1, wt2]
+                padded_w[3] = row_w[1];
+                padded_w[4] = row_w[2];
+                padded_w[5] = row_w[3];
+            } else {
+                // legacy 1/2-weight target bary -> [1, 0, 0, w0, w1, 0]
                 if !row_w.is_empty() {
-                    padded_w[1] = row_w[0];
+                    padded_w[3] = row_w[0];
                 }
                 if row_w.len() >= 2 {
-                    padded_w[2] = row_w[1];
+                    padded_w[4] = row_w[1];
                 }
-                padded_w[3] = 0.0;
             }
             out.concat_stitch_w.extend_from_slice(&padded_w);
+            // One stiffness per stitch row, from the owning object.
+            out.concat_stitch_stiffness.push(obj.stitch_stiffness as f32);
         }
     }
 
@@ -614,17 +571,19 @@ pub fn assemble_dyn_scene(
             }
         })?;
         for r in 0..cs.k {
-            let off = 4 * r;
-            let i0 = cs.ind[off];
-            let i1 = cs.ind[off + 1];
-            let i2 = cs.ind[off + 2];
-            let i3 = cs.ind[off + 3];
-            out.concat_stitch_ind.push(src_map[i0 as usize]);
-            out.concat_stitch_ind.push(tgt_map[i1 as usize]);
-            out.concat_stitch_ind.push(tgt_map[i2 as usize]);
-            out.concat_stitch_ind.push(tgt_map[i3 as usize]);
+            let off = 6 * r;
+            // Source barycentric (slots 0..2) -> source map; target
+            // barycentric (slots 3..5) -> target map.
+            out.concat_stitch_ind.push(src_map[cs.ind[off] as usize]);
+            out.concat_stitch_ind.push(src_map[cs.ind[off + 1] as usize]);
+            out.concat_stitch_ind.push(src_map[cs.ind[off + 2] as usize]);
+            out.concat_stitch_ind.push(tgt_map[cs.ind[off + 3] as usize]);
+            out.concat_stitch_ind.push(tgt_map[cs.ind[off + 4] as usize]);
+            out.concat_stitch_ind.push(tgt_map[cs.ind[off + 5] as usize]);
             out.concat_stitch_w
-                .extend_from_slice(&cs.weights[off..off + 4]);
+                .extend_from_slice(&cs.weights[off..off + 6]);
+            // Per-pair stiffness for this cross-stitch row.
+            out.concat_stitch_stiffness.push(cs.stitch_stiffness as f32);
         }
     }
 
@@ -697,6 +656,15 @@ pub fn assemble_static_scene(
     Ok(out)
 }
 
+/// Single-face shell shrink/strain-limit conflict predicate. Shrink/extend
+/// and a strain-limit cannot be combined on the same face: each rewrites the
+/// rest shape independently, so the strain bound becomes ill-defined when both
+/// are active. This is the one place the rule lives, shared by the batch check
+/// below and the solver's per-face assertion.
+pub fn is_shell_shrink_strain_limit_conflict(x: f64, y: f64, s: f64) -> bool {
+    (x != 1.0 || y != 1.0) && s > 0.0
+}
+
 /// Shell shrink/strain-limit conflict check. Returns the offending
 /// face index when the conflict is present so callers can emit the
 /// matching ValueError.
@@ -713,7 +681,7 @@ pub fn check_shell_shrink_strain_limit_conflict(
         let x = shrink_x[i];
         let y = shrink_y[i];
         let s = strain_limit[i];
-        if (x != 1.0 || y != 1.0) && s > 0.0 {
+        if is_shell_shrink_strain_limit_conflict(x, y, s) {
             return Some((i, x, y, s));
         }
     }

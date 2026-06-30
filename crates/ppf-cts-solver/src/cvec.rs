@@ -3,6 +3,7 @@
 // Review: Ryoichi Ando (ryoichi.ando@zozo.com)
 // License: Apache v2.0
 
+use super::raw_vec::{borrow_slice, leak_vec, reclaim};
 use std::fmt;
 
 #[repr(C)]
@@ -30,10 +31,11 @@ where
 {
     fn from(slice: &[T]) -> Self {
         let size = slice.len() as u32;
+        // with_capacity(size) keeps the real capacity equal to size, so allocated
+        // doubles as both length and capacity on Drop.
         let mut data = Vec::with_capacity(size as usize);
         data.extend_from_slice(slice);
-        let ptr = data.as_mut_ptr();
-        std::mem::forget(data);
+        let (ptr, _len, _cap) = leak_vec(data);
         CVec {
             data: ptr,
             size,
@@ -44,12 +46,10 @@ where
 
 impl<T> Drop for CVec<T> {
     fn drop(&mut self) {
+        // reclaim returns early when data is null (new() leaves it null with allocated == 0)
+        // and otherwise rebuilds the Vec with len == cap == allocated to free it.
         unsafe {
-            drop(Vec::from_raw_parts(
-                self.data,
-                self.allocated as usize,
-                self.allocated as usize,
-            ));
+            reclaim(self.data, self.allocated as usize);
         }
     }
 }
@@ -75,6 +75,15 @@ pub struct CVecIter<'a, T> {
 }
 
 impl<T> CVec<T> {
+    /// Borrow the contents as a slice. Empty when null or zero-length.
+    pub fn as_slice(&self) -> &[T] {
+        if self.data.is_null() || self.size == 0 {
+            &[]
+        } else {
+            unsafe { std::slice::from_raw_parts(self.data, self.size as usize) }
+        }
+    }
+
     pub fn iter(&self) -> CVecIter<'_, T> {
         CVecIter {
             ptr: self.data,
@@ -103,22 +112,21 @@ impl<T: serde::Serialize> serde::Serialize for CVec<T> {
     where
         S: serde::Serializer,
     {
+        // Borrow the live buffer as a slice instead of materializing an owning Vec; the
+        // serialized seq is byte-identical to a Vec under bincode, so the wire layout is
+        // unchanged. borrow_slice centralizes the null/empty guard.
         #[derive(serde::Serialize)]
-        struct Inner<T> {
-            pub data: Vec<T>,
+        struct Inner<'a, T> {
+            pub data: &'a [T],
             pub size: u32,
             pub allocated: u32,
         }
         let inner = Inner {
-            data: unsafe {
-                Vec::from_raw_parts(self.data, self.size as usize, self.allocated as usize)
-            },
+            data: unsafe { borrow_slice(self.data, self.size as usize) },
             size: self.size,
             allocated: self.allocated,
         };
-        let result = inner.serialize(serializer);
-        std::mem::forget(inner.data);
-        result
+        inner.serialize(serializer)
     }
 }
 
@@ -134,16 +142,70 @@ impl<'de, T: serde::Deserialize<'de>> serde::Deserialize<'de> for CVec<T> {
             pub allocated: u32,
         }
         let inner: Inner<T> = Inner::deserialize(deserializer)?;
-        let data_ptr = if inner.size > 0 {
-            inner.data.as_ptr() as *mut T
+        // Drop reconstructs the Vec from `data`/`allocated`, so the stored capacity must
+        // match the kept pointer's real allocation. Derive it from the decoded Vec's own
+        // capacity (not the serialized `allocated` field, which only coincides under
+        // bincode) and keep the null branch at capacity 0, since a null pointer with a
+        // non-zero capacity would be undefined behavior in Drop.
+        let (data_ptr, allocated) = if inner.size > 0 {
+            let (ptr, _len, cap) = leak_vec(inner.data);
+            (ptr, cap as u32)
         } else {
-            std::ptr::null_mut()
+            (std::ptr::null_mut(), 0)
         };
-        std::mem::forget(inner.data);
         Ok(CVec {
             data: data_ptr,
             size: inner.size,
-            allocated: inner.allocated,
+            allocated,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // I497: Drop on a null-pointer CVec (from new()) must not call
+    // Vec::from_raw_parts(null, 0, 0), which aborts under current rustc.
+    #[test]
+    fn new_is_null_and_drops_without_abort() {
+        let v: CVec<u32> = CVec::new();
+        assert!(v.data.is_null());
+        assert_eq!((v.size, v.allocated), (0, 0));
+        drop(v);
+    }
+
+    // I496: from() keeps the real capacity equal to size, so Drop frees the
+    // correct Layout; the data round-trips through as_slice().
+    #[test]
+    fn from_slice_roundtrips_and_capacity_matches() {
+        let src = [10u32, 20, 30, 40];
+        let v = CVec::from(&src[..]);
+        assert_eq!((v.size, v.allocated), (4, 4));
+        assert_eq!(v.as_slice(), &src);
+        drop(v);
+    }
+
+    #[test]
+    fn empty_from_slice_drops_safely() {
+        let empty: [u32; 0] = [];
+        let v = CVec::from(&empty[..]);
+        assert_eq!(v.size, 0);
+        assert!(v.as_slice().is_empty());
+        drop(v);
+    }
+
+    // I498: Deserialize derives the allocated capacity from the decoded Vec
+    // (not the serialized field), so Drop frees the right Layout.
+    #[test]
+    fn serde_roundtrip_preserves_data_and_drops_safely() {
+        let src = [1u32, 2, 3, 4, 5];
+        let v = CVec::from(&src[..]);
+        let bytes = bincode::serialize(&v).unwrap();
+        let back: CVec<u32> = bincode::deserialize(&bytes).unwrap();
+        assert_eq!(back.size, 5);
+        assert_eq!(back.as_slice(), &src);
+        drop(back);
+        drop(v);
     }
 }

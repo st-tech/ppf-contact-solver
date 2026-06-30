@@ -42,6 +42,7 @@ echo [1/9] Verifying build...
 
 set RUST_EXE=%SRC_DIR%\target\release\ppf-contact-solver.exe
 set SERVER_EXE=%SRC_DIR%\target\release\ppf-cts-server.exe
+set PYO3_DLL=%SRC_DIR%\target\release\_ppf_cts_py.dll
 set CUDA_DLL=%SRC_DIR%\crates\ppf-cts-solver\src\cpp\build\lib\libsimbackend_cuda.dll
 
 if not exist "%RUST_EXE%" (
@@ -50,6 +51,10 @@ if not exist "%RUST_EXE%" (
 )
 if not exist "%SERVER_EXE%" (
     echo ERROR: ppf-cts-server.exe not found. Please run build.bat first.
+    exit /b 1
+)
+if not exist "%PYO3_DLL%" (
+    echo ERROR: _ppf_cts_py.dll not found. Please run build.bat first.
     exit /b 1
 )
 if not exist "%CUDA_DLL%" (
@@ -106,6 +111,17 @@ if errorlevel 1 (
     exit /b 1
 )
 echo   Copied ppf-cts-server.exe to target/release/
+
+REM Copy the PyO3 extension to target/release/ where frontend/__init__.py
+REM loads it by absolute path (target\release\_ppf_cts_py.dll relative to
+REM the tree root, which in the bundle is %DIST%). No wheel is installed
+REM into the bundled Python.
+copy "%PYO3_DLL%" "%TARGET_DIR%\" >nul
+if errorlevel 1 (
+    echo ERROR: Failed to copy _ppf_cts_py.dll
+    exit /b 1
+)
+echo   Copied _ppf_cts_py.dll to target/release/
 
 REM Copy CUDA backend DLL to bin/ (loaded via PATH)
 copy "%CUDA_DLL%" "%BIN_DIR%\" >nul

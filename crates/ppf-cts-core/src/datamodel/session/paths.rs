@@ -61,8 +61,10 @@ pub fn command_path(session_path: &Path, platform: Platform) -> Option<PathBuf> 
     }
 }
 
-/// Convenience boolean for the `<output>/<marker>.txt` style sentinels
+/// Convenience boolean for `<output>/<marker>` sentinels that
 /// `FixedSession.finished` and `FixedSession.initialize_finished` poll.
+/// `marker` is the full filename including extension (e.g. `finished.txt`,
+/// `initialize_finish.txt`); no suffix is appended.
 pub fn marker_exists(output_path: &Path, marker: &str) -> bool {
     output_path.join(marker).exists()
 }
@@ -86,6 +88,33 @@ pub fn touch_save_and_quit(session_path: &Path) -> std::io::Result<PathBuf> {
 pub fn delete_session_dir(session_path: &Path) -> std::io::Result<()> {
     if session_path.exists() {
         std::fs::remove_dir_all(session_path)?;
+    }
+    Ok(())
+}
+
+/// Clear every direct child of the session directory except the solver
+/// `output/` subtree. This preserves the saved checkpoints
+/// (`state_<N>.bin.gz`, `dataset.bin.gz`, `meshset.bin.gz`) and the
+/// `save_and_quit` sentinel (all of which live under `output/`) while
+/// removing the scene input so it can be re-decoded for a resume.
+///
+/// No-op when the directory is missing. Degenerates to a full clear
+/// (the session directory itself is kept) when there is no `output/`
+/// child yet.
+pub fn delete_session_dir_keep_output(session_path: &Path) -> std::io::Result<()> {
+    if !session_path.exists() {
+        return Ok(());
+    }
+    for entry in std::fs::read_dir(session_path)? {
+        let entry = entry?;
+        if entry.file_name() == "output" {
+            continue;
+        }
+        if entry.file_type()?.is_dir() {
+            std::fs::remove_dir_all(entry.path())?;
+        } else {
+            std::fs::remove_file(entry.path())?;
+        }
     }
     Ok(())
 }
@@ -141,18 +170,13 @@ pub fn build_symlink_name(
     }
 }
 
-/// Path layout used by `Session._save_fixed_session`. The
-/// `recoverable_pickle` is where the CBOR-wrapped pickle gets written;
-/// `symlinks_dir` and the path you pass to `symlink_target_path`
-/// resolve the symlink (or `.txt` fallback) the recovery flow reads.
+/// Path layout used by `Session._save_fixed_session`. `session_dir`
+/// is the per-session directory under the app root; `recoverable_pickle`
+/// is where the CBOR-wrapped pickle gets written.
 #[derive(Debug, Clone)]
 pub struct FixedSessionDirLayout {
     pub session_dir: PathBuf,
     pub recoverable_pickle: PathBuf,
-    /// Empty path here means "caller will compose it from data_dir
-    /// separately"; we don't carry it because `_save_fixed_session`
-    /// receives `data_dirpath` as a separate argument.
-    pub symlinks_dir: PathBuf,
 }
 
 pub fn fixed_session_dir_layout(app_root: &str, name: &str) -> FixedSessionDirLayout {
@@ -161,7 +185,6 @@ pub fn fixed_session_dir_layout(app_root: &str, name: &str) -> FixedSessionDirLa
     FixedSessionDirLayout {
         session_dir,
         recoverable_pickle,
-        symlinks_dir: PathBuf::new(),
     }
 }
 
@@ -205,7 +228,7 @@ pub fn stdout_error_log_paths(info_path: &Path) -> (PathBuf, PathBuf) {
 pub fn validate_driver_version(driver_version: Option<u32>, minimum: u32) -> Result<(), String> {
     match driver_version {
         Some(v) if v < minimum => Err(format!(
-            "Driver version is {v}. It must be newer than {minimum}"
+            "Driver version is {v}. It must be {minimum} or newer"
         )),
         Some(_) => Ok(()),
         None => Err("Driver version could not be detected.".to_string()),
@@ -229,18 +252,6 @@ pub fn max_strain_limit_default_zero(vals: &[f64]) -> f64 {
         .fold(0.0_f64, f64::max)
 }
 
-/// Filter the `params.items()` dict to "CBOR-friendly scalar metadata"
-/// the way `fixed_session_to_cbor_dict` does. Each entry is a Python
-/// `(str, ParamValue)` pair on the outside; in pure Rust we only
-/// need to validate the value type fits the (bool/int/float/string/
-/// None) bucket. Returns the same key list, in input order.
-///
-/// We surface this so the Python binding can drop the inline
-/// `isinstance` filter and call into Rust for the keep/drop decision.
-pub fn cbor_scalar_keep_indices(values: &[bool]) -> Vec<usize> {
-    values.iter().enumerate().filter_map(|(i, keep)| if *keep { Some(i) } else { None }).collect()
-}
-
 /// Pre-flight a "zip target path": existing zip is removed; final
 /// `<dirpath>.zip` is returned.
 pub fn zip_target_path(dirpath: &Path) -> PathBuf {
@@ -261,12 +272,10 @@ pub fn prepare_zip_target(dirpath: &Path) -> std::io::Result<PathBuf> {
 
 /// Project-root resolution Mirror for the
 /// `os.path.dirname(os.path.dirname(os.path.abspath(__file__)))`
-/// idiom in `SessionExport.animation`. Pure path arithmetic.
+/// idiom in `SessionExport.animation`. Delegates to
+/// `app::frontend_base_dir_from_file` so the absolutization and
+/// fallback policy stay identical across the crate.
 pub fn project_root_from_frontend_file(frontend_file: &Path) -> PathBuf {
     // `<root>/frontend/_session_.py` -> `<root>` (two parents).
-    frontend_file
-        .parent()
-        .and_then(|p| p.parent())
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."))
+    crate::datamodel::app::frontend_base_dir_from_file(frontend_file)
 }

@@ -18,9 +18,7 @@ _DYN_PARAM_TYPES = {
 }
 
 
-def _check_vec3(name: str, v):
-    from ...core.utils import check_vec3
-    return check_vec3(name, v, ValidationError)
+from ._helpers import check_vec3_validation as _check_vec3
 
 
 def _find_dyn_param(state, param_type: str):

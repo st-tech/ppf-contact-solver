@@ -15,6 +15,8 @@
 #include "../csrmat/csrmat.hpp"
 #include "../data.hpp"
 #include "../energy/energy.hpp"
+#include "../energy/model/pdrd_rigid.hpp"
+#include "../energy/model/sand_rigid.hpp"
 #include "../kernels/exclusive_scan.hpp"
 #include "../kernels/reduce.hpp"
 #include "../kernels/vec_ops.hpp"
@@ -112,6 +114,11 @@ void invalidate_inactive_aabbs() {
 namespace main_helper {
 DataSet host_dataset, dev_dataset;
 ParamSet *param;
+// True iff the scene contains at least one SAND grain (grain_inv_inertia > 0).
+// Computed once at initialize() by a host scan; gates the per-Newton-iteration
+// grain-buffer clears so non-SAND scenes launch zero extra kernels. The grain_*
+// buffers are sized n_vert in EVERY scene, so a size check would be useless.
+bool has_grains = false;
 
 bool initialize(DataSet _host_dataset, DataSet _dev_dataset, ParamSet *_param) {
 
@@ -130,6 +137,16 @@ bool initialize(DataSet _host_dataset, DataSet _dev_dataset, ParamSet *_param) {
     host_dataset = _host_dataset;
     dev_dataset = _dev_dataset;
     param = _param;
+
+    // Detect SAND grains once (host scan of the host-side inverse-inertia mirror;
+    // grain_inv_inertia > 0 only for grains, and 0 for every non-SAND scene).
+    has_grains = false;
+    for (unsigned j = 0; j < host_dataset.grain_inv_inertia.size; ++j) {
+        if (host_dataset.grain_inv_inertia.data[j] > 0.0f) {
+            has_grains = true;
+            break;
+        }
+    }
 
     unsigned vert_count = host_dataset.vertex.curr.size;
     unsigned edge_count = host_dataset.mesh.mesh.edge.size;
@@ -154,6 +171,11 @@ bool initialize(DataSet _host_dataset, DataSet _dev_dataset, ParamSet *_param) {
 
     contact::initialize(host_dataset, *param);
 
+    // Re-seed the persistent PDRD per-body rotation on (re)initialize / scene
+    // load, so the anchored rigidify starts from the absolute fit of the loaded
+    // pose rather than a stale rotation.
+    PDRD::pdrd_reset_rprev();
+
     // Initialize GPU LBVH construction buffers
     // Use max of main mesh and collision mesh sizes
     unsigned collision_mesh_face_count = host_dataset.constraint.mesh.face.size;
@@ -161,6 +183,19 @@ bool initialize(DataSet _host_dataset, DataSet _dev_dataset, ParamSet *_param) {
     unsigned max_edges = edge_count > collision_mesh_edge_count ? edge_count : collision_mesh_edge_count;
     unsigned max_verts = surface_vert_count > collision_mesh_vert_count ? surface_vert_count : collision_mesh_vert_count;
     lbvh::initialize(max_faces, max_edges, max_verts);
+
+    // Pre-allocate the scratch pool for the mesh/body-bounded buffers the solve
+    // loop reuses, so the hot path performs no dynamic GPU alloc/dealloc once
+    // warmed up. schwarz's contact-driven scratch is left to grow the same pool
+    // to its high-water mark at runtime (its sizes are not known here). The
+    // vertex driver covers both the full-mesh DOF count and the surface/
+    // collision-mesh contact counts.
+    {
+        unsigned pool_verts =
+            vert_count > max_verts ? vert_count : max_verts;
+        unsigned n_bodies = host_dataset.prop.pdrd_body.size;
+        buffer::reserve_for_mesh(pool_verts, max_edges, max_faces, n_bodies);
+    }
 
     if (!param->disable_contact) {
         // Name: Initial LBVH Build Time
@@ -224,6 +259,14 @@ StepResult advance() {
     // reflect how hard the solver had to work to progress the step.
     SimpleLog logging("advance");
 
+    // Device alloc/free counts at step entry. The per-step delta (logged at
+    // exit) verifies the steady-state goal: once the scene reaches peak contact
+    // and the pre-allocated / high-water pool has warmed up, the solve loop
+    // performs ZERO dynamic GPU alloc/dealloc. A nonzero steady-state delta
+    // flags a buffer that still escapes the pool.
+    const unsigned long long dev_alloc_at_entry = g_device_alloc_count;
+    const unsigned long long dev_free_at_entry = g_device_free_count;
+
     StepResult result;
     result.pcg_success = true;
     result.ccd_success = true;
@@ -237,6 +280,16 @@ StepResult advance() {
     const unsigned shell_face_count = host_dataset.shell_face_count;
     const unsigned rod_count = host_dataset.rod_count;
     const unsigned tet_count = host_data.mesh.mesh.tet.size;
+
+    // PDRD: PDRD bodies are exactly rigid. After each collision-free Newton
+    // position update, the surface is snapped onto the nearest exactly-rigid
+    // configuration (fit (x_b,R_b), reconstruct x_v = x_b + R_b ybar). That snap
+    // is itself a trajectory, so its delta is run through the contact CCD line
+    // search; if rigidifying would penetrate, we take a partial step (toi<1) and
+    // the remaining non-rigid residual is removed over subsequent iterations
+    // (at toi=0 the snap is identity, so a feasible step always exists).
+    const unsigned n_pdrd_bodies = host_data.prop.pdrd_body.size;
+    const bool rigid_pdrd = n_pdrd_bodies > 0;
 
     // Get buffers from buffer pool (auto-deduce PooledVec type)
     buffer::MemoryPool &pool = buffer::get();
@@ -353,9 +406,17 @@ StepResult advance() {
             Vec<Svd3x2> svd_vec = svd.as_vec();
             Vec<float> tmp_scalar_vec = tmp_scalar.as_vec();
             DISPATCH_START(shell_face_count)
-            [prop_face, param_face, svd_vec,
+            [prop_face, param_face, mesh_face, prop_vertex, svd_vec,
              tmp_scalar_vec] __device__(unsigned i) mutable {
                 const FaceProp &prop = prop_face[i];
+                // PDRD bodies have no per-element elastic stretch; their
+                // rigid fit always carries a small singular-value residual
+                // that would dominate this metric and mislead diagnostics.
+                // Exclude them entirely.
+                const Vec3u &face = mesh_face[i];
+                if (prop_vertex[face[0]].pdrd_body_index != 0) {
+                    return;
+                }
                 if (!prop.fixed) {
                     const FaceParam &fparam = param_face[prop.param_index];
                     tmp_scalar_vec[i] =
@@ -430,6 +491,39 @@ StepResult advance() {
     auto force = pool.get<float>(3 * vertex_count);
     auto dx = pool.get<float>(3 * vertex_count);
     auto diag_hess = pool.get<Mat3x3f>(vertex_count);
+    auto rigid_tgt = pool.get<Vec3f>(rigid_pdrd ? vertex_count : 1);
+
+    // Anchored-rigidify state (PDRD): R_run integrates the applied rotation
+    // increment onto the persistent committed rotation R_prev, so the rigidify
+    // target rotation never re-fits the contact-sheared eval_x (which is what
+    // accumulated the non-rigid shrink). pdrd_dtheta carries the per-body reduced
+    // rotation step out of the solve each Newton iteration.
+    unsigned n_pdrd = data.prop.pdrd_body.size;
+    auto R_run = pool.get<float>(rigid_pdrd ? 9 * n_pdrd : 1);
+    auto pdrd_dtheta = pool.get<float>(rigid_pdrd ? 3 * n_pdrd : 1);
+    if (rigid_pdrd) {
+        Vec<float> &R_prev = PDRD::pdrd_rprev();
+        if (R_prev.size < 9u * n_pdrd) {
+            R_prev.free();
+            R_prev = Vec<float>::alloc(9u * n_pdrd);
+            PDRD::pdrd_rprev_seeded() = false;
+        }
+        if (!PDRD::pdrd_rprev_seeded()) {
+            Vec<Vec3f> eval_x_vec = eval_x.as_vec();
+            PDRD::launch_seed_rprev(data, eval_x_vec, R_prev);
+            PDRD::pdrd_rprev_seeded() = true;
+        }
+        kernels::copy(R_prev.data, R_run.data, 9u * n_pdrd); // R_run <- R_prev
+    }
+
+    // Implicit (Schur-condensed) rolling: snapshot each grain's start-of-step
+    // angular velocity. The condense/recover use it as the (constant) inertia
+    // reference across Newton iterations, since recover overwrites grain_omega
+    // in-loop.
+    if (has_grains) {
+        kernels::copy(data.grain_omega.data, data.grain_omega_prev.data,
+                      data.grain_omega.size);
+    }
 
     while (true) {
         if (final_step) {
@@ -443,6 +537,22 @@ StepResult advance() {
         fixed_hess.clear();
         force.clear();
         dx.clear();
+
+        // SAND grains: zero the transient spin accumulators each iteration so the
+        // contact embeds (grain-grain point-point + floor/sphere) ACCUMULATE
+        // (atomicAdd) the friction torque / angular stiffness / contact-normal
+        // sum over ALL of a grain's simultaneous contacts within this iteration,
+        // rather than overwrite. The post-solve integrate consumes the converged
+        // sums once. Gated so non-SAND scenes launch no extra kernels.
+        if (has_grains) {
+            data.grain_torque.clear(Vec3f::Zero());
+            data.grain_ang_stiff.clear(0.0f);
+            data.grain_contact_normal.clear(Vec3f::Zero());
+            // Implicit (Schur-condensed) rolling Schur blocks (floor/sphere).
+            data.grain_A.clear(Mat3x3f::Zero());
+            data.grain_B.clear(Mat3x3f::Zero());
+            data.grain_grot.clear(Vec3f::Zero());
+        }
 
         if (final_step) {
             dt *= toi_advanced;
@@ -483,16 +593,38 @@ StepResult advance() {
                                              force, diag_hess, prm,
                                              torque_result_vec);
 
+        // Name: Assembly: Elastic
+        // Format: list[(time, ms)]
+        // Description:
+        // Diagnostic sub-timer of "matrix assembly": wall-clock ms spent
+        // assembling the elastic (membrane / bending / solid) Hessian and
+        // force into the fixed matrix.
+        logging.push("asm elastic");
         energy::embed_elastic_force_hessian(data, eval_x, force, fixed_hess, dt,
                                             prm);
+        logging.pop();
 
         if (host_data.constraint.stitch.size) {
             energy::embed_stitch_force_hessian(data, eval_x, force, fixed_hess,
                                                prm);
         }
 
+        // Name: Assembly: Fixed Copy
+        // Format: list[(time, ms)]
+        // Description:
+        // Diagnostic sub-timer of "matrix assembly": wall-clock ms to snapshot
+        // the elastic fixed matrix into tmp_fixed (the contact-stiffness
+        // reference read by the contact assembly).
+        logging.push("asm copy");
         tmp_fixed.copy(fixed_hess);
+        logging.pop();
 
+        // Name: Assembly: Strain Limit
+        // Format: list[(time, ms)]
+        // Description:
+        // Diagnostic sub-timer of "matrix assembly": wall-clock ms for the
+        // strain-limiting Hessian / force contributions.
+        logging.push("asm strainlimit");
         if (data.shell_face_count > 0) {
             strainlimiting::embed_strainlimiting_force_hessian(
                 data, eval_x, force, tmp_fixed, fixed_hess, prm);
@@ -501,14 +633,23 @@ StepResult advance() {
             strainlimiting::embed_rod_strainlimiting_force_hessian(
                 data, eval_x, force, tmp_fixed, fixed_hess, prm);
         }
+        logging.pop();
         unsigned num_contact = 0;
         float dyn_consumed = 0.0f;
         unsigned max_nnz_row = 0;
+        // Name: Assembly: Contact
+        // Format: list[(time, ms)]
+        // Description:
+        // Diagnostic sub-timer of "matrix assembly": wall-clock ms for the
+        // self-contact / collision-mesh Hessian + force assembly (the CSR fill
+        // path, including the dynamic-matrix rebuild).
+        logging.push("asm contact");
         if (!param->disable_contact) {
             num_contact += contact::embed_contact_force_hessian(
                 data, eval_x, force, tmp_fixed, fixed_hess, dyn_hess,
                 max_nnz_row, dyn_consumed, dt, prm);
         }
+        logging.pop();
 
         // Name: Dynamic Hessian Memory Usage Ratio
         // Format: list[(time, ratio)]
@@ -545,8 +686,28 @@ StepResult advance() {
         logging.mark("num_contact", num_contact);
         logging.pop();
 
+        // Implicit (Schur-condensed) rolling: condense each grain's angular DOF
+        // (from its floor/sphere friction, accumulated into grain_A/B/grot) into
+        // its 3x3 translation block (diag_hess) and RHS (force) BEFORE the solve,
+        // so the linear solve sees the rotation-translation coupling.
+        if (has_grains) {
+            // Fraction of the grain's spin angular-momentum fed back into its
+            // translation (spin-to-translation rolling drive). 0.5 gives near-
+            // textbook rolling while staying bounded (no energy-pump runaway);
+            // higher approaches textbook but loses stability margin on steep
+            // slopes. Tunable via PPF_SAND_SPIN_COUPLE.
+            static const float sand_spin_couple = []() {
+                const char *s = std::getenv("PPF_SAND_SPIN_COUPLE");
+                return s ? std::strtof(s, nullptr) : 0.5f;
+            }();
+            SandRigid::launch_condense_grains(data, diag_hess.as_vec(),
+                                              force.as_vec(), dt,
+                                              sand_spin_couple);
+        }
+
         unsigned iter;
         float reresid;
+        unsigned schwarz_fallback = 0;
 
         // Name: Linear Solve Time
         // Format: list[(time, ms)]
@@ -558,9 +719,13 @@ StepResult advance() {
         // dominant per-iteration cost.
         logging.push("linsolve");
 
+        Vec<Vec3f> eval_x_positions = eval_x.as_vec();
+        Vec<float> pdrd_dtheta_vec =
+            rigid_pdrd ? pdrd_dtheta.as_vec() : Vec<float>{};
         bool success =
             solver::solve(dyn_hess, fixed_hess, diag_hess, force, prm.cg_tol,
-                          prm.cg_max_iter, dx, iter, reresid);
+                          prm.cg_max_iter, dx, eval_x_positions, prm, iter,
+                          reresid, schwarz_fallback, data, dt, pdrd_dtheta_vec);
         logging.pop();
 
         // Name: Linear Solve Iteration Count
@@ -583,11 +748,31 @@ StepResult advance() {
         // tolerance indicate the iteration cap was hit.
         logging.mark("reresid", reresid);
 
+        // Name: Schwarz Block-Jacobi Fallback
+        // Format: list[(time, count)]
+        // Description:
+        // 1 if the Schwarz preconditioner produced a non-SPD residual (rz <= 0)
+        // during this Newton iteration's PCG solve and the solver latched the
+        // SPD-safe block-Jacobi fallback for the rest of the solve, else 0.
+        // Always 0 under the block-jacobi preconditioner; a nonzero entry flags a
+        // Schwarz SPD breakdown worth reviewing. Recorded every iteration but only
+        // printed when nonzero so the common 0 case does not clutter the log.
+        logging.mark("schwarz_fallback", schwarz_fallback, schwarz_fallback != 0);
+
         if (!success) {
             logging.message("### cg failed");
             result.pcg_success = false;
             // PooledVec buffers will auto-release when returning
             return result;
+        }
+
+        // Implicit (Schur-condensed) rolling: recover each grain's angular
+        // velocity from the solved translation increment via Schur back-substitution
+        // (omega = -A^-1 (g_theta - B^T dx) / dt). Uses the raw solve direction dx
+        // (the line-search toi-rescale is not applied to the recovered spin; a
+        // documented small-toi approximation).
+        if (has_grains) {
+            SandRigid::launch_recover_grains(data, dx.as_vec(), dt);
         }
 
         float max_dx;
@@ -746,6 +931,68 @@ StepResult advance() {
             } DISPATCH_END;
         }
 
+        // PDRD rigidify: snap the PDRD surface onto the nearest exactly-rigid
+        // configuration. eval_x is collision-free here; the snap (eval_x ->
+        // rigid_tgt) is treated as a trajectory and run through the contact CCD
+        // line search, so it can never introduce a penetration. A partial step
+        // (toi_rig < 1) leaves a small non-rigid residual that the next Newton
+        // iterations remove; toi_rig = 0 is always feasible (identity snap).
+        if (rigid_pdrd) {
+            Vec<Vec3f> eval_x_vec = eval_x.as_vec();
+            Vec<Vec3f> rigid_tgt_vec = rigid_tgt.as_vec();
+            // Integrate this iteration's actually-applied rotation
+            // (toi_recale*toi * reduced dtheta) onto the persistent R_run, then
+            // build the rigidify target from R_run (anchored rotation + eval_x
+            // centroid) instead of re-fitting the contact-sheared eval_x. This
+            // breaks the cross-frame accumulation that drove the non-rigid
+            // shrink; the lerp + CCD below are unchanged.
+            Vec<float> R_run_vec = R_run.as_vec();
+            // The applied per-vertex step eval_x -= toi_recale*toi*(dx_b - p x dth)
+            // rotates the body by -(toi_recale*toi)*dth (note the sign from the
+            // prolong's -p x dth and the -= update), so R_run integrates the
+            // NEGATED scaled reduced rotation.
+            PDRD::launch_compose_rrun(n_pdrd, R_run_vec, pdrd_dtheta.as_vec(),
+                                      -(toi_recale * toi));
+            // rigid_tgt = eval_x, then overwrite PDRD verts with the anchored
+            // rigid image (centroid(eval_x) + R_run * ybar).
+            kernels::copy(eval_x.data, rigid_tgt.data, eval_x.size);
+            PDRD::launch_rigidify_from_rot(data, eval_x_vec, R_run_vec,
+                                           rigid_tgt_vec);
+
+            float toi_rig = 1.0f;
+            if (!param->disable_contact) {
+                logging.push("rigidify ccd");
+                lbvh::update_face_aabb(eval_x_vec, rigid_tgt_vec,
+                                       prm.line_search_max_t, data.mesh.mesh.face,
+                                       bvh_storage::get_bvh().face,
+                                       contact::get_face_aabb(), data.prop.face,
+                                       data.param_arrays.face);
+                lbvh::update_edge_aabb(eval_x_vec, rigid_tgt_vec,
+                                       prm.line_search_max_t, data.mesh.mesh.edge,
+                                       bvh_storage::get_bvh().edge,
+                                       contact::get_edge_aabb(), data.prop.edge,
+                                       data.param_arrays.edge);
+                lbvh::update_vertex_aabb(
+                    eval_x_vec, rigid_tgt_vec, prm.line_search_max_t,
+                    bvh_storage::get_bvh().vertex, contact::get_vertex_aabb(),
+                    host_data.surface_vert_count, data.prop.vertex,
+                    data.param_arrays.vertex);
+                invalidate_inactive_aabbs();
+                toi_rig = contact::line_search(data, eval_x_vec, rigid_tgt_vec,
+                                               prm);
+                logging.pop();
+            }
+            logging.mark("rigidify_toi", toi_rig);
+            {
+                DISPATCH_START(vertex_count)
+                [eval_x_vec, rigid_tgt_vec, toi_rig] __device__(unsigned i) mutable {
+                    Vec3f d = toi_rig *
+                              (rigid_tgt_vec[i] - eval_x_vec[i]);
+                    eval_x_vec[i] = eval_x_vec[i] + d;
+                } DISPATCH_END;
+            }
+        }
+
         if (!result.success()) {
             // Early exit - buffers already released in error handling above
             break;
@@ -831,6 +1078,31 @@ StepResult advance() {
         kernels::copy(eval_x.data, dev_dataset.vertex.curr.data,
                       dev_dataset.vertex.curr.size);
 
+        // Carry this frame's integrated rotation to the next frame so the
+        // anchored rigidify target stays exact (breaks the non-rigid drift
+        // accumulation across frames).
+        if (rigid_pdrd) {
+            Vec<float> &R_prev = PDRD::pdrd_rprev();
+            kernels::copy(R_run.data, R_prev.data, 9u * n_pdrd);
+        }
+
+        // SAND grain spin (staggered / post-solve rolling): the converged
+        // contact-friction torque (grain_torque, written by the final
+        // force/Hessian embed) spins each grain's angular velocity for the next
+        // step, which feeds the next step's contact-point friction (contact.cu)
+        // and closes the rolling loop. PPF_SAND_NO_ROLL pins omega at 0 so grains
+        // slide instead of roll.
+        static const bool sand_no_roll = std::getenv("PPF_SAND_NO_ROLL") != nullptr;
+        // Rolling-resistance under-roll fraction (anti-pump; see sand_rigid.hpp).
+        static const float sand_roll_resist = []() {
+            const char *s = std::getenv("PPF_SAND_ROLL_RESIST");
+            return s ? std::strtof(s, nullptr) : 0.05f;
+        }();
+        if (!sand_no_roll && has_grains) {
+            SandRigid::launch_integrate_grains(data, dt, /*c_roll=*/0.0f,
+                                               sand_roll_resist);
+        }
+
         // Update plasticity (permanent deformation) on B matrices
         if (shell_face_count > 0) {
             plasticity::update_face_plasticity(data, prm);
@@ -851,10 +1123,41 @@ StepResult advance() {
     // PooledVec buffers auto-release here when exiting function scope
     // No manual release() calls needed!
 
+    // Dynamic GPU alloc/dealloc performed during this step. Settles to 0/0 once
+    // the pools warm up (see entry capture above).
+    {
+        const unsigned long long dev_alloc =
+            g_device_alloc_count - dev_alloc_at_entry;
+        const unsigned long long dev_free =
+            g_device_free_count - dev_free_at_entry;
+        logging.mark("device-alloc", static_cast<double>(dev_alloc));
+        logging.mark("device-free", static_cast<double>(dev_free));
+        logging.message("* device alloc/free this step: %llu / %llu", dev_alloc,
+                        dev_free);
+    }
+
     return result;
 }
 
 } // namespace main_helper
+
+// Fatal-exit reason set by the exit(1) paths (HandleError in
+// cuda_utils.hpp, the no-device check below); the Rust host reads it in an
+// atexit hook to write a terminal Crashed{Oom|CudaDriver} record. 0 means
+// no fatal exit (a clean run or a panic, which the host handles
+// separately).
+extern "C" unsigned char g_ppf_fatal_code = 0;
+
+// Device alloc/free instrumentation (declared in main/cuda_utils.hpp). Bumped
+// by Vec<T>::alloc/reserve/free so advance() can log the per-step delta and we
+// can verify the solve loop performs no dynamic GPU alloc/dealloc in steady
+// state.
+unsigned long long g_device_alloc_count = 0;
+unsigned long long g_device_free_count = 0;
+
+extern "C" DLL_EXPORT unsigned char ppf_fatal_code() {
+    return g_ppf_fatal_code;
+}
 
 extern "C" DLL_EXPORT void set_log_path(const char *data_dir) {
     SimpleLog::setPath(data_dir);
@@ -897,7 +1200,8 @@ DataSet malloc_dataset(DataSet dataset, ParamSet param) {
                              mem::malloc_device(dataset.prop.edge),
                              mem::malloc_device(dataset.prop.face),
                              mem::malloc_device(dataset.prop.hinge),
-                             mem::malloc_device(dataset.prop.tet)};
+                             mem::malloc_device(dataset.prop.tet),
+                             mem::malloc_device(dataset.prop.pdrd_body)};
 
     CollisionMesh tmp_collision_mesh = dataset.constraint.mesh;
     {
@@ -968,6 +1272,25 @@ DataSet malloc_dataset(DataSet dataset, ParamSet param) {
         mem::malloc_device(dataset.param_arrays.tet),
     };
 
+    Vec<unsigned> dev_pdrd_vert_list = mem::malloc_device(dataset.pdrd_vert_list);
+    Vec<Vec3f> dev_pdrd_rest_centered =
+        mem::malloc_device(dataset.pdrd_rest_centered);
+    Vec<Vec3f> dev_grain_omega = mem::malloc_device(dataset.grain_omega);
+    Vec<float> dev_grain_inv_inertia =
+        mem::malloc_device(dataset.grain_inv_inertia);
+    Vec<Vec3f> dev_grain_torque = mem::malloc_device(dataset.grain_torque);
+    Vec<float> dev_grain_ang_stiff =
+        mem::malloc_device(dataset.grain_ang_stiff);
+    Vec<Vec3f> dev_grain_contact_normal =
+        mem::malloc_device(dataset.grain_contact_normal);
+    Vec<float> dev_grain_inv_inertia_center =
+        mem::malloc_device(dataset.grain_inv_inertia_center);
+    Vec<Vec3f> dev_grain_omega_prev =
+        mem::malloc_device(dataset.grain_omega_prev);
+    Vec<Mat3x3f> dev_grain_A = mem::malloc_device(dataset.grain_A);
+    Vec<Mat3x3f> dev_grain_B = mem::malloc_device(dataset.grain_B);
+    Vec<Vec3f> dev_grain_grot = mem::malloc_device(dataset.grain_grot);
+
     DataSet dev_dataset = {dev_vertex,
                            dev_mesh_info,
                            dev_prop_info,
@@ -979,7 +1302,19 @@ DataSet malloc_dataset(DataSet dataset, ParamSet param) {
                            dev_transpose_table,
                            dataset.rod_count,
                            dataset.shell_face_count,
-                           dataset.surface_vert_count};
+                           dataset.surface_vert_count,
+                           dev_pdrd_vert_list,
+                           dev_pdrd_rest_centered,
+                           dev_grain_omega,
+                           dev_grain_inv_inertia,
+                           dev_grain_torque,
+                           dev_grain_ang_stiff,
+                           dev_grain_contact_normal,
+                           dev_grain_inv_inertia_center,
+                           dev_grain_omega_prev,
+                           dev_grain_A,
+                           dev_grain_B,
+                           dev_grain_grot};
 
     return dev_dataset;
 }
@@ -991,6 +1326,7 @@ extern "C" DLL_EXPORT bool initialize(DataSet *dataset, ParamSet *param) {
     logging::info("cuda: detected %d devices...", num_device);
     if (num_device == 0) {
         logging::info("cuda: no device found...");
+        g_ppf_fatal_code = 3; // CudaDriver: no usable CUDA device
         exit(1);
     }
 
@@ -1153,6 +1489,46 @@ extern "C" DLL_EXPORT void update_constraint(const Constraint *constraint) {
     mem::copy_to_device(hinge_prop, main_helper::dev_dataset.prop.hinge);
 }
 
+extern "C" DLL_EXPORT void update_rest_shape(const RestShapeUpdate *update) {
+    // Replace the device-side inverse rest matrices with the streamed
+    // time-varying rest shape for this frame. The elastic force/Hessian
+    // kernels read inv_rest2x2/inv_rest3x3 fresh each Newton iteration, so
+    // overwriting them here (right after update_constraint, before the next
+    // advance) drives each element's rest pose per frame. Empty arrays (a
+    // tet-only solid has no faces, a shell-only cloth has no tets) are
+    // skipped. Plasticity does not coexist with a streamed rest shape (the
+    // frontend refuses to ship both, leaving plasticity == 0 for these
+    // elements), so there is no in-place mutation to preserve here.
+    if (update->inv_rest2x2.size) {
+        mem::copy_to_device(update->inv_rest2x2,
+                            main_helper::dev_dataset.inv_rest2x2);
+    }
+    if (update->inv_rest3x3.size) {
+        mem::copy_to_device(update->inv_rest3x3,
+                            main_helper::dev_dataset.inv_rest3x3);
+    }
+    // Exclude near-singular rest elements from the elastic/strain energy via
+    // the dedicated `rest_excluded` flag (energy.cu and strainlimiting.cu gate
+    // on it independently of the pin-driven `fixed` flag, so the two never
+    // alias). This path owns `rest_excluded`: it assigns the full per-element
+    // mask every frame, so there is no stale state and no ordering dependence
+    // on update_constraint (which only touches `fixed`).
+    auto &face_prop = main_helper::host_dataset.prop.face;
+    if (update->exclude_face.size) {
+        for (unsigned i = 0; i < update->exclude_face.size && i < face_prop.size; ++i) {
+            face_prop[i].rest_excluded = update->exclude_face[i] != 0;
+        }
+        mem::copy_to_device(face_prop, main_helper::dev_dataset.prop.face);
+    }
+    auto &tet_prop = main_helper::host_dataset.prop.tet;
+    if (update->exclude_tet.size) {
+        for (unsigned i = 0; i < update->exclude_tet.size && i < tet_prop.size; ++i) {
+            tet_prop[i].rest_excluded = update->exclude_tet[i] != 0;
+        }
+        mem::copy_to_device(tet_prop, main_helper::dev_dataset.prop.tet);
+    }
+}
+
 extern "C" DLL_EXPORT void override_velocity(
     const unsigned *indices, unsigned count,
     float vx, float vy, float vz, float dt
@@ -1176,6 +1552,87 @@ extern "C" DLL_EXPORT void override_velocity(
             dev_curr[vi][0] - fp_vx,
             dev_curr[vi][1] - fp_vy,
             dev_curr[vi][2] - fp_vz
+        );
+    }
+    DISPATCH_END
+
+    cudaFree(d_indices);
+}
+
+// Gather the CURRENT positions of `indices` (start-of-step `vertex.curr`)
+// into a contiguous host buffer `out` packed (x, y, z) per index. Used by
+// the angular velocity overwrite: the Rust side computes the body's
+// principal axes from these live positions each time a keyframe fires, so
+// the spin axis tracks the simulated (rotated / deformed) geometry rather
+// than a pose frozen at t=0.
+extern "C" DLL_EXPORT void gather_current_positions(
+    const unsigned *indices, unsigned count, float *out
+) {
+    if (count == 0) return;
+
+    unsigned *d_indices;
+    cudaMalloc(&d_indices, count * sizeof(unsigned));
+    cudaMemcpy(d_indices, indices, count * sizeof(unsigned),
+               cudaMemcpyHostToDevice);
+
+    float *d_out;
+    cudaMalloc(&d_out, count * 3 * sizeof(float));
+
+    auto dev_curr = main_helper::dev_dataset.vertex.curr.data;
+
+    DISPATCH_START(count)
+    [d_indices, d_out, dev_curr] __device__(unsigned i) mutable {
+        unsigned vi = d_indices[i];
+        d_out[i * 3 + 0] = static_cast<float>(dev_curr[vi][0]);
+        d_out[i * 3 + 1] = static_cast<float>(dev_curr[vi][1]);
+        d_out[i * 3 + 2] = static_cast<float>(dev_curr[vi][2]);
+    }
+    DISPATCH_END
+
+    cudaMemcpy(out, d_out, count * 3 * sizeof(float), cudaMemcpyDeviceToHost);
+
+    cudaFree(d_indices);
+    cudaFree(d_out);
+}
+
+// Inject an angular velocity ω (rad/s) about world-space center `c` into the
+// listed vertices: the implicit integrator reads the incoming velocity as
+// (curr - prev)/dt, so subtracting (ω × (curr - c)) · dt from `prev` adds a
+// rigid spin field. Applied AFTER `override_velocity` in the same step, so a
+// keyframe carrying both linear and angular components yields a full
+// rigid-velocity overwrite prev = curr - (v_lin + ω × (x - c)) · dt. For a
+// PDRD body the field is exactly rigid and survives the rigidify projection;
+// for a deformable solid/shell it seeds a rotational velocity field.
+extern "C" DLL_EXPORT void override_angular_velocity(
+    const unsigned *indices, unsigned count,
+    float wx, float wy, float wz,
+    float cx, float cy, float cz, float dt
+) {
+    if (count == 0 || dt <= 0.0f) return;
+
+    unsigned *d_indices;
+    cudaMalloc(&d_indices, count * sizeof(unsigned));
+    cudaMemcpy(d_indices, indices, count * sizeof(unsigned),
+               cudaMemcpyHostToDevice);
+
+    auto dev_curr = main_helper::dev_dataset.vertex.curr.data;
+    auto dev_prev = main_helper::dev_dataset.vertex.prev.data;
+
+    DISPATCH_START(count)
+    [d_indices, dev_curr, dev_prev, wx, wy, wz, cx, cy, cz, dt]
+    __device__(unsigned i) mutable {
+        unsigned vi = d_indices[i];
+        float rx = static_cast<float>(dev_curr[vi][0]) - cx;
+        float ry = static_cast<float>(dev_curr[vi][1]) - cy;
+        float rz = static_cast<float>(dev_curr[vi][2]) - cz;
+        // v = ω × r
+        float vwx = wy * rz - wz * ry;
+        float vwy = wz * rx - wx * rz;
+        float vwz = wx * ry - wy * rx;
+        dev_prev[vi] = Vec3f(
+            dev_prev[vi][0] - (vwx * dt),
+            dev_prev[vi][1] - (vwy * dt),
+            dev_prev[vi][2] - (vwz * dt)
         );
     }
     DISPATCH_END

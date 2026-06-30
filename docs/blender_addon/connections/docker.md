@@ -30,7 +30,7 @@ the daemon and container live on a different host, see
    `ppf-dev`). The container must already exist on the daemon; the
    add-on will start it if it is stopped, but it will not create one.
 3. Fill **Container Path** with the working directory **inside** the
-   container (default `/root/ppf-contact-solver`). This is the
+   container (for example `/root/ppf-contact-solver`). This is the
    directory containing the `ppf-cts-server` binary, *not* a path on the Blender host.
 4. Set **Docker Port** to the TCP port `ppf-cts-server` listens on inside
    the container (default `9090`).
@@ -60,7 +60,7 @@ module is missing. **Connect** is highlighted.
 
 The Docker backend requires the `docker` Python package (sometimes
 called `docker-py`). When it is missing the main panel shows an
-**Install Docker** button that installs the package into the add-on's
+**Install Docker-Py to Add-on Directory** button that installs the package into the add-on's
 private library on a background thread.
 
 ## Troubleshooting
@@ -74,7 +74,7 @@ private library on a background thread.
   `ppf-cts-server` did not become ready within 16 seconds. Check
   `server.log` inside the directory set in **Container Path**; the
   panel prints the last 20 lines automatically.
-- **`docker-py` not found** - click **Install Docker** on the main
+- **`docker-py` not found** - click **Install Docker-Py to Add-on Directory** on the main
   panel and wait for the background installer to finish.
 
 :::{admonition} Under the hood

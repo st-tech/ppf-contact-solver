@@ -423,9 +423,12 @@ const CORNER_OFFSETS: [(i32, i32, i32); 8] = [
 /// `verts_flat` has shape `(n_verts * 3,)` (row-major xyz), and
 /// `faces_flat` has shape `(n_faces * 3,)`.
 ///
-/// Vertex deduplication uses a hash map keyed on the cube + edge so
-/// each crossing emits exactly one vertex even when the edge is
-/// shared between adjacent cubes (matches the Python source).
+/// Vertex deduplication is per-cube only: the hash map is keyed on
+/// `(i, j, k, edge)`, so the same physical edge shared between two
+/// adjacent cubes emits a separate vertex from each cube. The output
+/// mesh therefore contains duplicated vertices along shared edges.
+/// This matches the Python source; the manifold test snaps vertices
+/// to a coarse grid to merge them before checking connectivity.
 pub fn marching_cubes(
     xs: &[f64],
     ys: &[f64],
@@ -449,10 +452,8 @@ pub fn marching_cubes(
 
     let mut vertices: Vec<f64> = Vec::new();
     let mut faces: Vec<i32> = Vec::new();
-    // Key: (i, j, k, edge) packed into a single i64 for fast hashing.
-    // (nx, ny, nz, 12) ≪ 2^32 in practice; pack into 16/16/16/4 bits
-    // would overflow at very large grids; use u64 and tuple math
-    // instead.
+    // Per-cube vertex dedup keyed by (i, j, k, edge), so a vertex is
+    // not re-emitted for the same edge within one cube.
     let mut vertex_map: HashMap<(i32, i32, i32, u8), i32> = HashMap::new();
 
     for i in 0..nx - 1 {

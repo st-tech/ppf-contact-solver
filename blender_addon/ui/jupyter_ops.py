@@ -17,6 +17,47 @@ from ..core.utils import redraw_all_areas
 from ..models.groups import get_addon_data
 
 
+def _notebook_request(connection, header_dict, payload=b""):
+    """Run one notebook request/response exchange over a solver channel.
+
+    Opens a channel, sends HEADER_JSON_DATA, the JSON header line, and the
+    optional payload, then reads until newline and parses the OK/error
+    response. Returns (ok, rejected, err): on a server rejection `rejected`
+    is True and `err` is the parsed error string; on a transport failure
+    `rejected` is False and `err` is str(e). All side-effects (state writes,
+    INFO reports, the error verb) stay at the call site.
+    """
+    channel = None
+    try:
+        channel = connection.instance.open_channel()
+        channel.sendall(HEADER_JSON_DATA)
+        header = json.dumps(header_dict).encode() + b"\n"
+        channel.sendall(header)
+        if payload:
+            channel.sendall(payload)
+        response = b""
+        while b"\n" not in response:
+            chunk = channel.recv(1024)
+            if not chunk:
+                break
+            response += chunk
+        if b"OK" not in response:
+            try:
+                err = json.loads(response.decode().strip()).get("error", response.decode().strip())
+            except Exception:
+                err = response.decode(errors="replace").strip() or "no response"
+            return False, True, err
+        return True, False, ""
+    except Exception as e:
+        return False, False, str(e)
+    finally:
+        if channel is not None:
+            try:
+                channel.close()
+            except Exception:
+                pass
+
+
 JUPYTER_NOTEBOOK_TEMPLATE = {
     "cells": [
         {
@@ -157,40 +198,22 @@ class JUPYTER_OT_Export(Operator):
             self.report({"ERROR"}, "Not connected to solver server. Connect first.")
             return {"CANCELLED"}
 
-        channel = None
-        try:
-            channel = connection.instance.open_channel()
-            channel.sendall(HEADER_JSON_DATA)
-            header = json.dumps({
+        ok, rejected, err = _notebook_request(
+            connection,
+            {
                 "request": "notebook_send",
                 "relative_path": filepath,
                 "size": len(payload),
                 "name": project_name,
-            }).encode() + b"\n"
-            channel.sendall(header)
-            channel.sendall(payload)
-            response = b""
-            while b"\n" not in response:
-                chunk = channel.recv(1024)
-                if not chunk:
-                    break
-                response += chunk
-            if b"OK" not in response:
-                try:
-                    err = json.loads(response.decode().strip()).get("error", response.decode().strip())
-                except Exception:
-                    err = response.decode(errors="replace").strip() or "no response"
+            },
+            payload=payload,
+        )
+        if not ok:
+            if rejected:
                 self.report({"ERROR"}, f"Server rejected notebook: {err}")
-                return {"CANCELLED"}
-        except Exception as e:
-            self.report({"ERROR"}, f"Export failed: {e}")
+            else:
+                self.report({"ERROR"}, f"Export failed: {err}")
             return {"CANCELLED"}
-        finally:
-            if channel is not None:
-                try:
-                    channel.close()
-                except Exception:
-                    pass
 
         state.jupyter_last_export = filepath
         self.report({"INFO"}, f"Exported {filepath} via solver server")
@@ -239,38 +262,20 @@ class JUPYTER_OT_Delete(Operator):
             self.report({"ERROR"}, "Not connected to solver server. Connect first.")
             return {"CANCELLED"}
 
-        channel = None
-        try:
-            channel = connection.instance.open_channel()
-            channel.sendall(HEADER_JSON_DATA)
-            header = json.dumps({
+        ok, rejected, err = _notebook_request(
+            connection,
+            {
                 "request": "notebook_delete",
                 "relative_path": filepath,
                 "name": project_name,
-            }).encode() + b"\n"
-            channel.sendall(header)
-            response = b""
-            while b"\n" not in response:
-                chunk = channel.recv(1024)
-                if not chunk:
-                    break
-                response += chunk
-            if b"OK" not in response:
-                try:
-                    err = json.loads(response.decode().strip()).get("error", response.decode().strip())
-                except Exception:
-                    err = response.decode(errors="replace").strip() or "no response"
+            },
+        )
+        if not ok:
+            if rejected:
                 self.report({"ERROR"}, f"Server rejected delete: {err}")
-                return {"CANCELLED"}
-        except Exception as e:
-            self.report({"ERROR"}, f"Delete failed: {e}")
+            else:
+                self.report({"ERROR"}, f"Delete failed: {err}")
             return {"CANCELLED"}
-        finally:
-            if channel is not None:
-                try:
-                    channel.close()
-                except Exception:
-                    pass
 
         state.jupyter_last_export = ""
         self.report({"INFO"}, f"Deleted {filepath}")

@@ -242,7 +242,7 @@ pub fn validate_rod_has_edges(name: &str, has_edge: bool) -> Result<(), DecoderV
 /// Reject groups with an unknown discriminator string.
 pub fn validate_group_type(group_type: &str) -> Result<(), DecoderValidationError> {
     match group_type {
-        "STATIC" | "SOLID" | "SHELL" | "ROD" => Ok(()),
+        "STATIC" | "SOLID" | "SHELL" | "ROD" | "PDRD" | "SAND" => Ok(()),
         other => Err(DecoderValidationError::UnknownGroupType {
             group_type: other.to_string(),
         }),
@@ -429,7 +429,7 @@ mod tests {
 
     #[test]
     fn validate_group_type_accepts_known() {
-        for k in ["STATIC", "SOLID", "SHELL", "ROD"] {
+        for k in ["STATIC", "SOLID", "SHELL", "ROD", "PDRD", "SAND"] {
             assert!(validate_group_type(k).is_ok(), "{k}");
         }
         assert!(matches!(

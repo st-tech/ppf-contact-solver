@@ -151,24 +151,29 @@ __device__ Mat3x4f convert_force(const Mat3x3f &dedF,
 
 __device__ Mat9x9f convert_hessian(const Mat6x6f &d2ed2f,
                                    const Mat2x2f &inv_rest2x2) {
-    Vec2f g0 = -inv_rest2x2.row(0) - inv_rest2x2.row(1);
-    Vec2f g1 = inv_rest2x2.row(0);
-    Vec2f g2 = inv_rest2x2.row(1);
-    Mat6x9f dfdx = Mat6x9f::Zero();
-    for (unsigned j = 0; j < 9; ++j) {
-        unsigned col = j / 3;
-        unsigned row = j % 3;
-        Vec2f g_row = (col == 0) ? g0 : (col == 1) ? g1 : g2;
-        dfdx(0 * 3 + row, j) = g_row[0];
-        dfdx(1 * 3 + row, j) = g_row[1];
-    }
+    Vec2f g[3];
+    g[0] = -inv_rest2x2.row(0) - inv_rest2x2.row(1);
+    g[1] = inv_rest2x2.row(0);
+    g[2] = inv_rest2x2.row(1);
 
-    Mat9x9f result = Mat9x9f::Zero();
-    for (unsigned i = 0; i < 6; ++i) {
-        for (unsigned j = 0; j < 6; ++j) {
-            if (fabs(d2ed2f(i, j)) > EPSILON) {
-                result += d2ed2f(i, j) * dfdx.row(i).transpose() * dfdx.row(j);
+    // The deformation map dfdx = G (x) I_3 (with G[d][a] = g_a[d]) is sparse, so
+    // the dense result = dfdx^T d2ed2f dfdx collapses to per-vertex 3x3 blocks:
+    //   result.block(a,b) = sum_{d,e} g_a[d] g_b[e] * d2ed2f.block(3d, 3e).
+    // This skips materializing the 6x9 dfdx and the 36 9-vector outer products
+    // (fewer MACs, far less local-memory pressure). Every (a,b) block is filled
+    // (no upper-triangular shortcut) so add_stiffness_damping's dense K*u and
+    // the CSR scatter see the full matrix. Verified bit-close to the dense form.
+    Mat9x9f result;
+    for (unsigned a = 0; a < 3; ++a) {
+        for (unsigned b = 0; b < 3; ++b) {
+            Mat3x3f blk = Mat3x3f::Zero();
+            for (unsigned d = 0; d < 2; ++d) {
+                for (unsigned e = 0; e < 2; ++e) {
+                    blk += (g[a][d] * g[b][e]) *
+                           d2ed2f.block<3, 3>(3 * d, 3 * e);
+                }
             }
+            result.block<3, 3>(3 * a, 3 * b) = blk;
         }
     }
     return result;
@@ -181,22 +186,23 @@ __device__ Mat12x12f convert_hessian(const Mat9x9f &d2ed2f,
     Vec3f g2 = inv_rest3x3.row(1);
     Vec3f g3 = inv_rest3x3.row(2);
 
-    Mat9x12f dfdx = Mat9x12f::Zero();
-    for (unsigned j = 0; j < 12; ++j) {
-        unsigned col = j / 3;
-        unsigned row = j % 3;
-        Vec3f g_row = (col == 0) ? g0 : (col == 1) ? g1 : (col == 2) ? g2 : g3;
-        dfdx(0 * 3 + row, j) = g_row[0];
-        dfdx(1 * 3 + row, j) = g_row[1];
-        dfdx(2 * 3 + row, j) = g_row[2];
-    }
+    Vec3f g[4] = {g0, g1, g2, g3};
 
-    Mat12x12f result = Mat12x12f::Zero();
-    for (unsigned i = 0; i < 9; ++i) {
-        for (unsigned j = 0; j < 9; ++j) {
-            if (fabs(d2ed2f(i, j)) > EPSILON) {
-                result += d2ed2f(i, j) * dfdx.row(i).transpose() * dfdx.row(j);
+    // Same (G (x) I_3) factorization as the 6x6 overload, here 4 vertices x 3
+    // deformation-gradient columns. result.block(a,b) = sum_{d,e} g_a[d] g_b[e]
+    // * d2ed2f.block(3d, 3e), avoiding the 9x12 dfdx and the 81 12-vector outer
+    // products. All 16 blocks filled so downstream dense uses see a full matrix.
+    Mat12x12f result;
+    for (unsigned a = 0; a < 4; ++a) {
+        for (unsigned b = 0; b < 4; ++b) {
+            Mat3x3f blk = Mat3x3f::Zero();
+            for (unsigned d = 0; d < 3; ++d) {
+                for (unsigned e = 0; e < 3; ++e) {
+                    blk += (g[a][d] * g[b][e]) *
+                           d2ed2f.block<3, 3>(3 * d, 3 * e);
+                }
             }
+            result.block<3, 3>(3 * a, 3 * b) = blk;
         }
     }
     return result;

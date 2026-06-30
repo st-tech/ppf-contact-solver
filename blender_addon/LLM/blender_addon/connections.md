@@ -102,12 +102,14 @@ TIP: If you ran the solver's installer, it may have created a Python virtual env
 
 | Field | Description |
 | ----- | ----------- |
-| Local Path | Filesystem path to the solver checkout. Default `~/ppf-contact-solver`. |
+| Local Path | Filesystem path to the solver checkout, for example `~/ppf-contact-solver`. Empty until you fill it in. |
 | Server Port | TCP port for `ppf-cts-server`. Default `9090`; range 1024-65535. |
 
 ### Dependencies
 
 Local mode requires neither `paramiko` nor `docker-py`. The main panel's **Install Paramiko** and **Install Docker** buttons are only relevant for SSH and Docker modes.
+
+`cbor2` is required for **all** backends: it encodes the scene on the Blender side before every Transfer, so the dependency is independent of the transport. This is unlike `paramiko` (needed only for SSH and Docker-over-SSH) and `docker-py` (needed only for Docker). `cbor2` ships as a per-ABI wheel in `blender_manifest.toml` and installs automatically when the extension is installed through Blender; if that wheel is missing (e.g. the add-on was copied in manually or carried over by a settings migration without reinstalling its wheels), the main panel shows an **Install cbor2 to Add-on Directory** button as a recovery path.
 
 ### Troubleshooting
 
@@ -157,7 +159,7 @@ Figure: Backend Communicator with **Server Type** set to `SSH`. **Host**, **Port
 | Port | `22` | SSH port. |
 | Username | `""` | Remote user. Leave empty to use SSH config's `User`. |
 | Key Path | `~/.ssh/id_ed25519` or `~/.ssh/id_rsa` | Private key file. |
-| Remote Path | `/root/ppf-contact-solver` | Remote solver directory (must contain the built `ppf-cts-server` binary). |
+| Remote Path | `""` | Remote solver directory, e.g. `/root/ppf-contact-solver` (must contain the built `ppf-cts-server` binary). |
 | Server Port | `9090` | Port on the remote host where `ppf-cts-server` listens. |
 
 Aliases from your `~/.ssh/config` are resolved automatically, including entries pulled in via `Include` directives. If the alias's config supplies a hostname, port, user, or identity file, you can leave those fields blank in the panel and they will be filled in at connect time.
@@ -235,7 +237,7 @@ The session ID stamped on PC2 files and the remote project directory (see Sessio
 
 ### Installing paramiko
 
-The SSH backend requires the `paramiko` Python package. If it is not present, the main panel shows an **Install Paramiko** button that installs it into the add-on's private library directory; click it and wait for the background installer to finish.
+The SSH backend requires the `paramiko` Python package. If it is not present, the main panel shows an **Install Paramiko** button that installs it into Blender's `scripts/addons/modules` directory (the same target as the `cbor2` recovery install); click it and wait for the background installer to finish.
 
 UNDER THE HOOD:
 
@@ -264,7 +266,7 @@ Unknown host keys are accepted silently (paramiko `AutoAddPolicy`). This is not 
 
 **paramiko install path**
 
-The **Install Paramiko** button runs `pip install` into the add-on's bundled `lib/` directory on a background thread. If paramiko is already installed system-wide, the add-on uses that copy instead; both paths work.
+The **Install Paramiko** button runs `pip install --target` into Blender's `scripts/addons/modules` directory on a background thread. If paramiko is already installed system-wide, the add-on uses that copy instead; both paths work.
 
 ## Docker
 
@@ -288,7 +290,7 @@ Figure: Two stacked block diagrams showing the Docker local topology (add-on, da
 
 1. Set **Server Type** to `Docker`.
 2. Fill **Container** with the container name (default `ppf-dev`).
-3. Fill **Docker Path** with the working directory inside the container (default `/root/ppf-contact-solver`, containing the built `ppf-cts-server` binary).
+3. Fill **Container Path** with the working directory inside the container, for example `/root/ppf-contact-solver` (containing the built `ppf-cts-server` binary).
 4. Set **Server Port** to the TCP port `ppf-cts-server` listens on inside the container.
 5. Click **Connect**. If the container exists but is stopped, the add-on starts it for you. A missing container is reported as an error.
 
@@ -299,7 +301,7 @@ Figure: Backend Communicator with **Server Type** set to `Docker`. **Container**
 | Field | Description |
 | ----- | ----------- |
 | Container | Docker container name. Must already exist. |
-| Docker Path | Working directory inside the container (contains the built `ppf-cts-server` binary). |
+| Container Path | Working directory inside the container (contains the built `ppf-cts-server` binary). |
 | Server Port | Port inside the container where `ppf-cts-server` listens. |
 
 ### Setup - Docker over SSH
@@ -308,18 +310,18 @@ The SSH fields from the SSH page are combined with the Docker fields: the add-on
 
 1. Set **Server Type** to `Docker over SSH`.
 2. Fill Host / Port / Username / Key Path as in SSH Custom mode.
-3. Fill Container and Docker Path.
+3. Fill Container and Container Path.
 4. Click **Connect**. The add-on verifies that the container exists on the remote host and starts it if it is stopped.
 
 WARNING: The server port must be published on the container (`-p 9090:9090` or equivalent in your compose file). Before **Start Server**, the add-on checks the port mapping on the remote host and refuses to continue if the port is not exposed, the error text tells you exactly which port and container failed. You must fix this on the container side; the add-on cannot publish ports on a container that is already created.
 
 ### Setup - Docker over SSH Command
 
-Identical to Docker over SSH, but the SSH parameters come from a pasted command. Set **Server Type** to `Docker over SSH Command` and put the string in **Command** (see the SSH Command section for the parser rules). Container and Docker Path are still fields.
+Identical to Docker over SSH, but the SSH parameters come from a pasted command. Set **Server Type** to `Docker over SSH Command` and put the string in **Command** (see the SSH Command section for the parser rules). Container and Container Path are still fields.
 
 ### Installing docker-py
 
-The Docker backend requires the `docker` Python package (sometimes called `docker-py`). When it is missing the main panel shows an **Install Docker** button that installs the package into the add-on's private library on a background thread.
+The Docker backend requires the `docker` Python package (sometimes called `docker-py`). When it is missing the main panel shows an **Install Docker** button that installs the package into Blender's `scripts/addons/modules` directory on a background thread.
 
 Docker-over-SSH modes also require paramiko; install both if the remote-container path is what you need.
 

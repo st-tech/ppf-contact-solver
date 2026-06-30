@@ -20,9 +20,6 @@ blender_addon/
 │   ├── output.py            # Shared response-printing helpers
 │   ├── main.py              # General CLI (status, tools, call, exec, reload, ...)
 │   └── perf.py              # Profiler CLI (enable, disable, reset, report, sample)
-├── example_profile.toml     # Connection profile presets (SSH, Docker, local, Windows)
-├── example_material_profile.toml  # Material presets (Flag, Cotton, Silk, Denim, Rubber, Steel, Rope, Static)
-├── example_scene_profile.toml     # Scene presets (Default, Windy, HighRes, SlowMotion, ZeroGravity)
 ├── core/                    # Communication, encoding, protocol, utilities
 │   ├── transform.py         # Coordinate transforms (Z-up ↔ Y-up): _swap_axes, world_matrix, etc.
 │   ├── encoder/             # Data serialization (mesh, params, pins, dynamics)
@@ -71,6 +68,8 @@ All addon data lives under `scene.zozo_contact_solver`, accessed via `get_addon_
 | **SOLID** | Volumetric bodies | ARAP | Stable NeoHookean, ARAP |
 | **ROD** | 1D structures (ropes, wires) | ARAP | ARAP only |
 | **STATIC** | Non-deforming collision objects | N/A | N/A |
+| **PDRD** | Exactly-rigid bodies (Painless Differentiable Rotation Dynamics) | N/A | N/A |
+| **SAND** | Granular / sand bodies | N/A | N/A |
 
 ### Dynamics Groups
 
@@ -82,7 +81,7 @@ Up to 32 groups (`object_group_0` through `object_group_31`, constant `N_MAX_GRO
 - Pin vertex groups, each with a list of operations (MOVE_BY, SPIN, SCALE, TORQUE, EMBEDDED_MOVE)
 - Overlay visualization: color, wireframe, pin spheres, operation previews
 
-Default overlay colors by type: SOLID = red (0.75,0,0), SHELL = green (0,0.75,0), ROD = yellow (0.75,0.75,0), STATIC = blue (0,0,0.75).
+Default overlay colors by type: SOLID = red (0.75,0,0), SHELL = green (0,0.75,0), ROD = yellow (0.75,0.75,0), STATIC = blue (0,0,0.75), PDRD = magenta (0.75,0,0.75), SAND = tan (0.75,0.375,0).
 
 ### Pin Operations
 
@@ -301,7 +300,7 @@ Re-exported by `core/utils.py` (matrix functions) and `core/encoder/__init__.py`
 
 #### `profile.py` - TOML Profile System
 
-Mapping dicts: `PROFILE_TYPE_MAP` (7 connection types), `_SSH_STATE_FIELDS` (11 fields), `_SCENE_PARAM_FIELDS` (21 fields), `_MATERIAL_PARAM_FIELDS` (24 fields), `_OP_FIELDS` (20 fields).
+Mapping dicts: `PROFILE_TYPE_MAP` (7 connection types), `_SSH_STATE_FIELDS` (11 fields), `_SCENE_PARAM_FIELDS` (23 fields), `_MATERIAL_PARAM_FIELDS` (38 fields), `_OP_FIELDS` (20 fields).
 
 Functions: `load_profiles(path) -> dict`, `get_profile_names(path) -> list[str]`, `apply_profile(profile, ssh_state) -> bool`, `read_connection_profile(ssh_state) -> dict`, `apply_scene_profile(profile, state) -> bool`, `read_scene_profile(state) -> dict`, `apply_material_profile(profile, object_group) -> bool`, `read_material_profile(object_group, include_pins=False) -> dict`, `read_pin_operations(pin_item) -> dict`, `apply_pin_operations(profile, pin_item)`, `save_profile_entry(path, entry_name, data)`.
 
@@ -310,7 +309,7 @@ Functions: `load_profiles(path) -> dict`, `get_profile_names(path) -> list[str]`
 - **`reload_server.py`**: `ReloadServer` class - TCP server on port 8765. Commands: `"reload"` (disables addon, invalidates modules from sys.modules, re-enables), `"execute"` (exec arbitrary Python), `"start_mcp"` (starts MCP server). Module functions: `start_reload_server(port)`, `stop_reload_server()`, `trigger_reload_now()`.
 - **`module.py`**: `get_install_target()` returns Blender's user `scripts/addons/modules/` dir. `import_module(name)` resolves via `importlib.import_module`. `install_module(packages)` does an async pip install (`--target` = the install target) on a background thread.
 - **`ssh_config.py`**: `resolve_ssh_config(host, default_port=22) -> SSHConfigEntry` - parses `~/.ssh/config` with Include/glob support, first-match semantics.
-- **`numpy_mesh_utils.py`**: `extract_mesh_to_numpy(mesh)`, `triangulate_numpy_mesh(verts, faces)`, `triangulate_uv_data(mesh, tri_faces)`. NumPy helpers used by `encoder/mesh.py` to triangulate tri/quad/n-gon meshes and match UVs.
+- **`numpy_mesh_utils.py`**: `extract_mesh_to_numpy(mesh)`, `loop_triangle_indices(mesh)`, `loop_triangulate_mesh(mesh)`. NumPy helpers used by `encoder/mesh.py` to triangulate tri/quad/N-gon meshes via Blender's `loop_triangles` (the exact viewport tessellation) and match per-triangle UVs.
 - **`curve_rod.py`**: `sample_curve(obj, world_matrix) -> (verts, edges, params_data)` samples Bezier/NURBS/Poly curves into rod vertices. Bezier uses one sample per CP (edge length = CP spacing); NURBS samples each arc at four `t` values because NURBS CPs are off-curve. `build_fit_cache(obj) -> (cache_list, params_data)` precomputes per-spline data once per fetch; `apply_fit_cached(sim_pos, cache_entry)` writes simulated positions back into Blender's CV layout per frame (identity write for Bezier, weighted-pseudoinverse matmul for NURBS, slice for POLY). `map_cp_pins_to_sampled(obj, cp_indices)` maps global CP pin indices to sampled-vertex indices for the encoder.
 
 ---
@@ -334,12 +333,12 @@ State is split across three files for maintainability:
 | `port` | IntProperty | 22 | SSH port |
 | `username` | StringProperty | "" | SSH username |
 | `key_path` | StringProperty (FILE_PATH) | "~/.ssh/id_ed25519" or "~/.ssh/id_rsa" | SSH key |
-| `docker_path` | StringProperty | "/root/ppf-contact-solver" | Container working path |
-| `local_path` | StringProperty | "~/ppf-contact-solver" | Local solver path |
+| `docker_path` | StringProperty | "" | Container working path (e.g. "/root/ppf-contact-solver") |
+| `local_path` | StringProperty | "" | Local solver path (e.g. "~/ppf-contact-solver") |
 | `server_type` | EnumProperty | "CUSTOM" | LOCAL/CUSTOM/COMMAND/DOCKER/DOCKER_SSH/DOCKER_SSH_COMMAND/WIN_NATIVE |
 | `command` | StringProperty | "ssh -p xxx root@zzz" | SSH command string |
 | `container` | StringProperty | "ppf-dev" | Docker container name |
-| `ssh_remote_path` | StringProperty | "/root/ppf-contact-solver" | Remote solver path |
+| `ssh_remote_path` | StringProperty | "" | Remote solver path (e.g. "/root/ppf-contact-solver") |
 | `win_native_path` | StringProperty (DIR_PATH) | "" | Windows solver root |
 | `docker_port` | IntProperty | 9090 | Server port (min 1024, max 65535) |
 
@@ -383,11 +382,11 @@ Collections: `fetched_frame` (FetchedFrameItem), `saved_pin_keyframes` (SavedPin
 | `active` | BoolProperty | False | Group is active |
 | `name` | StringProperty | "" | Group name (empty shows "Group N") |
 | `uuid` | StringProperty | "" | Unique identifier |
-| `object_type` | EnumProperty | "SOLID" | SOLID/SHELL/ROD/STATIC |
+| `object_type` | EnumProperty | "SOLID" | SOLID/SHELL/ROD/STATIC/PDRD/SAND |
 | `solid_model` | EnumProperty | "ARAP" | STABLE_NEOHOOKEAN/ARAP |
 | `shell_model` | EnumProperty | "BARAFF_WITKIN" | STABLE_NEOHOOKEAN/ARAP/BARAFF_WITKIN |
 | `rod_model` | EnumProperty | "ARAP" | ARAP only |
-| `solid_density` | FloatProperty | 1000.0 | kg/m^3 |
+| `solid_density` | FloatProperty | 100.0 | kg/m^3 |
 | `shell_density` | FloatProperty | 1.0 | kg/m^2 |
 | `rod_density` | FloatProperty | 1.0 | kg/m |
 | `solid_young_modulus` | FloatProperty | 500.0 | Pa (0-10M) |
@@ -402,14 +401,14 @@ Collections: `fetched_frame` (FetchedFrameItem), `saved_pin_keyframes` (SavedPin
 | `contact_gap_rat` | FloatProperty | 0.001 | Ratio of bbox diagonal |
 | `contact_offset_rat` | FloatProperty | 0.0 | Ratio of bbox diagonal |
 | `enable_strain_limit` | BoolProperty | False | Shell strain limit |
-| `strain_limit` | FloatProperty | 0.05 | Shell strain limit value |
+| `strain_limit_percent` | FloatProperty | 5.0 | Shell strain limit, percent of stretch (5.0 = 5%) |
 | `enable_inflate` | BoolProperty | False | Shell inflation pressure |
 | `inflate_pressure` | FloatProperty | 0.0 | Pressure along face normals (Pa) |
 | `bend` | FloatProperty | 100.0 | Bend stiffness (0-100) |
 | `shrink_x` | FloatProperty | 1.0 | Anisotropic scale factor X (min 0.1; <1 shrinks, >1 extends) |
 | `shrink_y` | FloatProperty | 1.0 | Anisotropic scale factor Y (min 0.1; <1 shrinks, >1 extends) |
 | `shrink` | FloatProperty | 1.0 | Uniform scale factor for solids (min 0.1; <1 shrinks, >1 extends) |
-| `stitch_stiffness` | FloatProperty | 1.0 | Stitch constraint stiffness |
+| `stitch_stiffness` | FloatProperty | 1.0 | Direct stiffness factor for the stitch force (scales the stitch gradient/Hessian; no normalization) |
 | `color` | FloatVectorProperty (COLOR, 4) | per-type default | RGBA overlay color |
 
 Collections: `assigned_objects` (AssignedObject with name + included toggle), `pin_vertex_groups` (PinVertexGroupItem with operations CollectionProperty).
@@ -541,7 +540,7 @@ All parameters shown directly (no outer collapsible box):
 - Stats: per-object vertex/face counts
 - Material Params: copy/paste, profile management, type-specific parameter display
 
-**Panel `SNAPMERGE_PT_SnapAndMerge`** (default closed): Object A/B dropdowns with snap button, merge pairs list with remove button. Stitch stiffness shown only for pairs involving a SOLID object (shell+solid, rod+solid). Sheet-sheet and rod-rod pairs merge vertices exactly without stiffness. Missing frames warning shown below Clear Animation when remote has unfetched frames (hidden during simulation).
+**Panel `SNAPMERGE_PT_SnapAndMerge`** (default closed): Object A/B dropdowns with snap button, merge pairs list with remove button. Stitch stiffness shown for every supported soft-stitch pair (shell-shell, shell-solid, rod-shell, rod-solid, rod-rod, solid-solid). Missing frames warning shown below Clear Animation when remote has unfetched frames (hidden during simulation).
 
 #### `dynamics/utils.py` - Shared Dynamics Helpers
 
@@ -656,7 +655,7 @@ At registration time:
 4. Registers `state_ops` operators
 5. The addon's Python API is exposed as `bl_ext.user_default.ppf_contact_solver.ops.api`; user scripts use `from bl_ext.user_default.ppf_contact_solver.ops.api import solver`. (Earlier versions injected `api` into `sys.modules["zozo_contact_solver"]` to support `from zozo_contact_solver import solver`, but Blender 5's extension policy disallows extensions from claiming top-level module names, so that injection has been removed.)
 
-#### `ops/api.py` - High-Level Python API
+#### `ops/api/` - High-Level Python API
 
 **`_Solver` class** (top-level, exposed as `solver`):
 - `param` (class var) -> `_SceneProxy` for `solver.param.frame_count = 180`
@@ -692,7 +691,7 @@ At registration time:
 - All methods are chainable (return self)
 - Per-vertex animated pins (the EMBEDDED_MOVE path) are written via the UI "Add Keyframe" button on a pin, not via this API.
 
-**`_ParamProxy`**: Attribute proxy with whitelist of 23 properties (solid/shell density, young_modulus, poisson_ratio, friction, contact_gap/offset/rat, strain_limit, enable_inflate, inflate_pressure, bend, shrink, stitch_stiffness, etc.)
+**`_ParamProxy`**: Attribute proxy with whitelist of 39 properties (solid/shell density, young_modulus, poisson_ratio, friction, contact_gap/offset/rat, strain_limit_percent, enable_inflate, inflate_pressure, bend, shrink, stitch_stiffness, pdrd_density, sand_grain_radius, etc.)
 
 **`_SceneProxy`**: Attribute proxy for `addon_data.state` and `addon_data.ssh_state`. Alias: `gravity` -> `gravity_3d`. Method: `dyn(key) -> _DynParamBuilder` for dynamic parameter keyframing.
 
@@ -728,8 +727,8 @@ At registration time:
 - `_ADDON_NAMESPACE = "zozo_contact_solver"`
 - `get_addon_data(scene=None)` - returns `scene.zozo_contact_solver`
 - `invalidate_overlays()` - bumps `overlay_version`, redraws all VIEW_3D areas
-- `OBJECT_GROUP_DEFAULTS` dict (43 keys): all default values for ObjectGroup properties
-- `get_object_type(type) -> RGBA tuple` (SOLID=red, SHELL=green, ROD=yellow, STATIC=blue)
+- `OBJECT_GROUP_DEFAULTS` dict (57 keys): all default values for ObjectGroup properties
+- `get_object_type(type) -> RGBA tuple` (SOLID=red, SHELL=green, ROD=yellow, STATIC=blue, PDRD=magenta, SAND=tan)
 - `get_vertex_group_items(self, _)` - callback for vertex group enum, format `[ObjectName][VGName]`
 - `decode_vertex_group_identifier(identifier) -> (object_name, vg_name)` - regex `\[(.*)]\[(.*)]`
 - `iterate_object_groups(scene)` / `iterate_active_object_groups(scene)`
@@ -758,10 +757,6 @@ DEFAULT_RELOAD_PORT = 8765
 
 `Console` singleton with thread-safe message queue. Methods: `get_or_create()` (Blender text object), `show(last_lines=10)` (opens TEXT_EDITOR window), `write(message, timestamp=True)`, `process_messages()` (flushes to text object and optional log file, trims to `max_console_lines`).
 
-#### `models/git_utils.py`
-
-`get_git_branch() -> str` - reads `.git/branch_name.txt` first, falls back to `git branch --show-current`, returns "unknown" on failure.
-
 ---
 
 ### `mesh_ops/` - Mesh Operations
@@ -772,9 +767,9 @@ DEFAULT_RELOAD_PORT = 8765
 1. Builds KDTree from target object B's vertices (world space)
 2. For each vertex in object A, finds nearest B vertex via `kd.find()`
 3. Computes translation = closest_B - closest_A
-4. Applies gap along approach direction (closest_A - closest_B, normalized). Gap = `base_gap + max(base_gap, float32_margin)` where `base_gap = max(gap_a, gap_b) + offset_a + offset_b`. No gap for SHELL-SHELL and ROD-ROD (vertices merge exactly).
+4. Applies a small gap along the approach direction so the closest pair starts a short distance apart (sum of both objects' contact gap + offset, with a safety margin). The same gap applies to every supported pair: the snap produces a soft stitch, not an exact vertex weld, so no pair is left coincident.
 5. Translates object A in world space (handles parenting)
-6. Builds cross-stitch pairs with threshold = `2 * h` where `h = total_gap` (gap cases) or `h = max(gap_a, gap_b)` (no-gap cases). Merge pair encoder picks target vertex with highest barycentric weight.
+6. Builds cross-stitch pairs within a search threshold and records per-vertex barycentric anchors on the target feature.
 7. Registers merge pair in state with cross_stitch_json
 
 Duplicate object names across active groups are detected at encode time and raise `ValueError`.
@@ -834,11 +829,11 @@ Thread-safe bridge: HTTP thread posts tasks via `post_mcp_task(task_type, args) 
 
 **connection.py** (12 handlers): `connect_ssh(host, username, key_path, remote_path, port=22, container=None)`, `connect_docker(container, path)`, `connect_local(path)`, `connect_win_native(path, port=9090)`, `disconnect()`, `connect()` (uses current settings), `start_remote_server()`, `stop_remote_server()`, `is_remote_server_running()`, `get_remote_status()`, `update_remote_status()`, `get_connection_info()`.
 
-**group.py** (17 handlers): `create_group()`, `delete_group(uuid)`, `delete_all_groups()`, `duplicate_group(uuid)`, `rename_group(uuid, name)`, `bake_group_animation(uuid, object_name)`, `bake_group_single_frame(uuid, object_name)`, `set_object_included(uuid, object_name, included)`, `get_active_groups()`, `add_objects_to_group(uuid, object_names)`, `remove_object_from_group(uuid, object_name)`, `remove_all_objects_from_group(uuid)`, `get_group_objects(uuid)`, `set_group_type(uuid, type)`, `set_group_material_properties(uuid, properties)` (atomic updates with contact mode validation), `add_pin_vertex_group(uuid, identifier)` (accepts `"object::vgroup"` or `"[object][vgroup]"`), `remove_pin_vertex_group(uuid, identifier)`.
+**group.py** (20 handlers): `create_group()`, `delete_group(uuid)`, `delete_all_groups()`, `duplicate_group(uuid)`, `rename_group(uuid, name)`, `bake_group_animation(uuid, object_name)`, `bake_group_single_frame(uuid, object_name)`, `set_object_included(uuid, object_name, included)`, `get_group(uuid)`, `get_active_groups()`, `add_objects_to_group(uuid, object_names)`, `remove_object_from_group(uuid, object_name)`, `remove_all_objects_from_group(uuid)`, `get_group_objects(uuid)`, `set_group_type(uuid, type)`, `set_group_overlay_color(uuid, r, g, b, a=1.0)`, `list_pins(uuid)`, `set_group_material_properties(uuid, properties)` (atomic updates with contact mode validation), `add_pin_vertex_group(uuid, identifier)` (accepts `"object::vgroup"` or `"[object][vgroup]"`), `remove_pin_vertex_group(uuid, identifier)`.
 
-**object_ops.py** (18 handlers): pin settings (`set_pin_settings`), pin operations (`add_pin_operation`, `remove_pin_operation`, `list_pin_operations`, `clear_pin_operations`), static ops (`add_static_op`, `remove_static_op`, `list_static_ops`, `clear_static_ops`), velocity keyframes (`add_velocity_keyframe`, `remove_velocity_keyframe`, `list_velocity_keyframes`, `clear_velocity_keyframes`), and collision-window helpers (`set_use_collision_windows`, `add_collision_window`, `remove_collision_window`, `list_collision_windows`, `clear_collision_windows`).
+**object_ops.py** (28 handlers): pin settings (`set_pin_settings`), pin operations (`add_pin_operation`, `remove_pin_operation`, `list_pin_operations`, `clear_pin_operations`), static ops (`add_static_op`, `remove_static_op`, `list_static_ops`, `clear_static_ops`), PDRD hinge (`set_pdrd_hinge`), velocity keyframes (`add_velocity_keyframe`, `remove_velocity_keyframe`, `list_velocity_keyframes`, `clear_velocity_keyframes`), collision-window helpers (`set_use_collision_windows`, `add_collision_window`, `remove_collision_window`, `list_collision_windows`, `clear_collision_windows`), static-deformation capture (`capture_static_deformation`, `clear_static_deformation`, `get_static_deformation_status`), pin-deformation capture (`capture_pin_deformation`, `clear_pin_deformation`, `get_pin_deformation_status`), tet settings (`set_object_tet_settings`), and isolated-vertex helpers (`detect_isolated_static_vertices`, `remove_isolated_static_vertices`).
 
-**scene.py** (12 handlers): invisible colliders (`add_invisible_wall`, `add_invisible_sphere`, `list_invisible_colliders`, `remove_invisible_collider`, `clear_invisible_colliders`), merge pairs (`add_merge_pair`, `remove_merge_pair`, `list_merge_pairs`, `clear_merge_pairs`), `snap_to_vertices(object_a, object_b)`, `bake_all_animation()`, `bake_all_single_frame()`.
+**scene.py** (13 handlers): `clear_solver()`, invisible colliders (`add_invisible_wall`, `add_invisible_sphere`, `list_invisible_colliders`, `remove_invisible_collider`, `clear_invisible_colliders`), merge pairs (`add_merge_pair`, `remove_merge_pair`, `list_merge_pairs`, `clear_merge_pairs`), `snap_to_vertices(object_a, object_b)`, `bake_all_animation()`, `bake_all_single_frame()`.
 
 **dyn_params.py** (9 handlers): dynamic-parameter CRUD (`add_dynamic_param`, `remove_dynamic_param`, `list_dynamic_params`, `add_dynamic_param_keyframe`, `remove_dynamic_param_keyframe`) and collider keyframing (`set_collider_properties`, `add_collider_keyframe`, `remove_collider_keyframe`, `list_collider_keyframes`).
 
@@ -846,7 +841,7 @@ Thread-safe bridge: HTTP thread posts tasks via `post_mcp_task(task_type, args) 
 
 **debug.py** (8 handlers): `debug_data_send(data_size_mb=1)`, `debug_data_receive()`, `execute_server_command(server_script)`, `execute_shell_command(shell_command, use_shell=True)`, `git_pull_remote()`, `compile_project()`, `delete_log_file(path)`, `git_pull_local()`.
 
-**remote.py** (5 handlers): `abort_operation()`, `install_paramiko()`, `install_docker()`, `set_scene_parameters(step_size, frame_count, frame_rate, gravity, air_density, ...)`, `get_scene_parameters()`.
+**remote.py** (8 handlers): `abort_operation()`, `install_paramiko()`, `install_docker()`, `set_scene_parameters(step_size, frame_count, frame_rate, gravity, air_density, ...)`, `get_scene_parameters()`, `set_save_checkpoint_frames(frames)`, `clear_save_checkpoint_frames()`, `list_save_checkpoint_frames()`.
 
 **console.py** (3 handlers): `get_console_lines()`, `get_latest_error()`, `show_console()`.
 
@@ -858,9 +853,9 @@ Pre-bundled Python packages (not addon source code):
 
 | Package | Version | Purpose |
 |---------|---------|---------|
-| paramiko | 4.0.0 | SSH protocol (SSHClient, Transport, SFTP, key management) |
-| invoke | 2.2.1 | Task execution framework |
-| cryptography | 46.0.5 | Cryptographic primitives (used by paramiko) |
+| paramiko | 5.0.0 | SSH protocol (SSHClient, Transport, SFTP, key management) |
+| invoke | 3.0.3 | Task execution framework |
+| cryptography | 48.0.0 | Cryptographic primitives (used by paramiko) |
 | bcrypt | 5.0.0 | Password hashing (used by paramiko) |
 | cffi | 2.0.0 | C foreign function interface (used by cryptography, bcrypt, pynacl) |
 | pynacl | 1.6.2 | libsodium bindings / Ed25519 (used by paramiko) |
@@ -960,11 +955,13 @@ Profiler CLI (`blender_addon/debug/perf.py`) exposes `enable`, `disable`, `reset
 
 ### TOML Profiles
 
-**Connection profiles** (`example_profile.toml`): Presets for SSH, Docker, local, and Windows connections with all credentials and paths.
+Profiles are TOML files you create with the **Save** icon in the Connection, Material, and Scene panels; the add-on does not ship any. Each file holds named presets. Examples of what they can contain:
 
-**Material profiles** (`example_material_profile.toml`): Presets including Flag (shell, young=100, density=0.1), Cotton (shell, young=50), Silk (shell, young=30), Denim (shell+solid+rod hybrid), Rubber (solid, neohookean, density=1100), Steel (solid, young=200000), Rope (rod, young=10000), Static.
+**Connection profiles**: Presets for SSH, Docker, local, and Windows connections with all credentials and paths.
 
-**Scene profiles** (`example_scene_profile.toml`): Default (step=0.001, frames=180, fps=60, gravity=-9.8), Windy (wind_direction=[0,1,0], strength=5), HighRes (step=0.001, frames=360, cg_max_iter=20000), SlowMotion (frames=600, fps=120), ZeroGravity (gravity=[0,0,0]). Scene profiles also save/load dynamic parameters in grouped TOML format:
+**Material profiles**: Presets such as Flag (shell, young=100, density=0.1), Cotton (shell, young=50), Silk (shell, young=30), Denim (shell+solid+rod hybrid), Rubber (solid, neohookean, density=1100), Steel (solid, young=200000), Rope (rod, young=10000), Static.
+
+**Scene profiles**: Presets such as Default (step=0.001, frames=180, fps=60, gravity=-9.8), Windy (wind_direction=[0,1,0], strength=5), HighRes (step=0.001, frames=360, cg_max_iter=20000), SlowMotion (frames=600, fps=120), ZeroGravity (gravity=[0,0,0]). Scene profiles also save/load dynamic parameters in grouped TOML format:
 ```toml
 [[ProfileName.dyn_params]]
 param_type = "WIND"

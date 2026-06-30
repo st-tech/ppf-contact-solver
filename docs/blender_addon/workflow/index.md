@@ -5,7 +5,7 @@ Once you have a running solver and a live connection (see
 the day-to-day loop is:
 
 1. **Organize your scene** into object groups: **Solid**, **Shell**,
-   **Rod**, or **Static**.
+   **Rod**, **PDRD**, or **Static**.
 2. **Assign material parameters** per group (density, Young's modulus,
    Poisson ratio, friction, bend, shrink, strain limit, and so on).
 3. **Set scene parameters**: gravity, wind, time step, frame count, air
@@ -24,7 +24,7 @@ the day-to-day loop is:
    add-on.
 
 ```{figure} ../images/workflow/day_to_day_loop.svg
-:alt: Nine numbered step boxes across two rows. Row one covers scene-setup steps 1 through 5: object groups (Solid/Shell/Rod/Static), material parameters (density, Young's, Poisson, bend, shrink, strain limit), scene parameters (gravity, wind, time step, frame count, air density), pins and operations (Move By/Spin/Scale/Torque/Embedded Move), and the optional invisible colliders (walls, spheres, bowls). Row two covers steps 6 through 9: the optional Snap & Merge that stitches overlapping meshes across group boundaries, Transfer and Build which encodes the scene for the solver, Run and Fetch which solves on the GPU and downloads per-frame PC2 vertex data onto each Blender mesh, and the optional Bake step that converts the fetched PC2 data into standard Blender shape keys and fcurves and removes the ContactSolverCache modifier. Scene-setup boxes are blue, solver boxes are orange, and the bake box is green. Optional steps have dashed borders.
+:alt: Nine numbered step boxes across two rows. Row one covers scene-setup steps 1 through 5: object groups (Solid/Shell/Rod/PDRD/Static), material parameters (density, Young's, Poisson, bend, shrink, strain limit), scene parameters (gravity, wind, time step, frame count, air density), pins and operations (Move By/Spin/Scale/Torque/Embedded Move), and the optional invisible colliders (walls, spheres, bowls). Row two covers steps 6 through 9: the optional Snap & Merge that stitches overlapping meshes across group boundaries, Transfer and Build which encodes the scene for the solver, Run and Fetch which solves on the GPU and downloads per-frame PC2 vertex data onto each Blender mesh, and the optional Bake step that converts the fetched PC2 data into standard Blender shape keys and fcurves and removes the ContactSolverCache modifier. Scene-setup boxes are blue, solver boxes are orange, and the bake box is green. Optional steps have dashed borders.
 :width: 900px
 
 The same nine steps, laid out by phase. Steps 1 through 6 are scene

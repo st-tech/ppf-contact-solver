@@ -120,7 +120,7 @@ Rules of the road:
 | Version      | `2025-06-18`                                                      |
 | Transport    | Streamable HTTP on a single `/mcp` endpoint                       |
 | Requests     | `POST /mcp` with a JSON-RPC message                               |
-| Server push  | `GET /mcp` with `Accept: text/event-stream` (one-shot init event) |
+| Server push  | `GET /mcp` with `Accept: text/event-stream` (keep-alives only; the server never pushes events) |
 | CORS         | Enabled on every response                                         |
 
 All traffic goes through `/mcp`. The client calls `initialize` first; the
@@ -163,30 +163,34 @@ python blender_addon/debug/main.py scene
 python blender_addon/debug/main.py resources
 ```
 
-CLI options: `--host`, `--mcp-port`, `--timeout`. Run
+Global options are `--host` and `--mcp-port`. `--timeout` is per-subcommand,
+on `call` (default 30s) and `run` (default 60s). Run
 `python blender_addon/debug/main.py --help` for the full subcommand
 surface.
 
 ## Calling a Tool over HTTP
 
 If you are integrating from something that is not the bundled CLI, drive the
-HTTP transport directly. The server is stateless: every request is
-self-contained JSON-RPC, with no session token to manage.
+HTTP transport directly. The server is stateful: the `initialize` response
+returns an `Mcp-Session-Id` header, and every subsequent request must send it
+back. A non-`initialize` POST without a valid `Mcp-Session-Id` is rejected with
+HTTP 404.
 
 ```bash
 HDR_ACCEPT='Accept: application/json, text/event-stream'
 HDR_JSON='Content-Type: application/json'
 
-# 1. Initialize.
-curl -s -X POST http://localhost:9633/mcp \
+# 1. Initialize. Use `-D -` to dump response headers and read the session id.
+SID=$(curl -s -D - -o /dev/null -X POST http://localhost:9633/mcp \
   -H "$HDR_JSON" -H "$HDR_ACCEPT" \
   -d '{"jsonrpc":"2.0","id":1,"method":"initialize",
        "params":{"protocolVersion":"2025-06-18","capabilities":{},
-                 "clientInfo":{"name":"example","version":"0"}}}'
+                 "clientInfo":{"name":"example","version":"0"}}}' \
+  | awk -F': ' 'tolower($1)=="mcp-session-id"{print $2}' | tr -d '\r')
 
-# 2. Call a tool.
+# 2. Call a tool, passing the captured session id on every request.
 curl -s -X POST http://localhost:9633/mcp \
-  -H "$HDR_JSON" -H "$HDR_ACCEPT" \
+  -H "$HDR_JSON" -H "$HDR_ACCEPT" -H "Mcp-Session-Id: $SID" \
   -d '{"jsonrpc":"2.0","id":2,"method":"tools/call",
        "params":{"name":"run_python_script",
                  "arguments":{"code":"import bpy; print(bpy.app.version_string)"}}}'

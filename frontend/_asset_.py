@@ -288,6 +288,35 @@ class AssetUploader:
         self.check_bounds(V, E)
         self._manager._registry.add_rod(name, V, E)
 
+    def points(self, name: str, V: np.ndarray):
+        """Upload a positions-only point cloud to the asset manager.
+
+        A points asset is a set of loose vertices with no connectivity
+        (no edges, no faces). It is used for granular (SAND) groups,
+        where each vertex is an independent grain.
+
+        Args:
+            name (str): The name of the asset. Must not already exist.
+            V (np.ndarray): The vertices (#x3) of the point cloud.
+
+        Raises:
+            Exception: If ``name`` already exists or ``V`` does not have
+                3 columns.
+
+        Example:
+            Register a random cloud of points as a points asset::
+
+                import numpy as np
+                from frontend import App
+
+                app = App.create("demo")
+                V = np.random.rand(1000, 3)
+                app.asset.add.points("grains", V)
+        """
+        _rust.check_cols(V, "V", 3)
+        # Copy so later caller mutation doesn't reach the manager.
+        self._manager._registry.add_points(name, V.copy())
+
     def stitch(self, name: str, stitch: tuple[np.ndarray, np.ndarray]):
         """Upload a stitch asset to the asset manager.
 
@@ -345,7 +374,7 @@ class AssetFetcher:
 
         Returns:
             str: The type of the asset: one of ``"tri"``, ``"tet"``,
-            ``"rod"``, or ``"stitch"``.
+            ``"rod"``, ``"points"``, or ``"stitch"``.
 
         Raises:
             Exception: If no asset is registered under ``name``.
@@ -372,6 +401,7 @@ class AssetFetcher:
         * ``"tri"``: ``V``, ``F``, and optionally ``UV``.
         * ``"tet"``: ``V``, ``F``, ``T``.
         * ``"rod"``: ``V``, ``E``.
+        * ``"points"``: ``V``.
         * ``"stitch"``: ``Ind``, ``W``.
 
         Args:

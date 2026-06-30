@@ -70,6 +70,7 @@ struct FixedCSRMat {
     void clear();
     __device__ Mat3x3f operator()(unsigned i, unsigned j) const;
     __device__ bool push(unsigned i, unsigned j, const Mat3x3f &val);
+    __device__ void push_at(unsigned slot, const Mat3x3f &val);
     __device__ bool exists(unsigned i, unsigned j) const;
     bool check();
     void copy(const FixedCSRMat &other);

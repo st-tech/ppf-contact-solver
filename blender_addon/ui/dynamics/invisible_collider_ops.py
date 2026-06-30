@@ -96,7 +96,8 @@ class SCENE_OT_AddColliderKeyframe(Operator):
         kf = item.keyframes.add()
         kf.frame = current_frame
         kf.position = tuple(item.position)
-        kf.radius = item.radius
+        if item.collider_type == "SPHERE":
+            kf.radius = item.radius
         new_idx = sort_keyframes_by_frame(item.keyframes)
         item.keyframes_index = new_idx
         invalidate_overlays()

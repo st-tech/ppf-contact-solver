@@ -184,7 +184,34 @@ def main() -> int:
     # `frontend.*` here would trigger `frontend/__init__.py`, which
     # pulls in pythreejs / numba / etc.; we don't want those weights
     # in the docs venv. Source of truth is still the Rust crate.
-    import _ppf_cts_py as ext  # noqa: PLC0415
+    # Load the tree-local cdylib directly by absolute path (built by
+    # `cargo build --release -p ppf-cts-py` into target/<profile>/), mirroring
+    # frontend/__init__.py. There is no maturin wheel installed in the venv.
+    import importlib.machinery as _mach  # noqa: PLC0415
+    import importlib.util as _ilu  # noqa: PLC0415
+
+    if sys.platform == "darwin":
+        _libname = "lib_ppf_cts_py.dylib"
+    elif sys.platform == "win32":
+        _libname = "_ppf_cts_py.dll"
+    else:
+        _libname = "lib_ppf_cts_py.so"
+    _libpath = None
+    for _profile in ("release", "debug"):
+        _cand = REPO_ROOT / "target" / _profile / _libname
+        if _cand.exists():
+            _libpath = str(_cand)
+            break
+    if _libpath is None:
+        raise SystemExit(
+            f"_ppf_cts_py cdylib ({_libname}) not found under "
+            f"{REPO_ROOT / 'target'}/(release|debug)/. "
+            "Build it with `cargo build --release -p ppf-cts-py`."
+        )
+    _loader = _mach.ExtensionFileLoader("_ppf_cts_py", _libpath)
+    _spec = _ilu.spec_from_file_location("_ppf_cts_py", _libpath, loader=_loader)
+    ext = _ilu.module_from_spec(_spec)  # noqa: PLC0415
+    _loader.exec_module(ext)
 
     class param_mod:  # noqa: N801 — mimics module shape for renderers below
         app_param = staticmethod(ext.app_param_dict)

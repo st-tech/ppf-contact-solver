@@ -25,13 +25,17 @@
 // Conventions:
 //   * `PyValueError`  -> input shape / value problems.
 //   * `PyKeyError`    -> missing-name / missing-key lookups.
-//   * `PyTypeError`   -> dtype / structural mismatch.
 //   * `PyRuntimeError` -> system errors (I/O, GPU detect, etc.).
 //   * `PyOSError`     -> filesystem-side errors that the Python source
 //                        already raised as `OSError`.
 //
 // The mapping is conservative: when in doubt we pick `PyValueError`
 // to preserve the existing Python exception class users see.
+//
+// Note: dtype / structural-mismatch `PyTypeError`s are raised directly
+// at the ndarray-ingest boundary in `utils_py.rs` (the `read_index_array`
+// family) and intentionally do not flow through `IntoPyErr`, so no
+// variant here maps to `PyTypeError`.
 
 use pyo3::exceptions::{PyKeyError, PyOSError, PyRuntimeError, PyValueError};
 use pyo3::PyErr;
@@ -112,9 +116,7 @@ impl IntoPyErr for ParamError {
 impl IntoPyErr for ParamManagerError {
     fn into_py_err(self) -> PyErr {
         match self {
-            ParamManagerError::UnknownKey(_) | ParamManagerError::NoKeySelected => {
-                PyKeyError::new_err(self.to_string())
-            }
+            ParamManagerError::UnknownKey(_) => PyKeyError::new_err(self.to_string()),
             _ => PyValueError::new_err(self.to_string()),
         }
     }

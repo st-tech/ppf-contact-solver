@@ -503,13 +503,14 @@ hem.scale(
 # Release a pin after 90 frames.
 shoulder.unpin(frame=90)
 
-# Keyframed move (EMBEDDED_MOVE). First .move(frame=...) auto-keys at the
-# current scene frame, then keys again at the target frame.
+# Translate the pinned vertices by a fixed offset, ramped over a frame
+# range. (The interactive keyframed move, EMBEDDED_MOVE, is UI-only; the
+# Python API exposes move_by instead.)
 sleeve = cloth.create_pin("Shirt", "SleevePins")
-sleeve.unpin(frame=30)
-sleeve.move(delta=(0, 0, 0.5), frame=20)
+sleeve.move_by(delta=(0, 0, 0.5), frame_start=20, frame_end=30, transition="SMOOTH")
+sleeve.unpin(frame=60)
 
-# Torque can coexist with EMBEDDED_MOVE but not with SPIN/SCALE/MOVE_BY.
+# Torque cannot be mixed with MOVE_BY, SPIN, or SCALE on the same pin.
 twist = cloth.create_pin("Shirt", "TwistPins")
 twist.torque(magnitude=1.0, axis_component="PC3", frame_start=1, frame_end=60)
 ```

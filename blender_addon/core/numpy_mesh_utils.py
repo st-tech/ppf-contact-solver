@@ -27,86 +27,59 @@ def extract_mesh_to_numpy(mesh):
     return vertices, faces
 
 
-def triangulate_numpy_mesh(vertices, faces):
-    """Triangulate a mesh represented as NumPy arrays.
+def loop_triangle_indices(mesh):
+    """Triangle vertex indices from Blender's loop-triangle tessellation.
 
-    Args:
-        vertices: (N, 3) array of vertex positions
-        faces: List of face vertex indices (can be triangles, quads, ngons)
+    Returns an ``(M, 3)`` ``uint32`` array of mesh-vertex indices: exactly
+    the triangulation Blender renders in the viewport
+    (``mesh.loop_triangles``). This is the single source of truth for how a
+    polygon mesh, including quads and N-gons, is split into triangles for
+    the solver, so the geometry the artist sees matches the geometry the
+    solver runs on.
 
-    Returns:
-        np.ndarray: (M, 3) array of triangulated face indices
+    Blender's tessellation is used instead of a naive fan-from-first-vertex
+    split because a fan diverges from the viewport on concave or non-planar
+    N-gons (it can emit overlapping or back-facing triangles). The triangle
+    indices reference the original ``mesh.vertices`` order, so pins, vertex
+    groups, and per-vertex caches stay aligned with the buffer the encoder
+    ships.
     """
-    triangulated_faces = []
-
-    for face in faces:
-        if len(face) == 3:
-            # Already a triangle
-            triangulated_faces.append(face)
-        elif len(face) == 4:
-            # Quad - split into two triangles
-            # Split quad [0,1,2,3] into triangles [0,1,2] and [0,2,3]
-            triangulated_faces.append([face[0], face[1], face[2]])
-            triangulated_faces.append([face[0], face[2], face[3]])
-        elif len(face) > 4:
-            # N-gon - fan triangulation from first vertex
-            # Split ngon [0,1,2,...,n] into triangles [0,1,2], [0,2,3], ..., [0,n-1,n]
-            for i in range(1, len(face) - 1):
-                triangulated_faces.append([face[0], face[i], face[i + 1]])
-
-    return np.array(triangulated_faces, dtype=np.uint32)
+    mesh.calc_loop_triangles()
+    n = len(mesh.loop_triangles)
+    tri = np.empty(n * 3, dtype=np.uint32)
+    mesh.loop_triangles.foreach_get("vertices", tri)
+    return tri.reshape(n, 3)
 
 
-def triangulate_uv_data(mesh, triangulated_faces):
-    """Extract and triangulate UV data to match triangulated faces.
+def loop_triangulate_mesh(mesh):
+    """Blender loop-triangle tessellation plus aligned per-triangle UVs.
 
-    Args:
-        mesh: Blender mesh object
-        triangulated_faces: (M, 3) array of triangulated face indices from triangulate_numpy_mesh
-
-    Returns:
-        list: UV coordinates for each triangulated face, or empty list if no UV data
+    Returns ``(tri, uv)`` where:
+      * ``tri`` is the ``(M, 3)`` ``uint32`` array from
+        :func:`loop_triangle_indices`.
+      * ``uv`` is an ``(M, 3, 2)`` ``float32`` array of per-corner UVs taken
+        from the active UV layer through each loop triangle's loop indices,
+        or ``[]`` when the mesh has no active UV layer. Row ``i`` of ``uv``
+        corresponds to row ``i`` of ``tri``, so the UV payload lines up with
+        the face payload one entry per triangle (the decoder asserts
+        ``len(uv) == len(face)``).
     """
-    if not mesh.uv_layers.active:
-        return []
+    tri = loop_triangle_indices(mesh)
+    n = len(tri)
 
-    uv_layer = mesh.uv_layers.active.data
-    if len(uv_layer) == 0:
-        return []
-    original_faces = [list(poly.vertices) for poly in mesh.polygons]
+    uv_layer = mesh.uv_layers.active
+    if uv_layer is None or len(uv_layer.data) == 0:
+        return tri, []
 
-    # Build mapping from original face index to UV data
-    original_uv_data = {}
-    for poly_idx, poly in enumerate(mesh.polygons):
-        face_uv = [uv_layer[loop_index].uv[:] for loop_index in poly.loop_indices]
-        original_uv_data[poly_idx] = face_uv
+    # ``loops`` are 32-bit RNA indices, same width as the ``vertices`` read
+    # above; using uint32 keeps the foreach_get fast path and the dtype
+    # consistent. They are non-negative loop indices, safe as array indices.
+    loops = np.empty(n * 3, dtype=np.uint32)
+    mesh.loop_triangles.foreach_get("loops", loops)
 
-    # Map triangulated faces back to original faces to get UV data
-    triangulated_uv = []
-    tri_face_idx = 0
+    n_loops = len(uv_layer.data)
+    uv_flat = np.empty(n_loops * 2, dtype=np.float32)
+    uv_layer.data.foreach_get("uv", uv_flat)
+    uv = uv_flat.reshape(n_loops, 2)[loops.reshape(n, 3)]
 
-    for orig_face_idx, orig_face in enumerate(original_faces):
-        orig_uv = original_uv_data[orig_face_idx]
-
-        if len(orig_face) == 3:
-            # Already triangle - direct mapping
-            triangulated_uv.append(np.array(orig_uv, dtype=np.float32))
-            tri_face_idx += 1
-        elif len(orig_face) == 4:
-            # Quad split into 2 triangles: [0,1,2] and [0,2,3]
-            triangulated_uv.append(
-                np.array([orig_uv[0], orig_uv[1], orig_uv[2]], dtype=np.float32)
-            )
-            triangulated_uv.append(
-                np.array([orig_uv[0], orig_uv[2], orig_uv[3]], dtype=np.float32)
-            )
-            tri_face_idx += 2
-        elif len(orig_face) > 4:
-            # N-gon fan triangulation
-            for i in range(1, len(orig_face) - 1):
-                triangulated_uv.append(
-                    np.array([orig_uv[0], orig_uv[i], orig_uv[i + 1]], dtype=np.float32)
-                )
-                tri_face_idx += 1
-
-    return triangulated_uv
+    return tri, np.ascontiguousarray(uv, dtype=np.float32)

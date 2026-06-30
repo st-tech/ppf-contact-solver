@@ -24,15 +24,18 @@ import uuid
 from typing import Any, Callable, Protocol, runtime_checkable
 
 from .protocol import (
+    DATA_SEND_PICKLE_REJECT,
     DEFAULT_CHUNK_SIZE,
-    HEADER_JSON_DATA,
     HEADER_TEXT_CMD,
+    _read_ok_response,
+    _send_json_header,
     format_traffic,
     socket_data_send,
     socket_data_receive,
     socket_upload_atomic,
 )
 from .status import BytesPerSecondCalculator
+from ..models.defaults import DEFAULT_SERVER_PORT, DEFAULT_SSH_KEEPALIVE_INTERVAL
 
 # The two scene payloads land at these fixed basenames under the
 # project root; data_send refuses them (only upload_atomic writes them)
@@ -56,6 +59,21 @@ def _force_tcp() -> bool:
     return val not in ("", "0", "false", "no", "off")
 
 
+def _reject_scene_pickles(remote_path: str) -> None:
+    """Refuse a data_send aimed at the scene pickles, on any transport.
+
+    The scene payloads only ever land via upload_atomic (atomic + hashed),
+    never via data_send. The server enforces this server-side, but the
+    streamed path (channel) and the direct-disk path both pre-check here so
+    both reject identically and the disk path -- which never contacts the
+    server -- is guarded too. The wording is shared with the Rust server via
+    ``DATA_SEND_PICKLE_REJECT``.
+    """
+    basename = os.path.basename(remote_path)
+    if basename in (DATA_PICKLE, PARAM_PICKLE):
+        raise Exception(DATA_SEND_PICKLE_REJECT.format(basename=basename))
+
+
 # ---------------------------------------------------------------------------
 # Backend protocol (interface)
 # ---------------------------------------------------------------------------
@@ -76,6 +94,11 @@ class ConnectionBackend(Protocol):
     @property
     def server_port(self) -> int:
         ...
+
+    @property
+    def container(self) -> str:
+        """Return the Docker container name, or "" if not containerized."""
+        return ""
 
     def open_channel(self) -> Any:
         """Open a socket or SSH channel to the solver server."""
@@ -240,6 +263,9 @@ def _send_via_channel(
         if progress_cb:
             progress_cb(1.0, "")
         raise Exception("No data to send.")
+    # Pre-check so the streamed path rejects the scene pickles with the
+    # same provenance as the disk path, instead of relying on the server.
+    _reject_scene_pickles(remote_path)
 
     if progress_cb:
         progress_cb(0.0, format_traffic(0))
@@ -390,14 +416,9 @@ def _send_via_disk(
         if progress_cb:
             progress_cb(1.0, "")
         raise Exception("No data to send.")
-    # Match the server's invariant: the scene pickles only ever land via
-    # upload_atomic, never data_send.
-    basename = os.path.basename(remote_path)
-    if basename in (DATA_PICKLE, PARAM_PICKLE):
-        raise Exception(
-            f"data_send no longer accepts {basename}; "
-            "use upload_atomic for scene uploads."
-        )
+    # The disk path never contacts the server, so it must enforce the
+    # scene-pickle invariant itself (only upload_atomic writes them).
+    _reject_scene_pickles(remote_path)
     if interrupt_cb and interrupt_cb():
         raise Exception("Data send interrupted.")
     if progress_cb:
@@ -414,28 +435,8 @@ def _notify_upload_via_channel(channel_opener: Callable, request_data: dict) -> 
     """Send a payload-free ``upload_notify`` control message and await OK."""
     channel = channel_opener()
     try:
-        channel.sendall(HEADER_JSON_DATA)
-        header = json.dumps(request_data).encode() + b"\n"
-        sent = 0
-        while sent < len(header):
-            n = channel.send(header[sent:])
-            if n == 0:
-                raise RuntimeError("Socket connection broken during header send")
-            sent += n
-        response = b""
-        while b"\n" not in response:
-            chunk = channel.recv(1024)
-            if not chunk:
-                break
-            response += chunk
-        if b"OK" not in response:
-            try:
-                msg = json.loads(response.decode().strip())
-                raise Exception(msg.get("error", "Server did not confirm upload"))
-            except (json.JSONDecodeError, UnicodeDecodeError):
-                raise Exception(
-                    f"Server did not confirm upload: {response[:200]!r}"
-                )
+        _send_json_header(channel, request_data)
+        _read_ok_response(channel)
     finally:
         channel.close()
 
@@ -548,6 +549,10 @@ class SSHBackend:
     def server_port(self) -> int:
         return self._port
 
+    @property
+    def container(self) -> str:
+        return self._container
+
     def open_channel(self) -> Any:
         transport = self._instance.get_transport()
         return transport.open_channel(
@@ -640,6 +645,10 @@ class DockerBackend:
     def server_port(self) -> int:
         return self._port
 
+    @property
+    def container(self) -> str:
+        return self._container
+
     def open_channel(self) -> socket.socket:
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         s.connect(("localhost", self._port))
@@ -688,7 +697,13 @@ class DockerBackend:
         self._instance = None
 
     def is_alive(self) -> bool:
-        return self._instance is not None
+        # Cheap pre-gate: disconnect() nulls the handle.
+        if self._instance is None:
+            return False
+        # Probe the port so a stopped or crashed container is detected
+        # rather than reported alive just because the handle was set.
+        from .connection import _probe_ppf_cts_server
+        return _probe_ppf_cts_server(self._port)
 
 
 # ---------------------------------------------------------------------------
@@ -776,18 +791,32 @@ class LocalBackend:
         pass
 
     def stop_server(self) -> None:
-        """Local backend doesn't own the server subprocess.
+        """Direct-kill the local ``ppf-cts-server`` bound to our port.
 
-        ``connect_local`` only builds a ``ConnectionInfo``; the server
-        on ``localhost:port`` was started elsewhere (the test rig
-        orchestrator, a manual launcher, etc). Stop is therefore a
-        bookkeeping no-op: ``effect_runner._do_stop_server`` clears
-        the response cache and dispatches ``ServerStopped`` after
-        this returns. Anyone needing to terminate the squatter on the
-        port should do so out-of-band; if it's still listening when
-        the next connect tries to bind, ``PortInUseByForeignProcess``
-        surfaces the conflict.
+        The local server is launched detached (``nohup bash -c "...; \
+        ppf-cts-server --port N" &``) by ``effect_runner``, so there is no
+        Popen handle to terminate, and terminating the ``bash`` wrapper would
+        orphan the server child. Stop therefore finds the process listening on
+        ``self._port`` and kills it (SIGTERM, then SIGKILL), plus any matching
+        wrapper. Best-effort and idempotent: a clean no-op when nothing is
+        listening. ``effect_runner._do_stop_server`` clears the response cache
+        and dispatches ``ServerStopped`` after this returns.
         """
+        port = self._port
+        # ``lsof -ti tcp:N`` yields the PID(s) bound to the port (the server
+        # binds 127.0.0.1:N). Kill those, then sweep any lingering wrapper by
+        # command match. Both ``lsof`` and ``pkill`` are present on macOS/Linux
+        # where the local backend runs; guards keep it quiet if either is
+        # missing or the port is already free.
+        self.exec_command(
+            f"PIDS=$(lsof -ti tcp:{port} 2>/dev/null); "
+            f'[ -n "$PIDS" ] && kill $PIDS 2>/dev/null; '
+            f"sleep 0.3; "
+            f"PIDS=$(lsof -ti tcp:{port} 2>/dev/null); "
+            f'[ -n "$PIDS" ] && kill -9 $PIDS 2>/dev/null; '
+            f"pkill -f 'ppf-cts-server .*--port {port}' 2>/dev/null; true",
+            shell=True,
+        )
         return
 
     def start_server(self) -> None:
@@ -800,7 +829,11 @@ class LocalBackend:
         return
 
     def is_alive(self) -> bool:
-        return True
+        # Probe the port: a crashed local server should report dead so
+        # the protocol's is_alive() means actual reachability, matching
+        # the SSH and win_native backends.
+        from .connection import _probe_ppf_cts_server
+        return _probe_ppf_cts_server(self._port)
 
 
 # ---------------------------------------------------------------------------
@@ -985,13 +1018,13 @@ def create_backend(backend_type: str, config: dict) -> ConnectionBackend:
             key_filename=config.get("key_path"),
             compress=True,
         )
-        keepalive = config.get("keepalive_interval", 60)
+        keepalive = config.get("keepalive_interval", DEFAULT_SSH_KEEPALIVE_INTERVAL)
         instance.get_transport().set_keepalive(keepalive)
 
         backend = SSHBackend(
             instance=instance,
             directory=config["path"],
-            port=config.get("server_port", 9090),
+            port=config.get("server_port", DEFAULT_SERVER_PORT),
             container=config.get("container", ""),
         )
 
@@ -1033,19 +1066,19 @@ def create_backend(backend_type: str, config: dict) -> ConnectionBackend:
         return DockerBackend(
             instance=container_instance,
             directory=config["path"],
-            port=config.get("server_port", 9090),
+            port=config.get("server_port", DEFAULT_SERVER_PORT),
             container=config["container"],
         )
 
     elif backend_type == "local":
         return LocalBackend(
             directory=config["path"],
-            port=config.get("server_port", 9090),
+            port=config.get("server_port", DEFAULT_SERVER_PORT),
         )
 
     elif backend_type == "win_native":
         from .connection import connect_win_native
-        info, process = connect_win_native(config["path"], config.get("server_port", 9090))
+        info, process = connect_win_native(config["path"], config.get("server_port", DEFAULT_SERVER_PORT))
         return WinNativeBackend(
             directory=info.current_directory,
             port=info.server_port,

@@ -24,17 +24,22 @@ The Save icon (floppy disk) at the top-right of the Scene Configuration profile 
 
 With a scene profile loaded, the top row collapses into a Profile dropdown with four icons on the right: Open, Clear, Reload, Save. Switching entries in the dropdown applies that preset to the scene (overwriting scene parameters, dynamic parameters, and invisible colliders).
 
-Below the profile row, the panel lays out the basic parameters one per line: **FPS** (inside a small box, with a checkbox to drive it from Blender's render FPS instead), **Frame Count**, **Step Size**, **Min Newton Steps**, **Air Density**, **Air Friction**, **Gravity** (a 3-component vector), a **Preview Direction** toggle (viewport arrow), and an **Inactive Momentum Frames** row that is grayed-out unless the scene contains at least one **Shell** group.
+Below the profile row, the panel lays out the basic parameters one per line: **FPS** (inside a small box, with a checkbox to drive it from Blender's render FPS instead), **Frame Count**, **Step Size**, **Min Newton Steps**, **Air Density**, **Air Friction**, **World Scaling**, **Gravity** (a 3-component vector), a **Preview Direction** toggle (viewport arrow), and an **Inactive Momentum Frames** row that is grayed-out unless the scene contains at least one **Shell** group.
 
-Below the basics, three collapsible sub-sections hang off the panel. Each has a disclosure triangle on its header row and toggles open/closed independently:
+Below the basics, four collapsible sub-sections hang off the panel. Each has a disclosure triangle on its header row and toggles open/closed independently:
+
+- **Save and Checkpoints**: Save State on Finish, the Auto Save sub-box (interval + retention), and the per-frame Save Checkpoints list.
+
+With the Save and Checkpoints disclosure triangle open, the sub-section gathers everything that controls when the solver writes a resumable state. See Save and Checkpoints below.
 
 - **Wind**: wind direction vector, preview toggle, wind strength.
 
 With the Wind disclosure triangle open, the sub-section reveals a Direction XYZ field, a Preview Direction viewport toggle, and a Strength (m/s) scalar. Encoding combines direction x strength, so a zero-direction vector disables wind regardless of the strength value.
 
-- **Advanced Params**: contact NNZ, vertex air damp, auto-save + its interval, CCD line-search max t, constraint ghat, CG max iter, CG tol, include-face-mass and disable-contact toggles.
+- **Linear System Solver**: CG max iter, CG tol, preconditioner, and Schwarz levels.
+- **Advanced Params**: contact NNZ, vertex air damp, CCD line-search max t, constraint ghat, friction mode, include-face-mass and disable-contact toggles.
 
-Advanced Params exposes the tuning knobs most users never need to touch: contact-matrix capacity (Max Contact), per-vertex air drag, checkpointing (Auto Save), CCD line-search bounds, PCG iteration cap and tolerance, and two debugging toggles. Raise PCG limits for stiff systems; raise Max Contact only when the solver reports overflow.
+Advanced Params exposes the tuning knobs most users never need to touch: contact-matrix capacity (Max Contact), per-vertex air drag, CCD line-search bounds, the friction-combination mode, and two debugging toggles. Raise Max Contact only when the solver reports overflow.
 
 - **Dynamic Parameters**: keyframed gravity / wind / air density / air friction / vertex air damp. Covered separately in Dynamic Parameters.
 - **Invisible Colliders**: walls and spheres with their own keyframe lists. Covered separately in Invisible Colliders.
@@ -51,6 +56,7 @@ Only the sub-section headers are visible when collapsed; click the triangle on a
 | **Min Newton Steps**         | `min_newton_steps`         | 1             | Minimum Newton iterations per step. 1 – 64.                         |
 | **Air Density (kg/m³)**      | `air_density`              | 0.001         | Air density, kg/m³. Range 0 – 0.01.                                 |
 | **Air Friction**             | `air_friction`             | 0.2           | Tangential-to-normal air drag ratio, 0 – 1 (see below).             |
+| **World Scaling**            | `world_scaling`            | 1.0           | Uniform scale applied to all geometry before simulating; results are scaled back. Use it to simulate an over/under-sized scene at a sensible scale (see below). > 0.    |
 | **Gravity (m/s²)**           | `gravity_3d`               | (0, 0, -9.8)  | Gravity vector, m/s² (Z-up Blender frame).                          |
 | **Preview Direction** (gravity) | `preview_gravity_direction` | `False`    | Draw the gravity-direction arrow overlay in the viewport. Overlay-only. |
 | **Inactive Momentum Frames** | `inactive_momentum_frames` | 0             | Frames over which shell momentum is ignored at startup (0 – 600).   |
@@ -68,11 +74,34 @@ $$
 - **Normal** drag is always on with coefficient `1`. Pushing a shell face into or out of the air is always resisted.
 - **Tangential** drag is scaled by **Air Friction**. At `0`, air offers no sideways resistance, so a shell can slide edgewise through still air unopposed. At `1`, tangential and normal drag are equal in magnitude. The default `0.2` gives air a little "grip" on the fabric without over-damping swings.
 
+#### World Scaling
+
+**World Scaling** multiplies all input geometry by a single factor before the simulation runs, then divides the results back by the same factor so your scene keeps its authored size. It lets you simulate a scene that was modeled at the wrong physical scale without re-scaling it in Blender: a 15 m mesh set to `0.1` is simulated at 1.5 m (a sensible physical size for contact and gravity) and the playback is written back at 15 m. The default `1.0` disables it.
+
+What scales: every vertex position (deformable meshes, their rest shapes, pinned and animated targets), collider positions and sizes (sphere radius, wall/sphere thickness), initial and keyframed velocities, both **relative** contact gaps (a fraction of the mesh size) and **absolute** contact gaps/offsets (a fixed distance, scaled so it stays the same size relative to the geometry), and the `fix_xz` threshold. What does **not** scale: gravity and material stiffness. The factor must be greater than 0.
+
+**PDRD** rigid bodies scale correctly as well: their rest centroid, volume, inertia, mass, and joint pivot are each rescaled by the matching power of the factor, so a rigid body keeps its shape and dynamics at any World Scaling.
+
 The per-vertex air-damping force is then scaled by the vertex's associated area and by **Air Density** before being added to the Newton solve. A side-effect of that last multiplication: at `air_density = 0` there is no shell air damping at all, regardless of **Air Friction**.
 
 **Vertex Air Damping** (under **Advanced**) is a separate, isotropic per-vertex damper applied to every vertex in the scene, with no area or air-density weighting and no directional split. Use it when you need to calm a rod or a particle-heavy scene that **Air Friction** does not reach.
 
 Both **Air Friction** and **Vertex Air Damping** are keyframeable; see Dynamic Parameters.
+
+### Save and Checkpoints
+
+The first collapsible sub-section (above Wind) collects every control over when the solver writes a resumable state (`state_<N>.bin.gz`). Resuming reads these states, so the Resume-From dialog offers exactly the frames saved here.
+
+| UI label                       | Python / TOML key            | Default | Description                                                                 |
+| ------------------------------ | ---------------------------- | ------- | -------------------------------------------------------------------------- |
+| **Save and Checkpoints** (disclosure) | `show_save_and_checkpoints` | `False` | Whether the sub-section is expanded.                                       |
+| **Save State on Finish**       | `save_state_on_finish`       | `False` | Save the final-frame state before the solver exits, even when auto-save is off. |
+| **Auto Save** (disclosure + toggle) | `auto_save`             | `False` | Enable periodic solver-state snapshots on the remote.                       |
+| **Auto Save Interval**         | `auto_save_interval`         | 10      | Auto-save interval, in frames. Minimum 1. Disabled until Auto Save is on.   |
+| **Keep Saved States**          | `keep_states`                | 0       | How many saved states to retain. 0 keeps all (required to resume from older frames). |
+| **Save Checkpoints**           | `save_checkpoint_frames`     | (empty) | Explicit Blender frames at which to save a state, independent of the auto-save cadence. |
+
+The **Save Checkpoints** list is a UIList: scrub the timeline to the frame you want a checkpoint at and click **Add Frame N** (the button reflects the current timeline frame; duplicates are rejected and the list stays sorted); **Remove** drops the selected entry. The encoder converts each Blender 1-based frame to the solver's 0-based index and ships them as the comma-separated `checkpoints` scene key; the solver's `SimArgs.checkpoints` parses it and calls the same `save_state` path the auto-save cadence uses, so a checkpoint frame and an auto-save frame that coincide save only once. **Keep Saved States** retention applies to all saved states, so leave it at 0 (the default) when you need every listed checkpoint to stay resumable.
 
 ### Wind
 
@@ -87,22 +116,31 @@ The encoder combines the two into a single `direction × strength` vector before
 
 A live example of the Wind fields. With Direction = (0, 1, 0) and Strength = 5.0 m/s, the encoder ships direction × strength = (0, 5, 0) to the solver. Turning Preview Direction on draws the green wind-arrow overlay (and a translucent sphere whose radius scales with strength) so you can judge the wind field relative to scene geometry without running a simulation. The viewport label echoes the magnitude and normalized direction live.
 
+### Linear System Solver
+
+| UI label                       | Python / TOML key            | Default     | Description                                                      |
+| ------------------------------ | ---------------------------- | ----------- | ---------------------------------------------------------------- |
+| **Linear System Solver** (disclosure) | `show_linear_system_solver` | `False` | Whether the Linear System Solver sub-section is expanded.        |
+| **PCG Max Iterations**         | `cg_max_iter`                | 10 000      | Max iterations for the PCG linear solver. 100 – 100 000.         |
+| **PCG Tolerance**              | `cg_tol`                     | 0.001       | PCG relative tolerance. 0.00001 – 0.1.                           |
+| **Preconditioner**             | `precond`                    | `BLOCK_JACOBI` | PCG preconditioner. `BLOCK_JACOBI` (default) is the 3x3 per-vertex diagonal preconditioner; `SCHWARZ` is the opt-in additive aggregate-Schwarz, more robust on systems mixing stiff and soft elements. |
+| **Schwarz Levels**             | `schwarz_levels`             | `LEVEL_2`   | Number of additive levels for the Schwarz preconditioner (shown only when the preconditioner is `SCHWARZ`). `LEVEL_1` is the single-level smoother; `LEVEL_2` (default) adds a two-level coarse correction over the connectivity partition, reducing the worst-case PCG iteration count on stiff multibody contact. |
+
+Raise **PCG Max Iterations** (and lower **PCG Tolerance**) for stiff systems that fail to converge.
+
 ### Advanced
 
 | UI label                  | Python / TOML key    | Default     | Description                                                      |
 | ------------------------- | -------------------- | ----------- | ---------------------------------------------------------------- |
 | **Max Contact**           | `contact_nnz`        | 100 000 000 | Capacity of the contact sparse matrix (non-zero entries).        |
 | **Vertex Air Damping**    | `vertex_air_damp`    | 0.0         | Per-vertex isotropic air damping, 0 – 1.                         |
-| **Auto Save**             | `auto_save`          | `False`     | Enable periodic solver-state snapshots on the remote.            |
-| **Auto Save Interval**    | `auto_save_interval` | 10          | Auto-save interval, in frames. Minimum 1.                        |
 | **Line Search Max T**     | `line_search_max_t`  | 1.25        | CCD line-search maximum step factor. Range 0.1 – 10.             |
 | **Constraint Gap**        | `constraint_ghat`    | 0.001       | Barrier gap distance. Range 0.0001 – 0.1.                        |
-| **PCG Max Iterations**    | `cg_max_iter`        | 10 000      | Max iterations for the PCG linear solver. 100 – 100 000.         |
-| **PCG Tolerance**         | `cg_tol`             | 0.001       | PCG relative tolerance. 0.0001 – 0.1.                            |
 | **Include Face Mass**     | `include_face_mass`  | `False`     | Fold shell face mass into attached solids.                       |
+| **Friction Mode**         | `friction_mode`      | `MIN`       | How to combine the two contacting elements' friction coefficients: `MIN` (minimum, default), `MAX` (maximum), or `MEAN` (average). |
 | **Disable Contact**       | `disable_contact`    | `False`     | Turn off contact detection entirely (debugging / ablation).      |
 
-Raise **PCG Max Iterations** (and lower **PCG Tolerance**) for stiff systems that fail to converge. Raise **Max Contact** only if the solver reports a contact-matrix overflow; it's an upper bound, not a target.
+Raise **Max Contact** only if the solver reports a contact-matrix overflow; it's an upper bound, not a target.
 
 ### Previewing direction
 
@@ -122,7 +160,7 @@ Topology changes (adding or removing vertices, edges, or faces) still require a 
 
 ### Scene profiles
 
-A **scene profile** is a named set of scene parameters saved to a TOML file. The shipped example contains:
+A **scene profile** is a named set of scene parameters saved to a TOML file with the **Save** icon. A file can hold any number of presets; for example:
 
 | Preset        | Highlights                                                                  |
 | ------------- | --------------------------------------------------------------------------- |
@@ -132,7 +170,7 @@ A **scene profile** is a named set of scene parameters saved to a TOML file. The
 | `SlowMotion`  | 600 frames at 120 FPS. Step size stays at 0.001 s.                          |
 | `ZeroGravity` | `gravity = (0, 0, 0)`, 300 frames.                                          |
 
-NOTE: The `Default` preset above is a profile name in the shipped TOML, not the addon's new-scene default. The presets deliberately tighten `step_size` to 0.001 s for the more demanding example setups; a fresh Blender scene still starts at the addon default of 0.01 s (see the Basic table).
+NOTE: The `Default` preset above is just a profile name in this example, not the addon's new-scene default. These presets deliberately tighten `step_size` to 0.001 s for the more demanding example setups; a fresh Blender scene still starts at the addon default of 0.01 s (see the Basic table).
 
 Unlike material profiles, scene profiles also capture **dynamic parameters** and **invisible colliders**. Applying the profile clears existing dynamic parameters and invisible colliders first, then rebuilds them from the TOML entries.
 
@@ -228,14 +266,16 @@ line-search-max-t, auto-save, stitch-stiffness, ...
 
 Every object group carries its own copy of the full material-parameter set, but which fields are relevant depends on the group's type:
 
-- **Shell**: density, stiffness (Young's modulus, Poisson ratio, bend), shrink, strain limit, inflate, stitch, and contact settings.
-- **Solid**: density, stiffness, a single shrink factor, and contact settings.
-- **Rod**: density, stiffness, bend, strain limit, and contact settings.
+- **Shell**: density, stiffness (Young's modulus, Poisson ratio, bend), shrink, strain limit, inflate, stitch, Rayleigh damping (deformation + bending), and contact settings.
+- **Solid**: density, stiffness, a single shrink factor, deformation Rayleigh damping, and contact settings.
+- **Rod**: density, stiffness, bend, strain limit, Rayleigh damping (deformation + bending), and contact settings.
+- **PDRD**: an exactly-rigid body type. Only density, friction, contact settings, and an optional hinge joint (no Young's modulus, Poisson ratio, bend, shrink, strain limit, inflate, or Rayleigh damping). The surface mesh is not tetrahedralized.
+- **SAND**: a granular body of loose grains. Only grain radius, particle mass, friction, and contact settings (no Young's modulus, Poisson ratio, bend, shrink, strain limit, inflate, or Rayleigh damping).
 - **Static**: only friction and contact settings (static objects have no deformation to tune). See Static Objects for the full treatment of Static groups, including how to animate them.
 
 Rows that don't apply to the current type are hidden in the UI.
 
-The four options in the group-type dropdown on each group's header row. Picking one changes the Material Params box to match: Solid shows density, stiffness, and a single shrink factor; Shell shows the full cloth stack including anisotropic shrink, strain limit, inflate, and stitch; Rod shows density, stiffness, bend, and strain limit; Static collapses to just Friction and the contact rows.
+The six options in the group-type dropdown on each group's header row. Picking one changes the Material Params box to match: Solid shows density, stiffness, and a single shrink factor; Shell shows the full cloth stack including anisotropic shrink, strain limit, inflate, and stitch; Rod shows density, stiffness, bend, and strain limit; PDRD shows its rigid-body density, an optional hinge joint, plus shared contact rows; SAND shows its grain radius, particle mass, and friction, plus shared contact rows; Static collapses to just Friction and the contact rows.
 
 ### The Material Params box
 
@@ -249,12 +289,28 @@ The rows you see inside **Material Params**, top to bottom:
 4. **Poisson Ratio**: for **Shell** and **Solid** only.
 5. **Friction**: Coulomb friction coefficient at contacts.
 6. **Bend stiffness** and **Shrink**. **Shell** shows Bend, Shrink X/Y, a **Strain Limit** toggle, an **Inflate** toggle, and a **Stitch Stiffness** field. **Solid** collapses down to a single Shrink slider. **Rod** reuses the **Shell** Bend row.
-7. **Contact Gap**: a toggle picks between absolute distance (in Blender units) and a fraction of the group's bounding-box diagonal; the relevant pair of fields shows up below the toggle.
-8. **Collision Active Duration Windows**: optional per-object frame ranges that restrict when contact is active. Off by default for **Solid**, **Shell**, and **Rod** groups; unavailable for **Static**. Covered in Active collision windows.
-9. **Plasticity**: optional non-linear permanent deformation. Covered in its own subsection below.
-10. **Velocity Overwrite**: optional keyframed velocity targets for one of the assigned objects. Covered separately below.
+7. **Deformation Damping** and **Bending Damping**: stiffness-proportional Rayleigh damping (in seconds). **Deformation Damping** shows on **Solid**, **Shell**, and **Rod**; **Bending Damping** shows on **Shell** and **Rod** only (Solid has no bending term). Both default to `0.0` (off). **PDRD** groups are not Rayleigh-damped. Covered in Rayleigh damping below.
+8. **Contact Gap**: a toggle picks between an absolute distance and a fraction of the group's bounding-box diagonal; the relevant pair of fields shows up below the toggle. Both modes are multiplied by **World Scaling** before use, so the absolute fields are unitless numbers (not Blender meters).
+9. **Collision Active Duration Windows**: optional per-object frame ranges that restrict when contact is active. Off by default for **Solid**, **Shell**, and **Rod** groups; unavailable for **Static**. Covered in Active collision windows.
+10. **Plasticity**: optional non-linear permanent deformation. Covered in its own subsection below.
+11. **Velocity Overwrite**: optional keyframed velocity targets for one of the assigned objects. Covered separately below.
 
 The Material Params box expanded on a Shell group. The exact row set changes with the group's type: Solid collapses Shrink X/Y into a single Shrink, Rod drops Poisson ratio, and Static hides everything except Friction and the contact rows.
+
+#### Material presets
+
+At the very top of the **Material Params** box (above the profile row) is a **Preset** dropdown that applies a bundled, physically-grounded material in one click. It is shown for **Shell** and **Solid** groups.
+
+- **Filtered by Type.** The dropdown lists only presets that match the group's current Type: a **Shell** group sees fabrics (Silk, Flag, Cotton, Wool, Denim, Leather) and a **Solid** group sees soft deformables (Rubber, Silicone, Foam, Sponge, Jelly). Set the Type first, then pick a matching preset. **PDRD** (near-rigid) groups have no preset library, since a rigid body differs only by density and friction; set those directly on the group.
+- **Applying never changes the Type.** A preset only writes the material parameters it is about: density, friction, the model, Young's modulus and its normalization flag, Poisson ratio, and (fabrics only) bend and strain limit. It does not touch the group Type, contact gaps, pins, velocities, or plasticity. After it applies, the dropdown resets to **Select Preset...** so you can pick again.
+- **Bundled vs. profile.** A *preset* is read from the add-on's bundled library (`blender_addon/presets/materials.toml`) and ships with the add-on; a *profile* (the row just below) is a TOML file you save and load yourself. Use a preset for a sensible starting point, then tune in the panel and optionally Save a profile.
+
+The shipped numbers follow a per-type normalization convention:
+
+- **Solids** store a **density-normalized Young's modulus** (E / density, with **Density-Normalized on**) and ship at a uniform **density of 100.0 kg/m³** (the fabrics follow the same density-normalized convention but ship at 1.0 kg/m²). The stored modulus is the real Young's modulus divided by the real volumetric density (for example Rubber's ~3 MPa becomes ~2727), so the static deformation is identical to using the real material, but the uniform density avoids the ill-conditioning that a wide real-density spread caused in mixed-material scenes. Density only affects inertia and contact response, not the static shape, so it is a free knob you can raise. Each preset records its real E (Pa) in a comment for reference.
+- **Shells (fabrics)** have no clean bulk Young's modulus, so each preset stores a **calibrated, density-normalized membrane stiffness** (with **Density-Normalized on**) plus Poisson ratio, bend, and strain limit. The `bend` is validated against published Cusick drape coefficients by the reproducible harness in `calibration/cusick_drape/`, so the drape behavior is tied to a standard textile experiment rather than chosen by eye. The membrane stiffness (Young's modulus) and Poisson ratio are likewise calibrated against measured fabric tensile data by `calibration/tensile/`, so the fabrics stretch in the right relative order: Silk and Wool stretch more easily, Denim and Leather barely stretch. (Raising a fabric's Young's modulus also stiffens its drape, so `bend` and Young's modulus are calibrated together to keep the drape coefficient on target.) Shell `bend` is **density-normalized** in the solver (like Young's modulus), so the draped shape does not depend on areal density; the fabric presets therefore ship a uniform `shell_density` of **1.0 kg/m²**, a well-conditioned default you can freely change (it affects only inertia and contact response, not the drape). See the note under Bend Stiffness.
+
+Adding or editing a material is a TOML edit in `blender_addon/presets/materials.toml`; no code change is needed.
 
 #### Profile buttons: Open / Clear / Reload / Save
 
@@ -292,7 +348,7 @@ These apply regardless of type.
 | **Contact Gap Ratio**                | `contact_gap_rat`                 | 0.001   | Contact gap as a fraction of the group's bounding-box diagonal.          |
 | **Contact Offset Ratio**             | `contact_offset_rat`              | 0.0     | Contact offset as a fraction of the group's bounding-box diagonal.       |
 
-**Friction at a contact** is asymmetric in the material parameters but symmetric in the solve: each object carries its own **Friction** coefficient, and when two objects come into contact the solver takes the **minimum** of the two values as the friction at that contact. In practice, the lower-friction surface wins: a slippery cloth sliding over a grippy body behaves as if the whole contact were slippery. If you want a particular contact to feel grippy, both sides need to be set high.
+**Friction at a contact** is asymmetric in the material parameters but symmetric in the solve: each object carries its own **Friction** coefficient, and when two objects come into contact the solver combines the two values using the scene's **Friction Mode** (Advanced Params), which defaults to the **minimum** of the two but can be set to maximum or mean instead. Under the default minimum rule, the lower-friction surface wins: a slippery cloth sliding over a grippy body behaves as if the whole contact were slippery. If you want a particular contact to feel grippy, both sides need to be set high.
 
 See Contact gap: absolute vs ratio below for which pair you should be editing.
 
@@ -302,18 +358,22 @@ See Contact gap: absolute vs ratio below for which pair you should be editing.
 | ------------------------ | ---------------------- | ---------------- | -------------------------------------------------------------- |
 | **Model**                | `shell_model`          | `BARAFF_WITKIN`  | Material model. One of `BARAFF_WITKIN`, `STABLE_NEOHOOKEAN`, `ARAP`. |
 | **Density (kg/m²)**      | `shell_density`        | 1.0              | Areal density, kg/m².                                          |
-| **Young's Modulus (Pa/ρ)** | `shell_young_modulus`  | 1000.0         | Young's modulus (see note below). Accepted range 0 – 10 M.     |
+| **Young's Modulus (Pa/ρ)** | `shell_young_modulus`  | 1000.0         | Young's modulus (see note below). Accepted range 0.01 – 1 G (soft cap 10 M). |
 | **Poisson's Ratio**      | `shell_poisson_ratio`  | 0.35             | Poisson ratio, 0 – 0.4999.                                     |
-| **Bend Stiffness**       | `bend`                 | 100.0            | Bending stiffness, 0 – 100.                                    |
+| **Bend Stiffness**       | `bend`                 | 10.0             | Bending stiffness, 0 – 100. Density-normalized (see note below). |
 | **Shrink X**             | `shrink_x`             | 1.0              | Anisotropic warp scale (min 0.1). < 1 shrinks, > 1 extends.    |
 | **Shrink Y**             | `shrink_y`             | 1.0              | Anisotropic weft scale (min 0.1). < 1 shrinks, > 1 extends.    |
 | **Enable Strain Limit**  | `enable_strain_limit`  | `False`          | Turns on non-physical strain clamp (good for stiff cloth).     |
-| **Strain Limit**         | `strain_limit`         | 0.05             | Max strain permitted when **Enable Strain Limit** is on.       |
+| **Strain Limit**         | `strain_limit_percent` | 5.0              | Max stretch in percent (5.0 = 5% stretch) when **Enable Strain Limit** is on. |
 | **Inflate**              | `enable_inflate`       | `False`          | Turns on per-face pressure along face normals.                 |
 | **Pressure (Pa)**        | `inflate_pressure`     | 0.0              | Inflation pressure, Pa. Active only when **Inflate** is on.    |
-| **Stitch Stiffness**     | `stitch_stiffness`     | 1.0              | Stiffness of loose-edge stitches detected in the mesh.         |
+| **Stitch Stiffness**     | `stitch_stiffness`     | 1.0              | Loose-edge stitch stiffness; a direct factor on the stitch force (no normalization). |
 
 Loose edges (edges not belonging to any face) are automatically treated as stitch constraints, with stiffness set by **Stitch Stiffness**.
+
+NOTE: Shell **Bend Stiffness** is density-normalized, the same way Young's modulus is. The solver scales the shell bending stiffness by the fabric's areal density, so the bent / draped shape is invariant to **Density**: changing a shell's density alone leaves its drape unchanged (it only changes inertia and contact response). This matches the membrane and the rod bend, and it lets a very light fabric be mixed with much denser bodies without the mass-ratio conditioning trouble a tiny areal density would otherwise cause, so density is a free knob you can raise for stability. The drape calibration in `calibration/cusick_drape/` confirms the drape coefficient is constant across a wide density range at fixed `bend`.
+
+Shell **Bend Stiffness** is also **resolution-independent**: the solver uses the convergent Discrete Shells per-hinge stiffness (which scales as edge-length squared over triangle area), so the same `bend` value produces the same drape and bending whether the mesh is coarse or fine. You can re-mesh a cloth at a different density without re-tuning `bend`, and the calibrated preset values hold across resolutions. (An earlier formulation scaled only with edge length, so finer meshes drooped more; this is fixed.)
 
 #### Shrink X / Shrink Y
 
@@ -339,11 +399,11 @@ What it does: non-physical clamp that prevents mesh edges from stretching beyond
 When to enable: cloth that should keep its silhouette (denim, tablecloths, airbags) or ropes that must not visibly stretch. Disable when you want the mesh to deform freely under force, or when **Shrink X** / **Shrink Y** are non-unity on a **Shell** group (the two systems conflict).
 
 Example values:
-- **Strain Limit** = 0.025: very stiff (~2.5% stretch).
-- **Strain Limit** = 0.05: default; tight but drapes visibly.
-- **Strain Limit** = 0.15: loose; bigger ripples.
+- **Strain Limit** = 2.5: very stiff (~2.5% stretch).
+- **Strain Limit** = 5.0: default; tight but drapes visibly.
+- **Strain Limit** = 15.0: loose; bigger ripples.
 
-With Enable Strain Limit on, the Strain Limit field activates. The value is a strain ratio (0.05 = 5%), not a force.
+With Enable Strain Limit on, the Strain Limit field activates. The value is a percentage of stretch beyond rest length (5.0 = 5% stretch), not a force.
 
 #### Inflate
 
@@ -372,6 +432,34 @@ Example values:
 
 Shell groups expose two plasticity sections: Plasticity (stretch) and Bend Plasticity (hinge/rod-joint rest angle). Each has its own theta rate and threshold; bend plasticity also lets you pick the rest-angle source (flat, initial geometry, or current frame).
 
+#### Reference rest angle (per object)
+
+This applies to both **Shell** and **Rod** groups (rods reuse the same control; see Rod-specific). The **Rest Angle** dropdown (`bend_rest_angle_source`) sets how every object in the group seeds its bending rest angle: `FLAT` (shell hinge flat / rod straight) or `FROM_GEOMETRY` (use the initial pose). Below it, the **From Reference Geometry** checkbox (`bend_rest_from_reference`, group-level, default off) is a master toggle that turns on **per-object** reference rest angles. When it is on, a box appears with a pulldown of the group's objects; the selected object exposes an **Enable Reference Rest Angle** checkbox (`bend_ref_enable`, per object) and an eyedropper to **pick a reference object** for it (plus an X to clear).
+
+A reference object is a topological copy whose vertices were moved (typically by a modifier or geometry nodes). When you pick it, the add-on checks that it is a positions-only copy and rejects anything else with an error (the same check runs again at Transfer):
+
+- **Shell** and **mesh Rod**: the reference is evaluated through its full modifier / geometry-nodes stack; the result must have the same vertex count and identical connectivity (faces for shells, edges for rods) as the source base mesh.
+- **Curve Rod**: the reference must be a curve with the same spline structure; it is sampled at the control-point level the same way the source curve rod is, so move the reference's control points (curve modifiers / geometry nodes that do not bake into control points are not sampled, matching how the source curve is shipped).
+
+When a valid reference is enabled, that object's bending rest angles (shell hinge dihedral, or rod interior-vertex bend angle) are computed from the reference's shape, **overriding** the group's Rest Angle source for that one object (so it takes effect even when the group is set to Flat). The viewport line "Reference geometry overrides the group Rest Angle source for this object." confirms the override is active. Objects without a reference keep following the group `bend_rest_angle_source`.
+
+This is a per-object surface like the PDRD hinge and Velocity Overwrite: the master toggle round-trips through material profiles, but the per-object reference (which object, and its picked reference) lives on the assigned object and is set from the UI picker, not from the group material API or MCP.
+
+#### Rayleigh damping
+
+Two per-element, stiffness-proportional (Rayleigh) damping knobs, both expressed in **seconds** and both defaulting to `0.0` (off):
+
+| UI label                 | Python / TOML key       | Default | Applies to              | Description                                                          |
+| ------------------------ | ----------------------- | ------- | ----------------------- | -------------------------------------------------------------------- |
+| **Deformation Damping**  | `deformation_damping`   | 0.0     | **Solid**, **Shell**, **Rod** | Stiffness-proportional damping for stretch / membrane / solid deformation. |
+| **Bending Damping**      | `bending_damping`       | 0.0     | **Shell**, **Rod** only | Stiffness-proportional damping for shell and rod bending; usually smaller than deformation damping. |
+
+What it does: each coefficient `β` (seconds) adds a damping term `(β/Δt)·K` built from the element stiffness `K`, so it dissipates high-frequency motion of that energy. **Deformation Damping** damps the stretch / membrane / solid response and applies to **Solid**, **Shell**, and **Rod**. **Bending Damping** damps the bending response and applies to **Shell** and **Rod** only: a **Solid** (tet) group has no bending term, so the row is hidden there. **PDRD** groups are not Rayleigh-damped (a rigid body carries no per-element stiffness to scale).
+
+When to enable: calming jitter or ringing on stiff cloth, rods, or solids without globally raising air damping. Leave at `0.0` for fully elastic motion.
+
+Bending-CFL caveat: bending damping adds a stiffness term that tightens the explicit step-size stability bound on fine meshes. On a heavily subdivided shell or rod, a large **Bending Damping** value can force a smaller **Step Size** to stay stable; raise it gradually and watch for the solver needing a smaller step.
+
 #### Velocity Overwrite
 
 What it does: the bottom box in the Material Params stack. It stores a per-object list of keyframed velocity vectors. Each entry pins the whole group to a given `(direction, speed)` at a chosen frame, overriding the velocity produced by the simulation. The dropdown on the header row picks which assigned object receives the keyframes; the eye icon toggles a viewport preview arrow; the copy/paste icons move the keyframe list between groups.
@@ -380,13 +468,23 @@ When to enable: scripted cloth launches (flag unfurling, parachute drops), match
 
 The Velocity Overwrite section with four keyframes populated (frames 1, 30, 60, 90). Each row is `frame (speed m/s [direction])`. The selected row expands into per-keyframe editor rows (Frame, Direction (XYZ), and Speed) so you can tweak one entry without opening an animation editor. The Cloth dropdown at the top picks which assigned object the keyframes belong to, and the `+` / `-` buttons on the right add or remove entries.
 
+Two checkboxes gate which part of the velocity a keyframe overwrites: **Enable Translational Velocity Overwrite** (the Direction / Speed rows) and **Enable Angular Velocity Overwrite** (the Spin rows). Each component is overwritten **only when its box is checked**, so you can do either or both: a pure-spin keyframe (angular only) leaves the translation untouched, and a pure-translation keyframe leaves the spin alone. Translational defaults on, angular defaults off.
+
+Spin (angular) component: on **Solid**, **Shell**, and **PDRD** groups (not **Rod**) the selected keyframe exposes a **Spin** box with a **Spin Axis** dropdown and a signed **Angular Speed** in degrees per second. The dropdown offers three kinds of axis:
+
+- **Principal Axis 1 / 2 / 3** (PC1 = largest extent ... PC3 = thinnest, the PDRD-hinge convention). These are **resolved dynamically from the simulated geometry at the keyframe time**, not frozen at frame 1: a PDRD gear that has already rotated, or a deformed solid/shell, spins about its current principal axis.
+- **World X / World Y / World Z**: fixed world-space axes.
+- **Custom Axis**: a user-entered world-space vector (a **Custom Axis** field appears below the dropdown; it is normalized before use).
+
+World and Custom axes are fixed directions and do not track the body. When **Enable Angular** is checked, a rigid spin `ω × (x − c)` about the chosen axis is applied; when **Enable Translational** is also checked, the body's velocity is overwritten to `direction · speed` plus that spin. For a PDRD body the field is exactly rigid; on a hinged PDRD body only the component admissible by the hinge axle is kept, so picking a different axis than the hinge spins it only partially. The viewport preview (eye icon) draws a rotation arc along the chosen axis when the playhead is on the keyframe's frame.
+
 ### Solid-specific
 
 | UI label                   | Python / TOML key     | Default              | Description                                               |
 | -------------------------- | --------------------- | -------------------- | --------------------------------------------------------- |
 | **Model**                  | `solid_model`         | `ARAP`               | Material model. Either `STABLE_NEOHOOKEAN` or `ARAP`.     |
-| **Density (kg/m³)**        | `solid_density`       | 1000.0               | Volumetric density, kg/m³.                                |
-| **Young's Modulus (Pa/ρ)** | `solid_young_modulus` | 500.0                | Young's modulus (see note below). Range 0 – 10 M.         |
+| **Density (kg/m³)**        | `solid_density`       | 100.0                | Volumetric density, kg/m³.                                |
+| **Young's Modulus (Pa/ρ)** | `solid_young_modulus` | 500.0                | Young's modulus (see note below). Range 0.01 – 1 G (soft cap 10 M). |
 | **Poisson's Ratio**        | `solid_poisson_ratio` | 0.35                 | Poisson ratio, 0 – 0.4999.                                |
 | **Shrink**                 | `shrink`              | 1.0                  | Uniform rest-shape scale (min 0.1).                       |
 
@@ -403,9 +501,18 @@ Example values:
 
 Solid groups expose a single Shrink row in the Material Params box (Shell groups instead get anisotropic Shrink X / Shrink Y).
 
-#### fTetWild overrides
+#### Tetrahedralizer (per object)
 
-**Solid** groups only. The bottom of the Material Params box on a **Solid** group has an **fTetWild** disclosure row; expanding it reveals six per-group overrides for the tetrahedralizer the add-on runs on the input surface before sending the mesh to the solver. Each row has an **Override** checkbox on the left and the value on the right; the value is only forwarded to fTetWild when its checkbox is on. With all overrides off, the tetrahedralizer runs at its own defaults.
+**Solid** groups only. The bottom of the Material Params box on a **Solid** group has a **Tetrahedralizer** box. Like Velocity Overwrite, it is per object: an **Object** dropdown on the header picks which assigned mesh to edit, then a backend dropdown selects the tetrahedralizer for that mesh, followed by that backend's per-field overrides. The settings live on the assigned object, so each mesh in the group can choose its own backend and overrides.
+
+Two backends are available:
+
+- **fTetWild** (default): a tolerant remesher. It handles open, cracked, or near-duplicate input, but it resamples the surface, so the original Blender vertices are reconstructed through a surface map rather than preserved.
+- **TetGen**: preserves the input surface exactly. Every input vertex maps 1-1 to a tet-surface vertex (the add-on asserts this), so the simulated surface has the same vertices and triangles as the Blender mesh. It requires a clean, closed, manifold input; open, coplanar, or non-manifold meshes are rejected (assign those to a SHELL group or use fTetWild).
+
+Each override row has an **Override** checkbox on the left and the value on the right; the value is only forwarded when its checkbox is on. With all overrides off, the chosen backend runs at its own defaults.
+
+fTetWild overrides:
 
 | UI label               | Python / TOML key         | Default   | Description                                                          |
 | ---------------------- | ------------------------- | --------- | -------------------------------------------------------------------- |
@@ -417,9 +524,31 @@ Solid groups expose a single Shrink row in the Material Params box (Shell groups
 | **Simplify Input**     | `ftetwild_simplify`       | `True`    | Simplify the input surface before tetrahedralization.                |
 | **Coarsen Output**     | `ftetwild_coarsen`        | `False`   | Coarsen output while preserving quality.                             |
 
-Each value has a matching `ftetwild_override_<field>` boolean that gates whether the override is sent. Leave the box collapsed and untouched to get the tetrahedralizer's out-of-box behavior; reach for these only when a solid is meshing too coarsely, missing features, or taking too long to tetrahedralize.
+TetGen overrides (the surface is always preserved; these only tune the interior):
 
-The fTetWild box expanded at the bottom of a Solid group's Material Params. The left column is the per-field Override checkbox; with it off, the row is grayed and the tetrahedralizer's own default is used. In this example Edge Length Factor and Optimize are overridden; the rest stay at defaults.
+| UI label                  | Python / TOML key     | Default | Description                                                                |
+| ------------------------- | --------------------- | ------- | -------------------------------------------------------------------------- |
+| **Min Radius-Edge Ratio** | `tetgen_min_ratio`    | 2.0     | TetGen quality bound (`-q`); smaller forces rounder cells via more interior Steiner points. |
+| **Max Tet Volume**        | `tetgen_max_volume`   | 0.0     | TetGen max tetrahedron volume (`-a`) in object units; caps interior cell size. 0 leaves it uncapped. |
+
+Each value has a matching `<backend>_override_<field>` boolean that gates whether the override is sent. Leave the overrides untouched to get the backend's out-of-box behavior; reach for them only when a solid is meshing too coarsely, missing features, or taking too long to tetrahedralize.
+
+### PDRD-specific
+
+**PDRD** (Painless Differentiable Rotation Dynamics) is an exactly-rigid group type: each body moves as a single best-fit rigid transform (translation + rotation) over its surface mesh, with no per-element elasticity and no tetrahedralization. It exposes only density (plus the shared friction and contact rows); Young's modulus, Poisson ratio, bend, shrink, strain limit, inflate, and Rayleigh damping do not apply.
+
+| UI label                   | Python / TOML key  | Default  | Description                                                          |
+| -------------------------- | ------------------ | -------- | ------------------------------------------------------------------- |
+| **Density (kg/m³)**        | `pdrd_density`      | 100.0    | Volumetric density, kg/m³. Mass is density times the enclosed volume of the surface mesh. Range 0.01 – 10 000. |
+
+The **Hinge** joint is **per object**, not a group material: one PDRD group can hold several bodies (a gear train), each pinned on its own axle. In the PDRD group panel, the "Hinge" box has an object pulldown (like Velocity Overwrite) to focus one assigned body, then edits that body's hinge:
+
+| Per-object control | Python key (on the assigned object) | Default | Description                                                          |
+| ------------------ | ----------------------------------- | ------- | ------------------------------------------------------------------- |
+| **Hinge**          | `pdrd_hinge_enable`                  | False   | Pin this body and lock its rotation to a single principal axis (a hinge / pin joint). Build gears by hinging each gear to its axle and letting tooth contact transmit the torque. |
+| **Axle**           | `pdrd_hinge_axis`                    | `"2"`   | Which principal (PCA) axis of the rest shape is the free hinge axle, like the torque-axis dropdown: `"0"` = largest extent, `"1"` = middle, `"2"` = thinnest (the usual axle for a flat gear or disk). |
+
+From scripting / MCP, set the per-object hinge with `Group.set_hinge(object_name, pca_axis=2)` (the `set_pdrd_hinge` MCP tool), not with the group material API. When a body's **Hinge** is enabled the viewport draws a cyan ring around the chosen axle through that body's centroid (the same gizmo idiom as the static-object torque axis). At simulation time the body's reduced rigid degrees of freedom are filtered so translation is locked and rotation is restricted to that axle; contact still transmits torque between hinged bodies, so meshing gears counter-rotate without any explicit gear-ratio constraint.
 
 ### Rod-specific
 
@@ -429,9 +558,32 @@ The fTetWild box expanded at the bottom of a Solid group's Material Params. The 
 | **Density (kg/m)**         | `rod_density`       | 1.0       | Line density, kg/m.                               |
 | **Young's Modulus (Pa/ρ)** | `rod_young_modulus` | 10000.0   | Young's modulus (see note below).                 |
 
-**Rod** groups expose the same **Bend Stiffness** field as **Shell**; it writes into the single `bend` property on the group, so both types read and serialize it identically.
+**Rod** groups expose the same **Bend Stiffness** field as **Shell**; it writes into the single `bend` property on the group, so both types read and serialize it identically. The **Rest Angle** dropdown and the **From Reference Geometry** per-object reference rest angle (see Reference rest angle (per object) under Shell-specific) also apply to rods: a reference sets the rod's interior-vertex rest bend angles. For a mesh rod the reference is a modifier-evaluated mesh copy (matching vertex count + edges); for a curve rod it is a curve with the same spline structure, sampled at the control-point level.
 
-NOTE: Young's modulus behaves non-conventionally. The solver divides the entered Young's modulus by density internally. The practical effect is that animated behavior is invariant to density alone: doubling density without touching Young's modulus produces the same motion (the mass doubles, but the effective stiffness scales with it). This decouples "how heavy the material is" from "how stiff it looks", so you can tune stiffness and mass independently. The shipped material profiles (`Cotton`, `Silk`, `Steel`, ...) are tuned to physically meaningful values with that normalization in mind.
+NOTE: Young's modulus behaves non-conventionally. The solver divides the entered Young's modulus by density internally. The practical effect is that animated behavior is invariant to density alone: doubling density without touching Young's modulus produces the same motion (the mass doubles, but the effective stiffness scales with it). This decouples "how heavy the material is" from "how stiff it looks", so you can tune stiffness and mass independently. The bundled material presets (`Cotton`, `Silk`, `Rubber`, ...) are set to physically meaningful values with that normalization in mind (see Material presets above).
+
+#### Density-normalized vs true pascals
+
+| UI label                          | Python / TOML key               | Default | Description                                                              |
+| --------------------------------- | ------------------------------- | ------- | ------------------------------------------------------------------------ |
+| **Density-Normalized (Pa/ρ)**     | `young_mod_density_normalized`  | `True`  | What the Young's Modulus field above means: density-normalized or true pascals. |
+
+`young_mod_density_normalized` controls how the Young's Modulus field is interpreted, and it relabels that field to match (**Solid**, **Shell**, **Rod**; not relevant to **PDRD** or **Static**).
+
+- `True` (default): the entered value is a **density-normalized** modulus in `Pa/ρ`, the solver's native convention. It is sent unchanged, so changing a body's density alone leaves its motion unchanged. Keep it on to match existing scenes. The field reads `Young's Modulus (Pa/ρ)`.
+- `False`: the entered value is a **true Young's modulus in pascals** (for example a value from a material reference table). The add-on divides it by this group's density before sending, so a denser body of the same material is correspondingly stiffer to move. The field label flips to plain `Young's Modulus (Pa)`.
+
+### SAND-specific
+
+**SAND** is a granular group type: a faceless mesh of loose vertices simulated as individual grains. It exposes only the three grain parameters below plus the shared friction and contact rows; Young's modulus, Poisson ratio, bend, shrink, strain limit, inflate, and Rayleigh damping do not apply.
+
+| UI label              | Python / TOML key     | Default | Description                                                                 |
+| --------------------- | --------------------- | ------- | --------------------------------------------------------------------------- |
+| **Grain Radius (m)**  | `sand_grain_radius`   | 0.02    | Per-grain radius, in Blender units. Locked in at convert time, so the field is read-only once the group has been converted. |
+| **Particle Mass (g)** | `sand_particle_mass`  | 1.0     | Mass of a single grain, in grams (sent to the solver in kilograms).         |
+| **Friction**          | `sand_friction`       | 0.0     | Inter-grain friction coefficient of the granular body.                      |
+
+The grain radius doubles as the contact offset (the grain's physical skin); the contact gap is the extra barrier-activation distance on top.
 
 ### Contact gap and contact offset
 
@@ -457,7 +609,7 @@ Both pairs (**Contact Gap** / **Contact Gap Ratio** and **Contact Offset** / **C
 
 ### Material profiles
 
-A **material profile** is a named set of material parameters saved to a TOML file. The add-on ships an example material profile with the following presets:
+A **material profile** is a named set of material parameters saved to a TOML file with the **Save** icon. A single file can hold any number of presets; profiles like these are easy to build:
 
 | Preset   | Type       | Notes                                                               |
 | -------- | ---------- | ------------------------------------------------------------------- |
@@ -493,7 +645,7 @@ object_type = "SHELL"
 solid_model = "ARAP"
 shell_model = "BARAFF_WITKIN"
 rod_model = "ARAP"
-solid_density = 1000.0
+solid_density = 100.0
 shell_density = 0.8
 rod_density = 1.0
 solid_young_modulus = 500.0
@@ -510,11 +662,11 @@ contact_offset_rat = 0.0
 bend = 2.0
 shrink = 1.0
 enable_strain_limit = true
-strain_limit = 0.05
+strain_limit_percent = 5.0
 stitch_stiffness = 1.0
 ```
 
-Only the keys you include are applied; missing keys keep their current value on the group. You don't have to list every field for a preset to be valid. See `Silk` or `Static` in the shipped file for minimal examples.
+Only the keys you include are applied; missing keys keep their current value on the group. You don't have to list every field for a preset to be valid — a `Static` collider preset, for instance, can carry just a `friction` value.
 
 ### Blender Python API
 

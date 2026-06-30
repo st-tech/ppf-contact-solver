@@ -15,6 +15,13 @@ from PIL import Image
 
 from . import _rust  # type: ignore[attr-defined]
 
+# Single source of truth for the renderer's default image dimensions.
+# Both SoftwareRenderer and the CLI argparse defaults reference these, and
+# the Rust render_default_args table (crates/ppf-cts-py/src/render_py.rs)
+# must agree with them so the software and Mitsuba paths cannot diverge.
+DEFAULT_WIDTH = 640
+DEFAULT_HEIGHT = 480
+
 
 class SoftwareRenderer:
     """Software rasterizer for headless mesh rendering.
@@ -28,12 +35,13 @@ class SoftwareRenderer:
 
         Args:
             args (Optional[dict]): Optional configuration. Recognized keys are
-                ``width`` (default 640) and ``height`` (default 480).
+                ``width`` (default :data:`DEFAULT_WIDTH`) and ``height``
+                (default :data:`DEFAULT_HEIGHT`).
         """
         if args is None:
             args = {}
-        self._width = args.get("width", 640)
-        self._height = args.get("height", 480)
+        self._width = args.get("width", DEFAULT_WIDTH)
+        self._height = args.get("height", DEFAULT_HEIGHT)
         self._light_dir = np.array(
             _rust.normalize_light_dir(np.array([0.3, 0.5, 0.8], dtype=np.float32)),
             dtype=np.float32,

@@ -11,15 +11,50 @@
 Pure stdlib. No Blender dependency — runs on any host Python.
 """
 
+import importlib.util
 import json
+import os
 import socket
 import sys
 import urllib.error
 import urllib.request
 
 
-DEBUG_PORT = 8765
-DEFAULT_MCP_PORT = 9633
+def _load_port_defaults():
+    """Resolve the canonical port constants from the addon's
+    ``models/defaults.py`` by file path, so this standalone debug client
+    stays the single source of truth alongside the addon package.
+
+    The debug CLIs run with only ``debug/`` on ``sys.path`` and the addon
+    is installed under a mangled package name, so a normal import of
+    ``models.defaults`` is not available here. ``models/defaults.py`` has
+    no imports, so loading it by path is safe and pulls in no Blender
+    dependency. If the file cannot be found (debug client run detached
+    from the addon tree), fall back to the known literals below.
+    """
+    fallback = {"DEFAULT_MCP_PORT": 9633, "DEFAULT_RELOAD_PORT": 8765}
+    path = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        os.pardir, "models", "defaults.py",
+    )
+    try:
+        spec = importlib.util.spec_from_file_location("_ppf_cts_defaults", path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return {
+            "DEFAULT_MCP_PORT": module.DEFAULT_MCP_PORT,
+            "DEFAULT_RELOAD_PORT": module.DEFAULT_RELOAD_PORT,
+        }
+    except (OSError, AttributeError, ImportError, SyntaxError):
+        return fallback
+
+
+_PORT_DEFAULTS = _load_port_defaults()
+
+# The debug/reload port. Same value as ``DEFAULT_RELOAD_PORT`` in
+# models/defaults.py (the canonical source of truth).
+DEBUG_PORT = _PORT_DEFAULTS["DEFAULT_RELOAD_PORT"]
+DEFAULT_MCP_PORT = _PORT_DEFAULTS["DEFAULT_MCP_PORT"]
 HOST = "localhost"
 
 MCP_PROTOCOL_VERSION = "2025-06-18"

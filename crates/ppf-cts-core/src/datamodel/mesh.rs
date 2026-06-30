@@ -61,6 +61,20 @@ pub fn bbox(verts: &Array2<f64>) -> Array2<f64> {
     out
 }
 
+/// Per-axis extent (max - min) of a `(2, 3)` bounding box.
+fn bbox_extent(bb: &Array2<f64>) -> [f64; 3] {
+    [
+        bb[[1, 0]] - bb[[0, 0]],
+        bb[[1, 1]] - bb[[0, 1]],
+        bb[[1, 2]] - bb[[0, 2]],
+    ]
+}
+
+/// Largest component of a per-axis extent.
+fn max3(extent: [f64; 3]) -> f64 {
+    extent[0].max(extent[1]).max(extent[2])
+}
+
 /// Center the mesh on the origin and scale uniformly so the longest
 /// axis fits inside `[-0.5, 0.5]`.
 pub fn normalize(verts: &mut Array2<f64>) {
@@ -73,12 +87,8 @@ pub fn normalize(verts: &mut Array2<f64>) {
         0.5 * (bb[[0, 1]] + bb[[1, 1]]),
         0.5 * (bb[[0, 2]] + bb[[1, 2]]),
     ];
-    let extent = [
-        bb[[1, 0]] - bb[[0, 0]],
-        bb[[1, 1]] - bb[[0, 1]],
-        bb[[1, 2]] - bb[[0, 2]],
-    ];
-    let max_extent = extent[0].max(extent[1]).max(extent[2]);
+    let extent = bbox_extent(&bb);
+    let max_extent = max3(extent);
     let scale = if max_extent > 0.0 { 1.0 / max_extent } else { 1.0 };
     for mut row in verts.rows_mut() {
         row[0] = (row[0] - center[0]) * scale;
@@ -104,14 +114,10 @@ pub fn scale_to(verts: &mut Array2<f64>, target: f64, axis: ScaleAxis) {
         return;
     }
     let bb = bbox(verts);
-    let extent = [
-        bb[[1, 0]] - bb[[0, 0]],
-        bb[[1, 1]] - bb[[0, 1]],
-        bb[[1, 2]] - bb[[0, 2]],
-    ];
+    let extent = bbox_extent(&bb);
     let scale = match axis {
         ScaleAxis::Max => {
-            let m = extent[0].max(extent[1]).max(extent[2]);
+            let m = max3(extent);
             if m > 0.0 {
                 target / m
             } else {
@@ -596,11 +602,14 @@ pub fn tri_edge_loop(n: usize) -> Array2<u32> {
 }
 
 /// Resolve the cylinder generator parameters: `dx = (max_x - min_x) / n`,
-/// `ny = int(2 * pi * r / dx)`, `dy = 2 * pi / ny`.
+/// `ny = max(int(2 * pi * r / dx), 3)`, `dy = 2 * pi / ny`.
 pub fn cylinder_dx_ny_dy(min_x: f64, max_x: f64, n: usize, r: f64) -> (f64, usize, f64) {
     let dx = (max_x - min_x) / (n as f64);
     let ny_f = 2.0 * std::f64::consts::PI * r / dx;
-    let ny = ny_f as usize;
+    // Clamp to a minimal valid 3-sided prism so tiny-radius / coarse-n inputs
+    // (where 2*pi*r < dx truncates ny to 0) don't yield a degenerate mesh or a
+    // non-finite dy = 2*pi / 0.
+    let ny = (ny_f as usize).max(3);
     let dy = 2.0 * std::f64::consts::PI / (ny as f64);
     (dx, ny, dy)
 }
@@ -784,6 +793,23 @@ pub fn polygon_area_2d(pts: &Array2<f64>) -> f64 {
     0.5 * s.abs()
 }
 
+/// Unsigned volume of the tetrahedron `(v0, v1, v2, v3)`:
+/// `|cross(e0, e1) . e2| / 6` with `e0 = v1 - v0`, `e1 = v2 - v0`,
+/// `e2 = v3 - v0`. The `abs()` discards orientation, so this is the
+/// magnitude only. `triutils::tet_volume` in `ppf-cts-solver` mirrors
+/// this kernel (f32 nalgebra path); the `/ 6.0` divisor and the
+/// `abs()` convention must stay in sync between the two.
+pub fn tet_volume_abs(v0: [f64; 3], v1: [f64; 3], v2: [f64; 3], v3: [f64; 3]) -> f64 {
+    let e0 = [v1[0] - v0[0], v1[1] - v0[1], v1[2] - v0[2]];
+    let e1 = [v2[0] - v0[0], v2[1] - v0[1], v2[2] - v0[2]];
+    let e2 = [v3[0] - v0[0], v3[1] - v0[1], v3[2] - v0[2]];
+    // cross(e0, e1) . e2 / 6
+    let cx = e0[1] * e1[2] - e0[2] * e1[1];
+    let cy = e0[2] * e1[0] - e0[0] * e1[2];
+    let cz = e0[0] * e1[1] - e0[1] * e1[0];
+    (cx * e2[0] + cy * e2[1] + cz * e2[2]).abs() / 6.0
+}
+
 /// Output of [`tet_extract_surface`]. Vertex layout is reindexed to
 /// the unique set referenced by `tet` and `tri`.
 #[derive(Debug, Clone)]
@@ -825,14 +851,7 @@ pub fn tet_extract_surface(
         let v1 = [verts[[i1, 0]], verts[[i1, 1]], verts[[i1, 2]]];
         let v2 = [verts[[i2, 0]], verts[[i2, 1]], verts[[i2, 2]]];
         let v3 = [verts[[i3, 0]], verts[[i3, 1]], verts[[i3, 2]]];
-        let e0 = [v1[0] - v0[0], v1[1] - v0[1], v1[2] - v0[2]];
-        let e1 = [v2[0] - v0[0], v2[1] - v0[1], v2[2] - v0[2]];
-        let e2 = [v3[0] - v0[0], v3[1] - v0[1], v3[2] - v0[2]];
-        // cross(e0, e1) . e2 / 6
-        let cx = e0[1] * e1[2] - e0[2] * e1[1];
-        let cy = e0[2] * e1[0] - e0[0] * e1[2];
-        let cz = e0[0] * e1[1] - e0[1] * e1[0];
-        let vol = (cx * e2[0] + cy * e2[1] + cz * e2[2]).abs() / 6.0;
+        let vol = tet_volume_abs(v0, v1, v2, v3);
         if vol >= min_volume {
             kept_tets.push([
                 tet[[k, 0]],

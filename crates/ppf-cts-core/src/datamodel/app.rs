@@ -47,10 +47,15 @@ pub const RECOVERABLE_FIXED_SESSION_NAME: &str = "fixed_session.pickle";
 pub struct RecoverablePath {
     /// Absolute path to the `fixed_session.pickle` file on disk.
     pub pickle_path: PathBuf,
-    /// True iff the resolution went through the symlink (or its
-    /// Windows `.txt` twin), False if the fallback `{data_dir}/{name}/
-    /// session` directory was used. Pure diagnostic; the Python caller
-    /// uses different error messages for each branch.
+    /// True iff the resolution went through the named location, i.e. the
+    /// symlink (or its Windows `.txt` twin, which is a path-bearing text
+    /// file rather than an actual symlink), False if the fallback
+    /// `{data_dir}/{name}/session` directory was used. Pure diagnostic,
+    /// read only by the `#[cfg(test)]` assertions below; the PyO3 wrapper
+    /// `recover_session_path` returns only `pickle_path` and never
+    /// surfaces this flag to Python. Branch error differentiation is done
+    /// by the `AppPathError` variants (`NamedLocationMissing` vs
+    /// `NoSessionWithName`), not by this flag.
     pub via_symlink: bool,
 }
 
@@ -120,6 +125,9 @@ pub fn compose_data_dir(base_dir: &Path, home_dir: Option<&Path>, branch: &str) 
             .join("ppf-cts")
             .join(segment)
     } else {
+        // The `/tmp` fallback is a test-only hermetic default; production
+        // bindings always pass a resolved home (HOME, or the pwd entry) and
+        // must never reach it.
         let home = home_dir
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("/tmp"));
@@ -134,6 +142,9 @@ pub fn default_cache_dir(base_dir: &Path, home_dir: Option<&Path>) -> PathBuf {
     if cfg!(target_os = "windows") {
         base_dir.join("cache").join("ppf-cts")
     } else {
+        // The `/tmp` fallback is a test-only hermetic default; production
+        // bindings always pass a resolved home (HOME, or the pwd entry) and
+        // must never reach it.
         let home = home_dir
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("/tmp"));
@@ -181,20 +192,40 @@ pub fn recover_session_path(name: &str, data_dir: &Path) -> Result<RecoverablePa
     let symlink_path = data_dir.join("symlinks").join(name);
     let mut session_dir: Option<PathBuf> = None;
 
-    // 1. Symlink (POSIX). `read_link` follows the link target verbatim.
+    // 1. Symlink (POSIX). `read_link` returns the raw target; a relative
+    // target is resolved against the symlink's own directory, matching how
+    // the OS resolves the link itself.
     if let Ok(meta) = fs::symlink_metadata(&symlink_path) {
         if meta.file_type().is_symlink() {
             if let Ok(target) = fs::read_link(&symlink_path) {
-                session_dir = Some(target);
+                let resolved = if target.is_relative() {
+                    symlink_path
+                        .parent()
+                        .map(|p| p.join(&target))
+                        .unwrap_or(target)
+                } else {
+                    target
+                };
+                session_dir = Some(resolved);
             }
         }
     }
 
-    // 2. `.txt` fallback (Windows).
+    // 2. `.txt` fallback (Windows). A relative path is resolved against the
+    // `.txt` file's own directory, mirroring the symlink branch above.
     if session_dir.is_none() {
         let txt_path = symlink_path.with_extension("txt");
         if let Ok(raw) = fs::read_to_string(&txt_path) {
-            session_dir = Some(PathBuf::from(raw.trim().to_string()));
+            let target = PathBuf::from(raw.trim().to_string());
+            let resolved = if target.is_relative() {
+                txt_path
+                    .parent()
+                    .map(|p| p.join(&target))
+                    .unwrap_or(target)
+            } else {
+                target
+            };
+            session_dir = Some(resolved);
         }
     }
 

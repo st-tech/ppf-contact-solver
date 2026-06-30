@@ -3,13 +3,15 @@
 // Review: Ryoichi Ando (ryoichi.ando@zozo.com)
 // License: Apache v2.0
 
-use super::builder::{convert_prop, make_collision_mesh};
+use super::builder::{convert_prop, dedup_param, make_collision_mesh, SandParams};
 use super::data::*;
 use super::{CVec, MeshSet, ParamSet, ProgramArgs, Props, SimArgs, SimMesh};
 use bytemuck::{cast_slice, Pod};
-use log::warn;
+use log::{error, warn};
 use more_asserts::*;
-use na::{Const, Matrix, Matrix2x3, Matrix2xX, Matrix3xX, Matrix4xX, VecStorage, Vector3};
+use na::{
+    Const, Matrix, Matrix2x3, Matrix2xX, Matrix3xX, Matrix4xX, Matrix6xX, VecStorage, Vector3,
+};
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::fs::{self, File};
@@ -36,6 +38,16 @@ impl CollisionWindowTable {
     }
 }
 
+/// A streamed time-varying rest shape: per-keyframe full rest-vertex sets
+/// (each `n_vert` columns, same coordinate space as the static `rest_vert`)
+/// and their keyframe times in seconds. Built frontend-side by blending the
+/// captured pull-pin deformation into the original rest pose per vertex; the
+/// solver recomputes `inv_rest` from each frame and interpolates between them.
+struct RestVertSchedule {
+    times: Vec<f64>,
+    frames: Vec<Matrix3xX<f32>>,
+}
+
 pub struct Scene {
     args: SimArgs,
     dyn_args: DynParamTable,
@@ -50,23 +62,86 @@ pub struct Scene {
     static_vert_dmap: Vec<u32>,
     static_vert: Matrix3xX<f32>,
     static_tri: Matrix3xX<usize>,
-    stitch_ind: Matrix4xX<usize>,
-    stitch_w: Matrix4xX<f32>,
+    stitch_ind: Matrix6xX<usize>,
+    stitch_w: Matrix6xX<f32>,
+    stitch_stiffness: Vec<f32>,
     pin: Vec<Pin>,
     wall: Vec<InvisibleWall>,
     sphere: Vec<InvisibleSphere>,
     rest_vert: Option<Matrix3xX<f32>>,
     rest_vert_mask: Vec<bool>,
+    rest_vert_schedule: Option<RestVertSchedule>,
+    /// Per-object bending reference rest shape: full per-vertex positions
+    /// (unmasked entries equal the initial vert) used to compute hinge rest
+    /// angles for objects that opted into a reference rest angle. `None` when
+    /// no object in the scene uses one.
+    bend_rest_vert: Option<Matrix3xX<f32>>,
+    /// Per-vertex mask marking which vertices belong to an object with a
+    /// reference rest angle. Empty when `bend_rest_vert` is `None`.
+    bend_rest_vert_mask: Vec<bool>,
     shell_count: usize,
     rod_param: Vec<(String, ParamValueList)>,
     tri_param: Vec<(String, ParamValueList)>,
     tet_param: Vec<(String, ParamValueList)>,
     static_param: Vec<(String, ParamValueList)>,
+    /// Granular (SAND) scalar material params, one entry per `sand-*.bin`
+    /// param file (each a single float, len 1). A faceless particle cloud
+    /// has no elements, so these carry the grain mass / contact-offset /
+    /// contact-gap / friction outside the per-element assert. Empty when the
+    /// scene has no SAND object.
+    sand_param: Vec<(String, ParamValueList)>,
+    /// One row per PDRD body, packed as f32: vertex_start, vertex_count,
+    /// volume, centroid (3), rest_gram_inv (9), mass_per_vertex. 16
+    /// floats per row. Written by the Python frontend.
+    pdrd_body_rows: Vec<f32>,
+    /// Per-vertex 1-based PDRD body id (0 = not in an PDRD body), one
+    /// u32 per global vertex.
+    pdrd_vert_index: Vec<u32>,
+    /// Flat list of global vertex indices participating in PDRD
+    /// bodies, body-major. Body slices are contiguous in this list
+    /// per `PdrdBodyProp.vertex_start/vertex_count`.
+    pdrd_vert_list: Vec<u32>,
+    /// Centered rest position per entry of `pdrd_vert_list`, packed
+    /// (x, y, z). Length 3 * pdrd_vert_list.len().
+    pdrd_rest_centered: Vec<f32>,
 }
 
 enum ParamValueList {
     Model(Vec<Model>),
     Value(Vec<f32>),
+}
+
+// Extract the i-th scalar from a value list, panicking with the offending
+// key in the message when the list is the wrong variant. `key` is the literal
+// parameter key (e.g. "young-mod") so a panic maps straight back to the
+// param file.
+fn as_value(value: &ParamValueList, i: usize, key: &str) -> f32 {
+    match value {
+        ParamValueList::Value(v) => v[i],
+        _ => panic!("Expected parameter '{key}' to be a value list"),
+    }
+}
+
+// Extract the i-th model from a name list, panicking with the offending key
+// in the message when the list is the wrong variant.
+fn as_model(value: &ParamValueList, i: usize, key: &str) -> Model {
+    match value {
+        ParamValueList::Model(v) => v[i],
+        _ => panic!("Expected parameter '{key}' to be a name list"),
+    }
+}
+
+// Apply per-vertex instancing displacement in place: each column of `base`
+// gains `displacement[dmap[i]]`. Shared by the dynamic and static vertex
+// paths so they cannot drift in their displacement indexing.
+fn apply_displacement(
+    base: &mut Matrix3xX<f32>,
+    displacement: &Matrix3xX<f32>,
+    dmap: &[u32],
+) {
+    for (i, mut x) in base.column_iter_mut().enumerate() {
+        x += displacement.column(dmap[i] as usize);
+    }
 }
 
 enum PinOperation {
@@ -131,6 +206,11 @@ struct Pin {
     operations: Vec<PinOperation>,
     unpin_time: Option<f64>,
     pull_w: f32,
+    /// Optional per-vertex pull weight (aligned to `index`). When present,
+    /// overrides the scalar `pull_w` per vertex, so a single holder can
+    /// pull different vertices with different (graceful, diffused)
+    /// strengths. Absent for hard pins and scalar pull pins.
+    pull_weights: Option<Vec<f32>>,
     /// Per-pin scale on the moving (kinematic) constraint force.
     /// 1.0 leaves it unchanged; applied only when the pin is kinematic.
     stiffness: f32,
@@ -240,63 +320,6 @@ where
     Ok(cast_slice(&buff).to_vec())
 }
 
-/// Spherical linear interpolation of quaternions in (w,x,y,z) order.
-fn quat_slerp(q0: [f64; 4], q1: [f64; 4], t: f64) -> [f64; 4] {
-    let mut dot = q0[0] * q1[0] + q0[1] * q1[1] + q0[2] * q1[2] + q0[3] * q1[3];
-    let mut q1 = q1;
-    if dot < 0.0 {
-        q1 = [-q1[0], -q1[1], -q1[2], -q1[3]];
-        dot = -dot;
-    }
-    if dot > 0.9995 {
-        let r = [
-            q0[0] + t * (q1[0] - q0[0]),
-            q0[1] + t * (q1[1] - q0[1]),
-            q0[2] + t * (q1[2] - q0[2]),
-            q0[3] + t * (q1[3] - q0[3]),
-        ];
-        let n = (r[0] * r[0] + r[1] * r[1] + r[2] * r[2] + r[3] * r[3]).sqrt();
-        return [r[0] / n, r[1] / n, r[2] / n, r[3] / n];
-    }
-    let theta = dot.clamp(-1.0, 1.0).acos();
-    let sin_theta = theta.sin();
-    let a = ((1.0 - t) * theta).sin() / sin_theta;
-    let b = (t * theta).sin() / sin_theta;
-    [
-        a * q0[0] + b * q1[0],
-        a * q0[1] + b * q1[1],
-        a * q0[2] + b * q1[2],
-        a * q0[3] + b * q1[3],
-    ]
-}
-
-/// Cubic Bezier easing: given normalized t in [0,1] and normalized
-/// control-point handles (hr_x, hr_y, hl_x, hl_y), solve B_x(u) = t via
-/// Newton and return B_y(u).
-fn bezier_progress(t: f64, h: [f64; 4]) -> f64 {
-    let (p1x, p1y, p2x, p2y) = (h[0], h[1], h[2], h[3]);
-    let mut u = t;
-    for _ in 0..8 {
-        let omu = 1.0 - u;
-        let omu2 = omu * omu;
-        let u2 = u * u;
-        let u3 = u2 * u;
-        let bx = 3.0 * omu2 * u * p1x + 3.0 * omu * u2 * p2x + u3;
-        let dbx =
-            3.0 * omu2 * p1x + 6.0 * omu * u * (p2x - p1x) + 3.0 * u2 * (1.0 - p2x);
-        if dbx.abs() < 1e-10 {
-            break;
-        }
-        u -= (bx - t) / dbx;
-        u = u.clamp(0.0, 1.0);
-    }
-    let omu = 1.0 - u;
-    let omu2 = omu * omu;
-    let u2 = u * u;
-    let u3 = u2 * u;
-    (3.0 * omu2 * u * p1y + 3.0 * omu * u2 * p2y + u3).clamp(0.0, 1.0)
-}
-
 fn read_dyn_param(path: &str) -> io::Result<DynParamTable> {
     let mut result = Vec::new();
     let mut curr_entry_name = String::new();
@@ -315,15 +338,25 @@ fn read_dyn_param(path: &str) -> io::Result<DynParamTable> {
             curr_entry_name = line[1..line.len() - 1].to_string();
         } else if !line.is_empty() {
             let parts: Vec<&str> = line.split_whitespace().collect();
-            let time: f64 = parts[0].parse().expect("Failed to parse time");
+            let parse_f64 = |field: &str, token: &str| -> io::Result<f64> {
+                token.parse::<f64>().map_err(|e| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!("{path}: bad {field} in line '{line}': {e}"),
+                    )
+                })
+            };
+            let time = parse_f64("time", parts[0])?;
             if parts.len() == 4 {
-                let x: f64 = parts[1].parse().expect("Failed to parse x");
-                let y: f64 = parts[2].parse().expect("Failed to parse y");
-                let z: f64 = parts[3].parse().expect("Failed to parse z");
+                let x = parse_f64("x", parts[1])?;
+                let y = parse_f64("y", parts[2])?;
+                let z = parse_f64("z", parts[3])?;
                 curr_entry.push((time, DynParamValue::Vec3([x, y, z])));
             } else if parts.len() == 2 {
-                let value: f64 = parts[1].parse().expect("Failed to parse value");
+                let value = parse_f64("value", parts[1])?;
                 curr_entry.push((time, DynParamValue::Scalar(value)));
+            } else {
+                warn!("{path}: skipping line with {} tokens: '{line}'", parts.len());
             }
         }
     }
@@ -396,11 +429,6 @@ impl Scene {
         let n_wall = read_usize(count, "wall");
         let n_sphere = read_usize(count, "sphere");
         let n_stitch = read_usize(count, "stitch");
-        let _rod_vert_start = read_usize(count, "rod_vert_start");
-        let _rod_vert_end = read_usize(count, "rod_vert_end");
-        let _shell_vert_start = read_usize(count, "shell_vert_start");
-        let _shell_vert_end = read_usize(count, "shell_vert_end");
-        let _rod_count = read_usize(count, "rod_count");
         let shell_count = read_usize(count, "shell_count");
 
         let displacement_path = format!("{}/bin/displacement.bin", args.path);
@@ -416,33 +444,122 @@ impl Scene {
         let static_tri_path = format!("{}/bin/static_tri.bin", args.path);
         let stitch_ind_path = format!("{}/bin/stitch_ind.bin", args.path);
         let stitch_w_path = format!("{}/bin/stitch_w.bin", args.path);
+        let stitch_stiffness_path = format!("{}/bin/stitch_stiffness.bin", args.path);
+
+        // Uniform world scaling: every input geometric position/length is scaled
+        // by `ws` on ingest (and the per-frame output is divided back by it in
+        // backend.rs). Applied to the f64 value before the f32 cast so no
+        // precision is lost. `ws == 1.0` (the default) is a no-op. All the
+        // `.map(|x| (x as f64 * ws) as f32)` reads below are world-space positions,
+        // centers, or deltas; the velocity, keyframe translations, rest offset, and
+        // sphere radius are scaled explicitly. Directions, rotations, indices,
+        // weights, UVs, and physical params (gravity, absolute gaps) are NOT scaled.
+        // `args` is ProgramArgs (no sim params), so read world_scaling from
+        // param.toml now (the full Config loads again at its original site below;
+        // param.toml is tiny, so the extra parse is negligible).
+        let ws = {
+            let p = format!("{}/param.toml", args.path);
+            let c: Config = toml::from_str(
+                &fs::read_to_string(&p).expect("Failed to read param.toml"),
+            )
+            .expect("Failed to parse param.toml");
+            c.param.world_scaling as f64
+        };
+        // ws must be strictly positive: 0 collapses the scene to the origin and a
+        // negative value mirror-flips all geometry (inverting winding/normals).
+        assert!(
+            ws > 0.0,
+            "world-scaling must be > 0 (got {ws}); 1.0 disables scaling"
+        );
 
         let displacement_mat = read_mat_from_file::<f64, 3>(&displacement_path)
             .expect("Failed to read displacement")
-            .map(|x| x as f32);
+            .map(|x| (x as f64 * ws) as f32);
         let vert_dmap_mat = read_vec::<u32>(&vert_dmap_path).expect("Failed to read vert_dmap");
+        assert_eq!(vert_dmap_mat.len(), n_vert, "vert_dmap size mismatch");
         let vert_mat = read_mat_from_file::<f64, 3>(&vert_path)
             .expect("Failed to read vert")
-            .map(|x| x as f32);
-        let vel_mat = read_mat_from_file::<f32, 3>(&vel_path).expect("Failed to read velocity");
+            .map(|x| (x as f64 * ws) as f32);
+        // Velocity has units length/time; scale it with the geometry so seeded
+        // motion stays consistent after the output is divided back by `ws`.
+        let vel_mat = read_mat_from_file::<f32, 3>(&vel_path)
+            .expect("Failed to read velocity")
+            .map(|x| (x as f64 * ws) as f32);
         let has_rest_vert = count
             .get("has_rest_vert")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
-        let (rest_vert_mat, rest_vert_mask) = if has_rest_vert {
-            let rest_vert_path = format!("{}/bin/rest_vert.bin", args.path);
+        // Time-varying rest shape (the captured pull-pin deformation). Optional
+        // and absent on legacy payloads, so the flag read must not panic.
+        let has_rest_vert_anim = count
+            .get("has_rest_vert_anim")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        // The mask is shared between the static rest_vert and the time-varying
+        // schedule (make_mesh / rest_shape_schedule both consult it), so load
+        // it whenever either source is present.
+        let rest_vert_mask = if has_rest_vert || has_rest_vert_anim {
             let rest_vert_mask_path = format!("{}/bin/rest_vert_mask.bin", args.path);
-            let mat = read_mat_from_file::<f64, 3>(&rest_vert_path)
-                .expect("Failed to read rest_vert")
-                .map(|x| x as f32);
             let mask_bytes = read_vec::<u8>(&rest_vert_mask_path)
                 .expect("Failed to read rest_vert_mask");
             let mask: Vec<bool> = mask_bytes.iter().map(|&b| b != 0).collect();
-            assert_eq!(mat.ncols(), n_vert, "rest_vert size mismatch");
             assert_eq!(mask.len(), n_vert, "rest_vert_mask size mismatch");
+            mask
+        } else {
+            vec![false; n_vert]
+        };
+        let rest_vert_mat = if has_rest_vert {
+            let rest_vert_path = format!("{}/bin/rest_vert.bin", args.path);
+            let mat = read_mat_from_file::<f64, 3>(&rest_vert_path)
+                .expect("Failed to read rest_vert")
+                .map(|x| (x as f64 * ws) as f32);
+            assert_eq!(mat.ncols(), n_vert, "rest_vert size mismatch");
+            Some(mat)
+        } else {
+            None
+        };
+        // Stored frame-major in rest_vert_anim.bin as (n_frames * n_vert)
+        // columns of 3 rows, split here into one Matrix3xX per keyframe.
+        let rest_vert_schedule = if has_rest_vert_anim {
+            let n_frames = read_usize(count, "rest_vert_anim_frames");
+            let anim_path = format!("{}/bin/rest_vert_anim.bin", args.path);
+            let times_path = format!("{}/bin/rest_vert_times.bin", args.path);
+            let flat = read_mat_from_file::<f64, 3>(&anim_path)
+                .expect("Failed to read rest_vert_anim")
+                .map(|x| (x as f64 * ws) as f32);
+            assert_eq!(
+                flat.ncols(),
+                n_frames * n_vert,
+                "rest_vert_anim size mismatch"
+            );
+            let times = read_vec::<f64>(&times_path).expect("Failed to read rest_vert_times");
+            assert_eq!(times.len(), n_frames, "rest_vert_times size mismatch");
+            let frames: Vec<Matrix3xX<f32>> = (0..n_frames)
+                .map(|k| flat.columns(k * n_vert, n_vert).into_owned())
+                .collect();
+            Some(RestVertSchedule { times, frames })
+        } else {
+            None
+        };
+        // Bending reference rest shape (optional, absent on legacy payloads).
+        let has_bend_rest_vert = count
+            .get("has_bend_rest_vert")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let (bend_rest_vert, bend_rest_vert_mask) = if has_bend_rest_vert {
+            let vert_path = format!("{}/bin/bend_rest_vert.bin", args.path);
+            let mat = read_mat_from_file::<f64, 3>(&vert_path)
+                .expect("Failed to read bend_rest_vert")
+                .map(|x| (x as f64 * ws) as f32);
+            assert_eq!(mat.ncols(), n_vert, "bend_rest_vert size mismatch");
+            let mask_path = format!("{}/bin/bend_rest_vert_mask.bin", args.path);
+            let mask_bytes =
+                read_vec::<u8>(&mask_path).expect("Failed to read bend_rest_vert_mask");
+            let mask: Vec<bool> = mask_bytes.iter().map(|&b| b != 0).collect();
+            assert_eq!(mask.len(), n_vert, "bend_rest_vert_mask size mismatch");
             (Some(mat), mask)
         } else {
-            (None, vec![false; n_vert])
+            (None, Vec::new())
         };
         let uv_mat = if std::path::Path::new(&uv_path).exists() {
             let data = read_vec::<f32>(&uv_path).expect("Failed to read uv");
@@ -479,7 +596,7 @@ impl Scene {
                 read_vec::<u32>(&static_vert_dmap_path).expect("Failed to read static_vert_dmap"),
                 read_mat_from_file::<f64, 3>(&static_vert_path)
                     .expect("Failed to read static_vert")
-                    .map(|x| x as f32),
+                    .map(|x| (x as f64 * ws) as f32),
             )
         } else {
             (Vec::new(), Matrix3xX::<f32>::zeros(0))
@@ -489,14 +606,22 @@ impl Scene {
         } else {
             Matrix3xX::<usize>::zeros(0)
         };
-        let (stitch_ind_mat, stitch_w_mat) = if n_stitch > 0 {
+        let (stitch_ind_mat, stitch_w_mat, stitch_stiffness_vec) = if n_stitch > 0 {
             (
-                read_mat_from_file::<usize, 4>(&stitch_ind_path)
+                read_mat_from_file::<usize, 6>(&stitch_ind_path)
                     .expect("Failed to read stitch_ind"),
-                read_mat_from_file::<f32, 4>(&stitch_w_path).expect("Failed to read stitch_w"),
+                read_mat_from_file::<f32, 6>(&stitch_w_path).expect("Failed to read stitch_w"),
+                // Per-stitch stiffness (M,). Legacy scenes built before
+                // per-object stitch stiffness lack this file; default to 1.0.
+                read_vec::<f32>(&stitch_stiffness_path)
+                    .unwrap_or_else(|_| vec![1.0f32; n_stitch]),
             )
         } else {
-            (Matrix4xX::<usize>::zeros(0), Matrix4xX::<f32>::zeros(0))
+            (
+                Matrix6xX::<usize>::zeros(0),
+                Matrix6xX::<f32>::zeros(0),
+                Vec::new(),
+            )
         };
 
         let mut pin = Vec::new();
@@ -525,6 +650,17 @@ impl Scene {
             let pin_ind = read_vec::<usize>(&pin_ind_path).expect("Failed to read pin index");
             assert_eq!(pin_ind.len(), n_pin);
 
+            // Optional per-vertex pull weights (aligned to pin_ind). Present
+            // only for partially-pinned pull holders; probed by file
+            // existence so older payloads (scalar `pull` only) keep working.
+            let pullw_path = format!("{}/bin/pin-pullw-{}.bin", args.path, i);
+            let pull_weights = std::path::Path::new(&pullw_path).exists().then(|| {
+                let v = read_vec::<f32>(&pullw_path)
+                    .expect("Failed to read pin pull weights");
+                assert_eq!(v.len(), n_pin, "pin-pullw length must match pin index count");
+                v
+            });
+
             // Read operations in order
             let mut operations = Vec::new();
             for j in 0..operation_count {
@@ -544,7 +680,7 @@ impl Scene {
                         let delta_path = format!("{}/bin/pin-{}-op-{}.bin", args.path, i, j);
                         let delta = read_mat_from_file::<f64, 3>(&delta_path)
                             .expect("Failed to read move_by delta")
-                            .map(|x| x as f32);
+                            .map(|x| (x as f64 * ws) as f32);
                         operations.push(PinOperation::MoveBy {
                             delta,
                             t_start,
@@ -561,7 +697,7 @@ impl Scene {
                         let target_path = format!("{}/bin/pin-{}-op-{}.bin", args.path, i, j);
                         let target = read_mat_from_file::<f64, 3>(&target_path)
                             .expect("Failed to read move_to target")
-                            .map(|x| x as f32);
+                            .map(|x| (x as f64 * ws) as f32);
                         operations.push(PinOperation::MoveTo {
                             target,
                             t_start,
@@ -575,7 +711,7 @@ impl Scene {
                         let center_y = read_f32(op_entry, "center_y");
                         let center_z = read_f32(op_entry, "center_z");
                         let center = Vector3::new(center_x, center_y, center_z)
-                            .map(|x| x as f32);
+                            .map(|x| (x as f64 * ws) as f32);
                         let axis_x = read_f32(op_entry, "axis_x");
                         let axis_y = read_f32(op_entry, "axis_y");
                         let axis_z = read_f32(op_entry, "axis_z");
@@ -596,7 +732,7 @@ impl Scene {
                         let center_y = read_f32(op_entry, "center_y");
                         let center_z = read_f32(op_entry, "center_z");
                         let center = Vector3::new(center_x, center_y, center_z)
-                            .map(|x| x as f32);
+                            .map(|x| (x as f64 * ws) as f32);
                         let factor = read_f32(op_entry, "factor");
                         let t_start = read_f64(op_entry, "t_start");
                         let t_end = read_f64(op_entry, "t_end");
@@ -630,14 +766,14 @@ impl Scene {
                         let _ = read_f64(op_entry, "t_start");
                         let _ = read_f64(op_entry, "t_end");
                         let rest_t = [
-                            read_f64(op_entry, "rest_tx"),
-                            read_f64(op_entry, "rest_ty"),
-                            read_f64(op_entry, "rest_tz"),
+                            read_f64(op_entry, "rest_tx") * ws,
+                            read_f64(op_entry, "rest_ty") * ws,
+                            read_f64(op_entry, "rest_tz") * ws,
                         ];
                         let base = format!("{}/bin/pin-{}-op-{}", args.path, i, j);
                         let local = read_mat_from_file::<f64, 3>(&format!("{base}.bin"))
                             .expect("Failed to read transform_keyframes local verts")
-                            .map(|x| x as f32);
+                            .map(|x| (x as f64 * ws) as f32);
                         let times = read_vec::<f64>(&format!("{base}-time.bin"))
                             .expect("Failed to read keyframe times");
                         assert_eq!(times.len(), keyframe_count);
@@ -646,7 +782,7 @@ impl Scene {
                         assert_eq!(t_flat.len(), 3 * keyframe_count);
                         let translations: Vec<[f64; 3]> = t_flat
                             .chunks_exact(3)
-                            .map(|c| [c[0], c[1], c[2]])
+                            .map(|c| [c[0] * ws, c[1] * ws, c[2] * ws])
                             .collect();
                         let q_flat = read_vec::<f64>(&format!("{base}-quaternion.bin"))
                             .expect("Failed to read keyframe quaternions");
@@ -701,6 +837,7 @@ impl Scene {
                 operations,
                 unpin_time,
                 pull_w,
+                pull_weights,
                 stiffness,
                 pin_group_id,
             });
@@ -723,7 +860,7 @@ impl Scene {
                 let position =
                     read_mat_from_file::<f64, 3>(&format!("{}/bin/wall-pos-{}.bin", args.path, i))
                         .expect("Failed to read pos_path")
-                        .map(|x| x as f32);
+                        .map(|x| (x as f64 * ws) as f32);
                 let wall_timing =
                     read_vec::<f64>(&format!("{}/bin/wall-timing-{}.bin", args.path, i))
                         .expect("Failed to read wall timing");
@@ -732,7 +869,7 @@ impl Scene {
                 let active_duration =
                     read_optional_f32(count, "active-duration").unwrap_or(-1.0);
                 let thickness =
-                    read_optional_f32(count, "thickness").unwrap_or(1.0);
+                    read_optional_f32(count, "thickness").unwrap_or(1.0) * ws as f32;
                 assert_gt!(
                     thickness,
                     0.0,
@@ -770,9 +907,15 @@ impl Scene {
                     args.path, i
                 ))
                 .expect("Failed to read sphere pos_path")
-                .map(|x| x as f32);
-                let radius = read_vec::<f32>(&format!("{}/bin/sphere-radius-{}.bin", args.path, i))
-                    .expect("Failed to read sphere radius");
+                .map(|x| (x as f64 * ws) as f32);
+                // Sphere collider radius is a world-space length: scale it so the
+                // collider keeps its size relative to the scaled mesh.
+                let radius: Vec<f32> =
+                    read_vec::<f32>(&format!("{}/bin/sphere-radius-{}.bin", args.path, i))
+                        .expect("Failed to read sphere radius")
+                        .iter()
+                        .map(|r| (*r as f64 * ws) as f32)
+                        .collect();
                 let timing = read_vec::<f64>(&format!("{}/bin/sphere-timing-{}.bin", args.path, i))
                     .expect("Failed to read sphere timing");
                 let contact_gap = read_f32(count, "contact-gap");
@@ -780,7 +923,7 @@ impl Scene {
                 let active_duration =
                     read_optional_f32(count, "active-duration").unwrap_or(-1.0);
                 let thickness =
-                    read_optional_f32(count, "thickness").unwrap_or(1.0);
+                    read_optional_f32(count, "thickness").unwrap_or(1.0) * ws as f32;
                 assert_gt!(
                     thickness,
                     0.0,
@@ -811,9 +954,15 @@ impl Scene {
         assert_eq!(tri_mat.ncols(), n_tri);
         assert_eq!(tet_mat.ncols(), n_tet);
         assert_eq!(static_vert_mat.ncols(), n_static_vert);
+        assert_eq!(
+            static_vert_dmap_mat.len(),
+            n_static_vert,
+            "static_vert_dmap size mismatch"
+        );
         assert_eq!(static_tri_mat.ncols(), n_static_tri);
         assert_eq!(stitch_ind_mat.ncols(), n_stitch);
         assert_eq!(stitch_w_mat.ncols(), n_stitch);
+        assert_eq!(stitch_stiffness_vec.len(), n_stitch);
 
         let args_path = format!("{}/param.toml", args.path);
         let file_content = fs::read_to_string(args_path).unwrap();
@@ -831,12 +980,25 @@ impl Scene {
         let mut tri_param = Vec::new();
         let mut tet_param = Vec::new();
         let mut static_param = Vec::new();
+        let mut sand_param = Vec::new();
 
         for entry in fs::read_dir(&param_dir).expect("Failed to read param directory") {
             let entry = entry.expect("Failed to read entry");
             let path = entry.path();
             if path.is_file() {
                 let file_name = path.file_name().unwrap().to_str().unwrap();
+
+                // SAND params are scalar (len 1), not per-element, so they are
+                // read on a separate channel that skips the `len == n_element`
+                // assert below. Every grain in the cloud shares one mass /
+                // radius / gap / friction.
+                if file_name.starts_with("sand-") && file_name.ends_with(".bin") {
+                    let name = file_name["sand-".len()..file_name.len() - 4].to_string();
+                    let values = read_vec::<f32>(&path.to_string_lossy())
+                        .expect("Failed to read sand values");
+                    sand_param.push((name, ParamValueList::Value(values)));
+                    continue;
+                }
 
                 let (target_param, prefix, n_element) = if file_name.starts_with("rod-") {
                     (&mut rod_param, "rod-", n_rod)
@@ -858,17 +1020,8 @@ impl Scene {
                         let values = values
                             .iter()
                             .map(|&k| {
-                                if k == 0 {
-                                    Model::Arap
-                                } else if k == 1 {
-                                    Model::StVK
-                                } else if k == 2 {
-                                    Model::BaraffWitkin
-                                } else if k == 3 {
-                                    Model::SNHk
-                                } else {
-                                    panic!("Unknown model type: {k}");
-                                }
+                                Model::from_id(k)
+                                    .unwrap_or_else(|| panic!("Unknown model type: {k}"))
                             })
                             .collect::<Vec<_>>();
                         assert_eq!(values.len(), n_element, "path: {}", path.display());
@@ -882,6 +1035,115 @@ impl Scene {
                 }
             }
         }
+
+        // Optional PDRD inputs. Absent files are equivalent to "no
+        // PDRD bodies in this scene" and the solver falls through.
+        let pdrd_body_path = format!("{}/bin/pdrd_body.bin", args.path);
+        let pdrd_body_rows = if std::path::Path::new(&pdrd_body_path).exists() {
+            let mut raw =
+                read_vec::<f32>(&pdrd_body_path).expect("Failed to read pdrd_body.bin");
+            // Row layout: PDRD_BODY_ROW_LEN floats per body (vertex_start,
+            // vertex_count, volume, centroid[3], rest_gram_inv[9],
+            // mass_per_vertex, joint_mode, joint_axis[3], joint_pin[3]).
+            assert!(
+                raw.len() % PDRD_BODY_ROW_LEN == 0,
+                "pdrd_body.bin length {} not a multiple of {}",
+                raw.len(),
+                PDRD_BODY_ROW_LEN,
+            );
+            // Uniform world scaling. pdrd_body.bin is precomputed in the addon
+            // from the UNSCALED mesh, but the live vertices it is matched
+            // against were multiplied by `ws` on ingest. Each geometric field
+            // carries a power of length and must be rescaled by that power of
+            // `ws` so the shape-match dynamics stay consistent:
+            //   volume          (length^3) -> * ws^3
+            //   rest_centroid   (length^1) -> * ws       world position
+            //   rest_gram_inv   (length^-2)-> * 1/ws^2   see derivation below
+            //   mass_per_vertex (prop. volume) -> * ws^3
+            //   joint_pin       (length^1) -> * ws       world pivot
+            // vertex_start/count (indices/counts), joint_mode (enum) and
+            // joint_axis (a UNIT vector) are dimensionless and left untouched.
+            //
+            // rest_gram_inv derivation: it is stored as the inverse of the rest
+            // Gram `Sbar = sum_k ybar_k ybar_k^T` (length^2), where ybar_k are
+            // the centered rest positions (pdrd_rest_centered, scaled by ws
+            // below). The mass is factored out separately into mass_per_vertex,
+            // so Sbar is a pure geometric second moment (no mass weighting).
+            // Scaling ybar by ws sends Sbar -> ws^2 Sbar, hence the stored
+            // inverse -> ws^-2. This keeps the recovered reference inertia
+            // Iref = m (tr(Sbar) I - Sbar) ~ ws^3 * ws^2 = ws^5 = mass*length^2,
+            // the physically correct moment-of-inertia scaling. The best-fit
+            // rotation R is the polar factor of the cross-covariance
+            // M = sum_k y_k ybar_k^T and does NOT use rest_gram_inv; with both
+            // y_k and ybar_k scaled by ws, M -> ws^2 M leaves its polar factor
+            // (the rotation) invariant, so R is scale-invariant as required.
+            //
+            // ws == 1.0 (the default) is a no-op; skip the round-trip so the
+            // unscaled path stays byte-for-byte identical.
+            if (ws - 1.0).abs() > 1e-12 {
+                let ws3 = ws * ws * ws;
+                let inv_ws2 = 1.0 / (ws * ws);
+                let n_bodies = raw.len() / PDRD_BODY_ROW_LEN;
+                for b in 0..n_bodies {
+                    let row =
+                        &mut raw[PDRD_BODY_ROW_LEN * b..PDRD_BODY_ROW_LEN * (b + 1)];
+                    row[2] = (row[2] as f64 * ws3) as f32; // volume (length^3)
+                    for c in &mut row[3..6] {
+                        *c = (*c as f64 * ws) as f32; // rest_centroid (length)
+                    }
+                    for g in &mut row[6..15] {
+                        *g = (*g as f64 * inv_ws2) as f32; // rest_gram_inv (length^-2)
+                    }
+                    row[15] = (row[15] as f64 * ws3) as f32; // mass_per_vertex (~ volume)
+                    for p in &mut row[20..23] {
+                        *p = (*p as f64 * ws) as f32; // joint_pin (length)
+                    }
+                }
+            }
+            raw
+        } else {
+            Vec::new()
+        };
+        let pdrd_vert_index_path = format!("{}/bin/pdrd_vert_index.bin", args.path);
+        let pdrd_vert_index = if std::path::Path::new(&pdrd_vert_index_path).exists() {
+            let v = read_vec::<u32>(&pdrd_vert_index_path)
+                .expect("Failed to read pdrd_vert_index.bin");
+            assert_eq!(v.len(), n_vert, "pdrd_vert_index size mismatch");
+            v
+        } else {
+            vec![0u32; n_vert]
+        };
+        let pdrd_vert_list_path = format!("{}/bin/pdrd_vert_list.bin", args.path);
+        let pdrd_vert_list = if std::path::Path::new(&pdrd_vert_list_path).exists() {
+            read_vec::<u32>(&pdrd_vert_list_path).expect("Failed to read pdrd_vert_list.bin")
+        } else {
+            Vec::new()
+        };
+        let pdrd_rest_centered_path = format!("{}/bin/pdrd_rest_centered.bin", args.path);
+        let pdrd_rest_centered = if std::path::Path::new(&pdrd_rest_centered_path).exists() {
+            let mut v = read_vec::<f32>(&pdrd_rest_centered_path)
+                .expect("Failed to read pdrd_rest_centered.bin");
+            assert_eq!(
+                v.len(),
+                3 * pdrd_vert_list.len(),
+                "pdrd_rest_centered length mismatch (expected 3 * vert_list = {}, got {})",
+                3 * pdrd_vert_list.len(),
+                v.len(),
+            );
+            // Centered rest positions ybar_k are a world length (length^1), so
+            // scale by ws to match the live (ws-scaled) vertices they are fit
+            // against. The reconstruct x_v = centroid + R * ybar_k would
+            // otherwise rebuild the body at its unscaled size, corrupting the
+            // shape match. ws == 1.0 is a no-op (skip the round-trip).
+            if (ws - 1.0).abs() > 1e-12 {
+                for y in &mut v {
+                    *y = (*y as f64 * ws) as f32;
+                }
+            }
+            v
+        } else {
+            Vec::new()
+        };
 
         Self {
             args: config.param,
@@ -899,16 +1161,25 @@ impl Scene {
             static_tri: static_tri_mat,
             stitch_ind: stitch_ind_mat,
             stitch_w: stitch_w_mat,
+            stitch_stiffness: stitch_stiffness_vec,
             pin,
             wall,
             sphere,
             rest_vert: rest_vert_mat,
             rest_vert_mask,
+            rest_vert_schedule,
+            bend_rest_vert,
+            bend_rest_vert_mask,
             shell_count,
             rod_param,
             tri_param,
             tet_param,
             static_param,
+            sand_param,
+            pdrd_body_rows,
+            pdrd_vert_index,
+            pdrd_vert_list,
+            pdrd_rest_centered,
         }
     }
 
@@ -937,7 +1208,7 @@ impl Scene {
                 "=== Shells ({} elements) ===\n\n",
                 self.tri.ncols()
             ));
-            self.write_param_stats(&mut content, &self.tri_param, self.tri.ncols());
+            self.write_param_stats(&mut content, &self.tri_param);
 
             // Add mass and area statistics for shells
             if !props.face.is_empty() && !face_area.is_empty() {
@@ -974,7 +1245,7 @@ impl Scene {
                 "=== Solids ({} elements) ===\n\n",
                 self.tet.ncols()
             ));
-            self.write_param_stats(&mut content, &self.tet_param, self.tet.ncols());
+            self.write_param_stats(&mut content, &self.tet_param);
 
             // Add mass and volume statistics for solids
             if !props.tet.is_empty() {
@@ -1002,23 +1273,28 @@ impl Scene {
         // Write Rod parameters summary
         if self.rod.ncols() > 0 {
             content.push_str(&format!("=== Rods ({} elements) ===\n\n", self.rod.ncols()));
-            self.write_param_stats(&mut content, &self.rod_param, self.rod.ncols());
+            self.write_param_stats(&mut content, &self.rod_param);
 
-            // Add mass statistics for rods (only for actual rod elements, not shell edges)
-            let rod_count = self.rod.ncols().min(props.edge.len());
+            // Add mass statistics for rods. At summary time props.edge holds
+            // only rod entries (non-rod edges are appended later), so its
+            // length matches the rod count exactly.
+            debug_assert_eq!(
+                props.edge.len(),
+                self.rod.ncols(),
+                "param summary runs before non-rod edges are appended to props.edge"
+            );
+            let rod_count = self.rod.ncols();
             if rod_count > 0 {
                 let rod_props = &props.edge[0..rod_count];
                 let masses: Vec<f32> = rod_props.iter().map(|p| p.mass).collect();
-                if !masses.is_empty() {
-                    let min_mass = masses.iter().cloned().fold(f32::INFINITY, f32::min);
-                    let max_mass = masses.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
-                    let sum_mass: f64 = masses.iter().map(|&v| v as f64).sum();
-                    let mean_mass = (sum_mass / masses.len() as f64) as f32;
+                let min_mass = masses.iter().cloned().fold(f32::INFINITY, f32::min);
+                let max_mass = masses.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+                let sum_mass: f64 = masses.iter().map(|&v| v as f64).sum();
+                let mean_mass = (sum_mass / masses.len() as f64) as f32;
 
-                    content.push_str(&format!(
-                        "mass: (max: {max_mass:.4e}, min: {min_mass:.4e}, mean: {mean_mass:.4e})\n"
-                    ));
-                }
+                content.push_str(&format!(
+                    "mass: (max: {max_mass:.4e}, min: {min_mass:.4e}, mean: {mean_mass:.4e})\n"
+                ));
             }
             content.push('\n');
         }
@@ -1029,7 +1305,7 @@ impl Scene {
                 "=== Static Objects ({} elements) ===\n\n",
                 self.static_tri.ncols()
             ));
-            self.write_param_stats(&mut content, &self.static_param, self.static_tri.ncols());
+            self.write_param_stats(&mut content, &self.static_param);
             content.push('\n');
         }
 
@@ -1044,7 +1320,6 @@ impl Scene {
         &self,
         content: &mut String,
         params: &[(String, ParamValueList)],
-        _n_elements: usize,
     ) {
         for (name, values) in params {
             match values {
@@ -1054,6 +1329,11 @@ impl Scene {
                     for model in models {
                         *model_counts.entry(format!("{model:?}")).or_insert(0) += 1;
                     }
+                    // Sort by name so the breakdown is stable across runs
+                    // (std HashMap iteration order is randomized).
+                    let mut model_counts: Vec<(String, i32)> =
+                        model_counts.into_iter().collect();
+                    model_counts.sort_by(|a, b| a.0.cmp(&b.0));
 
                     content.push_str(&format!("{name}: ("));
                     let mut first = true;
@@ -1094,6 +1374,42 @@ impl Scene {
         self.args.clone()
     }
 
+    /// Resolve the scalar SAND material params (`sand-*.bin`) into a
+    /// `SandParams`, or `None` when the scene has no SAND object. The grain
+    /// radius / contact gap are sent on the standard `contact-offset` /
+    /// `contact-gap` keys (a grain's physical contact skin), while mass and
+    /// friction come from the `sand-*` keys. Every grain in the cloud shares
+    /// these scalars.
+    fn sand_params(&self) -> Option<SandParams> {
+        if self.sand_param.is_empty() {
+            return None;
+        }
+        let get = |key: &str| -> Option<f32> {
+            self.sand_param
+                .iter()
+                .find(|(name, _)| name.as_str() == key)
+                .map(|(_, value)| as_value(value, 0, key))
+        };
+        let particle_mass = get("particle-mass")
+            .expect("SAND object missing 'sand-particle-mass' param");
+        let grain_radius = get("grain-radius")
+            .expect("SAND object missing 'sand-grain-radius' param");
+        let contact_gap = get("contact-gap")
+            .expect("SAND object missing 'sand-contact-gap' param");
+        let friction = get("friction")
+            .expect("SAND object missing 'sand-friction' param");
+        assert_gt!(particle_mass, 0.0, "Sand particle mass must be positive");
+        assert_ge!(grain_radius, 0.0, "Sand grain radius must be non-negative");
+        assert_gt!(contact_gap, 0.0, "Sand contact gap must be positive");
+        assert_ge!(friction, 0.0, "Sand friction must be non-negative");
+        Some(SandParams {
+            particle_mass,
+            grain_radius,
+            contact_gap,
+            friction,
+        })
+    }
+
     pub fn make_props(&self, mesh: &MeshSet, face_area: &[f32], tet_volume: &[f32]) -> Props {
         // Build edge props and params with deduplication
         let mut edge_param_map: HashMap<EdgeParam, u32> = HashMap::new();
@@ -1110,6 +1426,8 @@ impl Scene {
                 let mut bend_plasticity = None;
                 let mut bend_plasticity_threshold = None;
                 let mut bend_rest_from_geometry = None;
+                let mut deform_damping = None;
+                let mut bend_damping = None;
                 let rod = mesh.mesh.mesh.edge.column(i);
                 let x0 = mesh.vertex.column(rod[0]);
                 let x1 = mesh.vertex.column(rod[1]);
@@ -1118,60 +1436,31 @@ impl Scene {
                 let mut density = None;
                 for (name, value) in &self.rod_param {
                     if name == "contact-gap" {
-                        ghat = match value {
-                            ParamValueList::Value(v) => Some(v[i]),
-                            _ => panic!("Expected contact-gap parameter to be a value list"),
-                        };
+                        ghat = Some(as_value(value, i, name));
                     } else if name == "contact-offset" {
-                        offset = match value {
-                            ParamValueList::Value(v) => Some(v[i]),
-                            _ => panic!("Expected contact-offset parameter to be a value list"),
-                        };
+                        offset = Some(as_value(value, i, name));
                     } else if name == "friction" {
-                        friction = match value {
-                            ParamValueList::Value(v) => Some(v[i]),
-                            _ => panic!("Expected friction parameter to be a value list"),
-                        };
+                        friction = Some(as_value(value, i, name));
                     } else if name == "young-mod" {
-                        stiffness = match value {
-                            ParamValueList::Value(v) => Some(v[i]),
-                            _ => panic!("Expected young-modulus parameter to be a value list"),
-                        };
+                        stiffness = Some(as_value(value, i, name));
                     } else if name == "density" {
-                        density = match value {
-                            ParamValueList::Value(v) => Some(v[i]),
-                            _ => panic!("Expected density parameter to be a value list"),
-                        };
+                        density = Some(as_value(value, i, name));
                     } else if name == "bend" {
-                        bend = match value {
-                            ParamValueList::Value(v) => Some(v[i]),
-                            _ => panic!("Expected bend-modulus parameter to be a value list"),
-                        };
+                        bend = Some(as_value(value, i, name));
                     } else if name == "length-factor" {
-                        length_factor = match value {
-                            ParamValueList::Value(v) => Some(v[i]),
-                            _ => panic!("Expected rod-length-factor parameter to be a value list"),
-                        };
+                        length_factor = Some(as_value(value, i, name));
                     } else if name == "strain-limit" {
-                        strainlimit = match value {
-                            ParamValueList::Value(v) => Some(v[i]),
-                            _ => panic!("Expected strain-limit parameter to be a value list"),
-                        };
+                        strainlimit = Some(as_value(value, i, name));
                     } else if name == "bend-plasticity" {
-                        bend_plasticity = match value {
-                            ParamValueList::Value(v) => Some(v[i]),
-                            _ => panic!("Expected bend-plasticity parameter to be a value list"),
-                        };
+                        bend_plasticity = Some(as_value(value, i, name));
                     } else if name == "bend-plasticity-threshold" {
-                        bend_plasticity_threshold = match value {
-                            ParamValueList::Value(v) => Some(v[i]),
-                            _ => panic!("Expected bend-plasticity-threshold to be a value list"),
-                        };
+                        bend_plasticity_threshold = Some(as_value(value, i, name));
                     } else if name == "bend-rest-from-geometry" {
-                        bend_rest_from_geometry = match value {
-                            ParamValueList::Value(v) => Some(v[i] != 0.0),
-                            _ => panic!("Expected bend-rest-from-geometry to be a value list"),
-                        };
+                        bend_rest_from_geometry = Some(as_value(value, i, name) != 0.0);
+                    } else if name == "deformation-damping" {
+                        deform_damping = Some(as_value(value, i, name));
+                    } else if name == "bending-damping" {
+                        bend_damping = Some(as_value(value, i, name));
                     } else if name == "pressure" {
                         // Pressure is a tri-only parameter; ignore for rods.
                     } else {
@@ -1189,6 +1478,10 @@ impl Scene {
                 let bend_plasticity = bend_plasticity.unwrap_or(0.0);
                 let bend_plasticity_threshold = bend_plasticity_threshold.unwrap_or(0.0);
                 let bend_rest_from_geometry = bend_rest_from_geometry.unwrap_or(false);
+                let deform_damping = deform_damping.unwrap_or(0.0);
+                let bend_damping = bend_damping.unwrap_or(0.0);
+                assert_ge!(deform_damping, 0.0, "Deformation damping must be non-negative");
+                assert_ge!(bend_damping, 0.0, "Bending damping must be non-negative");
                 assert_gt!(density, 0.0, "Density must be positive");
                 assert_gt!(stiffness, 0.0, "Stiffness must be positive");
                 assert_gt!(length, 0.0, "Length must be positive");
@@ -1201,7 +1494,7 @@ impl Scene {
                     0.0,
                     "Bend plasticity threshold must be non-negative"
                 );
-                assert_gt!(ghat, 0.0, "Contact gap must be non-negative");
+                assert_gt!(ghat, 0.0, "Contact gap must be positive");
                 let mass = density * length;
                 length *= length_factor;
 
@@ -1216,12 +1509,10 @@ impl Scene {
                     plasticity: bend_plasticity,
                     plasticity_threshold: bend_plasticity_threshold,
                     bend_rest_from_geometry,
+                    deform_damping,
+                    bend_damping,
                 };
-                let param_idx = *edge_param_map.entry(param).or_insert_with(|| {
-                    let new_idx = edge_params.len() as u32;
-                    edge_params.push(param);
-                    new_idx
-                });
+                let param_idx = dedup_param(&mut edge_param_map, &mut edge_params, param);
 
                 EdgeProp {
                     length,
@@ -1256,92 +1547,47 @@ impl Scene {
                 let mut bend_plasticity = None;
                 let mut bend_plasticity_threshold = None;
                 let mut bend_rest_from_geometry = None;
+                let mut deform_damping = None;
+                let mut bend_damping = None;
                 for (name, value) in &self.tri_param {
                     if name == "contact-gap" {
-                        ghat = match value {
-                            ParamValueList::Value(v) => Some(v[i]),
-                            _ => panic!("Expected contact-gap parameter to be a value list"),
-                        };
+                        ghat = Some(as_value(value, i, name));
                     } else if name == "contact-offset" {
-                        offset = match value {
-                            ParamValueList::Value(v) => Some(v[i]),
-                            _ => panic!("Expected contact-offset parameter to be a value list"),
-                        };
+                        offset = Some(as_value(value, i, name));
                     } else if name == "friction" {
-                        friction = match value {
-                            ParamValueList::Value(v) => Some(v[i]),
-                            _ => panic!("Expected friction parameter to be a value list"),
-                        };
+                        friction = Some(as_value(value, i, name));
                     } else if name == "strain-limit" {
-                        strainlimit = match value {
-                            ParamValueList::Value(v) => Some(v[i]),
-                            _ => panic!("Expected strainlimit parameter to be a value list"),
-                        };
+                        strainlimit = Some(as_value(value, i, name));
                     } else if name == "bend" {
-                        bend = match value {
-                            ParamValueList::Value(v) => Some(v[i]),
-                            _ => panic!("Expected bend-modulus parameter to be a value list"),
-                        };
+                        bend = Some(as_value(value, i, name));
                     } else if name == "shrink-x" {
-                        shrink_x = match value {
-                            ParamValueList::Value(v) => Some(v[i]),
-                            _ => panic!("Expected shrink-x parameter to be a value list"),
-                        };
+                        shrink_x = Some(as_value(value, i, name));
                     } else if name == "shrink-y" {
-                        shrink_y = match value {
-                            ParamValueList::Value(v) => Some(v[i]),
-                            _ => panic!("Expected shrink-y parameter to be a value list"),
-                        };
+                        shrink_y = Some(as_value(value, i, name));
                     } else if name == "model" {
-                        model = match value {
-                            ParamValueList::Model(v) => Some(v[i]),
-                            _ => panic!("Expected model parameter to be a name list"),
-                        };
+                        model = Some(as_model(value, i, name));
                     } else if name == "density" {
-                        density = match value {
-                            ParamValueList::Value(v) => Some(v[i]),
-                            _ => panic!("Expected density parameter to be a value list"),
-                        };
+                        density = Some(as_value(value, i, name));
                     } else if name == "young-mod" {
-                        young_mod = match value {
-                            ParamValueList::Value(v) => Some(v[i]),
-                            _ => panic!("Expected young-modulus parameter to be a value list"),
-                        };
+                        young_mod = Some(as_value(value, i, name));
                     } else if name == "poiss-rat" {
-                        poiss_rat = match value {
-                            ParamValueList::Value(v) => Some(v[i]),
-                            _ => panic!("Expected poisson's ratio parameter to be a value list"),
-                        };
+                        poiss_rat = Some(as_value(value, i, name));
                     } else if name == "pressure" {
-                        pressure = match value {
-                            ParamValueList::Value(v) => Some(v[i]),
-                            _ => panic!("Expected pressure parameter to be a value list"),
-                        };
+                        pressure = Some(as_value(value, i, name));
                     } else if name == "plasticity" {
-                        plasticity = match value {
-                            ParamValueList::Value(v) => Some(v[i]),
-                            _ => panic!("Expected plasticity parameter to be a value list"),
-                        };
+                        plasticity = Some(as_value(value, i, name));
                     } else if name == "plasticity-threshold" {
-                        plasticity_threshold = match value {
-                            ParamValueList::Value(v) => Some(v[i]),
-                            _ => panic!("Expected plasticity-threshold parameter to be a value list"),
-                        };
+                        plasticity_threshold = Some(as_value(value, i, name));
                     } else if name == "bend-plasticity" {
-                        bend_plasticity = match value {
-                            ParamValueList::Value(v) => Some(v[i]),
-                            _ => panic!("Expected bend-plasticity parameter to be a value list"),
-                        };
+                        bend_plasticity = Some(as_value(value, i, name));
                     } else if name == "bend-plasticity-threshold" {
-                        bend_plasticity_threshold = match value {
-                            ParamValueList::Value(v) => Some(v[i]),
-                            _ => panic!("Expected bend-plasticity-threshold to be a value list"),
-                        };
+                        bend_plasticity_threshold = Some(as_value(value, i, name));
                     } else if name == "bend-rest-from-geometry" {
-                        bend_rest_from_geometry = match value {
-                            ParamValueList::Value(v) => Some(v[i] != 0.0),
-                            _ => panic!("Expected bend-rest-from-geometry to be a value list"),
-                        };
+                        bend_rest_from_geometry = Some(as_value(value, i, name) != 0.0);
+                    } else if name == "deformation-damping" {
+                        deform_damping = Some(as_value(value, i, name));
+                    } else if name == "bending-damping" {
+                        bend_damping = Some(as_value(value, i, name));
                     } else {
                         panic!("Unknown face parameter: {name}");
                     }
@@ -1363,26 +1609,61 @@ impl Scene {
                 let bend_plasticity = bend_plasticity.unwrap_or(0.0);
                 let bend_plasticity_threshold = bend_plasticity_threshold.unwrap_or(0.0);
                 let bend_rest_from_geometry = bend_rest_from_geometry.unwrap_or(false);
+                let deform_damping = deform_damping.unwrap_or(0.0);
+                let bend_damping = bend_damping.unwrap_or(0.0);
+                assert_ge!(deform_damping, 0.0, "Deformation damping must be non-negative");
+                assert_ge!(bend_damping, 0.0, "Bending damping must be non-negative");
                 assert_gt!(density, 0.0, "Density must be positive");
-                assert_gt!(young_mod, 0.0, "Young's modulus must be positive");
                 assert_gt!(area, 0.0, "Area must be positive");
                 assert_ge!(pressure, 0.0, "Pressure must be non-negative");
                 assert_ge!(friction, 0.0, "Friction must be non-negative");
-                assert_ge!(bend, 0.0, "Bend modulus must be non-negative");
-                assert_gt!(shrink_x, 0.0, "Shrink X factor must be positive");
-                assert_gt!(shrink_y, 0.0, "Shrink Y factor must be positive");
-                // Shrink/extend and strain-limit cannot be combined on the
-                // same face: each rewrites the rest shape independently, so
-                // the strain bound becomes ill-defined when both are active.
-                assert!(
-                    !((shrink_x != 1.0 || shrink_y != 1.0) && strainlimit > 0.0),
-                    "Face {i}: shrink (x={shrink_x}, y={shrink_y}) conflicts with non-zero strain-limit ({strainlimit})"
-                );
-                assert_gt!(ghat, 0.0, "Contact gap must be non-negative");
-                assert_gt!(poiss_rat, 0.0, "Poisson's ratio must be positive");
-                assert_lt!(poiss_rat, 0.5, "Poisson's ratio must be less than 0.5");
-                let (mu, lambda) = convert_prop(young_mod, poiss_rat);
-                let mass = density * area;
+                assert_gt!(ghat, 0.0, "Contact gap must be positive");
+                // PDRD faces carry zero placeholders for elastic terms
+                // (young_mod, poiss_rat, bend, shrink) so the per-face
+                // expansion remains key-compatible with shells; their
+                // values are ignored by the elastic dispatch (gated on
+                // Model::Pdrd). Only validate the elastic terms on
+                // non-PDRD faces.
+                if model != Model::Pdrd {
+                    assert_gt!(young_mod, 0.0, "Young's modulus must be positive");
+                    assert_ge!(bend, 0.0, "Bend modulus must be non-negative");
+                    assert_gt!(shrink_x, 0.0, "Shrink X factor must be positive");
+                    assert_gt!(shrink_y, 0.0, "Shrink Y factor must be positive");
+                    // Shrink/extend and strain-limit cannot be combined on the
+                    // same face: each rewrites the rest shape independently, so
+                    // the strain bound becomes ill-defined when both are active.
+                    // Share the predicate with ppf-cts-core so frontend preview,
+                    // PyO3, and the solver all gate on the same rule.
+                    assert!(
+                        !ppf_cts_core::kernels::scene_build::is_shell_shrink_strain_limit_conflict(
+                            shrink_x as f64,
+                            shrink_y as f64,
+                            strainlimit as f64
+                        ),
+                        "Face {i}: shrink (x={shrink_x}, y={shrink_y}) conflicts with non-zero strain-limit ({strainlimit})"
+                    );
+                    assert_gt!(poiss_rat, 0.0, "Poisson's ratio must be positive");
+                    assert_lt!(poiss_rat, 0.5, "Poisson's ratio must be less than 0.5");
+                }
+                let (mu, lambda) = if model == Model::Pdrd {
+                    // PDRD faces contribute no elastic energy; the
+                    // existing dispatch in energy.cu trips on
+                    // `mu > 0.0f` so zero here is the natural
+                    // skip-everything path.
+                    (0.0f32, 0.0f32)
+                } else {
+                    convert_prop(young_mod, poiss_rat)
+                };
+                // PDRD bodies use VOLUMETRIC mass (ρ·V) distributed
+                // over per-body vertices in the PDRD builder pass.
+                // Zero out the per-face contribution here so the
+                // face-mass aggregation in builder.rs doesn't
+                // double-count.
+                let mass = if model == Model::Pdrd {
+                    0.0f32
+                } else {
+                    density * area
+                };
 
                 // Create param and deduplicate
                 let param = FaceParam {
@@ -1402,17 +1683,16 @@ impl Scene {
                     bend_plasticity,
                     bend_plasticity_threshold,
                     bend_rest_from_geometry,
+                    deform_damping,
+                    bend_damping,
                 };
-                let param_idx = *face_param_map.entry(param).or_insert_with(|| {
-                    let new_idx = face_params.len() as u32;
-                    face_params.push(param);
-                    new_idx
-                });
+                let param_idx = dedup_param(&mut face_param_map, &mut face_params, param);
 
                 FaceProp {
                     area,
                     mass,
                     fixed: false,
+                    rest_excluded: false,
                     param_index: param_idx,
                 }
             })
@@ -1430,44 +1710,31 @@ impl Scene {
                 let mut shrink = None;
                 let mut plasticity = None;
                 let mut plasticity_threshold = None;
+                let mut deform_damping = None;
                 for (name, value) in &self.tet_param {
                     if name == "model" {
-                        model = match value {
-                            ParamValueList::Model(v) => Some(v[i]),
-                            _ => panic!("Expected model parameter to be a name list"),
-                        };
+                        model = Some(as_model(value, i, name));
                     } else if name == "density" {
-                        density = match value {
-                            ParamValueList::Value(v) => Some(v[i]),
-                            _ => panic!("Expected density parameter to be a value list"),
-                        };
+                        density = Some(as_value(value, i, name));
                     } else if name == "young-mod" {
-                        young_mod = match value {
-                            ParamValueList::Value(v) => Some(v[i]),
-                            _ => panic!("Expected young-modulus parameter to be a value list"),
-                        };
+                        young_mod = Some(as_value(value, i, name));
                     } else if name == "poiss-rat" {
-                        poiss_rat = match value {
-                            ParamValueList::Value(v) => Some(v[i]),
-                            _ => panic!("Expected poisson's ratio parameter to be a value list"),
-                        };
+                        poiss_rat = Some(as_value(value, i, name));
                     } else if name == "shrink" {
-                        shrink = match value {
-                            ParamValueList::Value(v) => Some(v[i]),
-                            _ => panic!("Expected shrink parameter to be a value list"),
-                        };
+                        shrink = Some(as_value(value, i, name));
                     } else if name == "pressure" {
                         // Pressure is a tri-only parameter; ignore for tets.
                     } else if name == "plasticity" {
-                        plasticity = match value {
-                            ParamValueList::Value(v) => Some(v[i]),
-                            _ => panic!("Expected plasticity parameter to be a value list"),
-                        };
+                        plasticity = Some(as_value(value, i, name));
                     } else if name == "plasticity-threshold" {
-                        plasticity_threshold = match value {
-                            ParamValueList::Value(v) => Some(v[i]),
-                            _ => panic!("Expected plasticity-threshold parameter to be a value list"),
-                        };
+                        plasticity_threshold = Some(as_value(value, i, name));
+                    } else if name == "deformation-damping" {
+                        deform_damping = Some(as_value(value, i, name));
+                    } else if name == "bending-damping" {
+                        // Bending damping is a shell/rod-only key; tets have no
+                        // bending energy. The frontend clears it from the tet
+                        // param set, so this is a defensive ignore (mirrors the
+                        // tri-only "pressure" branch above).
                     } else {
                         panic!("Unknown tet parameter: {name}");
                     }
@@ -1479,6 +1746,8 @@ impl Scene {
                 let shrink = shrink.unwrap();
                 let plasticity = plasticity.unwrap_or(0.0);
                 let plasticity_threshold = plasticity_threshold.unwrap_or(0.0);
+                let deform_damping = deform_damping.unwrap_or(0.0);
+                assert_ge!(deform_damping, 0.0, "Deformation damping must be non-negative");
                 let volume = tet_volume[i];
                 assert_gt!(density, 0.0, "Density must be positive");
                 assert_gt!(young_mod, 0.0, "Young's modulus must be positive");
@@ -1497,17 +1766,15 @@ impl Scene {
                     shrink,
                     plasticity,
                     plasticity_threshold,
+                    deform_damping,
                 };
-                let param_idx = *tet_param_map.entry(param).or_insert_with(|| {
-                    let new_idx = tet_params.len() as u32;
-                    tet_params.push(param);
-                    new_idx
-                });
+                let param_idx = dedup_param(&mut tet_param_map, &mut tet_params, param);
 
                 TetProp {
                     mass,
                     volume,
                     fixed: false,
+                    rest_excluded: false,
                     param_index: param_idx,
                 }
             })
@@ -1520,6 +1787,7 @@ impl Scene {
             edge_params,
             face_params,
             tet_params,
+            sand: self.sand_params(),
         }
     }
 
@@ -1530,9 +1798,7 @@ impl Scene {
     pub fn make_constraint(&self, time: f64) -> Constraint {
         let collision_mesh = if self.static_vert.ncols() > 0 {
             let mut vert = self.static_vert.clone();
-            for (i, mut x) in vert.column_iter_mut().enumerate() {
-                x += self.displacement.column(self.static_vert_dmap[i] as usize);
-            }
+            apply_displacement(&mut vert, &self.displacement, &self.static_vert_dmap);
 
             // Build face props and params with deduplication
             let mut face_param_map: HashMap<FaceParam, u32> = HashMap::new();
@@ -1542,35 +1808,21 @@ impl Scene {
                     let mut contact_gap = None;
                     let mut contact_offset = None;
                     let mut friction = None;
-                    for entry in self.static_param.iter() {
-                        if entry.0 == "contact-gap" {
-                            contact_gap = match entry.1 {
-                                ParamValueList::Value(ref v) => Some(v[i]),
-                                _ => panic!("Expected contact-gap parameter to be a value list"),
-                            };
-                        } else if entry.0 == "contact-offset" {
-                            contact_offset = match entry.1 {
-                                ParamValueList::Value(ref v) => Some(v[i]),
-                                _ => panic!("Expected contact-offset parameter to be a value list"),
-                            };
-                        } else if entry.0 == "friction" {
-                            friction = match entry.1 {
-                                ParamValueList::Value(ref v) => Some(v[i]),
-                                _ => panic!("Expected friction parameter to be a value list"),
-                            };
+                    for (name, value) in self.static_param.iter() {
+                        if name == "contact-gap" {
+                            contact_gap = Some(as_value(value, i, name));
+                        } else if name == "contact-offset" {
+                            contact_offset = Some(as_value(value, i, name));
+                        } else if name == "friction" {
+                            friction = Some(as_value(value, i, name));
                         }
                     }
-                    let x0 = vert.column(self.static_tri.column(i)[0]);
-                    let x1 = vert.column(self.static_tri.column(i)[1]);
-                    let x2 = vert.column(self.static_tri.column(i)[2]);
-                    let r0 = (x1 - x0).map(f32::from);
-                    let r1 = (x2 - x0).map(f32::from);
-                    let area = 0.5 * r0.cross(&r1).norm();
+                    let area = super::triutils::area(&vert, &self.static_tri, i);
                     let ghat = contact_gap.unwrap();
                     let offset = contact_offset.unwrap();
                     let friction = friction.unwrap();
                     assert_gt!(area, 0.0, "Area of static triangle {} is zero", i);
-                    assert_gt!(ghat, 0.0, "Contact gap must be non-negative");
+                    assert_gt!(ghat, 0.0, "Contact gap must be positive");
 
                     // Create param and deduplicate
                     let param = FaceParam {
@@ -1590,18 +1842,17 @@ impl Scene {
                         bend_plasticity: 0.0,
                         bend_plasticity_threshold: 0.0,
                         bend_rest_from_geometry: false,
+                        deform_damping: 0.0,
+                        bend_damping: 0.0,
                     };
-                    let param_idx = *face_param_map.entry(param).or_insert_with(|| {
-                        let new_idx = face_params.len() as u32;
-                        face_params.push(param);
-                        new_idx
-                    });
+                    let param_idx = dedup_param(&mut face_param_map, &mut face_params, param);
 
                     FaceProp {
                         area,
                         mass: 0.0,
                         fixed: false,
-                            param_index: param_idx,
+                        rest_excluded: false,
+                        param_index: param_idx,
                     }
                 })
                 .collect::<Vec<_>>();
@@ -1615,7 +1866,7 @@ impl Scene {
                     ([0, 0], 1.0)
                 } else {
                     let last_time = timings[timings.len() - 1];
-                    if time > last_time {
+                    if time >= last_time {
                         ([timings.len() - 1, timings.len() - 1], 1.0)
                     } else {
                         for i in 0..timings.len() - 1 {
@@ -1633,6 +1884,18 @@ impl Scene {
                     }
                 }
             };
+        // Shared blend decision for the wall and sphere keyframe loops: a
+        // single keyframe holds at column 0 (non-kinematic), otherwise the
+        // pair (j, k) and weight w come from calc_coefficient (kinematic).
+        let blend_coeff = |timing: &[f64], transition: &str| -> (usize, usize, f32, bool) {
+            if timing.len() <= 1 {
+                assert_eq!(timing[0], 0.0);
+                (0, 0, 0.0, false)
+            } else {
+                let coeff = calc_coefficient(time, timing, transition);
+                (coeff.0[0], coeff.0[1], coeff.1, true)
+            }
+        };
         let mut fix = Vec::new();
         let mut pull = Vec::new();
         // Bridge into the centralized primitive-typed helpers in
@@ -1733,7 +1996,7 @@ impl Scene {
                     transition,
                     bezier_handles,
                 } => {
-                    if time <= *t_start {
+                    if time < *t_start {
                         return (position, false);
                     }
                     let cur = pin_apply::scale_factor_at(
@@ -1764,97 +2027,24 @@ impl Scene {
                     if times.is_empty() {
                         return (position, false);
                     }
-                    // Pick TRS at the current time with slerp on Q and
-                    // optional Bezier easing on the segment's progress.
-                    let n = times.len();
-                    let (t_arr, q_arr, s_arr) = if time <= times[0] {
-                        (translations[0], quaternions[0], scales[0])
-                    } else if time >= times[n - 1] {
-                        (
-                            translations[n - 1],
-                            quaternions[n - 1],
-                            scales[n - 1],
-                        )
-                    } else {
-                        let mut idx = n - 2;
-                        for k in 0..n - 1 {
-                            if time >= times[k] && time < times[k + 1] {
-                                idx = k;
-                                break;
-                            }
-                        }
-                        let raw = (time - times[idx]) / (times[idx + 1] - times[idx]);
-                        let code = interps.get(idx).copied().unwrap_or(0);
-                        let progress = match code {
-                            0 => raw,                               // LINEAR
-                            1 => bezier_progress(raw, handles[idx]), // BEZIER
-                            2 => 0.0,                               // CONSTANT
-                            other => panic!(
-                                "Unknown transform_keyframes interp code {other}",
-                            ),
-                        };
-                        let t_a = translations[idx];
-                        let t_b = translations[idx + 1];
-                        let s_a = scales[idx];
-                        let s_b = scales[idx + 1];
-                        let t_i = [
-                            (1.0 - progress) * t_a[0] + progress * t_b[0],
-                            (1.0 - progress) * t_a[1] + progress * t_b[1],
-                            (1.0 - progress) * t_a[2] + progress * t_b[2],
-                        ];
-                        let s_i = [
-                            (1.0 - progress) * s_a[0] + progress * s_b[0],
-                            (1.0 - progress) * s_a[1] + progress * s_b[1],
-                            (1.0 - progress) * s_a[2] + progress * s_b[2],
-                        ];
-                        let q_i = quat_slerp(
-                            quaternions[idx],
-                            quaternions[idx + 1],
-                            progress,
-                        );
-                        (t_i, q_i, s_i)
-                    };
-                    // Rotation matrix from quaternion (w,x,y,z).
-                    let (w, x, y, z) = (q_arr[0], q_arr[1], q_arr[2], q_arr[3]);
-                    let r = [
-                        [
-                            1.0 - 2.0 * (y * y + z * z),
-                            2.0 * (x * y - w * z),
-                            2.0 * (x * z + w * y),
-                        ],
-                        [
-                            2.0 * (x * y + w * z),
-                            1.0 - 2.0 * (x * x + z * z),
-                            2.0 * (y * z - w * x),
-                        ],
-                        [
-                            2.0 * (x * z - w * y),
-                            2.0 * (y * z + w * x),
-                            1.0 - 2.0 * (x * x + y * y),
-                        ],
-                    ];
+                    // Evaluate the sparse TRS keyframe timeline through the
+                    // shared core helper so this branch stays bit-identical
+                    // with the frontend preview path (slerp on Q, optional
+                    // Bezier easing, R*S*local + T - rest_t).
                     let lv = local.column(vert_idx);
                     let l = [f64::from(lv[0]), f64::from(lv[1]), f64::from(lv[2])];
-                    let sl = [s_arr[0] * l[0], s_arr[1] * l[1], s_arr[2] * l[2]];
-                    let out = [
-                        r[0][0] * sl[0] + r[0][1] * sl[1] + r[0][2] * sl[2]
-                            + t_arr[0]
-                            - rest_t[0],
-                        r[1][0] * sl[0] + r[1][1] * sl[1] + r[1][2] * sl[2]
-                            + t_arr[1]
-                            - rest_t[1],
-                        r[2][0] * sl[0] + r[2][1] * sl[1] + r[2][2] * sl[2]
-                            + t_arr[2]
-                            - rest_t[2],
-                    ];
-                    (
-                        Vector3::new(
-                            out[0] as f32,
-                            out[1] as f32,
-                            out[2] as f32,
-                        ),
-                        true,
-                    )
+                    let out = ppf_cts_core::datamodel::quat::transform_keyframes_step(
+                        l,
+                        times,
+                        translations,
+                        quaternions,
+                        scales,
+                        interps,
+                        handles,
+                        *rest_t,
+                        time,
+                    );
+                    (from_arr(out), true)
                 }
             }
         };
@@ -1888,11 +2078,22 @@ impl Scene {
                     kinematic = kinematic || did_move;
                 }
 
-                if pin.pull_w > 0.0 {
+                // Per-vertex pull weight overrides the scalar when present.
+                // The decoder drops weight-~0 verts from `index`, so every
+                // member of a per-vertex-weighted holder has w > 0 and takes
+                // the pull branch (a zero weight here would otherwise route a
+                // vertex to the hard `fix` branch and lock it).
+                let w = pin
+                    .pull_weights
+                    .as_ref()
+                    .map(|v| v[i])
+                    .unwrap_or(pin.pull_w);
+
+                if w > 0.0 {
                     pull.push(PullPair {
                         position: position + dx,
                         index: ind as u32,
-                        weight: pin.pull_w,
+                        weight: w,
                     });
                 } else {
                     fix.push(FixPair {
@@ -1977,12 +2178,13 @@ impl Scene {
             let mut stitch = Vec::new();
             for i in 0..self.stitch_ind.ncols() {
                 stitch.push(Stitch {
-                    index: Vec4u::from_iterator(
+                    index: Vec6u::from_iterator(
                         self.stitch_ind.column(i).iter().map(|&x| x as u32),
                     ),
-                    weight: Vec4f::from_iterator(
+                    weight: Vec6f::from_iterator(
                         self.stitch_w.column(i).iter().copied(),
                     ),
+                    stiffness: self.stitch_stiffness[i],
                 });
             }
             stitch
@@ -1996,32 +2198,17 @@ impl Scene {
                 continue;
             }
             let normal = wall.normal;
-            if wall.timing.len() <= 1 {
-                assert_eq!(wall.timing[0], 0.0);
-                let position = wall.position.column(0).into();
-                floor.push(Floor {
-                    ground: position,
-                    ghat: wall.contact_gap,
-                    friction: wall.friction,
-                    thickness: wall.thickness,
-                    up: normal,
-                    kinematic: false,
-                });
-            } else {
-                let coeff = calc_coefficient(time, &wall.timing, &wall.transition);
-                let (j, k) = (coeff.0[0], coeff.0[1]);
-                let w = coeff.1;
-                let position = wall.position.column(j) * (1.0 - w)
-                    + wall.position.column(k) * w;
-                floor.push(Floor {
-                    ground: position,
-                    ghat: wall.contact_gap,
-                    friction: wall.friction,
-                    thickness: wall.thickness,
-                    up: normal,
-                    kinematic: true,
-                });
-            }
+            let (j, k, w, kinematic) = blend_coeff(&wall.timing, &wall.transition);
+            let position = wall.position.column(j) * (1.0 - w)
+                + wall.position.column(k) * w;
+            floor.push(Floor {
+                ground: position,
+                ghat: wall.contact_gap,
+                friction: wall.friction,
+                thickness: wall.thickness,
+                up: normal,
+                kinematic,
+            });
         }
         for s in self.sphere.iter() {
             if s.active_duration >= 0.0 && (time as f32) >= s.active_duration {
@@ -2029,38 +2216,20 @@ impl Scene {
             }
             let reverse = s.inverted;
             let bowl = s.hemisphere;
-            if s.timing.len() <= 1 {
-                assert_eq!(s.timing[0], 0.0);
-                let center = s.center.column(0).into();
-                let radius = s.radius[0];
-                sphere.push(Sphere {
-                    center,
-                    ghat: s.contact_gap,
-                    friction: s.friction,
-                    radius,
-                    thickness: s.thickness,
-                    bowl,
-                    reverse,
-                    kinematic: false,
-                });
-            } else {
-                let coeff = calc_coefficient(time, &s.timing, &s.transition);
-                let (j, k) = (coeff.0[0], coeff.0[1]);
-                let w = coeff.1;
-                let center = s.center.column(j) * (1.0 - w)
-                    + s.center.column(k) * w;
-                let radius = s.radius[j] * (1.0 - w) + s.radius[k] * w;
-                sphere.push(Sphere {
-                    center,
-                    ghat: s.contact_gap,
-                    friction: s.friction,
-                    radius,
-                    thickness: s.thickness,
-                    bowl,
-                    reverse,
-                    kinematic: true,
-                });
-            }
+            let (j, k, w, kinematic) = blend_coeff(&s.timing, &s.transition);
+            let center = s.center.column(j) * (1.0 - w)
+                + s.center.column(k) * w;
+            let radius = s.radius[j] * (1.0 - w) + s.radius[k] * w;
+            sphere.push(Sphere {
+                center,
+                ghat: s.contact_gap,
+                friction: s.friction,
+                radius,
+                thickness: s.thickness,
+                bowl,
+                reverse,
+                kinematic,
+            });
         }
         Constraint {
             fix: CVec::from(&fix[..]),
@@ -2074,45 +2243,91 @@ impl Scene {
         }
     }
 
-    pub fn update_param(&self, _: &SimArgs, mut time: f64, param: &mut ParamSet) {
+    pub fn update_param(&self, _: &SimArgs, time: f64, param: &mut ParamSet) {
         for (title, entries) in self.dyn_args.iter() {
-            time = time.min(
+            // Clamp to this title's final keyframe independently. Use a
+            // per-title local so the clamp never carries over to titles
+            // processed later (each title has its own schedule).
+            let t = time.min(
                 entries
                     .iter()
-                    .fold(0.0_f64, |max_time, (t, _)| max_time.max(*t)),
+                    .fold(0.0_f64, |max_time, (kt, _)| max_time.max(*kt)),
             );
-            for i in 0..entries.len() - 1 {
-                let (t0, v0) = entries[i];
-                let (t1, v1) = entries[i + 1];
-                if time >= t0 && time <= t1 {
-                    let delta_t = t1 - t0;
-                    let w = if delta_t > 0.0 {
-                        (time - t0) / (t1 - t0)
-                    } else {
-                        1.0
-                    };
-                    let val = v0.lerp(v1, w);
-                    match (title.as_str(), val) {
-                        ("gravity", DynParamValue::Vec3(v)) => {
-                            param.gravity = Vec3f::new(v[0] as f32, v[1] as f32, v[2] as f32);
+            let mut apply = |val: DynParamValue| match (title.as_str(), val) {
+                ("gravity", DynParamValue::Vec3(v)) => {
+                    param.gravity = Vec3f::new(v[0] as f32, v[1] as f32, v[2] as f32);
+                }
+                ("gravity", DynParamValue::Scalar(v)) => {
+                    param.gravity = Vec3f::new(0.0, v as f32, 0.0);
+                }
+                ("wind", DynParamValue::Vec3(v)) => {
+                    param.wind = Vec3f::new(v[0] as f32, v[1] as f32, v[2] as f32);
+                }
+                ("air-density", DynParamValue::Scalar(v)) => param.air_density = v as f32,
+                ("air-friction", DynParamValue::Scalar(v)) => param.air_friction = v as f32,
+                ("isotropic-air-friction", DynParamValue::Scalar(v)) => param.isotropic_air_friction = v as f32,
+                ("dt", DynParamValue::Scalar(v)) => param.dt = v as f32,
+                ("playback", DynParamValue::Scalar(v)) => param.playback = v as f32,
+                ("inactive-momentum", DynParamValue::Scalar(v)) => param.inactive_momentum = v > 0.0,
+                _ => (),
+            };
+            // windows(2) yields no pairs for 0- or 1-element schedules, so
+            // there is no usize underflow on a bare/empty section. A single
+            // keyframe holds its value constant (mirrors the collider loops).
+            match entries.as_slice() {
+                [] => continue,
+                [(_, v)] => apply(*v),
+                many => {
+                    for w in many.windows(2) {
+                        let (t0, v0) = w[0];
+                        let (t1, v1) = w[1];
+                        if t >= t0 && t <= t1 {
+                            let delta_t = t1 - t0;
+                            let weight = if delta_t > 0.0 {
+                                (t - t0) / delta_t
+                            } else {
+                                1.0
+                            };
+                            apply(v0.lerp(v1, weight));
                         }
-                        ("gravity", DynParamValue::Scalar(v)) => {
-                            param.gravity = Vec3f::new(0.0, v as f32, 0.0);
-                        }
-                        ("wind", DynParamValue::Vec3(v)) => {
-                            param.wind = Vec3f::new(v[0] as f32, v[1] as f32, v[2] as f32);
-                        }
-                        ("air-density", DynParamValue::Scalar(v)) => param.air_density = v as f32,
-                        ("air-friction", DynParamValue::Scalar(v)) => param.air_friction = v as f32,
-                        ("isotropic-air-friction", DynParamValue::Scalar(v)) => param.isotropic_air_friction = v as f32,
-                        ("dt", DynParamValue::Scalar(v)) => param.dt = v as f32,
-                        ("playback", DynParamValue::Scalar(v)) => param.playback = v as f32,
-                        ("inactive-momentum", DynParamValue::Scalar(v)) => param.inactive_momentum = v > 0.0,
-                        _ => (),
                     }
                 }
             }
         }
+    }
+
+    /// Vertices that are strict kinematic `fix` constraints at time `t0` and
+    /// therefore excluded from velocity overrides. Mirrors the
+    /// fix/pull/torque_only classification in the pin-building loop: a pin
+    /// becomes a strict `fix` constraint iff it's not torque-only and
+    /// `pull_w == 0`. Weak pins (pull) and torque-only pins stay dynamic.
+    fn hard_pinned_at(&self, t0: f64) -> std::collections::HashSet<usize> {
+        self.pin
+            .iter()
+            .filter(|pin| pin.pull_w == 0.0)
+            .filter(|pin| pin.unpin_time.is_none_or(|ut| t0 < ut))
+            .filter(|pin| {
+                let torque_only = !pin.operations.is_empty()
+                    && pin
+                        .operations
+                        .iter()
+                        .all(|op| matches!(op, PinOperation::Torque { .. }));
+                !torque_only
+            })
+            .flat_map(|pin| pin.index.iter().copied())
+            .collect()
+    }
+
+    /// Dynamic (non-hard-pinned) vertices of displacement group `dmap_idx` at
+    /// time `t0`. Shared by the linear and angular velocity overrides.
+    fn override_indices(&self, dmap_idx: u32, t0: f64) -> Vec<u32> {
+        let hard_pinned = self.hard_pinned_at(t0);
+        self.vert_dmap
+            .iter()
+            .enumerate()
+            .filter(|(j, &dm)| dm == dmap_idx && !hard_pinned.contains(j))
+            .map(|(j, _)| j as u32)
+            .collect()
     }
 
     /// Compute velocity overrides that fire during this time step.
@@ -2121,7 +2336,6 @@ impl Scene {
     /// weak pins (pull) and torque-only pins still receive the override since
     /// those vertices remain dynamic.
     pub fn get_velocity_overrides(&self, time: f64, dt: f32) -> Vec<(Vec<u32>, f32, f32, f32)> {
-        use std::collections::HashSet;
         let mut result = Vec::new();
         let time_end = time + dt as f64;
         for (title, entries) in self.dyn_args.iter() {
@@ -2136,28 +2350,7 @@ impl Scene {
                 // Fire only when this step crosses the keyframe time
                 if *t0 >= time && *t0 < time_end {
                     if let DynParamValue::Vec3(vel) = v0 {
-                        // Mirror the fix/pull/torque_only classification in
-                        // the pin-building loop: a pin becomes a strict `fix`
-                        // constraint iff it's not torque-only and pull_w == 0.
-                        let hard_pinned: HashSet<usize> = self
-                            .pin
-                            .iter()
-                            .filter(|pin| pin.pull_w == 0.0)
-                            .filter(|pin| pin.unpin_time.is_none_or(|ut| *t0 < ut))
-                            .filter(|pin| {
-                                let torque_only = !pin.operations.is_empty()
-                                    && pin.operations.iter().all(|op| {
-                                        matches!(op, PinOperation::Torque { .. })
-                                    });
-                                !torque_only
-                            })
-                            .flat_map(|pin| pin.index.iter().copied())
-                            .collect();
-                        let indices: Vec<u32> = self.vert_dmap.iter()
-                            .enumerate()
-                            .filter(|(j, &dm)| dm == dmap_idx && !hard_pinned.contains(j))
-                            .map(|(j, _)| j as u32)
-                            .collect();
+                        let indices = self.override_indices(dmap_idx, *t0);
                         if !indices.is_empty() {
                             result.push((indices, vel[0] as f32, vel[1] as f32, vel[2] as f32));
                         }
@@ -2168,8 +2361,78 @@ impl Scene {
         result
     }
 
+    /// Compute angular velocity overrides that fire during this time step.
+    /// Mirrors [`get_velocity_overrides`] but for `angular_velocity:` keys.
+    /// Each firing entry carries the chosen principal-axis index (0/1/2) and a
+    /// signed angular speed (rad/s) packed as `[pca_index, speed, _]`; the
+    /// actual world-space spin axis is resolved by the caller from the body's
+    /// live geometry so it tracks the simulated (rotated / deformed) pose.
+    /// Returns `(vertex indices, pca_index, speed_rad_per_s)`.
+    pub fn get_angular_velocity_overrides(&self, time: f64, dt: f32) -> Vec<(Vec<u32>, u32, f32)> {
+        let mut result = Vec::new();
+        let time_end = time + dt as f64;
+        for (title, entries) in self.dyn_args.iter() {
+            if !title.starts_with("angular_velocity:") {
+                continue;
+            }
+            let dmap_idx: u32 = match title["angular_velocity:".len()..].parse() {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+            for (t0, v0) in entries.iter() {
+                if *t0 >= time && *t0 < time_end {
+                    if let DynParamValue::Vec3(vel) = v0 {
+                        let indices = self.override_indices(dmap_idx, *t0);
+                        if !indices.is_empty() {
+                            let pca_index = vel[0].round().clamp(0.0, 2.0) as u32;
+                            let speed = vel[1] as f32;
+                            result.push((indices, pca_index, speed));
+                        }
+                    }
+                }
+            }
+        }
+        result
+    }
+
+    /// Compute fixed world-axis angular velocity overrides that fire during
+    /// this time step. Counterpart to [`get_angular_velocity_overrides`] for
+    /// the World X/Y/Z and Custom axis modes: each entry already carries the
+    /// full world-space angular velocity vector `ω` (rad/s), so no per-firing
+    /// principal-axis resolution is needed. Returns `(vertex indices, ω)`.
+    pub fn get_angular_velocity_world_overrides(
+        &self,
+        time: f64,
+        dt: f32,
+    ) -> Vec<(Vec<u32>, [f32; 3])> {
+        let mut result = Vec::new();
+        let time_end = time + dt as f64;
+        for (title, entries) in self.dyn_args.iter() {
+            if !title.starts_with("angular_velocity_world:") {
+                continue;
+            }
+            let dmap_idx: u32 = match title["angular_velocity_world:".len()..].parse() {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+            for (t0, v0) in entries.iter() {
+                if *t0 >= time && *t0 < time_end {
+                    if let DynParamValue::Vec3(w) = v0 {
+                        let indices = self.override_indices(dmap_idx, *t0);
+                        if !indices.is_empty() {
+                            result.push((indices, [w[0] as f32, w[1] as f32, w[2] as f32]));
+                        }
+                    }
+                }
+            }
+        }
+        result
+    }
+
     pub fn build_collision_window_table(&self) -> CollisionWindowTable {
-        const MAX_WINDOWS: usize = 8;
+        // Single source of truth for the cap (also enforced GPU-side via
+        // the `MAX_COLLISION_WINDOWS` #define in cpp/main/main.cu).
+        const MAX_WINDOWS: usize = ppf_cts_core::datamodel::object::MAX_COLLISION_WINDOWS;
 
         // Find all collision_window entries
         let mut windows_by_dmap: HashMap<u32, Vec<(f64, f64)>> = HashMap::new();
@@ -2191,8 +2454,12 @@ impl Scene {
                 })
                 .collect();
             if all_wins.len() > MAX_WINDOWS {
-                warn!("collision_window:{} has {} windows, truncating to {}",
-                      dmap_idx, all_wins.len(), MAX_WINDOWS);
+                // Loud: a FixedScene built outside the Python builder's
+                // ValueError guard reaches here, and silently dropping
+                // windows changes simulation results invisibly.
+                error!("collision_window:{} has {} windows, exceeding the cap of {}; \
+                        extra windows are dropped",
+                       dmap_idx, all_wins.len(), MAX_WINDOWS);
             }
             let wins: Vec<(f64, f64)> = all_wins.into_iter().take(MAX_WINDOWS).collect();
             if !wins.is_empty() {
@@ -2230,22 +2497,81 @@ impl Scene {
         }
     }
 
-    pub fn make_mesh(&mut self) -> MeshSet {
+    /// The initial vertices with per-vertex instancing displacement applied
+    /// (`self.vert + displacement[dmap]`), the base the simulation starts from.
+    fn displaced_vert(&self) -> Matrix3xX<f32> {
         let mut vert = self.vert.clone();
-        for (i, mut x) in vert.column_iter_mut().enumerate() {
-            x += self.displacement.column(self.vert_dmap[i] as usize);
-        }
-        let rest_vertex = self.rest_vert.as_ref().map(|rv| {
-            let mut rest = rv.clone();
-            for (i, mut x) in rest.column_iter_mut().enumerate() {
-                if self.rest_vert_mask[i] {
-                    x += self.displacement.column(self.vert_dmap[i] as usize);
-                } else {
-                    x.copy_from(&vert.column(i));
-                }
+        apply_displacement(&mut vert, &self.displacement, &self.vert_dmap);
+        vert
+    }
+
+    /// Apply the same per-vertex instancing displacement to a rest-vertex set
+    /// that `make_mesh` applies to the static rest pose: masked entries take
+    /// `base + displacement`, unmasked entries fall back to the displaced
+    /// initial vert (`vert`). Shared by the static `rest_vert` and the
+    /// per-frame `rest_vert_schedule` so both stay in the same space.
+    fn displaced_rest(
+        &self,
+        base: &Matrix3xX<f32>,
+        vert: &Matrix3xX<f32>,
+        mask: &[bool],
+    ) -> Matrix3xX<f32> {
+        let mut rest = base.clone();
+        for (i, mut x) in rest.column_iter_mut().enumerate() {
+            if mask[i] {
+                x += self.displacement.column(self.vert_dmap[i] as usize);
+            } else {
+                x.copy_from(&vert.column(i));
             }
-            rest
-        });
+        }
+        rest
+    }
+
+    /// Per-body PDRD rows as written by the Python frontend. Each row
+    /// is 16 f32s: `[vertex_start, vertex_count, volume, centroid.x,
+    /// centroid.y, centroid.z, gram_inv[0..9 row-major],
+    /// mass_per_vertex]`. Empty Vec means "no PDRD bodies."
+    pub fn pdrd_body_rows(&self) -> &[f32] {
+        &self.pdrd_body_rows
+    }
+
+    /// Per-vertex 1-based PDRD body id (0 = not in any PDRD body).
+    pub fn pdrd_vert_index(&self) -> &[u32] {
+        &self.pdrd_vert_index
+    }
+
+    /// Flat list of global vertex indices participating in PDRD
+    /// bodies (body-major).
+    pub fn pdrd_vert_list(&self) -> &[u32] {
+        &self.pdrd_vert_list
+    }
+
+    /// Centered rest position per entry of `pdrd_vert_list`, packed
+    /// (x, y, z). Length 3 * pdrd_vert_list.len().
+    pub fn pdrd_rest_centered(&self) -> &[f32] {
+        &self.pdrd_rest_centered
+    }
+
+    pub fn make_mesh(&mut self) -> MeshSet {
+        let vert = self.displaced_vert();
+        // Capture the vertex count before `vert` is moved into the MeshSet so
+        // a faceless particle cloud sizes its neighbor tables to the real
+        // vertex buffer (see Mesh::new).
+        let n_vert = vert.ncols();
+        let rest_vertex = self
+            .rest_vert
+            .as_ref()
+            .map(|rv| self.displaced_rest(rv, &vert, &self.rest_vert_mask));
+        // Bending reference rest shape: same instancing-displacement
+        // treatment as `rest_vertex`, but gated on its own per-vertex mask
+        // (the objects that opted into a reference rest angle). Unmasked
+        // entries fall back to the displaced initial vert, so a hinge on a
+        // non-reference object computes the same angle whether or not any
+        // reference exists in the scene.
+        let bend_rest_vertex = self
+            .bend_rest_vert
+            .as_ref()
+            .map(|bv| self.displaced_rest(bv, &vert, &self.bend_rest_vert_mask));
         MeshSet {
             vertex: vert,
             uv: self.uv.clone(),
@@ -2254,8 +2580,27 @@ impl Scene {
                 self.tri.clone(),
                 self.tet.clone(),
                 self.shell_count,
+                n_vert,
             ),
             rest_vertex,
+            bend_rest_vertex,
+            bend_rest_vertex_mask: self.bend_rest_vert_mask.clone(),
         }
+    }
+
+    /// The streamed time-varying rest shape, if any: keyframe times (seconds)
+    /// and per-keyframe rest-vertex sets in the same coordinate space as
+    /// `make_mesh`'s `rest_vertex` (instancing displacement applied). The
+    /// backend recomputes `inv_rest` from each frame via
+    /// `builder::compute_inv_rest` and interpolates between them per step.
+    pub fn rest_shape_schedule(&self) -> Option<(Vec<f64>, Vec<Matrix3xX<f32>>)> {
+        let sched = self.rest_vert_schedule.as_ref()?;
+        let vert = self.displaced_vert();
+        let frames = sched
+            .frames
+            .iter()
+            .map(|f| self.displaced_rest(f, &vert, &self.rest_vert_mask))
+            .collect();
+        Some((sched.times.clone(), frames))
     }
 }

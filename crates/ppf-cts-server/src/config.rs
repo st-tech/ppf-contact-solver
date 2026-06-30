@@ -25,6 +25,12 @@ pub struct HardwareInfo {
     pub cpu: String,
     #[serde(rename = "RAM")]
     pub ram: String,
+    /// True when the server was compiled with the `emulated` feature
+    /// (the CPU stub backend used by the test rig, no CUDA). The addon
+    /// reads this off every status response to warn before running a
+    /// simulation that would not produce real physics.
+    #[serde(rename = "emulated", default)]
+    pub emulated: bool,
 }
 
 impl Default for HardwareInfo {
@@ -36,6 +42,7 @@ impl Default for HardwareInfo {
             sm: "Unknown".into(),
             cpu: "Unknown".into(),
             ram: "Unknown".into(),
+            emulated: false,
         }
     }
 }
@@ -51,6 +58,10 @@ pub struct EngineConfig {
     /// (matches server/monitor.py's `SOLVER_STARTUP_GRACE = 3.0`
     /// seconds). Tests can lower this to keep wall-clock short.
     pub solver_startup_grace_ms: u64,
+    /// Backoff in milliseconds applied after a failed `accept()` so the
+    /// accept loop does not busy-spin on hard failures (e.g. fd
+    /// exhaustion). Defaults to 50.
+    pub accept_backoff_ms: u64,
     /// Log channel `(name, filename)` pairs harvested at startup from
     /// the project's `src/` tree via
     /// `ppf_cts_core::parsers::get_logging_docstrings`. Used by
@@ -77,6 +88,7 @@ impl Default for EngineConfig {
             git_branch: "unknown".into(),
             monitor_interval_ms: 250,
             solver_startup_grace_ms: 3000,
+            accept_backoff_ms: 50,
             log_filenames: Vec::new(),
             data_root: None,
         }

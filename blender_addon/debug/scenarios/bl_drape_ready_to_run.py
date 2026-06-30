@@ -83,7 +83,7 @@ try:
     cloth = dh.api.solver.create_group("Cloth", "SHELL")
     cloth.add(sheet.name)
     cloth.param.enable_strain_limit = True
-    cloth.param.strain_limit = 0.05
+    cloth.param.strain_limit_percent = 5.0  # percent (5% allowed stretch)
     cloth.param.bend = 1
     cloth.create_pin(sheet.name, "Corners")
 

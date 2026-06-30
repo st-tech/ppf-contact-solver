@@ -16,16 +16,6 @@ RUN apt-get update && \
   apt-get install -y python3 python3-venv && \
   python3 warmup.py --skip-confirmation && \
   /root/.cargo/bin/cargo build && \
-  # Build + install the PyO3 extension `_ppf_cts_py` into the venv.
-  # frontend/__init__.py hard-imports it, so any image that runs
-  # examples/headless.py needs the wheel present.
-  /root/.local/share/ppf-cts/venv/bin/pip install --upgrade maturin && \
-  PATH=/root/.cargo/bin:$PATH /root/.local/share/ppf-cts/venv/bin/maturin build --release \
-    --manifest-path crates/ppf-cts-py/Cargo.toml \
-    --interpreter /root/.local/share/ppf-cts/venv/bin/python \
-    --out /tmp/wheels && \
-  /root/.local/share/ppf-cts/venv/bin/pip install /tmp/wheels/*.whl && \
-  rm -rf /tmp/wheels && \
   rm -rf /root/${PROJ_NAME}
 
 WORKDIR /root
@@ -68,6 +58,12 @@ RUN apt-get update && \
 COPY --from=builder /root/${PROJ_NAME}/target/release/ppf-contact-solver /root/${PROJ_NAME}/target/release/ppf-contact-solver
 COPY --from=builder /root/${PROJ_NAME}/target/release/ppf-cts-server /root/${PROJ_NAME}/target/release/ppf-cts-server
 COPY --from=builder /root/${PROJ_NAME}/target/release/build/ppf-cts-solver-*/out/lib/*.so /usr/local/lib/
+# The PyO3 cdylib (ppf-cts-py is a workspace default-member, so the release
+# build above produces it). frontend/__init__.py loads it directly by
+# absolute path from target/release and registers it as _ppf_cts_py, so the
+# runtime image needs it at this exact path. No glob: a missing cdylib must
+# fail the build loudly (there is no wheel fallback).
+COPY --from=builder /root/${PROJ_NAME}/target/release/lib_ppf_cts_py.so /root/${PROJ_NAME}/target/release/lib_ppf_cts_py.so
 COPY --from=builder /root/${PROJ_NAME}/*.py /root/${PROJ_NAME}/
 COPY --from=builder /root/${PROJ_NAME}/Cargo.toml /root/${PROJ_NAME}/
 COPY --from=builder /root/${PROJ_NAME}/LICENSE /root/${PROJ_NAME}/
@@ -84,7 +80,10 @@ COPY --from=builder /root/${PROJ_NAME}/.git/branch_name.txt /root/${PROJ_NAME}/.
 COPY --from=builder /root/${PROJ_NAME}/.github/workflows/scripts/examples.txt /root/${PROJ_NAME}/examples.txt
 COPY --from=builder /root/${PROJ_NAME}/bin/ffmpeg /root/${PROJ_NAME}/bin/ffmpeg
 
-# Copy virtual environment from base-image (which has the venv created)
+# Copy virtual environment from base-image (which has the venv created).
+# The venv provides the pure-python deps (cbor2, psutil, jupyter); the PyO3
+# extension is NOT installed here. frontend/__init__.py loads the cdylib
+# directly from target/release/lib_ppf_cts_py.so (copied above).
 COPY --from=base-image /root/.local/share/ppf-cts/venv /root/.local/share/ppf-cts/venv
 
 # Clean up venv cache files and unnecessary content to reduce image size

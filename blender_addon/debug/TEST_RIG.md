@@ -33,12 +33,14 @@ The ``--features emulated`` build:
 
 ```sh
 # Build the emulated Rust binary (one-time, on any host).
-cargo build --release -p ppf-cts-server --features emulated
+# On a CUDA host build.rs blocks the stub by default (it would overwrite the
+# real binary); PPF_ALLOW_EMULATED=1 opts in. Harmless on CUDA-less hosts.
+PPF_ALLOW_EMULATED=1 cargo build --release -p ppf-cts-server --features emulated
 
 # Install Blender-side deps (one-time).
 ./install-blender-addon.sh
 python3.12 -m venv .venv
-.venv/bin/python -m pip install numpy scipy tqdm psutil tomli ipython pillow pythreejs pytetwild
+.venv/bin/python -m pip install numpy scipy tqdm psutil tomli ipython pillow pythreejs pytetwild tetgen
 
 # All scenarios.
 python3.12 blender_addon/debug/main.py runtests
@@ -197,7 +199,11 @@ The default build links ``simbackend_cuda`` and requires the CUDA
 toolkit. To build a CUDA-free binary for the test rig:
 
 ```sh
-cargo build --release -p ppf-cts-server --features emulated
+# On a host that HAS the CUDA toolkit, build.rs refuses the emulated
+# build by default (the stub would silently overwrite the real CUDA
+# binary at target/release/). Opt in with PPF_ALLOW_EMULATED=1. On a
+# CUDA-less host the variable is unnecessary but harmless.
+PPF_ALLOW_EMULATED=1 cargo build --release -p ppf-cts-server --features emulated
 ```
 
 The workspace produces two release binaries that matter here:

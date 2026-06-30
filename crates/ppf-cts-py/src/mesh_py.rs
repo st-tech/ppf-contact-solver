@@ -64,71 +64,17 @@ fn read_pts_array2_f64(arr: &PyReadonlyArray2<'_, f64>) -> PyResult<ndarray::Arr
 }
 
 /// Try to read a `(N, M)` indices array. Accepts dtype int32, int64,
-/// uint32, or uint64. Validates `ncols == m`.
-fn read_indices_u32(arr: &Bound<'_, PyAny>, m: usize, name: &str) -> PyResult<ndarray::Array2<u32>> {
-    fn check_shape(shape: &[usize], m: usize, name: &str) -> PyResult<()> {
-        if shape.len() != 2 || shape[1] != m {
-            return Err(PyValueError::new_err(format!(
-                "{name} must have shape (N, {m}), got {shape:?}"
-            )));
-        }
-        Ok(())
-    }
-    if let Ok(view) = arr.extract::<PyReadonlyArray2<'_, u32>>() {
-        let shape = view.shape();
-        check_shape(shape, m, name)?;
-        let slice = view
-            .as_slice()
-            .map_err(|_| PyTypeError::new_err(format!("{name} must be C-contiguous")))?;
-        return ndarray::Array2::from_shape_vec((shape[0], m), slice.to_vec())
-            .map_err(|e| PyValueError::new_err(format!("reshape failed: {e}")));
-    }
-    if let Ok(view) = arr.extract::<PyReadonlyArray2<'_, i32>>() {
-        let shape = view.shape();
-        check_shape(shape, m, name)?;
-        let slice = view
-            .as_slice()
-            .map_err(|_| PyTypeError::new_err(format!("{name} must be C-contiguous")))?;
-        let buf: Vec<u32> = slice.iter().map(|&v| v as u32).collect();
-        return ndarray::Array2::from_shape_vec((shape[0], m), buf)
-            .map_err(|e| PyValueError::new_err(format!("reshape failed: {e}")));
-    }
-    if let Ok(view) = arr.extract::<PyReadonlyArray2<'_, i64>>() {
-        let shape = view.shape();
-        check_shape(shape, m, name)?;
-        let slice = view
-            .as_slice()
-            .map_err(|_| PyTypeError::new_err(format!("{name} must be C-contiguous")))?;
-        let buf: Vec<u32> = slice.iter().map(|&v| v as u32).collect();
-        return ndarray::Array2::from_shape_vec((shape[0], m), buf)
-            .map_err(|e| PyValueError::new_err(format!("reshape failed: {e}")));
-    }
-    if let Ok(view) = arr.extract::<PyReadonlyArray2<'_, u64>>() {
-        let shape = view.shape();
-        check_shape(shape, m, name)?;
-        let slice = view
-            .as_slice()
-            .map_err(|_| PyTypeError::new_err(format!("{name} must be C-contiguous")))?;
-        let buf: Vec<u32> = slice.iter().map(|&v| v as u32).collect();
-        return ndarray::Array2::from_shape_vec((shape[0], m), buf)
-            .map_err(|e| PyValueError::new_err(format!("reshape failed: {e}")));
-    }
-    Err(PyTypeError::new_err(format!(
-        "{name} must be int32/int64/uint32/uint64 ndarray of shape (N, {m})"
-    )))
-}
-
-fn vec3_arg(arr: numpy::PyReadonlyArray1<'_, f64>, name: &str) -> PyResult<[f64; 3]> {
-    let s = arr
-        .as_slice()
-        .map_err(|_| PyTypeError::new_err(format!("{name} must be C-contiguous")))?;
-    if s.len() != 3 {
-        return Err(PyValueError::new_err(format!(
-            "{name} must have length 3, got {}",
-            s.len()
-        )));
-    }
-    Ok([s[0], s[1], s[2]])
+/// uint32, or uint64. Validates `ncols == M`. Delegates the dtype
+/// dispatch to `utils_py::read_index_array` and reshapes the flat
+/// result into a `(N, M)` array.
+fn read_indices_u32<const M: usize>(
+    arr: &Bound<'_, PyAny>,
+    name: &str,
+) -> PyResult<ndarray::Array2<u32>> {
+    let flat = crate::utils_py::read_index_array::<u32, M>(arr, name)?;
+    let rows = flat.len() / M;
+    ndarray::Array2::from_shape_vec((rows, M), flat)
+        .map_err(|e| PyValueError::new_err(format!("reshape failed: {e}")))
 }
 
 // ---------------------------------------------------------------------------
@@ -329,8 +275,8 @@ pub fn mesh_transform_verts_2d<'py>(
             v[[i, 2]] = s[3 * i + 2];
         }
     }
-    let ex_v = vec3_arg(ex, "ex")?;
-    let ey_v = vec3_arg(ey, "ey")?;
+    let ex_v = crate::utils_py::vec3(&ex, "ex")?;
+    let ey_v = crate::utils_py::vec3(&ey, "ey")?;
     let out = py.allow_threads(|| mesh_core::transform_verts_2d(&v, ex_v, ey_v));
     Ok(out.into_pyarray(py))
 }
@@ -395,7 +341,7 @@ pub fn mesh_fix_skinny_triangles<'py>(
     min_angle_deg: f64,
 ) -> PyResult<Bound<'py, PyTuple>> {
     let v = read_verts_array2_f64(&verts)?;
-    let f = read_indices_u32(faces, 3, "faces")?;
+    let f = read_indices_u32::<3>(faces, "faces")?;
     let (v_out, f_out) = py.allow_threads(|| mesh_core::fix_skinny_triangles(&v, &f, min_angle_deg));
     let n_faces = f_out.nrows();
     let buf: Vec<i32> = f_out.iter().map(|&v| v as i32).collect();
@@ -430,7 +376,7 @@ pub fn mesh_tet_extract_surface<'py>(
     min_volume: f64,
 ) -> PyResult<Bound<'py, PyTuple>> {
     let v = read_verts_array2_f64(&verts)?;
-    let t = read_indices_u32(tet, 4, "tet")?;
+    let t = read_indices_u32::<4>(tet, "tet")?;
     let out = py.allow_threads(|| mesh_core::tet_extract_surface(&v, &t, min_volume));
     let n_tri = out.tri.nrows();
     let n_tet = out.tet.nrows();
@@ -508,8 +454,8 @@ pub fn mesh_rectangle_with_uv<'py>(
             "res_x must be >= 2, got {res_x}"
         )));
     }
-    let ex_v = vec3_arg(ex, "ex")?;
-    let ey_v = vec3_arg(ey, "ey")?;
+    let ex_v = crate::utils_py::vec3(&ex, "ex")?;
+    let ey_v = crate::utils_py::vec3(&ey, "ey")?;
     let (verts, faces) = py.allow_threads(|| {
         mesh_core::rectangle_with_uv(res_x, width, height, ex_v, ey_v, gen_uv)
     });

@@ -299,9 +299,11 @@ REM Install Full Python (with libs\python3.lib + include\) via NuGet
 REM ============================================================
 REM
 REM The embedded Python distribution from python.org strips libs/ and
-REM include/, so it can't be used as the maturin interpreter for the
-REM PyO3 wheel: PyO3's link step needs python3.lib, which only ships
-REM with the dev-headers payload of a regular CPython install.
+REM include/, so it can't be used as the PyO3 build interpreter for the
+REM _ppf_cts_py.dll cdylib: PyO3's Windows link step needs python3.lib,
+REM which only ships with the dev-headers payload of a regular CPython
+REM install. build.bat points PYO3_PYTHON at this python_full for
+REM `cargo build --release`.
 REM
 REM Pull a fully portable CPython via the official NuGet `python`
 REM package (https://www.nuget.org/packages/python). Unlike the
@@ -440,12 +442,12 @@ if errorlevel 1 (
     )
 
     echo.
-    echo Installing pytetwild (fTetWild wrapper^) + pyvista...
+    echo Installing pytetwild (fTetWild^) + tetgen (TetGen^) + pyvista...
     rem pyvista is imported at the top of pytetwild._accessor but is not
     rem declared as a hard dependency, so install it explicitly.
-    "%PYTHON%" -m pip install --no-warn-script-location pytetwild pyvista
+    "%PYTHON%" -m pip install --no-warn-script-location pytetwild tetgen pyvista
     if errorlevel 1 (
-        echo WARNING: pytetwild failed to install
+        echo WARNING: pytetwild/tetgen failed to install
     )
 
     echo.

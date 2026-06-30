@@ -18,6 +18,8 @@ pub mod asset;
 pub mod collider;
 pub mod decoder;
 pub mod easing;
+pub mod elastic_model;
+pub mod interp_consts;
 pub mod mesh;
 pub mod object;
 pub mod param_manager;
@@ -41,6 +43,7 @@ pub use decoder::{
     StitchRows, TetraJob,
 };
 pub use easing::{bezier_progress, eased_progress, TransitionKind};
+pub use elastic_model::{model_id_to_name, model_name_to_id, MODEL_NAMES};
 pub use mesh::{
     bbox, box_mesh, cone_mesh, fix_skinny_triangles, generate_cylinder_faces,
     generate_cylinder_verts, generate_grid_faces, generate_rect_faces, icosphere, line_mesh,
@@ -53,8 +56,7 @@ pub use params::{
     app_param, object_param, ObjectKind, ParamEntry, ParamError, ParamHolder, ParamValue,
 };
 pub use pin::{
-    CenterMode, InterpMode, KeyframeSegment, MoveByDelta, PinData, PinKeyframe, PinOperation,
-    SpinData,
+    CenterMode, InterpMode, KeyframeSegment, MoveByDelta, PinData, PinOperation,
 };
 pub use pin_apply::{
     move_by_step, move_to_step, progress_at, scale_factor_at, scale_step, spin_angle_rad,
@@ -62,9 +64,9 @@ pub use pin_apply::{
 };
 pub use quat::{
     apply_transform_to_verts, axis_angle_to_quat, mat3_to_quat, quat_multiply, quat_to_mat3, slerp,
-    Mat3, Quat, Vec3,
+    transform_keyframes_step, Mat3, Quat, Vec3,
 };
-pub use scene::{CrossStitch, ExplicitMergePair, Scene, SceneError, SurfaceMap};
+pub use scene::{CrossStitch, Scene, SceneError, SurfaceMap};
 pub use session::{
     analyze_solver_error, convert_integer, convert_time, is_saving_in_progress, latest_log_value,
     latest_vertex_frame, list_saved_states, list_vertex_frames, project_resumable,

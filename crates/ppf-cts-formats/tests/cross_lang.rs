@@ -116,6 +116,7 @@ fn param_fixture_decodes() {
     let shell_pins = &payload.pin_config["uuid-shell-1"];
     let v0 = &shell_pins[&0];
     assert_eq!(v0.unpin_time, Some(1.0));
+    assert_eq!(v0.pin_group_id.as_deref(), Some("uuid-shell-1:vg-a"));
     assert_eq!(v0.operations.len(), 2);
     match &v0.operations[0] {
         PinOperation::Spin(s) => assert_eq!(s.angular_velocity, 360.0),
@@ -127,16 +128,6 @@ fn param_fixture_decodes() {
     }
     let v3 = &shell_pins[&3];
     assert!(v3.operations.is_empty());
-
-    // merge_pairs: optional uuid slots.
-    assert_eq!(payload.merge_pairs.len(), 2);
-    assert_eq!(payload.merge_pairs[0].3.as_deref(), Some("uuid-shell-1"));
-    assert!(payload.merge_pairs[1].3.is_none());
-
-    // Explicit merge pairs.
-    let emp = payload.explicit_merge_pairs.as_ref().unwrap();
-    assert_eq!(emp.len(), 1);
-    assert_eq!(emp[0].pairs, vec![[0, 0], [1, 1]]);
 
     // Cross-stitch.
     let cs = payload.cross_stitch.as_ref().unwrap();

@@ -11,7 +11,7 @@
 use std::path::PathBuf;
 
 use numpy::{PyReadonlyArray2, PyUntypedArrayMethods};
-use pyo3::exceptions::{PyRuntimeError, PyTypeError, PyValueError};
+use pyo3::exceptions::{PyOSError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 
 use ppf_cts_core::utils;
@@ -20,6 +20,22 @@ use ppf_cts_core::utils;
 // Shared array-shape and index-decode helpers used by `decoder_py`,
 // `kernels`, and `scene_py`. Centralizing keeps the dtype-acceptance
 // rules and error-message format consistent across bindings.
+
+/// Extract a length-3 `[f64; 3]` from a 1-D f64 ndarray. Emits a
+/// `PyTypeError` if the array is not C-contiguous and a `PyValueError`
+/// if its length is not 3.
+pub(crate) fn vec3(arr: &numpy::PyReadonlyArray1<'_, f64>, name: &str) -> PyResult<[f64; 3]> {
+    let s = arr
+        .as_slice()
+        .map_err(|_| PyTypeError::new_err(format!("{name} must be C-contiguous")))?;
+    if s.len() != 3 {
+        return Err(PyValueError::new_err(format!(
+            "{name} must have length 3, got {}",
+            s.len()
+        )));
+    }
+    Ok([s[0], s[1], s[2]])
+}
 
 /// Verify that `arr` is a 2-D ndarray of shape `(N, K)` and return `N`.
 /// Emits `PyValueError` on shape mismatch.
@@ -36,9 +52,9 @@ pub(crate) fn require_n_by_k<T: numpy::Element, const K: usize>(
     Ok(s[0])
 }
 
-/// Output integer types accepted by [`read_index_array`]. Implemented
-/// for `u32` and `i64`; conversion is the same `as`-cast each call site
-/// used pre-refactor.
+/// Output integer type accepted by [`read_index_array`]. The input
+/// dtype (u32/i32/i64/u64) is widened or narrowed via an `as`-cast at
+/// each match arm. Implemented for `u32`, `i32`, and `i64`.
 pub(crate) trait IndexOut: Copy {
     fn from_u32(v: u32) -> Self;
     fn from_i32(v: i32) -> Self;
@@ -55,6 +71,17 @@ impl IndexOut for u32 {
     fn from_i64(v: i64) -> Self { v as u32 }
     #[inline]
     fn from_u64(v: u64) -> Self { v as u32 }
+}
+
+impl IndexOut for i32 {
+    #[inline]
+    fn from_u32(v: u32) -> Self { v as i32 }
+    #[inline]
+    fn from_i32(v: i32) -> Self { v }
+    #[inline]
+    fn from_i64(v: i64) -> Self { v as i32 }
+    #[inline]
+    fn from_u64(v: u64) -> Self { v as i32 }
 }
 
 impl IndexOut for i64 {
@@ -77,15 +104,37 @@ pub(crate) fn read_index_array<T: IndexOut, const COLS: usize>(
     arr: &Bound<'_, PyAny>,
     name: &str,
 ) -> PyResult<Vec<T>> {
+    read_index_array_impl::<T, COLS>(arr, name, false)
+}
+
+/// Like [`read_index_array`] but tolerates a zero-row input whose column
+/// count does not match `COLS` (e.g. an empty `(0, 0)` buffer). A
+/// non-empty input must still have exactly `COLS` columns. Used by
+/// callers that accept empty tri/rod/static_tris arrays.
+pub(crate) fn read_index_array_allow_empty<T: IndexOut, const COLS: usize>(
+    arr: &Bound<'_, PyAny>,
+    name: &str,
+) -> PyResult<Vec<T>> {
+    read_index_array_impl::<T, COLS>(arr, name, true)
+}
+
+fn read_index_array_impl<T: IndexOut, const COLS: usize>(
+    arr: &Bound<'_, PyAny>,
+    name: &str,
+    allow_empty: bool,
+) -> PyResult<Vec<T>> {
     fn shape_err<const COLS: usize>(name: &str, s: &[usize]) -> PyErr {
         PyValueError::new_err(format!("{name} must be (N, {COLS}), got {s:?}"))
     }
     fn cont_err(name: &str) -> PyErr {
         PyTypeError::new_err(format!("{name} must be C-contiguous"))
     }
+    fn shape_bad<const COLS: usize>(s: &[usize], allow_empty: bool) -> bool {
+        s.len() != 2 || (!(allow_empty && s[0] == 0) && s[1] != COLS)
+    }
     if let Ok(view) = arr.extract::<PyReadonlyArray2<'_, u32>>() {
         let s = view.shape();
-        if s.len() != 2 || s[1] != COLS {
+        if shape_bad::<COLS>(s, allow_empty) {
             return Err(shape_err::<COLS>(name, s));
         }
         let slice = view.as_slice().map_err(|_| cont_err(name))?;
@@ -93,7 +142,7 @@ pub(crate) fn read_index_array<T: IndexOut, const COLS: usize>(
     }
     if let Ok(view) = arr.extract::<PyReadonlyArray2<'_, i32>>() {
         let s = view.shape();
-        if s.len() != 2 || s[1] != COLS {
+        if shape_bad::<COLS>(s, allow_empty) {
             return Err(shape_err::<COLS>(name, s));
         }
         let slice = view.as_slice().map_err(|_| cont_err(name))?;
@@ -101,7 +150,7 @@ pub(crate) fn read_index_array<T: IndexOut, const COLS: usize>(
     }
     if let Ok(view) = arr.extract::<PyReadonlyArray2<'_, i64>>() {
         let s = view.shape();
-        if s.len() != 2 || s[1] != COLS {
+        if shape_bad::<COLS>(s, allow_empty) {
             return Err(shape_err::<COLS>(name, s));
         }
         let slice = view.as_slice().map_err(|_| cont_err(name))?;
@@ -109,7 +158,7 @@ pub(crate) fn read_index_array<T: IndexOut, const COLS: usize>(
     }
     if let Ok(view) = arr.extract::<PyReadonlyArray2<'_, u64>>() {
         let s = view.shape();
-        if s.len() != 2 || s[1] != COLS {
+        if shape_bad::<COLS>(s, allow_empty) {
             return Err(shape_err::<COLS>(name, s));
         }
         let slice = view.as_slice().map_err(|_| cont_err(name))?;
@@ -140,46 +189,47 @@ pub(crate) fn read_index_array_chunked<T: IndexOut + Default, const COLS: usize>
     Ok(out)
 }
 
+/// Read a 1-D index ndarray and return a flat `Vec<T>`. Accepts dtypes
+/// `u32`, `i32`, `i64`, `u64`. The 1-D analog of [`read_index_array`]:
+/// same dtype order, same `IndexOut` casts, same C-contiguous handling.
+/// Requires C-contiguous input.
+pub(crate) fn read_index_array_1d<T: IndexOut>(
+    arr: &Bound<'_, PyAny>,
+    name: &str,
+) -> PyResult<Vec<T>> {
+    use numpy::PyReadonlyArray1;
+    fn cont_err(name: &str) -> PyErr {
+        PyTypeError::new_err(format!("{name} must be C-contiguous"))
+    }
+    if let Ok(view) = arr.extract::<PyReadonlyArray1<'_, u32>>() {
+        let slice = view.as_slice().map_err(|_| cont_err(name))?;
+        return Ok(slice.iter().map(|&v| T::from_u32(v)).collect());
+    }
+    if let Ok(view) = arr.extract::<PyReadonlyArray1<'_, i32>>() {
+        let slice = view.as_slice().map_err(|_| cont_err(name))?;
+        return Ok(slice.iter().map(|&v| T::from_i32(v)).collect());
+    }
+    if let Ok(view) = arr.extract::<PyReadonlyArray1<'_, i64>>() {
+        let slice = view.as_slice().map_err(|_| cont_err(name))?;
+        return Ok(slice.iter().map(|&v| T::from_i64(v)).collect());
+    }
+    if let Ok(view) = arr.extract::<PyReadonlyArray1<'_, u64>>() {
+        let slice = view.as_slice().map_err(|_| cont_err(name))?;
+        return Ok(slice.iter().map(|&v| T::from_u64(v)).collect());
+    }
+    Err(PyTypeError::new_err(format!(
+        "{name} must be a 1-D ndarray of int32/int64/uint32/uint64",
+    )))
+}
+
 /// Read a 1-D index ndarray of any int dtype (u32 / i32 / i64 / u64)
-/// and return a `Vec<u32>`. Requires C-contiguous input.
+/// and return a `Vec<u32>`. Thin `u32` wrapper over
+/// [`read_index_array_1d`]. Requires C-contiguous input.
 pub(crate) fn read_index_array_1d_u32(
     arr: &Bound<'_, PyAny>,
     name: &str,
 ) -> PyResult<Vec<u32>> {
-    use numpy::PyReadonlyArray1;
-    if let Ok(view) = arr.extract::<PyReadonlyArray1<'_, u32>>() {
-        return Ok(view
-            .as_slice()
-            .map_err(|_| PyTypeError::new_err(format!("{name} must be C-contiguous")))?
-            .to_vec());
-    }
-    if let Ok(view) = arr.extract::<PyReadonlyArray1<'_, i64>>() {
-        return Ok(view
-            .as_slice()
-            .map_err(|_| PyTypeError::new_err(format!("{name} must be C-contiguous")))?
-            .iter()
-            .map(|&v| v as u32)
-            .collect());
-    }
-    if let Ok(view) = arr.extract::<PyReadonlyArray1<'_, i32>>() {
-        return Ok(view
-            .as_slice()
-            .map_err(|_| PyTypeError::new_err(format!("{name} must be C-contiguous")))?
-            .iter()
-            .map(|&v| v as u32)
-            .collect());
-    }
-    if let Ok(view) = arr.extract::<PyReadonlyArray1<'_, u64>>() {
-        return Ok(view
-            .as_slice()
-            .map_err(|_| PyTypeError::new_err(format!("{name} must be C-contiguous")))?
-            .iter()
-            .map(|&v| v as u32)
-            .collect());
-    }
-    Err(PyTypeError::new_err(format!(
-        "{name} must be a 1-D numpy array of int/uint dtype"
-    )))
+    read_index_array_1d::<u32>(arr, name)
 }
 
 #[pyfunction]
@@ -231,13 +281,9 @@ pub fn get_export_base_path() -> String {
 /// `_utils_.py:dict_to_html_table`. Cell values are passed pre-
 /// stringified so the Rust side stays agnostic of Python types.
 #[pyfunction]
-#[pyo3(signature = (columns, classes = "table".to_string(), index = false))]
-pub fn dict_to_html_table(
-    columns: Vec<(String, Vec<String>)>,
-    classes: String,
-    index: bool,
-) -> String {
-    utils::dict_to_html_table(&columns, &classes, index)
+#[pyo3(signature = (columns, classes = "table".to_string()))]
+pub fn dict_to_html_table(columns: Vec<(String, Vec<String>)>, classes: String) -> String {
+    utils::dict_to_html_table(&columns, &classes)
 }
 
 /// Read the `.CI` marker file under the given frontend directory.
@@ -272,7 +318,7 @@ pub fn has_cli_or_ci_marker(frontend_dir: &str) -> bool {
 #[pyfunction]
 pub fn make_dir(path: &str) -> PyResult<()> {
     std::fs::create_dir_all(PathBuf::from(path))
-        .map_err(|e| PyRuntimeError::new_err(format!("create_dir_all({path}) failed: {e}")))
+        .map_err(|e| PyOSError::new_err(format!("create_dir_all({path}) failed: {e}")))
 }
 
 /// Register the additional helpers. The callers in `lib.rs` already

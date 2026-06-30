@@ -17,6 +17,7 @@ from .primitives import (
     _generate_rotation_arc,
     _generate_vertex_arrow,
     _max_towards_centroid,
+    _max_towards_selected,
 )
 
 
@@ -150,6 +151,8 @@ def _build_operation_batches(scene, depsgraph, view_distance=10.0):
     Metal (Blender 5.x macOS) has no fixed-function point size and
     gpu.state.point_size_set is a no-op.
     """
+    from ....core.transform import _to_blender
+
     shader = gpu.shader.from_builtin("UNIFORM_COLOR")
     point_shader = gpu.shader.from_builtin("POINT_UNIFORM_COLOR")
     batches = []
@@ -219,8 +222,8 @@ def _build_operation_batches(scene, depsgraph, view_distance=10.0):
                         center = Vector(op.spin_center)
                     elif op.spin_center_mode == "MAX_TOWARDS":
                         center = _max_towards_centroid(vertices, Vector(op.spin_center_direction))
-                    elif op.spin_center_mode == "VERTEX" and op.spin_center_vertex >= 0:
-                        center = world_matrix @ obj.data.vertices[op.spin_center_vertex].co
+                    elif op.spin_center_mode == "VERTEX" and 0 <= op.spin_center_vertex < len(mesh.vertices):
+                        center = world_matrix @ mesh.vertices[op.spin_center_vertex].co
                     else:
                         center = centroid
                     axis = Vector(op.spin_axis)
@@ -281,8 +284,8 @@ def _build_operation_batches(scene, depsgraph, view_distance=10.0):
                         center = Vector(op.scale_center)
                     elif op.scale_center_mode == "MAX_TOWARDS":
                         center = _max_towards_centroid(vertices, Vector(op.scale_center_direction))
-                    elif op.scale_center_mode == "VERTEX" and op.scale_center_vertex >= 0:
-                        center = world_matrix @ obj.data.vertices[op.scale_center_vertex].co
+                    elif op.scale_center_mode == "VERTEX" and 0 <= op.scale_center_vertex < len(mesh.vertices):
+                        center = world_matrix @ mesh.vertices[op.scale_center_vertex].co
                     else:
                         center = centroid
                     factor = op.scale_factor
@@ -345,7 +348,7 @@ def _build_operation_batches(scene, depsgraph, view_distance=10.0):
                     if _np.dot(sax, sd[hint_idx]) < 0:
                         sax = -sax
                     # Transform back to Blender: solver [x,y,z] -> Blender [x,-z,y]
-                    axis = Vector((float(sax[0]), float(-sax[2]), float(sax[1]))).normalized()
+                    axis = Vector(_to_blender(sax)).normalized()
 
                     total_dist = 0
                     for v in vertices:
@@ -377,7 +380,6 @@ def _build_operation_batches(scene, depsgraph, view_distance=10.0):
                     })
 
             # Max Towards visualization: highlight selected vertices + direction arrow
-            import numpy as _np
             for op in pin_ref.operations:
                 show = False
                 direction = None
@@ -390,12 +392,8 @@ def _build_operation_batches(scene, depsgraph, view_distance=10.0):
                 if not show or direction is None or direction.length < 1e-6:
                     continue
                 d = direction.normalized()
-                positions = _np.array([list(v) for v in vertices])
-                projections = positions @ _np.array(d)
-                max_val = projections.max()
-                eps = 1e-3
-                mask = projections > max_val - eps
-                selected_verts = [vertices[i] for i in range(len(vertices)) if mask[i]]
+                # Same selection rule as the resolved center (eps lives in the helper).
+                selected_verts = _max_towards_selected(vertices, direction)
                 if not selected_verts:
                     continue
                 # Highlighted points batch (drawn as small spheres via POINTS)
@@ -440,5 +438,88 @@ def _build_operation_batches(scene, depsgraph, view_distance=10.0):
                     "pos_3d": pos,
                     "color": (0.0, 1.0, 0.5, 0.9),
                 })
+
+    return batches, labels
+
+
+def _build_pdrd_hinge_batches(scene, depsgraph, view_distance=10.0):
+    """Build hinge-axle gizmos for PDRD bodies with the hinge enabled.
+
+    For each included PDRD body whose ``pdrd_hinge_enable`` is set (a per-object
+    setting), draw a ring (plus a full-turn arc) in the plane perpendicular to
+    the chosen principal (PCA) axis through the body centroid. This is exactly
+    the axle the solver pins (see ``Object.hinge`` and the frontend PCA bake),
+    and the axis ordering matches (``_compute_pca_axes`` returns PC1/PC2/PC3 in
+    descending eigenvalue order, the same convention the frontend uses).
+
+    Returns ``(batches, labels)`` in the same shape as
+    :func:`_build_operation_batches`.
+    """
+    from ....core.uuid_registry import resolve_assigned
+
+    shader = gpu.shader.from_builtin("UNIFORM_COLOR")
+    batches = []
+    labels = []
+    rgb = (0.2, 0.7, 1.0)  # cyan axle
+
+    for group in iterate_active_object_groups(scene):
+        if group.object_type != "PDRD":
+            continue
+        if not getattr(group, "pdrd_hinge_visualize", True):
+            continue
+        for assigned in group.assigned_objects:
+            if not getattr(assigned, "included", True):
+                continue
+            if not getattr(assigned, "pdrd_hinge_enable", False):
+                continue
+            comp_idx = {"0": 0, "1": 1, "2": 2}.get(
+                str(assigned.pdrd_hinge_axis), 2
+            )
+            obj = resolve_assigned(assigned)
+            if obj is None or obj.type != "MESH":
+                continue
+            eval_obj = obj.evaluated_get(depsgraph)
+            mesh = eval_obj.data
+            world_matrix = eval_obj.matrix_world
+            vertices = [world_matrix @ v.co for v in mesh.vertices]
+            if len(vertices) < 2:
+                continue
+            pca = _compute_pca_axes(vertices)
+            if pca is None:
+                continue
+            center, eigvecs = pca
+            axis = Vector((
+                float(eigvecs[0, comp_idx]),
+                float(eigvecs[1, comp_idx]),
+                float(eigvecs[2, comp_idx]),
+            ))
+            if axis.length < 1e-6:
+                continue
+            axis = axis.normalized()
+            # Ring radius = mean perpendicular distance to the axle (matches
+            # the TORQUE gizmo so the two read consistently).
+            total = 0.0
+            for v in vertices:
+                diff = v - center
+                total += (diff - axis * diff.dot(axis)).length
+            avg_radius = total / len(vertices)
+            if avg_radius < 1e-4:
+                avg_radius = 0.1
+            thickness = max(0.002, avg_radius * 0.01)
+            circle_tris = _generate_circle(
+                center, axis, avg_radius, thickness=thickness,
+            )
+            arc_tris = _generate_rotation_arc(
+                center, axis, avg_radius, 360.0, thickness=thickness * 2,
+            )
+            all_tris = circle_tris + arc_tris
+            if all_tris:
+                batch = batch_for_shader(shader, "TRIS", {"pos": all_tris})
+                batches.append((batch, "TRIS", (*rgb, 0.7)))
+            labels.append({
+                "text": f"hinge (PC{comp_idx + 1})",
+                "pos_3d": center + axis * avg_radius * 0.1,
+                "color": (*rgb, 0.9),
+            })
 
     return batches, labels

@@ -15,6 +15,26 @@ from bpy.types import Operator  # pyright: ignore
 
 _pump_stop_requested = False
 
+_pump_error_reported: set[str] = set()
+
+# The modal TIMER fires every 0.1s. Run the (O(N)) mesh-cache self-heal
+# only every Nth tick (~once per second) so a large scene doesn't spend
+# the main thread re-scanning every object 10x/second. Starts at 0 so the
+# first tick heals immediately.
+_heal_tick_counter = 0
+_HEAL_EVERY_N_TICKS = 10
+
+
+def _log_pump_error(msg: str) -> None:
+    if msg in _pump_error_reported:
+        return
+    _pump_error_reported.add(msg)
+    try:
+        from ..models.console import console
+        console.write(f"[frame pump] {msg}")
+    except Exception:
+        pass
+
 
 def _request_stop() -> None:
     global _pump_stop_requested
@@ -37,6 +57,11 @@ class PPF_OT_FramePump(Operator):
     _timer = None
 
     def execute(self, context):
+        # Reset so the first tick after a (re)start always heals once,
+        # catching a post-load/reload MESH_CACHE teardown even when the
+        # engine is idle (periodic heal is otherwise skipped at rest).
+        global _heal_tick_counter
+        _heal_tick_counter = 0
         self._timer = context.window_manager.event_timer_add(
             0.1, window=context.window
         )
@@ -73,10 +98,30 @@ class PPF_OT_FramePump(Operator):
             return {"PASS_THROUGH"}
         try:
             from .client import apply_animation, heal_mesh_caches_if_stale
-            heal_mesh_caches_if_stale()
+            # apply_animation is the latency-sensitive path: it applies
+            # simulation frames as they stream in from the solver (frame
+            # arrival is async with no Blender event, hence the poll). It
+            # early-outs to ~0ms when no frames are pending, so polling it
+            # every tick is essentially free at rest.
+            #
+            # heal is pure self-repair (recreates a broken/missing
+            # MESH_CACHE modifier). Scanning every assigned object is O(N)
+            # in bpy API calls, so it must NOT run 10x/second on a large
+            # scene. It only matters while caches may be changing (frames
+            # arriving) or once right after the modal (re)starts to catch a
+            # post-load/reload teardown. On a fully idle scene it is
+            # skipped entirely, so an at-rest scene costs ~0 here.
+            global _heal_tick_counter
+            run_heal = _heal_tick_counter == 0
+            if not run_heal and _heal_tick_counter % _HEAL_EVERY_N_TICKS == 0:
+                from .facade import _engine_is_idle
+                run_heal = not _engine_is_idle()
+            if run_heal:
+                heal_mesh_caches_if_stale()
+            _heal_tick_counter += 1
             apply_animation()
         except Exception as e:
-            print(f"frame pump error: {e}")
+            _log_pump_error(str(e))
         return {"PASS_THROUGH"}
 
 

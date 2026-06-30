@@ -3,29 +3,31 @@
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
 # License: Apache v2.0
 #
-# Per-group fTetWild override encoding.
+# Per-object tetrahedralizer override encoding (fTetWild + TetGen).
 #
-# Motivation: commit 71325d15 ("Per-group fTetWild overrides and
-# velocity keyframe copy/paste"). SOLID groups gained per-field
-# fTetWild overrides (edge_length_fac, epsilon, stop_energy,
-# num_opt_iter, optimize, simplify, coarsen) behind per-field enable
-# toggles. Only enabled overrides ride through ``param.pickle`` as
-# ``param["group"][i][0]["ftetwild"]``; the decoder later fans the
-# kwargs out by UUID into ``tetrahedralize()``.
+# Motivation: the tetrahedralizer picker and its per-field overrides
+# moved from the group to the AssignedObject (per-object, like Velocity
+# Overwrite), and TetGen was re-added as a backend alongside fTetWild.
+# Enabled fTetWild overrides ride through ``param.pickle`` as
+# ``param["group"][i][0]["ftetwild"][<object_uuid>]``; TetGen objects
+# additionally carry ``backend="tetgen"``. The decoder peeks this
+# per-UUID map at populate time and passes the kwargs into
+# ``tetrahedralize()`` for the matching mesh.
 #
 # This scenario authors a SOLID group on a primitive cube, sets every
-# override toggle on with a non-default value, encodes the params,
-# decodes the pickle, and asserts:
+# fTetWild override on the assigned object with a non-default value,
+# encodes the params, decodes the pickle, and asserts:
 #   A. The SOLID group exists with the cube assigned and the
 #      ftetwild_override_<field> + ftetwild_<field> properties set to
-#      the test values on the PropertyGroup.
+#      the test values on the AssignedObject.
 #   B. The decoded ``param.pickle`` carries the seven authored values
-#      under the SOLID group's ``ftetwild`` dict, and the routing dict
-#      lives at ``param["group"][i][0]["ftetwild"]`` rather than at
-#      the top level.
-#   C. The encoded group entry's ``object_uuids`` carries the cube's
-#      UUID, so a downstream decoder can route the kwargs to the right
-#      mesh by UUID.
+#      under ``ftetwild[<cube_uuid>]``, and the routing dict lives at
+#      ``param["group"][i][0]["ftetwild"]`` rather than at the top level.
+#   C. The per-object kwargs are keyed by the cube's UUID, so a
+#      downstream decoder routes them to the right mesh.
+#   D. Switching the assigned object to the TetGen backend encodes
+#      ``backend="tetgen"`` plus the authored TetGen override under the
+#      same per-UUID slot.
 #
 # No build / run / fetch is involved; this is encoding-only. Same
 # shape as bl_velocity_keyframes and bl_pc2_migration.
@@ -91,21 +93,11 @@ try:
     solid = dh.api.solver.create_group("Solid", "SOLID")
     solid.add(cube.name)
 
-    # Reach into the underlying PropertyGroup and set every override
-    # toggle + value. The encoder skips fields whose
-    # ``ftetwild_override_<field>`` flag is False, so flipping the
-    # flags on is what makes the values flow through.
+    # The tetrahedralizer backend + overrides live on the AssignedObject
+    # now (per-object, like Velocity Overwrite), so author them there.
+    # The encoder skips fields whose ``ftetwild_override_<field>`` flag is
+    # False, so flipping the flags on is what makes the values flow.
     group = root.object_group_0
-    for field, value in AUTHORED_FLOATS.items():
-        setattr(group, "ftetwild_override_" + field, True)
-        setattr(group, "ftetwild_" + field, value)
-    for field, value in AUTHORED_INTS.items():
-        setattr(group, "ftetwild_override_" + field, True)
-        setattr(group, "ftetwild_" + field, value)
-    for field, value in AUTHORED_BOOLS.items():
-        setattr(group, "ftetwild_override_" + field, True)
-        setattr(group, "ftetwild_" + field, value)
-
     assigned = group.assigned_objects[0]
     # Resolve UUIDs so the encoder doesn't trip the "no UUID after
     # resolve" guard, and so subtest C can compare against a real id.
@@ -114,22 +106,34 @@ try:
     uuid_registry.resolve_assigned(assigned)
     cube_uuid = assigned.uuid
 
+    assigned.tet_backend = "FTETWILD"
+    for field, value in AUTHORED_FLOATS.items():
+        setattr(assigned, "ftetwild_override_" + field, True)
+        setattr(assigned, "ftetwild_" + field, value)
+    for field, value in AUTHORED_INTS.items():
+        setattr(assigned, "ftetwild_override_" + field, True)
+        setattr(assigned, "ftetwild_" + field, value)
+    for field, value in AUTHORED_BOOLS.items():
+        setattr(assigned, "ftetwild_override_" + field, True)
+        setattr(assigned, "ftetwild_" + field, value)
+
     # ----- A: solid_group_authored ------------------------------
     authored_floats_ok = all(
-        getattr(group, "ftetwild_override_" + f, False) is True
-        and abs(float(getattr(group, "ftetwild_" + f)) - v) < 1e-6
+        getattr(assigned, "ftetwild_override_" + f, False) is True
+        and abs(float(getattr(assigned, "ftetwild_" + f)) - v) < 1e-6
         for f, v in AUTHORED_FLOATS.items()
     )
     authored_ints_ok = all(
-        getattr(group, "ftetwild_override_" + f, False) is True
-        and int(getattr(group, "ftetwild_" + f)) == v
+        getattr(assigned, "ftetwild_override_" + f, False) is True
+        and int(getattr(assigned, "ftetwild_" + f)) == v
         for f, v in AUTHORED_INTS.items()
     )
     authored_bools_ok = all(
-        getattr(group, "ftetwild_override_" + f, False) is True
-        and bool(getattr(group, "ftetwild_" + f)) is v
+        getattr(assigned, "ftetwild_override_" + f, False) is True
+        and bool(getattr(assigned, "ftetwild_" + f)) is v
         for f, v in AUTHORED_BOOLS.items()
     )
+    backend_default_ok = assigned.tet_backend == "FTETWILD"
     cube_assigned_ok = (
         group.object_type == "SOLID"
         and len(group.assigned_objects) == 1
@@ -139,9 +143,10 @@ try:
     dh.record(
         "A_solid_group_authored",
         authored_floats_ok and authored_ints_ok and authored_bools_ok
-        and cube_assigned_ok,
+        and backend_default_ok and cube_assigned_ok,
         {
             "object_type": group.object_type,
+            "tet_backend": assigned.tet_backend,
             "assigned_count": len(group.assigned_objects),
             "assigned_name": (
                 group.assigned_objects[0].name
@@ -149,19 +154,19 @@ try:
             ),
             "cube_uuid": cube_uuid,
             "floats": {
-                f: float(getattr(group, "ftetwild_" + f))
+                f: float(getattr(assigned, "ftetwild_" + f))
                 for f in AUTHORED_FLOATS
             },
             "ints": {
-                f: int(getattr(group, "ftetwild_" + f))
+                f: int(getattr(assigned, "ftetwild_" + f))
                 for f in AUTHORED_INTS
             },
             "bools": {
-                f: bool(getattr(group, "ftetwild_" + f))
+                f: bool(getattr(assigned, "ftetwild_" + f))
                 for f in AUTHORED_BOOLS
             },
             "override_flags": {
-                f: bool(getattr(group, "ftetwild_override_" + f, False))
+                f: bool(getattr(assigned, "ftetwild_override_" + f, False))
                 for f in list(AUTHORED_FLOATS) + list(AUTHORED_INTS)
                 + list(AUTHORED_BOOLS)
             },
@@ -194,22 +199,25 @@ try:
     ftetwild = group_params.get("ftetwild")
 
     # ----- B: encoded_param_carries_ftetwild --------------------
+    # ``ftetwild`` is now a per-UUID map: {cube_uuid: {field: value}}.
     expected = {}
     expected.update(AUTHORED_FLOATS)
     expected.update(AUTHORED_INTS)
     expected.update(AUTHORED_BOOLS)
-    routed_under_group = isinstance(ftetwild, dict)
-    keys_match = routed_under_group and set(ftetwild.keys()) == set(expected.keys())
-    floats_match = routed_under_group and all(
-        f in ftetwild and abs(float(ftetwild[f]) - v) < 1e-6
+    routed_by_uuid = isinstance(ftetwild, dict) and cube_uuid in ftetwild
+    obj_kwargs = ftetwild.get(cube_uuid) if routed_by_uuid else None
+    obj_is_dict = isinstance(obj_kwargs, dict)
+    keys_match = obj_is_dict and set(obj_kwargs.keys()) == set(expected.keys())
+    floats_match = obj_is_dict and all(
+        f in obj_kwargs and abs(float(obj_kwargs[f]) - v) < 1e-6
         for f, v in AUTHORED_FLOATS.items()
     )
-    ints_match = routed_under_group and all(
-        f in ftetwild and int(ftetwild[f]) == v
+    ints_match = obj_is_dict and all(
+        f in obj_kwargs and int(obj_kwargs[f]) == v
         for f, v in AUTHORED_INTS.items()
     )
-    bools_match = routed_under_group and all(
-        f in ftetwild and bool(ftetwild[f]) is v
+    bools_match = obj_is_dict and all(
+        f in obj_kwargs and bool(obj_kwargs[f]) is v
         for f, v in AUTHORED_BOOLS.items()
     )
     # The encoder lives on the per-group params dict, not at the top
@@ -217,15 +225,17 @@ try:
     not_at_top_level = "ftetwild" not in decoded
     dh.record(
         "B_encoded_param_carries_ftetwild",
-        routed_under_group and keys_match and floats_match
+        routed_by_uuid and keys_match and floats_match
         and ints_match and bools_match and not_at_top_level,
         {
-            "ftetwild_keys": (
-                sorted(ftetwild.keys()) if routed_under_group else None
+            "ftetwild_top_keys": (
+                sorted(ftetwild.keys()) if isinstance(ftetwild, dict) else None
             ),
-            "ftetwild_payload": (
-                {k: ftetwild[k] for k in ftetwild}
-                if routed_under_group else None
+            "obj_kwargs_keys": (
+                sorted(obj_kwargs.keys()) if obj_is_dict else None
+            ),
+            "obj_kwargs_payload": (
+                {k: obj_kwargs[k] for k in obj_kwargs} if obj_is_dict else None
             ),
             "expected": expected,
             "not_at_top_level": not_at_top_level,
@@ -234,10 +244,10 @@ try:
     )
 
     # ----- C: overrides_keyed_by_object_uuid --------------------
-    # The group entry's third tuple element carries the per-object
-    # UUIDs; the decoder uses these to fan the ftetwild kwargs out
-    # by UUID into tetrahedralize(). Confirm our cube's UUID lands
-    # there and the assigned-object name lines up.
+    # The kwargs are keyed by object UUID inside the ftetwild map, and
+    # the group entry's third tuple element carries the same UUID. The
+    # decoder uses these to route the kwargs into tetrahedralize().
+    uuid_keys_kwargs = isinstance(ftetwild, dict) and cube_uuid in ftetwild
     uuid_in_routing = (
         isinstance(group_uuids, list)
         and cube_uuid in group_uuids
@@ -250,11 +260,53 @@ try:
     )
     dh.record(
         "C_overrides_keyed_by_object_uuid",
-        uuid_in_routing and objects_aligned,
+        uuid_keys_kwargs and uuid_in_routing and objects_aligned,
         {
             "cube_uuid": cube_uuid,
+            "uuid_keys_kwargs": uuid_keys_kwargs,
             "group_uuids": list(group_uuids) if group_uuids else None,
             "group_objects": list(group_objects) if group_objects else None,
+        },
+    )
+
+    # ----- D: tetgen_backend_encoded ----------------------------
+    # Switch the same object to the TetGen backend with one override and
+    # confirm the per-UUID slot carries backend="tetgen" + the knob, and
+    # that the (backend-specific) fTetWild fields drop out.
+    assigned.tet_backend = "TETGEN"
+    assigned.tetgen_override_min_ratio = True
+    assigned.tetgen_min_ratio = 1.4
+    param_bytes_tg = dh.encoder_param.encode_param(bpy.context)
+    decoded_tg = dh.decode_addon_blob(param_bytes_tg)
+    tg_obj_kwargs = None
+    for params, _objects, object_uuids in decoded_tg["group"]:
+        if cube_uuid in object_uuids:
+            ftw = params.get("ftetwild")
+            if isinstance(ftw, dict):
+                tg_obj_kwargs = ftw.get(cube_uuid)
+            break
+    tg_is_dict = isinstance(tg_obj_kwargs, dict)
+    backend_ok = tg_is_dict and tg_obj_kwargs.get("backend") == "tetgen"
+    min_ratio_ok = (
+        tg_is_dict
+        and "min_ratio" in tg_obj_kwargs
+        and abs(float(tg_obj_kwargs["min_ratio"]) - 1.4) < 1e-6
+    )
+    no_ftetwild_fields = tg_is_dict and not (
+        set(tg_obj_kwargs.keys())
+        & (set(AUTHORED_FLOATS) | set(AUTHORED_INTS) | set(AUTHORED_BOOLS))
+    )
+    dh.record(
+        "D_tetgen_backend_encoded",
+        backend_ok and min_ratio_ok and no_ftetwild_fields,
+        {
+            "tg_obj_kwargs": (
+                {k: tg_obj_kwargs[k] for k in tg_obj_kwargs}
+                if tg_is_dict else None
+            ),
+            "backend_ok": backend_ok,
+            "min_ratio_ok": min_ratio_ok,
+            "no_ftetwild_fields": no_ftetwild_fields,
         },
     )
 

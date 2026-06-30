@@ -4,13 +4,13 @@
 // License: Apache v2.0
 //
 // PyO3 binding for `scene_build::build_index_map` (Scene.build core
-// loop). Resolves alias / merge pairs and assigns rod/shell/finalize
-// global indices for every object in the scene.
+// loop). Assigns rod/shell/finalize global indices for every object in
+// the scene.
 
 use numpy::PyArray1;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyList, PyTuple};
+use pyo3::types::{PyDict, PyList};
 
 use ppf_cts_core::kernels::scene_build as sb;
 
@@ -22,8 +22,6 @@ use crate::errors::into_py_err;
 /// Args:
 ///   * `objects`: list of dicts with keys `name: str`, `n_verts: int`,
 ///     and optional `edges`, `faces`, `tets` numpy arrays.
-///   * `merge_pairs`: list of `(source_name, target_name, [(src, tgt)...])`
-///     tuples. May be empty.
 ///
 /// Returns a dict:
 ///   * `map_by_name`: `{name: ndarray int64 (n_verts,)}`
@@ -31,50 +29,11 @@ use crate::errors::into_py_err;
 ///   * `shell_vert_range`: `(int, int)`
 ///   * `concat_count`: int
 #[pyfunction]
-#[pyo3(signature = (objects, merge_pairs))]
+#[pyo3(signature = (objects))]
 pub(super) fn scene_build_index_map<'py>(
     py: Python<'py>,
     objects: &Bound<'py, PyList>,
-    merge_pairs: &Bound<'py, PyList>,
 ) -> PyResult<Bound<'py, PyDict>> {
-    // Decode merge pairs into owned Vec.
-    let mut merge_owned: Vec<(String, String, Vec<(u32, u32)>)> = Vec::with_capacity(merge_pairs.len());
-    for entry in merge_pairs.iter() {
-        let tup = entry.downcast::<PyTuple>().map_err(|_| {
-            PyValueError::new_err(
-                "merge_pairs entries must be (source_name, target_name, [(src, tgt), ...]) tuples",
-            )
-        })?;
-        if tup.len() != 3 {
-            return Err(PyValueError::new_err(
-                "each merge_pairs entry must be a 3-tuple",
-            ));
-        }
-        let src: String = tup.get_item(0)?.extract()?;
-        let tgt: String = tup.get_item(1)?.extract()?;
-        let pairs_list = tup.get_item(2)?;
-        let mut pairs: Vec<(u32, u32)> = Vec::new();
-        for pair in pairs_list.try_iter()? {
-            let pair = pair?;
-            // Accept (src, tgt) tuples or [src, tgt] lists.
-            let pt = pair.downcast::<PyTuple>();
-            if let Ok(pt) = pt {
-                let s: i64 = pt.get_item(0)?.extract()?;
-                let t: i64 = pt.get_item(1)?.extract()?;
-                pairs.push((s as u32, t as u32));
-                continue;
-            }
-            let pl: Vec<i64> = pair.extract()?;
-            if pl.len() != 2 {
-                return Err(PyValueError::new_err(
-                    "each pair must be (src_vi, tgt_vi)",
-                ));
-            }
-            pairs.push((pl[0] as u32, pl[1] as u32));
-        }
-        merge_owned.push((src, tgt, pairs));
-    }
-
     // Decode objects. We hold owned Vec<[u32; N]> per object so the
     // borrows we hand to the kernel outlive the call.
     struct Owned {
@@ -125,7 +84,7 @@ pub(super) fn scene_build_index_map<'py>(
         .collect();
 
     let result = py
-        .allow_threads(|| sb::build_index_map(&view, &merge_owned))
+        .allow_threads(|| sb::build_index_map(&view))
         .map_err(into_py_err)?;
 
     // Pack output dict.

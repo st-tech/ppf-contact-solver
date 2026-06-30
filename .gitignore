@@ -11,7 +11,12 @@ requirements.txt
 .clang-format
 *.lock
 !Cargo.lock
+# Ignore a local CARGO_HOME / stray .cargo state, but keep the committed
+# workspace cargo config (defines the `build-emul` alias).
 .cargo*
+!.cargo/
+.cargo/*
+!.cargo/config.toml
 *.dylib
 *.so
 *.a
@@ -83,12 +88,11 @@ build-win-native/ci
 build-win-native/temp_ffmpeg
 build-win-native/ffmpeg
 build-win-native/msys64
-# Embedded toolchain dirs warmup.bat builds on Windows hosts. They
-# only exist on aws-dev-win:/cygdrive/c/dev/, never in the local
-# repo. Listed here so `rsync --filter=':- .gitignore' --delete`
-# preserves them; a missing entry here = `--delete` wipes them and
-# recovery requires re-running warmup.bat (20-30 min, ~10GB of
-# downloads). See the rsync-excludes memory for the post-mortem.
+# Embedded toolchain dirs that warmup.bat builds on Windows hosts.
+# They are large local-only build artifacts, never committed. Listed
+# here so `rsync --filter=':- .gitignore' --delete` preserves them; a
+# missing entry here = `--delete` wipes them and recovery requires
+# re-running warmup.bat (20-30 min, ~10GB of downloads).
 build-win-native/cuda
 build-win-native/dist
 build-win-native/mingit
@@ -99,8 +103,6 @@ build-win-native/fast_check
 build-win-native/python_full
 .claude/
 .venv/
-# build-all.sh installs the maturin-built PyO3 wheel here so two
-# worktrees on the same host don't clobber each other's _ppf_cts_py
-# through the shared venv site-packages. Path is the same on every
-# tree; the gitignore matches at the repo root only.
-/.tree-pyo3/
+
+# Calibration sim cache (intermediate meshes; re-render report offline, do not commit)
+calibration/report_data/

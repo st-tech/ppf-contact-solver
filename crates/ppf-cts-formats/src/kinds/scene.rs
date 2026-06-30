@@ -52,6 +52,14 @@ pub struct ObjectInfo {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vert: Option<Vec<[f32; 3]>>,
 
+    /// SHELL only, optional: local-space reference vertices for the
+    /// bending rest angle, shape (N, 3), same vertex order as `vert`.
+    /// Present when the object opted into a per-object reference rest
+    /// angle (see mesh.py `_encode_bend_reference_verts`); the solver
+    /// computes this object's hinge rest angles from these positions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bend_rest_vert: Option<Vec<[f32; 3]>>,
+
     /// Triangulated faces, shape (M, 3). uint32 in pickle.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub face: Option<Vec<[u32; 3]>>,
@@ -63,8 +71,9 @@ pub struct ObjectInfo {
 
     /// Per-face UV data (SHELL only). Length matches `face` row count.
     /// Each entry is the per-triangle UV layout the addon's
-    /// `triangulate_uv_data` produces; variable inner shape, kept as
-    /// a CBOR-flexible value to avoid coupling to UV layout choices.
+    /// `loop_triangulate_mesh` produces (one (3, 2) corner-UV block per
+    /// loop triangle); variable inner shape, kept as a CBOR-flexible
+    /// value to avoid coupling to UV layout choices.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub uv: Option<ciborium::Value>,
 

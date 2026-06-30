@@ -144,14 +144,18 @@ pub fn write_ply_binary(
 }
 
 /// Compute the Mitsuba auto-camera placement: returns `(origin,
-/// target)` as `[f32; 3]` triples. Mirrors the bounds + offset block
-/// in `MitsubaRenderer.render` when `camera` is None.
+/// target, z_extent)` where `origin`/`target` are `[f32; 3]` triples
+/// and `z_extent` is `mx[2] - mn[2]`. The z-extent is returned so the
+/// Python wall placement can reuse this single bounds reduction instead
+/// of recomputing min/max over the same vertex array. Mirrors the
+/// bounds + offset block in `MitsubaRenderer.render` when `camera` is
+/// None.
 #[pyfunction]
 pub fn mitsuba_auto_camera(
     verts: PyReadonlyArray2<'_, f32>,
     width: u32,
     height: u32,
-) -> PyResult<([f32; 3], [f32; 3])> {
+) -> PyResult<([f32; 3], [f32; 3], f32)> {
     let v = verts.as_array();
     let n = v.shape()[0];
     if v.shape()[1] != 3 || n == 0 {
@@ -186,7 +190,7 @@ pub fn mitsuba_auto_camera(
         target[1] + offset,
         target[2] + 5.0 * offset,
     ];
-    Ok((origin, target))
+    Ok((origin, target, bounds[2]))
 }
 
 /// Verify the per-input mesh data + return the flattened f32 light
@@ -252,6 +256,10 @@ pub fn render_default_args<'py>(
         None => PyDict::new(py),
     };
     use pyo3::IntoPyObjectExt;
+    // The default width/height below must agree with DEFAULT_WIDTH /
+    // DEFAULT_HEIGHT in frontend/_rasterizer_.py, which is the single
+    // source of truth shared by SoftwareRenderer and the CLI. Keep these
+    // values in sync so the Mitsuba and software paths cannot diverge.
     let pairs: [(&str, PyObject); 9] = [
         ("variant", "cuda_ad_rgb".into_py_any(py)?),
         ("max_depth", 12i64.into_py_any(py)?),
@@ -274,57 +282,32 @@ pub fn render_default_args<'py>(
     Ok(merged)
 }
 
-/// Evaluate a single sphere SDF at a point. Mirrors
-/// `frontend/_sdf_.py:SphereSDF.__call__`.
-#[pyfunction]
-pub fn sphere_sdf_eval(x: f64, y: f64, z: f64, cx: f64, cy: f64, cz: f64, r: f64) -> f64 {
-    let dx = x - cx;
-    let dy = y - cy;
-    let dz = z - cz;
-    (dx * dx + dy * dy + dz * dz).sqrt() - r
-}
+/// AABB safety margin around an SDF primitive so marching cubes
+/// captures the full surface and does not clip it at the grid edge.
+const SDF_BOUNDS_PADDING: f64 = 0.1;
 
-/// Evaluate a single capsule SDF at a point. Mirrors
-/// `frontend/_sdf_.py:CapsuleSDF.__call__`.
-#[pyfunction]
-#[allow(clippy::too_many_arguments)]
-pub fn capsule_sdf_eval(
-    x: f64,
-    y: f64,
-    z: f64,
-    p0x: f64,
-    p0y: f64,
-    p0z: f64,
-    bax: f64,
-    bay: f64,
-    baz: f64,
-    ba_dot_ba: f64,
-    radius: f64,
-) -> f64 {
-    let pax = x - p0x;
-    let pay = y - p0y;
-    let paz = z - p0z;
-    let pa_dot_ba = pax * bax + pay * bay + paz * baz;
-    let h = (pa_dot_ba / ba_dot_ba).clamp(0.0, 1.0);
-    let dx = pax - bax * h;
-    let dy = pay - bay * h;
-    let dz = paz - baz * h;
-    (dx * dx + dy * dy + dz * dz).sqrt() - radius
-}
-
-/// Compute the axis-aligned bounding box of a sphere padded by 0.1
-/// in each direction. Returns `((minx, miny, minz), (maxx, maxy,
-/// maxz))` as a pair of f64 triples.
+/// Compute the axis-aligned bounding box of a sphere padded by
+/// `SDF_BOUNDS_PADDING` in each direction. Returns `((minx, miny,
+/// minz), (maxx, maxy, maxz))` as a pair of f64 triples.
 #[pyfunction]
 pub fn sphere_bounds(cx: f64, cy: f64, cz: f64, r: f64) -> ((f64, f64, f64), (f64, f64, f64)) {
     (
-        (cx - r - 0.1, cy - r - 0.1, cz - r - 0.1),
-        (cx + r + 0.1, cy + r + 0.1, cz + r + 0.1),
+        (
+            cx - r - SDF_BOUNDS_PADDING,
+            cy - r - SDF_BOUNDS_PADDING,
+            cz - r - SDF_BOUNDS_PADDING,
+        ),
+        (
+            cx + r + SDF_BOUNDS_PADDING,
+            cy + r + SDF_BOUNDS_PADDING,
+            cz + r + SDF_BOUNDS_PADDING,
+        ),
     )
 }
 
-/// Compute the axis-aligned bounding box of a capsule padded by 0.1.
-/// `p0` and `p1` are the segment endpoints; `r` is the radius.
+/// Compute the axis-aligned bounding box of a capsule padded by
+/// `SDF_BOUNDS_PADDING`. `p0` and `p1` are the segment endpoints; `r`
+/// is the radius.
 #[pyfunction]
 pub fn capsule_bounds(
     p0x: f64,
@@ -336,14 +319,14 @@ pub fn capsule_bounds(
     r: f64,
 ) -> ((f64, f64, f64), (f64, f64, f64)) {
     let mins = (
-        p0x.min(p1x) - r - 0.1,
-        p0y.min(p1y) - r - 0.1,
-        p0z.min(p1z) - r - 0.1,
+        p0x.min(p1x) - r - SDF_BOUNDS_PADDING,
+        p0y.min(p1y) - r - SDF_BOUNDS_PADDING,
+        p0z.min(p1z) - r - SDF_BOUNDS_PADDING,
     );
     let maxs = (
-        p0x.max(p1x) + r + 0.1,
-        p0y.max(p1y) + r + 0.1,
-        p0z.max(p1z) + r + 0.1,
+        p0x.max(p1x) + r + SDF_BOUNDS_PADDING,
+        p0y.max(p1y) + r + SDF_BOUNDS_PADDING,
+        p0z.max(p1z) + r + SDF_BOUNDS_PADDING,
     );
     (mins, maxs)
 }
@@ -427,16 +410,14 @@ pub fn check_walls_violations_for_objs(
     let mut descs: Vec<ic::WallDesc> = Vec::with_capacity(walls.len());
     let mut idxs: Vec<usize> = Vec::with_capacity(walls.len());
     for (wall_idx, wall) in walls.iter().enumerate() {
+        // Static = exactly one keyframe; empty or kinematic
+        // (multi-keyframe) walls are skipped (handled elsewhere). The
+        // threshold lives in `Wall.is_static_collider` so it is not
+        // re-derived here.
+        if !wall.call_method0("is_static_collider")?.is_truthy()? {
+            continue;
+        }
         let entry_obj = wall.call_method0("get_entry")?;
-        // Empty entry list: skip.
-        let entry_len = entry_obj.len()?;
-        if entry_len == 0 {
-            continue;
-        }
-        // Kinematic wall (multiple keyframes): handled elsewhere.
-        if entry_len > 1 {
-            continue;
-        }
         // entry[0][0] is the keyframe-0 position.
         let kf0 = entry_obj.get_item(0)?;
         let pos_obj = kf0.get_item(0)?;
@@ -505,14 +486,14 @@ pub fn check_spheres_violations_for_objs(
     let mut idxs: Vec<usize> = Vec::with_capacity(spheres.len());
     let mut tags: Vec<String> = Vec::with_capacity(spheres.len());
     for (sphere_idx, sphere) in spheres.iter().enumerate() {
+        // Static = exactly one keyframe; empty or kinematic
+        // (multi-keyframe) spheres are skipped (handled elsewhere). The
+        // threshold lives in `Sphere.is_static_collider` so it is not
+        // re-derived here.
+        if !sphere.call_method0("is_static_collider")?.is_truthy()? {
+            continue;
+        }
         let entry_obj = sphere.call_method0("get_entry")?;
-        let entry_len = entry_obj.len()?;
-        if entry_len == 0 {
-            continue;
-        }
-        if entry_len > 1 {
-            continue;
-        }
         // entry[0] = (pos, radius, _)
         let kf0 = entry_obj.get_item(0)?;
         let pos_obj = kf0.get_item(0)?;
@@ -662,8 +643,6 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(normalize_light_dir, m)?)?;
     m.add_function(wrap_pyfunction!(build_pinned_mask, m)?)?;
     m.add_function(wrap_pyfunction!(render_default_args, m)?)?;
-    m.add_function(wrap_pyfunction!(sphere_sdf_eval, m)?)?;
-    m.add_function(wrap_pyfunction!(capsule_sdf_eval, m)?)?;
     m.add_function(wrap_pyfunction!(sphere_bounds, m)?)?;
     m.add_function(wrap_pyfunction!(capsule_bounds, m)?)?;
     m.add_function(wrap_pyfunction!(pack_sdf_primitive, m)?)?;

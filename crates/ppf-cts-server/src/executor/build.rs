@@ -21,12 +21,12 @@ use super::dispatch_re_entrant;
 use crate::engine::ServerEngine;
 
 /// Spawn the build task and install a cancel handle on the engine.
-/// The body is a placeholder loop that polls the cancel token at
-/// regular intervals and emits `BuildProgress` events. The real
-/// build pipeline (decoder, tetrahedralize, FixedScene assembly)
-/// is being ported in parallel; the plumbing here already matches
-/// the contract expected by the engine + monitor.
-pub(super) fn spawn_build_task(engine: &ServerEngine) {
+/// The body runs the build in a Python subprocess
+/// (`frontend/build_worker.py`) via `run_build_pipeline` ->
+/// `drive_build_worker`, translating the worker's stdout
+/// PROGRESS/META/ERROR markers into `BuildProgress`/`BuildMetadata`/
+/// `BuildFailed` events and forwarding a SIGTERM on cooperative cancel.
+pub(super) fn spawn_build_task(engine: &ServerEngine, preserve_output: bool) {
     let cancel = engine.install_cancel_handle();
     let engine = engine.clone();
 
@@ -34,11 +34,24 @@ pub(super) fn spawn_build_task(engine: &ServerEngine) {
         // Clear any sidecar left by a previous build so a later failure
         // that produces no structured violations (e.g. a tetwild crash)
         // can't inherit stale geometry. `root` is the project dir the
-        // worker also writes `build_violations.json` to.
-        let root = engine.state().root;
+        // worker also writes `build_violations.json` to. We snapshot
+        // name/root once here and thread the same values into the
+        // pipeline so the sidecar clear/read and the worker's write
+        // cannot disagree if the project context flips mid-build.
+        let (name, root) = {
+            let s = engine.state();
+            (s.name, s.root)
+        };
         clear_build_violations(&root);
+        // Drop a prior run's status record so the post-rebuild status reads
+        // READY/RESUMABLE, not the stale "Failed" a reconnect would
+        // otherwise reconstruct from a previous run's status.cbor between
+        // build-done and the next run. The next launch scrubs it again;
+        // clearing here closes the build-done .. run window.
+        clear_stale_status(&root);
 
-        let result = run_build_pipeline(&engine, cancel.clone()).await;
+        let result =
+            run_build_pipeline(&engine, cancel.clone(), &name, &root, preserve_output).await;
 
         // Re-entrant dispatch routes through whichever executor the
         // engine was attached to (`ServerEngine::attach_executor`),
@@ -84,6 +97,24 @@ fn clear_build_violations(root: &str) {
             target: "ppf::build",
             "[BUILD] could not clear build_violations.json: {e}",
         ),
+    }
+}
+
+/// Remove stale status markers (`status.cbor`, `terminate_request`) before a
+/// build runs so a clean
+/// rebuild doesn't leave a reconnect reconstructing `Solver::Failed` from
+/// a previous run's status record. Best-effort, mirrors
+/// `clear_build_violations`.
+fn clear_stale_status(root: &str) {
+    if root.is_empty() {
+        return;
+    }
+    let out = ppf_cts_formats::files::session_output_dir(Path::new(root));
+    for f in [
+        ppf_cts_formats::files::STATUS_RECORD,
+        ppf_cts_formats::files::TERMINATE_REQUEST,
+    ] {
+        let _ = std::fs::remove_file(out.join(f));
     }
 }
 
@@ -153,7 +184,13 @@ pub(super) enum BuildOutcome {
 /// build than as silent data corruption from a half-released GPU
 /// buffer. Operators who need to force-kill can do so manually with
 /// the worker pid logged at spawn time.
-async fn run_build_pipeline(engine: &ServerEngine, cancel: CancelHandle) -> BuildOutcome {
+async fn run_build_pipeline(
+    engine: &ServerEngine,
+    cancel: CancelHandle,
+    name: &str,
+    root: &str,
+    preserve_output: bool,
+) -> BuildOutcome {
     // Cached GPU check, mirroring the EffectExecutor._gpu_checked
     // class-level guard. We don't have a process-global cache yet,
     // so we just call into utils::check_gpu directly. A future
@@ -179,10 +216,6 @@ async fn run_build_pipeline(engine: &ServerEngine, cancel: CancelHandle) -> Buil
         return BuildOutcome::AlreadyDispatched;
     }
 
-    let (name, root) = {
-        let s = engine.state();
-        (s.name, s.root)
-    };
     if name.is_empty() || root.is_empty() {
         return BuildOutcome::Failed(
             "no project context: name/root must be set before BuildRequested".into(),
@@ -198,8 +231,15 @@ async fn run_build_pipeline(engine: &ServerEngine, cancel: CancelHandle) -> Buil
             );
         }
     };
-    let python = python_executable();
-    drive_build_worker(engine, cancel, &python, &worker, &name, &root).await
+    let (python, source) = python_executable();
+    let outcome =
+        drive_build_worker(engine, cancel, &python, &worker, name, root, preserve_output).await;
+    // Rewrite a bare missing-dependency failure into an actionable
+    // message about the interpreter / venv before it surfaces to the user.
+    if let BuildOutcome::Failed(reason) = outcome {
+        return BuildOutcome::Failed(enrich_build_failure(reason, &python, source));
+    }
+    outcome
 }
 
 /// Spawn the worker process and translate its stdout protocol into
@@ -212,6 +252,7 @@ pub(super) async fn drive_build_worker(
     worker: &Path,
     name: &str,
     root: &str,
+    preserve_output: bool,
 ) -> BuildOutcome {
     let mut cmd = Command::new(python);
     cmd.arg(worker)
@@ -222,6 +263,13 @@ pub(super) async fn drive_build_worker(
         .stderr(Stdio::piped())
         // Line-buffer Python so PROGRESS lines arrive promptly.
         .env("PYTHONUNBUFFERED", "1");
+    // Append `--preserve-output` after the positional `<name> <root>`
+    // so it lands at worker argv[3] (parsed from argv[3:]) without
+    // shifting the name/root positions the worker reads as argv[1]/[2].
+    // This keeps `session/output/` checkpoints in place for a resume.
+    if preserve_output {
+        cmd.arg("--preserve-output");
+    }
     // ``frontend`` lives one directory above ``build_worker.py``;
     // exposing that on PYTHONPATH lets the worker import it
     // regardless of the server's cwd (the test rig runs the server
@@ -394,14 +442,46 @@ fn parse_meta_frames_line(line: &str) -> Option<i32> {
     if n > 0 { Some(n) } else { None }
 }
 
-/// Resolve the python interpreter the worker should run under. The
-/// launcher script in `effect_runner.py` activates the project venv
-/// before exec'ing the Rust binary, so honoring `VIRTUAL_ENV` first
-/// keeps the worker on the same interpreter the addon expects.
-fn python_executable() -> PathBuf {
+/// How `python_executable` picked the interpreter, kept so a build
+/// failure can explain which Python ran and why it was chosen.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum PythonSource {
+    /// `PPF_CTS_BUILD_PYTHON` env override.
+    Explicit,
+    /// `VIRTUAL_ENV`'s interpreter (the addon launcher activates it).
+    Venv,
+    /// Bare `python3` / `python.exe` from PATH: neither the override nor
+    /// a usable `VIRTUAL_ENV` was set. The likely cause of a missing
+    /// frontend dependency, since the project deps live in the venv.
+    PathFallback,
+}
+
+impl PythonSource {
+    fn describe(self) -> &'static str {
+        match self {
+            PythonSource::Explicit => "PPF_CTS_BUILD_PYTHON",
+            PythonSource::Venv => "the active VIRTUAL_ENV",
+            PythonSource::PathFallback => {
+                "PATH (neither PPF_CTS_BUILD_PYTHON nor a usable VIRTUAL_ENV was set)"
+            }
+        }
+    }
+}
+
+/// Resolve the python interpreter the worker should run under, plus how
+/// it was resolved (for diagnostics). Resolution order:
+///   1. `PPF_CTS_BUILD_PYTHON` env var (explicit deployment/override;
+///      honored first when non-empty).
+///   2. `VIRTUAL_ENV`'s `bin/python` (Unix) or `Scripts/python.exe`
+///      (Windows) when that file exists. The launcher script in
+///      `blender_addon/core/effect_runner.py` activates the project
+///      venv before exec'ing the Rust binary, so this keeps the worker
+///      on the same interpreter the addon expects.
+///   3. A bare `python3` / `python.exe` resolved through PATH.
+fn python_executable() -> (PathBuf, PythonSource) {
     if let Ok(p) = std::env::var("PPF_CTS_BUILD_PYTHON") {
         if !p.is_empty() {
-            return PathBuf::from(p);
+            return (PathBuf::from(p), PythonSource::Explicit);
         }
     }
     if let Ok(venv) = std::env::var("VIRTUAL_ENV") {
@@ -411,34 +491,66 @@ fn python_executable() -> PathBuf {
             #[cfg(not(target_os = "windows"))]
             let candidate = PathBuf::from(&venv).join("bin").join("python");
             if candidate.exists() {
-                return candidate;
+                return (candidate, PythonSource::Venv);
             }
+            // VIRTUAL_ENV is set but its interpreter is missing: a
+            // misconfiguration worth surfacing rather than silently
+            // dropping to PATH.
+            log::warn!(
+                target: "ppf::build",
+                "[BUILD] VIRTUAL_ENV={venv} set but {} does not exist; falling back to PATH",
+                candidate.display(),
+            );
         }
     }
     // Fall back to the bare command; the OS resolves it through PATH.
     #[cfg(target_os = "windows")]
-    {
-        PathBuf::from("python.exe")
-    }
+    let bare = PathBuf::from("python.exe");
     #[cfg(not(target_os = "windows"))]
-    {
-        PathBuf::from("python3")
+    let bare = PathBuf::from("python3");
+    (bare, PythonSource::PathFallback)
+}
+
+/// Detect a Python import failure in a worker's error text.
+fn is_missing_dependency_error(reason: &str) -> bool {
+    reason.contains("ModuleNotFoundError")
+        || reason.contains("No module named")
+        || reason.contains("ImportError")
+}
+
+/// Turn a cryptic `ModuleNotFoundError: No module named 'pythreejs'`
+/// into an actionable message that names the interpreter, how it was
+/// chosen, and how to point the build at the project venv. Non-import
+/// failures pass through unchanged.
+fn enrich_build_failure(reason: String, python: &Path, source: PythonSource) -> String {
+    if !is_missing_dependency_error(&reason) {
+        return reason;
     }
+    format!(
+        "build worker's Python ({}, resolved from {}) is missing a required frontend \
+         dependency: {reason}. The frontend deps (numpy, scipy, pythreejs, ...) live in the \
+         ppf-cts venv. Point PPF_CTS_BUILD_PYTHON at that venv's interpreter (e.g. \
+         <data-root>/venv/bin/python) or launch the server with the venv activated so \
+         VIRTUAL_ENV is set, then rebuild.",
+        python.display(),
+        source.describe(),
+    )
 }
 
 /// Locate `frontend/build_worker.py`. Order:
 ///   1. `PPF_CTS_BUILD_WORKER` env var (deployment override).
 ///   2. `<cwd>/frontend/build_worker.py` (the launcher in
-///      `effect_runner.py` cd's into the repo root before exec).
+///      `blender_addon/core/effect_runner.py` cd's into the repo root
+///      before exec).
 ///   3. Walk up from `current_exe()` looking for
 ///      `frontend/build_worker.py`.
 ///
 /// We intentionally prefer the cwd path over `current_exe()`: the
 /// release binary lives at `<repo>/target/release/ppf-cts-server`
 /// where the ancestor walk also succeeds, but a developer running
-/// from a worktree (the .claude agent worktrees) may have a different
-/// frontend they want to test, and they'll be in that worktree's
-/// cwd, not the install root.
+/// from a separate worktree may have a different frontend they want
+/// to test, and they'll be in that worktree's cwd, not the install
+/// root.
 fn locate_build_worker() -> Option<PathBuf> {
     if let Ok(p) = std::env::var("PPF_CTS_BUILD_WORKER") {
         let path = PathBuf::from(p);
@@ -507,6 +619,32 @@ async fn send_cancel_signal(child: &mut Child) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn enrich_build_failure_rewrites_missing_module() {
+        let msg = enrich_build_failure(
+            "ModuleNotFoundError: No module named 'pythreejs'".to_string(),
+            Path::new("/usr/bin/python3"),
+            PythonSource::PathFallback,
+        );
+        // Names the interpreter, the resolution source, the missing dep,
+        // and the venv remedy.
+        assert!(msg.contains("/usr/bin/python3"));
+        assert!(msg.contains("PPF_CTS_BUILD_PYTHON"));
+        assert!(msg.contains("pythreejs"));
+        assert!(msg.contains("venv"));
+    }
+
+    #[test]
+    fn enrich_build_failure_passes_through_non_import_errors() {
+        let original = "tetwild failed: self-intersecting input".to_string();
+        let msg = enrich_build_failure(
+            original.clone(),
+            Path::new("/x/venv/bin/python"),
+            PythonSource::Venv,
+        );
+        assert_eq!(msg, original);
+    }
 
     #[test]
     fn parse_progress_line_extracts_percent_and_info() {

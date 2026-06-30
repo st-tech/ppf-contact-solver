@@ -64,55 +64,106 @@ private:
     std::vector<bool> in_use_;
 
 public:
-    // Allocate a buffer and reinterpret as requested type
-    // count: number of elements of type T needed
-    // Note: Buffers are sorted by size (smallest first), so this picks
-    // the smallest available buffer that fits, maximizing memory efficiency
-    // If no suitable buffer exists, allocates a new one on-the-fly
-    // Returns PooledVec<T> which auto-releases on destruction
+    // Allocate a buffer and reinterpret as requested type.
+    // count: number of elements of type T needed.
+    // Buffers are sorted smallest-first, so this picks the tightest available
+    // fit. If nothing fits, the pool grows to a HIGH-WATER mark rather than
+    // accumulating: it reallocates the largest free buffer in place instead of
+    // orphaning it and adding a new one (the old behavior monotonically grew
+    // the pool when fed schwarz's nnz-sized requests and caused the OOM). A
+    // brand-new buffer is added only when every buffer is checked out, i.e.
+    // when concurrent demand genuinely rises. Once a scene reaches its peak
+    // contact count the sizes stop changing and get<T> performs no cudaMalloc.
+    // Returns PooledVec<T> which auto-releases on destruction.
     template<typename T>
     PooledVec<T> get(size_t count) {
-        // Calculate required float count based on size
+        // Pool storage is float-backed; round the request up to whole floats.
         size_t float_count = (count * sizeof(T) + sizeof(float) - 1) / sizeof(float);
+        if (float_count == 0) {
+            float_count = 1;
+        }
 
-        // Find smallest available buffer with sufficient capacity
-        // Since buffers are sorted by size, first match is the smallest fit
+        // 1. Reuse the smallest free buffer that already fits.
         for (size_t i = 0; i < buffers_.size(); ++i) {
             if (!in_use_[i] && buffers_[i].size >= float_count) {
                 in_use_[i] = true;
-                // Reinterpret float buffer as requested type
-                Vec<T> vec{
+                return PooledVec<T>(this, Vec<T>{
                     reinterpret_cast<T*>(buffers_[i].data),
                     static_cast<unsigned>(count),
-                    buffers_[i].allocated
-                };
-                return PooledVec<T>(this, vec);
+                    buffers_[i].allocated});
             }
         }
 
-        // No suitable buffer found - allocate a new one on-the-fly
-        Vec<float> new_buffer = Vec<float>::alloc(float_count);
-        add_buffer(new_buffer);
-        // Sort to maintain smallest-first order
+        // 2. Nothing fits. Grow the largest free buffer in place (free +
+        // realloc; a free buffer holds no live data so no copy is needed). This
+        // keeps the buffer COUNT bounded by peak concurrency and the sizes at
+        // their high-water mark, so the pool stops growing once the workload
+        // stabilizes. Only when no buffer is free do we add one.
+        //
+        // Allocate with 1.5x headroom (amortized growth, like std::vector) so a
+        // contact-driven request (schwarz Galerkin / radix / scan, whose size
+        // tracks num_contact) that creeps to a new high reuses the slack
+        // instead of reallocating every step. Without this, each tiny new high
+        // churns a free+alloc pair even though memory is already plateaued.
+        size_t alloc_floats = float_count + float_count / 2;
+        long grow = -1;
+        for (size_t i = 0; i < buffers_.size(); ++i) {
+            if (!in_use_[i] &&
+                (grow < 0 || buffers_[i].size > buffers_[grow].size)) {
+                grow = static_cast<long>(i);
+            }
+        }
+        if (grow >= 0) {
+            buffers_[grow].free();
+            buffers_[grow] = Vec<float>::alloc(static_cast<unsigned>(alloc_floats));
+        } else {
+            add_buffer(Vec<float>::alloc(static_cast<unsigned>(alloc_floats)));
+        }
         sort_buffers();
 
-        // Find and mark the newly added buffer (must exist now)
+        // The buffer we just grew/added is now the tightest fit; claim it.
         for (size_t i = 0; i < buffers_.size(); ++i) {
             if (!in_use_[i] && buffers_[i].size >= float_count) {
                 in_use_[i] = true;
-                Vec<T> vec{
+                return PooledVec<T>(this, Vec<T>{
                     reinterpret_cast<T*>(buffers_[i].data),
                     static_cast<unsigned>(count),
-                    buffers_[i].allocated
-                };
-                return PooledVec<T>(this, vec);
+                    buffers_[i].allocated});
             }
         }
 
-        // Should never reach here
+        // Should never reach here.
         assert(false && "MemoryPool: Failed to allocate buffer");
-        Vec<T> empty{nullptr, 0, 0};
-        return PooledVec<T>(this, empty);
+        return PooledVec<T>(this, Vec<T>{nullptr, 0, 0});
+    }
+
+    // Pre-allocate a set of backing buffers once (at solver init), so the hot
+    // loop draws from them with no cudaMalloc. `slots` is a list of
+    // (float_count, how_many). Any existing buffers are released first, so this
+    // is safe to call once per session. The sizing need only be approximate:
+    // the high-water get<T> growth above covers any request it under-sizes, and
+    // a too-large request is bounded by reuse, so this just front-loads the
+    // common buffers to setup time.
+    void reserve(const std::vector<std::pair<size_t, size_t>>& slots) {
+        clear();
+        for (const auto& slot : slots) {
+            size_t fc = slot.first ? slot.first : 1;
+            for (size_t k = 0; k < slot.second; ++k) {
+                add_buffer(Vec<float>::alloc(static_cast<unsigned>(fc)));
+            }
+        }
+        sort_buffers();
+    }
+
+    // Release every backing buffer and reset. Must be called with nothing
+    // checked out (between solves); reserve() uses it to re-seed a session.
+    void clear() {
+        for (size_t i = 0; i < buffers_.size(); ++i) {
+            assert(!in_use_[i] && "MemoryPool::clear() with buffers in use");
+            buffers_[i].free();
+        }
+        buffers_.clear();
+        in_use_.clear();
     }
 
     // Release a buffer back to the pool
@@ -218,6 +269,13 @@ void PooledVec<T>::release() {
 
 // Get the global memory pool instance
 MemoryPool& get();
+
+// Pre-seed the global pool at solver init with the mesh/body-bounded buffers
+// the hot loop reuses, sized from the worst-case counts known at initialize().
+// schwarz's contact/nnz-driven buffers are intentionally NOT pre-sized here;
+// they grow the same pool to its high-water mark at runtime and then stabilize.
+void reserve_for_mesh(unsigned n_verts, unsigned n_edges, unsigned n_faces,
+                      unsigned n_bodies);
 
 } // namespace buffer
 

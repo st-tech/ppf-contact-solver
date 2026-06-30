@@ -308,4 +308,94 @@ class DriverHelpers:
             (n_samples,) = struct.unpack("<I", f.read(4))
             body = f.read(n_samples * n_verts * 3 * 4)
         return np.frombuffer(body, dtype="<f4").reshape(n_samples, n_verts, 3)
+
+    # -- staged-modal operator probe --
+
+    def staged_stub(self, op_cls):
+        # Fresh StagedStub bound to ``op_cls`` (SOLVER_OT_Run /
+        # SOLVER_OT_Transfer) and the addon's AsyncOperator machinery.
+        async_op = __import__(self.pkg + ".core.async_op",
+                              fromlist=["AsyncOperator", "StageAbort"])
+        return StagedStub(async_op, op_cls)
+
+
+class StagedStub:
+    # Stand-in operator ``self`` for the staged-modal action operators
+    # (Transfer / Run). Their execute() defers the real work -- scene
+    # encode, click-time drift checks, the engine dispatch -- to
+    # AsyncOperator.start_stages, which runs one (label, fn) stage per
+    # modal TIMER tick. The rig driver holds the main thread so no TIMER
+    # fires, so this stub borrows the real stage machinery and exposes
+    # drain_stages() to pump every stage synchronously, reproducing what
+    # the modal does across ticks. report() is captured for assertions
+    # and setup_modal() is faked so no real window-manager timer /
+    # modal_handler is registered.
+    #
+    # execute() builds its stage list from ``self._stage_*`` bound methods
+    # that live on the real operator class, so __getattr__ delegates any
+    # attribute this stub does not define to ``op_cls``, bound to ``self``
+    # -- the operator's own execute()/_stage_*()/is_complete() then run
+    # with self=stub while resolving their module globals normally.
+    auto_redraw = False
+    _stages = None
+    _stage_index = 0
+    _timer = None
+
+    def __init__(self, async_op_mod, op_cls):
+        self._aop = async_op_mod
+        self._op_cls = op_cls
+        self.captured = []
+        self.modal_set_up = False
+        self._mode = None
+        self._start_time = 0.0
+
+    def __getattr__(self, name):
+        # Only reached for attributes not found on the instance/StagedStub.
+        # Never delegate the dunders we set in __init__ (guards recursion).
+        if name in ("_aop", "_op_cls"):
+            raise AttributeError(name)
+        attr = getattr(self._op_cls, name)
+        if callable(attr):
+            return attr.__get__(self, type(self))
+        return attr
+
+    def report(self, kind, msg):
+        self.captured.append((tuple(kind), msg))
+
+    def setup_modal(self, context):
+        self.modal_set_up = True
+
+    def error(self, needle=""):
+        # First captured ERROR message containing ``needle`` (any if empty).
+        for kind, msg in self.captured:
+            if "ERROR" in kind and (not needle or needle in msg):
+                return msg
+        return ""
+
+    # start_stages / _run_stage_tick / _end_stages / cleanup_modal are
+    # called as ``self.<name>(...)`` from the operator's execute() and from
+    # drain_stages; delegate each to the real unbound AsyncOperator method.
+    def start_stages(self, context, stages):
+        return self._aop.AsyncOperator.start_stages(self, context, stages)
+
+    def _end_stages(self):
+        return self._aop.AsyncOperator._end_stages(self)
+
+    def cleanup_modal(self, context):
+        return self._aop.AsyncOperator.cleanup_modal(self, context)
+
+    def drain_stages(self, context):
+        # Pump every staged (label, fn) the way AsyncOperator.modal would,
+        # one per tick. Returns {"CANCELLED"} if a stage raised StageAbort
+        # (the message is in ``captured``), or None when all stages ran
+        # (the real modal would then fall through to the is_complete wait).
+        tick = self._aop.AsyncOperator._run_stage_tick
+        while self._stages is not None:
+            res = tick(self, context)
+            if res is None:
+                return None
+            if res == {"CANCELLED"}:
+                return res
+            # {"PASS_THROUGH"}: more stages remain; keep pumping.
+        return None
 """

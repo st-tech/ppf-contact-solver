@@ -11,7 +11,7 @@ one that matches where the solver runs.
 | **SSH** / **SSH Command** | Solver runs **directly** on a remote Linux host | [SSH (Direct)](ssh.md) |
 | **Local** | Solver runs on the same Linux machine as Blender | [Local](local.md) |
 
-All types share the same server-side protocol (TCP, version `0.04`) and the
+All types share the same server-side protocol (TCP, version `0.10`) and the
 same UI flow in the panel: **Connect** -> **Start Server** -> transfer data
 -> **Run** -> **Fetch**. The wire payloads are CBOR envelopes whose schema
 is defined by the `ppf-cts-formats` crate. Text commands use the TCMD

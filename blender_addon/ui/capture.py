@@ -691,6 +691,11 @@ def swap_operator_label(op_idname: str, marker_label: str):
 #: — guarantees a clean pixel diff.
 _MARKER_LABEL = "X" * 48
 
+#: Distinctive offset added to (or subtracted from) a numeric property's
+#: current value to force a visible widget diff during capture. A single
+#: int constant covers both the INT and FLOAT swap branches.
+_SWAP_DELTA = 12345
+
 
 def _auto_swap_value(rna_property, current_value, index: int = 0):
     """Given a Blender RNA property descriptor and its current value, return
@@ -708,9 +713,9 @@ def _auto_swap_value(rna_property, current_value, index: int = 0):
         except (TypeError, IndexError, ValueError):
             return None
         if t == "INT":
-            return ("array", index, int(scalar) + 12345)
+            return ("array", index, int(scalar) + _SWAP_DELTA)
         if t == "FLOAT":
-            return ("array", index, scalar + 12345.0)
+            return ("array", index, scalar + _SWAP_DELTA)
         if t == "BOOLEAN":
             return ("array", index, not bool(scalar))
         return None
@@ -720,18 +725,18 @@ def _auto_swap_value(rna_property, current_value, index: int = 0):
     if t == "INT":
         hard_max = getattr(rna_property, "hard_max", None)
         hard_min = getattr(rna_property, "hard_min", None)
-        candidate = current_value + 12345
+        candidate = current_value + _SWAP_DELTA
         if hard_max is not None and candidate > hard_max:
-            candidate = current_value - 12345
+            candidate = current_value - _SWAP_DELTA
         if hard_min is not None and candidate < hard_min:
             candidate = current_value + 1
         return int(candidate)
     if t == "FLOAT":
         hard_max = getattr(rna_property, "hard_max", None)
         hard_min = getattr(rna_property, "hard_min", None)
-        candidate = float(current_value) + 12345.0
+        candidate = float(current_value) + _SWAP_DELTA
         if hard_max is not None and candidate > hard_max:
-            candidate = float(current_value) - 12345.0
+            candidate = float(current_value) - _SWAP_DELTA
         if hard_min is not None and candidate < hard_min:
             # If both bounds clamp us back to the current value, the
             # swap would be a no-op — return None so the caller skips.

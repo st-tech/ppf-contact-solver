@@ -5,6 +5,20 @@
 
 use std::env;
 
+/// True when this machine can build the real CUDA backend, in which case an
+/// emulated build is almost certainly a mistake. Windows exposes the toolkit
+/// via ``CUDA_PATH``; Unix has ``nvcc`` on ``PATH``.
+fn cuda_toolkit_present() -> bool {
+    if env::var("CUDA_PATH").map_or(false, |p| !p.trim().is_empty()) {
+        return true;
+    }
+    std::process::Command::new("nvcc")
+        .arg("--version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
 fn main() {
     // The ``emulated`` feature swaps the backing C++ library. The
     // CUDA path links against ``libsimbackend_cuda`` as a shared
@@ -15,6 +29,32 @@ fn main() {
     // doesn't need a single ``#[cfg(feature = "emulated")]`` outside
     // this file to honor the switch.
     let emulated = env::var("CARGO_FEATURE_EMULATED").is_ok();
+
+    // Guard: never build the EMULATED (CPU stub) backend on a machine that can
+    // build CUDA. The emulator produces NO real physics yet is written to the
+    // same target/release/ path as the real solver/server, so it silently
+    // replaces the CUDA binary a live session depends on (this has bitten us:
+    // a rig build left an emulated server quietly serving fake results). The
+    // test rig, which deliberately runs emulated on a CUDA host, opts in with
+    // PPF_ALLOW_EMULATED=1.
+    println!("cargo:rerun-if-env-changed=PPF_ALLOW_EMULATED");
+    if emulated
+        && env::var("PPF_ALLOW_EMULATED").is_err()
+        && cuda_toolkit_present()
+    {
+        panic!(
+            "\n\n  Refusing to build the EMULATED (CPU stub) backend: a CUDA \
+             toolkit (nvcc / CUDA_PATH) is present on this machine.\n  The \
+             emulated binary produces no real physics and overwrites the real \
+             CUDA solver/server at target/release/, so a connected session \
+             would silently get fake results.\n  Build the real backend \
+             instead:  cargo build --release   (default features, real CUDA).\n  \
+             The emulated backend builds with  cargo build-emul   on macOS / a \
+             no-nvcc host.\n  If you truly need the emulator here (e.g. the \
+             test rig on a CUDA host), set  PPF_ALLOW_EMULATED=1.\n\n"
+        );
+    }
+
     let (cpp_dir, lib_name) = if emulated {
         ("src/cpp_emul", "simbackend_cpu")
     } else {

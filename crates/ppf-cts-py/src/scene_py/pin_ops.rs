@@ -266,24 +266,3 @@ pub(super) fn scene_transform_animation_evaluate<'py>(
         .map_err(|e| PyValueError::new_err(format!("reshape failed: {e}")))?;
     Ok(arr.into_pyarray(py))
 }
-
-/// `Scene.build`'s vertex-alias regrouping: take a flat
-/// `[((tgt_name, tgt_vi), (src_name, src_vi))...]` list and return
-/// `[(src_name, tgt_name, [(src_vi, tgt_vi)...]),...]` for the
-/// index-map kernel.
-#[pyfunction]
-#[pyo3(signature = (flat))]
-pub(super) fn scene_group_vertex_alias(
-    flat: Vec<((String, i64), (String, i64))>,
-) -> Vec<(String, String, Vec<(i64, i64)>)> {
-    sb::group_vertex_alias(&flat)
-        .into_iter()
-        .map(|(s, t, pairs)| {
-            (
-                s,
-                t,
-                pairs.into_iter().map(|(a, b)| (a as i64, b as i64)).collect(),
-            )
-        })
-        .collect()
-}

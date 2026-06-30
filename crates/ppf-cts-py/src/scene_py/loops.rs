@@ -26,11 +26,11 @@ pub(super) fn scene_stitch_preview_lines<'py>(
     stitch_w: PyReadonlyArray2<'py, f64>,
 ) -> PyResult<(Bound<'py, numpy::PyArray2<f64>>, Bound<'py, numpy::PyArray2<u32>>)> {
     let n_vert = crate::utils_py::require_n_by_k::<_, 3>(&vert, "vert")?;
-    let n_stitch = crate::utils_py::require_n_by_k::<_, 4>(&stitch_ind, "stitch_ind")?;
+    let n_stitch = crate::utils_py::require_n_by_k::<_, 6>(&stitch_ind, "stitch_ind")?;
     let ws = stitch_w.shape();
-    if ws.len() != 2 || ws[1] != 4 || ws[0] != n_stitch {
+    if ws.len() != 2 || ws[1] != 6 || ws[0] != n_stitch {
         return Err(PyValueError::new_err(format!(
-            "stitch_w must be ({n_stitch}, 4), got {ws:?}"
+            "stitch_w must be ({n_stitch}, 6), got {ws:?}"
         )));
     }
     let v_slice = vert
@@ -69,7 +69,7 @@ pub(super) fn scene_face_uv_expand<'py>(
         )));
     }
     let n_vert = vs[0];
-    let face_vec = read_face_indices_i64(faces)?;
+    let face_vec = crate::utils_py::read_index_array::<i64, 3>(faces, "faces")?;
     let n_face = face_vec.len() / 3;
     let uv_slice = vertex_uv
         .as_slice()
@@ -80,35 +80,6 @@ pub(super) fn scene_face_uv_expand<'py>(
     let arr = ndarray::Array3::from_shape_vec((n_face, 3, 2), buf)
         .map_err(|e| PyValueError::new_err(format!("face_uv reshape failed: {e}")))?;
     Ok(arr.into_pyarray(py))
-}
-
-// Accepts only int32 and int64 (no u32/u64), so it stays separate from
-// `crate::utils_py::read_index_array::<i64, 3>` which is broader. See
-// utils_py.rs for the general helper.
-fn read_face_indices_i64(arr: &Bound<'_, PyAny>) -> PyResult<Vec<i64>> {
-    if let Ok(view) = arr.extract::<PyReadonlyArray2<'_, i64>>() {
-        let s = view.shape();
-        if s.len() != 2 || s[1] != 3 {
-            return Err(PyValueError::new_err(format!("faces must be (N, 3), got {s:?}")));
-        }
-        let slice = view
-            .as_slice()
-            .map_err(|_| PyTypeError::new_err("faces must be C-contiguous"))?;
-        return Ok(slice.to_vec());
-    }
-    if let Ok(view) = arr.extract::<PyReadonlyArray2<'_, i32>>() {
-        let s = view.shape();
-        if s.len() != 2 || s[1] != 3 {
-            return Err(PyValueError::new_err(format!("faces must be (N, 3), got {s:?}")));
-        }
-        let slice = view
-            .as_slice()
-            .map_err(|_| PyTypeError::new_err("faces must be C-contiguous"))?;
-        return Ok(slice.iter().map(|&x| x as i64).collect());
-    }
-    Err(PyTypeError::new_err(
-        "faces must be (N, 3) ndarray of int32 or int64",
-    ))
 }
 
 /// Pin-marker index collection (frontend/_scene_.py ~2597-2604).

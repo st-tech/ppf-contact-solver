@@ -201,7 +201,9 @@ def build(n: int = 180, n_cylinders: int = 5, ring_radius: float = 1.0,
     grp.param.shell_density = density
     grp.param.shell_young_modulus = young_modulus
     grp.param.shell_poisson_ratio = poisson_ratio
-    grp.param.bend = bend
+    # Shell bend is density-normalized in the solver, so divide by density to
+    # reproduce the pre-normalization drape (this example uses density 3.5).
+    grp.param.bend = bend / density
     grp.param.friction = friction
 
     f_wait = max(2, int(round(t_wait * fps)))

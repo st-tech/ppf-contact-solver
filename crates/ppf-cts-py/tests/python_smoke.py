@@ -1,23 +1,35 @@
 """
 Smoke tests for the `_ppf_cts_py` extension module.
 
-These tests exercise one trivial call per binding module so the wheel's
-top-level surface is exercised end-to-end. Coverage is deliberately
-shallow: per-kernel correctness lives in the Rust unit tests.
+These tests exercise one trivial call per binding module so the
+extension's top-level surface is exercised end-to-end. Coverage is
+deliberately shallow: per-kernel correctness lives in the Rust unit
+tests.
 
-Invocation (after `maturin develop` builds and installs the wheel):
+Invocation (after `cargo build --release` builds the cdylib):
 
     pytest crates/ppf-cts-py/tests/
 
-We import `_ppf_cts_py` directly so this test file does not depend on
-the `frontend` Python package being on the import path.
+We obtain `_ppf_cts_py` through the `frontend` package, which loads the
+cdylib built into `target/release/` by absolute path and registers it as
+`_ppf_cts_py`. The repo root must be importable for that to work.
 """
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
 import pytest
 
-_rust = pytest.importorskip("_ppf_cts_py")
+REPO_ROOT = Path(__file__).resolve().parents[3]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+try:
+    from frontend import _rust
+except Exception as e:  # pragma: no cover - environment-dependent
+    pytest.skip(f"_ppf_cts_py cdylib unavailable: {e}", allow_module_level=True)
 
 
 def test_smoke_top_level():
@@ -59,7 +71,7 @@ def test_smoke_kernels():
     pinned = np.array([False, False], dtype=np.bool_)
     pos = np.array([0.0, 0.0, 0.0], dtype=np.float64)
     n = np.array([0.0, 1.0, 0.0], dtype=np.float64)
-    out = _rust.check_wall_violations(verts, pinned, pos, n)
+    out = _rust.check_wall_violations_single(verts, pinned, pos, n)
     assert len(out) == 1 and out[0][0] == 0
 
 

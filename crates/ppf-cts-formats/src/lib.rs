@@ -18,6 +18,9 @@
 //!   [`SCHEMA_VERSION`].
 //! - [`kinds`]: concrete payload bodies ([`ParamPayload`],
 //!   [`ScenePayload`]).
+//! - [`status`]: the structured solver run-status record ([`RunStatus`])
+//!   and its liveness [`status::lock`], the single source of truth for
+//!   solver lifecycle and outcome.
 //!
 //! Consumers: [`ppf_cts_core`] (kernels and state), `ppf-cts-py`
 //! (PyO3 bindings), and `ppf-cts-server` (engine host).
@@ -25,6 +28,8 @@
 pub mod envelope;
 pub mod files;
 pub mod kinds;
+pub mod status;
 
 pub use envelope::{Envelope, FormatError, SCHEMA_VERSION};
 pub use kinds::{ParamPayload, ScenePayload};
+pub use status::{RunStatus, STATUS_VERSION};

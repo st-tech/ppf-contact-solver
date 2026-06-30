@@ -8,7 +8,7 @@ The add-on ships with six small example clips that cover a range of motion types
 
 ## Reaching the author
 
-The project is maintained by ZOZO, Inc (https://corp.zozo.com/en/) and authored by Ryoichi Ando. The primary channel for bug reports and feature requests is GitHub issues (https://github.com/st-tech/ppf-contact-solver/issues), and usage questions are best asked on GitHub Discussions (https://github.com/st-tech/ppf-contact-solver/discussions); both keep the conversation searchable for other users. For private contact, email ryoichi.ando@zozo.com. If you use the project in a public piece of work (a paper, a production credit, or a personal project), the author would like to feature it in the docs: send a link to the article, project page, or website (rather than images or clips themselves, since hosting them may run into licensing issues).
+The project is maintained by ZOZO, Inc (https://corp.zozo.com/en/) and authored by Ryoichi Ando. The primary channel for bug reports, feature requests, and usage questions is GitHub issues (https://github.com/st-tech/ppf-contact-solver/issues), which keeps the discussion searchable for other users. For private contact, email ryoichi.ando@zozo.com. If you use the project in a public piece of work (a paper, a production credit, or a personal project), the author would like to feature it in the docs: send a link to the article, project page, or website (rather than images or clips themselves, since hosting them may run into licensing issues).
 
 ## LLM transparency
 
@@ -23,6 +23,9 @@ Code quality and testing: code quality is kept in check through an automated tes
 One-line definitions for the terms that appear across the rest of the documentation, grouped by subject and alphabetized within each group.
 
 ### Scene and Constraints
+
+**PDRD (Painless Differentiable Rotation Dynamics)**
+: Group type whose surface mesh moves as a single exactly-rigid transform (translation plus rotation) rather than deforming per-element. Mass is set by volumetric **Density** (kg/m^3, default 100; mass is density times the enclosed volume of the surface mesh). Has no Young's modulus, Poisson ratio, bending, shrink, strain-limit, or inflation parameters, and is not Rayleigh-damped. Intended for props and rigid shells.
 
 **Center mode**
 : How the pivot for a **Spin** or **Scale** operation is resolved. One of **Centroid** (vertex centroid at runtime), **Fixed** (a user-entered coordinate), **Max Towards** (centroid of vertices furthest along a direction), or **Vertex** (a single vertex picked in Edit Mode).
@@ -43,7 +46,7 @@ One-line definitions for the terms that appear across the rest of the documentat
 : Two snapped objects registered as a solver stitch constraint, optionally with explicit stitch anchors. Created by the snap operator and stored on the scene.
 
 **Object group**
-: One of up to 32 slots on a scene that holds a type (**Solid** / **Shell** / **Rod** / **Static**), material parameters, assigned meshes, and pins. Static groups are covered separately under Static Objects.
+: One of up to 32 slots on a scene that holds a type (**Solid** / **Shell** / **Rod** / **Static** / **PDRD** / **Sand**), material parameters, assigned meshes, and pins. Static groups are covered separately under Static Objects.
 
 **Operation**
 : A keyframed action stacked on a pin: **Move By**, **Spin**, **Scale**, **Torque**, or **Embedded Move**. **Torque** is exclusive with the first three; it can still coexist with **Embedded Move**.
@@ -67,7 +70,7 @@ One-line definitions for the terms that appear across the rest of the documentat
 : Group type for thin deformable surfaces (cloth, fabric). Accepts mesh objects.
 
 **Snap**
-: KDTree-based vertex alignment that translates object A so its nearest vertices land on object B's nearest vertices. Typically followed by a merge pair registration and, for shell+solid pairs, a stitch stiffness.
+: KDTree-based vertex alignment that translates object A so its nearest vertices land on object B's nearest vertices. Typically followed by a merge pair registration and a stitch stiffness.
 
 **Solid**
 : Group type for volumetric deformable bodies.
@@ -76,7 +79,7 @@ One-line definitions for the terms that appear across the rest of the documentat
 : Group type for non-deforming collision objects (ground planes, props, mannequins). Exposes friction and contact settings; motion is driven by Blender transform keyframes rather than by the solver.
 
 **Stitch stiffness**
-: Per-merge-pair compliance value that softens the stitch when a solid is involved. Pure shell-shell and rod-rod pairs merge vertices exactly and do not expose a stiffness slider.
+: Per-object factor on the soft cross-stitch force (6-slot barycentric, default 1.0), exposed for every supported pair: shell-shell, shell-solid, rod-shell, rod-solid, rod-rod, solid-solid, and any dynamic group stitched to a Static collider. It is a direct factor on the stitch force (no mass/dt normalization).
 
 **Torque**
 : A pin **Operation** that applies rotational force around an axis derived from the pinned vertices. Exclusive with Move By, Spin, and Scale; coexists with Embedded Move.
@@ -160,7 +163,7 @@ One-line definitions for the terms that appear across the rest of the documentat
 **MCP tool**
 : A JSON-RPC method exposed by the MCP server and dispatched with `tools/call`. Goes through the same validation layer as the sidebar buttons.
 
-**Protocol 0.02**
+**Protocol 0.10**
 : The current wire protocol version between the add-on and the `ppf-cts-server` binary. CBOR envelopes follow the schema defined in the `ppf-cts-formats` crate (`envelope.rs` + `kinds/`), shared by both ends. The server advertises its version on connect; mismatches surface as a protocol-version-mismatch status and refuse to proceed.
 
 **Python API (add-on)**

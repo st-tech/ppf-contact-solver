@@ -44,7 +44,18 @@ def marching_cubes(sdf_func, bounds, step):
     ys = np.arange(min_y, max_y + step, step)
     zs = np.arange(min_z, max_z + step, step)
 
-    sdf_types, sdf_params = sdf_func.get_kernel_primitives()
+    try:
+        sdf_types, sdf_params = sdf_func.get_kernel_primitives()
+    except NotImplementedError as exc:
+        # Intersection (``&``) and difference (``-``) composites have no
+        # kernel meshing path: the evaluator only aggregates a union of
+        # primitives. Re-raise with an actionable message instead of the
+        # bare "not yet supported" from get_kernel_primitives().
+        raise NotImplementedError(
+            f"{type(sdf_func).__name__} cannot be meshed: only union (|) of "
+            "spheres and capsules is supported by the kernel evaluator. "
+            "Intersection (&) and difference (-) have no meshing path yet."
+        ) from exc
 
     return _rust.marching_cubes(
         np.ascontiguousarray(xs, dtype=np.float64),
@@ -113,11 +124,6 @@ class SphereSDF(SDF):
         self.radius = float(radius)
         self.cx, self.cy, self.cz = float(center[0]), float(center[1]), float(center[2])
 
-    def __call__(self, x, y, z):
-        return _rust.sphere_sdf_eval(
-            float(x), float(y), float(z), self.cx, self.cy, self.cz, self.radius
-        )
-
     def bounds(self):
         return _rust.sphere_bounds(self.cx, self.cy, self.cz, self.radius)
 
@@ -139,14 +145,6 @@ class CapsuleSDF(SDF):
         self.baz = self.p1z - self.p0z
         self.ba_dot_ba = self.bax * self.bax + self.bay * self.bay + self.baz * self.baz
         self.radius = float(radius)
-
-    def __call__(self, x, y, z):
-        return _rust.capsule_sdf_eval(
-            float(x), float(y), float(z),
-            self.p0x, self.p0y, self.p0z,
-            self.bax, self.bay, self.baz,
-            self.ba_dot_ba, self.radius,
-        )
 
     def bounds(self):
         return _rust.capsule_bounds(
@@ -181,9 +179,6 @@ class UnionSDF(SDF):
         b_children = list(b.children) if isinstance(b, UnionSDF) else [b]
         self.children = a_children + b_children
 
-    def __call__(self, x, y, z):
-        return min(c(x, y, z) for c in self.children)
-
     def bounds(self):
         return _rust.reduce_bounds_from_children(self.children, "union")
 
@@ -199,9 +194,10 @@ class UnionSDF(SDF):
 class IntersectionSDF(SDF):
     """Intersection of two or more SDFs (the ``&`` operator).
 
-    Kernel-accelerated grid evaluation is not yet supported for
-    intersections; use the Python ``__call__`` path or marching cubes
-    with a small grid.
+    The kernel evaluator only aggregates a union of primitives, so
+    intersections have no meshing path yet: :meth:`get_kernel_primitives`
+    raises ``NotImplementedError`` and :meth:`save` therefore cannot
+    export an intersection. The ``bounds`` query still works.
     """
 
     def __init__(self, a, b):
@@ -211,9 +207,6 @@ class IntersectionSDF(SDF):
         a_children = list(a.children) if isinstance(a, IntersectionSDF) else [a]
         b_children = list(b.children) if isinstance(b, IntersectionSDF) else [b]
         self.children = a_children + b_children
-
-    def __call__(self, x, y, z):
-        return max(c(x, y, z) for c in self.children)
 
     def bounds(self):
         return _rust.reduce_bounds_from_children(self.children, "intersect")
@@ -228,9 +221,6 @@ class DifferenceSDF(SDF):
     def __init__(self, a, b):
         self.a = a
         self.b = b
-
-    def __call__(self, x, y, z):
-        return max(self.a(x, y, z), -self.b(x, y, z))
 
     def bounds(self):
         return self.a.bounds()

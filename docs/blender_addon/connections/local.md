@@ -62,7 +62,7 @@ you do not need to do anything.
 
 | Field | Description |
 | ----- | ----------- |
-| Path | Directory containing the `ppf-cts-server` binary. Default `~/ppf-contact-solver`. |
+| Path | Directory containing the `ppf-cts-server` binary. `~/ppf-contact-solver` is a typical value; the field defaults to empty and must be set. |
 
 The local `ppf-cts-server` port is fixed at `9090` in Local mode; the
 panel does not expose a Server Port field here (it is only editable in
@@ -71,7 +71,7 @@ Docker-family modes).
 ## Dependencies
 
 Local mode requires neither `paramiko` nor `docker-py`. The main panel's
-**Install Paramiko** and **Install Docker** buttons are only relevant for
+**Install Paramiko to Add-on Directory** and **Install Docker-Py to Add-on Directory** buttons are only relevant for
 SSH and Docker modes.
 
 ## Troubleshooting

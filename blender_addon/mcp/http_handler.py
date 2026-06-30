@@ -8,7 +8,9 @@ All traffic flows through a single ``/mcp`` endpoint:
   body contains requests, the server replies with a single JSON response; when
   it only contains notifications or responses, the server replies 202 Accepted.
 - ``GET /mcp`` with ``Accept: text/event-stream`` opens a server-to-client SSE
-  stream scoped to ``Mcp-Session-Id``. ``Last-Event-ID`` resumes the stream.
+  stream scoped to ``Mcp-Session-Id``. The server never pushes events (every
+  request is answered synchronously over POST), so the stream only holds open
+  with periodic keep-alive comments until the session closes.
 - ``DELETE /mcp`` terminates the session.
 
 The server supports MCP protocol version ``2025-06-18``.
@@ -31,6 +33,11 @@ SERVER_VERSION = "0.1.0"
 _MAX_POST_BYTES = 10 * 1024 * 1024
 _SSE_KEEPALIVE_SECONDS = 15.0
 
+# JSON-RPC 2.0 error codes used by this transport.
+PARSE_ERROR = -32700
+METHOD_NOT_FOUND = -32601
+INVALID_PARAMS = -32602
+
 _CAPABILITIES = {
     "tools": {"listChanged": False},
     "resources": {"subscribe": False, "listChanged": False},
@@ -38,14 +45,45 @@ _CAPABILITIES = {
 }
 
 
+def _rpc_result(request_id, result):
+    return {"jsonrpc": "2.0", "id": request_id, "result": result}
+
+
+def _rpc_error(request_id, code, message):
+    return {
+        "jsonrpc": "2.0",
+        "id": request_id,
+        "error": {"code": code, "message": message},
+    }
+
+
+def _accepts_json(accept: str) -> bool:
+    """Return True when an Accept header permits a JSON response.
+
+    An absent or wildcard Accept is treated as acceptable. Otherwise the
+    media-type tokens are compared exactly (after stripping ``;`` parameters)
+    so that e.g. ``application/json-seq`` is not mistaken for ``application/json``.
+    """
+    if not accept:
+        return True
+    for token in accept.split(","):
+        media_type = token.split(";", 1)[0].strip().lower()
+        if media_type in ("application/json", "application/*", "*/*"):
+            return True
+    return False
+
+
 def _is_local_origin(origin: str) -> bool:
     if not origin:
+        # No Origin header: non-browser clients (rmcp, curl).
         return True
     try:
         host = (urlsplit(origin).hostname or "").lower()
     except ValueError:
         return False
-    return host in ("localhost", "127.0.0.1", "::1", "")
+    # Only explicit loopback hostnames count as local. An empty/unparseable
+    # host (e.g. Origin: null, file://) is rejected.
+    return host in ("localhost", "127.0.0.1", "::1")
 
 
 class MCPRequestHandler(BaseHTTPRequestHandler):
@@ -128,47 +166,29 @@ class MCPRequestHandler(BaseHTTPRequestHandler):
         self._cors_headers()
         self.end_headers()
 
-        last_event_id = self.headers.get("Last-Event-ID", "")
-        if last_event_id:
-            for eid, payload in session.replay_after(last_event_id):
-                if not self._emit_sse(eid, payload):
-                    return
-
+        # The server never pushes events, so this stream only emits keep-alive
+        # comments. event_queue carries a single None sentinel from close() to
+        # unblock get() promptly when the session ends.
         while not session.closed:
             try:
-                item = session.event_queue.get(timeout=_SSE_KEEPALIVE_SECONDS)
+                session.event_queue.get(timeout=_SSE_KEEPALIVE_SECONDS)
             except Exception:
-                item = None
-            if item is None:
-                try:
-                    self.wfile.write(b": keep-alive\n\n")
-                    self.wfile.flush()
-                except (BrokenPipeError, ConnectionResetError):
-                    return
-                continue
-            eid, payload = item
-            if not self._emit_sse(eid, payload):
+                pass
+            try:
+                self.wfile.write(b": keep-alive\n\n")
+                self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError):
                 return
-
-    def _emit_sse(self, event_id: str, payload: str) -> bool:
-        frame = f"id: {event_id}\ndata: {payload}\n\n".encode("utf-8")
-        try:
-            self.wfile.write(frame)
-            self.wfile.flush()
-            return True
-        except (BrokenPipeError, ConnectionResetError):
-            return False
 
     def do_POST(self):
         if self._reject_non_local_origin() or self._reject_non_mcp_path():
             return
 
+        # The POST response is always a single JSON object (POST never upgrades
+        # to an SSE stream), so only application/json needs to be acceptable.
         accept = self.headers.get("Accept", "")
-        if "application/json" not in accept or "text/event-stream" not in accept:
-            self._send_status(
-                406,
-                "Accept must include both application/json and text/event-stream",
-            )
+        if not _accepts_json(accept):
+            self._send_status(406, "Accept must include application/json")
             return
 
         try:
@@ -186,13 +206,7 @@ class MCPRequestHandler(BaseHTTPRequestHandler):
         try:
             message = json.loads(raw)
         except json.JSONDecodeError:
-            self._send_json(
-                {
-                    "jsonrpc": "2.0",
-                    "error": {"code": -32700, "message": "Parse error"},
-                    "id": None,
-                }
-            )
+            self._send_json(_rpc_error(None, PARSE_ERROR, "Parse error"))
             return
 
         batch = message if isinstance(message, list) else [message]
@@ -257,37 +271,41 @@ class MCPRequestHandler(BaseHTTPRequestHandler):
             return None
 
         if method == "initialize":
-            return {
-                "jsonrpc": "2.0",
-                "id": request_id,
-                "result": {
+            return _rpc_result(
+                request_id,
+                {
                     "protocolVersion": PROTOCOL_VERSION,
                     "capabilities": _CAPABILITIES,
                     "serverInfo": self._server_info(),
                 },
-            }
+            )
 
         if method == "tools/list":
-            return {
-                "jsonrpc": "2.0",
-                "id": request_id,
-                "result": {"tools": get_tools_list()},
-            }
+            return _rpc_result(request_id, {"tools": get_tools_list()})
 
         if method == "tools/call":
             tool_name = params.get("name")
+            if not isinstance(tool_name, str) or not tool_name:
+                return _rpc_error(
+                    request_id,
+                    INVALID_PARAMS,
+                    "Invalid params: 'name' must be a non-empty string",
+                )
             arguments = params.get("arguments", {})
             task_id = post_mcp_task(tool_name, arguments)
             result = get_mcp_result(task_id)
-            return {
-                "jsonrpc": "2.0",
-                "id": request_id,
-                "result": {
-                    "content": [
-                        {"type": "text", "text": json.dumps(result, indent=2)}
-                    ]
-                },
+            # Surface handler-level failures as MCP tools/call result.isError so
+            # clients can detect them without string-parsing the embedded JSON.
+            # A failed tool call is still a well-formed JSON-RPC result, not a
+            # protocol-level -32xxx error, so isError lives inside result.
+            tool_result = {
+                "content": [
+                    {"type": "text", "text": json.dumps(result, indent=2)}
+                ]
             }
+            if isinstance(result, dict) and result.get("status") == "error":
+                tool_result["isError"] = True
+            return _rpc_result(request_id, tool_result)
 
         if method == "resources/list":
             resources = [
@@ -299,21 +317,16 @@ class MCPRequestHandler(BaseHTTPRequestHandler):
                 }
             ]
             resources.extend(list_llm_resources())
-            return {
-                "jsonrpc": "2.0",
-                "id": request_id,
-                "result": {"resources": resources},
-            }
+            return _rpc_result(request_id, {"resources": resources})
 
         if method == "resources/read":
             uri = params.get("uri")
             if uri == "blender://scene/current":
                 task_id = post_mcp_task("get_scene_info", {})
                 scene_info = get_mcp_result(task_id)
-                return {
-                    "jsonrpc": "2.0",
-                    "id": request_id,
-                    "result": {
+                return _rpc_result(
+                    request_id,
+                    {
                         "contents": [
                             {
                                 "uri": uri,
@@ -322,13 +335,12 @@ class MCPRequestHandler(BaseHTTPRequestHandler):
                             }
                         ]
                     },
-                }
+                )
             text = read_llm_resource(uri) if uri else None
             if text is not None:
-                return {
-                    "jsonrpc": "2.0",
-                    "id": request_id,
-                    "result": {
+                return _rpc_result(
+                    request_id,
+                    {
                         "contents": [
                             {
                                 "uri": uri,
@@ -337,15 +349,11 @@ class MCPRequestHandler(BaseHTTPRequestHandler):
                             }
                         ]
                     },
-                }
-            return {
-                "jsonrpc": "2.0",
-                "id": request_id,
-                "error": {"code": -32602, "message": f"Unknown resource: {uri}"},
-            }
+                )
+            return _rpc_error(
+                request_id, INVALID_PARAMS, f"Unknown resource: {uri}"
+            )
 
-        return {
-            "jsonrpc": "2.0",
-            "id": request_id,
-            "error": {"code": -32601, "message": f"Method not found: {method}"},
-        }
+        return _rpc_error(
+            request_id, METHOD_NOT_FOUND, f"Method not found: {method}"
+        )

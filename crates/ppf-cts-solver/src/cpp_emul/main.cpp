@@ -21,14 +21,21 @@
 //   * fetch() / fetch_inv_rest() / fetch_rest_angles() are real
 //     memcpy round-trips, identical-shape to the CUDA versions.
 //   * fetch_dyn_counts/fetch_dyn/update_dyn/init_collision_windows/
-//     refresh_collision_active/override_velocity are no-ops modulo
-//     state mirroring (no contact assembly happens).
+//     refresh_collision_active are no-ops modulo state mirroring (no
+//     contact assembly happens).
+//   * override_velocity/override_angular_velocity/gather_current_positions
+//     are real: they read/bias the vertex.curr/prev buffers so the optional
+//     PPF_EMULATED_ELASTIC step (pd_arap) picks up the injected velocity.
+//     With the elastic solver off they have no observable effect (advance()
+//     never integrates prev).
 //
 // Stripped Rust-side stubs (cuda_stubs, apply_kinematic_constraint,
 // emulated_intersection, time-bump+sleep) live here now.
 
 #include "../cpp/data.hpp"
 #include "mem.hpp"
+#include "pd_arap.hpp"
+#include "sand.hpp"
 
 #include <atomic>
 #include <chrono>
@@ -156,6 +163,20 @@ DataSet build_dev_mirror(const DataSet &host) {
     dev.prop.face = mem::malloc_device(host.prop.face);
     dev.prop.hinge = mem::malloc_device(host.prop.hinge);
     dev.prop.tet = mem::malloc_device(host.prop.tet);
+    dev.prop.pdrd_body = mem::malloc_device(host.prop.pdrd_body);
+    dev.pdrd_vert_list = mem::malloc_device(host.pdrd_vert_list);
+    dev.pdrd_rest_centered = mem::malloc_device(host.pdrd_rest_centered);
+    dev.grain_omega = mem::malloc_device(host.grain_omega);
+    dev.grain_inv_inertia = mem::malloc_device(host.grain_inv_inertia);
+    dev.grain_torque = mem::malloc_device(host.grain_torque);
+    dev.grain_ang_stiff = mem::malloc_device(host.grain_ang_stiff);
+    dev.grain_contact_normal = mem::malloc_device(host.grain_contact_normal);
+    dev.grain_inv_inertia_center =
+        mem::malloc_device(host.grain_inv_inertia_center);
+    dev.grain_omega_prev = mem::malloc_device(host.grain_omega_prev);
+    dev.grain_A = mem::malloc_device(host.grain_A);
+    dev.grain_B = mem::malloc_device(host.grain_B);
+    dev.grain_grot = mem::malloc_device(host.grain_grot);
 
     dev.inv_rest2x2 = mem::malloc_device(host.inv_rest2x2);
     dev.inv_rest3x3 = mem::malloc_device(host.inv_rest3x3);
@@ -184,6 +205,13 @@ extern "C" DLL_EXPORT void set_log_path(const char * /*data_dir*/) {
     // No-op in the emulator. SimpleLog isn't compiled in.
 }
 
+// The emulator has no CUDA error / exit(1) fatal paths, so it always
+// reports "no fatal exit". Present so the host's FFI symbol resolves on
+// the emulated link, matching cpp/main/main.cu.
+extern "C" DLL_EXPORT unsigned char ppf_fatal_code() {
+    return 0;
+}
+
 extern "C" DLL_EXPORT bool initialize(DataSet *dataset, ParamSet *param) {
     g_host_dataset = *dataset;
     g_dev_dataset = build_dev_mirror(*dataset);
@@ -204,6 +232,21 @@ extern "C" DLL_EXPORT void advance(StepResult *result) {
         n_calls > static_cast<unsigned long long>(fail_at) + 1) {
         seed_synthetic_records();
         result->intersection_free = false;
+    }
+
+    // Optional implicit ARAP elastic step (opt-in via PPF_EMULATED_ELASTIC).
+    // Default-off preserves the historical kinematic-only emulator: free
+    // vertices move only when this solver runs; pins are already written
+    // into vertex.curr by update_constraint() and act as Dirichlet targets.
+    if (g_param && pd_arap::enabled()) {
+        pd_arap::step(g_dev_dataset, *g_param);
+    }
+
+    // Phony granular mover. Auto-runs for a faceless/edgeless point cloud
+    // (sand::step self-gates via sand::is_point_cloud) and is a no-op for any
+    // scene with elements, so no opt-in flag is needed.
+    if (g_param) {
+        sand::step(g_dev_dataset, *g_param);
     }
 
     if (g_param) {
@@ -376,12 +419,118 @@ extern "C" DLL_EXPORT void update_constraint(const Constraint *constraint) {
     }
 }
 
-extern "C" DLL_EXPORT void override_velocity(const unsigned * /*indices*/,
-                                             unsigned /*count*/, float /*vx*/,
-                                             float /*vy*/, float /*vz*/,
-                                             float /*dt*/) {
-    // No physics integration happens in the emulator, so velocity
-    // overrides have nothing to bias. Left as no-op.
+extern "C" DLL_EXPORT void update_rest_shape(const RestShapeUpdate *update) {
+    // Mirror the production path: copy the streamed per-frame inverse rest
+    // matrices into the (emulated) device dataset. The emulator's advance is
+    // a no-op so elasticity is never evaluated, but keeping the copy faithful
+    // means tests that round-trip g_dev_dataset see the updated rest shape.
+    if (update->inv_rest2x2.size > 0) {
+        mem::copy_to_device(update->inv_rest2x2, g_dev_dataset.inv_rest2x2);
+    }
+    if (update->inv_rest3x3.size > 0) {
+        mem::copy_to_device(update->inv_rest3x3, g_dev_dataset.inv_rest3x3);
+    }
+    // Mirror production: assign the dedicated per-element `rest_excluded` flag
+    // (owned by this path, set wholesale each frame). The emulator's advance is
+    // a no-op so this has no dynamical effect, but it keeps g_dev_dataset
+    // faithful for any test that round-trips it.
+    auto &face_prop = g_host_dataset.prop.face;
+    if (update->exclude_face.size) {
+        for (unsigned i = 0; i < update->exclude_face.size && i < face_prop.size; ++i) {
+            face_prop[i].rest_excluded = update->exclude_face[i] != 0;
+        }
+        mem::copy_to_device(face_prop, g_dev_dataset.prop.face);
+    }
+    auto &tet_prop = g_host_dataset.prop.tet;
+    if (update->exclude_tet.size) {
+        for (unsigned i = 0; i < update->exclude_tet.size && i < tet_prop.size; ++i) {
+            tet_prop[i].rest_excluded = update->exclude_tet[i] != 0;
+        }
+        mem::copy_to_device(tet_prop, g_dev_dataset.prop.tet);
+    }
+}
+
+extern "C" DLL_EXPORT void override_velocity(const unsigned *indices,
+                                             unsigned count, float vx,
+                                             float vy, float vz,
+                                             float dt) {
+    // Bias the implicit predictor by setting prev = curr - v*dt, so the
+    // emulated elastic step (pd_arap, when PPF_EMULATED_ELASTIC=1) reads the
+    // incoming velocity v from (curr - prev)/dt. With the elastic solver
+    // disabled this is harmless: advance() then never integrates prev.
+    if (count == 0 || dt <= 0.0f) {
+        return;
+    }
+    auto &curr = g_dev_dataset.vertex.curr;
+    auto &prev = g_dev_dataset.vertex.prev;
+    for (unsigned i = 0; i < count; ++i) {
+        unsigned vi = indices[i];
+        if (vi >= curr.size) {
+            continue;
+        }
+        const Vec3f c = curr.data[vi];
+        Vec3f np;
+        np[0] = (static_cast<float>(c[0]) - vx * dt);
+        np[1] = (static_cast<float>(c[1]) - vy * dt);
+        np[2] = (static_cast<float>(c[2]) - vz * dt);
+        prev.data[vi] = np;
+    }
+}
+
+extern "C" DLL_EXPORT void gather_current_positions(const unsigned *indices,
+                                                    unsigned count,
+                                                    float *out) {
+    // The emulator's "device" buffers are plain host memory (see mem.hpp),
+    // so read vertex.curr directly. Mirrors the CUDA gather so the caller's
+    // principal-axis solve uses the live (deformed/rotated) positions.
+    if (!out || count == 0) {
+        return;
+    }
+    auto &curr = g_dev_dataset.vertex.curr;
+    for (unsigned i = 0; i < count; ++i) {
+        unsigned vi = indices[i];
+        if (vi < curr.size) {
+            out[i * 3 + 0] = static_cast<float>(curr.data[vi][0]);
+            out[i * 3 + 1] = static_cast<float>(curr.data[vi][1]);
+            out[i * 3 + 2] = static_cast<float>(curr.data[vi][2]);
+        } else {
+            out[i * 3 + 0] = 0.0f;
+            out[i * 3 + 1] = 0.0f;
+            out[i * 3 + 2] = 0.0f;
+        }
+    }
+}
+
+extern "C" DLL_EXPORT void override_angular_velocity(
+    const unsigned *indices, unsigned count, float wx,
+    float wy, float wz, float cx, float cy, float cz,
+    float dt) {
+    // Inject a rigid spin field: prev -= (ω × (curr - c)) * dt, applied on
+    // top of any linear override already written to prev this step. Matches
+    // the CUDA path so the emulated elastic solver spins the body.
+    if (count == 0 || dt <= 0.0f) {
+        return;
+    }
+    auto &curr = g_dev_dataset.vertex.curr;
+    auto &prev = g_dev_dataset.vertex.prev;
+    for (unsigned i = 0; i < count; ++i) {
+        unsigned vi = indices[i];
+        if (vi >= curr.size) {
+            continue;
+        }
+        float rx = static_cast<float>(curr.data[vi][0]) - cx;
+        float ry = static_cast<float>(curr.data[vi][1]) - cy;
+        float rz = static_cast<float>(curr.data[vi][2]) - cz;
+        float vwx = wy * rz - wz * ry;
+        float vwy = wz * rx - wx * rz;
+        float vwz = wx * ry - wy * rx;
+        const Vec3f p = prev.data[vi];
+        Vec3f np;
+        np[0] = (static_cast<float>(p[0]) - vwx * dt);
+        np[1] = (static_cast<float>(p[1]) - vwy * dt);
+        np[2] = (static_cast<float>(p[2]) - vwz * dt);
+        prev.data[vi] = np;
+    }
 }
 
 extern "C" DLL_EXPORT void init_collision_windows(const unsigned * /*vert_dmap*/,

@@ -1,0 +1,7 @@
+fabric,dc_min,dc_max,note,citation
+Silk,20,40,Light woven silk drapes very fluidly (low DC),Matsudaira & Yang 2003 (doi:10.1177/004051750307300309); Hu et al. 2020 (Industria Textila 71-1)
+Flag,20,40,Lightweight synthetic banner cloth; limp class,Synthetic woven limp class (ISO 9073-9 light template)
+Cotton,60,76,Plain woven cotton; classic reference value ~68%,"Gan, Ly & Steven 1991 (doi:10.1080/00405009108658741): measured 68.4%, FEM 71.0%"
+Wool,40,70,Woven wool worsted suiting; medium drape,Wool worsted drape studies (mid DC band)
+Leather,47,70,Garment (sheep) leather; heavy but stiff,Memon et al. 2021 (Materials 14-16-4553; PMC8398511): DC 47-70%
+Denim,70,90,Heavy cotton twill; stiffest fabric class (high DC),Twill / heavy fabric highest-DC class (Cusick drape literature)

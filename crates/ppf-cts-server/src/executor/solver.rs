@@ -12,9 +12,12 @@
 use std::path::PathBuf;
 
 use ppf_cts_core::events::Event;
-use ppf_cts_formats::files::{FINISHED, SAVE_AND_QUIT};
+use ppf_cts_formats::files::{
+    session_dir as session_dir_for, session_output_dir, ERROR_LOG, FINISHED, SAVE_AND_QUIT,
+    STATUS_RECORD, STDOUT_LOG, TERMINATE_REQUEST,
+};
 
-use super::{dispatch_re_entrant, solver_busy_for_check};
+use super::{dispatch_re_entrant, solver_busy_for_check, terminate_solver_for_kill};
 use crate::engine::ServerEngine;
 
 /// Spawn the solver subprocess. Build a shell command from the
@@ -43,13 +46,19 @@ pub(super) async fn launch_solver(engine: &ServerEngine, resume_from: Option<i32
 
     // Make sure no leftover sentinel from a previous run trips the
     // monitor before the new solver has a chance to write a frame.
-    // The chain scenarios (run → fetch → run) hit exactly this:
-    // ``finished.txt`` from run #1 is still on disk when run #2's
+    // The chain scenarios (run → fetch → run) hit exactly this: a
+    // terminal ``status.cbor`` from run #1 is still on disk when run #2's
     // first monitor tick fires, and we'd dispatch SolverFinished a
     // few ms after spawn.
-    let session_dir = PathBuf::from(&root).join("session");
-    let output_dir = session_dir.join("output");
-    for sentinel in [SAVE_AND_QUIT, FINISHED] {
+    let root_path = PathBuf::from(&root);
+    let session_dir = session_dir_for(&root_path);
+    let output_dir = session_output_dir(&root_path);
+    // STATUS_RECORD / TERMINATE_REQUEST are scrubbed for the same reason: a
+    // stale status.cbor or terminate_request from a prior run must not be
+    // read by the monitor before the fresh solver writes its own. STATUS_LOCK
+    // is deliberately NOT scrubbed: the about-to-spawn solver owns it, and an
+    // advisory lock left by a dead prior run is already released by the OS.
+    for sentinel in [SAVE_AND_QUIT, FINISHED, STATUS_RECORD, TERMINATE_REQUEST] {
         let p = output_dir.join(sentinel);
         if p.exists() {
             let _ = std::fs::remove_file(&p);
@@ -59,12 +68,12 @@ pub(super) async fn launch_solver(engine: &ServerEngine, resume_from: Option<i32
     // Kill any stragglers before spawning a fresh solver.
     if solver_busy_for_check() {
         log::info!(target: "ppf::solver", "DoLaunchSolver: terminating prior solver before relaunch");
-        ppf_cts_core::utils::terminate_solver();
+        terminate_solver_for_kill();
     }
 
     let load = resume_from.unwrap_or(0);
-    let log_path = session_dir.join("stdout.log");
-    let err_path = session_dir.join("error.log");
+    let log_path = session_dir.join(STDOUT_LOG);
+    let err_path = session_dir.join(ERROR_LOG);
     if let Err(e) = std::fs::create_dir_all(&session_dir) {
         log::error!(target: "ppf::solver", "DoLaunchSolver: failed to mkdir {session_dir:?}: {e}");
         dispatch_re_entrant(
@@ -82,7 +91,7 @@ pub(super) async fn launch_solver(engine: &ServerEngine, resume_from: Option<i32
     // doesn't need its execute bit set.
     #[cfg(target_os = "windows")]
     let (program, args, cmd_path): (&str, Vec<String>, PathBuf) = {
-        let cmd_path = session_dir.join("command.bat");
+        let cmd_path = session_dir.join(ppf_cts_formats::files::COMMAND_BAT);
         (
             "cmd",
             vec![
@@ -99,7 +108,7 @@ pub(super) async fn launch_solver(engine: &ServerEngine, resume_from: Option<i32
     };
     #[cfg(not(target_os = "windows"))]
     let (program, args, cmd_path): (&str, Vec<String>, PathBuf) = {
-        let cmd_path = session_dir.join("command.sh");
+        let cmd_path = session_dir.join(ppf_cts_formats::files::COMMAND_SH);
         (
             "bash",
             vec![
@@ -177,7 +186,7 @@ pub(super) async fn launch_solver(engine: &ServerEngine, resume_from: Option<i32
             log::info!(target: "ppf::solver", "DoLaunchSolver: solver pid={:?}", child.id());
             // Detach: drop the Child without awaiting. The monitor
             // task is the authoritative source of solver lifecycle
-            // events (it watches finished.txt + error.log).
+            // events (it reads the solver-authored status.cbor record).
             std::mem::drop(child);
         }
         Err(e) => {

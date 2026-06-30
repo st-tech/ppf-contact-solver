@@ -75,7 +75,13 @@ def _apply_transform_to_verts(
 
 @dataclass
 class TransformAnimation:
-    """Sparse rigid-body transform animation for a static object."""
+    """Sparse rigid-body transform animation for a static object.
+
+    ``local_vert`` holds the pre-transform local geometry the T*R*S
+    keyframes are applied to. For a normalized object it must already
+    carry the normalize pre-step ``(v - center) / max(bbox)`` baked in,
+    so ``evaluate(0)`` matches the object's built static base.
+    """
 
     local_vert: np.ndarray
     times: list[float]

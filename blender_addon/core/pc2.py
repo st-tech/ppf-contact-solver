@@ -19,7 +19,14 @@ PC2_HEADER = b"POINTCACHE2\0"
 PC2_VERSION = 1
 PC2_HEADER_SIZE = 32
 FRAME_VERTEX_SIZE = 12  # 3 * sizeof(float32)
+# Byte offsets into the PC2 header (see write_pc2): 12-byte magic +
+# version(i) + n_verts(i) + start(f) + sampling(f) + n_frames(i).
+PC2_NVERTS_OFFSET = 16
+PC2_FRAMECOUNT_OFFSET = 28
 MODIFIER_NAME = "ContactSolverCache"
+# Cache namespace suffixes embedded in PC2 keys / on-disk filenames.
+STATIC_DEFORM_SUFFIX = "_staticdeform"
+PIN_DEFORM_SUFFIX = "__pindeform"
 
 # Gap tracking: {obj_uuid: set of real (non-gap-filled) frame indices}
 _real_frames: dict[str, set[int]] = {}
@@ -73,7 +80,7 @@ def append_pc2_frame(filepath, positions, n_verts):
     new data on disk — never "new count, data missing".
     """
     with open(filepath, "r+b") as f:
-        f.seek(28)
+        f.seek(PC2_FRAMECOUNT_OFFSET)
         frame_tot = struct.unpack("<i", f.read(4))[0]
         # Data first: append to EOF and flush to disk.
         f.seek(0, 2)
@@ -84,7 +91,7 @@ def append_pc2_frame(filepath, positions, n_verts):
         except (OSError, AttributeError):
             pass
         # Header update publishes the new frame to readers.
-        f.seek(28)
+        f.seek(PC2_FRAMECOUNT_OFFSET)
         f.write(struct.pack("<i", frame_tot + 1))
         f.flush()
         try:
@@ -96,19 +103,23 @@ def append_pc2_frame(filepath, positions, n_verts):
 def read_pc2_frame_count(filepath):
     """Read the frame_tot from a PC2 file header."""
     with open(filepath, "rb") as f:
-        f.seek(28)
+        f.seek(PC2_FRAMECOUNT_OFFSET)
         return struct.unpack("<i", f.read(4))[0]
 
 
 def read_pc2_n_verts(filepath):
-    """Read the vertex count from a PC2 file header (offset 16)."""
+    """Read the vertex count from a PC2 file header."""
     with open(filepath, "rb") as f:
-        f.seek(16)
+        f.seek(PC2_NVERTS_OFFSET)
         return struct.unpack("<i", f.read(4))[0]
 
 
 def read_pc2_frame(filepath, frame_idx, n_verts):
     """Read a specific frame from a PC2 file."""
+    if frame_idx < 0:
+        raise ValueError(
+            f"read_pc2_frame: negative frame index {frame_idx} for {filepath}"
+        )
     offset = PC2_HEADER_SIZE + frame_idx * n_verts * FRAME_VERTEX_SIZE
     with open(filepath, "rb") as f:
         f.seek(offset)
@@ -124,6 +135,27 @@ def overwrite_pc2_frame(filepath, frame_idx, positions, n_verts):
         f.write(numpy.asarray(positions, dtype="<f").tobytes())
 
 
+def _load_pc2_array(filepath):
+    """Read a whole PC2 file into an ``(n_frames, n_verts, 3)`` array.
+
+    Returns ``None`` (and leaves no side effect) when the file is
+    missing or carries an empty (0-frame / 0-vert) header. Reads the
+    header and the float body from a single open handle so the bulk
+    payload streams without reopening the file.
+    """
+    if not os.path.exists(filepath):
+        return None
+    with open(filepath, "rb") as f:
+        f.seek(PC2_NVERTS_OFFSET)
+        n_verts = struct.unpack("<i", f.read(4))[0]
+        f.seek(PC2_FRAMECOUNT_OFFSET)
+        n_frames = struct.unpack("<i", f.read(4))[0]
+        if n_frames < 1 or n_verts < 1:
+            return None
+        data = numpy.frombuffer(f.read(), dtype="<f")
+    return data.reshape(n_frames, n_verts, 3).copy()
+
+
 def fill_gap_frames(filepath, from_frame_idx, to_frame_idx, n_verts, obj_key=None):
     """Fill gap frames by duplicating the nearest real frame across (from, to).
 
@@ -133,7 +165,17 @@ def fill_gap_frames(filepath, from_frame_idx, to_frame_idx, n_verts, obj_key=Non
     previously-gap-filled pose into new gaps. When no real frame is available
     yet, the function falls back to reading ``from_frame_idx`` (old behavior)
     so the first-ever gap-fill still produces a plausible pose.
+
+    Raises ``ValueError`` when ``from_frame_idx < 0``: there is no source
+    frame to duplicate (a 0-frame header has no frame 0 either), so the
+    caller must instead seed the leading gap from a known pose (rest /
+    captured-deformation), as the file-create path does.
     """
+    if from_frame_idx < 0:
+        raise ValueError(
+            f"fill_gap_frames: no source frame for from_frame_idx="
+            f"{from_frame_idx} ({filepath})"
+        )
     src_idx = from_frame_idx
     if obj_key is not None:
         reals = _real_frames.get(obj_key, set())
@@ -148,10 +190,10 @@ def fill_gap_frames(filepath, from_frame_idx, to_frame_idx, n_verts, obj_key=Non
         for _ in range(from_frame_idx + 1, to_frame_idx):
             f.write(src_bytes)
         # Update frame_tot
-        f.seek(28)
+        f.seek(PC2_FRAMECOUNT_OFFSET)
         old_tot = struct.unpack("<i", f.read(4))[0]
         new_tot = max(old_tot, to_frame_idx)
-        f.seek(28)
+        f.seek(PC2_FRAMECOUNT_OFFSET)
         f.write(struct.pack("<i", new_tot))
 
 
@@ -233,6 +275,21 @@ def object_pc2_key(obj) -> str:
             except OSError:
                 pass
     return uid
+
+
+def object_pc2_key_readonly(obj) -> str:
+    """Return the existing PC2 key for ``obj`` with no side effects.
+
+    Unlike :func:`object_pc2_key`, this never assigns a UUID, never
+    reassigns another object's UUID on duplicate detection, and never
+    migrates a legacy ``<name>.pc2`` file. It returns the empty string
+    when ``obj`` has no UUID yet. Use it from read-only contexts (draw,
+    operator poll, frame_change handlers): any object that actually owns
+    a cache was assigned a UUID by the write-context capture path or by
+    load_post migration, so an empty key here is behaviorally "no cache".
+    """
+    from .uuid_registry import get_object_uuid
+    return get_object_uuid(obj)
 
 
 # ---------------------------------------------------------------------------
@@ -374,6 +431,50 @@ def remove_mesh_cache_modifier(obj):
         obj.modifiers.remove(mod)
 
 
+def suspend_mesh_cache_display(obj):
+    """Disable the ContactSolverCache modifier's viewport evaluation and
+    return its prior ``show_viewport`` flag (``None`` if absent).
+
+    Capture Deformation records the pure deformer (Armature, Lattice,
+    Mesh Deform, shape-key, ...) output by sampling
+    ``obj.evaluated_get(depsgraph).to_mesh()``. The ContactSolverCache
+    MESH_CACHE modifier runs with ``deform_mode='OVERWRITE'``, so while it
+    is enabled the evaluated mesh is the solver's *previous* output, not
+    the deformer result. Re-capturing after a run would then record stale
+    (often gap-filled) solver positions and feed them back as the next
+    input. Capture operators suspend it for the duration of the job and
+    restore it via :func:`resume_mesh_cache_display`. The flag is the only
+    state touched, and the modifier is addon-owned, so this stays within
+    the addon's own state.
+    """
+    if obj is None:
+        return None
+    mod = obj.modifiers.get(MODIFIER_NAME)
+    if mod is None:
+        return None
+    prior = bool(mod.show_viewport)
+    try:
+        mod.show_viewport = False
+    except (AttributeError, RuntimeError):
+        # Restricted context (e.g. a UI draw() handler): Blender forbids
+        # writing to ID data. Callers that might run there gate the heavy
+        # path off separately; returning None here means "nothing to
+        # restore" so a stray call can't crash.
+        return None
+    return prior
+
+
+def resume_mesh_cache_display(obj, prior):
+    """Restore the ContactSolverCache ``show_viewport`` flag saved by
+    :func:`suspend_mesh_cache_display`. No-op when *prior* is ``None``
+    (modifier was absent) or the modifier has since been removed."""
+    if prior is None or obj is None:
+        return
+    mod = obj.modifiers.get(MODIFIER_NAME)
+    if mod is not None:
+        mod.show_viewport = bool(prior)
+
+
 def modifiers_above_cache(obj) -> list:
     """Names of modifiers sitting above ContactSolverCache in *obj*'s
     stack. This is exactly the set :func:`strip_modifiers_above_cache`
@@ -411,15 +512,67 @@ def strip_modifiers_above_cache(obj):
 
 
 def has_mesh_cache(obj):
-    """Check if *obj* has simulation animation (modifier, curve cache, or PC2 file)."""
+    """Check if *obj* has simulation animation (modifier, curve cache, or PC2 file).
+
+    Reached from read-only contexts (panel draw, operator poll), so it
+    uses the side-effect-free :func:`object_pc2_key_readonly`. An object
+    that owns a cache always carries a UUID (assigned by the capture path
+    or load_post migration), so an empty key means no cache.
+    """
     if obj.modifiers.get(MODIFIER_NAME) is not None:
         return True
-    key = object_pc2_key(obj)
+    key = object_pc2_key_readonly(obj)
+    if not key:
+        return False
     if obj.type == "CURVE" and key in _curve_cache:
         return True
     # Also check for PC2 file on disk (survives addon reload)
     if os.path.exists(get_pc2_path(key)):
         return True
+    return False
+
+
+def scene_has_solver_cache() -> bool:
+    """Fast, stateless: True when any object carries solver animation.
+
+    A ``ContactSolverCache`` MESH_CACHE modifier is only ever placed on a
+    solver-managed (assigned) object, and removing an object from a group
+    strips it (see ``cleanup_mesh_cache``), so scanning every object's
+    modifiers is equivalent to a per-active-group scan in practice. Curves
+    keep their cache in the in-memory ``_curve_cache`` instead of a modifier.
+
+    Used by panel ``poll()`` methods that run on every UI redraw. Reading
+    ``obj.modifiers`` is a C-level collection lookup, so this whole scan is
+    ~100x cheaper than resolving each assigned object by UUID (which dominated
+    redraw time on large scenes) -- and it recomputes every call, so it never
+    goes stale the way a memoized result can.
+    """
+    for obj in bpy.data.objects:
+        if obj.modifiers.get(MODIFIER_NAME) is not None:
+            return True
+    return bool(_curve_cache)
+
+
+def scene_has_static_deform_cache() -> bool:
+    """Fast, stateless: True when any STATIC-deform cache exists (captured in
+    memory, or a PC2 on disk after a fresh reload).
+
+    Used by the "Clear All Deformations" poll on every redraw. The in-memory
+    dict is an O(1) check; the on-disk fallback is a single directory scan for
+    ``*_staticdeform.pc2`` -- both avoid the per-object UUID resolve + per-
+    object ``os.path.exists`` that made the old scan ~10ms on large scenes.
+    """
+    if _static_deform_cache:
+        return True
+    suffix = STATIC_DEFORM_SUFFIX + ".pc2"
+    try:
+        with os.scandir(get_pc2_dir()) as it:
+            for entry in it:
+                if entry.name.endswith(suffix):
+                    return True
+    except OSError:
+        # No pc2 dir yet (nothing ever written) -> no cache.
+        pass
     return False
 
 
@@ -474,18 +627,18 @@ _curve_cache: dict[str, numpy.ndarray] = {}
 
 def load_curve_cache(key):
     """Load a curve's PC2 file into the in-memory cache (keyed by UUID)."""
-    path = get_pc2_path(key)
-    if not os.path.exists(path):
-        return
-    with open(path, "rb") as f:
-        f.seek(16)
-        n_verts = struct.unpack("<i", f.read(4))[0]
-        f.seek(28)
-        n_frames = struct.unpack("<i", f.read(4))[0]
-        if n_frames < 1 or n_verts < 1:
-            return
-        data = numpy.frombuffer(f.read(), dtype="<f")
-    _curve_cache[key] = data.reshape(n_frames, n_verts, 3).copy()
+    global _curve_last_frame
+    arr = _load_pc2_array(get_pc2_path(key))
+    if arr is not None:
+        _curve_cache[key] = arr
+        # Invalidate the frame-dedup guard. A live append grows this
+        # cache mid-tick; if an earlier per-frame scene.frame_set this
+        # tick (STATIC per-frame matrices, client.apply_animation) already
+        # ran the playback handler against the shorter cache, it stamped
+        # _curve_last_frame and clamped the rod a frame back. Clearing the
+        # guard lets the tick's final frame_set re-apply with the just-
+        # loaded frame so rods stay in lockstep with the meshes' MESH_CACHE.
+        _curve_last_frame = -1
 
 
 def unload_curve_cache(key=None):
@@ -494,6 +647,9 @@ def unload_curve_cache(key=None):
     if key is None:
         _curve_cache.clear()
         _handles_freed.clear()
+        # Reset the log-once dedup so "log once per message" resets
+        # between playback sessions rather than per process.
+        _curve_handler_error_reported.clear()
     else:
         _curve_cache.pop(key, None)
         _handles_freed.discard(key)
@@ -513,9 +669,17 @@ _handles_freed: set[str] = set()
 _saved_handle_types: dict[str, list] = {}
 
 
-def _apply_curve_cvs(obj, frame_idx):
-    """Set curve CVs from cached data for the given frame index."""
-    key = object_pc2_key(obj)
+def _apply_curve_cvs(obj, frame_idx, key=None):
+    """Set curve CVs from cached data for the given frame index.
+
+    When ``key`` is given (the playback handler already resolved it via
+    the read-only accessor), reuse it. When ``None`` (the
+    ``cleanup_mesh_cache`` operator path), fall back to the side-effecting
+    :func:`object_pc2_key` so the legacy ``<name>.pc2`` migration still
+    runs in that write-permitted context.
+    """
+    if key is None:
+        key = object_pc2_key(obj)
     cache = _curve_cache.get(key)
     if cache is None:
         return
@@ -594,8 +758,11 @@ def _apply_curves_at_current_frame():
         for obj in bpy.data.objects:
             if obj.type != "CURVE":
                 continue
-            if object_pc2_key(obj) in _curve_cache:
-                _apply_curve_cvs(obj, frame_idx)
+            # Read-only key: this runs from frame_change_post, so it must
+            # not stamp a UUID on an uncached curve or migrate any file.
+            key = object_pc2_key_readonly(obj)
+            if key and key in _curve_cache:
+                _apply_curve_cvs(obj, frame_idx, key=key)
     except Exception as e:
         # frame_change handlers run VERY frequently — log once per
         # message rather than every tick, but don't silence entirely.
@@ -614,6 +781,23 @@ def _log_curve_handler_error(msg: str) -> None:
         console.write(f"[curve playback] {msg}")
     except Exception:
         pass
+
+
+def refresh_curves_at_current_frame():
+    """Force curve CV playback to the current frame, bypassing the
+    per-frame dedup guard.
+
+    Called at the end of an apply tick (``client.apply_animation``): the
+    frame_change handler may have already run earlier in the tick (e.g. a
+    per-frame ``scene.frame_set`` for STATIC matrices) against a curve
+    cache that was still a frame short, and its ``_curve_last_frame``
+    guard would otherwise suppress the corrected re-apply when the tick's
+    final ``frame_set`` lands on the same frame. This guarantees rods sit
+    on the same frame as the meshes' MESH_CACHE.
+    """
+    global _curve_last_frame
+    _curve_last_frame = -1
+    _apply_curves_at_current_frame()
 
 
 @bpy.app.handlers.persistent
@@ -644,6 +828,9 @@ def remove_curve_handler():
     for h in list(fc):
         if getattr(h, "__name__", "") == "curve_frame_change_handler":
             fc.remove(h)
+    # Runs on addon reload (see __init__.py), giving a clean per-reload
+    # reset of the curve-handler log-once dedup.
+    _curve_handler_error_reported.clear()
 
 
 
@@ -667,7 +854,7 @@ _static_deform_cache: dict[str, numpy.ndarray] = {}
 def static_deform_pc2_key(obj) -> str:
     """Return the UUID-backed key for an object's static-deform PC2 file."""
     from .uuid_registry import get_or_create_object_uuid
-    return get_or_create_object_uuid(obj) + "_staticdeform"
+    return get_or_create_object_uuid(obj) + STATIC_DEFORM_SUFFIX
 
 
 def write_static_deform_pc2(obj, frames):
@@ -688,18 +875,9 @@ def write_static_deform_pc2(obj, frames):
 
 def load_static_deform_cache(key):
     """Load a static-deform PC2 file into the in-memory cache."""
-    path = get_pc2_path(key)
-    if not os.path.exists(path):
-        return
-    with open(path, "rb") as f:
-        f.seek(16)
-        n_verts = struct.unpack("<i", f.read(4))[0]
-        f.seek(28)
-        n_frames = struct.unpack("<i", f.read(4))[0]
-        if n_frames < 1 or n_verts < 1:
-            return
-        data = numpy.frombuffer(f.read(), dtype="<f")
-    _static_deform_cache[key] = data.reshape(n_frames, n_verts, 3).copy()
+    arr = _load_pc2_array(get_pc2_path(key))
+    if arr is not None:
+        _static_deform_cache[key] = arr
 
 
 def unload_static_deform_cache(key=None):
@@ -749,17 +927,25 @@ def remove_static_deform_pc2(obj):
     unload_static_deform_cache(key)
 
 
+def _clear_all_by_suffix(file_suffix):
+    """Delete every PC2 file in ``get_pc2_dir`` whose name ends with
+    *file_suffix*. Walks the directory rather than live objects so caches
+    whose owning object was already removed from the scene are still
+    deleted (no orphan files left behind)."""
+    pc2_dir = get_pc2_dir()
+    if not os.path.isdir(pc2_dir):
+        return
+    for fname in os.listdir(pc2_dir):
+        if fname.endswith(file_suffix):
+            try:
+                os.remove(os.path.join(pc2_dir, fname))
+            except OSError:
+                pass
+
+
 def clear_all_static_deform_animation():
     """Delete every static-deform PC2 file and clear the in-memory cache."""
-    if bpy is not None:
-        for obj in list(bpy.data.objects):
-            if obj.type == "MESH":
-                path = get_pc2_path(static_deform_pc2_key(obj))
-                if os.path.exists(path):
-                    try:
-                        os.remove(path)
-                    except OSError:
-                        pass
+    _clear_all_by_suffix(STATIC_DEFORM_SUFFIX + ".pc2")
     unload_static_deform_cache()
 
 
@@ -801,7 +987,8 @@ def _safe_vg_for_key(vg_name: str) -> str:
 def pin_anim_pc2_key(obj, vg_name: str) -> str:
     """Return the UUID-backed key for a pin's depsgraph-captured cache."""
     from .uuid_registry import get_or_create_object_uuid
-    return f"{get_or_create_object_uuid(obj)}__{_safe_vg_for_key(vg_name)}__pindeform"
+    return (f"{get_or_create_object_uuid(obj)}__"
+            f"{_safe_vg_for_key(vg_name)}{PIN_DEFORM_SUFFIX}")
 
 
 def write_pin_anim_pc2(obj, vg_name: str, frames):
@@ -825,18 +1012,9 @@ def write_pin_anim_pc2(obj, vg_name: str, frames):
 
 def load_pin_anim_cache(key):
     """Load a pin-deform PC2 file into the in-memory cache (no-op if missing)."""
-    path = get_pc2_path(key)
-    if not os.path.exists(path):
-        return
-    with open(path, "rb") as f:
-        f.seek(16)
-        n_verts = struct.unpack("<i", f.read(4))[0]
-        f.seek(28)
-        n_frames = struct.unpack("<i", f.read(4))[0]
-        if n_frames < 1 or n_verts < 1:
-            return
-        data = numpy.frombuffer(f.read(), dtype="<f")
-    _pin_anim_cache[key] = data.reshape(n_frames, n_verts, 3).copy()
+    arr = _load_pc2_array(get_pc2_path(key))
+    if arr is not None:
+        _pin_anim_cache[key] = arr
 
 
 def unload_pin_anim_cache(key=None):
@@ -878,19 +1056,13 @@ def remove_pin_anim_pc2(obj, vg_name: str):
 
 
 def clear_all_pin_anim_animation():
-    """Delete every pin-deform PC2 file and clear the in-memory cache."""
-    if bpy is not None:
-        # Pin caches use a per-pin filename suffix, not a per-object key;
-        # walk the on-disk directory and match by suffix to catch every
-        # cache regardless of which pin authored it.
-        pc2_dir = get_pc2_dir()
-        if os.path.isdir(pc2_dir):
-            for fname in os.listdir(pc2_dir):
-                if fname.endswith("__pindeform.pc2"):
-                    try:
-                        os.remove(os.path.join(pc2_dir, fname))
-                    except OSError:
-                        pass
+    """Delete every pin-deform PC2 file and clear the in-memory cache.
+
+    Pin caches use a per-pin filename suffix, not a per-object key, so
+    matching by suffix on disk catches every cache regardless of which
+    pin authored it.
+    """
+    _clear_all_by_suffix(PIN_DEFORM_SUFFIX + ".pc2")
     unload_pin_anim_cache()
 
 
@@ -907,6 +1079,8 @@ def migrate_pc2_on_save(*_args):
     """
     import shutil
 
+    from .uuid_registry import get_object_uuid
+
     blend_path = bpy.data.filepath
     if not blend_path:
         return
@@ -915,23 +1089,26 @@ def migrate_pc2_on_save(*_args):
     for obj in bpy.data.objects:
         if obj.type == "MESH":
             # Static-deform PC2: temp -> data/ migration on first save.
+            # Derive the on-disk filename through get_pc2_path so it can
+            # never diverge from the name every reader/existence check uses.
             sd_key = static_deform_pc2_key(obj)
-            safe_sd = sd_key.replace(" ", "_").replace("/", "_")
-            sd_old = os.path.realpath(os.path.join(tmp_dir, f"{safe_sd}.pc2"))
+            sd_name = os.path.basename(get_pc2_path(sd_key))
+            sd_old = os.path.realpath(os.path.join(tmp_dir, sd_name))
             if os.path.exists(sd_old):
                 os.makedirs(target_dir, exist_ok=True)
-                sd_new = os.path.join(target_dir, f"{safe_sd}.pc2")
+                sd_new = os.path.join(target_dir, sd_name)
                 if os.path.realpath(sd_new) != sd_old:
                     shutil.move(sd_old, sd_new)
                     load_static_deform_cache(sd_key)
             # Pin-deform PC2: per-pin caches share the object's UUID
             # prefix and end with ``__pindeform.pc2``. Migrate every
             # match for this object.
-            uid = obj.get("_solver_uuid", "") or ""
+            uid = get_object_uuid(obj)
             if uid and os.path.isdir(tmp_dir):
                 prefix = f"{uid}__"
                 for fname in os.listdir(tmp_dir):
-                    if not fname.startswith(prefix) or not fname.endswith("__pindeform.pc2"):
+                    if (not fname.startswith(prefix)
+                            or not fname.endswith(PIN_DEFORM_SUFFIX + ".pc2")):
                         continue
                     pd_old = os.path.realpath(os.path.join(tmp_dir, fname))
                     if not os.path.exists(pd_old):
@@ -958,14 +1135,16 @@ def migrate_pc2_on_save(*_args):
             key = object_pc2_key(obj)
             if key not in _curve_cache:
                 continue
-            safe_key = key.replace(" ", "_").replace("/", "_")
+            # Derive the filename through get_pc2_path so the migrate
+            # name can never diverge from what every reader computes.
+            curve_name = os.path.basename(get_pc2_path(key))
             old_path = os.path.realpath(
-                os.path.join(tmp_dir, f"{safe_key}.pc2")
+                os.path.join(tmp_dir, curve_name)
             )
             if not os.path.exists(old_path):
                 continue
             os.makedirs(target_dir, exist_ok=True)
-            new_path = os.path.join(target_dir, f"{safe_key}.pc2")
+            new_path = os.path.join(target_dir, curve_name)
             shutil.move(old_path, new_path)
             # Reload cache from new location
             load_curve_cache(key)
@@ -1001,7 +1180,7 @@ def warn_missing_frames_on_render(scene, *_args):
         if _render_job["frame_count"] < 2 or _render_job["warned"]:
             return
 
-        from .client import communicator as com
+        from .facade import communicator as com
         from .derived import is_server_busy_from_response as is_running
         from ..models.groups import get_addon_data
 

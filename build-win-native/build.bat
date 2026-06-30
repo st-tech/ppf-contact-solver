@@ -55,25 +55,14 @@ if not exist "%CUDA_DIR%\bin\nvcc.exe" (
 )
 echo Using local CUDA from %CUDA_PATH%
 
-REM Embedded Python from warmup.bat. Used by step [4/5] to install the
-REM PyO3 wheel so the frontend's `import _ppf_cts_py` resolves.
+REM Embedded Python from warmup.bat. Runs JupyterLab via the launcher
+REM scripts written below. The PyO3 extension (_ppf_cts_py.dll) is built
+REM directly into target\release by `cargo build --release` and loaded
+REM by frontend/__init__.py from there, so no wheel is installed here.
 set PYTHON_EXE=%BUILD_WIN%\python\python.exe
 if not exist "%PYTHON_EXE%" (
     echo ERROR: Embedded Python not found at %PYTHON_EXE%
     echo Please run warmup.bat first.
-    exit /b 1
-)
-
-REM Full Python install (with libs\python3.lib + include\), needed only
-REM as the maturin interpreter for the PyO3 build because the embedded
-REM Python distribution from python.org strips libs/include. The
-REM resulting abi3-py38 wheel still loads in the embedded Python at
-REM runtime. Installed by warmup.bat via the regular python.org
-REM installer at python_full\.
-set PYTHON_FULL_EXE=%BUILD_WIN%\python_full\python.exe
-if not exist "%PYTHON_FULL_EXE%" (
-    echo ERROR: Full Python not found at %PYTHON_FULL_EXE%
-    echo Please run warmup.bat first ^(it installs python_full alongside the embedded python^).
     exit /b 1
 )
 
@@ -171,19 +160,46 @@ set EIGEN_DIR=%DEPS%\%EIGEN_STEM%
 
 REM Source files
 set CPP_SRCS=%CPP_DIR%\simplelog\SimpleLog.cpp %CPP_DIR%\stub.cpp
-set CU_SRCS=%CPP_DIR%\buffer\buffer.cu %CPP_DIR%\main\main.cu %CPP_DIR%\utility\utility.cu %CPP_DIR%\utility\dispatcher.cu %CPP_DIR%\csrmat\csrmat.cu %CPP_DIR%\contact\contact.cu %CPP_DIR%\energy\energy.cu %CPP_DIR%\eigenanalysis\eigenanalysis.cu %CPP_DIR%\barrier\barrier.cu %CPP_DIR%\strainlimiting\strainlimiting.cu %CPP_DIR%\solver\solver.cu %CPP_DIR%\kernels\reduce.cu %CPP_DIR%\kernels\exclusive_scan.cu %CPP_DIR%\kernels\vec_ops.cu %CPP_DIR%\kernels\radix_sort.cu %CPP_DIR%\lbvh\lbvh.cu %CPP_DIR%\plasticity\plasticity.cu
+REM Keep this list in sync with BASE_DIRS in crates/ppf-cts-solver/src/cpp/Makefile
+REM (the Linux/macOS build). schwarz/schwarz.cu defines schwarz::build/apply that
+REM solver.cu references; omitting it here fails the link with unresolved externals.
+set CU_SRCS=%CPP_DIR%\buffer\buffer.cu %CPP_DIR%\main\main.cu %CPP_DIR%\utility\utility.cu %CPP_DIR%\utility\dispatcher.cu %CPP_DIR%\csrmat\csrmat.cu %CPP_DIR%\contact\contact.cu %CPP_DIR%\energy\energy.cu %CPP_DIR%\eigenanalysis\eigenanalysis.cu %CPP_DIR%\barrier\barrier.cu %CPP_DIR%\strainlimiting\strainlimiting.cu %CPP_DIR%\solver\solver.cu %CPP_DIR%\schwarz\schwarz.cu %CPP_DIR%\kernels\reduce.cu %CPP_DIR%\kernels\exclusive_scan.cu %CPP_DIR%\kernels\vec_ops.cu %CPP_DIR%\kernels\radix_sort.cu %CPP_DIR%\lbvh\lbvh.cu %CPP_DIR%\plasticity\plasticity.cu
 
-REM Compiler flags
-set NVCC_FLAGS=-std=c++17 --expt-relaxed-constexpr --extended-lambda -O3 -rdc=true -shared -Wno-deprecated-gpu-targets
+REM Compiler flags. Device link-time optimization (LTO), matching the Linux
+REM Makefile: compile each TU to an LTO intermediate (code=lto_86), then device-
+REM link with -dlto so cross-TU device callees (notably barrier::compute_stiffness)
+REM inline into the contact-Hessian embed kernels, roughly halving contact
+REM matrix-assembly cost. The .dll carries an sm_86 (Ampere / RTX 30-series, the
+REM CUDA 12.8 floor) SASS anchor plus the LTO-optimized compute_86 PTX, which the
+REM driver JITs and caches for newer GPUs (sm_89, sm_90, ...). nvcc
+REM forbids -dlto beside -gencode at compile (hence code=lto_86), but needs both
+REM at the link.
+set NVCC_COMMON=-std=c++17 --expt-relaxed-constexpr --extended-lambda -O3 -Wno-deprecated-gpu-targets
 set NVCC_DEFINES=-DWIN32 -DNDEBUG -D_WINDOWS -D_USRDLL -D__NVCC__ -DEIGEN_WARNINGS_DISABLED -DTHRUST_IGNORE_DEPRECATED_CPP_DIALECT -DCUB_IGNORE_DEPRECATED_CPP_DIALECT
 set NVCC_INCLUDES=-I"%EIGEN_DIR%"
 set NVCC_XCOMPILER=-Xcompiler "/EHsc /W0 /MD /O2"
 set NVCC_SUPPRESS=--diag-suppress=1222,2527,2529,2651,2653,2668,2669,2670,2671,2735,2737,2739,20012,20011,20014,177,940,1394
 
-echo Building with nvcc...
-%NVCC% %NVCC_FLAGS% %NVCC_DEFINES% %NVCC_INCLUDES% %NVCC_XCOMPILER% %NVCC_SUPPRESS% -o "%LIB_DIR%\libsimbackend_cuda.dll" %CPP_SRCS% %CU_SRCS% -lcudart
+set OBJ_DIR=%OUT_DIR%\obj
+if not exist "%OBJ_DIR%" mkdir "%OBJ_DIR%"
+
+echo Compiling CUDA TUs to LTO intermediates (code=lto_86)...
+set OBJS=
+for %%f in (%CU_SRCS%) do (
+    %NVCC% -dc -gencode arch=compute_86,code=lto_86 %NVCC_COMMON% %NVCC_DEFINES% %NVCC_INCLUDES% %NVCC_XCOMPILER% %NVCC_SUPPRESS% "%%f" -o "%OBJ_DIR%\%%~nf.obj" || exit /b 1
+    set OBJS=!OBJS! "%OBJ_DIR%\%%~nf.obj"
+)
+
+echo Compiling host C++ TUs...
+for %%f in (%CPP_SRCS%) do (
+    %NVCC% -c %NVCC_COMMON% %NVCC_DEFINES% %NVCC_INCLUDES% %NVCC_XCOMPILER% %NVCC_SUPPRESS% "%%f" -o "%OBJ_DIR%\%%~nf.obj" || exit /b 1
+    set OBJS=!OBJS! "%OBJ_DIR%\%%~nf.obj"
+)
+
+echo Device-linking with LTO (-dlto: sm_86 SASS + compute_86 PTX)...
+%NVCC% -shared -dlto -gencode arch=compute_86,code=sm_86 -gencode arch=compute_86,code=compute_86 -Xcompiler "/MD" !OBJS! -lcudart -o "%LIB_DIR%\libsimbackend_cuda.dll"
 if errorlevel 1 (
-    echo ERROR: nvcc build failed
+    echo ERROR: nvcc device-link failed
     exit /b 1
 )
 echo   [DONE] libsimbackend_cuda.dll created
@@ -197,19 +213,33 @@ echo.
 REM Build Rust
 echo Building Rust project...
 cd /d "%SRC_DIR%"
+
+REM PyO3 links _ppf_cts_py.dll against python3.lib (the abi3 stable lib).
+REM The embedded python\ ships no libs\, so point PyO3 at the full NuGet
+REM CPython (python_full\, provisioned by warmup.bat) for the cdylib link.
+REM Unlike macOS/Linux (which resolve Python symbols at load time), Windows
+REM must link the import library at build time.
+set "PYTHON_FULL_EXE=%BUILD_WIN%\python_full\python.exe"
+if not exist "%PYTHON_FULL_EXE%" (
+    echo ERROR: Full Python not found at %PYTHON_FULL_EXE%
+    echo Please run warmup.bat first ^(it installs python_full alongside the embedded python^).
+    exit /b 1
+)
+set "PYO3_PYTHON=%PYTHON_FULL_EXE%"
+
 cargo build --release
 if errorlevel 1 (
     echo ERROR: Rust build failed
     exit /b 1
 )
 
-REM Workspace default-members only includes ppf-cts-solver (binary
-REM ppf-contact-solver.exe), so ppf-cts-server isn't built by the
-REM line above. The Blender addon's Windows Native launcher
+REM `cargo build --release` above already builds ppf-cts-server (it is a
+REM workspace default-member alongside ppf-cts-solver and ppf-cts-py). The
+REM Blender addon's Windows Native launcher
 REM (blender_addon/core/connection.py:spawn_win_native_server) spawns
-REM target\release\ppf-cts-server.exe whenever the user picks
-REM "Windows Native" mode in the addon UI, so build it explicitly so
-REM the bundle ships with both binaries.
+REM target\release\ppf-cts-server.exe whenever the user picks "Windows
+REM Native" mode in the addon UI, so rebuild explicitly as a guard and
+REM verify it exists below so the bundle always ships both binaries.
 echo Building ppf-cts-server...
 cargo build --release -p ppf-cts-server
 if errorlevel 1 (
@@ -222,65 +252,21 @@ if not exist "%SRC_DIR%\target\release\ppf-cts-server.exe" (
 )
 echo   [DONE] Rust build complete
 
-echo.
-echo ============================================================
-echo [4/5] Installing _ppf_cts_py PyO3 wheel
-echo ============================================================
-echo.
-
-REM `frontend/__init__.py` does `import _ppf_cts_py as _rust` at the top
-REM level, so every Python entry point (fast-check, jupyter notebooks,
-REM the build-worker subprocess that ppf-cts-server spawns) requires
-REM the wheel to be installed in the embedded Python. The Linux/macOS
-REM build-all.sh runs the same step against $HOME/.local/share/ppf-cts/venv.
-REM
-REM Build with python_full (regular CPython installer, has libs and
-REM include/), pip install the resulting abi3 wheel into the embedded
-REM Python (which strips libs/ so it can't link directly).
-"%PYTHON_FULL_EXE%" -m pip show maturin >nul 2>&1
-if errorlevel 1 (
-    echo Installing maturin into python_full...
-    "%PYTHON_FULL_EXE%" -m pip install --no-warn-script-location maturin
-    if errorlevel 1 (
-        echo ERROR: maturin install failed
-        exit /b 1
-    )
-)
-echo Building _ppf_cts_py wheel via maturin build --release...
-cd /d "%SRC_DIR%\crates\ppf-cts-py"
-REM Push python_full to the front of PATH and set PYO3_PYTHON
-REM explicitly. PyO3's build script picks an interpreter from
-REM whichever is found first on PATH if PYO3_PYTHON isn't set, and
-REM `--interpreter` alone doesn't override that — the embedded
-REM python (which is on PATH from the launcher fragment above) lacks
-REM libs\python3.lib so its link step fails.
-set "PATH=%BUILD_WIN%\python_full;%PATH%"
-set "PYO3_PYTHON=%PYTHON_FULL_EXE%"
-"%PYTHON_FULL_EXE%" -m maturin build --release --interpreter "%PYTHON_FULL_EXE%"
-if errorlevel 1 (
-    echo ERROR: maturin build failed
+REM `cargo build --release` above also builds the ppf-cts-py crate
+REM (a workspace default-member) into target\release\_ppf_cts_py.dll.
+REM frontend/__init__.py loads that cdylib directly by absolute path, so
+REM no wheel install into the embedded Python is needed. The launcher
+REM scripts below put %SRC%\target\release on PATH and %SRC% on
+REM PYTHONPATH, which is all frontend needs to find it.
+if not exist "%SRC_DIR%\target\release\_ppf_cts_py.dll" (
+    echo ERROR: target\release\_ppf_cts_py.dll not found after build
     exit /b 1
 )
-echo Installing _ppf_cts_py wheel into embedded Python...
-REM maturin emits the wheel under <workspace>/target/wheels/. We force
-REM reinstall so a stale wheel from a prior build is replaced.
-for /f "delims=" %%w in ('dir /b /o-d "%SRC_DIR%\target\wheels\ppf_cts_py-*.whl" 2^>nul') do (
-    "%PYTHON_EXE%" -m pip install --no-warn-script-location --force-reinstall "%SRC_DIR%\target\wheels\%%w"
-    if errorlevel 1 (
-        echo ERROR: pip install of %%w failed
-        exit /b 1
-    )
-    goto wheel_installed
-)
-echo ERROR: maturin produced no wheel under target\wheels\
-exit /b 1
-:wheel_installed
-cd /d "%SRC_DIR%"
-echo   [DONE] _ppf_cts_py installed
+echo   [DONE] _ppf_cts_py.dll built
 
 echo.
 echo ============================================================
-echo [5/5] Creating Launcher Scripts
+echo [4/4] Creating Launcher Scripts
 echo ============================================================
 echo.
 

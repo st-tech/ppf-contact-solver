@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-use super::{json_u64, write_response};
+use super::{json_u64, write_response, MAX_PAYLOAD_BYTES};
 use crate::error::ServerError;
 use crate::protocol::read_exact_n_chunked;
 
@@ -36,10 +36,8 @@ fn examples_root() -> PathBuf {
             return PathBuf::from(over);
         }
     }
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(root) = exe.parent().and_then(|p| p.parent()).and_then(|p| p.parent()) {
-            return root.join("examples");
-        }
+    if let Some(root) = crate::upload::repo_root_from_exe_opt() {
+        return root.join("examples");
     }
     PathBuf::from(".").join("examples")
 }
@@ -63,6 +61,16 @@ where
     }
     if size == 0 {
         let resp = ServerError::BadRequest("Invalid size".into()).into_response();
+        return write_response(writer, &resp).await;
+    }
+    // Bound the client-declared size on the u64 before the `as usize`
+    // cast so an absurd declaration can't drive a giant allocation in
+    // read_exact_n_chunked.
+    if size > MAX_PAYLOAD_BYTES {
+        let resp = ServerError::BadRequest(format!(
+            "size {size} exceeds max payload {MAX_PAYLOAD_BYTES}"
+        ))
+        .into_response();
         return write_response(writer, &resp).await;
     }
     let target = match resolve_sandbox(&examples_root(), rel) {

@@ -12,49 +12,33 @@
 // so this module and the solver-side `src/scene.rs::apply_op` produce
 // identical positions.
 //
-// The easing helpers (`bezier_progress` / `eased_progress`) live here
-// too: they're only callers are pin operations and the Python easing
-// wrapper, and as a stand-alone module the file was below the
-// per-file size threshold.
+// The easing helpers (`bezier_progress` / `eased_progress`) are thin
+// adapters over `datamodel::easing`: their only callers are pin
+// operations and the Python easing wrapper, and they preserve the
+// tuple-/string-based public API while the actual math lives in the
+// centralized module.
 
 use super::quaternion::{apply_trs_to_verts, quat_slerp};
+use crate::datamodel::easing::{self, TransitionKind};
 
 // ---------------------------------------------------------------------------
 // Bezier / smooth easing.
 
 /// Cubic Bezier easing. `handles = (p1, p2)` where each is `(x, y)`.
-/// `P0 = (0, 0)`, `P3 = (1, 1)`. Mirrors `_bezier_progress`.
+/// `P0 = (0, 0)`, `P3 = (1, 1)`. Mirrors `_bezier_progress`. Thin
+/// adapter forwarding to `datamodel::easing::bezier_progress`
+/// (`right = handles.0`, `left = handles.1`).
 pub fn bezier_progress(t: f64, handles: ([f64; 2], [f64; 2])) -> f64 {
-    let (hr, hl) = handles;
-    let (p1x, p1y) = (hr[0], hr[1]);
-    let (p2x, p2y) = (hl[0], hl[1]);
-    let mut u = t;
-    for _ in 0..8 {
-        let omu = 1.0 - u;
-        let omu2 = omu * omu;
-        let u2 = u * u;
-        let u3 = u2 * u;
-        let bx = 3.0 * omu2 * u * p1x + 3.0 * omu * u2 * p2x + u3;
-        let dbx = 3.0 * omu2 * p1x
-            + 6.0 * omu * u * (p2x - p1x)
-            + 3.0 * u2 * (1.0 - p2x);
-        if dbx.abs() < 1e-10 {
-            break;
-        }
-        u -= (bx - t) / dbx;
-        u = u.clamp(0.0, 1.0);
-    }
-    let omu = 1.0 - u;
-    let omu2 = omu * omu;
-    let u2 = u * u;
-    let u3 = u2 * u;
-    (3.0 * omu2 * u * p1y + 3.0 * omu * u2 * p2y + u3).clamp(0.0, 1.0)
+    easing::bezier_progress(t, handles.0, handles.1)
 }
 
 /// Linear progress in `[0, 1]` over `[t_start, t_end]`. `transition` is
 /// one of `"linear"`, `"smooth"`, `"bezier"`. Mirrors `_eased_progress`.
-/// When `transition` isn't recognized, falls through to the linear
-/// branch (same as Python).
+/// When `transition` isn't recognized (or is `"bezier"` without
+/// handles), falls through to the linear branch (same as Python). Thin
+/// adapter forwarding to `datamodel::easing::eased_progress`, which also
+/// guards the zero-duration window (`t_end == t_start` returns `0.0`
+/// instead of a nan/inf).
 pub fn eased_progress(
     time: f64,
     t_start: f64,
@@ -62,16 +46,18 @@ pub fn eased_progress(
     transition: &str,
     bezier_handles: Option<([f64; 2], [f64; 2])>,
 ) -> f64 {
-    let progress = (time - t_start) / (t_end - t_start);
-    if transition == "bezier" {
-        if let Some(h) = bezier_handles {
-            return bezier_progress(progress, h);
-        }
-    }
-    if transition == "smooth" {
-        return progress * progress * (3.0 - 2.0 * progress);
-    }
-    progress
+    let kind = match transition {
+        "smooth" => TransitionKind::Smooth,
+        "bezier" => match bezier_handles {
+            Some((right, left)) => TransitionKind::Bezier {
+                right_handle: right,
+                left_handle: left,
+            },
+            None => TransitionKind::Linear,
+        },
+        _ => TransitionKind::Linear,
+    };
+    easing::eased_progress(time, t_start, t_end, &kind)
 }
 
 // ---------------------------------------------------------------------------
@@ -227,6 +213,14 @@ pub enum SegInterp {
 /// on rotation. `times`, `translations`, `quaternions`, `scales` are
 /// equal-length keyframe lists; `segments` has length `times.len() - 1`.
 /// When `times` is empty, returns the input unchanged.
+///
+/// The per-vertex TRS evaluation routes through
+/// `datamodel::quat::transform_keyframes_step` so this preview kernel
+/// and the solver-side `src/scene.rs::apply_op` share one
+/// implementation (same segment search, interp dispatch, T/S lerp, Q
+/// slerp, and rest-translation offset). `segments` is translated into
+/// the helper's `(interp code, handle pair)` form: `0` = LINEAR, `1`
+/// = BEZIER (`[hr0, hr1, hl0, hl1]`), `2` = CONSTANT.
 pub fn transform_keyframe_apply(
     vertex: &[f64],
     local_vert: &[f64],
@@ -238,55 +232,52 @@ pub fn transform_keyframe_apply(
     rest_translation: [f64; 3],
     time: f64,
 ) -> Vec<f64> {
+    use crate::datamodel::quat::transform_keyframes_step;
     if times.is_empty() {
         return vertex.to_vec();
     }
-    let eval_at = |t: [f64; 3], q: [f64; 4], s: [f64; 3]| -> Vec<f64> {
-        let mut out = apply_trs_to_verts(local_vert, t, q, s);
-        for i in 0..(out.len() / 3) {
-            out[3 * i] -= rest_translation[0];
-            out[3 * i + 1] -= rest_translation[1];
-            out[3 * i + 2] -= rest_translation[2];
-        }
-        out
-    };
-    if time <= times[0] {
-        return eval_at(translations[0], quaternions[0], scales[0]);
-    }
-    let last = times.len() - 1;
-    if time >= times[last] {
-        return eval_at(translations[last], quaternions[last], scales[last]);
-    }
-    for i in 0..last {
-        let t0 = times[i];
-        let t1 = times[i + 1];
-        if t0 <= time && time < t1 {
-            let mut progress = (time - t0) / (t1 - t0);
-            match segments[i] {
-                SegInterp::Linear => {}
-                SegInterp::Bezier(h_r, h_l) => {
-                    progress = bezier_progress(progress, (h_r, h_l));
-                }
-                SegInterp::Constant => {
-                    progress = 0.0;
-                }
+    let mut interps = Vec::with_capacity(segments.len());
+    let mut handles = Vec::with_capacity(segments.len());
+    for seg in segments {
+        match *seg {
+            SegInterp::Linear => {
+                interps.push(0u8);
+                handles.push([0.0; 4]);
             }
-            let inv = 1.0 - progress;
-            let trans = [
-                translations[i][0] * inv + translations[i + 1][0] * progress,
-                translations[i][1] * inv + translations[i + 1][1] * progress,
-                translations[i][2] * inv + translations[i + 1][2] * progress,
-            ];
-            let quat = quat_slerp(quaternions[i], quaternions[i + 1], progress);
-            let scl = [
-                scales[i][0] * inv + scales[i + 1][0] * progress,
-                scales[i][1] * inv + scales[i + 1][1] * progress,
-                scales[i][2] * inv + scales[i + 1][2] * progress,
-            ];
-            return eval_at(trans, quat, scl);
+            SegInterp::Bezier(h_r, h_l) => {
+                interps.push(1u8);
+                handles.push([h_r[0], h_r[1], h_l[0], h_l[1]]);
+            }
+            SegInterp::Constant => {
+                interps.push(2u8);
+                handles.push([0.0; 4]);
+            }
         }
     }
-    eval_at(translations[last], quaternions[last], scales[last])
+    let count = local_vert.len() / 3;
+    let mut out = vec![0.0f64; local_vert.len()];
+    for i in 0..count {
+        let local = [
+            local_vert[3 * i],
+            local_vert[3 * i + 1],
+            local_vert[3 * i + 2],
+        ];
+        let r = transform_keyframes_step(
+            local,
+            times,
+            translations,
+            quaternions,
+            scales,
+            &interps,
+            &handles,
+            rest_translation,
+            time,
+        );
+        out[3 * i] = r[0];
+        out[3 * i + 1] = r[1];
+        out[3 * i + 2] = r[2];
+    }
+    out
 }
 
 /// Mirrors `TransformAnimation.evaluate`. Returns world-space vertex

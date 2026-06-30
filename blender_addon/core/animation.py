@@ -36,8 +36,6 @@ def clear_animation_data(context, move_to_frame: bool = True):
             # Keyframed-pin PC2 caches use a separate key and are left
             # intact — their playback handler keeps driving the mesh.
             cleanup_mesh_cache(obj)
-    # Clear fetched frame tracking since keyframes were removed
-    get_addon_data(context.scene).state.clear_fetched_frames()
 
 
 def _iterate_dynamic_objects(scene):

@@ -43,6 +43,109 @@ def find_invalid_path_char(path: str) -> str | None:
     return None
 
 
+# Windows refuses to open a path of 260 characters or more (the classic
+# MAX_PATH limit) unless system-wide long-path support is enabled. The build
+# pipeline writes cache files several directories below the solver root, so a
+# long root pushes the deepest of them past the limit and the Transfer dies
+# with a bare ``FileNotFoundError`` that names a path nobody recognizes. The
+# deepest file is the tetrahedralize cache; its full server-side path mirrors
+# ``datamodel/app.rs`` ``compose_data_dir`` plus the cache filename:
+#
+#   <root>\local\share\ppf-cts\git-<branch>\<project>\.cash\
+#   <64-hex>__<64-hex>_tetrahedralize_.npz.npz
+#
+# The git branch is resolved on the server and is ``unknown`` for a packaged
+# Windows build (no ``.git``), which is the case this guards.
+WINDOWS_MAX_PATH = 260
+
+
+def projected_windows_cache_path_len(base_path: str, project_name: str) -> int:
+    """Length of the longest cache file path the build pipeline writes under
+    *base_path* for *project_name* on a Windows server.
+
+    Mirrors the server-side layout described in the ``WINDOWS_MAX_PATH`` note,
+    so the value matches the path that would actually appear in a
+    ``FileNotFoundError`` (computed exactly for the default, empty-arg
+    tetrahedralize cache; a cache with extra tetrahedralize args is longer, so
+    this is a lower bound).
+    """
+    root = base_path.strip().rstrip("/\\")
+    hex64 = "f" * 64  # a SHA-256 hex digest is 64 chars
+    cache_file = f"{hex64}__{hex64}_tetrahedralize_.npz.npz"
+    tail = "\\".join(
+        [
+            "local", "share", "ppf-cts", "git-unknown",
+            project_name.strip() or "unnamed", ".cash", cache_file,
+        ]
+    )
+    return len(root) + len("\\") + len(tail)
+
+
+def windows_path_too_long(base_path: str, project_name: str) -> int | None:
+    """Return the projected deepest cache-path length when it reaches the
+    Windows ``MAX_PATH`` limit, else ``None``.
+
+    This is a pure measurement of the path length. It does NOT consider
+    whether long-path support is enabled on the host; callers that warn the
+    user should also consult :func:`windows_long_paths_enabled`, since with
+    long paths on the limit no longer applies and the warning is just noise.
+
+    Returns ``None`` for an empty/whitespace-only path so callers can chain
+    ``windows_path_too_long(p, n) is None`` next to
+    :func:`find_invalid_path_char` without rejecting a blank field.
+    """
+    if not base_path.strip():
+        return None
+    projected = projected_windows_cache_path_len(base_path, project_name)
+    return projected if projected >= WINDOWS_MAX_PATH else None
+
+
+# Cache for windows_long_paths_enabled(). The registry value is honored per
+# process at startup (the long-path opt-in is read once), so it won't change
+# within a Blender session, and the panel's draw() would otherwise re-read it
+# on every redraw. ``None`` means "not yet queried".
+_windows_long_paths_enabled: bool | None = None
+
+
+def _query_windows_long_paths_enabled() -> bool:
+    """Read the system-wide long-path flag from the Windows registry.
+
+    ``HKLM\\SYSTEM\\CurrentControlSet\\Control\\FileSystem\\LongPathsEnabled``
+    is the DWORD that opts the whole system out of the ``MAX_PATH`` limit.
+    Returns ``False`` on non-Windows hosts and whenever the value is missing
+    or unreadable (i.e. assume the limit applies unless we can prove it
+    doesn't).
+    """
+    import sys
+
+    if sys.platform != "win32":
+        return False
+    try:
+        import winreg  # Windows-only stdlib module.
+
+        with winreg.OpenKey(
+            winreg.HKEY_LOCAL_MACHINE,
+            r"SYSTEM\CurrentControlSet\Control\FileSystem",
+        ) as key:
+            value, _ = winreg.QueryValueEx(key, "LongPathsEnabled")
+        return int(value) == 1
+    except (OSError, ValueError):
+        return False
+
+
+def windows_long_paths_enabled() -> bool:
+    """True when Windows long-path support is enabled system-wide, so paths
+    past ``MAX_PATH`` no longer fail.
+
+    ``False`` on non-Windows hosts and whenever the registry flag is unset or
+    unreadable. Cached after the first read (see ``_windows_long_paths_enabled``).
+    """
+    global _windows_long_paths_enabled
+    if _windows_long_paths_enabled is None:
+        _windows_long_paths_enabled = _query_windows_long_paths_enabled()
+    return _windows_long_paths_enabled
+
+
 def find_invalid_name_char(name: str) -> str | None:
     """Return the first character in *name* that is not filename-safe, else ``None``.
 
@@ -60,25 +163,42 @@ def find_invalid_name_char(name: str) -> str | None:
     return None
 
 
-def count_ngon_faces(obj) -> int:
-    """Return the number of N-gon faces (polygons with > 4 vertices)
-    on *obj*'s mesh. ``0`` means the mesh has only triangles and
-    quads, the only face shapes the solver supports.
+def count_duplicate_faces(obj) -> int:
+    """Return how many triangles share their full vertex set with an
+    earlier triangle once *obj*'s mesh is tessellated the way the encoder
+    tessellates it (Blender's ``loop_triangles``). ``0`` means every
+    triangle is unique.
 
-    Returns ``0`` for non-mesh objects (curves, etc.) — they don't
-    have polygons in the Blender mesh sense.
+    Two coincident triangles (the same three vertices, in any winding)
+    make the solver's bending-hinge builder produce a degenerate
+    element and abort the simulation at startup. They almost always come
+    from doubled geometry welded with Merge by Distance, common in
+    airbag / inflate setups, so the dynamics pipeline rejects them
+    up-front and names the object rather than silently dropping faces
+    the user may have placed on purpose.
+
+    Returns ``0`` for non-mesh objects (curves, etc.), which have no
+    polygons in the Blender mesh sense.
 
     Used by:
-      * ``OBJECT_OT_AddObjectsToGroup`` to refuse N-gon meshes at
-        assignment time, so the user sees an explicit error popup
-        rather than silently fan-triangulated geometry on the wire.
-      * ``encoder.mesh._build_obj_data`` to fail the Transfer if an
-        N-gon got assigned through any path that bypasses the
+      * ``OBJECT_OT_AddObjectsToGroup`` to refuse doubled meshes at
+        assignment time, so the user sees an explicit error popup.
+      * ``encoder.mesh._build_obj_data`` to fail the Transfer if a
+        doubled mesh got assigned through a path that bypasses the
         operator (older saves, MCP scripts).
     """
     if obj is None or obj.type != "MESH" or obj.data is None:
         return 0
-    return sum(1 for p in obj.data.polygons if len(p.vertices) > 4)
+    from .numpy_mesh_utils import loop_triangle_indices
+    seen: set[tuple[int, ...]] = set()
+    duplicates = 0
+    for tri in loop_triangle_indices(obj.data):
+        key = tuple(sorted(int(v) for v in tri))
+        if key in seen:
+            duplicates += 1
+        else:
+            seen.add(key)
+    return duplicates
 
 
 def find_linked_duplicate_siblings(obj) -> list[str]:
@@ -118,6 +238,24 @@ def redraw_all_areas(context):
     """Tag all screen areas for redraw."""
     for area in context.screen.areas:
         area.tag_redraw()
+
+
+def redraw_all_windows(area_type: str | None = None):
+    """Tag areas across all windows for redraw, optionally by type.
+
+    Iterates ``window_manager.windows`` (not ``context.screen``) so it is
+    safe to call from the public Python API and from ``bpy.app.timers``
+    callbacks where the active screen is unreliable or None. Pass
+    ``area_type`` (e.g. ``"VIEW_3D"``) to limit the redraw to one editor type,
+    or leave it None to tag every area.
+    """
+    wm = bpy.context.window_manager
+    if not wm:
+        return
+    for window in wm.windows:
+        for area in window.screen.areas:
+            if area_type is None or area.type == area_type:
+                area.tag_redraw()
 
 
 def check_vec3(name: str, v, error_cls) -> tuple[float, float, float]:
@@ -380,6 +518,137 @@ def eval_deform_local_positions(obj, context=None, exclude_modifier_name=None):
             m.show_viewport = True
 
 
+def validate_bend_reference(source_obj, ref_obj, context=None, group_type="SHELL"):
+    """Validate that *ref_obj* is a positions-only topological copy of
+    *source_obj*, usable as a bending rest-angle reference.
+
+    The check matches how each group type ships geometry:
+
+    * SHELL and mesh ROD: evaluate ``ref_obj`` through its full modifier /
+      geometry-nodes stack and compare the result against ``source_obj``'s
+      base mesh. The evaluated reference must have the same vertex count and
+      identical connectivity (faces for SHELL, edges for ROD); only vertex
+      positions may differ.
+    * Curve ROD: sample both curves the way the encoder does (control-point
+      level, ``sample_curve``) and compare sampled vertex count + edges.
+      Curve modifiers / geometry nodes are not sampled, so a curve reference
+      must move its control points (directly, or via a modifier baked into
+      the control points), mirroring how the source curve rod is shipped.
+
+    Returns ``(True, "")`` on success, or ``(False, message)`` with a
+    user-facing error describing the first mismatch found.
+    """
+    import numpy as np
+
+    if context is None:
+        context = bpy.context
+    if source_obj is None:
+        return False, "Source object not found."
+    if ref_obj is None:
+        return False, "Reference object not found."
+    if ref_obj == source_obj:
+        return False, "The reference object must be different from the object itself."
+    if ref_obj.type != source_obj.type:
+        return False, (
+            f"Reference '{ref_obj.name}' is a {ref_obj.type.title()} but "
+            f"'{source_obj.name}' is a {source_obj.type.title()}; the "
+            f"reference must be the same object type."
+        )
+
+    # Curve rod: compare sampled rod vertices (control-point level).
+    if group_type == "ROD" and source_obj.type == "CURVE":
+        from mathutils import Matrix  # pyright: ignore
+        from .curve_rod import sample_curve
+        src_v, src_e, _ = sample_curve(source_obj, Matrix.Identity(4))
+        ref_v, ref_e, _ = sample_curve(ref_obj, Matrix.Identity(4))
+        if len(ref_v) != len(src_v):
+            return False, (
+                f"Reference '{ref_obj.name}' samples to {len(ref_v)} rod "
+                f"vertices but '{source_obj.name}' samples to {len(src_v)}. A "
+                f"reference curve must have the same spline structure (only "
+                f"control-point positions may change)."
+            )
+        if not np.array_equal(np.asarray(ref_e), np.asarray(src_e)):
+            return False, (
+                f"Reference '{ref_obj.name}' has different rod connectivity "
+                f"than '{source_obj.name}'. Only control-point positions may "
+                f"change in a reference curve."
+            )
+        return True, ""
+
+    if source_obj.type != "MESH":
+        return False, (
+            f"'{source_obj.name}' is neither a mesh nor a curve rod; "
+            f"reference rest angles are not supported for it."
+        )
+
+    is_rod = group_type == "ROD"
+    src_mesh = source_obj.data
+    n_src = len(src_mesh.vertices)
+    if is_rod:
+        src_conn = [tuple(sorted(e.vertices)) for e in src_mesh.edges]
+        conn_label = "edge"
+    else:
+        src_conn = [tuple(p.vertices) for p in src_mesh.polygons]
+        conn_label = "face"
+
+    deps = context.evaluated_depsgraph_get()
+    eval_obj = ref_obj.evaluated_get(deps)
+    eval_mesh = eval_obj.to_mesh()
+    try:
+        n_ref = len(eval_mesh.vertices)
+        if n_ref != n_src:
+            return False, (
+                f"Reference '{ref_obj.name}' has {n_ref} vertices after "
+                f"evaluating its modifiers / geometry nodes, but "
+                f"'{source_obj.name}' has {n_src}. A reference must be a "
+                f"topological copy with only vertex positions changed."
+            )
+        if is_rod:
+            ref_conn = [tuple(sorted(e.vertices)) for e in eval_mesh.edges]
+        else:
+            ref_conn = [tuple(p.vertices) for p in eval_mesh.polygons]
+    finally:
+        eval_obj.to_mesh_clear()
+
+    if ref_conn != src_conn:
+        return False, (
+            f"Reference '{ref_obj.name}' has different {conn_label} "
+            f"connectivity than '{source_obj.name}' after evaluation. Only "
+            f"vertex positions may change in a reference object."
+        )
+    return True, ""
+
+
+def eval_reference_local_positions(ref_obj, context=None):
+    """Return ``(N, 3)`` float32 local-space vertex positions of *ref_obj*
+    with its FULL modifier / geometry-nodes stack evaluated at the current
+    frame, or ``None`` when evaluation isn't available.
+
+    Unlike :func:`eval_deform_local_positions`, this does NOT gate on the
+    evaluated count matching the object's own base mesh: a bending
+    reference is validated against the SOURCE object's count by the
+    caller (see :func:`validate_bend_reference`), so the count check
+    belongs there, not here.
+    """
+    import numpy as np
+
+    if ref_obj is None or ref_obj.type != "MESH":
+        return None
+    if context is None:
+        context = bpy.context
+    deps = context.evaluated_depsgraph_get()
+    eval_obj = ref_obj.evaluated_get(deps)
+    eval_mesh = eval_obj.to_mesh()
+    try:
+        n = len(eval_mesh.vertices)
+        co = np.empty(n * 3, dtype=np.float32)
+        eval_mesh.vertices.foreach_get("co", co)
+        return co.reshape(n, 3)
+    finally:
+        eval_obj.to_mesh_clear()
+
+
 def _depsgraph_mesh_differs_across_range(obj, context) -> bool:
     """Compare depsgraph-evaluated mesh *shape* at ``frame_start`` and
     ``frame_end``. Returns True if any vertex moves in the object's
@@ -396,10 +665,21 @@ def _depsgraph_mesh_differs_across_range(obj, context) -> bool:
     """
     import numpy as np
 
+    from .pc2 import resume_mesh_cache_display, suspend_mesh_cache_display
+
     scene = context.scene
     if scene.frame_end <= scene.frame_start:
         return False
     saved = scene.frame_current
+    # The addon's own ContactSolverCache (a MESH_CACHE with
+    # deform_mode='OVERWRITE') replays the PREVIOUS solver output, so with it
+    # enabled the evaluated mesh appears to change across the timeline even when
+    # the object is rigid. Suspend it for the duration of the two samples so
+    # this measures genuine deformer output only. Otherwise a moving STATIC
+    # collider that carries a cache (e.g. one previously simulated, or just
+    # replaying results) is misread as deforming and wrongly forced to Capture
+    # Deformation. Restored in the finally below.
+    cache_prior = suspend_mesh_cache_display(obj)
     try:
         def _sample(f):
             scene.frame_set(int(f))
@@ -420,6 +700,7 @@ def _depsgraph_mesh_differs_across_range(obj, context) -> bool:
         b = _sample(scene.frame_end)
     finally:
         scene.frame_set(saved)
+        resume_mesh_cache_display(obj, cache_prior)
     if a is None or b is None or a.shape != b.shape:
         return False
     return bool(np.any(np.abs(a - b) > 1e-6))
@@ -461,15 +742,73 @@ def _matrix_world_differs_without_own_fcurves(obj, context) -> bool:
     return bool(np.any(np.abs(a - b) > 1e-6))
 
 
-def is_deforming_static_object(obj, context) -> bool:
+def _has_nonfcurve_motion_source(obj) -> bool:
+    """Cheap (no depsgraph, no writes) check for a motion source the rigid
+    own-fcurve ``transform_animation`` path can't capture: a parent, a
+    constraint, a transform driver, or an NLA track. Used by the UI to keep
+    the Capture Deformation button reachable without running the depsgraph
+    sampler on every redraw; the encoder's full check is the authoritative
+    gate."""
+    if obj is None:
+        return False
+    if obj.parent is not None:
+        return True
+    if len(getattr(obj, "constraints", ())) > 0:
+        return True
+    ad = getattr(obj, "animation_data", None)
+    if ad is not None:
+        for d in ad.drivers:
+            dp = getattr(d, "data_path", "") or ""
+            if any(t in dp for t in ("location", "rotation", "scale")):
+                return True
+        if len(ad.nla_tracks) > 0:
+            return True
+    return False
+
+
+def _mesh_shape_could_animate(obj) -> bool:
+    """Cheap (no depsgraph, no writes) over-approximation of whether *obj*'s
+    evaluated mesh SHAPE can change across the timeline.
+
+    Returns True whenever some source could move this mesh's vertices frame
+    to frame: any modifier (a deform/generative modifier, or one whose
+    parameters are animated or driven), shape keys (their values can be
+    keyed or driven), mesh-level animation data (drivers on vertex coords),
+    or a parent (parent-relative armature/lattice deform). A fully inert
+    rigid mesh, none of the above, returns False; in that case the
+    evaluated mesh shape is provably frame-invariant, so the caller can
+    skip ``_depsgraph_mesh_differs_across_range`` and its two whole-scene
+    frame evaluations.
+
+    Own loc/rot/scale animation (``obj.animation_data`` action fcurves on a
+    mesh with no modifier/shape-key/parent) is deliberately NOT a trigger:
+    it moves the object transform, not the mesh shape, and is handled by
+    the rigid ``transform_animation`` path, not the deform path.
+    """
+    if obj is None or obj.type != "MESH":
+        return False
+    if len(getattr(obj, "modifiers", ())) > 0:
+        return True
+    if obj.parent is not None:
+        return True
+    mesh = obj.data
+    if mesh is not None:
+        if getattr(mesh, "shape_keys", None) is not None:
+            return True
+        if getattr(mesh, "animation_data", None) is not None:
+            return True
+    return False
+
+
+def is_deforming_static_object(obj, context, allow_eval: bool = True) -> bool:
     """True if *obj* needs a Capture Deformation pass for the solver.
 
-    Three-tier detection:
-      1. Declarative: deforming modifier stack or shape-key
-         animation.
-      2. Local-space mesh shape change across the timeline (catches
+    Four-tier detection:
+      1. Declarative: deforming modifier stack.
+      2. Shape-key animation.
+      3. Local-space mesh shape change across the timeline (catches
          driver-only and geometry-node deformation).
-      3. Externally driven object motion: ``matrix_world`` changes
+      4. Externally driven object motion: ``matrix_world`` changes
          across the timeline AND the object has no own loc/rot/scale
          fcurves (so the rigid ``transform_animation`` path would
          silently miss it).
@@ -478,6 +817,14 @@ def is_deforming_static_object(obj, context) -> bool:
     mesh with constant shape and no parent/constraint motion) returns
     False, and the encoder uses the lighter ``transform_animation``
     path instead.
+
+    ``allow_eval`` gates tiers 3-4, which sample the depsgraph (they call
+    ``scene.frame_set`` and temporarily toggle the ContactSolverCache
+    modifier). Those mutate scene state and must NOT run from a restricted
+    context such as a UI ``draw()`` handler, where Blender forbids ID writes
+    and per-redraw frame stepping would be unusable. Pass ``allow_eval=False``
+    from draw to get the cheap declarative tiers only; the encoder leaves it
+    True for the full, authoritative gate.
     """
     if obj is None or obj.type != "MESH":
         return False
@@ -485,11 +832,29 @@ def is_deforming_static_object(obj, context) -> bool:
         return True
     if _has_shape_key_animation(obj):
         return True
-    if context is None:
+    if context is None or not allow_eval:
         return False
-    if _depsgraph_mesh_differs_across_range(obj, context):
+    # Tiers 3-4 each step the timeline twice (``scene.frame_set`` at
+    # frame_start and frame_end) and re-evaluate the whole-scene depsgraph,
+    # so a single call costs two full frame evaluations. On a heavy
+    # collision scene with many rigid STATIC colliders this dominates the
+    # encode (hundreds of full-scene evals). Gate each behind a cheap,
+    # no-depsgraph pre-check that is a strict SUPERSET of the motion it can
+    # detect, so an inert rigid collider skips the sampling entirely:
+    #   * tier 3 reports a LOCAL mesh-shape change only if some animatable
+    #     source can move this mesh's verts (``_mesh_shape_could_animate``);
+    #   * tier 4 reports a world-matrix change from a non-own-fcurve source
+    #     (parent / constraint / transform driver / NLA), which is exactly
+    #     what ``_has_nonfcurve_motion_source`` reports.
+    # If the pre-check is False the sampler is provably False, so skipping
+    # it changes no result, only cost.
+    if _mesh_shape_could_animate(obj) and _depsgraph_mesh_differs_across_range(
+        obj, context
+    ):
         return True
-    if _matrix_world_differs_without_own_fcurves(obj, context):
+    if _has_nonfcurve_motion_source(obj) and _matrix_world_differs_without_own_fcurves(
+        obj, context
+    ):
         return True
     return False
 
@@ -523,6 +888,35 @@ def get_vertices_in_group(obj, vg) -> list[int]:
                 indices.append(v.index)
                 break
     return indices
+
+
+def pin_covers_all_vertices(obj, vg_name) -> bool:
+    """True when the pin's vertex group includes EVERY vertex of the mesh.
+
+    "Track Rest-Pose Deformation" requires such a full pin: with every vertex
+    captured, the rest pose IS the captured deformation (the solver drives all
+    sim vertices), so no partial-pin reconstruction is needed. A partial pin
+    would leave the unpinned region at the undeformed rest and tear the
+    boundary, so the feature is gated off for it. Mirrors the decoder's
+    ``full_pin`` test (``len(pinned) == n_blender``).
+
+    Implemented as a plain count match: the group's member count equals the
+    mesh vertex count. Blender exposes no O(1) vertex-group count, so this scans
+    the mesh (O(n)). The panel does not call this every redraw; the Refresh
+    button next to the rest-pose toggle runs it on demand and caches the result
+    on the pin (full_pin_checked / full_pin_cached). The encoder still calls it
+    directly at encode time as the source-of-truth gate.
+    """
+    if obj is None or getattr(obj, "type", None) != "MESH" or not vg_name:
+        return False
+    data = getattr(obj, "data", None)
+    if data is None or not hasattr(data, "vertices"):
+        return False
+    vg = obj.vertex_groups.get(vg_name)
+    if vg is None:
+        return False
+    n_total = len(data.vertices)
+    return n_total > 0 and len(get_vertices_in_group(obj, vg)) == n_total
 
 
 def set_linear_interpolation(action):

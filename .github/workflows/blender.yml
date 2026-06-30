@@ -135,6 +135,8 @@ jobs:
           shared-key: emulated-${{ matrix.os }}
 
       - name: Build emulated solver
+        env:
+          PPF_ALLOW_EMULATED: "1"   # CI intentionally builds the CPU stub
         run: cargo build --release --features emulated --no-default-features
 
       # ------------------------------------------------------------------
@@ -149,6 +151,8 @@ jobs:
       # ------------------------------------------------------------------
       - name: Build ppf-cts-server (emulated)
         shell: bash
+        env:
+          PPF_ALLOW_EMULATED: "1"   # CI intentionally builds the CPU stub
         run: |
           cargo build --release -p ppf-cts-server --features emulated
           if [ ! -f target/release/ppf-cts-server ]; then
@@ -176,22 +180,18 @@ jobs:
             numpy scipy numba plyfile requests trimesh pywavefront \
             matplotlib tqdm pythreejs ipywidgets fast-simplification \
             tabulate triangle psutil tomli ipython pillow pytetwild \
-            pyvista cbor2 maturin
+            tetgen pyvista cbor2
 
       # ------------------------------------------------------------------
-      # Build the ppf-cts-py wheel and install it editable into the
-      # venv. The frontend modules hard-import `_ppf_cts_py`; without
-      # this step the rig fails at import time.
+      # The emulated `cargo build --release` steps above build the PyO3
+      # cdylib into target/release/. frontend/__init__.py loads that
+      # cdylib by absolute path and registers it as `_ppf_cts_py`, so
+      # importing `frontend` first makes the Rust extension available.
       # ------------------------------------------------------------------
-      - name: Build + install ppf-cts-py wheel
-        shell: bash
-        working-directory: crates/ppf-cts-py
-        run: ../../.venv/bin/maturin develop --release
-
       - name: Verify Rust extension importable
         shell: bash
         run: |
-          .venv/bin/python -c "import _ppf_cts_py as m; print('schema_version', m.schema_version()); print('process_name', m.process_name())"
+          .venv/bin/python -c "from frontend import _rust as m; print('schema_version', m.schema_version()); print('process_name', m.process_name())"
 
       # ------------------------------------------------------------------
       # Install the addon as a Blender 5 extension. install-blender-

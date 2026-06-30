@@ -414,72 +414,6 @@ __global__ void find_and_set_root_kernel(unsigned *parent, unsigned *root_idx,
     }
 }
 
-// Swap node contents between two positions
-__global__ void swap_nodes_kernel(Vec2u *nodes, unsigned idx1, unsigned idx2) {
-    if (threadIdx.x == 0 && blockIdx.x == 0) {
-        Vec2u temp = nodes[idx1];
-        nodes[idx1] = nodes[idx2];
-        nodes[idx2] = temp;
-    }
-}
-
-// Update all child references after a swap
-__global__ void update_child_refs_kernel(Vec2u *nodes, unsigned num_nodes,
-                                         unsigned old_idx, unsigned new_idx) {
-    unsigned i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i >= num_nodes) {
-        return;
-    }
-
-    Vec2u node = nodes[i];
-    bool modified = false;
-
-    // Check if left child references swapped nodes
-    if (node[0] != 0) { // Has left child
-        unsigned left = node[0] - 1;
-        if (left == old_idx) {
-            node[0] = new_idx + 1;
-            modified = true;
-        } else if (left == new_idx) {
-            node[0] = old_idx + 1;
-            modified = true;
-        }
-    }
-
-    // Check if right child references swapped nodes
-    if (node[1] != 0) { // Has right child (internal node)
-        unsigned right = node[1] - 1;
-        if (right == old_idx) {
-            node[1] = new_idx + 1;
-            modified = true;
-        } else if (right == new_idx) {
-            node[1] = old_idx + 1;
-            modified = true;
-        }
-    }
-
-    if (modified) {
-        nodes[i] = node;
-    }
-}
-
-// Update level data indices after a swap
-__global__ void update_level_indices_kernel(unsigned *level_data, unsigned nnz,
-                                            unsigned old_idx,
-                                            unsigned new_idx) {
-    unsigned i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i >= nnz) {
-        return;
-    }
-
-    unsigned idx = level_data[i];
-    if (idx == old_idx) {
-        level_data[i] = new_idx;
-    } else if (idx == new_idx) {
-        level_data[i] = old_idx;
-    }
-}
-
 // Compute depth of each node by walking up to root
 __global__ void compute_depths_kernel(unsigned num_nodes, unsigned root_idx,
                                       const unsigned *parent, unsigned *depth) {
@@ -545,8 +479,10 @@ __global__ void scatter_to_levels_kernel(const unsigned *depth, unsigned n,
 void build_tree_and_levels(unsigned n, Vec<Vec2u> &nodes,
                            VecVec<unsigned> &level,
                            const Vec<unsigned> &sorted_indices,
-                           const Vec<unsigned> &morton_codes) {
+                           const Vec<unsigned> &morton_codes,
+                           unsigned &root_out) {
     if (n == 0) {
+        root_out = 0;
         return;
     }
 
@@ -582,6 +518,7 @@ void build_tree_and_levels(unsigned n, Vec<Vec2u> &nodes,
                                      cudaMemcpyHostToDevice));
         level.size = 1;
         level.nnz = 1;
+        root_out = 0;
         return;
     }
 
@@ -671,26 +608,11 @@ void build_tree_and_levels(unsigned n, Vec<Vec2u> &nodes,
     level.size = num_levels;
     level.nnz = num_nodes;
 
-    // Now swap root to the expected position (num_nodes - 1) for query
-    // compatibility This must happen AFTER level computation to preserve tree
-    // structure for depth calculation
-    unsigned target_idx = num_nodes - 1;
-    if (root_idx != target_idx) {
-        // First swap the node contents
-        swap_nodes_kernel<<<1, 1>>>(nodes.data, root_idx, target_idx);
-        CUDA_HANDLE_ERROR(cudaDeviceSynchronize());
-
-        // Then update all child references
-        update_child_refs_kernel<<<grid_nodes, BLOCK>>>(nodes.data, num_nodes,
-                                                        root_idx, target_idx);
-        CUDA_HANDLE_ERROR(cudaDeviceSynchronize());
-
-        // Also update level data indices to reflect the swap
-        unsigned grid_nnz = (level.nnz + BLOCK - 1) / BLOCK;
-        update_level_indices_kernel<<<grid_nnz, BLOCK>>>(level.data, level.nnz,
-                                                         root_idx, target_idx);
-        CUDA_HANDLE_ERROR(cudaDeviceSynchronize());
-    }
+    // Report the root's node index in root_out. Queries seed the traversal
+    // stack from bvh.root rather than assuming the root is the last node, so
+    // the root's integer label never reaches the query operator and its value
+    // does not affect query results.
+    root_out = root_idx;
 }
 
 //==============================================================================
@@ -979,7 +901,7 @@ void build_face_bvh(const Vec<Vec3f> &x0, const Vec<Vec3f> &x1,
 
     // 5. Build tree structure and gather levels entirely on GPU
     build_tree_and_levels(n, bvh.node, bvh.level, storage::sorted_indices,
-                          storage::morton_codes);
+                          storage::morton_codes, bvh.root);
     aabb.resize(bvh.node.size);
 
     // 6. Compute leaf AABBs
@@ -1034,7 +956,7 @@ void build_edge_bvh(const Vec<Vec3f> &x0, const Vec<Vec3f> &x1,
 
     // 5. Build tree structure and gather levels entirely on GPU
     build_tree_and_levels(n, bvh.node, bvh.level, storage::sorted_indices,
-                          storage::morton_codes);
+                          storage::morton_codes, bvh.root);
     aabb.resize(bvh.node.size);
 
     // 6. Compute leaf AABBs
@@ -1089,7 +1011,7 @@ void build_vertex_bvh(const Vec<Vec3f> &x0, const Vec<Vec3f> &x1,
 
     // 5. Build tree structure and gather levels entirely on GPU
     build_tree_and_levels(n, bvh.node, bvh.level, storage::sorted_indices,
-                          storage::morton_codes);
+                          storage::morton_codes, bvh.root);
     aabb.resize(bvh.node.size);
 
     // 6. Compute leaf AABBs

@@ -35,12 +35,12 @@ python blender_addon/debug/main.py call <tool> '{"arg":"value"}'
 ## Categories
 
 - Connection (12)
-- Group (21)
-- Object operations (21)
-- Simulation (9)
+- Group (20)
+- Object operations (28)
+- Simulation (11)
 - Scene (13)
 - Dynamic parameters (9)
-- Remote (5)
+- Remote (8)
 - Console (3)
 - Debug (8)
 - Blender (10)
@@ -127,7 +127,7 @@ Create a new dynamics group.
 **Parameters:**
 
 - **name**: Display name for the new group (optional)
-- **type**: Group type (SOLID, SHELL, ROD, STATIC)
+- **type**: Group type (SOLID, SHELL, ROD, STATIC, PDRD, SAND). PDRD is an exactly-rigid body type whose surface mesh moves as a single best-fit rigid transform (no tetrahedralization, no Young's/Poisson/bend/shrink/strain/inflate). SAND is a faceless granular body of loose grain-center vertices.
 
 ### delete_group(group_uuid: str)
 
@@ -196,10 +196,6 @@ Get one active group by UUID.
 
 - **group_uuid**: UUID of group
 
-### get_groups()
-
-Get list of all active groups.
-
 ### get_active_groups()
 
 Get list of all active groups with their properties.
@@ -245,7 +241,7 @@ Set the type of a dynamics group.
 **Parameters:**
 
 - **group_uuid**: UUID of group
-- **type**: Group type (SOLID, SHELL, ROD, STATIC)
+- **type**: Group type (SOLID, SHELL, ROD, STATIC, PDRD, SAND)
 
 ### add_pin_vertex_group(group_uuid: str, vertex_group_identifier: str, indices: Optional[list[int]]=None)
 
@@ -297,10 +293,22 @@ Set material properties for a dynamics group.
 
 Supported properties by group type:
 
-- SHELL: enable_strain_limit, strain_limit, shell_density, shell_young_modulus, shell_poisson_ratio, shell_model, bend, shrink_x, shrink_y, friction, enable_inflate, inflate_pressure, stitch_stiffness
-- SOLID: solid_density, solid_young_modulus, solid_poisson_ratio, solid_model, shrink, friction, stitch_stiffness
-- ROD: rod_density, rod_young_modulus, rod_model, friction, bend, enable_strain_limit, strain_limit, stitch_stiffness
+- SHELL: enable_strain_limit, strain_limit_percent, shell_density, shell_young_modulus, shell_poisson_ratio, shell_model, bend, shrink_x, shrink_y, deformation_damping, bending_damping, young_mod_density_normalized, friction, enable_inflate, inflate_pressure, stitch_stiffness, bend_rest_angle_source, bend_rest_from_reference
+- SOLID: solid_density, solid_young_modulus, solid_poisson_ratio, solid_model, shrink, deformation_damping, young_mod_density_normalized, friction, stitch_stiffness
+- ROD: rod_density, rod_young_modulus, rod_model, deformation_damping, bending_damping, young_mod_density_normalized, friction, bend, enable_strain_limit, strain_limit_percent, stitch_stiffness, bend_rest_angle_source, bend_rest_from_reference
+- PDRD: pdrd_density, friction, stitch_stiffness (the hinge joint is per-object; use the `set_pdrd_hinge` tool)
+- SAND: sand_grain_radius, sand_particle_mass, sand_friction (faceless granular body of loose grain-center vertices)
 - STATIC: friction (limited set)
+
+Per-type property notes:
+
+- pdrd_density: PDRD body volume density (kg/m^3), default 100. Mass is density times the enclosed volume of the surface mesh.
+- PDRD hinge: the hinge joint is a per-object setting, not a group material. Set it with the `set_pdrd_hinge` tool (group_uuid, object_name, enable, pca_axis), so each body in a PDRD group can be hinged on its own axle.
+- bend_rest_from_reference (SHELL, ROD): group-level master toggle for per-object reference rest angles. Settable via this tool, but the per-object reference itself (which object opts in, and which object is its reference) is not exposed over MCP: it is picked in the add-on UI (the eyedropper that runs `object.pick_bend_reference`). When enabled with a valid reference, that object's bending rest angle (shell hinge dihedral, or rod interior-vertex bend angle) is computed from the reference geometry, overriding `bend_rest_angle_source` for that object. Mesh references are modifier-evaluated (vertex count + connectivity must match); curve-rod references are sampled at the control-point level.
+- deformation_damping: stiffness-proportional Rayleigh damping (seconds) for stretch/membrane/solid deformation; default 0.0, min 0.0. Applies to SOLID, SHELL, ROD. 0 disables it. PDRD groups are not Rayleigh-damped.
+- bending_damping: stiffness-proportional Rayleigh damping (seconds) for bending; default 0.0, min 0.0. SHELL and ROD only (SOLID/tet has no bending term; rejected for SOLID and PDRD). 0 disables it.
+- young_mod_density_normalized: SOLID/SHELL/ROD only. True (default) interprets the Young's modulus field as a density-normalized value (Pa/rho), the solver's native convention. False interprets it as a true Young's modulus in pascals, which the addon divides by this group's density before sending it.
+- stitch_stiffness: per-object soft cross-stitch force stiffness, default 1.0. Cross-stitch is a soft 6-slot barycentric force (it replaced the old DOF-fold/exact-weld). Supported pairs: Shell-Shell, Shell-Solid, Rod-Shell, Rod-Solid, Rod-Rod, Solid-Solid, and any dynamic group stitched to a STATIC collider.
 
 Contact properties (mutually exclusive modes):
 
@@ -459,7 +467,42 @@ Report the deformation-capture state of one STATIC object. Returns three fields:
 - **group_uuid**: UUID of STATIC group containing the object
 - **object_name**: Name of the assigned mesh
 
-### add_velocity_keyframe(group_uuid: str, object_name: str, frame: int, direction: list[float], speed: float)
+### detect_isolated_static_vertices()
+
+Report stray faceless vertices on active STATIC colliders that block Transfer. Scans every included, active STATIC collider mesh for vertices that belong to no triangle (no face). The solver build aborts on these, and Transfer reports a ValueError whose message contains "isolated vert", naming the object and the vertex indices. Read-only; pair with `remove_isolated_static_vertices` to delete them.
+
+### remove_isolated_static_vertices()
+
+Delete stray faceless vertices from active STATIC colliders so the scene transfers. Removes only vertices that belong to no triangle (with their loose edges); faces are untouched. Mirrors the **Remove Isolated Vertices** panel button and scans every included, active STATIC collider. Run `detect_isolated_static_vertices` first to preview what will be deleted.
+
+### capture_pin_deformation(group_uuid: str, vertex_group_identifier: str)
+
+Record the per-frame shape of a deformable pin onto the cloth mesh. Use this for pins whose vertices ride along with an Armature, Lattice, Mesh Deform cage, animated Shape Keys, or a driver. The recording runs as a modal operator and continues after this call returns; poll `get_pin_deformation_status` until `frame_count` is non-zero. Press again any time the underlying animation changes. The recording does NOT update on its own. Refuses to start if the pin already carries manual Make-Keyframe vertex-co fcurves; clear those first.
+
+**Parameters:**
+
+- **group_uuid**: UUID of the SHELL/SOLID/ROD group containing the pin
+- **vertex_group_identifier**: Pin id in 'object::vertex_group' form
+
+### clear_pin_deformation(group_uuid: str, vertex_group_identifier: str)
+
+Discard the captured deformation cache for one pin. The pin returns to whatever motion source it had before (none, or manual Make-Keyframe fcurves if any). If no manual fcurves exist the EMBEDDED_MOVE sentinel is also removed so the pin no longer appears animated.
+
+**Parameters:**
+
+- **group_uuid**: UUID of the group containing the pin
+- **vertex_group_identifier**: Pin id in 'object::vertex_group' form
+
+### get_pin_deformation_status(group_uuid: str, vertex_group_identifier: str)
+
+Report the captured-deformation state of one pin. Returns four fields: `is_deforming` (True if the pin object's modifier stack will move vertices over the timeline, e.g. Armature or Lattice), `has_cache` (True if a captured-deformation cache exists for the pin, in memory or on disk), `frame_count` (number of frames in the cache, or 0 when absent), and `has_captured_anim_flag` (the pin item's `has_captured_anim` bool; should match `has_cache` after the load_post reconciler runs).
+
+**Parameters:**
+
+- **group_uuid**: UUID of the group containing the pin
+- **vertex_group_identifier**: Pin id in 'object::vertex_group' form
+
+### add_velocity_keyframe(group_uuid: str, object_name: str, frame: int, direction: list[float], speed: float, angular_axis: int | str = "PC3", angular_speed: float = 0.0, angular_axis_custom: list[float] | None = None, enable_translational: bool = True, enable_angular: bool | None = None)
 
 Add a velocity keyframe at the given frame for an assigned object.
 
@@ -470,6 +513,11 @@ Add a velocity keyframe at the given frame for an assigned object.
 - **frame**: Blender frame number (>= 1)
 - **direction**: [x, y, z] direction vector (normalized at runtime)
 - **speed**: Velocity magnitude (m/s)
+- **angular_axis**: Axis to spin about (solid/shell/PDRD only). `"PC1"`/`"PC2"`/`"PC3"` (principal axes resolved dynamically from the geometry), `"X"`/`"Y"`/`"Z"` (fixed world axes), or `"CUSTOM"` (the `angular_axis_custom` vector). Ints `0`/`1`/`2` map to PC1/PC2/PC3. Ignored when `angular_speed == 0`.
+- **angular_speed**: Signed spin speed in degrees per second (0 = no spin).
+- **angular_axis_custom**: World `[x, y, z]` axis used when `angular_axis == "CUSTOM"` (normalized before use). Defaults to `[0, 0, 1]`.
+- **enable_translational**: Overwrite the translational velocity at this frame (False leaves translation alone, e.g. a pure spin).
+- **enable_angular**: Overwrite the angular velocity at this frame. Defaults to True when `angular_speed` is non-zero, else False.
 
 ### remove_velocity_keyframe(group_uuid: str, object_name: str, frame: int)
 
@@ -498,6 +546,17 @@ Clear all velocity keyframes on an assigned object.
 
 - **group_uuid**: UUID of group
 - **object_name**: Name of the assigned object
+
+### set_pdrd_hinge(group_uuid: str, object_name: str, enable: bool=True, pca_axis: int=2)
+
+Pin a PDRD body as a hinge (per object): lock its position and restrict rotation to one principal (PCA) axis of its rest shape, the building block for gears. The group must be of type PDRD. Per-object, so each body in a group can be hinged on its own axle.
+
+**Parameters:**
+
+- **group_uuid**: UUID of the PDRD group
+- **object_name**: Name of the assigned object
+- **enable**: Pin the body (True) or release it so it moves freely (False)
+- **pca_axis**: Free axle: 0 (largest extent), 1 (middle), 2 (thinnest, the usual axle for a flat gear or disk)
 
 ### set_use_collision_windows(group_uuid: str, enable: bool)
 
@@ -547,6 +606,17 @@ Clear every collision window on an assigned object.
 - **group_uuid**: UUID of group
 - **object_name**: Name of the assigned object
 
+### set_object_tet_settings(group_uuid: str, object_name: str, tet_backend: Optional[str]=None, ftetwild_edge_length_fac: Optional[float]=None, ftetwild_epsilon: Optional[float]=None, ftetwild_stop_energy: Optional[float]=None, ftetwild_num_opt_iter: Optional[int]=None, ftetwild_optimize: Optional[bool]=None, ftetwild_simplify: Optional[bool]=None, ftetwild_coarsen: Optional[bool]=None, tetgen_min_ratio: Optional[float]=None, tetgen_max_volume: Optional[float]=None)
+
+Set the per-object tetrahedralizer backend and overrides. SOLID meshes are tetrahedralized at build time and each object picks its backend and overrides independently. Passing any override value also enables that override; otherwise the backend default applies. Ignored for non-SOLID objects.
+
+- **group_uuid**: UUID of the group containing the object
+- **object_name**: Name of the assigned object in the group
+- **tet_backend**: "FTETWILD" (tolerant remesher, default) or "TETGEN" (preserves the surface exactly, needs a clean closed manifold)
+- **ftetwild_edge_length_fac / ftetwild_epsilon / ftetwild_stop_energy / ftetwild_num_opt_iter / ftetwild_optimize / ftetwild_simplify / ftetwild_coarsen**: fTetWild overrides
+- **tetgen_min_ratio**: TetGen minimum radius-edge ratio
+- **tetgen_max_volume**: TetGen maximum tet volume (0 = uncapped)
+
 ## Simulation
 
 ### transfer_data()
@@ -584,6 +654,16 @@ Fetch simulation results from server.
 ### clear_local_animation()
 
 Clear local animation data and keyframes.
+
+### list_checkpoint_frames()
+
+List resumable checkpoint frames (Blender 1-based) saved on the server, read from the latest status response. Empty until a checkpoint has been saved (via Save Checkpoints, Auto Save, or Save State on Finish).
+
+### resume_simulation_from(frame: int)
+
+Resume the simulation from a specific saved checkpoint frame without re-uploading or rebuilding (frames before the checkpoint are kept, the rest overwritten). Refuses on geometry drift (transfer_data + run_simulation instead) or parameter drift (update_params first). `resume_simulation` continues from the latest checkpoint.
+
+- **frame**: Saved checkpoint frame to resume from (Blender 1-based)
 
 ## Scene
 
@@ -785,7 +865,7 @@ Install the Paramiko library.
 
 Install the Docker library.
 
-### set_scene_parameters(step_size: Optional[float]=None, min_newton_steps: Optional[int]=None, frame_count: Optional[int]=None, frame_rate: Optional[int]=None, gravity: Optional[list[float]]=None, wind_direction: Optional[list[float]]=None, wind_strength: Optional[float]=None, air_density: Optional[float]=None, air_friction: Optional[float]=None, vertex_air_damp: Optional[float]=None, inactive_momentum_frames: Optional[int]=None, contact_nnz: Optional[int]=None, line_search_max_t: Optional[float]=None, constraint_ghat: Optional[float]=None, cg_max_iter: Optional[int]=None, cg_tol: Optional[float]=None, include_face_mass: Optional[bool]=None, disable_contact: Optional[bool]=None, auto_save: Optional[bool]=None, auto_save_interval: Optional[int]=None, use_frame_rate_in_output: Optional[bool]=None, project_name: Optional[str]=None)
+### set_scene_parameters(step_size: Optional[float]=None, min_newton_steps: Optional[int]=None, frame_count: Optional[int]=None, frame_rate: Optional[int]=None, gravity: Optional[list[float]]=None, wind_direction: Optional[list[float]]=None, wind_strength: Optional[float]=None, air_density: Optional[float]=None, air_friction: Optional[float]=None, vertex_air_damp: Optional[float]=None, inactive_momentum_frames: Optional[int]=None, contact_nnz: Optional[int]=None, line_search_max_t: Optional[float]=None, constraint_ghat: Optional[float]=None, cg_max_iter: Optional[int]=None, cg_tol: Optional[float]=None, include_face_mass: Optional[bool]=None, disable_contact: Optional[bool]=None, auto_save: Optional[bool]=None, auto_save_interval: Optional[int]=None, save_state_on_finish: Optional[bool]=None, keep_states: Optional[int]=None, precond: Optional[str]=None, schwarz_levels: Optional[int]=None, use_frame_rate_in_output: Optional[bool]=None, project_name: Optional[str]=None)
 
 Set global scene parameters for physics simulation.
 
@@ -811,12 +891,30 @@ Set global scene parameters for physics simulation.
 - **disable_contact**: Disable all contact detection
 - **auto_save**: Enable auto-save
 - **auto_save_interval**: Auto-save interval (frames)
+- **save_state_on_finish**: Save a resumable state when the simulation finishes (default False)
+- **keep_states**: Number of most-recent saved states to retain (0 = keep all, the default)
+- **precond**: PCG preconditioner, "BLOCK_JACOBI" (default) or "SCHWARZ"
+- **schwarz_levels**: Number of additive Schwarz levels, 1 (single-level smoother) or 2 (two-level coarse correction, default). Only used when precond is "SCHWARZ".
 - **use_frame_rate_in_output**: Use frame rate in output
 - **project_name**: Project name used for remote session directory
 
 ### get_scene_parameters()
 
 Get current scene parameters.
+
+### set_save_checkpoint_frames(frames: list[int])
+
+Set the explicit frames at which to save a resumable checkpoint, replacing the current list (de-duplicated, clamped to >= 1, sorted ascending). These are the frames the Resume dialog offers, in addition to Auto Save and Save State on Finish.
+
+- **frames**: Frame indices (1-based) to save checkpoints at
+
+### clear_save_checkpoint_frames()
+
+Clear all explicit Save Checkpoints frames.
+
+### list_save_checkpoint_frames()
+
+List the explicit Save Checkpoints frames configured for the next run.
 
 ## Console
 

@@ -31,14 +31,6 @@ use super::collider::{Sphere, Wall};
 use super::object::Object;
 
 #[derive(Debug, Clone, Default)]
-pub struct ExplicitMergePair {
-    pub source_uuid: String,
-    pub target_uuid: String,
-    /// `[source_vertex, target_vertex]` index pairs.
-    pub pairs: Vec<[i32; 2]>,
-}
-
-#[derive(Debug, Clone, Default)]
 pub struct CrossStitch {
     pub source_uuid: String,
     pub target_uuid: String,
@@ -66,8 +58,6 @@ pub enum SceneError {
     ObjectNotFound(String),
     #[error("object {0} already exists")]
     ObjectAlreadyExists(String),
-    #[error("merge pair [{i}] missing required source_uuid/target_uuid")]
-    MergePairMissingUuid { i: usize },
     #[error("set_surface_map requires a non-empty object UUID key")]
     SurfaceMapEmptyKey,
 }
@@ -82,7 +72,6 @@ pub struct Scene {
     pub objects: BTreeMap<String, Object>,
     pub walls: Vec<Wall>,
     pub spheres: Vec<Sphere>,
-    pub explicit_merge_pairs: Vec<ExplicitMergePair>,
     pub cross_stitch: Vec<CrossStitch>,
     /// Frame-embedding surface mappings keyed by object UUID.
     pub surface_map_by_name: BTreeMap<String, SurfaceMap>,
@@ -95,7 +84,6 @@ impl Scene {
             objects: BTreeMap::new(),
             walls: vec![],
             spheres: vec![],
-            explicit_merge_pairs: vec![],
             cross_stitch: vec![],
             surface_map_by_name: BTreeMap::new(),
         }
@@ -107,11 +95,13 @@ impl Scene {
         self.objects.clear();
     }
 
-    /// Add a fresh object referencing an asset of the given kind.
-    /// Returns a mutable reference so the caller can chain transform
-    /// builders. The asset registry is consulted for the kind so the
-    /// caller doesn't pass it explicitly when they could instead
-    /// hand the registry over (see `add_from_registry`).
+    /// Add a fresh object referencing an asset of the given kind. The
+    /// kind is passed explicitly by the caller; this method does not
+    /// consult the asset registry. On a duplicate name it overwrites
+    /// (last-write-wins, see the inline note); use `add_unique` for
+    /// strict semantics or `add_from_registry` to derive the kind from
+    /// the registry. Returns a mutable reference so the caller can chain
+    /// transform builders.
     pub fn add(&mut self, asset_name: impl Into<String>, kind: AssetKind) -> &mut Object {
         let name: String = asset_name.into();
         let obj = Object::new(name.clone(), kind);
@@ -172,20 +162,6 @@ impl Scene {
 
     pub fn add_sphere(&mut self, sphere: Sphere) {
         self.spheres.push(sphere);
-    }
-
-    /// Validate then store explicit merge pairs.
-    pub fn set_explicit_merge_pairs(
-        &mut self,
-        pairs: Vec<ExplicitMergePair>,
-    ) -> Result<(), SceneError> {
-        for (i, p) in pairs.iter().enumerate() {
-            if p.source_uuid.is_empty() || p.target_uuid.is_empty() {
-                return Err(SceneError::MergePairMissingUuid { i });
-            }
-        }
-        self.explicit_merge_pairs = pairs;
-        Ok(())
     }
 
     /// Stamp a frame-embedding surface map.
@@ -276,19 +252,6 @@ pub fn sphere_move_by_entry(
     delta: [f64; 3],
 ) -> ([f64; 3], f64) {
     (wall_move_by_position(prev_position, delta), prev_radius)
-}
-
-/// 4-way OR of the violation flags.
-pub fn fixed_scene_has_violations(
-    has_self_intersection: bool,
-    has_contact_offset_violation: bool,
-    has_wall_violation: bool,
-    has_sphere_violation: bool,
-) -> bool {
-    has_self_intersection
-        || has_contact_offset_violation
-        || has_wall_violation
-        || has_sphere_violation
 }
 
 /// Format an integer with thousand separators (`12345 -> "12,345"`).
@@ -444,14 +407,6 @@ mod helper_tests {
     }
 
     #[test]
-    fn has_violations_or() {
-        assert!(!fixed_scene_has_violations(false, false, false, false));
-        assert!(fixed_scene_has_violations(true, false, false, false));
-        assert!(fixed_scene_has_violations(false, true, false, false));
-        assert!(fixed_scene_has_violations(false, false, false, true));
-    }
-
-    #[test]
     fn report_entries_omit_zero() {
         let r = fixed_scene_report_entries(1500, 0, 200, 0, 0, 0, 0, 0, 0);
         let map: std::collections::HashMap<_, _> = r.iter().cloned().collect();
@@ -575,28 +530,6 @@ mod tests {
         s.clear();
         assert_eq!(s.object_count(), 0);
         assert_eq!(s.walls.len(), 1);
-    }
-
-    #[test]
-    fn set_explicit_merge_pairs_validates_uuids() {
-        let mut s = Scene::new("demo");
-        let bad = vec![ExplicitMergePair {
-            source_uuid: String::new(),
-            target_uuid: "tgt".into(),
-            pairs: vec![],
-        }];
-        assert!(matches!(
-            s.set_explicit_merge_pairs(bad).unwrap_err(),
-            SceneError::MergePairMissingUuid { i: 0 }
-        ));
-
-        let good = vec![ExplicitMergePair {
-            source_uuid: "src".into(),
-            target_uuid: "tgt".into(),
-            pairs: vec![[0, 1]],
-        }];
-        s.set_explicit_merge_pairs(good).unwrap();
-        assert_eq!(s.explicit_merge_pairs.len(), 1);
     }
 
     #[test]

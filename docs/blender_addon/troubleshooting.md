@@ -8,8 +8,19 @@ strings are exact panel/log text. For full tracebacks read `server.log`,
 
 ### "No module named paramiko" or "No module named docker"
 
-Vendored copies are populated on demand. Click **Install Paramiko** (SSH
-backends) or **Install Docker** (Docker backends).
+Vendored copies are populated on demand. Click **Install Paramiko to
+Add-on Directory** (SSH backends) or **Install Docker-Py to Add-on
+Directory** (Docker backends).
+
+### "No module named cbor2"
+
+The `cbor2` module is needed to encode the scene before each transfer.
+It is normally installed for you when the extension is installed, so a
+missing copy usually means the install did not complete. Reinstall the
+extension through Blender (**Get Extensions** or **Install from Disk**),
+or click **Install cbor2 to Add-on Directory** in the Backend
+Communicator panel. The button installs `cbor2==6.0.1` into Blender's
+`scripts/addons/modules` directory.
 
 ### Install operator hangs or fails
 
@@ -152,7 +163,7 @@ and confirm `python3` resolves via the venv or `$PATH`.
 
 ### Status: "Protocol version mismatch"
 
-The server's wire version does not match the add-on (`0.04`). Rebuild
+The server's wire version does not match the add-on (`0.10`). Rebuild
 the solver from a matching revision, or update the add-on.
 
 ## Object groups and pins
@@ -199,6 +210,15 @@ Migration** from the Tools panel.
 The same object (identified by its UUID) appears in more than one active
 group. Remove it from all but one group via **Add Selected Objects** / the
 group's object list.
+
+### "Object '...' has N isolated vertex(es)" (the message says "isolated vert")
+
+A Static collider mesh has stray points that belong to no face, common in
+imported models. Click **Remove Isolated Vertices** under the error to delete
+them, then **Transfer** again. By hand: in Edit Mode run **Select > All by
+Trait > Loose Geometry**, then **Mesh > Delete > Loose**. Over MCP, call
+`remove_isolated_static_vertices` (preview with
+`detect_isolated_static_vertices`).
 
 ### Run button is disabled
 
@@ -300,7 +320,7 @@ If even that fails, restart Blender. This is a Blender RNA limitation.
 
 ### "Reload timed out"
 
-Plain reload times out at 30 s, full reload at 60 s. Something in
+Plain reload times out at 45 s, full reload at 70 s. Something in
 top-level module code, `register`, or `unregister` is blocking the
 main thread (network call, large mesh op, missing
 `bpy.app.timers.unregister`). The Blender system console shows what

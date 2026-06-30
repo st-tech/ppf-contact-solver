@@ -42,6 +42,71 @@ def _cleanup_stale_servers(port: int) -> None:
             pass
 
 
+def _resolve_addon_names() -> tuple[str, set[str], str, set[str]]:
+    """Resolve the addon module names needed to reload it.
+
+    Returns (short_addon_id, possible_addon_names, actual_addon_name,
+    purge_prefixes). Works whether the addon is loaded legacy-style
+    (``ppf_contact_solver.*``) or via the extension system
+    (``bl_ext.<vendor>.ppf_contact_solver.*``). Depends only on ``__name__``
+    (which resolves to this module inside reload_server.py), ``bpy.context``,
+    and ``sys.modules``, so it stands alone as a free function and can be
+    shared by perform_reload and _reload_phase1_disable."""
+    current_module = __name__
+    parts = current_module.split(".")
+
+    # Derive the short addon id (leaf package name), independent of
+    # whether the addon is loaded legacy-style (``ppf_contact_solver.*``)
+    # or via the extension system (``bl_ext.<vendor>.ppf_contact_solver.*``).
+    if parts[0] == "bl_ext" and len(parts) >= 3:
+        short_addon_id = parts[2]
+        bl_ext_prefix = ".".join(parts[:3])
+    else:
+        short_addon_id = parts[0]
+        bl_ext_prefix = None
+
+    # Collect every plausible addon-module name.
+    possible_addon_names: set[str] = {short_addon_id}
+    if bl_ext_prefix:
+        possible_addon_names.add(bl_ext_prefix)
+
+    # Also accept whatever Blender currently lists in preferences that
+    # *ends* with the short addon id, so the extension alias is picked
+    # up even when the reload server itself is imported via the legacy
+    # path (or vice versa).
+    enabled_modules = [a.module for a in bpy.context.preferences.addons]
+    for mod in enabled_modules:
+        if mod == short_addon_id or mod.endswith("." + short_addon_id):
+            possible_addon_names.add(mod)
+
+    # Pick the name that Blender actually has registered. Prefer the
+    # longest (most specific) match.
+    actual_addon_name = None
+    for candidate in sorted(possible_addon_names, key=len, reverse=True):
+        if candidate in enabled_modules:
+            actual_addon_name = candidate
+            break
+    if not actual_addon_name:
+        actual_addon_name = short_addon_id
+
+    # Prefixes we must purge from sys.modules. Includes the resolved
+    # addon name PLUS any alias seen in sys.modules so both legacy and
+    # bl_ext namespaces are flushed together.
+    purge_prefixes: set[str] = {actual_addon_name}
+    for mod_name in list(sys.modules):
+        mod_parts = mod_name.split(".")
+        if mod_parts[0] == short_addon_id:
+            purge_prefixes.add(short_addon_id)
+        elif (
+            mod_parts[0] == "bl_ext"
+            and len(mod_parts) >= 3
+            and mod_parts[2] == short_addon_id
+        ):
+            purge_prefixes.add(".".join(mod_parts[:3]))
+
+    return short_addon_id, possible_addon_names, actual_addon_name, purge_prefixes
+
+
 class ReloadServer:
     def __init__(self, port: int = DEFAULT_RELOAD_PORT):
         self.port = port
@@ -54,9 +119,24 @@ class ReloadServer:
         self._pending_timers: list = []
 
     def _schedule(self, fn, first_interval: float) -> None:
-        """Schedule a main-thread timer and remember it for stop()."""
-        bpy.app.timers.register(fn, first_interval=first_interval)
-        self._pending_timers.append(fn)
+        """Schedule a main-thread timer and remember it for stop().
+
+        ``fn`` is wrapped in a self-removing closure so the entry drops out
+        of ``self._pending_timers`` once the one-shot timer fires; otherwise
+        every reload/execute/start_mcp/trigger would leak a dead reference
+        that only ``stop()`` ever clears. The same wrapper object is both
+        registered and tracked, so ``stop()`` can still cancel an unfired
+        one. Mirrors the effect_runner.py self-removal pattern."""
+        def _wrapper():
+            # Remove before calling fn so a raising fn still leaves the list
+            # clean; guard in case stop() already cleared it.
+            try:
+                self._pending_timers.remove(_wrapper)
+            except ValueError:
+                pass
+            return fn()
+        bpy.app.timers.register(_wrapper, first_interval=first_interval)
+        self._pending_timers.append(_wrapper)
 
     def start(self):
         """Start TCP listener for reload packets and Python code execution"""
@@ -262,35 +342,18 @@ class ReloadServer:
             # PropertyGroup RNA in some cases (e.g. InvisibleColliderItem
             # with its keyframes CollectionProperty).
             result_holder: dict[str, Any] = {}
-            ctx_holder: list[Any] = [None]
             done = threading.Event()
 
-            def _full_phase2():
-                try:
-                    self._reload_phase2_enable(ctx_holder[0])
-                    result_holder["status"] = "ok"
-                except Exception as exc:
-                    result_holder["status"] = "error"
-                    result_holder["error"] = f"enable: {exc}"
-                    traceback.print_exc()
+            def _on_success():
+                result_holder["status"] = "ok"
                 done.set()
-                return None
 
-            def _full_phase1():
-                try:
-                    ctx_holder[0] = self._reload_phase1_disable()
-                except Exception as exc:
-                    result_holder["status"] = "error"
-                    result_holder["error"] = f"disable: {exc}"
-                    traceback.print_exc()
-                    done.set()
-                    return None
-                # Yield back to Blender for one full event-loop iteration
-                # before re-registering; that's where RNA cleanup happens.
-                self._schedule(_full_phase2, 0.3)
-                return None
+            def _on_error(phase, exc):
+                result_holder["status"] = "error"
+                result_holder["error"] = f"{phase}: {exc}"
+                done.set()
 
-            self._schedule(_full_phase1, 0.1)
+            self.perform_full_reload(on_success=_on_success, on_error=_on_error)
             if done.wait(timeout=60.0):
                 self._send(conn, {**result_holder, "command": "full_reload"})
             else:
@@ -313,57 +376,12 @@ class ReloadServer:
         matching ``sys.modules`` entry is deleted and importer caches are
         invalidated before re-enable so fresh source is executed.
         """
-        current_module = __name__
-        parts = current_module.split(".")
-
-        # Derive the short addon id (leaf package name), independent of
-        # whether the addon is loaded legacy-style (``ppf_contact_solver.*``)
-        # or via the extension system (``bl_ext.<vendor>.ppf_contact_solver.*``).
-        if parts[0] == "bl_ext" and len(parts) >= 3:
-            short_addon_id = parts[2]
-            bl_ext_prefix = ".".join(parts[:3])
-        else:
-            short_addon_id = parts[0]
-            bl_ext_prefix = None
-
-        # Collect every plausible addon-module name.
-        possible_addon_names: set[str] = {short_addon_id}
-        if bl_ext_prefix:
-            possible_addon_names.add(bl_ext_prefix)
-
-        # Also accept whatever Blender currently lists in preferences that
-        # *ends* with the short addon id, so the extension alias is picked
-        # up even when the reload server itself is imported via the legacy
-        # path (or vice versa).
-        enabled_modules = [a.module for a in bpy.context.preferences.addons]
-        for mod in enabled_modules:
-            if mod == short_addon_id or mod.endswith("." + short_addon_id):
-                possible_addon_names.add(mod)
-
-        # Pick the name that Blender actually has registered. Prefer the
-        # longest (most specific) match.
-        actual_addon_name = None
-        for candidate in sorted(possible_addon_names, key=len, reverse=True):
-            if candidate in enabled_modules:
-                actual_addon_name = candidate
-                break
-        if not actual_addon_name:
-            actual_addon_name = short_addon_id
-
-        # Prefixes we must purge from sys.modules. Includes the resolved
-        # addon name PLUS any alias seen in sys.modules so both legacy and
-        # bl_ext namespaces are flushed together.
-        purge_prefixes: set[str] = {actual_addon_name}
-        for mod_name in list(sys.modules):
-            mod_parts = mod_name.split(".")
-            if mod_parts[0] == short_addon_id:
-                purge_prefixes.add(short_addon_id)
-            elif (
-                mod_parts[0] == "bl_ext"
-                and len(mod_parts) >= 3
-                and mod_parts[2] == short_addon_id
-            ):
-                purge_prefixes.add(".".join(mod_parts[:3]))
+        (
+            short_addon_id,
+            possible_addon_names,
+            actual_addon_name,
+            purge_prefixes,
+        ) = _resolve_addon_names()
 
         try:
             ctx = self._reload_phase1_disable(
@@ -377,11 +395,55 @@ class ReloadServer:
             print(f"Reload failed: {e}")
             traceback.print_exc()
 
+    def perform_full_reload(self, on_success=None, on_error=None) -> None:
+        """Run a full (two-phase) reload, splitting disable and enable across
+        two event-loop ticks so Blender's event loop can run RNA cleanup
+        between them (needed for classes with nested CollectionProperty
+        bindings, e.g. InvisibleColliderItem with its keyframes collection).
+
+        The handoff is scheduled, not synchronous: phase1 fires at 0.1s, then
+        phase2 at 0.3s. ``on_success``/``on_error`` (default print+traceback)
+        let callers thread the result back; ``on_error`` is invoked with a
+        phase label (\"disable\"/\"enable\") and the exception. On a phase1
+        failure phase2 is NOT scheduled."""
+        def _report_error(phase: str, exc: Exception) -> None:
+            if on_error is not None:
+                on_error(phase, exc)
+            else:
+                print(f"Full reload {phase} failed: {exc}")
+            traceback.print_exc()
+
+        ctx_holder: list = [None]
+
+        def _phase2():
+            try:
+                self._reload_phase2_enable(ctx_holder[0])
+            except Exception as exc:
+                _report_error("enable", exc)
+                return None
+            if on_success is not None:
+                on_success()
+            return None
+
+        def _phase1():
+            try:
+                ctx_holder[0] = self._reload_phase1_disable()
+            except Exception as exc:
+                _report_error("disable", exc)
+                return None
+            # Yield back to Blender for one full event-loop iteration before
+            # re-registering; that's where RNA cleanup happens.
+            self._schedule(_phase2, 0.3)
+            return None
+
+        self._schedule(_phase1, 0.1)
+
     # -- full-reload phases ------------------------------------------------
-    # The fast `perform_reload` runs both phases in the same timer tick.
-    # `perform_full_reload` (driven by the dispatcher for the "full_reload"
-    # command) splits them across two ticks so Blender's event loop can run
-    # RNA cleanup between disable and enable.
+    # The fast `perform_reload` runs both disable and enable in the same
+    # timer tick. `perform_full_reload` splits them across two event-loop
+    # ticks (phase1 then phase2) so Blender can run RNA cleanup between
+    # disable and enable. The dispatcher's "full_reload" branch and the
+    # module-level `trigger_full_reload_now` both delegate to it.
 
     def _reload_phase1_disable(
         self,
@@ -392,42 +454,16 @@ class ReloadServer:
     ) -> dict:
         """Unregister the addon and purge its modules. Returns a context
         dict consumed by _reload_phase2_enable."""
-        # When called from perform_full_reload we don't get the precomputed
-        # names; derive them here so the method stands alone.
+        # When called from the full-reload path (perform_full_reload via the
+        # dispatcher or trigger_full_reload_now) with no args, derive the
+        # names here so the method stands alone.
         if actual_addon_name is None:
-            current_module = __name__
-            parts = current_module.split(".")
-            if parts[0] == "bl_ext" and len(parts) >= 3:
-                short_addon_id = parts[2]
-                bl_ext_prefix = ".".join(parts[:3])
-            else:
-                short_addon_id = parts[0]
-                bl_ext_prefix = None
-            possible_addon_names = {short_addon_id}
-            if bl_ext_prefix:
-                possible_addon_names.add(bl_ext_prefix)
-            enabled_modules = [a.module for a in bpy.context.preferences.addons]
-            for mod in enabled_modules:
-                if mod == short_addon_id or mod.endswith("." + short_addon_id):
-                    possible_addon_names.add(mod)
-            actual_addon_name = None
-            for candidate in sorted(possible_addon_names, key=len, reverse=True):
-                if candidate in enabled_modules:
-                    actual_addon_name = candidate
-                    break
-            if not actual_addon_name:
-                actual_addon_name = short_addon_id
-            purge_prefixes = {actual_addon_name}
-            for mod_name in list(sys.modules):
-                mod_parts = mod_name.split(".")
-                if mod_parts[0] == short_addon_id:
-                    purge_prefixes.add(short_addon_id)
-                elif (
-                    mod_parts[0] == "bl_ext"
-                    and len(mod_parts) >= 3
-                    and mod_parts[2] == short_addon_id
-                ):
-                    purge_prefixes.add(".".join(mod_parts[:3]))
+            (
+                short_addon_id,
+                possible_addon_names,
+                actual_addon_name,
+                purge_prefixes,
+            ) = _resolve_addon_names()
 
         # Save which servers are running so register() can restart them
         _save_server_state_before_reload()
@@ -587,28 +623,7 @@ def trigger_full_reload_now():
     if not (_reload_server_instance and _reload_server_instance.running):
         raise RuntimeError("Reload server is not running")
 
-    server = _reload_server_instance
-    ctx_holder: list = [None]
-
-    def _phase2():
-        try:
-            server._reload_phase2_enable(ctx_holder[0])
-        except Exception as exc:
-            print(f"Full reload phase2 failed: {exc}")
-            traceback.print_exc()
-        return None
-
-    def _phase1():
-        try:
-            ctx_holder[0] = server._reload_phase1_disable()
-        except Exception as exc:
-            print(f"Full reload phase1 failed: {exc}")
-            traceback.print_exc()
-            return None
-        server._schedule(_phase2, 0.3)
-        return None
-
-    server._schedule(_phase1, 0.1)
+    _reload_server_instance.perform_full_reload()
 
 
 

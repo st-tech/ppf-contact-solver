@@ -20,6 +20,43 @@ from .._api_markers import blender_api
 # ---------------------------------------------------------------------------
 
 
+def _init_collider(state, collider_type, name_prefix):
+    """Add a new invisible collider to *state* and seed the frame-1 keyframe.
+
+    Shared by the Wall and Sphere builders.  Returns the freshly added
+    collider item; the caller fills in the type-specific fields (normal,
+    radius).  The collider type, auto-generated unique name, the initial
+    keyframe at frame 1, and the active-index update are common to both.
+    """
+    item = state.invisible_colliders.add()
+    item.collider_type = collider_type
+    existing = [c.name for c in state.invisible_colliders if c.collider_type == collider_type]
+    item.name = generate_unique_name(name_prefix, existing)
+    kf = item.keyframes.add()
+    kf.frame = 1
+    state.invisible_colliders_index = len(state.invisible_colliders) - 1
+    return item
+
+
+def _delete_collider(target):
+    """Remove *target* from the active scene's invisible colliders.
+
+    Shared by the Wall and Sphere builders' ``delete`` methods so the
+    index fix-up and overlay invalidation live in one place.
+    """
+    state = get_addon_data(bpy.context.scene).state
+    for i, item in enumerate(state.invisible_colliders):
+        if item == target:
+            state.invisible_colliders.remove(i)
+            state.invisible_colliders_index = safe_update_index(
+                state.invisible_colliders_index,
+                len(state.invisible_colliders),
+            )
+            from ...models.groups import invalidate_overlays
+            invalidate_overlays()
+            break
+
+
 @blender_api
 class _ColliderParamProxy:
     """Attribute proxy for invisible-collider parameters.
@@ -82,16 +119,9 @@ class _InvisibleWallBuilder:
 
     def __init__(self, position, normal):
         state = get_addon_data(bpy.context.scene).state
-        self._item = state.invisible_colliders.add()
-        self._item.collider_type = "WALL"
-        # Auto-name
-        existing = [c.name for c in state.invisible_colliders if c.collider_type == "WALL"]
-        self._item.name = generate_unique_name("Wall", existing)
+        self._item = _init_collider(state, "WALL", "Wall")
         self._item.position = tuple(position)
         self._item.normal = tuple(normal)
-        kf = self._item.keyframes.add()
-        kf.frame = 1
-        state.invisible_colliders_index = len(state.invisible_colliders) - 1
         self._frame = 1
 
     @classmethod
@@ -210,17 +240,7 @@ class _InvisibleWallBuilder:
             wall = solver.add_wall((0, 0, 0), (0, 0, 1))
             wall.delete()
         """
-        state = get_addon_data(bpy.context.scene).state
-        for i, item in enumerate(state.invisible_colliders):
-            if item == self._item:
-                state.invisible_colliders.remove(i)
-                state.invisible_colliders_index = safe_update_index(
-                    state.invisible_colliders_index,
-                    len(state.invisible_colliders),
-                )
-                from ...models.groups import invalidate_overlays
-                invalidate_overlays()
-                break
+        _delete_collider(self._item)
 
     def _add_keyframe(self, use_hold=False, position=None):
         validate_no_duplicate_frame(self._item.keyframes, self._frame)
@@ -247,15 +267,9 @@ class _InvisibleSphereBuilder:
 
     def __init__(self, position, radius):
         state = get_addon_data(bpy.context.scene).state
-        self._item = state.invisible_colliders.add()
-        self._item.collider_type = "SPHERE"
-        existing = [c.name for c in state.invisible_colliders if c.collider_type == "SPHERE"]
-        self._item.name = generate_unique_name("Sphere", existing)
+        self._item = _init_collider(state, "SPHERE", "Sphere")
         self._item.position = tuple(position)
         self._item.radius = float(radius)
-        kf = self._item.keyframes.add()
-        kf.frame = 1
-        state.invisible_colliders_index = len(state.invisible_colliders) - 1
         self._frame = 1
 
     @classmethod
@@ -412,17 +426,7 @@ class _InvisibleSphereBuilder:
             sphere = solver.add_sphere((0, 0, 0), 1.0)
             sphere.delete()
         """
-        state = get_addon_data(bpy.context.scene).state
-        for i, item in enumerate(state.invisible_colliders):
-            if item == self._item:
-                state.invisible_colliders.remove(i)
-                state.invisible_colliders_index = safe_update_index(
-                    state.invisible_colliders_index,
-                    len(state.invisible_colliders),
-                )
-                from ...models.groups import invalidate_overlays
-                invalidate_overlays()
-                break
+        _delete_collider(self._item)
 
     def _add_keyframe(self, use_hold=False, position=None, radius=None):
         validate_no_duplicate_frame(self._item.keyframes, self._frame)

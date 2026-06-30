@@ -33,6 +33,8 @@ from ..models.groups import (  # noqa: F401
 
 # Re-exports for backward compatibility
 from .state_types import (
+    CheckpointFrameItem,
+    SaveCheckpointFrameItem,
     FetchedFrameItem,
     MergePairItem,
     DynParamKeyframe,
@@ -109,7 +111,10 @@ class SSHState(PropertyGroup):
         name="Container Path", default=""
     )  # pyright: ignore
     local_path: StringProperty(
-        name="Path", default=""
+        name="Path",
+        subtype="DIR_PATH",
+        default="",
+        description="Local directory of the ppf-contact-solver repo (the server runs from here)",
     )  # pyright: ignore
     server_type: EnumProperty(  # pyright: ignore
         name="Type",
@@ -323,6 +328,22 @@ class State(PropertyGroup):
         precision=2,
         description="Ratio of tangential friction to normal friction for air drag/lift",
     )  # pyright: ignore
+    world_scaling: FloatProperty(
+        name="World Scaling",
+        default=1.0,
+        min=0.001,
+        max=1000.0,
+        soft_min=0.01,
+        soft_max=100.0,
+        precision=4,
+        description=(
+            "Uniform scale applied to all geometry before simulating; results are "
+            "scaled back so the scene stays at its authored size. Use it to "
+            "simulate an over- or under-sized scene at a sensible physical scale "
+            "(e.g. 0.1 simulates a 15 m mesh at 1.5 m). Only geometry and relative "
+            "contact gaps scale; gravity and absolute gaps do not"
+        ),
+    )  # pyright: ignore
     friction_mode: EnumProperty(
         name="Friction Mode",
         items=[
@@ -333,6 +354,43 @@ class State(PropertyGroup):
         default="MIN",
         description="How to combine friction coefficients of two contacting elements",
     )  # pyright: ignore
+    precond: EnumProperty(
+        name="Preconditioner",
+        # Explicit numeric IDs (4th=icon, 5th=number) freeze each identifier to
+        # its slot so reordering or removing an item later cannot silently
+        # corrupt the choice stored in pre-existing .blend files.
+        items=[
+            ("BLOCK_JACOBI", "Block Jacobi",
+             "3x3 per-vertex diagonal preconditioner (default): fast with the "
+             "device-resident PCG loop and does not run out of memory on "
+             "heavy-contact scenes", "NONE", 0),
+            ("SCHWARZ", "Schwarz",
+             "Single-level additive aggregate-Schwarz; fewer iterations on "
+             "systems mixing stiff and soft elements, but heavier per iteration "
+             "and can OOM on large contact counts", "NONE", 1),
+        ],
+        default="BLOCK_JACOBI",
+        description="Preconditioner for the PCG linear solver",
+    )  # pyright: ignore
+    schwarz_levels: EnumProperty(
+        name="Schwarz Levels",
+        # Explicit numeric IDs freeze each identifier to its slot so reordering
+        # or removing an item later cannot silently corrupt the choice stored
+        # in pre-existing .blend files.
+        items=[
+            ("LEVEL_1", "Level 1",
+             "Single-level additive aggregate-Schwarz smoother", "NONE", 0),
+            ("LEVEL_2", "Level 2",
+             "Two-level additive Schwarz with a coarse correction over the "
+             "connectivity partition; reduces the worst-case PCG iteration "
+             "count on stiff multibody contact", "NONE", 1),
+        ],
+        default="LEVEL_2",
+        description=(
+            "Number of additive levels for the Schwarz preconditioner "
+            "(only used when the preconditioner is Schwarz)"
+        ),
+    )  # pyright: ignore
     inactive_momentum_frames: IntProperty(
         name="Inactive Momentum Frames",
         default=0,
@@ -340,6 +398,50 @@ class State(PropertyGroup):
         max=600,
         description="Number of frames with inactive momentum (0 to disable)",
     )  # pyright: ignore
+    save_state_on_finish: BoolProperty(
+        name="Save State on Finish",
+        default=False,
+        description=(
+            "Save the simulation state on the final frame before the solver "
+            "exits, so the result stays resumable even when auto-save is off"
+        ),
+    )  # pyright: ignore
+    # "Save and Checkpoints" UI box: a collapsible group above Wind that
+    # collects Save State on Finish, the Auto Save sub-box, and the
+    # per-frame Save Checkpoints list.
+    show_save_and_checkpoints: BoolProperty(
+        name="Save and Checkpoints",
+        default=False,
+        description="Toggle visibility of the save and checkpoint settings",
+    )  # pyright: ignore
+    show_auto_save: BoolProperty(
+        name="Auto Save",
+        default=False,
+        description="Toggle visibility of the auto-save interval settings",
+    )  # pyright: ignore
+    show_checkpoints: BoolProperty(
+        name="Save Checkpoints",
+        default=False,
+        description="Toggle visibility of the per-frame save checkpoints list",
+    )  # pyright: ignore
+    # Per-frame save checkpoints (input side). Each item is a Blender
+    # 1-based frame at which the solver writes a resumable state. The
+    # encoder converts these to solver 0-based indices. Distinct from
+    # ``checkpoint_frames`` below, which lists states the solver has
+    # already saved (the Resume-From dialog reads that one).
+    save_checkpoint_frames: CollectionProperty(type=SaveCheckpointFrameItem)  # pyright: ignore
+    save_checkpoint_frames_index: IntProperty(default=-1)  # pyright: ignore
+
+    def convert_save_checkpoint_frames_to_remote(self) -> list[int]:
+        """Sorted, de-duplicated solver 0-based frames for the encoder.
+
+        The UIList stores Blender 1-based frames; the solver counts frames
+        from 0 (Blender N -> solver N-1), so subtract one. Solver frame 0
+        is the rest pose written before the step loop and is never a
+        checkpoint, so frames that map to a negative index are dropped.
+        """
+        remote = {int(item.frame) - 1 for item in self.save_checkpoint_frames}
+        return sorted(f for f in remote if f > 0)
     frame_count: IntProperty(
         name="Frame Count",
         default=180,
@@ -394,9 +496,9 @@ class State(PropertyGroup):
     cg_tol: FloatProperty(
         name="PCG Tolerance",
         default=0.001,
-        min=0.0001,
+        min=0.00001,
         max=0.1,
-        precision=4,
+        precision=5,
         description="Relative tolerance for PCG solver termination",
     )  # pyright: ignore
     include_face_mass: BoolProperty(
@@ -420,12 +522,22 @@ class State(PropertyGroup):
         min=1,
         description="Interval for auto-saving the simulation state",
     )
+    keep_states: IntProperty(  # pyright: ignore
+        name="Keep Saved States",
+        default=0,
+        min=0,
+        description=(
+            "Number of auto-saved checkpoints to retain. 0 keeps all "
+            "(required for resuming from older frames)."
+        ),
+    )
     vertex_air_damp: FloatProperty(  # pyright: ignore
         name="Vertex Air Damping",
         default=0.0,
         min=0.0,
         max=1.0,
-        precision=3,
+        precision=6,
+        step=1,
         description="Damping factor for air resistance",
     )
     fix_xz: FloatProperty(  # pyright: ignore
@@ -453,11 +565,6 @@ class State(PropertyGroup):
         name="Remote Hardware",
         default=False,
         description="Toggle visibility of remote hardware info",
-    )  # pyright: ignore
-    show_usage: BoolProperty(
-        name="Resource Usage",
-        default=True,
-        description="Toggle visibility of machine resources usage",
     )  # pyright: ignore
     debug_mode: BoolProperty(
         name="Debug Options",
@@ -578,6 +685,16 @@ class State(PropertyGroup):
             item = self.fetched_frame.add()
             item.value = frame
 
+    # Saved-checkpoint frames offered in the Resume-From dialog. Populated
+    # on the operator's invoke from ``com.saved_state_frames()`` and drawn
+    # through ``SOLVER_UL_CheckpointFrames``.
+    checkpoint_frames: CollectionProperty(type=CheckpointFrameItem)  # pyright: ignore
+    checkpoint_frames_index: IntProperty(default=-1)  # pyright: ignore
+
+    def convert_checkpoint_frames_to_list(self) -> list[int]:
+        """Convert the checkpoint frames collection to a list of integers."""
+        return [item.frame for item in self.checkpoint_frames]
+
     # Group management
     current_group_uuid: StringProperty(
         name="Current Group UUID",
@@ -602,6 +719,19 @@ class State(PropertyGroup):
     merge_pairs: CollectionProperty(type=MergePairItem)  # pyright: ignore
     merge_pairs_index: IntProperty(default=-1)  # pyright: ignore
 
+    # Global (not per-pair) toggle: when on, fetched frames snap every
+    # stitched source vertex exactly onto its target so seams read as
+    # joined; when off, the raw simulated soft-stitch gap is shown.
+    post_snap_exactly: BoolProperty(
+        name="Post Snap Exactly",
+        default=True,
+        description=(
+            "On fetch, move every stitched vertex exactly onto its stitch "
+            "target so seams appear joined. Applies to all stitch pairs. "
+            "Turn off to keep the raw simulated gap between stitched parts"
+        ),
+    )  # pyright: ignore
+
     # Dynamic scene parameters
     dyn_params: CollectionProperty(type=DynParamItem)  # pyright: ignore
     dyn_params_index: IntProperty(default=-1)  # pyright: ignore
@@ -618,6 +748,12 @@ class State(PropertyGroup):
         name="Invisible Colliders",
         default=False,
         description="Toggle visibility of invisible colliders section",
+    )  # pyright: ignore
+
+    show_linear_system_solver: BoolProperty(
+        name="Linear System Solver",
+        default=False,
+        description="Toggle visibility of linear system solver settings",
     )  # pyright: ignore
 
     # Visualization master toggles
@@ -721,6 +857,8 @@ for _i in range(N_MAX_GROUPS):
 
 classes = [
     FetchedFrameItem,
+    CheckpointFrameItem,
+    SaveCheckpointFrameItem,
     VelocityKeyframe,
     CollisionWindowEntry,
     StaticOpItem,

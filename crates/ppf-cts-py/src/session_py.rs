@@ -101,25 +101,6 @@ pub fn convert_time(ms: f64) -> String {
     core::convert_time(ms)
 }
 
-/// `convert_time` plus the `None -> "N/A"` guard the public Python
-/// helper applies. Mirrors the body of `frontend/_session_.py:convert_time`.
-#[pyfunction]
-#[pyo3(signature = (ms=None))]
-pub fn convert_time_optional(ms: Option<f64>) -> String {
-    core::convert_time_optional(ms)
-}
-
-/// `convert_integer` plus two extra guards from the public Python
-/// helper:
-///   * `None -> "N/A"`
-///   * Sub-1000 integer-valued values pass through `str()` so a stray
-///     `42.5` doesn't truncate.
-#[pyfunction]
-#[pyo3(signature = (n=None))]
-pub fn convert_integer_optional(n: Option<f64>) -> String {
-    core::convert_integer_optional(n)
-}
-
 /// Build the "latest values" log summary as a Python dict. `max_sigma`
 /// of None or <= 0 omits the `"stretch"` entry.
 #[pyfunction]
@@ -165,6 +146,12 @@ pub fn log_summary<'py>(
     newton_steps_avg=None,
     pcg_iter_avg=None,
     max_sigma_avg=None,
+    matrix_assembly_ms_avg=None,
+    pcg_linsolve_ms_avg=None,
+    toi_advanced_avg=None,
+    dyn_consumed_max=None,
+    line_search_ms_avg=None,
+    toi_avg=None,
 ))]
 pub fn log_average_summary<'py>(
     py: Python<'py>,
@@ -174,6 +161,12 @@ pub fn log_average_summary<'py>(
     newton_steps_avg: Option<f64>,
     pcg_iter_avg: Option<f64>,
     max_sigma_avg: Option<f64>,
+    matrix_assembly_ms_avg: Option<f64>,
+    pcg_linsolve_ms_avg: Option<f64>,
+    toi_advanced_avg: Option<f64>,
+    dyn_consumed_max: Option<f64>,
+    line_search_ms_avg: Option<f64>,
+    toi_avg: Option<f64>,
 ) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
     let pairs = core::format_log_average_summary(
         time_per_frame_ms_avg,
@@ -182,6 +175,12 @@ pub fn log_average_summary<'py>(
         newton_steps_avg,
         pcg_iter_avg,
         max_sigma_avg,
+        matrix_assembly_ms_avg,
+        pcg_linsolve_ms_avg,
+        toi_advanced_avg,
+        dyn_consumed_max,
+        line_search_ms_avg,
+        toi_avg,
     );
     let d = pyo3::types::PyDict::new(py);
     for (k, v) in pairs {
@@ -264,15 +263,7 @@ pub fn nvidia_smi_text(session_path: &str) -> String {
 /// `which`: "windows" or "unix".
 #[pyfunction]
 pub fn command_path(session_path: &str, which: &str) -> PyResult<Option<String>> {
-    let plat = match which {
-        "windows" | "win" | "Windows" => core::Platform::Windows,
-        "unix" | "linux" | "macos" | "darwin" => core::Platform::Unix,
-        other => {
-            return Err(PyValueError::new_err(format!(
-                "unknown platform tag: {other}"
-            )))
-        }
-    };
+    let plat = parse_platform(which)?;
     Ok(core::command_path(std::path::Path::new(session_path), plat)
         .map(|p| p.to_string_lossy().into_owned()))
 }
@@ -310,6 +301,15 @@ pub fn delete_session_dir(session_path: &str) -> PyResult<()> {
         .map_err(|e| PyValueError::new_err(format!("delete session dir: {e}")))
 }
 
+/// Clear the session directory while preserving the solver `output/`
+/// subtree (checkpoints + `save_and_quit` sentinel). Mirrors
+/// `FixedSession.delete(preserve_output=True)`. No-op when missing.
+#[pyfunction]
+pub fn delete_session_dir_keep_output(session_path: &str) -> PyResult<()> {
+    core::delete_session_dir_keep_output(std::path::Path::new(session_path))
+        .map_err(|e| PyValueError::new_err(format!("delete session dir (keep output): {e}")))
+}
+
 /// Write `param.toml` (and `dyn_param.txt` when there are dynamic
 /// overrides) under `path`. Mirrors `ParamManager.export`.
 ///
@@ -336,7 +336,7 @@ pub fn param_export_to_disk(
     let items: Vec<(String, Bound<'_, pyo3::types::PyAny>)> = items_obj.extract()?;
     let mut pm = CoreParam::new();
     for (k, v) in items {
-        let pv = py_any_to_param_value(&v)?;
+        let pv = crate::param_py::pyany_to_param_value(&v)?;
         // Use bool-only set for the defaults that don't already exist
         // is unnecessary here: every key from `holder.items()` already
         // lives in the underlying app_param() default set.
@@ -344,12 +344,11 @@ pub fn param_export_to_disk(
     }
 
     if let Some(dyn_dict) = dyn_param {
-        // Build the toml separately, then format the dyn block by hand
-        // because the Python source's stored list begins with `(0.0,
-        // initial)` which the public `dyn_select + time + change` API
-        // refuses (it auto-seeds and rejects t == current_time == 0).
-        // We replay through `to_dyn_param_string` after manually
-        // injecting the entries onto the holder.
+        // The frontend Python ParamManager owns the dyn/time/change/hold
+        // time cursor and already assembled each per-key list (starting
+        // with the `(0.0, initial)` seed). We hand those lists straight
+        // to `inject_dyn_entries`, which stores them for
+        // `to_dyn_param_string` to serialize.
         for (key, vals) in dyn_dict.iter() {
             let key_s: String = key.extract()?;
             let entries: Vec<Bound<'_, pyo3::types::PyAny>> = vals.extract()?;
@@ -357,7 +356,7 @@ pub fn param_export_to_disk(
                 Vec::with_capacity(entries.len());
             for entry_bound in entries {
                 let tup: (f64, Bound<'_, pyo3::types::PyAny>) = entry_bound.extract()?;
-                converted.push((tup.0, py_any_to_param_value(&tup.1)?));
+                converted.push((tup.0, crate::param_py::pyany_to_param_value(&tup.1)?));
             }
             pm.inject_dyn_entries(&key_s, converted)
                 .map_err(|e| PyValueError::new_err(format!("inject_dyn: {e}")))?;
@@ -366,38 +365,6 @@ pub fn param_export_to_disk(
 
     core::param_export_to_disk(std::path::Path::new(path), &pm, fast_check)
         .map_err(|e| PyValueError::new_err(format!("param export: {e}")))
-}
-
-/// Tiny PyAny → ParamValue coercion mirroring the wider
-/// `param_py::pyany_to_param_value` (which is private to that
-/// module). Kept local so this binding remains independent.
-fn py_any_to_param_value(
-    value: &Bound<'_, pyo3::types::PyAny>,
-) -> PyResult<ppf_cts_core::datamodel::params::ParamValue> {
-    use ppf_cts_core::datamodel::params::ParamValue;
-    if let Ok(b) = value.extract::<bool>() {
-        let ty = value.get_type();
-        if ty.name()? == "bool" {
-            return Ok(ParamValue::Bool(b));
-        }
-    }
-    if let Ok(i) = value.extract::<i64>() {
-        return Ok(ParamValue::Int(i));
-    }
-    if let Ok(f) = value.extract::<f64>() {
-        return Ok(ParamValue::Float(f));
-    }
-    if let Ok(s) = value.extract::<String>() {
-        return Ok(ParamValue::String(s));
-    }
-    if let Ok(seq) = value.extract::<Vec<f64>>() {
-        if seq.len() == 3 {
-            return Ok(ParamValue::Vec3([seq[0], seq[1], seq[2]]));
-        }
-    }
-    Err(PyValueError::new_err(
-        "unsupported parameter value type (expected bool, int, float, str, or [f64; 3])",
-    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -723,8 +690,6 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(read_latest_vertex, m)?)?;
     m.add_function(wrap_pyfunction!(analyze_solver_error, m)?)?;
     m.add_function(wrap_pyfunction!(convert_time, m)?)?;
-    m.add_function(wrap_pyfunction!(convert_time_optional, m)?)?;
-    m.add_function(wrap_pyfunction!(convert_integer_optional, m)?)?;
     m.add_function(wrap_pyfunction!(log_summary, m)?)?;
     m.add_function(wrap_pyfunction!(log_average_summary, m)?)?;
     m.add_function(wrap_pyfunction!(average_summary_from_disk, m)?)?;
@@ -736,6 +701,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(save_and_quit_file_path, m)?)?;
     m.add_function(wrap_pyfunction!(touch_save_and_quit, m)?)?;
     m.add_function(wrap_pyfunction!(delete_session_dir, m)?)?;
+    m.add_function(wrap_pyfunction!(delete_session_dir_keep_output, m)?)?;
     m.add_function(wrap_pyfunction!(param_export_to_disk, m)?)?;
     m.add_function(wrap_pyfunction!(session_autogenerate_name, m)?)?;
     m.add_function(wrap_pyfunction!(session_build_symlink_name, m)?)?;

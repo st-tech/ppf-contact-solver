@@ -50,7 +50,7 @@ def connect_ssh(
         container: Docker container name (optional)
     """
     # Set connection parameters in scene state
-    state, props = _get_connection_state()
+    _, props = _get_connection_state()
 
     # Configure SSH connection parameters
     props.server_type = "CUSTOM"
@@ -86,7 +86,7 @@ def connect_docker(container: str, path: str):
         path: Working directory path in container
     """
     # Set connection parameters in scene state
-    state, props = _get_connection_state()
+    _, props = _get_connection_state()
 
     # Configure Docker connection parameters
     props.server_type = "DOCKER"
@@ -114,7 +114,7 @@ def connect_local(path: str):
         path: Local working directory path
     """
     # Set connection parameters in scene state
-    state, props = _get_connection_state()
+    _, props = _get_connection_state()
 
     # Configure local connection parameters
     props.server_type = "LOCAL"
@@ -140,7 +140,7 @@ def connect_win_native(path: str, port: int = DEFAULT_SERVER_PORT):
         path: Path to the Windows native build or distribution directory
         port: Port for the solver server
     """
-    state, props = _get_connection_state()
+    _, props = _get_connection_state()
 
     # Configure Windows native connection parameters
     props.server_type = "WIN_NATIVE"

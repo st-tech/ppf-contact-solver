@@ -11,6 +11,7 @@
 #include "../energy/model/fix.hpp"
 #include "../energy/model/friction.hpp"
 #include "../energy/model/push.hpp"
+#include "../energy/model/rigid_core.hpp"
 #include "../kernels/reduce.hpp"
 #include "../kernels/vec_ops.hpp"
 #include "../main/cuda_utils.hpp"
@@ -177,6 +178,53 @@ dry_atomic_embed_hessian(const Eigen::Vector<unsigned, N> &index,
     }
 }
 
+// SAND rolling spin clamp (the bound the spin term must satisfy; the clamp itself
+// runs in post-solve, see the NOTE below and sand_rigid.hpp). The spin-induced
+// contact displacement must never exceed the realized tangential center
+// displacement |P dx| (P = I - n n^T). This keeps the friction slip
+// fdx = dx - spin from reversing past no-slip (over-roll),
+// so kinetic friction can never flip into a propelling direction, the energy-
+// pumping ratchet. At the cap the slip is zero (free rolling); below it friction
+// resists, so travel is bounded by a frictionless slide regardless of how the
+// lagged omega was integrated. n is the grain's outward contact normal.
+__device__ inline Vec3f grain_clamp_spin(const Vec3f &spin, const Vec3f &dx,
+                                         const Vec3f &n) {
+    // NOTE: clamping the spin displacement to exactly |P dx| in the embed
+    // dead-locks the grain at stick (to roll it must move, but it cannot move
+    // until it rolls). The anti-pump bound is instead applied to omega in the
+    // post-solve integrate (under-roll clamp, see sand_rigid.hpp), so this is a
+    // pass-through; kept as a single point of control for the spin term.
+    (void)dx;
+    (void)n;
+    return spin;
+}
+
+// SAND implicit (Schur-condensed) rolling: accumulate one analytic contact's
+// Schur blocks for a grain.
+// fric_hess is the friction Hessian lambda*P (P = I - n n^T, trace 2*lambda); dx
+// the grain's center slip; n the OUTWARD contact normal; r the grain radius. With
+// the slip u = P(dx - r(dtheta x n)) = P dx + r P [n]x dtheta, the per-contact
+// friction energy 1/2 lambda |u|^2 gives:
+//   A_c = lambda r^2 (P [n]x)^T (P [n]x)   (angular, SPD; symmetric by construction)
+//   B_c = lambda r   P [n]x                 (translation<->rotation coupling)
+//   grot_c = B_c^T (P dx)                   (rotational gradient at dtheta = 0)
+__device__ inline void accumulate_grain_schur(const Mat3x3f &fric_hess,
+                                              const Vec3f &dx, const Vec3f &n,
+                                              float r, Mat3x3f &A_loc,
+                                              Mat3x3f &B_loc, Vec3f &grot_loc) {
+    float lambda =
+        (fric_hess(0, 0) + fric_hess(1, 1) + fric_hess(2, 2)) * 0.5f;
+    if (lambda <= 0.0f) {
+        return; // no friction (mu = 0 or zero normal force): no coupling
+    }
+    Mat3x3f P = Mat3x3f::Identity() - n * n.transpose();
+    Mat3x3f PS = P * RigidCore::rigid_skew(n);
+    Mat3x3f B_c = (lambda * r) * PS;
+    A_loc += (lambda * r * r) * (PS.transpose() * PS);
+    B_loc += B_c;
+    grot_loc += B_c.transpose() * (P * dx);
+}
+
 template <unsigned N>
 __device__ void embed_contact_force_hess(
     const Proximity<N> &prox, const Vec<Vec3f> &x0, const Vec<Vec3f> &x,
@@ -184,7 +232,18 @@ __device__ void embed_contact_force_hess(
     const Vec<float> &force_in, DynCSRMat &dyn_out, float ghat, float offset,
     const Vec<VertexProp> &vert_prop, Barrier barrier, float dt, float friction,
     unsigned count, const ParamSet &param, int stage, bool include_friction,
-    unsigned i) {
+    unsigned i, const Vec3f *fdx_override = nullptr,
+    Vec3f *out_fric_grad = nullptr, float *out_lambda = nullptr) {
+
+    // Stage 0 only reserves CSR slots from prox.index; the per-pair prologue
+    // below (mass / ex / normal / compute_stiffness, the last of which streams
+    // fixed_in) is computed and discarded in this stage. Take the dry path
+    // before it. Release byte-identical: the prologue is side-effect-free and
+    // the asserts are NDEBUG-stripped.
+    if (stage == 0) {
+        dry_atomic_embed_hessian<N>(prox.index, fixed_out, dyn_out);
+        return;
+    }
 
     SVecf<N> mass;
     Vec3f ex0 = Vec3f::Zero();
@@ -213,29 +272,60 @@ __device__ void embed_contact_force_hess(
     float stiff_k = barrier::compute_stiffness<N>(prox, mass, fixed_in, ex_fp,
                                                   ghat, offset, param);
 
-    if (stage == 0) {
-        dry_atomic_embed_hessian<N>(prox.index, fixed_out, dyn_out);
-    } else {
-        Vec3f f = stiff_k *
-                  barrier::compute_edge_gradient(ex_fp, ghat, offset, barrier);
-        Mat3x3f H = stiff_k *
-                    barrier::compute_edge_hessian(ex_fp, ghat, offset, barrier);
+    Vec3f f = stiff_k *
+              barrier::compute_edge_gradient(ex_fp, ghat, offset, barrier);
+    Mat3x3f H = stiff_k *
+                barrier::compute_edge_hessian(ex_fp, ghat, offset, barrier);
 
-        if (include_friction) {
-            Friction _friction(f, dx, normal, friction, param.friction_eps);
-            f += _friction.gradient();
-            H += _friction.hessian();
+    if (include_friction) {
+        // SAND grains override the friction slip with the rolling-adjusted
+        // contact-point slip (both grains' lagged spin folded in by the
+        // caller); other contacts use the plain relative displacement dx.
+        const Vec3f &slip = fdx_override ? *fdx_override : dx;
+        Friction _friction(f, slip, normal, friction, param.friction_eps);
+        Vec3f fg = _friction.gradient();
+        Mat3x3f fh = _friction.hessian();
+        f += fg;
+        H += fh;
+        // Export the friction gradient + stiffness by value (Friction has a
+        // reference member and no default ctor, so it cannot be returned).
+        if (out_fric_grad) {
+            *out_fric_grad = fg;
         }
-
-        SMatf<3, N> ext_force;
-        SMatf<N * 3, N * 3> ext_hess;
-        extend_contact_force_hess<N>(prox, f, H, ext_force, ext_hess);
-        utility::atomic_embed_force<N>(prox.index, count * ext_force,
-                                       force_out);
-        atomic_embed_hessian<N>(prox.index, count * ext_hess, fixed_out,
-                                dyn_out);
+        if (out_lambda) {
+            *out_lambda = (fh(0, 0) + fh(1, 1) + fh(2, 2)) * 0.5f;
+        }
     }
+
+    SMatf<3, N> ext_force;
+    SMatf<N * 3, N * 3> ext_hess;
+    extend_contact_force_hess<N>(prox, f, H, ext_force, ext_hess);
+    utility::atomic_embed_force<N>(prox.index, count * ext_force, force_out);
+    atomic_embed_hessian<N>(prox.index, count * ext_hess, fixed_out, dyn_out);
 }
+
+// Detect-once cache for one contact type. Stage 0 appends each active
+// (query, candidate) primitive pair into a flat list so stage 1 can fill it
+// without a second BVH traversal (the dominant assembly cost). A null `data`
+// disables recording (used by the stage-1 replay and the overflow fallback).
+// Candidates come from a shared BVH, so the slot counter is atomic; each write
+// lands in its own slot and is race-free. If the list overflows its capacity
+// `overflow` is set and the caller falls back to a full BVH fill, so
+// correctness never depends on `cap`.
+struct ContactPairCache {
+    Vec2u *data{nullptr};
+    unsigned *cnt{nullptr};
+    unsigned *overflow{nullptr};
+    unsigned cap{0};
+    __device__ void record(unsigned a, unsigned b) const {
+        unsigned slot = atomicAdd(cnt, 1u);
+        if (slot < cap) {
+            data[slot] = Vec2u(a, b);
+        } else {
+            *overflow = 1u;
+        }
+    }
+};
 
 struct PointPointContactForceHessEmbed {
 
@@ -256,11 +346,21 @@ struct PointPointContactForceHessEmbed {
     int stage;
     float dt;
     const ParamSet &param;
+    // Full dataset, for reading grain spin state (grain_inv_inertia, grain_omega)
+    // and atomic-accumulating grain_torque / grain_ang_stiff / grain_contact_normal.
+    const DataSet &data;
+    ContactPairCache cache; // detect-once recording (stage 0); {} = disabled
 
     __device__ bool operator()(unsigned index) {
         bool either_dyn =
             prop[vertex_index].fix_index == 0 || prop[index].fix_index == 0;
-        if (index < vertex_index && either_dyn) {
+        // Skip intra-PDRD-body vertex pairs: vertices on the same body share one
+        // exact rigid transform, so internal collisions are physically
+        // meaningless and just inflate the linear system.
+        unsigned bid_a = prop[vertex_index].pdrd_body_index;
+        unsigned bid_b = prop[index].pdrd_body_index;
+        bool same_pdrd_body = bid_a != 0 && bid_a == bid_b;
+        if (index < vertex_index && either_dyn && !same_pdrd_body) {
             const Vec3f &x = eval_x[vertex_index];
             const Vec3f &y = eval_x[index];
             Vec3f e = x - y;
@@ -325,11 +425,85 @@ struct PointPointContactForceHessEmbed {
                     Proximity<2> prox;
                     prox.index = Vec2u(vertex_index, index);
                     prox.value = Vec2f(1.0f, -1.0f);
+
+                    // SAND grain rolling. If either endpoint is a grain, fold the
+                    // lagged angular velocity of BOTH grains into the contact-point
+                    // slip (no-slip relation u = dx_rel - dt*[r_a omega_a x n +
+                    // r_b omega_b x n], n the a-side outward normal) so the contact
+                    // rolls, and after the friction is built atomic-accumulate the
+                    // torque tau = r*(n x g) onto each grain (g = friction
+                    // gradient, +g on a / -g on b cancels the -n on b, so both get
+                    // r*(n x g) = genuine counter-rotation = rolling). Gated so
+                    // non-grain pairs and the dry (stage 0) / friction-off passes
+                    // are byte-identical (fdx_ptr stays null -> embed uses dx).
+                    unsigned a = vertex_index, b = index;
+                    bool ga = data.grain_inv_inertia[a] > 0.0f;
+                    bool gb = data.grain_inv_inertia[b] > 0.0f;
+                    Vec3f fdx;
+                    const Vec3f *fdx_ptr = nullptr;
+                    Vec3f fric_grad = Vec3f::Zero();
+                    float fric_lambda = 0.0f;
+                    Vec3f n = Vec3f::Zero();
+                    float ra = 0.0f, rb = 0.0f;
+                    if ((ga || gb) && stage != 0 && include_friction) {
+                        ra = vparam_vertex.offset;
+                        rb = vparam_index.offset;
+                        // Match the embed's internal slip: ex = x - y,
+                        // ex0 = vertex[a] - vertex[b], dx = ex - ex0,
+                        // normal = ex.normalized().
+                        n = e.normalized();
+                        Vec3f dx_rel = (x - y) - (vertex[a] - vertex[b]);
+                        Vec3f spin = Vec3f::Zero();
+                        if (ga) {
+                            spin += ra * data.grain_omega[a].cross(n);
+                        }
+                        if (gb) {
+                            spin += rb * data.grain_omega[b].cross(n);
+                        }
+                        // Clamp the combined spin displacement to the tangential
+                        // relative step so the pair can never over-roll and let
+                        // friction propel them apart (energy pump).
+                        fdx = dx_rel - grain_clamp_spin(dt * spin, dx_rel, n);
+                        fdx_ptr = &fdx;
+                    }
+
                     embed_contact_force_hess(
                         prox, vertex, eval_x, fixed_hess_in, fixed_out, force,
                         force_in, dyn_out, ghat, offset, prop, param.barrier,
                         dt, friction, count, param, stage, include_friction,
-                        vertex_index);
+                        vertex_index, fdx_ptr, fdx_ptr ? &fric_grad : nullptr,
+                        fdx_ptr ? &fric_lambda : nullptr);
+
+                    if (fdx_ptr) {
+                        // count matches the actually-deposited friction force
+                        // (count * ext_force) so the torque tracks the applied
+                        // force; count == 1 for pure grain-grain pile contacts.
+                        Vec3f f_t = float(count) * fric_grad;
+                        float lam = float(count) * fric_lambda;
+                        if (ga) {
+                            Vec3f tau = ra * n.cross(f_t);
+                            atomicAdd(&data.grain_torque.data[a][0], tau[0]);
+                            atomicAdd(&data.grain_torque.data[a][1], tau[1]);
+                            atomicAdd(&data.grain_torque.data[a][2], tau[2]);
+                            atomicAdd(&data.grain_ang_stiff.data[a], ra * ra * lam);
+                            atomicAdd(&data.grain_contact_normal.data[a][0], n[0]);
+                            atomicAdd(&data.grain_contact_normal.data[a][1], n[1]);
+                            atomicAdd(&data.grain_contact_normal.data[a][2], n[2]);
+                        }
+                        if (gb) {
+                            Vec3f tau = rb * n.cross(f_t);
+                            atomicAdd(&data.grain_torque.data[b][0], tau[0]);
+                            atomicAdd(&data.grain_torque.data[b][1], tau[1]);
+                            atomicAdd(&data.grain_torque.data[b][2], tau[2]);
+                            atomicAdd(&data.grain_ang_stiff.data[b], rb * rb * lam);
+                            atomicAdd(&data.grain_contact_normal.data[b][0], -n[0]);
+                            atomicAdd(&data.grain_contact_normal.data[b][1], -n[1]);
+                            atomicAdd(&data.grain_contact_normal.data[b][2], -n[2]);
+                        }
+                    }
+                    if (stage == 0 && cache.data) {
+                        cache.record(vertex_index, index);
+                    }
                     return true;
                 }
             }
@@ -358,12 +532,17 @@ struct PointEdgeContactForceHessEmbed {
     int stage;
     float dt;
     const ParamSet &param;
+    ContactPairCache cache; // detect-once recording (stage 0); {} = disabled
 
     __device__ bool operator()(unsigned index) {
         Vec2u f = edge[index];
         bool either_dyn = vert_prop[vertex_index].fix_index == 0 ||
                           edge_prop[index].fixed == false;
-        if (f[0] != vertex_index && f[1] != vertex_index && either_dyn) {
+        unsigned bid_v = vert_prop[vertex_index].pdrd_body_index;
+        unsigned bid_e = vert_prop[f[0]].pdrd_body_index;
+        bool same_pdrd_body = bid_v != 0 && bid_v == bid_e;
+        if (f[0] != vertex_index && f[1] != vertex_index && either_dyn &&
+            !same_pdrd_body) {
             const Vec3f &p = eval_x[vertex_index];
             const Vec3f &t0 = eval_x[f[0]];
             const Vec3f &t1 = eval_x[f[1]];
@@ -416,6 +595,9 @@ struct PointEdgeContactForceHessEmbed {
                             force, force_in, dyn_out, ghat, offset, vert_prop,
                             param.barrier, dt, friction, count, param, stage,
                             include_friction, vertex_index);
+                        if (stage == 0 && cache.data) {
+                            cache.record(vertex_index, index);
+                        }
                         return true;
                     }
                 }
@@ -443,13 +625,17 @@ struct PointFaceContactForceHessEmbed {
     int stage;
     float dt;
     const ParamSet &param;
+    ContactPairCache cache; // detect-once recording (stage 0); {} = disabled
 
     __device__ bool operator()(unsigned index) {
         Vec3u f = face[index];
         bool either_dyn = vert_prop[vertex_index].fix_index == 0 ||
                           face_prop[index].fixed == false;
+        unsigned bid_v = vert_prop[vertex_index].pdrd_body_index;
+        unsigned bid_f = vert_prop[f[0]].pdrd_body_index;
+        bool same_pdrd_body = bid_v != 0 && bid_v == bid_f;
         if (f[0] != vertex_index && f[1] != vertex_index &&
-            f[2] != vertex_index && either_dyn) {
+            f[2] != vertex_index && either_dyn && !same_pdrd_body) {
             const Vec3f &p = eval_x[vertex_index];
             const Vec3f &t0 = eval_x[f[0]];
             const Vec3f &t1 = eval_x[f[1]];
@@ -476,6 +662,9 @@ struct PointFaceContactForceHessEmbed {
                         force_in, dyn_out, ghat, offset, vert_prop,
                         param.barrier, dt, friction, 1, param, stage, true,
                         vertex_index);
+                    if (stage == 0 && cache.data) {
+                        cache.record(vertex_index, index);
+                    }
                     return true;
                 }
             }
@@ -501,14 +690,18 @@ struct EdgeEdgeContactForceHessEmbed {
     int stage;
     float dt;
     const ParamSet &param;
+    ContactPairCache cache; // detect-once recording (stage 0); {} = disabled
 
     __device__ bool operator()(unsigned index) {
         const Vec2u &e0 = edge[edge_index];
         const Vec2u &e1 = edge[index];
         bool either_dyn = edge_prop[edge_index].fixed == false ||
                           edge_prop[index].fixed == false;
+        unsigned bid_a = vert_prop[e0[0]].pdrd_body_index;
+        unsigned bid_b = vert_prop[e1[0]].pdrd_body_index;
+        bool same_pdrd_body = bid_a != 0 && bid_a == bid_b;
         if (edge_index < index && edge_has_shared_vert(e0, e1) == false &&
-            either_dyn) {
+            either_dyn && !same_pdrd_body) {
             const Vec3f &p0 = eval_x[e0[0]];
             const Vec3f &p1 = eval_x[e0[1]];
             const Vec3f &q0 = eval_x[e1[0]];
@@ -537,6 +730,9 @@ struct EdgeEdgeContactForceHessEmbed {
                         force_in, dyn_out, ghat, offset, vert_prop,
                         param.barrier, dt, friction, 1, param, stage, true,
                         edge_index);
+                    if (stage == 0 && cache.data) {
+                        cache.record(edge_index, index);
+                    }
                     return true;
                 }
             }
@@ -815,6 +1011,23 @@ __device__ unsigned embed_vertex_constraint_force_hessian(
     float mass = prop.mass;
     unsigned num_contact = 0;
 
+    // SAND grain spin: a grain (inv_inertia > 0) rolls when the contact-point
+    // velocity v_center + omega x r (arm r = -grain_radius*normal, normal the
+    // contact push direction) feeds friction, and the torque
+    // tau = r x F = (grain_radius*normal) x F spins it. Summed over this
+    // vertex's per-vertex contacts (floor/sphere/wall) below, then written to
+    // grain_torque[i] for the post-solve integrate (sand_rigid.hpp).
+    bool grain = data.grain_inv_inertia[i] > 0.0f;
+    float grain_radius = vparam.offset;
+    // Implicit (Schur-condensed) rolling: accumulate this grain's floor/sphere
+    // Schur blocks locally (one thread per vertex), then write once below.
+    // grain_A is the SPD angular block, grain_B the translation<->rotation
+    // coupling, and grain_grot the rotational gradient (sand_rigid.hpp condenses
+    // them).
+    Mat3x3f grain_A_loc = Mat3x3f::Zero();
+    Mat3x3f grain_B_loc = Mat3x3f::Zero();
+    Vec3f grain_grot_loc = Vec3f::Zero();
+
     Mat3x3f local_hess = fixed_hess_in(i, i);
     Mat3x3f H = Mat3x3f::Zero();
     Vec3f f = Vec3f::Zero();
@@ -923,10 +1136,21 @@ __device__ unsigned embed_vertex_constraint_force_hessian(
                     f += f_push;
                     H += stiff_k * push::hessian(o - projected_x, normal, ghat);
 
+                    // Implicit (Schur-condensed) rolling on the sphere: plain-dx
+                    // translation friction (rotation solved implicitly), grain
+                    // angular coupling via the Schur blocks. `normal` is the
+                    // grain's outward push direction.
                     Friction _friction(f_push, dx, normal, friction,
                                        param.friction_eps);
-                    f += _friction.gradient();
-                    H += _friction.hessian();
+                    Vec3f fric_grad = _friction.gradient();
+                    Mat3x3f fric_hess = _friction.hessian();
+                    f += fric_grad;
+                    H += fric_hess;
+                    if (grain) {
+                        accumulate_grain_schur(fric_hess, dx, normal, grain_radius,
+                                               grain_A_loc, grain_B_loc,
+                                               grain_grot_loc);
+                    }
                 }
             }
         }
@@ -959,12 +1183,35 @@ __device__ unsigned embed_vertex_constraint_force_hessian(
                     stiff_k * push::hessian(-projected_x, up, ghat);
                 f += f_push;
                 H += H_push;
-                Friction _friction(f_push, dx, up, friction,
-                                   param.friction_eps);
-                f += _friction.gradient();
-                H += _friction.hessian();
+                // Implicit (Schur-condensed) rolling: the translation friction
+                // uses the PLAIN center slip dx (the rotation coupling is solved
+                // implicitly, not lagged into the slip), so f/H here are exactly a
+                // normal contact's. The grain's angular DOF enters via the Schur
+                // blocks accumulated below.
+                Friction _friction(f_push, dx, up, friction, param.friction_eps);
+                Vec3f fric_grad = _friction.gradient();
+                Mat3x3f fric_hess = _friction.hessian();
+                f += fric_grad;
+                H += fric_hess;
+                if (grain) {
+                    accumulate_grain_schur(fric_hess, dx, up, grain_radius,
+                                           grain_A_loc, grain_B_loc,
+                                           grain_grot_loc);
+                }
             }
         }
+    }
+
+    // Write this grain's accumulated floor/sphere Schur blocks for the implicit
+    // (Schur-condensed) rolling path. One
+    // thread per vertex owns grain_A/B/grot[i] (grain-grain uses the disjoint
+    // grain_torque/ang_stiff/contact_normal), so a plain write is race-free; the
+    // buffers were zeroed at the Newton-iteration top, so a grain with no analytic
+    // contact writes zero and the condense/recover skip it.
+    if (grain) {
+        data.grain_A.data[i] = grain_A_loc;
+        data.grain_B.data[i] = grain_B_loc;
+        data.grain_grot.data[i] = grain_grot_loc;
     }
 
     utility::atomic_embed_force<1>(Vec1u(i), f, force);
@@ -1015,139 +1262,229 @@ unsigned embed_contact_force_hessian(const DataSet &data,
     Vec<unsigned> num_contact_vtf_vec = num_contact_vtf.as_vec();
     Vec<unsigned> num_contact_ee_vec = num_contact_ee.as_vec();
 
+    // Detect-once caches (one per contact type). Stage 0 records every active
+    // primitive pair into these flat lists; stage 1 fills them directly,
+    // skipping a second BVH traversal (the dominant assembly cost). A shared
+    // overflow flag triggers a full-BVH fallback in stage 1, so correctness
+    // never depends on the capacity.
+    const unsigned CC_CAP = 1u << 21; // 2M pairs per type (16 MB)
+    auto pf_buf = pool.get<Vec2u>(CC_CAP); // point-face
+    auto pe_buf = pool.get<Vec2u>(CC_CAP); // point-edge
+    auto pp_buf = pool.get<Vec2u>(CC_CAP); // point-point
+    auto ee_buf = pool.get<Vec2u>(CC_CAP); // edge-edge
+    auto cc_cnt = pool.get<unsigned>(4);   // per-type active counts
+    auto cc_overflow = pool.get<unsigned>(1);
+    cc_cnt.clear(0);
+    cc_overflow.clear(0);
+    Vec<Vec2u> pf_vec = pf_buf.as_vec(), pe_vec = pe_buf.as_vec(),
+               pp_vec = pp_buf.as_vec(), ee_vec = ee_buf.as_vec();
+    Vec<unsigned> cc_cnt_vec = cc_cnt.as_vec();
+    Vec<unsigned> cc_overflow_vec = cc_overflow.as_vec();
+    ContactPairCache pf_cache{pf_vec.data, cc_cnt_vec.data + 0,
+                              cc_overflow_vec.data, CC_CAP};
+    ContactPairCache pe_cache{pe_vec.data, cc_cnt_vec.data + 1,
+                              cc_overflow_vec.data, CC_CAP};
+    ContactPairCache pp_cache{pp_vec.data, cc_cnt_vec.data + 2,
+                              cc_overflow_vec.data, CC_CAP};
+    ContactPairCache ee_cache{ee_vec.data, cc_cnt_vec.data + 3,
+                              cc_overflow_vec.data, CC_CAP};
+
     for (int stage = 0; stage < 2; ++stage) {
         if (stage == 0) {
             dyn_out.start_rebuild_buffer();
         }
 
-        DISPATCH_START(surface_vert_count)
-        [data, eval_x, rod_count, contact_force_vec, force, fixed_hess_in,
-         fixed_out, dyn_out, face_bvh, face_aabb, edge_bvh, edge_aabb,
-         vertex_bvh, vertex_aabb, num_contact_vtf_vec, vertex_params,
-         edge_params, face_params, stage, dt, vert_active,
-         param] __device__(unsigned i) mutable {
-            unsigned count(0);
-            const VertexParam &vparam =
-                vertex_params[data.prop.vertex[i].param_index];
-            float ext_eps = 0.5f * vparam.ghat + vparam.offset;
-            AABB pt_aabb = aabb::make(eval_x[i], ext_eps);
-            if (vert_active && !vert_active[i]) pt_aabb.active = false;
+        // At the fill stage, replay the detect-once caches (no second BVH
+        // traversal) unless stage 0 overflowed a cache, in which case fall back
+        // to a full BVH fill so correctness never depends on the capacity.
+        bool replay = false;
+        unsigned cc_n[4] = {0, 0, 0, 0};
+        if (stage == 1) {
+            unsigned of = 0;
+            CUDA_HANDLE_ERROR(cudaMemcpy(&of, cc_overflow_vec.data,
+                                         sizeof(unsigned),
+                                         cudaMemcpyDeviceToHost));
+            CUDA_HANDLE_ERROR(cudaMemcpy(cc_n, cc_cnt_vec.data,
+                                         4 * sizeof(unsigned),
+                                         cudaMemcpyDeviceToHost));
+            replay = (of == 0);
+        }
 
-            PointFaceContactForceHessEmbed embed_0 = {i,
-                                                      data.mesh.mesh.face,
-                                                      data.vertex.curr,
-                                                      eval_x,
-                                                      contact_force_vec,
-                                                      force,
-                                                      fixed_hess_in,
-                                                      fixed_out,
-                                                      dyn_out,
-                                                      data.prop.vertex,
-                                                      data.prop.face,
-                                                      vertex_params,
-                                                      face_params,
-                                                      stage,
-                                                      dt,
-                                                      param};
-
-            AABB_AABB_Tester<PointFaceContactForceHessEmbed> op_0(embed_0);
-            count += aabb::query(face_bvh, face_aabb, op_0, pt_aabb);
-
-            PointEdgeContactForceHessEmbed embed_1 = {i,
-                                                      data.mesh.mesh.edge,
-                                                      data.mesh.mesh.face,
-                                                      data.mesh.neighbor.edge,
-                                                      data.vertex.curr,
-                                                      eval_x,
-                                                      contact_force_vec,
-                                                      force,
-                                                      fixed_hess_in,
-                                                      fixed_out,
-                                                      dyn_out,
-                                                      data.prop.vertex,
-                                                      data.prop.edge,
-                                                      vertex_params,
-                                                      edge_params,
-                                                      stage,
-                                                      dt,
-                                                      param};
-
-            AABB_AABB_Tester<PointEdgeContactForceHessEmbed> op_1(embed_1);
-            count += aabb::query(edge_bvh, edge_aabb, op_1, pt_aabb);
-
-            PointPointContactForceHessEmbed embed_2 = {
-                i,
-                rod_count,
-                data.mesh.mesh.edge,
-                data.mesh.mesh.face,
-                data.mesh.neighbor.vertex,
-                data.vertex.curr,
-                eval_x,
-                contact_force_vec,
-                force,
-                fixed_hess_in,
-                fixed_out,
-                dyn_out,
-                data.prop.vertex,
-                vertex_params,
-                stage,
-                dt,
-                param};
-            AABB_AABB_Tester<PointPointContactForceHessEmbed> op_2(embed_2);
-            count += aabb::query(vertex_bvh, vertex_aabb, op_2, pt_aabb);
-            if (stage == 0) {
-                num_contact_vtf_vec[i] += count;
+        if (replay) {
+            // ---- point-contact replays (stage 1 fill, no BVH) ----
+            if (cc_n[0]) {
+                DISPATCH_START(cc_n[0])
+                [data, eval_x, contact_force_vec, force, fixed_hess_in,
+                 fixed_out, dyn_out, vertex_params, face_params, dt, param,
+                 pf_vec] __device__(unsigned e) mutable {
+                    PointFaceContactForceHessEmbed embed = {
+                        pf_vec[e][0],      data.mesh.mesh.face,
+                        data.vertex.curr,  eval_x,
+                        contact_force_vec, force,
+                        fixed_hess_in,     fixed_out,
+                        dyn_out,           data.prop.vertex,
+                        data.prop.face,    vertex_params,
+                        face_params,       1,
+                        dt,                param};
+                    embed(pf_vec[e][1]);
+                } DISPATCH_END;
             }
-        } DISPATCH_END;
-
-        DISPATCH_START(edge_count)
-        [data, eval_x, contact_force_vec, force, fixed_hess_in, fixed_out,
-         dyn_out, edge_bvh, edge_aabb, num_contact_ee_vec, edge_params, stage,
-         dt, edge_active, param] __device__(unsigned i) mutable {
-            Vec2u edge = data.mesh.mesh.edge[i];
-            const EdgeParam &eparam =
-                edge_params[data.prop.edge[i].param_index];
-            float ext_eps = 0.5f * eparam.ghat + eparam.offset;
-            AABB aabb = aabb::make(eval_x[edge[0]], eval_x[edge[1]], ext_eps);
-            if (edge_active && !edge_active[i]) aabb.active = false;
-            EdgeEdgeContactForceHessEmbed embed = {i,
-                                                   data.mesh.mesh.edge,
-                                                   data.vertex.curr,
-                                                   eval_x,
-                                                   contact_force_vec,
-                                                   force,
-                                                   fixed_hess_in,
-                                                   fixed_out,
-                                                   dyn_out,
-                                                   data.prop.vertex,
-                                                   data.prop.edge,
-                                                   edge_params,
-                                                   stage,
-                                                   dt,
-                                                   param};
-            AABB_AABB_Tester<EdgeEdgeContactForceHessEmbed> op(embed);
-            unsigned count = aabb::query(edge_bvh, edge_aabb, op, aabb);
-            if (stage == 0) {
-                num_contact_ee_vec[i] += count;
+            if (cc_n[1]) {
+                DISPATCH_START(cc_n[1])
+                [data, eval_x, contact_force_vec, force, fixed_hess_in,
+                 fixed_out, dyn_out, vertex_params, edge_params, dt, param,
+                 pe_vec] __device__(unsigned e) mutable {
+                    PointEdgeContactForceHessEmbed embed = {
+                        pe_vec[e][0],            data.mesh.mesh.edge,
+                        data.mesh.mesh.face,     data.mesh.neighbor.edge,
+                        data.vertex.curr,        eval_x,
+                        contact_force_vec,       force,
+                        fixed_hess_in,           fixed_out,
+                        dyn_out,                 data.prop.vertex,
+                        data.prop.edge,          vertex_params,
+                        edge_params,             1,
+                        dt,                      param};
+                    embed(pe_vec[e][1]);
+                } DISPATCH_END;
             }
-        } DISPATCH_END;
+            if (cc_n[2]) {
+                DISPATCH_START(cc_n[2])
+                [data, eval_x, rod_count, contact_force_vec, force,
+                 fixed_hess_in, fixed_out, dyn_out, vertex_params, dt, param,
+                 pp_vec] __device__(unsigned e) mutable {
+                    PointPointContactForceHessEmbed embed = {
+                        pp_vec[e][0],              rod_count,
+                        data.mesh.mesh.edge,       data.mesh.mesh.face,
+                        data.mesh.neighbor.vertex, data.vertex.curr,
+                        eval_x,                    contact_force_vec,
+                        force,                     fixed_hess_in,
+                        fixed_out,                 dyn_out,
+                        data.prop.vertex,          vertex_params,
+                        1,                         dt,
+                        param,                     data};
+                    embed(pp_vec[e][1]);
+                } DISPATCH_END;
+            }
+        } else {
+            // Stage 0 detection (records the caches) and the stage-1 overflow
+            // fallback share this BVH dispatch: recording is gated on stage 0,
+            // so with stage 1 it simply fills.
+            DISPATCH_START(surface_vert_count)
+            [data, eval_x, rod_count, contact_force_vec, force, fixed_hess_in,
+             fixed_out, dyn_out, face_bvh, face_aabb, edge_bvh, edge_aabb,
+             vertex_bvh, vertex_aabb, num_contact_vtf_vec, vertex_params,
+             edge_params, face_params, stage, dt, vert_active, param, pf_cache,
+             pe_cache, pp_cache] __device__(unsigned i) mutable {
+                unsigned count(0);
+                const VertexParam &vparam =
+                    vertex_params[data.prop.vertex[i].param_index];
+                float ext_eps = 0.5f * vparam.ghat + vparam.offset;
+                AABB pt_aabb = aabb::make(eval_x[i], ext_eps);
+                if (vert_active && !vert_active[i]) pt_aabb.active = false;
+
+                PointFaceContactForceHessEmbed embed_0 = {
+                    i,                 data.mesh.mesh.face,
+                    data.vertex.curr,  eval_x,
+                    contact_force_vec, force,
+                    fixed_hess_in,     fixed_out,
+                    dyn_out,           data.prop.vertex,
+                    data.prop.face,    vertex_params,
+                    face_params,       stage,
+                    dt,                param,
+                    pf_cache};
+                AABB_AABB_Tester<PointFaceContactForceHessEmbed> op_0(embed_0);
+                count += aabb::query(face_bvh, face_aabb, op_0, pt_aabb);
+
+                PointEdgeContactForceHessEmbed embed_1 = {
+                    i,                   data.mesh.mesh.edge,
+                    data.mesh.mesh.face, data.mesh.neighbor.edge,
+                    data.vertex.curr,    eval_x,
+                    contact_force_vec,   force,
+                    fixed_hess_in,       fixed_out,
+                    dyn_out,             data.prop.vertex,
+                    data.prop.edge,      vertex_params,
+                    edge_params,         stage,
+                    dt,                  param,
+                    pe_cache};
+                AABB_AABB_Tester<PointEdgeContactForceHessEmbed> op_1(embed_1);
+                count += aabb::query(edge_bvh, edge_aabb, op_1, pt_aabb);
+
+                PointPointContactForceHessEmbed embed_2 = {
+                    i,                         rod_count,
+                    data.mesh.mesh.edge,       data.mesh.mesh.face,
+                    data.mesh.neighbor.vertex, data.vertex.curr,
+                    eval_x,                    contact_force_vec,
+                    force,                     fixed_hess_in,
+                    fixed_out,                 dyn_out,
+                    data.prop.vertex,          vertex_params,
+                    stage,                     dt,
+                    param,                     data,
+                    pp_cache};
+                AABB_AABB_Tester<PointPointContactForceHessEmbed> op_2(embed_2);
+                count += aabb::query(vertex_bvh, vertex_aabb, op_2, pt_aabb);
+                if (stage == 0) {
+                    num_contact_vtf_vec[i] += count;
+                }
+            } DISPATCH_END;
+        }
+
+        if (replay) {
+            // ---- edge-edge replay (stage 1 fill, no BVH) ----
+            if (cc_n[3]) {
+                DISPATCH_START(cc_n[3])
+                [data, eval_x, contact_force_vec, force, fixed_hess_in,
+                 fixed_out, dyn_out, edge_params, dt, param,
+                 ee_vec] __device__(unsigned e) mutable {
+                    EdgeEdgeContactForceHessEmbed embed = {
+                        ee_vec[e][0],      data.mesh.mesh.edge,
+                        data.vertex.curr,  eval_x,
+                        contact_force_vec, force,
+                        fixed_hess_in,     fixed_out,
+                        dyn_out,           data.prop.vertex,
+                        data.prop.edge,    edge_params,
+                        1,                 dt,
+                        param};
+                    embed(ee_vec[e][1]);
+                } DISPATCH_END;
+            }
+        } else {
+            // Stage 0 detection (records ee_cache) and the stage-1 overflow
+            // fallback share this BVH dispatch (recording is gated on stage 0).
+            DISPATCH_START(edge_count)
+            [data, eval_x, contact_force_vec, force, fixed_hess_in, fixed_out,
+             dyn_out, edge_bvh, edge_aabb, num_contact_ee_vec, edge_params,
+             stage, dt, edge_active, param, ee_cache] __device__(unsigned i)
+                mutable {
+                Vec2u edge = data.mesh.mesh.edge[i];
+                const EdgeParam &eparam =
+                    edge_params[data.prop.edge[i].param_index];
+                float ext_eps = 0.5f * eparam.ghat + eparam.offset;
+                AABB aabb =
+                    aabb::make(eval_x[edge[0]], eval_x[edge[1]], ext_eps);
+                if (edge_active && !edge_active[i]) aabb.active = false;
+                EdgeEdgeContactForceHessEmbed embed = {
+                    i,                 data.mesh.mesh.edge,
+                    data.vertex.curr,  eval_x,
+                    contact_force_vec, force,
+                    fixed_hess_in,     fixed_out,
+                    dyn_out,           data.prop.vertex,
+                    data.prop.edge,    edge_params,
+                    stage,             dt,
+                    param,             ee_cache};
+                AABB_AABB_Tester<EdgeEdgeContactForceHessEmbed> op(embed);
+                unsigned count = aabb::query(edge_bvh, edge_aabb, op, aabb);
+                if (stage == 0) {
+                    num_contact_ee_vec[i] += count;
+                }
+            } DISPATCH_END;
+        }
 
         if (stage == 0) {
-            // Name: Time for Rebuilding Memory Layout for Contact Matrix
-            // Format: list[(vid_time,ms)]
-            // Map: contact_mat_rebuild
-            // Description:
-            // After the dry pass, the memory layout for the contact matrix
-            // is re-computed so that the matrix can be assembled in the
-            // fill-in pass.
+            // After the dry pass, recompute the dynamic contact-matrix memory
+            // layout so the fill pass can assemble into it.
             dyn_out.finish_rebuild_buffer(max_nnz_row, dyn_consumed);
         } else {
-            // Name: Time for Filializing Contact Matrix
-            // Format: list[(vid_time,ms)]
-            // Map: contact_mat_finalize
-            // Description:
-            // After the fill-in pass, the contact matrix is compressed to
-            // eliminate redundant entries.
+            // After the fill pass, compress the contact matrix (dedup entries).
             if (dyn_consumed) {
                 dyn_out.finalize();
             }
@@ -1465,7 +1802,10 @@ struct PointFaceCCD {
         const Vec3u &f = face[index];
         bool either_dyn = vertex_prop[vertex_index].fix_index == 0 ||
                           face_prop[index].fixed == false;
-        if (either_dyn) {
+        unsigned bid_v = vertex_prop[vertex_index].pdrd_body_index;
+        unsigned bid_f = vertex_prop[f[0]].pdrd_body_index;
+        bool same_pdrd_body = bid_v != 0 && bid_v == bid_f;
+        if (either_dyn && !same_pdrd_body) {
             int dup_i = -1;
             for (int i = 0; i < 3; ++i) {
                 if (f[i] == vertex_index) {
@@ -1522,15 +1862,19 @@ struct EdgeEdgeCCD {
     const Vec<Vec2u> &edge;
     const Vec<EdgeProp> &edge_prop;
     const Vec<EdgeParam> &edge_params;
+    const Vec<VertexProp> &vert_prop;
     unsigned edge_index;
     float &toi;
     const ParamSet &param;
     __device__ bool operator()(unsigned index) {
         bool either_dyn = edge_prop[edge_index].fixed == false ||
                           edge_prop[index].fixed == false;
-        if (edge_index < index && either_dyn) {
-            const Vec2u &e0 = edge[edge_index];
-            const Vec2u &e1 = edge[index];
+        const Vec2u &e0 = edge[edge_index];
+        const Vec2u &e1 = edge[index];
+        unsigned bid_a = vert_prop[e0[0]].pdrd_body_index;
+        unsigned bid_b = vert_prop[e1[0]].pdrd_body_index;
+        bool same_pdrd_body = bid_a != 0 && bid_a == bid_b;
+        if (edge_index < index && either_dyn && !same_pdrd_body) {
             float result = param.line_search_max_t;
             const EdgeParam &eparam_edge =
                 edge_params[edge_prop[edge_index].param_index];
@@ -1573,6 +1917,45 @@ struct EdgeEdgeCCD {
                     }
                 }
             }
+            if (result < param.line_search_max_t) {
+                toi = fminf(toi, result);
+                assert(toi > 0.0f);
+                return true;
+            }
+        }
+        return false;
+    }
+};
+
+// Continuous collision detection for two free grains (point-point). A faceless
+// SAND cloud has no point-point CCD candidate among the face/edge primitives,
+// so without this the line search cannot bound a Newton step that pushes two
+// grains through each other; under pile load that drives a pair inside the
+// contact wall and trips the barrier precondition. Mirrors PointFaceCCD and
+// shares the same pair filters as PointPointContactForceHessEmbed
+// (upper-triangular, at least one free vertex, not the same PDRD body).
+struct PointPointCCD {
+    const Vec<Vec3f> &x0;
+    const Vec<Vec3f> &x1;
+    const Vec<VertexProp> &vertex_prop;
+    const Vec<VertexParam> &vertex_params;
+    unsigned vertex_index;
+    float &toi;
+    const ParamSet &param;
+    __device__ bool operator()(unsigned index) {
+        bool either_dyn = vertex_prop[vertex_index].fix_index == 0 ||
+                          vertex_prop[index].fix_index == 0;
+        unsigned bid_a = vertex_prop[vertex_index].pdrd_body_index;
+        unsigned bid_b = vertex_prop[index].pdrd_body_index;
+        bool same_pdrd_body = bid_a != 0 && bid_a == bid_b;
+        if (index < vertex_index && either_dyn && !same_pdrd_body) {
+            const VertexParam &vparam_a =
+                vertex_params[vertex_prop[vertex_index].param_index];
+            const VertexParam &vparam_b =
+                vertex_params[vertex_prop[index].param_index];
+            float offset = vparam_a.offset + vparam_b.offset;
+            float result = accd::point_point_ccd(x0[vertex_index], x1[vertex_index],
+                                                 x0[index], x1[index], offset, param);
             if (result < param.line_search_max_t) {
                 toi = fminf(toi, result);
                 assert(toi > 0.0f);
@@ -1765,6 +2148,28 @@ float line_search(const DataSet &data, const Vec<Vec3f> &x0,
             toi_vtf_vec[i] = fmin(toi_vtf_vec[i], toi);
         } DISPATCH_END;
 
+        // Grain-grain (point-point) CCD over the vertex BVH, bounding the step
+        // so two free grains never cross the contact wall. Without it a faceless
+        // SAND cloud has no point-point CCD candidate and dense piles penetrate.
+        const BVH &vertex_bvh = bvhset.vertex;
+        const Vec<AABB> vertex_aabb = storage::vertex_aabb;
+        DISPATCH_START(surface_vert_count)
+        [data, x0, x1, vertex_bvh, vertex_aabb, toi_vtf_vec, vertex_params,
+         vert_active, param] __device__(unsigned i) mutable {
+            const VertexParam &vparam =
+                vertex_params[data.prop.vertex[i].param_index];
+            float ext_eps = 0.5f * vparam.ghat + vparam.offset;
+            float toi = param.line_search_max_t;
+            PointPointCCD ccd = {x0,   x1, data.prop.vertex, vertex_params,
+                                 i,    toi, param};
+            AABB_AABB_Tester<PointPointCCD> op(ccd);
+            AABB aabb = aabb::make(
+                x0[i], float(toi) * (x1[i] - x0[i]) + x0[i], ext_eps);
+            if (vert_active && !vert_active[i]) aabb.active = false;
+            aabb::query(vertex_bvh, vertex_aabb, op, aabb);
+            toi_vtf_vec[i] = fmin(toi_vtf_vec[i], toi);
+        } DISPATCH_END;
+
         DISPATCH_START(surface_vert_count)
         [data, mesh, x0, x1, collision_mesh_face, collision_mesh_face_bvh,
          collision_mesh_face_aabb, collision_mesh_vertex, toi_vtf_vec,
@@ -1826,11 +2231,21 @@ float line_search(const DataSet &data, const Vec<Vec3f> &x0,
             toi_vtf_vec[i] = fmin(toi_vtf_vec[i], toi);
         } DISPATCH_END;
 
+        // Seed the edge-edge CCD with the vertex/face time-of-impact minimum.
+        // An edge collision later than T_vf cannot beat an already-found earlier
+        // vertex/face hit, so bounding the edge sweep to [0, T_vf] prunes far
+        // BVH nodes (this kernel is global-load-latency bound) while leaving the
+        // final fmin over all toi bit-identical. The ext_eps spatial margin is
+        // untouched, so coverage of [0, T_vf] stays conservative (no missed
+        // swept pair, penetration-free).
+        float T_vf_seed = kernels::min_array(
+            toi_vtf_vec.data, toi_vtf_vec.size, param.line_search_max_t);
+
         DISPATCH_START(edge_count)
         [data, mesh, x0, x1, edge_bvh, edge_aabb, toi_ee_vec, edge_params,
-         edge_active, param] __device__(unsigned i) mutable {
+         edge_active, T_vf_seed, param] __device__(unsigned i) mutable {
             Vec2u edge = mesh.mesh.edge[i];
-            float toi = param.line_search_max_t;
+            float toi = T_vf_seed;
             const EdgeParam &eparam =
                 edge_params[data.prop.edge[i].param_index];
             float ext_eps = 0.5f * eparam.ghat + eparam.offset;
@@ -1843,7 +2258,7 @@ float line_search(const DataSet &data, const Vec<Vec3f> &x0,
             if (edge_active && !edge_active[i]) aabb.active = false;
             EdgeEdgeCCD ccd = {
                 x0, x1,  mesh.mesh.edge, data.prop.edge, edge_params,
-                i,  toi, param};
+                data.prop.vertex, i,  toi, param};
             AABB_AABB_Tester<EdgeEdgeCCD> op(ccd);
             aabb::query(edge_bvh, edge_aabb, op, aabb);
             toi_ee_vec[i] = fmin(toi, toi_ee_vec[i]);
@@ -1852,10 +2267,10 @@ float line_search(const DataSet &data, const Vec<Vec3f> &x0,
         DISPATCH_START(edge_count)
         [data, mesh, x0, x1, collision_mesh_edge_bvh, collision_mesh_edge,
          collision_mesh_vertex, collision_mesh_edge_aabb, toi_ee_vec,
-         edge_params, collision_edge_params, edge_active,
+         edge_params, collision_edge_params, edge_active, T_vf_seed,
          param] __device__(unsigned i) mutable {
             Vec2u edge = mesh.mesh.edge[i];
-            float toi = param.line_search_max_t;
+            float toi = T_vf_seed;
             const EdgeParam &eparam =
                 edge_params[data.prop.edge[i].param_index];
             float ext_eps = 0.5f * eparam.ghat + eparam.offset;
@@ -1941,10 +2356,11 @@ class EdgeEdgeIntersectTester {
     EdgeEdgeIntersectTester(const Vec<EdgeProp> &prop,
                             const Vec<EdgeParam> &edge_params,
                             const Vec<Vec3f> &vertex, const Vec<Vec2u> &edge,
+                            const Vec<VertexProp> &vert_prop,
                             const ParamSet &param, unsigned edge_index,
                             IntersectionRecord *records, unsigned *record_counter)
         : prop(prop), edge_params(edge_params), vertex(vertex), edge(edge),
-          param(param), edge_index(edge_index),
+          vert_prop(vert_prop), param(param), edge_index(edge_index),
           records(records), record_counter(record_counter) {}
     __device__ bool operator()(unsigned index) {
         if (index < edge_index) {
@@ -1955,7 +2371,10 @@ class EdgeEdgeIntersectTester {
             // Two zero-mass edges (both static solids) never intersect.
             bool either_nonzero =
                 prop[edge_index].mass > 0.0f || prop[index].mass > 0.0f;
-            if (either_dyn && either_nonzero) {
+            unsigned bid_a = vert_prop[e0[0]].pdrd_body_index;
+            unsigned bid_b = vert_prop[e1[0]].pdrd_body_index;
+            bool same_pdrd_body = bid_a != 0 && bid_a == bid_b;
+            if (either_dyn && either_nonzero && !same_pdrd_body) {
                 const EdgeParam &eparam_edge =
                     edge_params[prop[edge_index].param_index];
                 const EdgeParam &eparam_index =
@@ -2026,6 +2445,7 @@ class EdgeEdgeIntersectTester {
     const Vec<EdgeParam> &edge_params;
     const Vec<Vec3f> &vertex;
     const Vec<Vec2u> &edge;
+    const Vec<VertexProp> &vert_prop;
     const ParamSet &param;
     unsigned edge_index;
     IntersectionRecord *records;
@@ -2037,11 +2457,12 @@ class FaceEdgeIntersectTester {
     __device__
     FaceEdgeIntersectTester(const Vec<FaceProp> &face_prop,
                             const Vec<EdgeProp> &edge_prop,
+                            const Vec<VertexProp> &vert_prop,
                             const Vec<Vec3f> &vertex, const Vec<Vec3u> &face,
                             const Vec<Vec2u> &edge, unsigned edge_index,
                             IntersectionRecord *records, unsigned *record_counter)
-        : face_prop(face_prop), edge_prop(edge_prop), vertex(vertex),
-          face(face), edge(edge), edge_index(edge_index),
+        : face_prop(face_prop), edge_prop(edge_prop), vert_prop(vert_prop),
+          vertex(vertex), face(face), edge(edge), edge_index(edge_index),
           records(records), record_counter(record_counter) {}
     __device__ bool operator()(unsigned index) {
         bool either_dyn = face_prop[index].fixed == false ||
@@ -2049,7 +2470,15 @@ class FaceEdgeIntersectTester {
         // Two zero-mass elements (both static solids) never intersect.
         bool either_nonzero = face_prop[index].mass > 0.0f ||
                               edge_prop[edge_index].mass > 0.0f;
-        if (either_dyn && either_nonzero) {
+        // Skip intra-PDRD-body edge/face pairs: a rigid body never deforms, so
+        // an edge piercing a face of the SAME body is a fixed, physically
+        // meaningless self-intersection that must be tolerated even when the
+        // body starts self-tangled. Mirrors the same_pdrd_body filter in the
+        // edge-edge / point-point intersect testers and the contact embeds.
+        unsigned bid_e = vert_prop[edge[edge_index][0]].pdrd_body_index;
+        unsigned bid_f = vert_prop[face[index][0]].pdrd_body_index;
+        bool same_pdrd_body = bid_e != 0 && bid_e == bid_f;
+        if (either_dyn && either_nonzero && !same_pdrd_body) {
             Vec3u f = face[index];
             unsigned e0 = edge[edge_index][0];
             unsigned e1 = edge[edge_index][1];
@@ -2073,6 +2502,7 @@ class FaceEdgeIntersectTester {
     }
     const Vec<FaceProp> &face_prop;
     const Vec<EdgeProp> &edge_prop;
+    const Vec<VertexProp> &vert_prop;
     const Vec<Vec3f> &vertex;
     const Vec<Vec3u> &face;
     const Vec<Vec2u> &edge;
@@ -2111,6 +2541,60 @@ class CollisionMeshFaceEdgeIntersectTester {
     const Vec<Vec3u> &face;
     Vec3f y0, y1;
     unsigned edge_index;
+    IntersectionRecord *records;
+    unsigned *record_counter;
+};
+
+// Detects two grains (free vertices) that begin the simulation already inside
+// each other's contact radius (centers closer than offset_i + offset_j). The
+// smooth contact barrier is undefined inside the wall, so such a start state
+// would otherwise abort mid-advance with an opaque kernel assertion; recording
+// it here lets initialization fail with a clear "point_point" violation, the
+// same way edge/triangle self-intersection is reported. Pair filtering matches
+// PointPointContactForceHessEmbed (upper-triangular, at least one free vertex,
+// not the same PDRD body).
+class PointPointIntersectTester {
+  public:
+    __device__
+    PointPointIntersectTester(const Vec<VertexProp> &vert_prop,
+                              const Vec<VertexParam> &vertex_params,
+                              const Vec<Vec3f> &vertex, unsigned vertex_index,
+                              IntersectionRecord *records,
+                              unsigned *record_counter)
+        : vert_prop(vert_prop), vertex_params(vertex_params), vertex(vertex),
+          vertex_index(vertex_index), records(records),
+          record_counter(record_counter) {}
+    __device__ bool operator()(unsigned index) {
+        if (index < vertex_index) {
+            bool either_dyn = vert_prop[vertex_index].fix_index == 0 ||
+                              vert_prop[index].fix_index == 0;
+            unsigned bid_a = vert_prop[vertex_index].pdrd_body_index;
+            unsigned bid_b = vert_prop[index].pdrd_body_index;
+            bool same_pdrd_body = bid_a != 0 && bid_a == bid_b;
+            if (either_dyn && !same_pdrd_body) {
+                const VertexParam &vp_a =
+                    vertex_params[vert_prop[vertex_index].param_index];
+                const VertexParam &vp_b =
+                    vertex_params[vert_prop[index].param_index];
+                float offset = vp_a.offset + vp_b.offset;
+                Vec3f p = vertex[vertex_index];
+                Vec3f q = vertex[index];
+                Vec3f e = (p - q).cast<float>();
+                if (e.dot(e) < offset * offset) {
+                    Vec3f ev0[1] = {p};
+                    Vec3f ev1[1] = {q};
+                    record_intersection(records, record_counter, 3, vertex_index,
+                                        index, ev0, 1, ev1, 1);
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+    const Vec<VertexProp> &vert_prop;
+    const Vec<VertexParam> &vertex_params;
+    const Vec<Vec3f> &vertex;
+    unsigned vertex_index;
     IntersectionRecord *records;
     unsigned *record_counter;
 };
@@ -2156,7 +2640,8 @@ bool check_intersection(const DataSet &data, const Vec<Vec3f> &vertex,
         Vec3f y1 = vertex[edge[1]];
         AABB aabb = aabb::make(y0, y1, 0.0f);
         if (edge_active && !edge_active[i]) aabb.active = false;
-        FaceEdgeIntersectTester tester_0(data.prop.face, data.prop.edge, vertex,
+        FaceEdgeIntersectTester tester_0(data.prop.face, data.prop.edge,
+                                         data.prop.vertex, vertex,
                                          mesh.mesh.face, mesh.mesh.edge, i,
                                          records_vec.data, counter_vec.data);
         AABB_AABB_Tester<FaceEdgeIntersectTester> op_0(tester_0);
@@ -2164,7 +2649,8 @@ bool check_intersection(const DataSet &data, const Vec<Vec3f> &vertex,
             intersection_flag_vec[i] = 1;
         }
         EdgeEdgeIntersectTester tester_1(data.prop.edge, edge_params, vertex,
-                                         mesh.mesh.edge, param, i,
+                                         mesh.mesh.edge, data.prop.vertex,
+                                         param, i,
                                          records_vec.data, counter_vec.data);
         AABB_AABB_Tester<EdgeEdgeIntersectTester> op_1(tester_1);
         if (aabb::query(edge_bvh, edge_aabb, op_1, aabb)) {
@@ -2184,6 +2670,35 @@ bool check_intersection(const DataSet &data, const Vec<Vec3f> &vertex,
         }
     } DISPATCH_END;
 
+    // Grain-grain (point-point) initial overlap. The edge loop above never runs
+    // for a faceless particle cloud (no edges), so without this pass an
+    // overlapping SAND cloud passes the init check and then aborts mid-advance.
+    unsigned surface_vert_count = data.surface_vert_count;
+    auto vert_flag = pool.get<char>(max_of_two(surface_vert_count, 1u));
+    vert_flag.clear(0);
+    Vec<char> vert_flag_vec = vert_flag.as_vec();
+    if (surface_vert_count > 0) {
+        const BVH &vertex_bvh = bvh_storage::get_bvh().vertex;
+        const Vec<AABB> vertex_aabb = storage::vertex_aabb;
+        Vec<VertexParam> vertex_params = data.param_arrays.vertex;
+        const bool *vert_active = get_vert_collision_active();
+        DISPATCH_START(surface_vert_count)
+        [data, vertex, vertex_bvh, vertex_aabb, vertex_params, vert_flag_vec,
+         records_vec, counter_vec, vert_active] __device__(unsigned i) mutable {
+            const VertexParam &vparam =
+                vertex_params[data.prop.vertex[i].param_index];
+            AABB aabb = aabb::make(vertex[i], vparam.offset);
+            if (vert_active && !vert_active[i]) aabb.active = false;
+            PointPointIntersectTester tester(data.prop.vertex, vertex_params,
+                                             vertex, i, records_vec.data,
+                                             counter_vec.data);
+            AABB_AABB_Tester<PointPointIntersectTester> op(tester);
+            if (aabb::query(vertex_bvh, vertex_aabb, op, aabb)) {
+                vert_flag_vec[i] = 1;
+            }
+        } DISPATCH_END;
+    }
+
     // Copy intersection records from GPU to host
     unsigned gpu_count = 0;
     CUDA_HANDLE_ERROR(cudaMemcpy(&gpu_count, counter_vec.data,
@@ -2197,9 +2712,12 @@ bool check_intersection(const DataSet &data, const Vec<Vec3f> &vertex,
             cudaMemcpyDeviceToHost));
     }
 
-    bool result = kernels::max_array(intersection_flag_vec.data, edge_count,
-                                     char(0)) == 0;
-    return result;
+    bool edge_clear = kernels::max_array(intersection_flag_vec.data, edge_count,
+                                         char(0)) == 0;
+    bool vert_clear =
+        surface_vert_count == 0 ||
+        kernels::max_array(vert_flag_vec.data, surface_vert_count, char(0)) == 0;
+    return edge_clear && vert_clear;
 }
 
 unsigned get_intersection_count() {

@@ -27,7 +27,20 @@ use super::animation::TransformAnimation;
 use super::asset::AssetKind;
 use super::params::{object_param, ObjectKind, ParamHolder};
 use super::pin::PinData;
-use super::quat::Vec3;
+use super::quat::{axis_angle_to_quat, quat_to_mat3, Vec3};
+
+/// Maximum number of collision-active windows the solver can store per
+/// dynamics group. This is the single source of truth for the cap.
+///
+/// MUST stay equal to the GPU-side `#define MAX_COLLISION_WINDOWS` in
+/// `crates/ppf-cts-solver/src/cpp/main/main.cu`: the Rust side writes a
+/// flat window table with stride `MAX_COLLISION_WINDOWS * 2` floats per
+/// group and the kernel reads back with the same stride, so a mismatch
+/// silently corrupts the simulation. The solver's collision-window table
+/// builder (`scene.rs`) and the PyO3 binding (`ppf-cts-py`) reference this
+/// constant; the frontend imports it through the PyO3 module rather than
+/// re-declaring the literal.
+pub const MAX_COLLISION_WINDOWS: usize = 8;
 
 /// Per-object color spec: either uniform RGB or per-vertex.
 /// Default is `None`; render uses the default tint.
@@ -63,6 +76,11 @@ pub struct Object {
     /// True for static collider objects. Pinning every vertex flips
     /// this on (the Python source flips it inside `pin(None)`).
     pub is_static: bool,
+    /// True when the object is an Painless Differentiable Rotation Dynamics (PDRD) body:
+    /// its surface mesh moves rigidly via a single best-fit rigid
+    /// transform shared by all vertices. Only valid for Tri assets;
+    /// mutually exclusive with `is_static`.
+    pub is_pdrd: bool,
     /// Per-object material parameters; defaulted from
     /// `object_param(kind)` at construction.
     pub param: ParamHolder,
@@ -126,6 +144,7 @@ impl Object {
             asset_name: asset_name.into(),
             asset_kind: kind,
             is_static: false,
+            is_pdrd: false,
             param,
             transform: identity4(),
             color: ObjectColor::None,
@@ -144,6 +163,28 @@ impl Object {
             is_static_moving: false,
             normalized: false,
         }
+    }
+
+    /// Switch this object to Painless Differentiable Rotation Dynamics. The body must
+    /// reference a Tri asset (PDRD is implemented as an exact per-body
+    /// rigid motion over a surface mesh; no tetrahedralization is
+    /// needed or used). Swaps the parameter set to the PDRD defaults
+    /// (volumetric `density`, contact/friction only; `young-mod`,
+    /// `bend`, etc. are kept as zero placeholders so the existing
+    /// per-face param expansion continues to work).
+    ///
+    /// Errors if the object is already flagged static, since PDRD and
+    /// static colliders are mutually exclusive.
+    pub fn as_pdrd(&mut self) -> Result<&mut Self, ObjectError> {
+        if self.asset_kind != AssetKind::Tri {
+            return Err(ObjectError::PdrdRequiresTriAsset);
+        }
+        if self.is_static {
+            return Err(ObjectError::PdrdConflictsStatic);
+        }
+        self.is_pdrd = true;
+        self.param = object_param(ObjectKind::Pdrd);
+        Ok(self)
     }
 
     /// Reset every field except `asset_name`/`asset_kind`/`param`.
@@ -209,30 +250,24 @@ impl Object {
     ///
     /// `axis` accepts `'x' | 'y' | 'z'` (case-insensitive).
     pub fn rotate(&mut self, angle_deg: f64, axis: char) -> &mut Self {
-        let theta = angle_deg.to_radians();
-        let c = theta.cos();
-        let s = theta.sin();
-        let r = match axis.to_ascii_lowercase() {
-            'x' => [
-                [1.0, 0.0, 0.0, 0.0],
-                [0.0, c, -s, 0.0],
-                [0.0, s, c, 0.0],
-                [0.0, 0.0, 0.0, 1.0],
-            ],
-            'y' => [
-                [c, 0.0, s, 0.0],
-                [0.0, 1.0, 0.0, 0.0],
-                [-s, 0.0, c, 0.0],
-                [0.0, 0.0, 0.0, 1.0],
-            ],
-            'z' => [
-                [c, -s, 0.0, 0.0],
-                [s, c, 0.0, 0.0],
-                [0.0, 0.0, 1.0, 0.0],
-                [0.0, 0.0, 0.0, 1.0],
-            ],
+        // Route the principal-axis rotation through the shared quat
+        // helpers so the datamodel layer has one rotation-sign
+        // convention. The quat helpers do not validate the axis, so the
+        // invalid-axis panic is preserved here.
+        let axis_vec: Vec3 = match axis.to_ascii_lowercase() {
+            'x' => [1.0, 0.0, 0.0],
+            'y' => [0.0, 1.0, 0.0],
+            'z' => [0.0, 0.0, 1.0],
             other => panic!("invalid axis: {other:?} (expected 'x', 'y', or 'z')"),
         };
+        let m = quat_to_mat3(axis_angle_to_quat(axis_vec, angle_deg));
+        // Embed the 3x3 rotation into the top-left of an identity 4x4.
+        let mut r = identity4();
+        for row in 0..3 {
+            for col in 0..3 {
+                r[row][col] = m[row][col];
+            }
+        }
         let pos = [
             self.transform[0][3],
             self.transform[1][3],
@@ -332,6 +367,10 @@ impl Object {
 pub enum ObjectError {
     #[error("object is static")]
     Static,
+    #[error("PDRD requires a Tri (surface mesh) asset")]
+    PdrdRequiresTriAsset,
+    #[error("PDRD cannot be applied to a static object")]
+    PdrdConflictsStatic,
 }
 
 // ---------------------------------------------------------------------------
@@ -462,6 +501,46 @@ mod tests {
             o.param.get("young-mod").unwrap(),
             &super::super::params::ParamValue::Float(1e4)
         );
+    }
+
+    #[test]
+    fn as_pdrd_switches_kind_and_params_on_tri_asset() {
+        let mut o = Object::new("cube", AssetKind::Tri);
+        assert!(!o.is_pdrd);
+        o.as_pdrd().unwrap();
+        assert!(o.is_pdrd);
+        // Now the param holder is the PDRD set: model="pdrd", young-mod zeroed.
+        assert_eq!(
+            o.param.get("model").unwrap(),
+            &super::super::params::ParamValue::String("pdrd".into())
+        );
+        assert_eq!(
+            o.param.get("young-mod").unwrap(),
+            &super::super::params::ParamValue::Float(0.0)
+        );
+    }
+
+    #[test]
+    fn as_pdrd_rejects_non_tri_assets() {
+        let mut o = Object::new("brick", AssetKind::Tet);
+        let err = o.as_pdrd().unwrap_err();
+        assert!(matches!(err, ObjectError::PdrdRequiresTriAsset));
+        // Object is unchanged.
+        assert!(!o.is_pdrd);
+
+        let mut o = Object::new("rope", AssetKind::Rod);
+        let err = o.as_pdrd().unwrap_err();
+        assert!(matches!(err, ObjectError::PdrdRequiresTriAsset));
+        assert!(!o.is_pdrd);
+    }
+
+    #[test]
+    fn as_pdrd_rejects_static_object() {
+        let mut o = Object::new("wall", AssetKind::Tri);
+        o.is_static = true;
+        let err = o.as_pdrd().unwrap_err();
+        assert!(matches!(err, ObjectError::PdrdConflictsStatic));
+        assert!(!o.is_pdrd);
     }
 
     #[test]

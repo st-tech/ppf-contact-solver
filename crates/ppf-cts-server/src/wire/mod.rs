@@ -8,8 +8,8 @@
 // Three paths after the 4-byte header:
 //   * TCMD: text command line, dispatch to engine, send JSON status.
 //   * JSON: JSON request line; sub-handler keyed by `request` field
-//     (upload_atomic, data_send, data_receive, notebook_send,
-//     notebook_delete).
+//     (upload_atomic, upload_notify, data_send, data_receive,
+//     notebook_send, notebook_delete).
 //   * BDAT: drain bytes, ack with `BINARY_OK`.
 //
 // The TCMD response shape is the protocol contract: every status
@@ -37,6 +37,19 @@ mod upload;
 
 const MAX_TCMD_BYTES: usize = 64 * 1024;
 const MAX_JSON_LINE_BYTES: usize = 64 * 1024;
+
+/// Upper bound on a single JSON-path payload (`data_send`,
+/// `upload_atomic`, `notebook_send`). The client declares the byte
+/// count in the JSON header line; without a ceiling, a hostile or
+/// buggy declaration of e.g. 0xFFFFFFFFFFFF would drive
+/// `read_exact_n_chunked` into a multi-terabyte allocation before a
+/// single payload byte is read. 4 GiB sits well above the largest
+/// legitimate pickle (`data_receive` streams session artifacts of a
+/// few hundred MB) while still rejecting absurd declarations fast.
+/// Kept here next to MAX_TCMD_BYTES / MAX_JSON_LINE_BYTES so all wire
+/// input bounds live in one place; the TCMD 64 KB bound is too small
+/// to reuse for these payloads.
+pub(super) const MAX_PAYLOAD_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 
 /// Run the per-connection handler to completion. Errors during
 /// reading/writing log and return; the caller drops the socket. Owns
@@ -176,7 +189,9 @@ where
 
     if let Some(req) = get_arg(&args, "request") {
         log::debug!(target: "ppf::wire", "{peer}: TCMD request name={name} request={req}");
-        if let Some(event) = tcmd_request_to_event(req) {
+        let resume_from = get_arg(&args, "resume_from").and_then(|s| s.parse::<i32>().ok());
+        let preserve_output = get_arg(&args, "preserve_output") == Some("1");
+        if let Some(event) = tcmd_request_to_event(req, resume_from, preserve_output) {
             dispatch_with_executor(engine, executor, event).await;
         } else {
             log::warn!(target: "ppf::wire", "{peer}: unknown TCMD request {req}");
@@ -198,7 +213,9 @@ where
 /// identity stamp, the data and param hash files, and
 /// `app_state.pickle` (the build_worker's "make() succeeded"
 /// marker). `is_resumable` falls out of `project_resumable`, which
-/// scans for the solver's `state_<N>.bin.gz` checkpoints. The
+/// scans for the solver's `state_<N>.bin.gz` checkpoints, and
+/// `has_crashed` from the solver-authored `status.cbor` so a reconnect
+/// after a crash reconstructs `Solver::Failed` (the in-memory state is gone). The
 /// transition layer then advances `state.data` / `state.build` so
 /// the addon's status string reflects what survived the restart.
 fn reconcile_project_from_disk(name: &str, root: &str) -> Event {
@@ -212,6 +229,28 @@ fn reconcile_project_from_disk(name: &str, root: &str) -> Event {
     let has_app = root_path.join("app_state.pickle").exists();
     let is_resumable =
         ppf_cts_core::datamodel::project_resumable(&root_path);
+    // Reconstruct a crash from the solver-authored status.cbor (the
+    // in-memory Solver::Failed is gone after a restart): a terminal Crashed
+    // outcome, or a non-terminal record whose owning process is confirmed
+    // dead (liveness lock free AND pid gone) and was not an intentional
+    // terminate. A still-live solver (lock held) reports false here and is
+    // re-adopted as Running by the monitor's live-adoption path.
+    let has_crashed = {
+        use ppf_cts_formats::status::{self, lock, Outcome};
+        let out = ppf_cts_formats::files::session_output_dir(&root_path);
+        match status::read(&out) {
+            Ok(Some(rec)) => match rec.outcome {
+                Some(Outcome::Crashed { .. }) => true,
+                Some(_) => false,
+                None => {
+                    !lock::is_held_by_other(&out)
+                        && !lock::pid_alive(rec.pid)
+                        && !out.join(ppf_cts_formats::files::TERMINATE_REQUEST).exists()
+                }
+            },
+            _ => false,
+        }
+    };
 
     let upload_id = if has_data && has_param {
         crate::upload::read_upload_id(&root_path).unwrap_or_default()
@@ -239,6 +278,7 @@ fn reconcile_project_from_disk(name: &str, root: &str) -> Event {
         has_param,
         has_app,
         is_resumable,
+        has_crashed,
         upload_id,
         data_hash,
         param_hash,
@@ -266,13 +306,21 @@ fn read_total_frames_from_scene_info(root: &std::path::Path) -> i32 {
         .unwrap_or(0)
 }
 
-/// Map a TCMD `request` string to an engine `Event`.
-fn tcmd_request_to_event(req: &str) -> Option<Event> {
+/// Map a TCMD `request` string to an engine `Event`. `resume_from`
+/// carries the optional `--resume_from` frame for the resume request
+/// (`None` resumes from the latest checkpoint). `preserve_output`
+/// carries the `--preserve_output 1` flag for the build request, which
+/// keeps the `session/output/` checkpoints in place across a rebuild.
+fn tcmd_request_to_event(
+    req: &str,
+    resume_from: Option<i32>,
+    preserve_output: bool,
+) -> Option<Event> {
     Some(match req {
-        "build" => Event::BuildRequested,
+        "build" => Event::BuildRequested { preserve_output },
         "cancel_build" => Event::CancelBuildRequested,
         "start" => Event::StartRequested,
-        "resume" => Event::ResumeRequested,
+        "resume" => Event::ResumeRequested { from_frame: resume_from },
         "terminate" => Event::TerminateRequested,
         "save_and_quit" => Event::SaveAndQuitRequested,
         "delete" => Event::DeleteRequested,
@@ -318,8 +366,8 @@ where
     match req_type {
         "upload_atomic" => upload::handle_upload_atomic(reader, writer, engine, executor, &req).await,
         "upload_notify" => upload::handle_upload_notify(writer, engine, executor, &req).await,
-        "data_send" => data::handle_data_send(reader, writer, &req).await,
-        "data_receive" => data::handle_data_receive(writer, &req).await,
+        "data_send" => data::handle_data_send(reader, writer, engine, &req).await,
+        "data_receive" => data::handle_data_receive(writer, engine, &req).await,
         "notebook_send" => notebook::handle_notebook_send(reader, writer, &req).await,
         "notebook_delete" => notebook::handle_notebook_delete(writer, &req).await,
         other => {
@@ -357,8 +405,32 @@ mod tests {
             "build", "cancel_build", "start", "resume",
             "terminate", "save_and_quit", "delete",
         ] {
-            assert!(tcmd_request_to_event(r).is_some(), "missing {r}");
+            assert!(tcmd_request_to_event(r, None, false).is_some(), "missing {r}");
         }
-        assert!(tcmd_request_to_event("not_a_real_request").is_none());
+        assert!(tcmd_request_to_event("not_a_real_request", None, false).is_none());
+    }
+
+    #[test]
+    fn resume_request_carries_from_frame() {
+        assert_eq!(
+            tcmd_request_to_event("resume", Some(80), false),
+            Some(Event::ResumeRequested { from_frame: Some(80) }),
+        );
+        assert_eq!(
+            tcmd_request_to_event("resume", None, false),
+            Some(Event::ResumeRequested { from_frame: None }),
+        );
+    }
+
+    #[test]
+    fn build_request_carries_preserve_output() {
+        assert_eq!(
+            tcmd_request_to_event("build", None, true),
+            Some(Event::BuildRequested { preserve_output: true }),
+        );
+        assert_eq!(
+            tcmd_request_to_event("build", None, false),
+            Some(Event::BuildRequested { preserve_output: false }),
+        );
     }
 }

@@ -3,12 +3,14 @@
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
 # License: Apache v2.0
 #
-# PyO3 bindings. Compiled as a cdylib by maturin into the Python
-# extension module `_ppf_cts_py`. The pure-Python `frontend` package
-# eventually re-exports from here so JupyterLab notebooks see the same
-# names they always did.
+# PyO3 bindings. Compiled as a cdylib by plain `cargo build` (this crate
+# is a workspace default-member) into the Python extension `_ppf_cts_py`.
+# `frontend/__init__.py` loads the resulting `target/<profile>/` cdylib
+# directly via importlib, so JupyterLab notebooks see the same names they
+# always did. There is no maturin wheel step (see build.rs for the macOS
+# link flag).
 #
-# abi3-py38: one wheel works for any CPython >= 3.8.
+# abi3-py38: one cdylib works for any CPython >= 3.8.
 
 [package]
 name = "ppf-cts-py"
@@ -19,6 +21,13 @@ license.workspace = true
 [lib]
 name = "_ppf_cts_py"
 crate-type = ["cdylib", "rlib"]
+# The `extension-module` feature tells pyo3 not to link libpython, so a
+# Rust test/doctest harness for this crate fails to link (`undefined
+# reference to PyXXX`). The Python-level smoke tests in tests/ cover this
+# crate instead, so disable the cargo test harness. Without this, now that
+# ppf-cts-py is a default-member, a bare `cargo test` would break.
+test = false
+doctest = false
 
 [dependencies]
 ppf-cts-core = { path = "../ppf-cts-core" }

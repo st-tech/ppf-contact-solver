@@ -382,13 +382,13 @@ pub(super) fn scene_mat4_apply_scale<'py>(
             "matrix must be (4, 4), got {m_shape:?}"
         )));
     }
-    let s_slice = matrix.as_slice().map_err(|_| {
+    let m_slice = matrix.as_slice().map_err(|_| {
         PyTypeError::new_err("matrix must be C-contiguous")
     })?;
     let mut m = [[0.0f64; 4]; 4];
     for r in 0..4 {
         for c in 0..4 {
-            m[r][c] = s_slice[4 * r + c];
+            m[r][c] = m_slice[4 * r + c];
         }
     }
     let r = py.allow_threads(|| sb::mat4_apply_uniform_scale(&m, scale));
@@ -422,13 +422,13 @@ pub(super) fn scene_mat4_apply_rotate<'py>(
     let axis_char = axis.chars().next().ok_or_else(|| {
         PyValueError::new_err("invalid axis (empty)")
     })?;
-    let s_slice = matrix.as_slice().map_err(|_| {
+    let m_slice = matrix.as_slice().map_err(|_| {
         PyTypeError::new_err("matrix must be C-contiguous")
     })?;
     let mut m = [[0.0f64; 4]; 4];
     for r in 0..4 {
         for c in 0..4 {
-            m[r][c] = s_slice[4 * r + c];
+            m[r][c] = m_slice[4 * r + c];
         }
     }
     let r = py

@@ -40,11 +40,25 @@ fn dp_idx(width: usize, py: usize, px: usize) -> usize {
 }
 
 /// Raw-pointer shim over the framebuffer + depth slices so the
-/// rayon worker threads can write through them. Safety: every
-/// pixel-write inside `rasterize_triangles` / `rasterize_lines` is
-/// a depth-test-and-store; concurrent writes to the same pixel race
-/// (last writer wins), but no thread observes a torn write because
-/// `u8` and `f32` are word-sized stores.
+/// rayon worker threads can write through them. Used only by
+/// `rasterize_triangles` / `rasterize_one_triangle`; `rasterize_lines`
+/// runs serially through safe slices and does not touch this shim.
+///
+/// Per-pixel coverage is an intentionally-racy, non-atomic
+/// depth-test-then-store: one f32 depth write plus four u8 color
+/// writes, i.e. five separate unsynchronized stores guarded by a plain
+/// `z < depth` read. When two worker threads cover the same pixel from
+/// overlapping triangles, both can read the old depth, both can pass
+/// the test, and the stores can interleave so the final depth comes
+/// from one triangle while the color bytes come from another. Under
+/// Rust's memory model these unsynchronized concurrent reads+writes are
+/// a data race, and the documented "last writer wins" is not even
+/// self-consistent on a contested pixel. We accept that by design: this
+/// is a debug/preview software renderer, the worst case is a handful of
+/// mis-colored or mis-depthed pixels at triangle overlaps, and the
+/// writes are never out of bounds (px < width / py < height clamps in
+/// `rasterize_one_triangle` keep every index valid, see the SAFETY note
+/// at the lane-store loop).
 struct UnsafeFb {
     fb: *mut u8,
     depth: *mut f32,
@@ -52,10 +66,11 @@ struct UnsafeFb {
     depth_len: usize,
 }
 
-// SAFETY: see UnsafeFb docstring. Writes are non-tearing per pixel;
-// callers must guarantee the underlying slices outlive every spawned
-// task (we use rayon `par_iter` with this struct captured by ref, so
-// the lifetime is bounded by the surrounding function).
+// SAFETY: the per-pixel data race is accepted by design (see UnsafeFb
+// docstring). The genuine obligation is that callers keep the
+// underlying slices alive for every spawned task: we drive this struct
+// with rayon `par_iter` capturing `&UnsafeFb`, so its lifetime is
+// bounded by the surrounding function and the slices outlive all tasks.
 unsafe impl Send for UnsafeFb {}
 unsafe impl Sync for UnsafeFb {}
 
@@ -448,7 +463,12 @@ fn draw_line_bresenham(
 }
 
 /// Rasterize line segments with depth-interpolated color. Direct
-/// port of `_rasterize_lines`.
+/// port of `_rasterize_lines`. Unlike `rasterize_triangles`, the line
+/// pass is a small overlay/wireframe workload with no parallelism to
+/// gain, so it runs serially through safe `&mut [u8]` / `&mut [f32]`
+/// slices and deliberately does not use the `UnsafeFb` raw-pointer race
+/// machinery. The `z < depth` depth-test semantics match the triangle
+/// pass.
 pub fn rasterize_lines(
     framebuffer: &mut [u8],
     depth: &mut [f32],
@@ -540,6 +560,16 @@ pub fn normals(verts_flat: &[f32], faces: &[i32]) -> Vec<f32> {
 // glue stay thin: argparse / Mitsuba scene-dict construction stays in
 // Python; matrix math + binary I/O move down here.
 
+// Preview-camera parameters baked into `render_transform`. These match
+// the numpy reference render path, so keep them in sync if that path
+// changes: the X-axis tilt applied before projection, the extent-fit
+// factor that shrinks the normalized mesh inside the view plane, and
+// the orthographic near/far depth bounds.
+const RENDER_TILT_DEG: f32 = 10.0;
+const RENDER_FIT_SCALE: f32 = 0.9;
+const RENDER_ORTHO_NEAR: f32 = -10.0;
+const RENDER_ORTHO_FAR: f32 = 10.0;
+
 /// 4x4 orthographic projection matrix in row-major order.
 pub fn ortho_matrix(left: f32, right: f32, bottom: f32, top: f32, near: f32, far: f32) -> [f32; 16] {
     [
@@ -584,7 +614,7 @@ pub fn render_transform(verts_flat: &[f32], width: u32, height: u32) -> (Vec<f32
         bounds[2] / 2.0 + mn[2],
     ];
     // 10-degree X-axis rotation (matches numpy reference).
-    let rad = 10.0_f32.to_radians();
+    let rad = RENDER_TILT_DEG.to_radians();
     let cos_r = rad.cos();
     let sin_r = rad.sin();
     // Center + rotate.
@@ -614,7 +644,7 @@ pub fn render_transform(verts_flat: &[f32], width: u32, height: u32) -> (Vec<f32
         }
     }
     if max_extent > 0.0 {
-        let s = 0.9 / max_extent;
+        let s = RENDER_FIT_SCALE / max_extent;
         for v in rotated.iter_mut() {
             *v *= s;
         }
@@ -622,9 +652,16 @@ pub fn render_transform(verts_flat: &[f32], width: u32, height: u32) -> (Vec<f32
     // Orthographic projection.
     let aspect = (width as f32) / (height as f32);
     let proj = if aspect >= 1.0 {
-        ortho_matrix(-aspect, aspect, -1.0, 1.0, -10.0, 10.0)
+        ortho_matrix(-aspect, aspect, -1.0, 1.0, RENDER_ORTHO_NEAR, RENDER_ORTHO_FAR)
     } else {
-        ortho_matrix(-1.0, 1.0, -1.0 / aspect, 1.0 / aspect, -10.0, 10.0)
+        ortho_matrix(
+            -1.0,
+            1.0,
+            -1.0 / aspect,
+            1.0 / aspect,
+            RENDER_ORTHO_NEAR,
+            RENDER_ORTHO_FAR,
+        )
     };
     // Transform to clip space, then NDC, then screen-space.
     let mut screen = Vec::with_capacity(4 * n);

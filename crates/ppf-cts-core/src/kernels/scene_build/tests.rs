@@ -29,7 +29,7 @@ fn make_obj<'a>(
 fn single_tri_assigns_sequential_globals() {
     let faces: [[u32; 3]; 1] = [[0, 1, 2]];
     let o = make_obj("sheet", 3, None, Some(&faces), None);
-    let r = build_index_map(&[o], &[]).unwrap();
+    let r = build_index_map(&[o]).unwrap();
     assert_eq!(r.rod_vert_range, (0, 0));
     assert_eq!(r.shell_vert_range, (0, 3));
     assert_eq!(r.concat_count, 3);
@@ -42,45 +42,17 @@ fn rod_verts_precede_shell_verts() {
     let rod = make_obj("rope", 3, Some(&edges), None, None);
     let faces: [[u32; 3]; 2] = [[0, 1, 2], [0, 2, 3]];
     let shell = make_obj("sheet", 4, None, Some(&faces), None);
-    let r = build_index_map(&[rod, shell], &[]).unwrap();
+    let r = build_index_map(&[rod, shell]).unwrap();
     assert_eq!(r.rod_vert_range, (0, 3));
     assert_eq!(r.shell_vert_range, (3, 7));
     assert_eq!(r.concat_count, 7);
 }
 
 #[test]
-fn merge_alias_redirects_target_to_source_slot() {
-    let f1: [[u32; 3]; 1] = [[0, 1, 2]];
-    let f2: [[u32; 3]; 1] = [[0, 1, 2]];
-    let o1 = make_obj("first", 3, None, Some(&f1), None);
-    let o2 = make_obj("second", 3, None, Some(&f2), None);
-    // (target_name=second, target_vi=0) -> (source_name=first, source_vi=0)
-    let merge = vec![("first".to_string(), "second".to_string(), vec![(0u32, 0u32)])];
-    let r = build_index_map(&[o1, o2], &merge).unwrap();
-    let m1 = &r.map_by_name["first"];
-    let m2 = &r.map_by_name["second"];
-    assert_eq!(m1, &vec![0i64, 1, 2]);
-    // Aliased vertex 0 of "second" must share global slot with first[0].
-    assert_eq!(m2[0], 0);
-    // Other verts get unique slots.
-    assert!(m2[1] != 0 && m2[2] != 0);
-    assert_eq!(r.concat_count, 5);
-}
-
-#[test]
-fn merge_unknown_object_errors() {
-    let f: [[u32; 3]; 1] = [[0, 1, 2]];
-    let o = make_obj("known", 3, None, Some(&f), None);
-    let merge = vec![("missing".to_string(), "known".to_string(), vec![(0, 0)])];
-    let err = build_index_map(&[o], &merge).unwrap_err();
-    assert!(matches!(err, SceneBuildError::MergePairUnknownObject { .. }));
-}
-
-#[test]
 fn unused_vertex_finalized() {
     let f: [[u32; 3]; 1] = [[0, 1, 2]];
     let o = make_obj("sheet", 4, None, Some(&f), None);
-    let r = build_index_map(&[o], &[]).unwrap();
+    let r = build_index_map(&[o]).unwrap();
     let m = &r.map_by_name["sheet"];
     assert_eq!(m[0], 0);
     assert_eq!(m[1], 1);
@@ -448,10 +420,10 @@ fn triangle_areas_unit_and_zero() {
 #[test]
 fn face_to_vert_weights_inverse_count() {
     let tris = vec![[0u32, 1, 2], [0, 1, 3]];
-    let w = face_to_vert_weights(4, &tris, 1e-4);
+    let w = face_to_vert_weights(4, &tris, FACE_TO_VERT_WEIGHT_EPS);
     // verts 0,1 are in 2 faces -> 1/(2+eps); verts 2,3 in 1 -> 1/(1+eps).
-    assert!((w[0] - 1.0 / (2.0 + 1e-4)).abs() < 1e-12);
-    assert!((w[3] - 1.0 / (1.0 + 1e-4)).abs() < 1e-12);
+    assert!((w[0] - 1.0 / (2.0 + FACE_TO_VERT_WEIGHT_EPS)).abs() < 1e-12);
+    assert!((w[3] - 1.0 / (1.0 + FACE_TO_VERT_WEIGHT_EPS)).abs() < 1e-12);
 }
 
 #[test]
@@ -655,16 +627,18 @@ fn rod_tri_offset_short_rod_flagged() {
 }
 
 #[test]
-fn group_vertex_alias_collects_pairs() {
-    let flat = vec![
-        (("tgt".to_string(), 0i64), ("src".to_string(), 0i64)),
-        (("tgt".to_string(), 1i64), ("src".to_string(), 5i64)),
+fn rod_tri_offset_short_rod_flagged_no_tris() {
+    // Rod-only scene (no triangles): the per-rod edge-length check is
+    // triangle-independent, so an over-large offset must still flag.
+    // edge length 0.05, offset 0.1 → EdgeShorterThanOffset.
+    let v = vec![
+        0.1, 0.1, 5.0,
+        0.15, 0.1, 5.0,
     ];
-    let g = group_vertex_alias(&flat);
-    assert_eq!(g.len(), 1);
-    assert_eq!(g[0].0, "src");
-    assert_eq!(g[0].1, "tgt");
-    assert_eq!(g[0].2.len(), 2);
+    let rods = vec![[0u32, 1]];
+    let tris: Vec<[u32; 3]> = vec![];
+    let r = rod_tri_contact_offset_check(&v, &rods, &tris, &[], &vec![0.1]);
+    assert!(matches!(r, Err(RodTriOffsetViolation::EdgeShorterThanOffset { .. })));
 }
 
 #[test]
@@ -713,6 +687,7 @@ fn make_assemble_obj<'a>(
         stitch_ind_cols: 0,
         stitch_w: None,
         stitch_w_cols: 0,
+        stitch_stiffness: 1.0,
         position: [0.0, 0.0, 0.0],
     }
 }
@@ -720,7 +695,7 @@ fn make_assemble_obj<'a>(
 #[test]
 fn assemble_empty_scene_returns_empty() {
     let map: std::collections::HashMap<String, Vec<i64>> = std::collections::HashMap::new();
-    let r = assemble_dyn_scene(&[], &map, 0, false, &[], &[]).unwrap();
+    let r = assemble_dyn_scene(&[], &map, 0, &[], &[]).unwrap();
     assert_eq!(r.concat_count, 0);
     assert!(r.concat_vert.is_empty());
     assert!(r.concat_rod.is_empty());
@@ -741,7 +716,7 @@ fn assemble_single_tri_object() {
     let mut map = std::collections::HashMap::new();
     map.insert("sheet".to_string(), vec![0i64, 1, 2]);
     let disp_idx = vec![("sheet".to_string(), [10.0, 20.0, 30.0])];
-    let r = assemble_dyn_scene(&[obj], &map, 3, false, &disp_idx, &[]).unwrap();
+    let r = assemble_dyn_scene(&[obj], &map, 3, &disp_idx, &[]).unwrap();
     assert_eq!(r.concat_count, 3);
     assert_eq!(r.concat_vert.len(), 9);
     assert_eq!(r.concat_tri, vec![0u32, 1, 2]);
@@ -758,31 +733,6 @@ fn assemble_single_tri_object() {
 }
 
 #[test]
-fn assemble_multi_object_with_merge_filters_degenerate() {
-    // Two tri objects merged at vertex (B[0] -> A[0]). A has a
-    // single face [0,1,2]; B has [0,1,2] but B[0] aliases to A[0].
-    let va = vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
-    let vb = vec![5.0, 0.0, 0.0, 6.0, 0.0, 0.0, 5.0, 1.0, 0.0];
-    let ca = vec![1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0];
-    let cb = vec![0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0];
-    let fa: [[u32; 3]; 1] = [[0, 1, 2]];
-    let fb: [[u32; 3]; 1] = [[0, 1, 2]];
-    let oa = make_assemble_obj("a", "tri", &va, &ca, Some(&fa), None, None);
-    let ob = make_assemble_obj("b", "tri", &vb, &cb, Some(&fb), None, None);
-    // After merge: B[0] -> A[0] (same global slot 0). B[1] -> 3, B[2] -> 4.
-    let mut map = std::collections::HashMap::new();
-    map.insert("a".to_string(), vec![0i64, 1, 2]);
-    map.insert("b".to_string(), vec![0i64, 3, 4]);
-    let disp = vec![
-        ("a".to_string(), [0.0, 0.0, 0.0]),
-        ("b".to_string(), [0.0, 0.0, 0.0]),
-    ];
-    let r = assemble_dyn_scene(&[oa, ob], &map, 5, true, &disp, &[]).unwrap();
-    // Both faces are non-degenerate (no two indices coincide).
-    assert_eq!(r.shell_count, 2);
-}
-
-#[test]
 fn assemble_rod_object() {
     let v = vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 2.0, 0.0, 0.0];
     let c = vec![0.0; 9];
@@ -791,7 +741,7 @@ fn assemble_rod_object() {
     let mut map = std::collections::HashMap::new();
     map.insert("rope".to_string(), vec![0i64, 1, 2]);
     let disp = vec![("rope".to_string(), [0.0, 0.0, 0.0])];
-    let r = assemble_dyn_scene(&[obj], &map, 3, false, &disp, &[]).unwrap();
+    let r = assemble_dyn_scene(&[obj], &map, 3, &disp, &[]).unwrap();
     assert_eq!(r.rod_count, 2);
     assert_eq!(r.concat_rod, vec![0u32, 1, 1, 2]);
 }
@@ -810,7 +760,7 @@ fn assemble_tet_object() {
     let mut map = std::collections::HashMap::new();
     map.insert("block".to_string(), vec![0i64, 1, 2, 3]);
     let disp = vec![("block".to_string(), [0.0, 0.0, 0.0])];
-    let r = assemble_dyn_scene(&[obj], &map, 4, false, &disp, &[]).unwrap();
+    let r = assemble_dyn_scene(&[obj], &map, 4, &disp, &[]).unwrap();
     // shell_count counts pure-shell triangles only; tet surfaces
     // come in phase 4 and are not part of shell_count.
     assert_eq!(r.shell_count, 0);
@@ -830,7 +780,7 @@ fn assemble_collider_flag_when_pinned_endpoints() {
     let mut map = std::collections::HashMap::new();
     map.insert("sheet".to_string(), vec![0i64, 1, 2]);
     let disp = vec![("sheet".to_string(), [0.0, 0.0, 0.0])];
-    let r = assemble_dyn_scene(&[obj], &map, 3, false, &disp, &[]).unwrap();
+    let r = assemble_dyn_scene(&[obj], &map, 3, &disp, &[]).unwrap();
     assert_eq!(r.concat_tri_is_collider, vec![1u8]);
 }
 
@@ -845,7 +795,7 @@ fn assemble_uv_passthrough_for_shell() {
     let mut map = std::collections::HashMap::new();
     map.insert("s".to_string(), vec![0i64, 1, 2]);
     let disp = vec![("s".to_string(), [0.0, 0.0, 0.0])];
-    let r = assemble_dyn_scene(&[obj], &map, 3, false, &disp, &[]).unwrap();
+    let r = assemble_dyn_scene(&[obj], &map, 3, &disp, &[]).unwrap();
     assert_eq!(r.concat_uv, uv);
 }
 
@@ -865,19 +815,23 @@ fn assemble_cross_stitch_remaps() {
         ("a".to_string(), [0.0, 0.0, 0.0]),
         ("b".to_string(), [0.0, 0.0, 0.0]),
     ];
-    let cs_ind = vec![0i64, 0, 1, 2];
-    let cs_w = vec![1.0, 0.5, 0.25, 0.25];
+    // 6-wide: source bary over a's verts (slots 0..2 -> src_map),
+    // target bary over b's verts (slots 3..5 -> tgt_map).
+    let cs_ind = vec![0i64, 1, 2, 0, 1, 2];
+    let cs_w = vec![0.2, 0.3, 0.5, 0.5, 0.25, 0.25];
     let cs = CrossStitch {
         source_name: "a",
         target_name: "b",
         ind: &cs_ind,
         weights: &cs_w,
         k: 1,
+        stitch_stiffness: 2.5,
     };
-    let r = assemble_dyn_scene(&[oa, ob], &map, 6, false, &disp, &[cs]).unwrap();
-    // a[0] -> 0; b[0] -> 3; b[1] -> 4; b[2] -> 5.
-    assert_eq!(r.concat_stitch_ind, vec![0i64, 3, 4, 5]);
+    let r = assemble_dyn_scene(&[oa, ob], &map, 6, &disp, &[cs]).unwrap();
+    // source a[0,1,2] -> 0,1,2; target b[0,1,2] -> 3,4,5.
+    assert_eq!(r.concat_stitch_ind, vec![0i64, 1, 2, 3, 4, 5]);
     assert_eq!(r.concat_stitch_w, cs_w);
+    assert_eq!(r.concat_stitch_stiffness, vec![2.5f32]);
 }
 
 #[test]

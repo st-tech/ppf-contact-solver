@@ -59,7 +59,7 @@ void embed_strainlimiting_force_hessian(const DataSet &data,
      face_params, param] __device__(unsigned i) mutable {
         const FaceProp &prop = data.prop.face[i];
         const FaceParam &fparam = face_params[prop.param_index];
-        if (!prop.fixed && fparam.strainlimit > 0.0f) {
+        if (!prop.fixed && !prop.rest_excluded && fparam.strainlimit > 0.0f) {
             float shrink_min = fminf(fparam.shrink_x, fparam.shrink_y);
             float limit = (fparam.strainlimit + 1.0f) / shrink_min - 1.0f;
             const Vec3u &face = data.mesh.mesh.face[i];
@@ -250,7 +250,7 @@ float line_search(const DataSet &data, const Vec<Vec3f> &eval_x,
         float t = param.line_search_max_t;
         const FaceProp &prop = data.prop.face[i];
         const FaceParam &fparam = face_params[prop.param_index];
-        if (!prop.fixed && fparam.strainlimit > 0.0f) {
+        if (!prop.fixed && !prop.rest_excluded && fparam.strainlimit > 0.0f) {
             float shrink_min = fminf(fparam.shrink_x, fparam.shrink_y);
             float limit = (fparam.strainlimit + 1.0f) / shrink_min - 1.0f;
             Vec3u face = mesh.mesh.face[i];

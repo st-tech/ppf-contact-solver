@@ -1,6 +1,5 @@
 # Build outputs rebuilt inside the container.
 target/
-.tree-pyo3/
 # Per-tree venv created by `python3 -m venv` on the host; the
 # container creates its own via `warmup.py --skip-confirmation`.
 .venv/

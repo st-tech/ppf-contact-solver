@@ -7,6 +7,7 @@ import bpy  # pyright: ignore
 
 from bpy.types import UIList  # pyright: ignore
 
+from ...models.groups import GROUP_TYPE_ICONS
 from ..state import decode_vertex_group_identifier
 
 
@@ -18,16 +19,9 @@ class OBJECT_UL_AssignedObjectsList(UIList):
     ):
         # Determine icon based on group type
         group = data  # data is the group object
-        if group.object_type == "SOLID":
-            object_icon = "MESH_CUBE"
-        elif group.object_type == "SHELL":
-            object_icon = "OUTLINER_OB_SURFACE"
-        elif group.object_type == "ROD":
-            object_icon = "VIEW_ORTHO"
-        elif group.object_type == "STATIC":
-            object_icon = "OBJECT_ORIGIN"
-        else:
-            object_icon = "MESH_DATA"
+        object_icon = GROUP_TYPE_ICONS.get(group.object_type, {}).get(
+            "object", "MESH_DATA"
+        )
 
         if self.layout_type in {"DEFAULT", "COMPACT"}:
             from ...core.uuid_registry import get_object_by_uuid
@@ -57,6 +51,7 @@ class OBJECT_UL_PinVertexGroupsList(UIList):
             resolve_pin(item)
             _, vg_name = decode_vertex_group_identifier(item.name)
             obj = get_object_by_uuid(item.object_uuid) if item.object_uuid else None
+            row = layout.row(align=True)
             if obj and vg_name:
                 has_pin = False
                 if obj.type == "MESH" and obj.vertex_groups.get(vg_name):
@@ -64,14 +59,19 @@ class OBJECT_UL_PinVertexGroupsList(UIList):
                 elif obj.type == "CURVE" and obj.get(f"_pin_{vg_name}"):
                     has_pin = True
                 if has_pin:
-                    row = layout.row()
                     row.label(text=f"[{obj.name}][{vg_name}]", icon="GROUP_VERTEX")
                 else:
-                    layout.label(
+                    row.label(
                         text=f"[{obj.name}][{vg_name}] (Missing)", icon="ERROR"
                     )
             else:
-                layout.label(text=item.name, icon="ERROR")
+                row.label(text=item.name, icon="ERROR")
+            # Per-pin viewport visibility (eye), default open. Replaces the
+            # former group-level "Show Pins" checkbox.
+            row.prop(
+                item, "show_overlay", text="", emboss=False,
+                icon="HIDE_OFF" if item.show_overlay else "HIDE_ON",
+            )
         elif self.layout_type == "GRID":
             layout.alignment = "CENTER"
             layout.label(text="", icon="GROUP_VERTEX")
@@ -200,6 +200,37 @@ class SCENE_UL_DynParamKeyframesList(bpy.types.UIList):
             layout.label(text="", icon="KEYFRAME")
 
 
+class SOLVER_UL_CheckpointFrames(bpy.types.UIList):
+    """Saved-checkpoint frames offered in the Resume-From dialog."""
+
+    def draw_item(self, context, layout, data, item, icon, active_data, active_property, index):
+        if self.layout_type in {"DEFAULT", "COMPACT"}:
+            # item.frame is the remote 0-based checkpoint index (kept raw for
+            # the solver's --load on resume). Display it as the Blender 1-based
+            # frame so it matches "Last Saved" in Scene Info.
+            from ..main_panel import remote_frame_to_blender
+            layout.label(
+                text=f"Frame {remote_frame_to_blender(item.frame)}", icon="KEYFRAME"
+            )
+        elif self.layout_type == "GRID":
+            layout.alignment = "CENTER"
+            layout.label(text="", icon="KEYFRAME")
+
+
+class SCENE_UL_SaveCheckpointFrames(bpy.types.UIList):
+    """User-requested frames at which the solver saves a resumable state."""
+
+    def draw_item(self, context, layout, data, item, icon, active_data, active_property, index):
+        if self.layout_type in {"DEFAULT", "COMPACT"}:
+            # item.frame is the Blender 1-based frame the artist entered, so
+            # show it verbatim (the encoder converts to the solver's 0-based
+            # index at upload time).
+            layout.label(text=f"Frame {item.frame}", icon="KEYFRAME")
+        elif self.layout_type == "GRID":
+            layout.alignment = "CENTER"
+            layout.label(text="", icon="KEYFRAME")
+
+
 class SCENE_UL_InvisibleCollidersList(bpy.types.UIList):
     def draw_item(self, context, layout, data, item, icon, active_data, active_property, index):
         if self.layout_type in {"DEFAULT", "COMPACT"}:
@@ -241,8 +272,13 @@ class OBJECT_UL_VelocityKeyframesList(bpy.types.UIList):
     def draw_item(self, context, layout, data, item, icon, active_data, active_property, index):
         if self.layout_type in {"DEFAULT", "COMPACT"}:
             d = item.direction
+            spin = (
+                f"  ω={item.angular_speed:.0f}°/s {item.angular_axis}"
+                if item.enable_angular and item.angular_speed != 0.0
+                else ""
+            )
             layout.label(
-                text=f"Frame {item.frame}  ({item.speed:.1f} m/s  [{d[0]:.1f}, {d[1]:.1f}, {d[2]:.1f}])",
+                text=f"Frame {item.frame}  ({item.speed:.1f} m/s  [{d[0]:.1f}, {d[1]:.1f}, {d[2]:.1f}]){spin}",
                 icon="KEYFRAME",
             )
         elif self.layout_type == "GRID":
@@ -270,6 +306,8 @@ classes = (
     OBJECT_UL_MergePairsList,
     SCENE_UL_DynParamsList,
     SCENE_UL_DynParamKeyframesList,
+    SOLVER_UL_CheckpointFrames,
+    SCENE_UL_SaveCheckpointFrames,
     SCENE_UL_InvisibleCollidersList,
     SCENE_UL_ColliderKeyframesList,
     OBJECT_UL_VelocityKeyframesList,

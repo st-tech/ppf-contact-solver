@@ -17,6 +17,9 @@ from .primitives import (
     _generate_arrow,
     _generate_sphere_wireframe,
     _line_to_tris,
+    _orthonormal_basis,
+    _sphere_grid,
+    _sphere_wire_lines,
 )
 
 
@@ -189,11 +192,7 @@ def _build_collider_batches(view_distance):
             normal = normal.normalized()
 
             # Orthonormal basis on the plane
-            if abs(normal.z) < 0.9:
-                tangent = normal.cross(Vector((0, 0, 1))).normalized()
-            else:
-                tangent = normal.cross(Vector((1, 0, 0))).normalized()
-            bitangent = normal.cross(tangent).normalized()
+            tangent, bitangent = _orthonormal_basis(normal)
 
             # Core grid on the plane (view-scaled)
             grid_size = scale
@@ -272,28 +271,11 @@ def _build_collider_batches(view_distance):
 
                 # Lower hemisphere wireframe (only bottom half: rings below equator)
                 half_rings = rings // 2
-                grid = []
-                for i in range(half_rings + 1):
-                    theta = -math.pi / 2 + math.pi / 2 * i / half_rings
-                    ring_row = []
-                    for j in range(segments):
-                        phi = 2 * math.pi * j / segments
-                        x = radius * math.cos(theta) * math.cos(phi)
-                        y = radius * math.cos(theta) * math.sin(phi)
-                        z = radius * math.sin(theta)
-                        ring_row.append(Vector((x, y, z)))
-                    grid.append(ring_row)
-                hemi_tris = []
-                for i in range(half_rings + 1):
-                    for j in range(segments):
-                        hemi_tris.extend(_line_to_tris(
-                            grid[i][j], grid[i][(j + 1) % segments], thickness,
-                        ))
-                for j in range(segments):
-                    for i in range(half_rings):
-                        hemi_tris.extend(_line_to_tris(
-                            grid[i][j], grid[i + 1][j], thickness,
-                        ))
+                grid = _sphere_grid(
+                    radius=radius, segments=segments, rings=half_rings,
+                    theta_min=-math.pi / 2, theta_max=0.0,
+                )
+                hemi_tris = _sphere_wire_lines(grid, segments, half_rings, thickness)
                 hemi_tris = [v + pos for v in hemi_tris]
 
                 # Cylinder extending upward from equator

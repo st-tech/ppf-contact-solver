@@ -20,5 +20,23 @@ serde_json.workspace = true
 ciborium.workspace = true
 thiserror.workspace = true
 
+# The status-record liveness lock (status::lock) needs a kernel advisory
+# lock the OS releases on ANY process death, plus a PID-scoped liveness
+# probe. Both are raw syscalls, so they are the crate's only
+# platform-conditional dependencies.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Storage_FileSystem",
+    "Win32_System_IO",
+    "Win32_System_Threading",
+] }
+
+[dev-dependencies]
+tempfile = "3"
+
 [lints]
 workspace = true

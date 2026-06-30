@@ -7,6 +7,11 @@
 # singleton, plus the helpers operators and UI code call directly. State
 # transitions go through the pure ``transition()`` function in
 # ``core/transitions.py``.
+#
+# The ``communicator`` re-export here is a backward-compatible surface for
+# legacy UI and MCP call sites; new core code should import the singleton
+# directly from ``core/facade.py`` (its definition site, which is import-cycle
+# free) rather than going through this module.
 
 import collections
 import os
@@ -29,6 +34,7 @@ from .pc2 import (
     load_curve_cache,
     mark_real_frame,
     object_pc2_key,
+    object_pc2_key_readonly,
     overwrite_pc2_frame,
     read_pc2_frame_count,
     read_pc2_n_verts,
@@ -85,75 +91,118 @@ def _apply_matrix_np(mat, positions):
     return positions @ m[:3, :3].T + m[:3, 3]
 
 
+def _needs_after_deformers(object_type, obj):
+    """True when the object's MESH_CACHE must sit after upstream deformers.
+
+    STATIC colliders always need it (captured-deformation or fcurve
+    animation flows into the simulator). SHELL/SOLID/ROD cloths inherit
+    the same need whenever they carry a deforming modifier stack
+    (Armature, Lattice, ...) that would otherwise re-deform the solver's
+    PC2 output on top of itself.
+    """
+    from .utils import has_deforming_modifier_stack
+    return object_type == "STATIC" or has_deforming_modifier_stack(obj)
+
+
 # ---------------------------------------------------------------------------
 # Animation helpers (main-thread only)
 # ---------------------------------------------------------------------------
 
-def apply_stitch_constraints(obj, map_vert, context):
-    """Apply stitch constraints by averaging positions of stitched vertices.
+def _apply_post_snap_closure(context, world_by_uuid):
+    """Snap every stitched source vertex exactly onto its target, in world
+    space, across the per-object reconstructed position arrays.
 
-    *map_vert* is a numpy ndarray (N, 3).  Returns an ndarray of the same shape.
+    ``world_by_uuid`` maps object uuid -> ndarray (N, 3) of that object's
+    deformed positions for the frame, indexed by the object's local vertex
+    (mesh) or sample (rod) index, which is the same index space the stitch
+    data uses. Arrays are mutated in place. Handles both the cross-object
+    snap/merge stitches (every supported type pair, solids reconstructed via
+    surface embedding upstream) and the intra-object loose-edge stitches.
+    The caller gates this on the global ``post_snap_exactly`` toggle.
     """
     try:
+        import json
+
+        # Snapshot so chained stitches read original (pre-move) targets.
+        snap = {uid: arr.copy() for uid, arr in world_by_uuid.items()}
+
+        # Cross-object stitches (snap/merge pairs, all supported type pairs).
+        state = get_addon_data(context.scene).state
+        for pair in state.merge_pairs:
+            if not pair.cross_stitch_json:
+                continue
+            try:
+                data = json.loads(pair.cross_stitch_json)
+            except Exception:
+                continue
+            src_uid = data.get("source_uuid")
+            tgt_uid = data.get("target_uuid")
+            if src_uid not in world_by_uuid or tgt_uid not in snap:
+                continue
+            src_arr = world_by_uuid[src_uid]
+            tgt = snap[tgt_uid]
+            n_src, n_tgt = len(src_arr), len(tgt)
+            for row, wt in zip(data.get("ind", []), data.get("w", [])):
+                # The snap-time JSON keeps the source as a single Blender
+                # vertex (the SOLID-source tet re-projection is solver-only),
+                # so this Blender-space closure snaps that source vertex onto
+                # the target barycentric point. New rows are 6-wide
+                # [s, s, s, t0, t1, t2] / [1, 0, 0, a, b, c] (target bary in
+                # slots 3..5); legacy rows are 4-wide [s, t0, t1, t2] /
+                # [1, a, b, c]. Accept both so pre-migration scenes still
+                # snap until they are re-snapped.
+                if len(row) >= 6 and len(wt) >= 6:
+                    si = int(row[0])
+                    t0, t1, t2 = int(row[3]), int(row[4]), int(row[5])
+                    a, b, c = float(wt[3]), float(wt[4]), float(wt[5])
+                elif len(row) >= 4 and len(wt) >= 4:
+                    si = int(row[0])
+                    t0, t1, t2 = int(row[1]), int(row[2]), int(row[3])
+                    a, b, c = float(wt[1]), float(wt[2]), float(wt[3])
+                else:
+                    continue
+                if si >= n_src or t0 >= n_tgt or t1 >= n_tgt or t2 >= n_tgt:
+                    continue
+                src_arr[si] = a * tgt[t0] + b * tgt[t1] + c * tgt[t2]
+
+        # Intra-object loose-edge stitches. Skip ROD: every rod edge is
+        # "loose", so averaging endpoints would corrupt the rod.
         from .encoder import detect_stitch_edges
-
-        # Match the obj to its group by UUID to avoid picking the wrong
-        # group if two objects share a name after a rename/duplicate.
-        from .uuid_registry import get_object_uuid
-        obj_uuid = get_object_uuid(obj)
-        obj_group = None
-        if obj_uuid:
-            for group in iterate_active_object_groups(context.scene):
-                for assigned in group.assigned_objects:
-                    if assigned.uuid and assigned.uuid == obj_uuid:
-                        obj_group = group
-                        break
-                if obj_group:
-                    break
-
-        if not obj_group:
-            return map_vert
-
-        # ROD meshes have no faces by design, so every edge is "loose"
-        # and detect_stitch_edges flags them all. Averaging endpoints of
-        # short rod edges is exactly the bug: pin animation surfaces it
-        # as sudden vertex jumps when neighboring rod verts get close.
-        if obj_group.object_type == "ROD":
-            return map_vert
-
-        stitch_data = detect_stitch_edges(obj.data)
-        if not stitch_data:
-            return map_vert
-
-        computed_contact_gap = obj_group.computed_contact_gap
-        computed_contact_offset = obj_group.computed_contact_offset
-        stitch_threshold = 2 * computed_contact_gap + computed_contact_offset
-
-        Ind, _ = stitch_data
-        v1_idx = numpy.asarray(Ind[:, 0], dtype=numpy.intp)
-        v2_idx = numpy.asarray(Ind[:, 1], dtype=numpy.intp)
-        n = len(map_vert)
-        valid = (v1_idx < n) & (v2_idx < n)
-        v1_idx = v1_idx[valid]
-        v2_idx = v2_idx[valid]
-
-        stitched = map_vert.copy()
-        diffs = stitched[v1_idx] - stitched[v2_idx]
-        dists = numpy.linalg.norm(diffs, axis=1)
-        mask = dists < stitch_threshold
-        v1_m = v1_idx[mask]
-        v2_m = v2_idx[mask]
-        avg = (stitched[v1_m] + stitched[v2_m]) / 2.0
-        stitched[v1_m] = avg
-        stitched[v2_m] = avg
-        return stitched
+        from .uuid_registry import get_object_uuid, resolve_assigned
+        for group in iterate_active_object_groups(context.scene):
+            if group.object_type == "ROD":
+                continue
+            thr = 2 * group.computed_contact_gap + group.computed_contact_offset
+            for obj_ref in group.assigned_objects:
+                if not obj_ref.included:
+                    continue
+                obj = resolve_assigned(obj_ref)
+                if not obj or obj.type != "MESH":
+                    continue
+                uid = get_object_uuid(obj)
+                if uid is None or uid not in world_by_uuid:
+                    continue
+                sd = detect_stitch_edges(obj.data)
+                if not sd:
+                    continue
+                arr = world_by_uuid[uid]
+                base = snap[uid]
+                Ind, _ = sd
+                v1 = numpy.asarray(Ind[:, 0], dtype=numpy.intp)
+                v2 = numpy.asarray(Ind[:, 1], dtype=numpy.intp)
+                ok = (v1 < len(arr)) & (v2 < len(arr))
+                v1, v2 = v1[ok], v2[ok]
+                close = numpy.linalg.norm(base[v1] - base[v2], axis=1) < thr
+                v1, v2 = v1[close], v2[close]
+                mid = 0.5 * (base[v1] + base[v2])
+                arr[v1] = mid
+                arr[v2] = mid
 
     except Exception as e:
-        console.write(f"Failed to apply stitch constraints to {obj.name}: {e}")
-        return map_vert
+        console.write(f"post-snap closure failed: {e}")
 
 
-def _validate_curve_mapping(display_name, obj, map_indices, vert, spline_meta):
+def _validate_curve_mapping(display_name, map_indices, vert, spline_meta):
     # display_name is used ONLY for human-readable error text. Internal
     # routing is UUID-based via the tuples constructed in apply_animation.
     if len(map_indices) == 0:
@@ -203,6 +252,78 @@ def _validate_mesh_mapping(display_name, obj, map_indices, surface_map, vert):
         raise ValueError(f"Surface vertex mapping out of range for '{display_name}'.")
 
 
+def _gap_fill_poses(obj, n_verts):
+    """Compute the per-frame poses used to fill frames before the first
+    real simulation frame arrives.
+
+    Returns ``(rest_co, sd_cache_local)``:
+
+    - ``rest_co``: ``(n_verts, 3)`` fallback pose. The object's rest cage,
+      replaced by the deform-evaluated pose (Geometry Nodes, Armature, ...)
+      when the stack deforms vertices, and by the curve rest CVs for a
+      CURVE. The MESH_CACHE modifier is excluded from the eval so we don't
+      read prior solver output back in.
+    - ``sd_cache_local``: ``(n_frames, n_verts, 3)`` in object-local space
+      for a Case-3 STATIC collider that carries a captured-deformation
+      cache, else ``None``. When present, gap frame ``i`` should use
+      ``sd_cache_local[i]`` (depsgraph-baked pose) in preference to
+      ``rest_co``.
+    """
+    if obj.type == "CURVE":
+        from .curve_rod import get_curve_rest_cvs
+        return get_curve_rest_cvs(obj), None
+
+    rest_co = numpy.empty(n_verts * 3, dtype=numpy.float64)
+    obj.data.vertices.foreach_get("co", rest_co)
+    rest_co = rest_co.reshape(n_verts, 3)
+    # A deform-only modifier stack (Geometry Nodes, Armature, ...) makes
+    # the visible pose diverge from the rest cage. Gap-fill from the
+    # deform-evaluated pose so frames before the first sim arrival (notably
+    # PC2 frame 0 / scene frame 1) match the shape the solver started from,
+    # instead of showing the flat rest mesh for one frame.
+    from .utils import (
+        eval_deform_local_positions,
+        has_deforming_modifier_stack,
+    )
+    if has_deforming_modifier_stack(obj):
+        from .pc2 import MODIFIER_NAME
+        deform_co = eval_deform_local_positions(
+            obj, exclude_modifier_name=MODIFIER_NAME,
+        )
+        if deform_co is not None and len(deform_co) == n_verts:
+            rest_co = deform_co.astype(numpy.float64)
+    # Case 3 STATIC: gap-fill from the captured-deformation cache instead
+    # of the undeformed rest mesh, so frames before the first sim arrival
+    # still show the depsgraph-baked pose at each gap frame.
+    sd_cache_local = None
+    if has_static_deform_animation(obj):
+        sd_cache = get_static_deform_cache(obj)
+        if sd_cache is not None and sd_cache.shape[1] == n_verts:
+            inv = numpy.array(inv_world_matrix(obj), dtype=numpy.float64)
+            sd_world = sd_cache.astype(numpy.float64)
+            sd_cache_local = sd_world @ inv[:3, :3].T + inv[:3, 3]
+    return rest_co, sd_cache_local
+
+
+def _append_leading_gap_frames(pc2_path, frame_idx, n_verts, obj):
+    """Append gap frames covering PC2 indices ``[0, frame_idx)`` so the
+    next appended real frame lands at PC2 index ``frame_idx``.
+
+    Uses the Case-3 captured-deformation pose per frame when available,
+    falling back to the (deform-evaluated) rest pose. Shared by the
+    file-create path and the recovery path that finds an existing but
+    0-frame (header-only) PC2 file on disk.
+    """
+    if frame_idx <= 0:
+        return
+    rest_co, sd_cache_local = _gap_fill_poses(obj, n_verts)
+    for gap_i in range(frame_idx):
+        if sd_cache_local is not None and gap_i < sd_cache_local.shape[0]:
+            append_pc2_frame(pc2_path, sd_cache_local[gap_i], n_verts)
+        else:
+            append_pc2_frame(pc2_path, rest_co, n_verts)
+
+
 def _write_mesh_frame_to_pc2(obj, map_vert, blender_frame, n_verts_override=None,
                               place_after_deformers=False):
     """Write a single frame to the object's PC2 file.
@@ -242,54 +363,26 @@ def _write_mesh_frame_to_pc2(obj, map_vert, blender_frame, n_verts_override=None
                 pass
             clear_gap_tracking(key)
 
-    if not os.path.exists(pc2_path):
-        # First frame to arrive — create PC2, gap-fill up to this frame,
-        # and write the real data.
+    # An existing file whose header reports 0 frames (header-only: an
+    # interrupted write between create and the first append, a disk-full
+    # error mid-sequence, or external truncation) has no frame 0 to
+    # duplicate, so it cannot go through the fill_gap_frames path below.
+    # Treat it like a missing file and re-run the create/gap-fill flow so
+    # the appended real frame still lands at PC2 index ``frame_idx``.
+    file_present = os.path.exists(pc2_path)
+    if file_present:
+        try:
+            file_present = read_pc2_frame_count(pc2_path) >= 1
+        except Exception:
+            file_present = False
+
+    if not file_present:
+        # First frame to arrive (or a 0-frame file we discard): create
+        # PC2, gap-fill up to this frame, and write the real data.
         os.makedirs(os.path.dirname(pc2_path), exist_ok=True)
-        if obj.type == "CURVE":
-            from .curve_rod import get_curve_rest_cvs
-            rest_co = get_curve_rest_cvs(obj)
-            sd_cache_local = None
-        else:
-            rest_co = numpy.empty(n_verts * 3, dtype=numpy.float64)
-            obj.data.vertices.foreach_get("co", rest_co)
-            rest_co = rest_co.reshape(n_verts, 3)
-            # A deform-only modifier stack (Geometry Nodes, Armature,
-            # ...) makes the visible pose diverge from the rest cage.
-            # Gap-fill from the deform-evaluated pose so frames before
-            # the first sim arrival (notably PC2 frame 0 / scene frame
-            # 1) match the shape the solver started from, instead of
-            # showing the flat rest mesh for one frame. The MESH_CACHE
-            # is excluded from the eval so we don't read prior output.
-            from .utils import (
-                eval_deform_local_positions,
-                has_deforming_modifier_stack,
-            )
-            if has_deforming_modifier_stack(obj):
-                from .pc2 import MODIFIER_NAME
-                deform_co = eval_deform_local_positions(
-                    obj, exclude_modifier_name=MODIFIER_NAME,
-                )
-                if deform_co is not None and len(deform_co) == n_verts:
-                    rest_co = deform_co.astype(numpy.float64)
-            # Case 3 STATIC: gap-fill from the captured-deformation
-            # cache instead of the undeformed rest mesh, so frames
-            # before the first sim arrival still show the
-            # depsgraph-baked pose at each gap frame.
-            sd_cache_local = None
-            if has_static_deform_animation(obj):
-                sd_cache = get_static_deform_cache(obj)
-                if sd_cache is not None and sd_cache.shape[1] == n_verts:
-                    inv = numpy.array(inv_world_matrix(obj), dtype=numpy.float64)
-                    sd_world = sd_cache.astype(numpy.float64)
-                    sd_cache_local = sd_world @ inv[:3, :3].T + inv[:3, 3]
         create_pc2_file(pc2_path, n_verts, start=0.0, sampling=1.0)
         # Fill gap frames [0, frame_idx).
-        for gap_i in range(frame_idx):
-            if sd_cache_local is not None and gap_i < sd_cache_local.shape[0]:
-                append_pc2_frame(pc2_path, sd_cache_local[gap_i], n_verts)
-            else:
-                append_pc2_frame(pc2_path, rest_co, n_verts)
+        _append_leading_gap_frames(pc2_path, frame_idx, n_verts, obj)
         # Write the actual simulation frame
         append_pc2_frame(pc2_path, map_vert, n_verts)
         mark_real_frame(key, frame_idx)
@@ -370,6 +463,16 @@ def _apply_single_frame(context, n, vert, map_by_uuid, surface_map_by_uuid,
     """
     blender_frame = n + 1
 
+    from .curve_rod import apply_fit_cached, build_fit_cache
+
+    # Phase 1: reconstruct every object's deformed positions for this frame,
+    # carried in WORLD space so the post-snap closure can move stitched
+    # vertices across objects in one common frame. Solid surfaces are
+    # reconstructed in LOCAL space first (their embedding normal coef is in
+    # local units) then converted to world; the world->local matrix is
+    # reapplied at write time.
+    world_by_uuid = {}
+    records = []
     for target in target_objects:
         uid = target.uuid
         obj = target.obj
@@ -380,10 +483,6 @@ def _apply_single_frame(context, n, vert, map_by_uuid, surface_map_by_uuid,
             mat = target.constant_inv
 
         if obj.type == "CURVE":
-            from .curve_rod import (
-                apply_fit_cached, build_fit_cache, compute_params,
-            )
-
             cached = curve_fit_cache.get(uid) if curve_fit_cache is not None else None
             if cached is None:
                 cached = build_fit_cache(obj)
@@ -392,57 +491,28 @@ def _apply_single_frame(context, n, vert, map_by_uuid, surface_map_by_uuid,
             cache_list, params_data = cached
             if not params_data.get("splines"):
                 continue
-            _validate_curve_mapping(uid, obj, map, vert, params_data["splines"])
-            sim_pos = _apply_matrix_np(mat, vert[map])
-
-            # Fit each spline and collect CVs in Blender's layout order
-            all_cvs = []
-            vi_offset = 0
-            for si, spline_meta in enumerate(params_data["splines"]):
-                if si >= len(obj.data.splines):
-                    continue
-                n_sp_verts = len(spline_meta["params"])
-                sp_sim = sim_pos[vi_offset : vi_offset + n_sp_verts]
-                cvs = apply_fit_cached(sp_sim, cache_list[si])
-                all_cvs.append(cvs)
-                vi_offset += n_sp_verts
-
-            if all_cvs:
-                curve_cvs = numpy.concatenate(all_cvs, axis=0)
-                n_cvs = _get_curve_cv_count(obj)
-                _write_mesh_frame_to_pc2(obj, curve_cvs[:n_cvs], blender_frame,
-                                         n_verts_override=n_cvs)
+            _validate_curve_mapping(uid, map, vert, params_data["splines"])
+            # Rod samples are already world-space solver output.
+            world_sim = numpy.array(vert[map], dtype=numpy.float64)
+            world_by_uuid[uid] = world_sim
+            records.append({
+                "kind": "curve", "obj": obj, "mat": mat, "world": world_sim,
+                "cache_list": cache_list, "params": params_data,
+            })
             continue
 
-        # STATIC collider meshes have captured-deformation or fcurve
-        # animation flowing into the simulator; their MESH_CACHE must
-        # sit after the upstream deformers so PC2 wins on display.
-        # SHELL/SOLID/ROD cloths inherit the same need whenever they
-        # carry a deforming modifier stack (Armature, Lattice, ...) -
-        # Capture Pin Deformation is the canonical case but any
-        # deformer would otherwise re-deform the solver's PC2 output
-        # on top of itself, producing double-counted motion.
-        from .utils import has_deforming_modifier_stack
-        place_after_deformers = (
-            target.object_type == "STATIC"
-            or has_deforming_modifier_stack(obj)
-        )
+        # STATIC colliders (and any cloth with a deforming modifier stack)
+        # need their MESH_CACHE after the upstream deformers so PC2 wins.
+        place_after_deformers = _needs_after_deformers(target.object_type, obj)
 
-        # --- Mesh path: write simulation output directly to PC2 ---
+        # --- Mesh path ---
         surface_map = surface_map_by_uuid.get(uid)
         _validate_mesh_mapping(uid, obj, map, surface_map, vert)
         if surface_map is not None:
-            # Frame-embedding reconstruction: p' = x0' + c1*b1' + c2*b2' + c3*n̂'.
-            # The surface_map's coefs were computed on the local-space tet
-            # produced by fTetWild, so c3 is in local-space length units.
-            # Convert each triangle corner to local space FIRST, then apply
-            # the formula; otherwise non-uniform world scales (Blender object
-            # scale != 1) make `c3 * n̂_world` use a unit normal in world
-            # while c3 still carries local units, producing a constant
-            # rest-pose offset that surfaces as a sharp surface jump on the
-            # first fetched frame (PC2 frame 0 is gap-filled with the actual
-            # rest mesh, hiding the rest-pose error; frame 1 onward expose
-            # it).
+            # Frame-embedding reconstruction p' = x0' + c1*b1' + c2*b2' + c3*n.
+            # Done in LOCAL space (corners converted via mat first) because c3
+            # carries local-space length units; mixing it with world-space
+            # corners would inject a scale-dependent rest-pose offset.
             tri_indices_arr, coefs_arr, surf_tri_arr = surface_map
             n_verts = len(obj.data.vertices)
             ti = numpy.asarray(tri_indices_arr[:n_verts])
@@ -453,26 +523,60 @@ def _apply_single_frame(context, n, vert, map_by_uuid, surface_map_by_uuid,
             v2 = _apply_matrix_np(mat, vert[map[tris[:, 2]]])
             b1 = v1 - v0
             b2 = v2 - v0
-            n = numpy.cross(b1, b2)
-            n_sq = numpy.einsum("ij,ij->i", n, n)
+            nrm = numpy.cross(b1, b2)
+            n_sq = numpy.einsum("ij,ij->i", nrm, nrm)
             # Guard against deformed degenerate triangles: drop the normal
             # term instead of dividing by ~0. Matches the kernel's fallback.
             safe = n_sq > 1e-20
             inv_nlen = numpy.zeros_like(n_sq)
             inv_nlen[safe] = 1.0 / numpy.sqrt(n_sq[safe])
-            n_hat = n * inv_nlen[:, None]
-            map_vert = (
-                v0
-                + c[:, 0:1] * b1
-                + c[:, 1:2] * b2
-                + c[:, 2:3] * n_hat
+            n_hat = nrm * inv_nlen[:, None]
+            map_vert_local = (
+                v0 + c[:, 0:1] * b1 + c[:, 1:2] * b2 + c[:, 2:3] * n_hat
             )
+            mat_to_world = numpy.linalg.inv(numpy.array(mat, dtype=numpy.float64))
+            world_vert = _apply_matrix_np(mat_to_world, map_vert_local)
         else:
             n_verts = len(obj.data.vertices)
-            map_vert = _apply_matrix_np(mat, vert[map[:n_verts]])
-        map_vert = apply_stitch_constraints(obj, map_vert, context)
-        _write_mesh_frame_to_pc2(obj, map_vert, blender_frame,
-                                 place_after_deformers=place_after_deformers)
+            world_vert = numpy.array(vert[map[:n_verts]], dtype=numpy.float64)
+        world_by_uuid[uid] = world_vert
+        records.append({
+            "kind": "mesh", "obj": obj, "mat": mat, "world": world_vert,
+            "after": place_after_deformers,
+        })
+
+    # Phase 2: snap every stitched source vertex exactly onto its target
+    # (world space), across all object types, when the global toggle is on.
+    if get_addon_data(context.scene).state.post_snap_exactly:
+        _apply_post_snap_closure(context, world_by_uuid)
+
+    # Phase 3: convert each object's world positions back to local, write PC2.
+    for rec in records:
+        obj = rec["obj"]
+        mat = rec["mat"]
+        if rec["kind"] == "curve":
+            sim_pos = _apply_matrix_np(mat, rec["world"])
+            params_data = rec["params"]
+            cache_list = rec["cache_list"]
+            all_cvs = []
+            vi_offset = 0
+            for si, spline_meta in enumerate(params_data["splines"]):
+                if si >= len(obj.data.splines):
+                    continue
+                n_sp_verts = len(spline_meta["params"])
+                sp_sim = sim_pos[vi_offset : vi_offset + n_sp_verts]
+                cvs = apply_fit_cached(sp_sim, cache_list[si])
+                all_cvs.append(cvs)
+                vi_offset += n_sp_verts
+            if all_cvs:
+                curve_cvs = numpy.concatenate(all_cvs, axis=0)
+                n_cvs = _get_curve_cv_count(obj)
+                _write_mesh_frame_to_pc2(obj, curve_cvs[:n_cvs], blender_frame,
+                                         n_verts_override=n_cvs)
+        else:
+            map_vert = _apply_matrix_np(mat, rec["world"])
+            _write_mesh_frame_to_pc2(obj, map_vert, blender_frame,
+                                     place_after_deformers=rec["after"])
 
     return blender_frame
 
@@ -508,24 +612,22 @@ def heal_mesh_caches_if_stale():
                 obj = resolve_assigned(assigned)
                 if obj is None or obj.type != "MESH":
                     continue
-                pc2 = get_pc2_path(object_pc2_key(obj))
+                # Read-only key: this timer fires every 0.1s, and the
+                # side-effecting variant runs an O(N) duplicate scan per
+                # object (O(N^2) across the scene). An object that owns a
+                # cache already has a UUID, so an empty key means "no
+                # cache" and there is nothing to heal.
+                key = object_pc2_key_readonly(obj)
+                if not key:
+                    continue
+                pc2 = get_pc2_path(key)
                 if not os.path.exists(pc2):
                     continue
-                try:
-                    if read_pc2_n_verts(pc2) != len(obj.data.vertices):
-                        continue
-                except Exception as e:
-                    # Log once per (pc2, error-kind) so a broken file doesn't
-                    # spam the console on every heal tick.
-                    key = (pc2, type(e).__name__)
-                    if key not in _heal_logged:
-                        _heal_logged.add(key)
-                        from ..models.console import console
-                        console.write(
-                            f"[heal_mesh_caches] skipping {obj.name}: could "
-                            f"not read {pc2}: {e}"
-                        )
-                    continue
+                # Decide whether the modifier needs (re)binding BEFORE
+                # touching the PC2 file. In steady state every modifier is
+                # already healthy, so this skips the per-object PC2 header
+                # read (1.6k file reads/tick on a large scene) that only
+                # exists to validate vertex count before a rebind.
                 mod = obj.modifiers.get("ContactSolverCache")
                 needs_setup = (
                     mod is None
@@ -535,12 +637,25 @@ def heal_mesh_caches_if_stale():
                 if not needs_setup:
                     continue
                 try:
-                    from .utils import has_deforming_modifier_stack
+                    if read_pc2_n_verts(pc2) != len(obj.data.vertices):
+                        continue
+                except Exception as e:
+                    # Log once per (pc2, error-kind) so a broken file doesn't
+                    # spam the console on every heal tick.
+                    log_key = (pc2, type(e).__name__)
+                    if log_key not in _heal_logged:
+                        _heal_logged.add(log_key)
+                        from ..models.console import console
+                        console.write(
+                            f"[heal_mesh_caches] skipping {obj.name}: could "
+                            f"not read {pc2}: {e}"
+                        )
+                    continue
+                try:
                     setup_mesh_cache_modifier(
                         obj, pc2, frame_start=1.0,
-                        place_after_deformers=(
-                            g.object_type == "STATIC"
-                            or has_deforming_modifier_stack(obj)
+                        place_after_deformers=_needs_after_deformers(
+                            g.object_type, obj
                         ),
                     )
                 except Exception:
@@ -704,6 +819,14 @@ def apply_animation():
                     context.scene.frame_end, max_blender_frame
                 )
             context.scene.frame_set(max_blender_frame)
+            # Rods play back via a frame_change_post handler, not MESH_CACHE.
+            # A per-frame frame_set earlier in this tick (STATIC per-frame
+            # matrices) can run that handler before this tick's curve cache
+            # was loaded, leaving the rod a frame behind the meshes during
+            # live fetch. Force a fresh curve apply at the final frame so
+            # rods stay in lockstep.
+            from .pc2 import refresh_curves_at_current_frame
+            refresh_curves_at_current_frame()
 
         if last_total > 0:
             if last_applied >= last_total:

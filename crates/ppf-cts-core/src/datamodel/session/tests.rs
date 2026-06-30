@@ -207,6 +207,33 @@ fn latest_log_value_none_for_empty_file() {
 }
 
 #[test]
+fn latest_step_average_averages_trailing_same_timestamp_rows() {
+    let dir = tempfile::tempdir().unwrap();
+    let p = dir.path().join("metric.out");
+    // Step t=0 had one iteration; step t=1 had three. The latest step is
+    // t=1, so the average is over (2, 4, 6) = 4.0, ignoring the t=0 row.
+    write_text(&p, "0 99\n1 2\n1 4\n1 6\n");
+    assert_eq!(latest_step_average(&p), Some(4.0));
+}
+
+#[test]
+fn latest_step_average_single_row_step() {
+    let dir = tempfile::tempdir().unwrap();
+    let p = dir.path().join("metric.out");
+    // A step with one iteration averages to that one value.
+    write_text(&p, "0 7\n1 9\n");
+    assert_eq!(latest_step_average(&p), Some(9.0));
+}
+
+#[test]
+fn latest_step_average_none_for_empty_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let p = dir.path().join("empty.out");
+    write_text(&p, "");
+    assert_eq!(latest_step_average(&p), None);
+}
+
+#[test]
 fn current_platform_dispatches_correctly() {
     // Only check that filenames are right; the actual current()
     // value depends on cfg.
@@ -350,14 +377,49 @@ fn format_log_summary_includes_stretch_only_when_positive() {
 fn format_log_average_summary_skips_none_metrics() {
     let r = format_log_average_summary(
         Some(1500.0), None, Some(2000.0), Some(5.5), None, Some(1.10),
+        Some(12.0), None, Some(0.9), Some(0.42), Some(7.0), Some(0.85),
     );
     let map: std::collections::HashMap<_, _> = r.into_iter().collect();
     assert_eq!(map["time-per-frame"], "1.50s");
     assert_eq!(map["num-contact (max)"], "2.00k");
     assert_eq!(map["newton-steps"], "5.50");
     assert_eq!(map["stretch"], "10.00%");
+    assert_eq!(map["matrix-assembly"], "12ms");
+    assert_eq!(map["toi-advanced"], "90.00%");
+    assert_eq!(map["dyn-consumed (max)"], "42.00%");
+    assert_eq!(map["line-search"], "7ms");
+    assert_eq!(map["toi"], "85.00%");
     assert!(!map.contains_key("time-per-step"));
     assert!(!map.contains_key("pcg-iter"));
+    // pcg_linsolve_ms_avg was None, so the row is omitted.
+    assert!(!map.contains_key("pcg-linsolve"));
+}
+
+#[test]
+fn average_summary_includes_matrix_assembly_and_pcg_time() {
+    let dir = tempfile::tempdir().unwrap();
+    write_text(&dir.path().join("advance.matrix_assembly.out"), "0 8\n0 12\n");
+    write_text(&dir.path().join("advance.linsolve.out"), "0 100\n1 140\n");
+    let pairs = [
+        ("matrix-assembly", "advance.matrix_assembly.out"),
+        ("pcg-linsolve", "advance.linsolve.out"),
+    ];
+    let got: std::collections::HashMap<_, _> =
+        average_summary_from_disk(dir.path(), &pairs).into_iter().collect();
+    assert_eq!(got["matrix-assembly"], "10ms"); // avg(8,12)
+    assert_eq!(got["pcg-linsolve"], "120ms"); // avg(100,140)
+}
+
+#[test]
+fn average_summary_reports_dyn_consumed_as_max() {
+    // dyn-consumed is shown as the run maximum (like num-contact),
+    // formatted as a percentage.
+    let dir = tempfile::tempdir().unwrap();
+    write_text(&dir.path().join("advance.dyn_consumed.out"), "0 0.1\n1 0.73\n2 0.5\n");
+    let pairs = [("dyn-consumed", "advance.dyn_consumed.out")];
+    let got: std::collections::HashMap<_, _> =
+        average_summary_from_disk(dir.path(), &pairs).into_iter().collect();
+    assert_eq!(got["dyn-consumed (max)"], "73.00%"); // max(0.1,0.73,0.5)
 }
 
 // -----------------------------------------------------------------
@@ -503,14 +565,60 @@ fn delete_session_dir_removes_tree() {
 }
 
 #[test]
+fn delete_session_dir_keep_output_preserves_output_clears_input() {
+    let dir = tempfile::tempdir().unwrap();
+    let session = dir.path().join("session");
+    // Scene input that must be cleared.
+    write_text(&session.join("bin/x.bin"), "input");
+    write_text(&session.join("param.toml"), "frames = 60");
+    // Solver output that must survive.
+    write_text(&session.join("output/state_5.bin.gz"), "checkpoint");
+    write_text(&session.join("output/save_and_quit"), "");
+
+    delete_session_dir_keep_output(&session).unwrap();
+
+    // The session directory itself remains.
+    assert!(session.exists());
+    // Scene input is gone.
+    assert!(!session.join("bin").exists());
+    assert!(!session.join("param.toml").exists());
+    // Output subtree (checkpoints + sentinel) survives.
+    assert!(session.join("output/state_5.bin.gz").exists());
+    assert!(session.join("output/save_and_quit").exists());
+}
+
+#[test]
+fn delete_session_dir_keep_output_missing_dir_is_noop() {
+    let dir = tempfile::tempdir().unwrap();
+    let session = dir.path().join("does-not-exist");
+    delete_session_dir_keep_output(&session).unwrap();
+    assert!(!session.exists());
+}
+
+#[test]
+fn delete_session_dir_keep_output_no_output_child_clears_all() {
+    let dir = tempfile::tempdir().unwrap();
+    let session = dir.path().join("session");
+    write_text(&session.join("foo/bar.bin"), "data");
+
+    delete_session_dir_keep_output(&session).unwrap();
+
+    // The session directory itself remains, but all children are gone.
+    assert!(session.exists());
+    assert!(!session.join("foo").exists());
+}
+
+#[test]
 fn param_export_to_disk_writes_toml_and_dyn() {
     use crate::datamodel::params::ParamValue;
     let dir = tempfile::tempdir().unwrap();
     let mut p = ParamManager::new();
     p.set("frames", Some(ParamValue::Int(60))).unwrap();
-    p.dyn_select("playback").unwrap();
-    p.time(1.0).unwrap();
-    p.change(ParamValue::Float(0.5)).unwrap();
+    p.inject_dyn_entries(
+        "playback",
+        vec![(0.0, ParamValue::Float(1.0)), (1.0, ParamValue::Float(0.5))],
+    )
+    .unwrap();
 
     param_export_to_disk(dir.path(), &p, false).unwrap();
     let toml = std::fs::read_to_string(dir.path().join("param.toml")).unwrap();
@@ -594,7 +702,6 @@ fn fixed_session_dir_layout_paths() {
         layout.recoverable_pickle,
         PathBuf::from("/tmp/app/demo/fixed_session.pickle")
     );
-    assert_eq!(layout.symlinks_dir, PathBuf::from(""));
 }
 
 #[test]
@@ -632,6 +739,27 @@ fn convert_integer_optional_preserves_small_floats() {
     assert_eq!(convert_integer_optional(Some(2_500.0)), "2.50k");
     // Non-integer under 1000 stays as the decimal form (Python str()).
     assert_eq!(convert_integer_optional(Some(42.5)), "42.5");
+}
+
+#[test]
+fn convert_average_count_two_decimals_under_thousand() {
+    assert_eq!(convert_average_count_optional(None), "N/A");
+    // Whole values still show two decimals (no bare "4").
+    assert_eq!(convert_average_count_optional(Some(4.0)), "4.00");
+    // Long fractional tails are clamped to two decimals.
+    assert_eq!(convert_average_count_optional(Some(4.333_333_333)), "4.33");
+    assert_eq!(convert_average_count_optional(Some(40.0)), "40.00");
+}
+
+#[test]
+fn convert_average_count_abbreviates_large_values() {
+    // At or above 1000 the count gets a k/M/B suffix instead of a long
+    // digit run (12439.3 -> "12.44k" rather than "12439.30").
+    assert_eq!(convert_average_count_optional(Some(12_439.3)), "12.44k");
+    assert_eq!(convert_average_count(1_000.0), "1.00k");
+    assert_eq!(convert_average_count(2_500_000.0), "2.50M");
+    // Just under the threshold stays in two-decimal form.
+    assert_eq!(convert_average_count(999.5), "999.50");
 }
 
 #[test]

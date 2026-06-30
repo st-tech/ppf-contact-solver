@@ -19,15 +19,15 @@ from ..core.utils import find_invalid_name_char, find_invalid_path_char, get_tim
 from ..models.groups import get_addon_data
 
 
-def refresh_ssh_panel():
-    """Refresh the ssh connection panel UI.
+def _refresh_ssh_panel_bridge():
+    """Forward to main_panel.refresh_ssh_panel (the canonical implementation).
 
     This wrapper uses a lazy import to break a circular dependency:
     main_panel.py imports operator classes from connection_ops.py, so
     connection_ops.py cannot import from main_panel.py at module level.
     """
-    from .main_panel import refresh_ssh_panel as _refresh
-    _refresh()
+    from .main_panel import refresh_ssh_panel
+    refresh_ssh_panel()
 
 
 class REMOTE_OT_Connect(Operator):
@@ -178,8 +178,7 @@ class REMOTE_OT_Connect(Operator):
             if not win_path:
                 self.report({"ERROR"}, "Solver path is not set")
                 return {"CANCELLED"}
-            from ..models.defaults import DEFAULT_SERVER_PORT
-            com.connect_win_native(win_path, props.docker_port or DEFAULT_SERVER_PORT)
+            com.connect_win_native(win_path, props.docker_port)
         elif props.server_type == "LOCAL":
             com.connect_local(
                 self.get_remote_path(props),
@@ -219,7 +218,7 @@ class REMOTE_OT_Connect(Operator):
                 self._timer = None
             self.report({"ERROR"}, "Connection timed out")
             return {"CANCELLED"}
-        refresh_ssh_panel()
+        _refresh_ssh_panel_bridge()
         if self._connection_established and not com.is_connected():
             if self._timer:
                 context.window_manager.event_timer_remove(self._timer)

@@ -104,36 +104,13 @@ pub fn mat3_to_quat(m: [[f64; 3]; 3]) -> [f64; 4] {
 }
 
 /// Spherical linear interpolation `(1-t)q0 + t q1`-style with the
-/// shortest-arc + small-angle short-circuit.
+/// shortest-arc + small-angle short-circuit. Thin alias over the
+/// canonical `crate::datamodel::quat::slerp` so the scene-build path and
+/// the datamodel path stay in lockstep; the datamodel version guards the
+/// degenerate `n == 0` normalize (returns the blend instead of zeros),
+/// which is strictly safer and unreachable on valid unit-quat inputs.
 pub fn quat_slerp(q0: [f64; 4], q1: [f64; 4], t: f64) -> [f64; 4] {
-    let mut q1 = q1;
-    let mut dot = q0[0] * q1[0] + q0[1] * q1[1] + q0[2] * q1[2] + q0[3] * q1[3];
-    if dot < 0.0 {
-        q1 = [-q1[0], -q1[1], -q1[2], -q1[3]];
-        dot = -dot;
-    }
-    if dot > 0.9995 {
-        // Linear blend + renormalize.
-        let r = [
-            q0[0] + t * (q1[0] - q0[0]),
-            q0[1] + t * (q1[1] - q0[1]),
-            q0[2] + t * (q1[2] - q0[2]),
-            q0[3] + t * (q1[3] - q0[3]),
-        ];
-        let n = (r[0] * r[0] + r[1] * r[1] + r[2] * r[2] + r[3] * r[3]).sqrt();
-        let inv = if n > 0.0 { 1.0 / n } else { 0.0 };
-        return [r[0] * inv, r[1] * inv, r[2] * inv, r[3] * inv];
-    }
-    let theta = dot.clamp(-1.0, 1.0).acos();
-    let sin_t = theta.sin();
-    let a = ((1.0 - t) * theta).sin() / sin_t;
-    let b = (t * theta).sin() / sin_t;
-    [
-        a * q0[0] + b * q1[0],
-        a * q0[1] + b * q1[1],
-        a * q0[2] + b * q1[2],
-        a * q0[3] + b * q1[3],
-    ]
+    crate::datamodel::quat::slerp(q0, q1, t)
 }
 
 /// Apply a `T * R(quat) * S(scale)` transform to a flat `(N, 3)` local

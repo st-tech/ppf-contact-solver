@@ -325,39 +325,6 @@ jobs:
           # Close tunnel
           kill $TUNNEL_PID 2>/dev/null || true
 
-      - name: Build + install ppf-cts-py wheel into embedded Python
-        # Mirror blender.yml's maturin step: build the PyO3 extension
-        # `_ppf_cts_py` and install it into the embedded Python that
-        # build-win-native shipped at
-        # C:\\ppf-contact-solver\\build-win-native\\python\\python.exe.
-        # Without this the frontend dispatchers silently fall back to
-        # the Numba paths and the migration loses Rust kernel coverage
-        # on Windows. install-ppf-cts-py.ps1 reuses the portable MSVC
-        # and Rust toolchain that build.bat already prepared.
-        run: |
-          echo "Installing ppf-cts-py into embedded Python..."
-          INSTANCE_ID=$(cat /tmp/instance_id.txt)
-
-          # Open tunnel for this step
-          aws ec2-instance-connect open-tunnel \\
-            --instance-id "$INSTANCE_ID" \\
-            --remote-port 22 \\
-            --local-port 2222 &
-          TUNNEL_PID=$!
-          sleep 5
-
-          scp -P 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \\
-            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \\
-            -i /tmp/ec2key .github/workflows/scripts/win/install-ppf-cts-py.ps1 Administrator@localhost:C:/install_ppf_cts_py.ps1
-
-          ssh -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \\
-            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \\
-            -i /tmp/ec2key Administrator@localhost \\
-            "powershell -ExecutionPolicy Bypass -File C:/install_ppf_cts_py.ps1"
-
-          # Close tunnel
-          kill $TUNNEL_PID 2>/dev/null || true
-
       - name: Build ppf-cts-server binary
         # build.bat only builds the root `ppf-contact-solver` crate.
         # The Blender addon launcher

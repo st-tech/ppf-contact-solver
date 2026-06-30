@@ -1,0 +1,7 @@
+fabric,rel_membrane_stiffness,young_mod_wire,poisson,elongation_rank,note,sources
+Silk,0.05,500,0.40,1,Lightweight woven silk: very compliant (low E*t ~500 N/m); stretches most,"Wang2011 (silk<<denim); arxiv 2212.08790 (membrane E 0.8-32.6 MPa, low end); Hursa2009 plain-weave Poisson 0.34-0.50"
+Flag,0.10,1000,0.40,2,Thin woven polyester banner: low E*t ~1500 N/m (thin),"arxiv 2212.08790; polyester banner specs; Penava2014 woven Poisson"
+Wool,0.20,2000,0.40,3,Woven worsted suiting: compliant (FAST/SiroFAST secant ~3000 N/m),"FAST/SiroFAST E100 wool extensibility; Wang2011 (knit/wool compliant)"
+Cotton,0.55,5500,0.35,4,Plain woven cotton shirting: stiff-in-stretch but below denim,"Zhang2019 cotton Ex/Ey=178/98 MPa, Poisson 0.39/0.25; Wang2011; Miguel2012"
+Denim,1.00,10000,0.25,5,Heavy cotton twill: normalization anchor ~15000 N/m per width,"Wang2011 11oz black denim (stiffest in stretch); Miguel2012; twill Poisson lower (Hursa2009)"
+Leather,1.30,13000,0.40,6,Chrome-tanned garment leather: stiffest per width (thick),"Efendioglu2025 (ISO 3376) E~77 MPa x t~0.75mm ~58 kN/m; stiff but elongates to break ~15%"

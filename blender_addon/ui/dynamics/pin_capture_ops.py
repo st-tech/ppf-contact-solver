@@ -28,6 +28,8 @@ from bpy.types import Operator  # pyright: ignore
 from ...core.pc2 import (
     has_pin_anim_pc2,
     remove_pin_anim_pc2,
+    resume_mesh_cache_display,
+    suspend_mesh_cache_display,
     write_pin_anim_pc2,
 )
 from ...core.transform import zup_to_yup
@@ -53,6 +55,9 @@ _capture_job: dict = {
     "saved_frame": 1,
     "status": "",
     "error": "",
+    # {obj_uuid: prior show_viewport} for ContactSolverCache modifiers
+    # suspended for the duration of the capture (see _start_job).
+    "suspended_caches": {},
 }
 
 
@@ -67,6 +72,7 @@ def _reset_job() -> None:
         "saved_frame": 1,
         "status": "",
         "error": "",
+        "suspended_caches": {},
     })
 
 
@@ -245,6 +251,17 @@ def _start_job(context, entries: list) -> tuple[bool, str]:
         return False, "No eligible pins to capture"
     scene = context.scene
     total = sum(e["frames"].shape[0] for e in entries)
+    # Suspend each captured object's ContactSolverCache so the per-frame
+    # sample reads the pure deformer output, not the solver's previous
+    # (OVERWRITE) result. Restored in _teardown on every exit path.
+    from ...core.uuid_registry import get_object_by_uuid
+    suspended: dict = {}
+    for entry in entries:
+        uid = entry["obj_uuid"]
+        if uid in suspended:
+            continue
+        obj = get_object_by_uuid(uid)
+        suspended[uid] = suspend_mesh_cache_display(obj)
     _capture_job.update({
         "active": True,
         "aborted": False,
@@ -255,6 +272,7 @@ def _start_job(context, entries: list) -> tuple[bool, str]:
         "saved_frame": int(scene.frame_current),
         "status": "Capturing pin...",
         "error": "",
+        "suspended_caches": suspended,
     })
     return True, ""
 
@@ -325,6 +343,18 @@ def _restore_frame(context) -> None:
     saved = _capture_job.get("saved_frame")
     if saved is not None:
         context.scene.frame_set(int(saved))
+
+
+def _cleanup_after_job(context) -> None:
+    """Restore the saved frame, resume the suspended ContactSolverCache
+    modifiers, and reset the job singleton (the non-timer half of the modal
+    teardown, shared with the all-pins coordinator)."""
+    from ...core.uuid_registry import get_object_by_uuid
+
+    _restore_frame(context)
+    for uid, prior in _capture_job.get("suspended_caches", {}).items():
+        resume_mesh_cache_display(get_object_by_uuid(uid), prior)
+    _reset_job()
 
 
 # ---------------------------------------------------------------------------
@@ -403,42 +433,50 @@ class OBJECT_OT_CapturePinDeformation(Operator):
     def modal(self, context, event):
         if event.type != "TIMER":
             return {"PASS_THROUGH"}
-        if _capture_job["aborted"]:
-            err = _capture_job.get("error", "")
+        # Any exception inside the tick must still run _teardown, or the
+        # suspended ContactSolverCache stays disabled and the job flag
+        # stays set forever (worse than a visible failure).
+        try:
+            if _capture_job["aborted"]:
+                err = _capture_job.get("error", "")
+                self._teardown(context)
+                redraw_all_areas(context)
+                if err:
+                    self.report({"ERROR"}, err)
+                else:
+                    self.report({"INFO"}, "Pin capture aborted")
+                return {"CANCELLED"}
+            more = _tick_job(context)
+            redraw_all_areas(context)
+            if not more and not _capture_job["aborted"]:
+                n_pins, n_frames = _finalize_job(context)
+                self._teardown(context)
+                redraw_all_areas(context)
+                from ...models.groups import invalidate_overlays
+                invalidate_overlays()
+                self.report(
+                    {"INFO"},
+                    f"Captured {n_frames} frame(s) across {n_pins} pin(s)",
+                )
+                return {"FINISHED"}
+            return {"RUNNING_MODAL"}
+        except Exception as exc:  # noqa: BLE001 — must restore state
             self._teardown(context)
             redraw_all_areas(context)
-            if err:
-                self.report({"ERROR"}, err)
-            else:
-                self.report({"INFO"}, "Pin capture aborted")
+            self.report({"ERROR"}, f"Pin capture failed: {exc}")
             return {"CANCELLED"}
-        more = _tick_job(context)
-        redraw_all_areas(context)
-        if not more and not _capture_job["aborted"]:
-            n_pins, n_frames = _finalize_job(context)
-            self._teardown(context)
-            redraw_all_areas(context)
-            from ...models.groups import invalidate_overlays
-            invalidate_overlays()
-            self.report(
-                {"INFO"},
-                f"Captured {n_frames} frame(s) across {n_pins} pin(s)",
-            )
-            return {"FINISHED"}
-        return {"RUNNING_MODAL"}
 
     def cancel(self, context):
         self._teardown(context)
         redraw_all_areas(context)
 
     def _teardown(self, context):
-        _restore_frame(context)
         wm = context.window_manager
         timer = getattr(self, "_timer", None)
         if timer is not None:
             wm.event_timer_remove(timer)
             self._timer = None
-        _reset_job()
+        _cleanup_after_job(context)
 
 
 # ---------------------------------------------------------------------------
@@ -618,6 +656,189 @@ def pin_captured_frame_count(pin_item) -> int:
 
 
 # ---------------------------------------------------------------------------
+# Refresh full-pin coverage (gates the rest-pose tracking toggle)
+# ---------------------------------------------------------------------------
+
+
+class OBJECT_OT_RefreshFullPinState(Operator):
+    """Check whether this pin's vertex group covers every vertex of the mesh
+    (a full pin) and cache the result on the pin. "Track Rest-Pose
+    Deformation" needs a full pin, so its toggle stays disabled until this
+    confirms one. The check is an O(N) vertex scan, so it runs only on click,
+    not on every panel redraw. Run it again after editing the vertex group to
+    update the cached state."""
+
+    bl_idname = "object.refresh_full_pin_state"
+    bl_label = "Refresh"
+    bl_options = {"REGISTER", "UNDO"}
+
+    group_index: bpy.props.IntProperty(options={'HIDDEN'})  # pyright: ignore
+    pin_index: bpy.props.IntProperty(options={'HIDDEN'})  # pyright: ignore
+
+    def execute(self, context):
+        from ...core.utils import pin_covers_all_vertices
+        from ...core.uuid_registry import resolve_pin
+        from ...models.groups import decode_vertex_group_identifier
+
+        scene = context.scene
+        group = get_group_from_index(scene, self.group_index)
+        if group is None:
+            self.report({"ERROR"}, "Group not found")
+            return {"CANCELLED"}
+        if not (0 <= self.pin_index < len(group.pin_vertex_groups)):
+            self.report({"ERROR"}, "Pin index out of range")
+            return {"CANCELLED"}
+        pin_item = group.pin_vertex_groups[self.pin_index]
+        try:
+            obj = resolve_pin(pin_item)
+        except ValueError as exc:
+            self.report({"ERROR"}, str(exc))
+            return {"CANCELLED"}
+        _, vg_name = decode_vertex_group_identifier(pin_item.name)
+        is_full = bool(
+            obj is not None
+            and obj.type == "MESH"
+            and pin_covers_all_vertices(obj, vg_name)
+        )
+        pin_item.full_pin_checked = True
+        pin_item.full_pin_cached = is_full
+        redraw_all_areas(context)
+        self.report(
+            {"INFO"},
+            "Full pin: rest-pose tracking available"
+            if is_full
+            else "Partial pin: rest-pose tracking unavailable",
+        )
+        return {"FINISHED"}
+
+
+# ---------------------------------------------------------------------------
+# "Re-capture all" support: enumerate every capturable pin across the active
+# non-STATIC groups and drive the shared job from the coordinator in
+# solver.py (which owns its own timer). The job machinery already processes
+# a list of entries, so "all pins" is just a larger entry set.
+# ---------------------------------------------------------------------------
+
+
+def collect_capturable_pins(context, *, cheap: bool = False) -> list:
+    """``(group_index, pin_index)`` for every pin in active non-STATIC groups
+    whose object can be captured.
+
+    Mirrors the per-pin button gate: a mesh pin whose object has a deforming
+    modifier stack, no TORQUE op, and (when ``cheap`` is False) no manual
+    vertex-co fcurves. ``cheap=True`` skips the fcurve scan so the result is
+    light enough for a panel poll; ``cheap=False`` is the accurate set used
+    when actually starting the job.
+    """
+    from ...core.uuid_registry import resolve_pin
+    from ...models.groups import N_MAX_GROUPS, get_addon_data
+
+    data = get_addon_data(context.scene)
+    specs: list = []
+    for gi in range(N_MAX_GROUPS):
+        group = getattr(data, f"object_group_{gi}", None)
+        if not group or not group.active or group.object_type == "STATIC":
+            continue
+        for pi, pin_item in enumerate(group.pin_vertex_groups):
+            try:
+                obj = resolve_pin(pin_item)
+            except ValueError:
+                continue
+            if obj is None or obj.type != "MESH":
+                continue
+            if not pin_object_supports_capture(obj):
+                continue
+            if any(op.op_type == "TORQUE" for op in pin_item.operations):
+                continue
+            if not cheap and _pin_has_vertex_co_fcurves(pin_item):
+                continue
+            specs.append((gi, pi))
+    return specs
+
+
+def start_capture_for_pins(context, specs: list) -> tuple[bool, str]:
+    """Build entries for each ``(group_index, pin_index)`` in *specs* and
+    start the shared pin-capture job. Returns ``(ok, error_message)``."""
+    errors: list = []
+    entries = []
+    for gi, pi in specs:
+        entry = _build_entry(context.scene, gi, pi, errors)
+        if entry is not None:
+            entries.append(entry)
+    if not entries:
+        return False, (errors[0] if errors else "No eligible pins to capture")
+    return _start_job(context, entries)
+
+
+def advance_pin_capture(context) -> tuple[bool, bool, str]:
+    """Tick the running pin capture once; returns ``(more, aborted, error)``."""
+    if _capture_job.get("aborted"):
+        return False, True, str(_capture_job.get("error", ""))
+    more = _tick_job(context)
+    if _capture_job.get("aborted"):
+        return False, True, str(_capture_job.get("error", ""))
+    return more, False, ""
+
+
+def finalize_pin_capture(context) -> tuple[int, int]:
+    """Write completed pin entries to PC2; returns ``(pins, frames)`` written."""
+    return _finalize_job(context)
+
+
+def cleanup_pin_capture(context) -> None:
+    """Restore frame, resume suspended caches, and clear the job state."""
+    _cleanup_after_job(context)
+
+
+def collect_pins_with_captured_anim(context) -> list:
+    """``(group_index, pin_index)`` for every pin in active non-STATIC groups
+    that currently holds a captured-deformation cache. Used by "Clear All
+    Deformations" (and its poll)."""
+    from ...models.groups import N_MAX_GROUPS, get_addon_data
+
+    data = get_addon_data(context.scene)
+    specs: list = []
+    for gi in range(N_MAX_GROUPS):
+        group = getattr(data, f"object_group_{gi}", None)
+        if not group or not group.active or group.object_type == "STATIC":
+            continue
+        for pi, pin_item in enumerate(group.pin_vertex_groups):
+            if pin_has_captured_anim(pin_item):
+                specs.append((gi, pi))
+    return specs
+
+
+def clear_captured_pin(context, group_index: int, pin_index: int) -> bool:
+    """Drop one pin's captured-deformation cache, clear its
+    ``has_captured_anim`` flag, and (when the pin carries no manual vertex-co
+    fcurves) remove the EMBEDDED_MOVE sentinel. Returns True if a pin was
+    cleared. Mirrors ``OBJECT_OT_ClearPinDeformation.execute`` for the
+    batch "Clear All Deformations" path."""
+    from ...core.uuid_registry import resolve_pin
+    from ...models.groups import decode_vertex_group_identifier
+    from .pin_ops import _remove_embedded_move_ops
+
+    group = get_group_from_index(context.scene, group_index)
+    if group is None or not (0 <= pin_index < len(group.pin_vertex_groups)):
+        return False
+    pin_item = group.pin_vertex_groups[pin_index]
+    try:
+        obj = resolve_pin(pin_item)
+    except ValueError:
+        return False
+    if obj is None or obj.type != "MESH":
+        return False
+    _, vg_name = decode_vertex_group_identifier(pin_item.name)
+    if not vg_name:
+        return False
+    remove_pin_anim_pc2(obj, vg_name)
+    pin_item.has_captured_anim = False
+    if not _pin_has_vertex_co_fcurves(pin_item):
+        _remove_embedded_move_ops(pin_item)
+    return True
+
+
+# ---------------------------------------------------------------------------
 # Registration
 # ---------------------------------------------------------------------------
 
@@ -625,6 +846,7 @@ def pin_captured_frame_count(pin_item) -> int:
 classes = (
     OBJECT_OT_CapturePinDeformation,
     OBJECT_OT_ClearPinDeformation,
+    OBJECT_OT_RefreshFullPinState,
     SOLVER_OT_PinCaptureAbort,
 )
 

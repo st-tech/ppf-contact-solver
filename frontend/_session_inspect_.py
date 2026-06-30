@@ -19,7 +19,6 @@ Everything is re-exported from ``_session_.py`` for backward compatibility.
 """
 
 import os
-import platform
 import shutil
 import subprocess
 import time
@@ -115,7 +114,7 @@ class SessionExport:
                 print(path)
         """
         param.export(self._fixed_session.info.path)
-        which = "windows" if platform.system() == "Windows" else "unix"
+        which = Utils.platform_which()
         return _rust.write_shell_command_script(
             self._fixed_session.info.path,
             self._fixed_session.output.path,
@@ -502,7 +501,7 @@ class SessionLog:
         # in Rust via `average_summary_from_disk`. Pass the same
         # `(name, filename)` mapping we use for `numbers()`.
         log_filenames = [(k, v["filename"]) for k, v in self._log.items()]
-        data_dir = os.path.join(self._fixed_session.info.path, "output", "data")
+        data_dir = os.path.join(self._fixed_session.output.path, "data")
         return _rust.average_summary_from_disk(data_dir, log_filenames)
 
 
@@ -550,7 +549,7 @@ class SessionGet:
                 frame = session.get.latest_frame()
                 print(f"solver is on frame {frame}")
         """
-        path = os.path.join(self._fixed_session.info.path, "output")
+        path = self._fixed_session.output.path
         return int(_rust.latest_vertex_frame(path))
 
     def saved(self) -> list[int]:
@@ -566,7 +565,7 @@ class SessionGet:
                 if saved:
                     session.resume(max(saved))
         """
-        output_path = os.path.join(self._fixed_session.info.path, "output")
+        output_path = self._fixed_session.output.path
         return [int(n) for n in _rust.list_saved_states(output_path)]
 
     def vertex(self, n: Optional[int] = None) -> Optional[tuple[np.ndarray, int]]:
@@ -589,7 +588,7 @@ class SessionGet:
                     vert, frame = result
                     print(vert.shape, frame)
         """
-        path = os.path.join(self._fixed_session.info.path, "output")
+        path = self._fixed_session.output.path
         if n is None:
             got = _rust.read_latest_vertex(path)
             if got is None:
@@ -599,7 +598,7 @@ class SessionGet:
         arr = _rust.read_vertex_bin(path, int(n))
         if arr is None:
             return None
-        return (arr, n)
+        return (arr, int(n))
 
     def command(self) -> Optional[str]:
         """Get the path to the solver launcher script.
@@ -618,7 +617,7 @@ class SessionGet:
                 if path:
                     print(path)
         """
-        which = "windows" if platform.system() == "Windows" else "unix"
+        which = Utils.platform_which()
         return _rust.command_path(self._fixed_session.info.path, which)
 
     def param_summary(self) -> list[str]:

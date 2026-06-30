@@ -27,6 +27,25 @@ def _is_writable(obj: bpy.types.Object) -> bool:
     return obj.library is None
 
 
+def resolve_uuid_owner(
+    objs: "list[bpy.types.Object]", prev_name: "str | None"
+) -> "bpy.types.Object":
+    """Pick the original object among several sharing one UUID.
+
+    Prefer the object whose name matches *prev_name* (the last-known name of
+    the UUID's holder from the previous depsgraph tick); when there is no
+    such memory, fall back to the shortest name, since Blender appends
+    ".NNN" to copies. Used by both get_or_create_object_uuid and the
+    depsgraph handler so the original-vs-copy decision is identical
+    everywhere.
+    """
+    if prev_name:
+        for o in objs:
+            if o.name == prev_name:
+                return o
+    return min(objs, key=lambda o: (len(o.name), o.name))
+
+
 def get_or_create_object_uuid(obj: bpy.types.Object) -> str:
     """Get or assign a stable UUID for a Blender object.
 
@@ -44,34 +63,46 @@ def get_or_create_object_uuid(obj: bpy.types.Object) -> str:
         # object cannot participate in reassignment anyway.
         if not _is_writable(obj):
             return uid
-        for other in bpy.data.objects:
-            if other != obj and str(other.get(_OBJ_UUID_KEY, "")) == uid:
-                # Duplicate found — decide who keeps the UUID by
-                # consulting the rename-tracker's last-known mapping.
-                # _prev_names[uid] records which object instance was
-                # observed with this UUID in the previous depsgraph
-                # tick, so it IS the original; the one we're handling
-                # here may be the copy produced by e.g. duplicate-obj.
-                # Names are NOT used — they may have diverged since.
-                prev_name = _prev_names.get(uid)
-                # Original is whichever object is currently tracked
-                # under this UUID. If obj matches the tracked name
-                # it's the original; otherwise obj is the copy.
-                obj_is_original = (prev_name is not None and prev_name == obj.name)
-                if obj_is_original and _is_writable(other):
-                    # obj is the original — reassign the other
-                    new_uid = str(_uuid.uuid4())
-                    other[_OBJ_UUID_KEY] = new_uid
-                    _cache[new_uid] = other.name
-                elif _is_writable(obj):
-                    # obj is the copy (or tie-broken as such) — reassign it
-                    uid = str(_uuid.uuid4())
-                    obj[_OBJ_UUID_KEY] = uid
-                    _cache[uid] = obj.name
-                # else: both sides unwritable — nothing we can do; the
-                # duplicate UUID persists harmlessly until a writable
-                # copy is made.
-                break
+        # Fast path: the depsgraph rename/duplicate handler keeps UUIDs
+        # unique and warms ``_cache`` (uuid -> owner name); ``resolve_*``
+        # also warms it via ``get_object_by_uuid``. When the cache maps
+        # this uid back to *this* exact object there is a single owner, so
+        # the O(M) collision scan below is redundant. Skipping it turns the
+        # common encode case (this is called several times per object) from
+        # O(objects^2) into O(objects). The authoritative scan still runs
+        # on a cold/miss cache, so correctness is unchanged.
+        if _cache.get(uid) == obj.name and bpy.data.objects.get(obj.name) is obj:
+            return uid
+        # Gather every object currently carrying this UUID. A duplicate
+        # (e.g. produced by duplicate-obj) copies the custom property, so
+        # more than one object may share it; handle >2-way collisions too.
+        objs = [
+            o for o in bpy.data.objects
+            if str(o.get(_OBJ_UUID_KEY, "")) == uid
+        ]
+        if len(objs) <= 1:
+            # Warm the cache so the next lookup for this object is O(1).
+            _cache[uid] = obj.name
+            return uid
+        # Decide who keeps the UUID using the same policy as the depsgraph
+        # handler: prefer the object tracked under this UUID in the previous
+        # tick (_prev_names), else the shortest name. Reassign every other
+        # writable object a fresh UUID. Names alone are NOT the deciding
+        # factor; they may have diverged since the duplicate appeared.
+        owner = resolve_uuid_owner(objs, _prev_names.get(uid))
+        for other in objs:
+            if other is owner or not _is_writable(other):
+                # Unwritable non-owners (library-linked) cannot be fixed
+                # here; the duplicate UUID persists harmlessly until a
+                # writable copy is made.
+                continue
+            new_uid = str(_uuid.uuid4())
+            other[_OBJ_UUID_KEY] = new_uid
+            _cache[new_uid] = other.name
+            # If the object we were handed is itself a non-owner, return
+            # its NEW UUID rather than the original.
+            if other is obj:
+                uid = new_uid
         return uid
     if not _is_writable(obj):
         return ""
@@ -105,11 +136,6 @@ def get_object_by_uuid(uid: str) -> "bpy.types.Object | None":
             _cache[uid] = obj.name
             return obj
     return None
-
-
-def resolve_object(uid: str) -> "bpy.types.Object | None":
-    """Resolve an object by UUID."""
-    return get_object_by_uuid(uid) if uid else None
 
 
 def resolve_assigned(assigned) -> "bpy.types.Object | None":
@@ -315,6 +341,14 @@ def _on_depsgraph_update(scene, depsgraph):
     per-update duplicate checks are O(1) instead of O(M), giving
     O(N+M) total instead of the previous O(N*M).
     """
+    # During animation playback objects are never renamed or duplicated,
+    # yet a frame change reports every animated object as updated — which
+    # would run the full O(N+M) rename/duplicate scan on every frame for
+    # no possible result. Skip it while playing; renames/duplicates are
+    # editing actions handled on the next non-playback update.
+    screen = getattr(bpy.context, "screen", None)
+    if screen is not None and screen.is_animation_playing:
+        return
     # Fast path: skip the O(M) index build when no object was updated.
     has_object_update = False
     for update in depsgraph.updates:
@@ -345,19 +379,12 @@ def _on_depsgraph_update(scene, depsgraph):
         if len(objs) == 1:
             uuid_index[uid] = objs[0]
             continue
-        prev_name = _prev_names.get(uid)
-        owner = None
-        if prev_name:
-            for o in objs:
-                if o.name == prev_name:
-                    owner = o
-                    break
-        if owner is None:
-            # No memory of who held this UUID (first tick after load,
-            # or the original was renamed in the same tick it was
-            # duplicated). Blender appends ".NNN" to copies, so the
-            # shortest name is the most likely original.
-            owner = min(objs, key=lambda o: (len(o.name), o.name))
+        # Resolve the original via the shared policy: prefer the object
+        # tracked under this UUID in the previous tick (_prev_names), else
+        # the shortest name (Blender appends ".NNN" to copies). No memory
+        # happens on the first tick after load, or when the original was
+        # renamed in the same tick it was duplicated.
+        owner = resolve_uuid_owner(objs, _prev_names.get(uid))
         uuid_index[uid] = owner
         # Strip UUID from every non-owner now — the copy may not
         # appear in depsgraph.updates (only the new object's update

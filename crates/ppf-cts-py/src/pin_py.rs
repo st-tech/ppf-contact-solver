@@ -7,13 +7,19 @@
 // `PinHolder` (frontend/_scene_.py:1110) routes its builder calls
 // through this class.
 //
-// Design: this is a *parallel mirror*. The Python `PinHolder` keeps
-// owning a Python `PinData` dataclass (because the rest of the
-// codebase, including `_decoder_.py` and the scene builder, reads and
-// mutates that dataclass directly). The Rust holder runs the same
-// argument validation and stores its own `PinData` in lockstep. The
-// parity test exercises the public surface and confirms both stores
-// see the same field set after a builder chain.
+// Design: this is a *parallel validator*, not a full lockstep mirror.
+// The Python `PinHolder` keeps owning a Python `PinData` dataclass
+// (because the rest of the codebase, including `_decoder_.py` and the
+// scene builder, reads and mutates that dataclass directly, and it is
+// the sole source for the FixedScene export). The Rust holder runs the
+// same argument validation and stores its own `PinData` for the fields
+// it carries: `index`, `transition`, `unpin_time`, `pull_strength`,
+// `pin_group_id`, and `operations`. The Python-only fields that the
+// Rust `PinData` has no counterpart for (`pin_stiffness`,
+// `pull_weights`, `rest_shape_track`) are validated and stored on the
+// Python side alone, so they are NOT mirrored here. The parity test exercises the public surface and
+// confirms both stores agree on the mirrored field set after a builder
+// chain.
 //
 // The wire-format distinction:
 //   * `PinData.transition` is a string (`"linear"`, `"smooth"`,
@@ -93,18 +99,10 @@ fn coerce_move_by_delta(
     delta: &Bound<'_, PyAny>,
     n_pin_verts: usize,
 ) -> PyResult<MoveByDelta> {
-    // Try a single 3-vec first.
+    // Try a single 3-vec first. Python tiles a single delta to (N, 3),
+    // but the math is identical to a uniform offset, so keep the compact
+    // Uniform form regardless of n_pin_verts.
     if let Ok(v) = extract_vec3(delta, "delta_pos") {
-        if n_pin_verts <= 1 {
-            // Single pin vertex (or the broadcast case): a uniform
-            // delta is the most compact representation. Python tiles
-            // it to `(N, 3)` always, but the math is identical.
-            return Ok(MoveByDelta::Uniform(v));
-        }
-        // Many vertices, single delta. Python's `np.tile` to `(N, 3)`
-        // is equivalent to applying the same uniform offset to each
-        // row; keep the uniform form so the apply path doesn't
-        // allocate.
         return Ok(MoveByDelta::Uniform(v));
     }
     // Per-vertex (N, 3) array.

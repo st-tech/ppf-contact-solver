@@ -10,7 +10,7 @@
 
 //! PyO3 bindings for the ppf-contact-solver Rust core.
 //!
-//! Compiled by maturin into the Python extension module
+//! Compiled by cargo (cdylib) into the Python extension module
 //! `_ppf_cts_py`. The pure-Python `frontend` package re-exports from
 //! here, so JupyterLab notebooks keep using the same names while the
 //! implementation lives in Rust.
@@ -21,7 +21,7 @@
 //! `schema_version()`, all numeric kernels (rasterizer, SDF,
 //! marching cubes, self-intersection, frame mapping, normals),
 //! `_utils_` helpers, and the per-domain holders (param, asset,
-//! session, app, scene, pin, mesh, render, decoder).
+//! session, app, pin, scene, mesh, render, decoder).
 //!
 //! Algorithmic implementations live in [`ppf_cts_core`]; cross-language
 //! wire types come from [`ppf_cts_formats`]. This crate is consumed
@@ -57,8 +57,13 @@ fn schema_version() -> u32 {
 fn _ppf_cts_py(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(version, m)?)?;
     m.add_function(wrap_pyfunction!(schema_version, m)?)?;
+    // Build-tree provenance stamp: the crate-source dir baked in at compile
+    // time. `frontend/__init__.py` compares this against its own tree root to
+    // fail fast when a compiled module built from a different source tree is
+    // loaded, which imports cleanly but can produce incorrect results.
+    m.add("__build_manifest_dir__", env!("CARGO_MANIFEST_DIR"))?;
     // Numeric kernels
-    m.add_function(wrap_pyfunction!(kernels::check_wall_violations, m)?)?;
+    m.add_function(wrap_pyfunction!(kernels::check_wall_violations_single, m)?)?;
     m.add_function(wrap_pyfunction!(kernels::frame_mapping, m)?)?;
     m.add_function(wrap_pyfunction!(kernels::interpolate_surface, m)?)?;
     m.add_function(wrap_pyfunction!(kernels::check_contact_offset_violation, m)?)?;
@@ -80,13 +85,12 @@ fn _ppf_cts_py(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Additional `_utils_` helpers.
     utils_py::register(m)?;
     // Extra (Extra.load_CIPC_stitch_mesh / sparse_clone)
-    m.add_function(wrap_pyfunction!(extra_py::load_cipc_stitch_mesh, m)?)?;
-    m.add_function(wrap_pyfunction!(extra_py::sparse_clone, m)?)?;
+    extra_py::register(m)?;
     // Param holder and asset validation.
     param_py::register(m)?;
     asset_py::register(m)?;
     session_py::register(m)?;
-    // App, scene hot-path kernels, pin holder.
+    // App, pin holder, scene hot-path kernels.
     app_py::register(m)?;
     pin_py::register(m)?;
     scene_py::register(m)?;

@@ -19,9 +19,16 @@ from ..core.derived import (
     is_sim_running_from_response as is_simulating,
 )
 from ..models.groups import get_addon_data, has_addon_data
-from ..core.module import get_install_error_message, get_install_result, get_installing_status, module_exists
+from ..core.module import cbor2_available, get_install_error_message, get_install_result, get_installing_status, module_exists
 from ..core.reload_server import get_reload_server_status
-from ..core.utils import find_invalid_name_char, find_invalid_path_char, get_category_name
+from ..core.utils import (
+    WINDOWS_MAX_PATH,
+    find_invalid_name_char,
+    find_invalid_path_char,
+    get_category_name,
+    windows_long_paths_enabled,
+    windows_path_too_long,
+)
 
 from .connection_ops import (
     REMOTE_OT_Abort,
@@ -35,6 +42,7 @@ from .connection_ops import (
     classes as connection_classes,
 )
 from .install_ops import (
+    REMOTE_OT_InstallCbor2,
     REMOTE_OT_InstallDocker,
     REMOTE_OT_InstallParamiko,
     classes as install_classes,
@@ -68,6 +76,10 @@ from .solver_control_ops import (
     SOLVER_OT_UpdateStatus,
     classes as solver_control_classes,
 )
+from .geometry_cleanup_ops import (
+    MESH_OT_RemoveIsolatedVertices,
+    classes as geometry_cleanup_classes,
+)
 
 
 # Tiny TTL cache for the port-error probe in the panel draw. The panel
@@ -75,8 +87,32 @@ from .solver_control_ops import (
 # wasteful even at sub-millisecond cost. ``_PROBE_TTL_S`` keeps the
 # answer fresh enough that the user sees the stale-error suppression
 # kick in within a frame or two of attaching.
+#
+# Only one port is ever in play at a time (the one named in the current
+# error), so a single (port, timestamp, ours) tuple caps the cache at one
+# entry instead of accumulating a dict key per distinct port hit.
 _PROBE_TTL_S = 1.5
-_probe_cache: dict[int, tuple[float, bool]] = {}
+_probe_cache: tuple[int, float, bool] | None = None
+
+
+# The server reports frame indices 0-based; Blender's timeline is 1-based.
+# This offset documents the convention in one place for the display-side
+# remaps below.
+REMOTE_FRAME_OFFSET = 1
+
+
+def remote_frame_to_blender(value, *, grouped=False) -> str:
+    """Convert a remote 0-based frame index into a Blender 1-based frame for
+    display. Strips thousands separators before parsing so the grouped
+    ``Total Frames`` string is tolerated, adds ``REMOTE_FRAME_OFFSET``, and
+    returns the result thousands-grouped when *grouped* is set. A value that
+    isn't an integer is returned unchanged (coerced to ``str``).
+    """
+    try:
+        n = int(str(value).replace(",", "")) + REMOTE_FRAME_OFFSET
+    except (ValueError, TypeError):
+        return str(value)
+    return f"{n:,}" if grouped else str(n)
 
 
 def _our_server_responding_in_error(error_msg: str) -> bool:
@@ -88,17 +124,17 @@ def _our_server_responding_in_error(error_msg: str) -> bool:
     import re
     import time
 
+    global _probe_cache
     m = re.search(r"\bPort\s+(\d+)", error_msg)
     if not m:
         return False
     port = int(m.group(1))
     now = time.monotonic()
-    cached = _probe_cache.get(port)
-    if cached and (now - cached[0]) < _PROBE_TTL_S:
-        return cached[1]
+    if _probe_cache and _probe_cache[0] == port and (now - _probe_cache[1]) < _PROBE_TTL_S:
+        return _probe_cache[2]
     from ..core.connection import _probe_ppf_cts_server
     ours = _probe_ppf_cts_server(port, timeout=0.5)
-    _probe_cache[port] = (now, ours)
+    _probe_cache = (port, now, ours)
     return ours
 
 
@@ -113,6 +149,29 @@ def _draw_path_warning(layout, path) -> bool:
     return True
 
 
+def _draw_long_path_warning(layout, path, project_name) -> bool:
+    """Draw a warning when the build pipeline's deepest cache file under
+    *path* would reach the Windows ``MAX_PATH`` limit for *project_name*, and
+    return ``True``. Draws nothing and returns ``False`` otherwise.
+
+    This is what makes a too-long Windows solver path fail loudly here, at the
+    time it is set, instead of as a bare ``FileNotFoundError`` deep inside a
+    later Transfer. Stays silent when Windows long-path support is enabled,
+    since the limit no longer applies there.
+    """
+    if windows_long_paths_enabled():
+        return False
+    projected = windows_path_too_long(path, project_name)
+    if projected is None:
+        return False
+    layout.label(
+        text=f"Path too long: cache files reach {projected} chars (Windows limit {WINDOWS_MAX_PATH})",
+        icon="ERROR",
+    )
+    layout.label(text="Use a shorter solver path, or enable Windows long paths")
+    return True
+
+
 def _draw_name_warning(layout, name) -> bool:
     """Draw a one-line warning when the project *name* holds a space or a
     character that isn't filename-safe, and return ``True``. Draws nothing and
@@ -124,6 +183,27 @@ def _draw_name_warning(layout, name) -> bool:
     return True
 
 
+def _draw_install_prompt(layout, *, operator_idname, module_label) -> None:
+    """Draw the install operator for *module_label* followed by its current
+    status: an in-progress notice while installing, the install error message
+    (or a generic failure fallback) when the last attempt failed, or a prompt
+    that the module still needs to be installed otherwise.
+    """
+    layout.operator(operator_idname)
+    if get_installing_status():
+        layout.label(text="Installing...", icon="FILE_REFRESH")
+    else:
+        install_result = get_install_result()
+        if install_result is False:
+            error_msg = get_install_error_message()
+            if error_msg:
+                layout.label(text=error_msg, icon="ERROR")
+            else:
+                layout.label(text=f"{module_label} installation failed.", icon="ERROR")
+        else:
+            layout.label(text=f"{module_label} needs to be installed.", icon="ERROR")
+
+
 class MAIN_OT_ProjectNameFromFile(bpy.types.Operator):
     """Copy the .blend filename into the Project Name field"""
 
@@ -131,7 +211,6 @@ class MAIN_OT_ProjectNameFromFile(bpy.types.Operator):
     bl_label = "Use Filename"
 
     def execute(self, context):
-        import os
         filepath = bpy.data.filepath
         name = os.path.splitext(os.path.basename(filepath))[0]
         get_addon_data(context.scene).state.project_name = name
@@ -139,7 +218,7 @@ class MAIN_OT_ProjectNameFromFile(bpy.types.Operator):
 
 
 class MAIN_PT_RemotePanel(Panel):
-    """Panel for SSH connection settings."""
+    """Backend Communicator panel: connection settings, server status, transfer, and statistics."""
 
     bl_label = "Backend Communicator"
     bl_idname = "MAIN_PT_RemotePanel"
@@ -157,49 +236,32 @@ class MAIN_PT_RemotePanel(Panel):
         state = root.state
         props = root.ssh_state
 
+        # cbor2 encodes every Transfer regardless of backend, so prompt
+        # for it up front whenever the bundled wheel is missing.
+        if not cbor2_available():
+            _draw_install_prompt(
+                layout,
+                operator_idname=REMOTE_OT_InstallCbor2.bl_idname,
+                module_label="cbor2",
+            )
+
         if (
             props.server_type == "COMMAND"
             or props.server_type == "CUSTOM"
             or "SSH" in props.server_type
         ):
             if not module_exists(["paramiko"]):
-                layout.operator(REMOTE_OT_InstallParamiko.bl_idname)
-                if get_installing_status():
-                    layout.label(text="Installing...", icon="FILE_REFRESH")
-                else:
-                    install_result = get_install_result()
-                    if install_result is False:
-                        error_msg = get_install_error_message()
-                        if error_msg:
-                            layout.label(text=error_msg, icon="ERROR")
-                        else:
-                            layout.label(
-                                text="Paramiko installation failed.", icon="ERROR"
-                            )
-                    else:
-                        layout.label(
-                            text="Paramiko needs to be installed.",
-                            icon="ERROR",
-                        )
+                _draw_install_prompt(
+                    layout,
+                    operator_idname=REMOTE_OT_InstallParamiko.bl_idname,
+                    module_label="Paramiko",
+                )
         elif props.server_type == "DOCKER" and not module_exists(["docker"]):
-            layout.operator(REMOTE_OT_InstallDocker.bl_idname)
-            if get_installing_status():
-                layout.label(text="Installing...", icon="FILE_REFRESH")
-            else:
-                install_result = get_install_result()
-                if install_result is False:
-                    error_msg = get_install_error_message()
-                    if error_msg:
-                        layout.label(text=error_msg, icon="ERROR")
-                    else:
-                        layout.label(
-                            text="Docker-Py installation failed.", icon="ERROR"
-                        )
-                else:
-                    layout.label(
-                        text="Docker-Py needs to be installed.",
-                        icon="ERROR",
-                    )
+            _draw_install_prompt(
+                layout,
+                operator_idname=REMOTE_OT_InstallDocker.bl_idname,
+                module_label="Docker-Py",
+            )
 
         profile_row = layout.row(align=True)
         profile_row.enabled = com.is_connected() is False
@@ -273,6 +335,7 @@ class MAIN_PT_RemotePanel(Panel):
                             col.label(text="Solver path valid", icon="CHECKMARK")
                         else:
                             col.label(text="ppf-cts-server.exe not found", icon="ERROR")
+                    _draw_long_path_warning(col, props.win_native_path, state.project_name)
             elif props.server_type == "LOCAL":
                 col.prop(props, "local_path")
                 _draw_path_warning(col, props.local_path)
@@ -317,8 +380,15 @@ class MAIN_PT_RemotePanel(Panel):
                 row = box.row()
                 row.label(text="Click \"Start Server on Remote\"", icon="INFO")
 
-        message = com.message or f"Status: {com.info.status.value}"
         status = com.info.status
+        # After a crash the server stays in the failed state but keeps the
+        # saved checkpoints, so surface both: "Simulation Failed (Resumable)"
+        # rather than a bare "Resumable" (which hides the failure) or a bare
+        # "Simulation Failed" (which hides that a resume is still possible).
+        status_text = status.value
+        if status == RemoteStatus.SIMULATION_FAILED and len(com.saved_state_frames()) > 0:
+            status_text = f"{status.value} (Resumable)"
+        message = com.message or f"Status: {status_text}"
         if com.is_connecting():
             layout.label(text=message, icon=status.icon)
             layout.operator(REMOTE_OT_CancelConnect.bl_idname, text="Cancel", icon="X")
@@ -365,6 +435,13 @@ class MAIN_PT_RemotePanel(Panel):
                     layout.operator(
                         SOLVER_OT_ForceTerminatePort.bl_idname, icon="X",
                     )
+                elif "isolated vert" in err_lower:
+                    # Stray faceless vertices on a STATIC collider abort the
+                    # build; offer a one-click cleanup (see the encoder's
+                    # detect_isolated_vertices check / geometry_cleanup_ops).
+                    layout.operator(
+                        MESH_OT_RemoveIsolatedVertices.bl_idname, icon="TRASH",
+                    )
 
         server_error = com.server_error
         if server_error:
@@ -378,6 +455,15 @@ class MAIN_PT_RemotePanel(Panel):
         # Remote Hardware info (shown when connected)
         hardware = com.response.get("hardware", {})
         if hardware and com.is_connected():
+            # Prominent, always-visible banner when the connected server
+            # is an emulated (CPU stub, no CUDA) build: it produces no
+            # real physics. `alert` renders the box in the theme's red.
+            if hardware.get("emulated"):
+                warn = layout.box()
+                warn.alert = True
+                wcol = warn.column(align=True)
+                wcol.label(text="SERVER IN EMULATION MODE (no CUDA)", icon="ERROR")
+                wcol.label(text="Solver produces no real physics (test-rig build).")
             hw_box = layout.box()
             row = hw_box.row()
             row.prop(
@@ -394,6 +480,19 @@ class MAIN_PT_RemotePanel(Panel):
                     row = col.row(align=True)
                     row.label(text=key)
                     row.label(text=str(value))
+
+        # Scene-encode / drift-check progress. This runs on the main thread
+        # inside Transfer / Run before any server status exists, so it has its
+        # own snapshot (see core.encode_progress); showing it here gives a
+        # labeled bar from the moment of the click that flows straight into the
+        # server's build/sim bar below.
+        from ..core import encode_progress
+        if encode_progress.is_active():
+            done, total, label = encode_progress.snapshot()
+            factor = min(1.0, done / total) if total else 0.0
+            layout.progress(
+                factor=factor, type="BAR", text=label or "Preparing scene data...",
+            )
 
         response = com.response
         if com.info.status.in_progress() or is_running(response):
@@ -433,10 +532,7 @@ class MAIN_PT_RemotePanel(Panel):
                 for key, value in displayed_summary.items():
                     # Remap remote frame index to Blender frame (0-based → 1-based)
                     if key == "frame":
-                        try:
-                            value = str(int(value) + 1)
-                        except (ValueError, TypeError):
-                            pass
+                        value = remote_frame_to_blender(value)
                     add_statistic_row(col, key, value)
 
         scene_info = com.response.get("scene_info", {})
@@ -444,17 +540,13 @@ class MAIN_PT_RemotePanel(Panel):
             # Remap remote frame indices to Blender frames (0-based → 1-based)
             scene_info = dict(scene_info)
             if "Total Frames" in scene_info:
-                try:
-                    n = int(scene_info["Total Frames"].replace(",", ""))
-                    scene_info["Total Frames"] = f"{n + 1:,}"
-                except (ValueError, TypeError):
-                    pass
+                scene_info["Total Frames"] = remote_frame_to_blender(
+                    scene_info["Total Frames"], grouped=True
+                )
             if "Last Saved" in scene_info and scene_info["Last Saved"] != "None":
-                try:
-                    n = int(scene_info["Last Saved"])
-                    scene_info["Last Saved"] = str(n + 1)
-                except (ValueError, TypeError):
-                    pass
+                scene_info["Last Saved"] = remote_frame_to_blender(
+                    scene_info["Last Saved"], grouped=True
+                )
         if scene_info:
             info_box = layout.box()
             info_box.prop(
@@ -634,6 +726,7 @@ classes = (
     + install_classes
     + mcp_classes
     + solver_control_classes
+    + list(geometry_cleanup_classes)
     + [MAIN_OT_ProjectNameFromFile, MAIN_PT_RemotePanel]
     + debug_classes
     + addon_classes

@@ -67,6 +67,10 @@ def set_scene_parameters(
     disable_contact: Optional[bool] = None,
     auto_save: Optional[bool] = None,
     auto_save_interval: Optional[int] = None,
+    save_state_on_finish: Optional[bool] = None,
+    keep_states: Optional[int] = None,
+    precond: Optional[str] = None,
+    schwarz_levels: Optional[int] = None,
     use_frame_rate_in_output: Optional[bool] = None,
     project_name: Optional[str] = None,
 ):
@@ -93,6 +97,12 @@ def set_scene_parameters(
         disable_contact: Disable all contact detection
         auto_save: Enable auto-save
         auto_save_interval: Auto-save interval (frames)
+        save_state_on_finish: Save a resumable state when the simulation finishes
+        keep_states: Number of most-recent saved states to retain (0 = keep all)
+        precond: PCG preconditioner, "BLOCK_JACOBI" (default) or "SCHWARZ"
+        schwarz_levels: Number of additive Schwarz levels, 1 (single-level
+            smoother) or 2 (two-level coarse correction, default). Only used
+            when precond is "SCHWARZ".
         use_frame_rate_in_output: Use frame rate in output
         project_name: Project name used for remote session directory
     """
@@ -104,6 +114,12 @@ def set_scene_parameters(
         gravity = check_vec3("gravity", gravity, MCPError)
     if wind_direction is not None:
         wind_direction = check_vec3("wind_direction", wind_direction, MCPError)
+    if precond is not None:
+        precond = precond.upper()
+        if precond not in {"SCHWARZ", "BLOCK_JACOBI"}:
+            raise MCPError("precond must be 'SCHWARZ' or 'BLOCK_JACOBI'")
+    if schwarz_levels is not None and schwarz_levels not in (1, 2):
+        raise MCPError("schwarz_levels must be 1 or 2")
 
     param_map = {
         "step_size": step_size,
@@ -126,6 +142,12 @@ def set_scene_parameters(
         "disable_contact": disable_contact,
         "auto_save": auto_save,
         "auto_save_interval": auto_save_interval,
+        "save_state_on_finish": save_state_on_finish,
+        "keep_states": keep_states,
+        "precond": precond,
+        "schwarz_levels": (
+            f"LEVEL_{schwarz_levels}" if schwarz_levels is not None else None
+        ),
         "use_frame_rate_in_output": use_frame_rate_in_output,
         "project_name": project_name,
     }
@@ -176,7 +198,51 @@ def get_scene_parameters():
             "disable_contact": state.disable_contact,
             "auto_save": state.auto_save,
             "auto_save_interval": state.auto_save_interval,
+            "save_state_on_finish": state.save_state_on_finish,
+            "keep_states": state.keep_states,
+            "precond": state.precond,
+            "schwarz_levels": int(state.schwarz_levels.split("_")[1]),
             "use_frame_rate_in_output": state.use_frame_rate_in_output,
             "project_name": state.project_name,
         }
     }
+
+
+@mcp_handler
+def set_save_checkpoint_frames(frames: list[int]):
+    """Set the explicit frames at which to save a resumable checkpoint.
+
+    Replaces the current Save Checkpoints list. Frames are de-duplicated,
+    clamped to Blender's 1-based minimum, and sorted ascending. These are
+    the frames the Resume dialog offers, in addition to Auto Save and Save
+    State on Finish.
+
+    Args:
+        frames: Frame indices (1-based) to save checkpoints at.
+    """
+    state = get_addon_data(bpy.context.scene).state
+    cleaned = sorted({max(1, int(f)) for f in frames})
+    state.save_checkpoint_frames.clear()
+    for f in cleaned:
+        item = state.save_checkpoint_frames.add()
+        item.frame = f
+    state.save_checkpoint_frames_index = len(cleaned) - 1 if cleaned else -1
+    return {"message": f"Set {len(cleaned)} checkpoint frames", "frames": cleaned}
+
+
+@mcp_handler
+def clear_save_checkpoint_frames():
+    """Clear all explicit Save Checkpoints frames."""
+    state = get_addon_data(bpy.context.scene).state
+    count = len(state.save_checkpoint_frames)
+    state.save_checkpoint_frames.clear()
+    state.save_checkpoint_frames_index = -1
+    return {"message": f"Cleared {count} checkpoint frames"}
+
+
+@mcp_handler
+def list_save_checkpoint_frames():
+    """List the explicit Save Checkpoints frames configured for the next run."""
+    state = get_addon_data(bpy.context.scene).state
+    frames = [int(item.frame) for item in state.save_checkpoint_frames]
+    return {"frames": frames, "count": len(frames)}

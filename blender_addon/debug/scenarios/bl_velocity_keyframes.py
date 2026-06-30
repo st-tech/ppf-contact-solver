@@ -16,6 +16,12 @@
 #     ``(frame - 1) / fps``. The swap converts Blender Z-up directions
 #     to solver Y-up: ``(x, y, z) -> (x, z, -y)``. The vector is
 #     normalized then multiplied by ``speed`` before the swap.
+#   - ``param["group"][i][0]["angular-velocity-schedule"][uuid]``: a
+#     list of ``(time_seconds, pca_index, speed_rad)`` for every entry
+#     with ``angular_speed != 0`` (including ``frame == 1`` at t=0).
+#     There is NO axis swap: ``pca_index`` is a principal-axis selector
+#     the solver resolves to a world axis from the live geometry, and
+#     ``speed_rad`` is ``radians(angular_speed_deg)``.
 #
 # This scenario authors a small velocity schedule on a single SHELL
 # assigned plane via the production
@@ -87,6 +93,17 @@ try:
         8:  ((1.0, 0.0, 0.0), 4.0),
         10: ((-1.0, 0.0, 0.0), 1.5),
     }
+    # Angular (spin) component per frame: (axis_mode, speed_deg). All use
+    # principal-axis modes here (the world/custom modes are checked in F).
+    # Frame 1's nonzero spin proves frame-1 angular routes through the
+    # schedule at t=0 (not a separate initial key); frame 10's zero is
+    # omitted by the encoder.
+    PER_FRAME_ANGULAR = {
+        1:  ("PC3", 90.0),
+        5:  ("PC1", -45.0),
+        8:  ("PC2", 180.0),
+        10: ("PC3", 0.0),
+    }
 
     assigned.velocity_keyframes.clear()
     # Drive the production operator. It reads frame from
@@ -115,6 +132,13 @@ try:
         direction, speed = PER_FRAME_AUTHOR[frame]
         added.direction = direction
         added.speed = speed
+        axis_mode, ang_speed = PER_FRAME_ANGULAR[frame]
+        added.angular_axis = axis_mode
+        added.angular_speed = ang_speed
+        # enable_translational stays at its default (True) so the linear
+        # checks below see every keyframe; angular is enabled only where a
+        # nonzero spin was authored.
+        added.enable_angular = ang_speed != 0.0
 
     # ----- A: keyframes_authored_via_operator -------------------
     # Sanity check that the operator path produced one row per
@@ -261,6 +285,161 @@ try:
             "schedule_times": times,
             "schedule_times_sorted": times_sorted_ok,
             "schedule_times_expected": expected_times,
+        },
+    )
+
+    # ----- D: param_pickle_carries_angular_velocity_schedule ----
+    # Every keyframe with angular_speed != 0 is emitted into
+    # "angular-velocity-schedule" as (t, pca_index, speed_rad) with
+    # t = (frame - 1) / fps (fps == 100) and speed_rad = radians(deg).
+    # There is NO axis swap: pca_index is a principal-axis selector the
+    # solver resolves to a world axis from the live geometry. Frame 10
+    # (speed 0) is omitted; frame 1's spin lands at t=0.
+    import math
+    EXPECTED_ANGULAR = [
+        (0.00, 2, math.radians(90.0)),    # frame 1  -> t=0
+        (0.04, 0, math.radians(-45.0)),   # frame 5
+        (0.07, 1, math.radians(180.0)),   # frame 8
+    ]
+    ang_payload = group_params.get("angular-velocity-schedule", {}).get(
+        assigned_uuid, []
+    )
+    ang_actual = [
+        (float(t), int(round(pca)), float(speed)) for t, pca, speed in ang_payload
+    ]
+    ang_len_ok = len(ang_actual) == len(EXPECTED_ANGULAR)
+    ang_match_ok = ang_len_ok and all(
+        abs(ang_actual[i][0] - EXPECTED_ANGULAR[i][0]) < 1e-6
+        and ang_actual[i][1] == EXPECTED_ANGULAR[i][1]
+        and abs(ang_actual[i][2] - EXPECTED_ANGULAR[i][2]) < 1e-5
+        for i in range(len(EXPECTED_ANGULAR))
+    )
+    dh.record(
+        "D_param_pickle_carries_angular_velocity_schedule",
+        ang_match_ok,
+        {
+            "angular_actual": ang_actual,
+            "angular_expected": EXPECTED_ANGULAR,
+        },
+    )
+
+    # ----- E: checkboxes gate emission --------------------------
+    # The "Enable Translational / Angular Velocity Overwrite" checkboxes
+    # control emission independently of the stored vectors. Unchecking
+    # both on every keyframe must drop ALL linear and angular entries and
+    # zero the initial velocity; re-checking only angular must bring back
+    # exactly the angular schedule (and keep the linear side empty). This
+    # is the load-bearing assertion for the per-component gating.
+    for kf in assigned.velocity_keyframes:
+        kf.enable_translational = False
+        kf.enable_angular = False
+    decoded_off = dh.decode_addon_blob(dh.encoder_param.encode_param(bpy.context))
+    gp_off = next(
+        params for params, _o, uuids in decoded_off["group"]
+        if assigned_uuid in uuids
+    )
+    init_off = tuple(float(c) for c in gp_off["velocity"][assigned_uuid])
+    sched_off = gp_off["velocity-schedule"][assigned_uuid]
+    ang_off = gp_off.get("angular-velocity-schedule", {}).get(assigned_uuid, [])
+    all_off_ok = (
+        all(abs(c) < 1e-9 for c in init_off)
+        and len(sched_off) == 0
+        and len(ang_off) == 0
+    )
+
+    # Re-enable only the angular component; linear must stay empty.
+    for kf in assigned.velocity_keyframes:
+        kf.enable_angular = kf.angular_speed != 0.0
+    decoded_ang = dh.decode_addon_blob(dh.encoder_param.encode_param(bpy.context))
+    gp_ang = next(
+        params for params, _o, uuids in decoded_ang["group"]
+        if assigned_uuid in uuids
+    )
+    init_ang = tuple(float(c) for c in gp_ang["velocity"][assigned_uuid])
+    sched_ang = gp_ang["velocity-schedule"][assigned_uuid]
+    ang_ang = gp_ang.get("angular-velocity-schedule", {}).get(assigned_uuid, [])
+    angular_only_ok = (
+        all(abs(c) < 1e-9 for c in init_ang)
+        and len(sched_ang) == 0
+        and len(ang_ang) == len(EXPECTED_ANGULAR)
+    )
+
+    dh.record(
+        "E_checkboxes_gate_emission",
+        all_off_ok and angular_only_ok,
+        {
+            "all_off": {
+                "initial": init_off,
+                "schedule_len": len(sched_off),
+                "angular_len": len(ang_off),
+            },
+            "angular_only": {
+                "initial": init_ang,
+                "schedule_len": len(sched_ang),
+                "angular_len": len(ang_ang),
+            },
+        },
+    )
+
+    # ----- F: world / custom axis modes -------------------------
+    # World X/Y/Z and Custom axes are FIXED world directions, pre-resolved
+    # by the encoder into a world-space ω vector (axis swapped Blender->
+    # solver via (x,y,z)->(x,z,-y), normalized, scaled by radians(speed)).
+    # They land in "angular-velocity-world-schedule" and must NOT appear in
+    # the principal-axis "angular-velocity-schedule".
+    assigned.velocity_keyframes.clear()
+    WORLD_KFS = [
+        # frame, axis_mode, custom_vec (Blender), speed_deg
+        (1, "X", (0.0, 0.0, 1.0), 90.0),
+        (3, "Z", (0.0, 0.0, 1.0), 180.0),
+        (5, "CUSTOM", (0.0, 2.0, 0.0), -60.0),
+    ]
+    for fr, mode, custom, spd in WORLD_KFS:
+        kf = assigned.velocity_keyframes.add()
+        kf.frame = fr
+        kf.angular_axis = mode
+        kf.angular_axis_custom = custom
+        kf.angular_speed = spd
+        kf.enable_translational = False
+        kf.enable_angular = True
+    assigned.velocity_keyframes_index = 0
+
+    EXPECTED_WORLD = [
+        (0.00, (math.radians(90.0), 0.0, 0.0)),     # World X
+        (0.02, (0.0, math.radians(180.0), 0.0)),    # World Z -> solver Y
+        (0.04, (0.0, 0.0, -math.radians(-60.0))),   # Custom (0,2,0) -> solver (0,0,-1)
+    ]
+    decoded_w = dh.decode_addon_blob(dh.encoder_param.encode_param(bpy.context))
+    gp_w = next(
+        params for params, _o, uuids in decoded_w["group"]
+        if assigned_uuid in uuids
+    )
+    world_payload = gp_w.get("angular-velocity-world-schedule", {}).get(
+        assigned_uuid, []
+    )
+    world_actual = [
+        (float(t), tuple(float(c) for c in v)) for t, v in world_payload
+    ]
+    pca_leak = gp_w.get("angular-velocity-schedule", {}).get(assigned_uuid, [])
+    world_ok = (
+        len(world_actual) == len(EXPECTED_WORLD)
+        and len(pca_leak) == 0
+        and all(
+            abs(world_actual[i][0] - EXPECTED_WORLD[i][0]) < 1e-6
+            and all(
+                abs(world_actual[i][1][j] - EXPECTED_WORLD[i][1][j]) < 1e-4
+                for j in range(3)
+            )
+            for i in range(len(EXPECTED_WORLD))
+        )
+    )
+    dh.record(
+        "F_param_pickle_carries_world_axis_schedule",
+        world_ok,
+        {
+            "world_actual": world_actual,
+            "world_expected": EXPECTED_WORLD,
+            "pca_leak_len": len(pca_leak),
         },
     )
 

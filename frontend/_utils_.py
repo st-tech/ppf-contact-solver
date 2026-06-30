@@ -14,7 +14,21 @@ import subprocess
 
 from typing import Optional
 
+import numpy as np
+
 from . import _rust  # type: ignore[attr-defined]
+
+
+def _as_c(arr, dtype):
+    """Return a C-contiguous view of ``arr`` with the given dtype.
+
+    The Rust kernels take ``PyReadonlyArray`` parameters and re-check
+    C-contiguity, so the contiguous copy is load-bearing; the ``dtype``
+    keeps the existing silent-cast behavior so callers that build
+    indices with the platform-default int width keep working. ``None``
+    passes through unchanged for the optional array arguments.
+    """
+    return None if arr is None else np.ascontiguousarray(arr, dtype=dtype)
 
 
 def get_cache_dir() -> str:
@@ -27,10 +41,10 @@ def get_export_base_path() -> str:
     return _rust.get_export_base_path()
 
 
-def dict_to_html_table(data: dict, classes: str = "table", index: bool = False) -> str:
+def dict_to_html_table(data: dict, classes: str = "table") -> str:
     """Render a column-oriented mapping to an HTML table."""
     columns = [(str(k), [str(x) for x in v]) for k, v in data.items()]
-    return _rust.dict_to_html_table(columns, classes, index)
+    return _rust.dict_to_html_table(columns, classes)
 
 
 class Utils:
@@ -73,6 +87,13 @@ class Utils:
         return _rust.is_fast_check()
 
     @staticmethod
+    def platform_which() -> str:
+        """Return the platform discriminator ('windows' or 'unix') used by the Rust launcher helpers."""
+        import platform
+
+        return "windows" if platform.system() == "Windows" else "unix"
+
+    @staticmethod
     def set_fast_check(enabled: bool = True):
         """Set fast check mode."""
         _rust.set_fast_check(enabled)
@@ -94,13 +115,20 @@ class Utils:
         """Number of NVIDIA GPUs visible to nvidia-smi."""
         try:
             result = subprocess.run(
-                ["nvidia-smi", "-L"], capture_output=True, text=True, check=True
+                ["nvidia-smi", "-L"],
+                capture_output=True,
+                text=True,
+                check=True,
+                timeout=10,
             )
-            return len(result.stdout.strip().split("\n"))
+            lines = [
+                l for l in result.stdout.strip().split("\n") if l.startswith("GPU ")
+            ]
+            return len(lines)
         except subprocess.CalledProcessError as e:
             print("Error occurred while running nvidia-smi:", e)
             return 0
-        except FileNotFoundError:
+        except (subprocess.TimeoutExpired, FileNotFoundError):
             print("nvidia-smi not found. Is NVIDIA driver installed?")
             return 0
 
@@ -113,12 +141,13 @@ class Utils:
                 capture_output=True,
                 text=True,
                 check=True,
+                timeout=10,
             )
             return int(result.stdout.strip().split(".")[0])
         except subprocess.CalledProcessError as e:
             print("Error occurred while running nvidia-smi:", e)
             return None
-        except FileNotFoundError:
+        except (subprocess.TimeoutExpired, FileNotFoundError):
             print("nvidia-smi not found. Is NVIDIA driver installed?")
             return None
 

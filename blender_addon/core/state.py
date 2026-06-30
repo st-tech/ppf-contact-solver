@@ -96,6 +96,12 @@ class AppState:
     # cleared by UploadPipelineComplete (once the build request is
     # dispatched) or by any error / abort path that resets activity.
     pending_build: bool = False
+    # Carries the preserve-output flag from the upload start to the
+    # chained build: when True the chained build keeps session/output/
+    # checkpoints in place (a resume-rebuild). Set by
+    # BuildPipelineRequested, cleared in UploadPipelineComplete alongside
+    # pending_build.
+    pending_build_preserve_output: bool = False
     # Quick fingerprints of the data.pickle / param.pickle currently
     # on the server, mirrored from each status response. The Run /
     # UpdateParams operators recompute the live scene's hashes at
@@ -126,6 +132,12 @@ class AppState:
     # exit out of STARTING (BUSY/SAVING/error), so a normal-paced run
     # never even touches it.
     starting_poll_guard: int = 0
+    # True when the connected server is an emulated (CPU stub, no CUDA)
+    # build. Mirrored from ``hardware.emulated`` on each status response;
+    # the Run operator warns before running on such a server because it
+    # produces no real physics. Preserved across responses that omit the
+    # hardware block (e.g. the minimal error-only reply).
+    emulated: bool = False
 
     # -- derived helpers (no mutation) --
 
@@ -194,10 +206,7 @@ class AppState:
             Solver.SAVING: RemoteStatus.SAVING_IN_PROGRESS,
             Solver.FAILED: RemoteStatus.SIMULATION_FAILED,
         }
-        if self.solver in _SOLVER_MAP:
-            return _SOLVER_MAP[self.solver]
-
-        # Fallback
-        if self.error:
-            return RemoteStatus.ERROR
-        return RemoteStatus.UNKNOWN
+        # _SOLVER_MAP is exhaustive over the Solver enum, so this always
+        # returns. A future Solver member without a map entry raises KeyError
+        # (fail-loud) rather than silently falling through.
+        return _SOLVER_MAP[self.solver]

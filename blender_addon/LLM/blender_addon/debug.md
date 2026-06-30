@@ -39,7 +39,6 @@ The CLI lives at `blender_addon/debug/main.py` and talks to both the debug reloa
 | `full-reload`            | Two-phase reload for schema changes. Timeout 70 s.                                         |
 | `exec <code>`            | Execute Python inside Blender. Pass `-` to read from stdin.                                |
 | `start-mcp`              | Ask the reload server to start the MCP server. `--port` selects port.                      |
-| `restart-server`         | Run `server/restart.sh` on the addon's connected remote (stop + start the solver server).  |
 | `tools`                  | List MCP tools. `--json` for raw JSON.                                                     |
 | `call <tool> [json]`     | Invoke an MCP tool with the given JSON arguments.                                          |
 | `scene`                  | Fetch the current Blender scene via the MCP `blender://scene/current` resource.            |
@@ -208,7 +207,7 @@ top = next(
     None,
 )
 if top is None:
-    raise RuntimeError("ppf-contact-solver addon does not appear to be loaded")
+    raise RuntimeError("ppf_contact_solver addon does not appear to be loaded")
 
 perf = importlib.import_module(top + ".ui.perf")
 perf.enable()

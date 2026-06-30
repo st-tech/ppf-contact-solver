@@ -32,18 +32,22 @@ use super::bvh::{
 };
 use super::geom_util::{
     bbox_overlap, dot3, elements_share_vertex_2_3, elements_share_vertex_3_3, expand_bbox, sub3,
+    vert3,
 };
 
-const EPS_DIST: f64 = 1e-14;
+// Degeneracy guards. Split by physical dimension so the threshold's meaning is
+// explicit even though both values are intentionally identical (no numeric change).
+const EPS_LEN_SQ: f64 = 1e-14; // squared edge length (L^2) degeneracy guard
+const EPS_DENOM: f64 = 1e-14; // squared parallelogram area |d1 x d2|^2 (L^4); near-parallel-edge guard
 
 // ---------------------------------------------------------------------------
-// Distance primitives (mirrors frontend/_proximity_.py:97-233)
+// Distance primitives
 
 #[inline]
 fn point_edge_dist_sq(p: [f64; 3], e0: [f64; 3], e1: [f64; 3]) -> f64 {
     let edge = sub3(e1, e0);
     let edge_len_sq = dot3(edge, edge);
-    if edge_len_sq < EPS_DIST {
+    if edge_len_sq < EPS_LEN_SQ {
         let d = sub3(p, e0);
         return dot3(d, d);
     }
@@ -68,20 +72,21 @@ fn edge_edge_dist_sq(a0: [f64; 3], a1: [f64; 3], b0: [f64; 3], b1: [f64; 3]) -> 
     let f = dot3(d2, r);
 
     let (s, t);
-    if a < EPS_DIST && e < EPS_DIST {
+    if a < EPS_LEN_SQ && e < EPS_LEN_SQ {
         let d = sub3(a0, b0);
         return dot3(d, d);
-    } else if a < EPS_DIST {
+    } else if a < EPS_LEN_SQ {
         s = 0.0;
         t = (f / e).clamp(0.0, 1.0);
-    } else if e < EPS_DIST {
+    } else if e < EPS_LEN_SQ {
         t = 0.0;
         s = (-dot3(d1, r) / a).clamp(0.0, 1.0);
     } else {
         let b_val = dot3(d1, d2);
         let c = dot3(d1, r);
+        // Gram determinant |d1 x d2|^2, a quartic (L^4) quantity, not a length^2.
         let denom = a * e - b_val * b_val;
-        let s_init = if denom.abs() > EPS_DIST {
+        let s_init = if denom.abs() > EPS_DENOM {
             ((b_val * f - c * e) / denom).clamp(0.0, 1.0)
         } else {
             0.0
@@ -130,12 +135,16 @@ fn tri_tri_distance_sq(
     tri_j: [i32; 3],
     threshold_sq: f64,
 ) -> f64 {
-    let v_at = |idx: i32| -> [f64; 3] {
-        let k = idx as usize;
-        [verts[3 * k], verts[3 * k + 1], verts[3 * k + 2]]
-    };
-    let ti = [v_at(tri_i[0]), v_at(tri_i[1]), v_at(tri_i[2])];
-    let tj = [v_at(tri_j[0]), v_at(tri_j[1]), v_at(tri_j[2])];
+    let ti = [
+        vert3(verts, tri_i[0]),
+        vert3(verts, tri_i[1]),
+        vert3(verts, tri_i[2]),
+    ];
+    let tj = [
+        vert3(verts, tri_j[0]),
+        vert3(verts, tri_j[1]),
+        vert3(verts, tri_j[2]),
+    ];
 
     let mut min_sq = f64::INFINITY;
     // 3 verts of i to triangle j
@@ -183,12 +192,12 @@ fn tri_edge_distance_sq(
     edge: [i32; 2],
     threshold_sq: f64,
 ) -> f64 {
-    let v_at = |idx: i32| -> [f64; 3] {
-        let k = idx as usize;
-        [verts[3 * k], verts[3 * k + 1], verts[3 * k + 2]]
-    };
-    let t = [v_at(tri[0]), v_at(tri[1]), v_at(tri[2])];
-    let e = [v_at(edge[0]), v_at(edge[1])];
+    let t = [
+        vert3(verts, tri[0]),
+        vert3(verts, tri[1]),
+        vert3(verts, tri[2]),
+    ];
+    let e = [vert3(verts, edge[0]), vert3(verts, edge[1])];
 
     let mut min_sq = f64::INFINITY;
     // Edge endpoints to triangle (2)
@@ -247,14 +256,29 @@ fn find_close_tri_tri(
     bvh: &Bvh,
     contact_offset: &[f64],
     is_collider: &[bool],
+    max_cand_offset: f64,
 ) -> Vec<(i32, i32)> {
     let tri_i = [tris[3 * ti], tris[3 * ti + 1], tris[3 * ti + 2]];
     let offset_i = contact_offset[ti];
+    // Tight box (this element expanded by its own offset) drives the precise
+    // per-candidate Minkowski-overlap prune below.
     let (bb_i_min, bb_i_max) =
         expand_bbox(&bvh.elem_bboxes_min[ti], &bvh.elem_bboxes_max[ti], offset_i);
+    // Traversal box expands by offset_i + the max candidate offset. BVH node
+    // bboxes are bare (no per-element offset baked in), so culling with the
+    // tight box alone drops a candidate that sits within offset_i + offset_j
+    // whenever offset_i is the smaller term, e.g. a zero-offset shell triangle
+    // whose nearby rod carries the whole offset. The precise per-candidate
+    // test inside still uses the tight box, so this only widens what the BVH
+    // visits, never what it reports.
+    let (q_min, q_max) = expand_bbox(
+        &bvh.elem_bboxes_min[ti],
+        &bvh.elem_bboxes_max[ti],
+        offset_i + max_cand_offset,
+    );
 
     let mut out = Vec::new();
-    traverse_overlap(bvh, &bb_i_min, &bb_i_max, |tj_i| {
+    traverse_overlap(bvh, &q_min, &q_max, |tj_i| {
         let tj = tj_i as usize;
         if tj <= ti {
             return;
@@ -298,13 +322,19 @@ fn find_close_tri_edge(
     n_tris: usize,
     tri_bboxes_min: &[[f64; 3]],
     tri_bboxes_max: &[[f64; 3]],
+    max_cand_offset: f64,
 ) -> Vec<(i32, i32)> {
     let tri = [tris[3 * ti], tris[3 * ti + 1], tris[3 * ti + 2]];
     let offset_i = tri_offset[ti];
+    // Tight box for the precise per-candidate prune; loose box (offset_i + max
+    // candidate offset) for the BVH traversal. See `find_close_tri_tri` for why
+    // the bare node bboxes force the wider traversal box.
     let (bb_i_min, bb_i_max) = expand_bbox(&tri_bboxes_min[ti], &tri_bboxes_max[ti], offset_i);
+    let (q_min, q_max) =
+        expand_bbox(&tri_bboxes_min[ti], &tri_bboxes_max[ti], offset_i + max_cand_offset);
 
     let mut out = Vec::new();
-    traverse_overlap(edge_bvh, &bb_i_min, &bb_i_max, |ej_i| {
+    traverse_overlap(edge_bvh, &q_min, &q_max, |ej_i| {
         let ej = ej_i as usize;
         if tri_is_collider[ti] && edge_is_collider[ej] {
             return;
@@ -341,24 +371,30 @@ fn find_close_edge_edge(
     contact_offset: &[f64],
     is_collider: &[bool],
     n_tris: usize,
+    max_cand_offset: f64,
 ) -> Vec<(i32, i32)> {
     let edge_i = [edges[2 * ei], edges[2 * ei + 1]];
     let offset_i = contact_offset[ei];
+    // Tight box for the precise per-candidate prune; loose box (offset_i + max
+    // candidate offset) for the BVH traversal. See `find_close_tri_tri`. This
+    // also matters for rod-vs-rod: two rods up to offset_i + offset_j apart
+    // must be visited, not just those within offset_i.
     let (bb_i_min, bb_i_max) = expand_bbox(
         &edge_bvh.elem_bboxes_min[ei],
         &edge_bvh.elem_bboxes_max[ei],
         offset_i,
     );
+    let (q_min, q_max) = expand_bbox(
+        &edge_bvh.elem_bboxes_min[ei],
+        &edge_bvh.elem_bboxes_max[ei],
+        offset_i + max_cand_offset,
+    );
 
-    let v_at = |idx: i32| -> [f64; 3] {
-        let k = idx as usize;
-        [verts[3 * k], verts[3 * k + 1], verts[3 * k + 2]]
-    };
-    let e0_i = v_at(edge_i[0]);
-    let e1_i = v_at(edge_i[1]);
+    let e0_i = vert3(verts, edge_i[0]);
+    let e1_i = vert3(verts, edge_i[1]);
 
     let mut out = Vec::new();
-    traverse_overlap(edge_bvh, &bb_i_min, &bb_i_max, |ej_i| {
+    traverse_overlap(edge_bvh, &q_min, &q_max, |ej_i| {
         let ej = ej_i as usize;
         if ej <= ei {
             return;
@@ -381,8 +417,8 @@ fn find_close_edge_edge(
         if !bbox_overlap(&bb_i_min, &bb_i_max, &exp_min, &exp_max) {
             return;
         }
-        let e0_j = v_at(edge_j[0]);
-        let e1_j = v_at(edge_j[1]);
+        let e0_j = vert3(verts, edge_j[0]);
+        let e1_j = vert3(verts, edge_j[1]);
         let d_sq = edge_edge_dist_sq(e0_i, e1_i, e0_j, e1_j);
         if d_sq < required_sq {
             out.push((
@@ -443,6 +479,14 @@ pub fn check_contact_offset_violation(input: ProximityInput<'_>) -> Vec<(i32, i3
     let tri_offset = &offset[..n_tris];
     let edge_offset = &offset[n_tris..];
 
+    // Max offset per candidate kind: the BVH traversal box for each source
+    // element is widened by source_offset + this, so no candidate within the
+    // summed contact offset is culled before the precise distance test (the
+    // BVH node bboxes are bare). Without this an asymmetric pair (a zero-offset
+    // triangle next to an offset-carrying rod) is silently dropped.
+    let max_tri_offset = tri_offset.iter().copied().fold(0.0_f64, f64::max);
+    let max_edge_offset = edge_offset.iter().copied().fold(0.0_f64, f64::max);
+
     let tri_bvh = input
         .tris
         .filter(|_| n_tris > 0)
@@ -461,7 +505,15 @@ pub fn check_contact_offset_violation(input: ProximityInput<'_>) -> Vec<(i32, i3
         let mut pairs: Vec<(i32, i32)> = (0..n_tris)
             .into_par_iter()
             .flat_map(|ti| {
-                find_close_tri_tri(ti, input.verts, tris, bvh, tri_offset, tri_is_collider)
+                find_close_tri_tri(
+                    ti,
+                    input.verts,
+                    tris,
+                    bvh,
+                    tri_offset,
+                    tri_is_collider,
+                    max_tri_offset,
+                )
             })
             .collect();
         all_pairs.append(&mut pairs);
@@ -491,6 +543,7 @@ pub fn check_contact_offset_violation(input: ProximityInput<'_>) -> Vec<(i32, i3
                     n_tris,
                     tri_bb_min,
                     tri_bb_max,
+                    max_edge_offset,
                 )
             })
             .collect();
@@ -504,7 +557,16 @@ pub fn check_contact_offset_violation(input: ProximityInput<'_>) -> Vec<(i32, i3
         let mut pairs: Vec<(i32, i32)> = (0..n_edges)
             .into_par_iter()
             .flat_map(|ei| {
-                find_close_edge_edge(ei, input.verts, edges, bvh, edge_offset, edge_is_collider, n_tris)
+                find_close_edge_edge(
+                    ei,
+                    input.verts,
+                    edges,
+                    bvh,
+                    edge_offset,
+                    edge_is_collider,
+                    n_tris,
+                    max_edge_offset,
+                )
             })
             .collect();
         all_pairs.append(&mut pairs);
@@ -556,6 +618,70 @@ mod tests {
             contact_offset: Some(&off),
         });
         assert!(r.is_empty());
+    }
+
+    #[test]
+    fn asymmetric_offset_tri_edge_not_culled() {
+        // Regression for the BVH offset-cull bug: a zero-offset triangle and a
+        // rod edge carrying the whole contact offset. The triangle's bare bbox
+        // (expanded by its own offset 0) never reaches the rod, so traversing
+        // with the tight box alone dropped the pair even though the rod's offset
+        // brings it into range. Mirrors the real rod-on-shell scene (shell
+        // contact-offset 0, rod 0.014, edge gap ~0.009).
+        let verts = flat3(&[
+            // Triangle in the z = 0 plane.
+            [0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0],
+            // Rod edge hovering 0.009 above the triangle interior.
+            [0.25, 0.25, 0.009], [0.30, 0.25, 0.009],
+        ]);
+        let tris = flat3i(&[[0, 1, 2]]);
+        let edges = flat2i(&[[3, 4]]);
+        // tri offset 0, rod offset 0.014 ⇒ sum 0.014 > gap 0.009 ⇒ violation.
+        let off = vec![0.0, 0.014];
+        let r = check_contact_offset_violation(ProximityInput {
+            verts: &verts,
+            tris: Some(&tris),
+            edges: Some(&edges),
+            is_collider: None,
+            contact_offset: Some(&off),
+        });
+        // namespace: tri 0, rod edge at n_tris + 0 = 1.
+        assert_eq!(r, vec![(0, 1)]);
+
+        // Pull the rod above the summed offset ⇒ no violation.
+        let verts_far = flat3(&[
+            [0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0],
+            [0.25, 0.25, 0.02], [0.30, 0.25, 0.02],
+        ]);
+        let r = check_contact_offset_violation(ProximityInput {
+            verts: &verts_far,
+            tris: Some(&tris),
+            edges: Some(&edges),
+            is_collider: None,
+            contact_offset: Some(&off),
+        });
+        assert!(r.is_empty());
+    }
+
+    #[test]
+    fn edge_edge_distance_between_max_and_sum_not_culled() {
+        // Two parallel rod edges 0.015 apart, each offset 0.01. The gap exceeds
+        // either single offset (0.01) but is under their sum (0.02), so the
+        // tight-box traversal (expand by offset_i = 0.01) missed it.
+        let verts = flat3(&[
+            [0.0, 0.0, 0.0], [1.0, 0.0, 0.0],
+            [0.0, 0.015, 0.0], [1.0, 0.015, 0.0],
+        ]);
+        let edges = flat2i(&[[0, 1], [2, 3]]);
+        let off = vec![0.01, 0.01];
+        let r = check_contact_offset_violation(ProximityInput {
+            verts: &verts,
+            tris: None,
+            edges: Some(&edges),
+            is_collider: None,
+            contact_offset: Some(&off),
+        });
+        assert_eq!(r, vec![(0, 1)]);
     }
 
     #[test]

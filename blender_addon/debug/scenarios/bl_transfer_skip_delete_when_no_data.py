@@ -17,10 +17,12 @@
 #      directly (the delete-cycle path would set ``self._mode =
 #      "delete"`` and only flip to "pipeline" after the delete reply
 #      lands).
-#   B. no_delete_request_dispatched: the engine's recent_events ring
-#      buffer holds no QueryRequested with ``request="delete"``
-#      between the operator's execute() call and the SENDING activity
-#      that the upload kicked off.
+#   B. no_delete_request_dispatched: execute() defers the upload to
+#      staged modal ticks, so we drain the stages and then check the
+#      engine's recent_events ring buffer: it holds a
+#      BuildPipelineRequested and no QueryRequested with
+#      ``request="delete"`` (the skipped path would have queued the
+#      delete first).
 #   C. upload_landed: the modal completes with the project at
 #      READY/RESUMABLE — proves the skip didn't break the upload
 #      pipeline downstream.
@@ -45,20 +47,6 @@ result.setdefault("errors", [])
 result.setdefault("checks", {})
 LOCAL_PATH = "<<LOCAL_PATH>>"
 SERVER_PORT = <<SERVER_PORT>>
-
-
-# Lightweight stand-in for the operator instance. Captures
-# ``self.report`` calls and accepts attribute assignment so
-# ``self._mode = 'pipeline'`` lands somewhere we can inspect.
-class _StubSelf:
-    def __init__(self):
-        self.captured = []
-        self.modal_set_up = False
-        self._mode = None
-    def report(self, kind, msg):
-        self.captured.append((tuple(kind), msg))
-    def setup_modal(self, ctx):
-        self.modal_set_up = True
 
 
 try:
@@ -101,23 +89,13 @@ try:
     pre_event_count = len(dh.facade.engine.recent_events)
 
     # ----- Invoke Transfer.execute on a fresh project -----------------
-    stub = _StubSelf()
+    # execute() now defers the encode + upload to staged modal ticks and
+    # returns RUNNING_MODAL immediately. The skip-delete decision is the
+    # synchronous ``self._mode = "pipeline"`` assignment, so it is already
+    # observable here; the actual build dispatch happens on the final
+    # staged tick, so drain the stages before inspecting the events.
+    stub = dh.staged_stub(Transfer)
     verdict = Transfer.execute(stub, bpy.context)
-    dh.facade.tick()
-    post_event_count = len(dh.facade.engine.recent_events)
-    new_events = dh.facade.engine.recent_events[
-        max(0, pre_event_count - len(dh.facade.engine.recent_events)):
-    ]
-    # The stable signal: between the execute() and the next tick that
-    # processes its dispatched event, we should see exactly ONE new
-    # event -- BuildPipelineRequested. The skipped path would have
-    # dispatched a QueryRequested(request={'request':'delete'}) first.
-    new_event_names = [name for _, name, _ in new_events]
-    saw_build_pipeline = "BuildPipelineRequested" in new_event_names
-    saw_delete_query = any(
-        name == "QueryRequested" and "'request': 'delete'" in repr_
-        for _, name, repr_ in new_events
-    )
 
     dh.record(
         "A_fresh_transfer_skips_delete",
@@ -135,10 +113,24 @@ try:
         },
     )
 
+    # Pump the staged encode -> upload stages. The skipped delete path
+    # would have dispatched a QueryRequested(request={'request':'delete'})
+    # before the build; the fast path dispatches only BuildPipelineRequested.
+    drain_result = stub.drain_stages(bpy.context)
+    new_events = dh.facade.engine.recent_events[pre_event_count:]
+    new_event_names = [name for _, name, _ in new_events]
+    saw_build_pipeline = "BuildPipelineRequested" in new_event_names
+    saw_delete_query = any(
+        name == "QueryRequested" and "'request': 'delete'" in repr_
+        for _, name, repr_ in new_events
+    )
+
     dh.record(
         "B_no_delete_request_dispatched",
-        saw_build_pipeline and not saw_delete_query,
+        drain_result is None
+        and saw_build_pipeline and not saw_delete_query,
         {
+            "drain_result": list(drain_result) if drain_result else None,
             "new_event_names": new_event_names,
             "saw_build_pipeline": saw_build_pipeline,
             "saw_delete_query": saw_delete_query,

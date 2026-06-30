@@ -49,10 +49,8 @@ def invalidate_overlays():
         root.state.overlay_version += 1
     except Exception:
         pass
-    for window in bpy.context.window_manager.windows:
-        for area in window.screen.areas:
-            if area.type == "VIEW_3D":
-                area.tag_redraw()
+    from ..core.utils import redraw_all_windows
+    redraw_all_windows("VIEW_3D")
 
 
 # Centralized default values for ObjectGroup properties
@@ -67,13 +65,17 @@ OBJECT_GROUP_DEFAULTS = {
     "shell_model": "BARAFF_WITKIN",
     "rod_model": "ARAP",
     # Density values
-    "solid_density": 1000.0,
+    "solid_density": 100.0,
     "shell_density": 1.0,
     "rod_density": 1.0,
     # Young's modulus values
     "solid_young_modulus": 500.0,
     "shell_young_modulus": 1000.0,
     "rod_young_modulus": 10000.0,
+    # Whether the Young's modulus field is a density-normalized value (Pa/rho,
+    # the solver's native convention). True (default) sends it unchanged; False
+    # treats it as a true modulus in pascals and the encoder divides by density.
+    "young_mod_density_normalized": True,
     # Poisson's ratio values
     "solid_poisson_ratio": 0.35,
     "shell_poisson_ratio": 0.35,
@@ -89,29 +91,32 @@ OBJECT_GROUP_DEFAULTS = {
     "computed_contact_offset": 0.0,
     # Solid-specific parameters
     "shrink": 1.0,
+    # PDRD-specific parameter: volumetric density. The body moves
+    # exactly rigidly; its asset stays a Tri surface mesh and no
+    # tetrahedralization is performed for PDRD bodies.
+    "pdrd_density": 100.0,
+    # SAND-specific parameters. A SAND group is a faceless mesh of loose
+    # vertices (grain centers); the grains share one radius and a
+    # volumetric density, plus an inter-grain friction coefficient.
+    "sand_grain_radius": 0.02,
+    "sand_particle_mass": 1.0,
+    "sand_friction": 0.0,
     # Rod-specific parameters (1D analog of shell shrink_x / solid shrink)
     "length_factor": 1.0,
-    # fTetWild overrides (SOLID groups). When no sub-override is set, no
-    # kwargs are forwarded and pure fTetWild defaults apply.
-    "show_ftetwild": False,
-    "ftetwild_override_edge_length_fac": False,
-    "ftetwild_edge_length_fac": 0.05,
-    "ftetwild_override_epsilon": False,
-    "ftetwild_epsilon": 1e-3,
-    "ftetwild_override_stop_energy": False,
-    "ftetwild_stop_energy": 10.0,
-    "ftetwild_override_num_opt_iter": False,
-    "ftetwild_num_opt_iter": 80,
-    "ftetwild_override_optimize": False,
-    "ftetwild_optimize": True,
-    "ftetwild_override_simplify": False,
-    "ftetwild_simplify": True,
-    "ftetwild_override_coarsen": False,
-    "ftetwild_coarsen": False,
+    # The tetrahedralizer backend (fTetWild / TetGen) and its per-field
+    # overrides are per-object now; their defaults live on the
+    # AssignedObject property definitions (see ui/state_types.py).
     # Shell-specific parameters
     "enable_strain_limit": False,
-    "strain_limit": 0.05,
+    # Percentage of rest length (5.0 == 5% allowed stretch). Encoder divides
+    # by 100 for the solver wire value.
+    "strain_limit_percent": 5.0,
     "bend": 10.0,
+    # Stiffness-proportional Rayleigh damping coefficients (seconds). 0.0
+    # disables damping. deformation_damping damps stretch/membrane/solid
+    # motion; bending_damping damps shell/rod bending (usually smaller).
+    "deformation_damping": 0.0,
+    "bending_damping": 0.0,
     "shrink_x": 1.0,
     "shrink_y": 1.0,
     "enable_inflate": False,
@@ -123,6 +128,11 @@ OBJECT_GROUP_DEFAULTS = {
     "bend_plasticity": 0.5,
     "bend_plasticity_threshold": 0.0,
     "bend_rest_angle_source": "FLAT",
+    "bend_rest_from_reference": False,
+    # Direct stiffness factor for the loose-edge stitch force: the solver
+    # scales the stitch gradient and Hessian by this value, with no mass or
+    # dt normalization. Raise it to hold seams harder under gravity/collision
+    # loads; lower it to let light (rod) vertices articulate more freely.
     "stitch_stiffness": 1.0,
     # UI visibility flags
     "show_parameters": False,
@@ -130,12 +140,28 @@ OBJECT_GROUP_DEFAULTS = {
     "show_stats": False,
     "show_pin": False,
     "show_group": True,
+    "show_pdrd_hinge": False,
+    "pdrd_hinge_visualize": True,
     # Pin overlay settings
-    "show_pin_overlay": True,
     "pin_overlay_size": 12.0,
     # Collection indices
     "assigned_objects_index": -1,
     "pin_vertex_groups_index": -1,
+}
+
+
+# Icons by ObjectGroup.object_type, the single source for the type set.
+# Each entry carries two role-specific icons: "header" is the group-type
+# badge drawn once on the group header (panels.py); "object" is the
+# per-object glyph drawn beside each assigned object name (ui_lists.py).
+# The two vocabularies are intentionally distinct; do not collapse them.
+GROUP_TYPE_ICONS = {
+    "SOLID": {"header": "MESH_CUBE", "object": "MESH_CUBE"},
+    "SHELL": {"header": "SURFACE_DATA", "object": "OUTLINER_OB_SURFACE"},
+    "ROD": {"header": "CURVE_DATA", "object": "VIEW_ORTHO"},
+    "STATIC": {"header": "FREEZE", "object": "OBJECT_ORIGIN"},
+    "PDRD": {"header": "MESH_ICOSPHERE", "object": "MESH_ICOSPHERE"},
+    "SAND": {"header": "PARTICLE_DATA", "object": "PARTICLE_DATA"},
 }
 
 
@@ -150,9 +176,49 @@ def get_object_type(object_type):
         color = (intensity, 0.0, 0.0, alpha)
     elif object_type == "ROD":
         color = (intensity, intensity, 0.0, alpha)  # Yellow for rod
+    elif object_type == "PDRD":
+        color = (intensity, 0.0, intensity, alpha)  # Magenta for PDRD
+    elif object_type == "SAND":
+        color = (intensity, 0.5 * intensity, 0.0, alpha)  # Tan/orange for sand
     else:
         color = (0.0, 0.0, 0.0, alpha)
     return color
+
+
+def sand_radius_source_object(group):
+    """First included SAND object carrying a stamped ``ppf_grain_radius``.
+
+    The Convert op stamps the user-chosen radius on each object it converts;
+    that stamped value is the locked source of truth for both the rendered
+    sphere and the contact skin. Returns the Blender object, or None if no
+    included object has been converted yet (so the group's
+    ``sand_grain_radius`` fallback applies).
+    """
+    from ..core.uuid_registry import get_object_by_uuid
+
+    for obj_ref in group.assigned_objects:
+        if not obj_ref.included or not obj_ref.uuid:
+            continue
+        obj = get_object_by_uuid(obj_ref.uuid)
+        if obj is not None and obj.get("ppf_grain_radius"):
+            return obj
+    return None
+
+
+def sand_seeded_radius(group):
+    """Locked grain radius for a SAND group.
+
+    The Convert op stamps the user-chosen radius on the object as
+    ``ppf_grain_radius`` and derives the non-overlapping seeding spacing from
+    it, so that value is the single source of truth for both the rendered
+    sphere and the contact skin. Returns the first included converted object's
+    stamped radius, falling back to the group's ``sand_grain_radius`` for an
+    object converted before the radius was stamped. Returns a float.
+    """
+    obj = sand_radius_source_object(group)
+    if obj is not None:
+        return float(obj["ppf_grain_radius"])
+    return float(group.sand_grain_radius)
 
 
 def get_vertex_group_items(self, _):
@@ -231,6 +297,19 @@ def iterate_active_object_groups(scene):
             yield group
 
 
+# Object types that participate in the dynamics solve (STATIC is excluded).
+DYNAMIC_OBJECT_TYPES = ("SOLID", "SHELL", "ROD", "PDRD", "SAND")
+
+
+def has_simulatable_dynamics(scene) -> bool:
+    """Return True if any active group holds a dynamic object with assignments."""
+    return any(
+        group.object_type in DYNAMIC_OBJECT_TYPES
+        and len(group.assigned_objects) > 0
+        for group in iterate_active_object_groups(scene)
+    )
+
+
 def get_group_by_uuid(scene, group_uuid: str):
     """Get a group by its UUID."""
     for group in iterate_object_groups(scene):
@@ -259,14 +338,27 @@ def find_available_group_slot(scene):
 
 
 def pair_supports_cross_stitch(type_a, type_b):
-    """Check whether the given pair of group types supports cross-stitch."""
+    """Check whether the given pair of group types supports cross-stitch.
+
+    A STATIC collider may be a stitch TARGET for any dynamic source type
+    (SOLID/SHELL/ROD). The STATIC side is treated like a SHELL target: its
+    surface is a plain triangle mesh whose vertex indices map 1:1 to the
+    solver (a STATIC is never re-tetrahedralized), so it needs no
+    re-projection. A non-moving STATIC that participates in a stitch is
+    promoted into the dynamic pinned namespace at decode time so the stitch
+    index can reach it (see frontend ``_populate_static``).
+    """
     pair = {type_a, type_b}
     return (
         pair == {"SHELL"}
+        or pair == {"SOLID"}
         or pair == {"SHELL", "SOLID"}
         or pair == {"ROD", "SHELL"}
         or pair == {"ROD", "SOLID"}
         or pair == {"ROD"}
+        or pair == {"SOLID", "STATIC"}
+        or pair == {"SHELL", "STATIC"}
+        or pair == {"ROD", "STATIC"}
     )
 
 

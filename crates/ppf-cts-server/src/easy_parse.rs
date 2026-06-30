@@ -7,10 +7,11 @@
 //
 //     --request build --name demo
 //
-// and the only callers (`wire::handle_tcmd`) look up `name` and
-// `request`. Repeated keys are last-write-wins; `--name` is
-// single-valued by construction and the seven `--request` values are
-// enumerated in `wire/mod.rs`. Bare `--flag` tokens with no
+// and the only callers (`wire::handle_tcmd`) look up keys such as
+// `name`, `request`, and `resume_from`. Repeated keys are
+// last-write-wins; `--name` is
+// single-valued by construction and the `--request` values are
+// enumerated in `wire::tcmd_request_to_event`. Bare `--flag` tokens with no
 // following value are skipped: every flag the addon emits today
 // carries a value.
 

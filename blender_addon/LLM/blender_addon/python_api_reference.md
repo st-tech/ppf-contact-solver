@@ -75,7 +75,7 @@ Create a new dynamics group.
 **Parameters:**
 
 - **name**: Display name for the group. Empty string leaves the auto-generated name in place.
-- **type**: One of `"SOLID"`, `"SHELL"`, `"ROD"`, `"STATIC"`.
+- **type**: One of `"SOLID"`, `"SHELL"`, `"ROD"`, `"STATIC"`, `"PDRD"`, `"SAND"`.
 
 **Returns:** A `Group` proxy for the newly created group.
 
@@ -381,7 +381,7 @@ Remove an object from this group.
 
 **Returns:** `self` for chaining.
 
-### set_velocity(object_name: str, direction: tuple[float, float, float], speed: float, frame: int=1) -> Group
+### set_velocity(object_name: str, direction: tuple[float, float, float], speed: float, frame: int=1, angular_axis: int|str="PC3", angular_speed: float=0.0, angular_axis_custom: tuple[float, float, float]=(0.0, 0.0, 1.0), enable_translational: bool=True, enable_angular: bool|None=None) -> Group
 
 Keyframe a velocity on an object assigned to this group.
 
@@ -393,6 +393,11 @@ Appends an entry to the assigned object's `velocity_keyframes` collection. Call 
 - **direction**: `(dx, dy, dz)` velocity direction; normalized by the solver before use.
 - **speed**: Velocity magnitude in m/s.
 - **frame**: Frame at which the keyframe takes effect. `1` (the default) is the initial-velocity slot.
+- **angular_axis**: Axis to spin about (SOLID, SHELL, PDRD only). `"PC1"`/`"PC2"`/`"PC3"` (principal axes resolved dynamically from the geometry), `"X"`/`"Y"`/`"Z"` (fixed world axes), or `"CUSTOM"` (the `angular_axis_custom` vector). Ints `0`/`1`/`2` map to PC1/PC2/PC3. Ignored when `angular_speed == 0`.
+- **angular_speed**: Signed spin speed in degrees per second (0 = no spin).
+- **angular_axis_custom**: World `(x, y, z)` axis used when `angular_axis == "CUSTOM"` (normalized before use).
+- **enable_translational**: Overwrite the translational velocity at this frame (False leaves translation alone, e.g. a pure spin).
+- **enable_angular**: Overwrite the angular velocity at this frame. Defaults to True when `angular_speed` is non-zero, else False.
 
 **Returns:** `self` for chaining.
 
@@ -402,6 +407,28 @@ Appends an entry to the assigned object's `velocity_keyframes` collection. Call 
 ball = solver.create_group("Ball", type="SOLID")
 ball.add("Sphere")
 ball.set_velocity("Sphere", direction=(1, 0, 0), speed=2.3)
+```
+
+### set_hinge(object_name: str, pca_axis: int=2, enable: bool=True) -> Group
+
+Pin a PDRD body assigned to this group as a hinge (per object).
+
+Locks the body's position and restricts its rotation to a single principal (PCA) axis of its rest shape, the building block for gears: hinge each gear to its axle and let tooth contact transmit the torque, so meshing gears counter-rotate with no explicit gear-ratio constraint. The group must be of type `PDRD`, and the setting is per object, so different bodies in the same group can be hinged on different axles.
+
+**Parameters:**
+
+- **object_name**: Name of an object already added to this group via `add`.
+- **pca_axis**: Which principal axis of the rest shape is the free axle: `0` (largest extent), `1` (middle), or `2` (thinnest, the usual axle for a flat gear or disk). Defaults to `2`.
+- **enable**: `True` (the default) sets the hinge; `False` clears it and lets the body move freely.
+
+**Returns:** `self` for chaining.
+
+**Raises:** `ValueError` if the group is not `PDRD`, the object is not assigned to it, or `pca_axis` is not in `{0, 1, 2}`.
+
+```python
+gears = solver.create_group("Gears", type="PDRD")
+gears.add("GearA")
+gears.set_hinge("GearA", pca_axis=2)
 ```
 
 ### create_pin(object_name: str, vertex_group_name: str, indices: list[int] | None=None) -> Pin
@@ -445,16 +472,19 @@ Accessed via `Group.param`. Attribute access is whitelisted: reading or writing 
 
 Whitelisted attributes:
 
-- **Solver model**: `solid_model`, `shell_model`
+- **Solver model**: `solid_model`, `shell_model`, `rod_model` (`rod_model` currently accepts only `"ARAP"`: the enum has a single item and ROD groups force-pin it to ARAP)
 - **Density**: `solid_density`, `shell_density`, `rod_density`
 - **Young's modulus**: `solid_young_modulus`, `shell_young_modulus`, `rod_young_modulus`
 - **Poisson ratio**: `solid_poisson_ratio`, `shell_poisson_ratio`
 - **Contact**: `friction`, `use_group_bounding_box_diagonal`, `contact_gap`, `contact_gap_rat`, `contact_offset`, `contact_offset_rat`
-- **Strain limit**: `enable_strain_limit`, `strain_limit`
+- **Strain limit**: `enable_strain_limit`, `strain_limit_percent`
 - **Inflation**: `enable_inflate`, `inflate_pressure`
 - **Plasticity**: `enable_plasticity`, `plasticity`, `plasticity_threshold`
 - **Bend plasticity**: `enable_bend_plasticity`, `bend_plasticity`, `bend_plasticity_threshold`, `bend_rest_angle_source`
+- **Reference rest angle (SHELL / ROD)**: `bend_rest_from_reference` (group master toggle). The per-object reference itself (which object, and its picked reference object) is **not** a group material: it lives on the assigned object (`bend_ref_enable`, `bend_ref_uuid`) and is set from the UI eyedropper (`object.pick_bend_reference` / `object.clear_bend_reference`), not via the group param API. When enabled with a valid reference, that object's bending rest angle (shell hinge dihedral, or rod interior-vertex bend angle) is computed from the reference geometry, overriding `bend_rest_angle_source` for that object. Mesh references are modifier-evaluated; curve-rod references are sampled at the control-point level.
 - **Shell / solid / rod shape controls**: `bend`, `shrink`, `shrink_x`, `shrink_y`, `length_factor`, `stitch_stiffness`
+- **PDRD-specific**: `pdrd_density` (kg/m^3, volumetric). The PDRD hinge joint is per-object, set via `set_hinge` (not a group material).
+- **SAND-specific**: `sand_grain_radius`, `sand_particle_mass`, `sand_friction` (used only when the group's object_type is `"SAND"`).
 
 ```python
 group.param.friction = 0.5
@@ -499,6 +529,22 @@ Pull allows the vertices to move but applies a restoring force toward their targ
 
 ```python
 group.create_pin("Cloth", "shoulder").pull(strength=2.5)
+```
+
+### stiffness(value: float=1.0) -> Pin
+
+Scale this pin's moving (kinematic) constraint force.
+
+Only affects an animated pin (one with operations or a captured deformation); 1.0 leaves the force unchanged. Raise it if a moving pin lags or wobbles off its target.
+
+**Parameters:**
+
+- **value**: Stiffness scale (default 1.0).
+
+**Returns:** `self` for chaining.
+
+```python
+group.create_pin("Cloth", "edge").stiffness(value=4.0)
 ```
 
 ### spin(axis: tuple[float, float, float]=(1, 0, 0), angular_velocity: float=360.0, flip: bool=False, center: tuple[float, float, float] | None=None, center_mode: str | None=None, center_direction: tuple[float, float, float] | None=None, center_vertex: int | None=None, frame_start: int=1, frame_end: int=60, transition: str='LINEAR') -> Pin

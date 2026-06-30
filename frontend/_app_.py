@@ -273,20 +273,9 @@ class App:
         """
         from . import _cbor_bridge_ as _cbor
 
-        def _load_fixed_session(p: str) -> FixedSession:
-            with open(p, "rb") as f:
-                blob = f.read()
-            if _cbor.is_cbor(blob):
-                # ``loads_pickle_blob`` handles both the current
-                # dict-shaped payload and the older raw-bytes
-                # envelopes left on disk by earlier builds.
-                pickled = _cbor.loads_pickle_blob(blob, _cbor.KIND_FIXED_SESSION)
-                return pickle.loads(pickled)
-            return pickle.loads(blob)
-
         data_dir = App.get_data_dirpath()
         pickle_path = _rust.recover_session_path(name, data_dir)
-        return _load_fixed_session(pickle_path)
+        return _cbor.load_pickle_payload(pickle_path, _cbor.KIND_FIXED_SESSION)
 
     @staticmethod
     def get_data_dirpath():
@@ -330,26 +319,14 @@ class App:
         if os.path.exists(self._path) and not renew:
             from . import _cbor_bridge_ as _cbor
 
-            with open(self._path, "rb") as f:
-                blob = f.read()
-            if _cbor.is_cbor(blob):
-                # ``loads_pickle_blob`` accepts both the current
-                # dict-shaped payload (with ``pickle_blob`` field) and
-                # the older raw-bytes payload left on disk by
-                # earlier App.save versions.
-                pickled = _cbor.loads_pickle_blob(blob, _cbor.KIND_APP_STATE)
-                (self._asset, self._scene, self._mesh, self._session, self._plot) = (
-                    pickle.loads(pickled)
-                )
-            else:
-                (self._asset, self._scene, self._mesh, self._session, self._plot) = (
-                    pickle.loads(blob)
-                )
+            (self._asset, self._scene, self._mesh, self._session, self._plot) = (
+                _cbor.load_pickle_payload(self._path, _cbor.KIND_APP_STATE)
+            )
         else:
             os.makedirs(self._root, exist_ok=True)
             self._plot = PlotManager()
             self._session = SessionManager(
-                self._name, self._root, proj_root, App.get_data_dirpath()
+                self._name, self._root, proj_root, data_dirpath
             )
             self._asset = AssetManager()
             self._scene = SceneManager(self._plot, self.asset)
@@ -534,8 +511,6 @@ class App:
                 app = app.clear()
                 print(app.asset.list())
         """
-        self.asset.clear()
-        self._scene.clear()
         self._session.clear()
         return App(self._name, True, self._cache_dir)
 

@@ -83,7 +83,7 @@ try:
 
     root = groups_mod.get_addon_data(bpy.context.scene)
     group = root.object_group_0
-    group.show_pin_overlay = True
+    # Pin overlay visibility is now per-pin (default on), so no group toggle.
     pre_edit_world_co = plane.matrix_world @ plane.data.vertices[0].co
     log("pre_edit_world_co=" + repr(tuple(pre_edit_world_co)))
 

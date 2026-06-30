@@ -7,6 +7,7 @@ or ObjectGroup properties based on the key (and optional group_uuid).
 import bpy  # pyright: ignore
 from bpy.props import StringProperty  # pyright: ignore
 
+from ..models.defaults import SCENE_PARAM_ALIASES
 from ..models.groups import get_addon_data
 
 
@@ -68,10 +69,6 @@ class ZOZO_CTS_OT_Set(bpy.types.Operator):
             self.report({"ERROR"}, "key is required")
             return {"CANCELLED"}
 
-        # Property aliases for backward compatibility
-        _ALIASES = {"gravity": "gravity_3d"}
-        key = _ALIASES.get(key, key)
-
         # If group_uuid is provided, target ObjectGroup
         if self.group_uuid:
             from ..models.groups import get_group_by_uuid
@@ -91,6 +88,11 @@ class ZOZO_CTS_OT_Set(bpy.types.Operator):
             except Exception as e:
                 self.report({"ERROR"}, f"Failed to set group property '{key}': {e}")
                 return {"CANCELLED"}
+
+        # Scene/SSH parameter aliases for backward compatibility. Applied only
+        # on the scene path so group-targeted keys keep the caller's name in
+        # any error message.
+        key = SCENE_PARAM_ALIASES.get(key, key)
 
         # Try addon_data.state first
         addon_data = get_addon_data(scene)

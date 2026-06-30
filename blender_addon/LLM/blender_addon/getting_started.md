@@ -16,7 +16,8 @@ ZOZO's Contact Solver (https://github.com/st-tech/ppf-contact-solver) is a GPU-a
 
 - **Blender 5.0 or newer.** The extension manifest pins `blender_version_min = "5.0.0"`; older builds will refuse to enable it.
 - **A solver backend.** Any one of: a solver checkout on the same machine (simplest), an SSH-reachable Linux host, a Docker container, or a Windows workstation. The solver itself requires an NVIDIA GPU with CUDA 12.x. See Connections for the full matrix and GPU requirements. The add-on is just a client and runs fine on any machine Blender runs on (including macOS).
-- **(Optional) paramiko / docker-py.** Needed only for SSH and Docker connections. You do not need to install them yourself. When you pick an SSH or Docker server type without the module present, the main panel surfaces an **Install Paramiko** / **Install Docker-Py** button that installs into the add-on's vendored `lib/` directory.
+- **(Optional) paramiko / docker-py.** Needed only for SSH and Docker connections. You do not need to install them yourself. When you pick an SSH or Docker server type without the module present, the main panel surfaces an **Install Paramiko** / **Install Docker-Py** button that pip-installs them (via `--target`) into Blender's user `scripts/addons/modules` directory.
+- **cbor2** (bundled wheel, required to encode the scene before upload) is installed with the extension. If it is missing, the main panel surfaces an **Install cbor2** button that reinstalls it into Blender's user `scripts/addons/modules` directory.
 
 NOTE: The solver binary itself is not shipped with the add-on. You build or deploy it separately at the path you point the connection at. The add-on only looks for the `ppf-cts-server` binary there.
 
@@ -49,13 +50,13 @@ Figure: the Solver panel with **Transfer** (the button that uploads geometry and
 
 ### Scene Configuration
 
-Global solver inputs: FPS, frame count, step size, gravity, air density, air friction. Four collapsible sub-sections: **Wind**, **Advanced Params**, **Dynamic Parameters** (keyframed gravity / wind / air), and **Invisible Colliders** (walls and spheres).
+Global solver inputs: FPS, frame count, step size, gravity, air density, air friction. Six collapsible sub-sections: **Save and Checkpoints**, **Wind**, **Dynamic Parameters** (keyframed gravity / wind / air), **Invisible Colliders** (walls and spheres), **Linear System Solver**, and **Advanced Params**.
 
-Figure: the Scene Configuration panel. Every field here applies to the whole scene; the four collapsible sections at the bottom (Wind, Advanced Params, Dynamic Parameters, and Invisible Colliders) expand to reveal more inputs.
+Figure: the Scene Configuration panel. Every field here applies to the whole scene; the six collapsible sections at the bottom (Save and Checkpoints, Wind, Dynamic Parameters, Invisible Colliders, Linear System Solver, and Advanced Params) expand to reveal more inputs.
 
 ### Dynamics Groups
 
-Up to 32 groups. Create a group, pick its type (**Solid** / **Shell** / **Rod** / **Static**), assign meshes, set per-group material parameters, manage pin vertex groups, and attach pin operations (**Move By**, **Spin**, **Scale**, **Torque**, **Embedded Move**).
+Up to 32 groups. Create a group, pick its type (**Solid** / **Shell** / **Rod** / **Static** / **PDRD** / **Sand**), assign meshes, set per-group material parameters, manage pin vertex groups, and attach pin operations (**Move By**, **Spin**, **Scale**, **Torque**, **Embedded Move**).
 
 Figure: the Dynamics Groups panel in its empty state with **Create Group** (the button that allocates a new group slot) highlighted. Each created group appears as its own box below.
 

@@ -43,6 +43,16 @@ template <class T> T max_array(const T *array, unsigned size, T init_val);
 
 template <class T> T inner_product(const T *array1, const T *array2, unsigned size);
 
+// Device-resident reduction outputs for the sync-free PCG inner loop. Same
+// float32 arithmetic as inner_product()/sum_array(), but the scalar is left at
+// the caller-supplied device address `out` instead of copied to the host, and
+// the multi-pass tail ping-pongs scratch buffers rather than issuing a
+// host-synchronizing device-to-device copy. No device-to-host copy occurs, so
+// the whole reduction queues on `queue` with no host round-trip.
+void inner_product_into(const float *a, const float *b, float *out, unsigned n,
+                        cudaStream_t queue = 0);
+void sum_into(const float *in, float *out, unsigned n, cudaStream_t queue = 0);
+
 } // namespace kernels
 
 #endif // REDUCE_HPP

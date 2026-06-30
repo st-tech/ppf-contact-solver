@@ -145,36 +145,39 @@ pub fn check_gpu() -> Result<(), GpuError> {
 // ---------------------------------------------------------------------------
 // Process discovery + termination.
 
+/// Construct and populate a `System` snapshot scoped to process info.
+/// All three process helpers read only name/status/parent, so a
+/// process-only refresh is sufficient. Centralizing the construction
+/// keeps the refresh decision in one place.
+fn scan_solver_system() -> System {
+    let mut sys = System::new_with_specifics(
+        RefreshKind::new().with_processes(ProcessRefreshKind::new()),
+    );
+    sys.refresh_processes(ProcessesToUpdate::All, true);
+    sys
+}
+
+/// True iff `proc` is a live (non-zombie) solver process, i.e. its
+/// name contains `SOLVER_PROCESS_NAME`.
+fn is_live_solver(proc: &sysinfo::Process) -> bool {
+    proc.name().to_string_lossy().contains(SOLVER_PROCESS_NAME)
+        && !matches!(proc.status(), sysinfo::ProcessStatus::Zombie)
+}
+
 /// True iff any process whose name contains `SOLVER_PROCESS_NAME` is
 /// running and not a zombie.
 pub fn solver_busy() -> bool {
-    let mut sys = System::new_with_specifics(
-        RefreshKind::new().with_processes(ProcessRefreshKind::new()),
-    );
-    sys.refresh_processes(ProcessesToUpdate::All, true);
-    for proc in sys.processes().values() {
-        let name = proc.name().to_string_lossy();
-        if !name.contains(SOLVER_PROCESS_NAME) {
-            continue;
-        }
-        if matches!(proc.status(), sysinfo::ProcessStatus::Zombie) {
-            continue;
-        }
-        return true;
-    }
-    false
+    let sys = scan_solver_system();
+    sys.processes().values().any(is_live_solver)
 }
 
-/// True iff any **descendant** of the current process whose name
-/// contains `SOLVER_PROCESS_NAME` is running and not a zombie. Used
-/// by the test rig's emulated server so a peer worker's solver
-/// (running on the same host but in a different process tree) doesn't
-/// trip our own "solver already running" guard.
-pub fn solver_busy_descendants_only() -> bool {
-    let mut sys = System::new_with_specifics(
-        RefreshKind::new().with_processes(ProcessRefreshKind::new()),
-    );
-    sys.refresh_processes(ProcessesToUpdate::All, true);
+/// Collect the PIDs of every live (non-zombie) solver process that is
+/// a descendant of the current process, given an already-refreshed
+/// `System` snapshot. Shared by `solver_busy_descendants_only` and
+/// `terminate_solver_descendants_only` so the descendant-tree walk
+/// can't drift between the busy check and the kill. The current
+/// process (``me``) is never included even if it somehow matched.
+fn solver_descendant_pids(sys: &System) -> Vec<sysinfo::Pid> {
     let me = sysinfo::Pid::from_u32(std::process::id());
     let processes = sys.processes();
     // Build a parent->child map so we can walk the descendant tree
@@ -187,6 +190,7 @@ pub fn solver_busy_descendants_only() -> bool {
             children_of.entry(parent).or_default().push(*pid);
         }
     }
+    let mut matches: Vec<sysinfo::Pid> = Vec::new();
     let mut stack: Vec<sysinfo::Pid> = vec![me];
     let mut seen: std::collections::HashSet<sysinfo::Pid> = std::collections::HashSet::new();
     while let Some(pid) = stack.pop() {
@@ -194,20 +198,25 @@ pub fn solver_busy_descendants_only() -> bool {
             continue;
         }
         if let Some(proc) = processes.get(&pid) {
-            if pid != me {
-                let name = proc.name().to_string_lossy();
-                if name.contains(SOLVER_PROCESS_NAME)
-                    && !matches!(proc.status(), sysinfo::ProcessStatus::Zombie)
-                {
-                    return true;
-                }
+            if pid != me && is_live_solver(proc) {
+                matches.push(pid);
             }
         }
         if let Some(kids) = children_of.get(&pid) {
             stack.extend(kids.iter().copied());
         }
     }
-    false
+    matches
+}
+
+/// True iff any **descendant** of the current process whose name
+/// contains `SOLVER_PROCESS_NAME` is running and not a zombie. Used
+/// by the test rig's emulated server so a peer worker's solver
+/// (running on the same host but in a different process tree) doesn't
+/// trip our own "solver already running" guard.
+pub fn solver_busy_descendants_only() -> bool {
+    let sys = scan_solver_system();
+    !solver_descendant_pids(&sys).is_empty()
 }
 
 // ---------------------------------------------------------------------------
@@ -229,12 +238,7 @@ pub fn get_export_base_path() -> String {
 
 /// Render a column-oriented mapping to an HTML table. The caller passes
 /// (column_name, [cell_string, ...]) pairs in the desired column order.
-/// `index` is accepted for compatibility but ignored.
-pub fn dict_to_html_table(
-    columns: &[(String, Vec<String>)],
-    classes: &str,
-    _index: bool,
-) -> String {
+pub fn dict_to_html_table(columns: &[(String, Vec<String>)], classes: &str) -> String {
     if columns.is_empty() {
         return "<table></table>".to_string();
     }
@@ -307,22 +311,38 @@ pub fn has_cli_or_ci_marker(frontend_dir: &std::path::Path) -> bool {
 /// `Process::kill()` (TerminateProcess) since there's no graceful
 /// equivalent.
 pub fn terminate_solver() {
-    let mut sys = System::new_with_specifics(
-        RefreshKind::new().with_processes(ProcessRefreshKind::new()),
-    );
-    sys.refresh_processes(ProcessesToUpdate::All, true);
-    for proc in sys.processes().values() {
-        let name = proc.name().to_string_lossy();
-        if !name.contains(SOLVER_PROCESS_NAME) {
-            continue;
-        }
-        if matches!(proc.status(), sysinfo::ProcessStatus::Zombie) {
-            continue;
-        }
+    let sys = scan_solver_system();
+    for proc in sys.processes().values().filter(|p| is_live_solver(p)) {
         #[cfg(unix)]
         let _ = proc.kill_with(Signal::Term);
         #[cfg(windows)]
         let _ = proc.kill();
+    }
+}
+
+/// Terminate only the live (non-zombie) solver processes that are
+/// descendants of the current process. The emulated test-rig build
+/// selects this over `terminate_solver` so a worker that kills or
+/// relaunches its own solver does not signal a peer worker's solver
+/// running on the same host (a different process tree). This keeps the
+/// kill set aligned with `solver_busy_descendants_only`'s check set.
+///
+/// Snapshot the descendant PIDs from a single refresh before signaling
+/// any of them: killing mutates the process table, so re-walking after
+/// a signal could miss or misattribute PIDs. We also keep the zombie
+/// skip (via `is_live_solver`) so we never signal an already-reaped PID
+/// and risk hitting a reused PID. Per-platform signaling matches
+/// `terminate_solver`.
+pub fn terminate_solver_descendants_only() {
+    let sys = scan_solver_system();
+    let pids = solver_descendant_pids(&sys);
+    for pid in pids {
+        if let Some(proc) = sys.process(pid) {
+            #[cfg(unix)]
+            let _ = proc.kill_with(Signal::Term);
+            #[cfg(windows)]
+            let _ = proc.kill();
+        }
     }
 }
 
@@ -359,6 +379,162 @@ mod tests {
     }
 
     #[test]
+    fn terminate_solver_descendants_only_runs_to_completion() {
+        // No solver descendant in a test context; the terminator must
+        // complete without error and signal nothing.
+        terminate_solver_descendants_only();
+    }
+
+    /// Clone `sleep` into a temp dir under a name that contains
+    /// SOLVER_PROCESS_NAME. Detection keys off `Process::name`, which on
+    /// Linux is the executable's ``comm`` (its basename), so renaming the
+    /// binary, not just argv[0], is what makes the clone look like the
+    /// real ``ppf-contact-solver``. Returns the temp dir (the caller must
+    /// keep it alive while the process runs) and the binary path, or None
+    /// when the host has no `sleep` to clone.
+    #[cfg(unix)]
+    fn clone_solver_named_sleep() -> Option<(tempfile::TempDir, std::path::PathBuf)> {
+        use std::os::unix::fs::PermissionsExt;
+        let sleep_bin = ["/bin/sleep", "/usr/bin/sleep"]
+            .iter()
+            .map(std::path::PathBuf::from)
+            .find(|p| p.exists())?;
+        let dir = tempfile::tempdir().ok()?;
+        let bin = dir.path().join("ppf-contact-sibling");
+        std::fs::copy(&sleep_bin, &bin).ok()?;
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).ok()?;
+        Some((dir, bin))
+    }
+
+    /// POSIX ``kill -0``: true iff a process with `pid` exists. Routed
+    /// through the shell so it works on hosts without a standalone
+    /// ``/bin/kill`` and on both Linux and macOS.
+    #[cfg(unix)]
+    fn pid_alive(pid: i32) -> bool {
+        std::process::Command::new("sh")
+            .arg("-c")
+            .arg(format!("kill -0 {pid}"))
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn descendant_terminator_spares_non_descendant_solver() {
+        use std::process::Command;
+
+        // A solver-named binary running OUTSIDE our descendant tree must
+        // be spared. Build the clone, launch it in the background from a
+        // short-lived launcher shell, and let the launcher exit so the
+        // process is orphaned (reparented to init) and no longer a
+        // descendant of this test process. The launcher (not the orphan)
+        // is what ``status()`` reaps, so we capture the orphan's PID via
+        // a file.
+        let (dir, bin) = match clone_solver_named_sleep() {
+            Some(pair) => pair,
+            None => return,
+        };
+        let pidfile = dir.path().join("pid");
+        let script = format!(
+            "'{bin}' 30 & echo $! > '{pid}'",
+            bin = bin.display(),
+            pid = pidfile.display(),
+        );
+        if Command::new("sh").arg("-c").arg(&script).status().is_err() {
+            return;
+        }
+        // Let the orphan be reparented and appear in the process table.
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        let pid = match std::fs::read_to_string(&pidfile)
+            .ok()
+            .and_then(|s| s.trim().parse::<i32>().ok())
+        {
+            Some(p) => p,
+            None => return,
+        };
+
+        // Skip (rather than falsely fail) if we couldn't establish a
+        // live sibling, or if this environment did not actually detach it
+        // from our descendant tree (e.g. a sandbox with an unusual
+        // reaper). We check the precondition with the same descendant
+        // walk the terminator uses.
+        if !pid_alive(pid) {
+            return;
+        }
+        let sys = scan_solver_system();
+        if solver_descendant_pids(&sys).contains(&sysinfo::Pid::from_u32(pid as u32)) {
+            let _ = Command::new("sh").arg("-c").arg(format!("kill -9 {pid}")).status();
+            return;
+        }
+
+        terminate_solver_descendants_only();
+
+        // Allow any (erroneous) signal to land before checking.
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        let still_alive = pid_alive(pid);
+        let _ = Command::new("sh").arg("-c").arg(format!("kill -9 {pid}")).status();
+
+        assert!(
+            still_alive,
+            "descendant-only terminator must not signal a non-descendant solver-named sibling"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn descendant_terminator_kills_descendant_solver() {
+        use std::process::{Command, Stdio};
+
+        // A solver-named DIRECT CHILD of this test process is inside our
+        // descendant tree, so the terminator must signal it.
+        let (_dir, bin) = match clone_solver_named_sleep() {
+            Some(pair) => pair,
+            None => return,
+        };
+        let mut child = match Command::new(&bin)
+            .arg("30")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+        {
+            Ok(c) => c,
+            Err(_) => return,
+        };
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        // Sanity: the child must be running (and seen as a descendant)
+        // before we exercise the kill, else the assertion is vacuous.
+        let sys = scan_solver_system();
+        let is_descendant =
+            solver_descendant_pids(&sys).contains(&sysinfo::Pid::from_u32(child.id()));
+        if !matches!(child.try_wait(), Ok(None)) || !is_descendant {
+            let _ = child.kill();
+            let _ = child.wait();
+            return;
+        }
+
+        terminate_solver_descendants_only();
+
+        // SIGTERM should reach the child; poll briefly for its exit.
+        let mut exited = false;
+        for _ in 0..50 {
+            if matches!(child.try_wait(), Ok(Some(_))) {
+                exited = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let _ = child.kill();
+        let _ = child.wait();
+
+        assert!(
+            exited,
+            "descendant-only terminator must signal a descendant solver-named child"
+        );
+    }
+
+    #[test]
     fn check_gpu_runs_to_completion() {
         // We don't assume nvidia-smi is installed on the dev Mac; the
         // function must produce *some* Result without panicking.
@@ -369,7 +545,7 @@ mod tests {
 
     #[test]
     fn dict_to_html_table_empty() {
-        let out = dict_to_html_table(&[], "table", false);
+        let out = dict_to_html_table(&[], "table");
         assert_eq!(out, "<table></table>");
     }
 
@@ -379,7 +555,7 @@ mod tests {
             ("name".to_string(), vec!["a".to_string(), "b".to_string()]),
             ("value".to_string(), vec!["1".to_string(), "2".to_string()]),
         ];
-        let out = dict_to_html_table(&cols, "tbl", false);
+        let out = dict_to_html_table(&cols, "tbl");
         assert!(out.contains("<table class=\"tbl\">"));
         assert!(out.contains("<th>name</th>"));
         assert!(out.contains("<th>value</th>"));

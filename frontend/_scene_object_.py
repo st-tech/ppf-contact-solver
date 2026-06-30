@@ -23,7 +23,7 @@ from . import _rust  # type: ignore[attr-defined]
 
 from ._asset_ import AssetManager
 from ._param_ import ParamHolder, object_param
-from ._scene_fixed_ import EnumColor
+from ._scene_ import EnumColor
 from ._scene_pin_ import PinHolder
 from ._scene_transform_ import (
     TransformAnimation,
@@ -56,6 +56,7 @@ class Object:
         self._asset = asset
         self._name = name
         self._static = False
+        self._is_pdrd = False
         self._param = ParamHolder(object_param(self.obj_type))
         self.clear()
 
@@ -78,10 +79,28 @@ class Object:
         Example:
             Pinning every vertex turns an object into a static collider::
 
-                obj = scene.add("sphere").pin().object
+                obj = scene.add("sphere")
+                obj.pin()
+                obj.update_static()
                 assert obj.static
         """
         return self._static
+
+    @property
+    def pdrd(self) -> bool:
+        """Get whether the object is a PDRD body.
+
+        A PDRD body is a Tri-asset object whose vertices move
+        rigidly through a single best-fit rigid transform shared by
+        the whole body. Set via :meth:`as_pdrd`.
+
+        Example:
+            Flag a cube as PDRD and inspect the result::
+
+                obj = scene.add("cube").as_pdrd()
+                assert obj.pdrd
+        """
+        return self._is_pdrd
 
     @property
     def param(self) -> ParamHolder:
@@ -102,7 +121,8 @@ class Object:
         """Get the type of the object.
 
         Returns:
-            str: The type of the object, either "rod", "tri", or "tet".
+            str: The type of the object, either "rod", "tri", "tet", or
+            "points".
 
         Example:
             Branch on object topology when iterating the scene::
@@ -223,9 +243,33 @@ class Object:
         self._static_color = [0.75, 0.75, 0.75]
         self._default_color = [1.0, 0.85, 0.0]
         self._velocity = [0.0, 0.0, 0.0]
+        self._angular_velocity = [0.0, 0.0, 0.0]
+        # PDRD hinge spec: None = free body, or ("hinge", pca_axis_index)
+        # where pca_axis_index in {0, 1, 2} selects a principal axis of the
+        # rest shape as the world rotation axle. See :meth:`hinge`.
+        self._joint: Optional[tuple[str, int]] = None
         self._velocity_schedule = []
+        # Principal-axis angular velocity overwrite keyframes:
+        # list of (time, pca_index, speed_rad_per_s). The spin axis is the
+        # `pca_index`-th principal axis (0 = largest extent ... 2 = thinnest)
+        # of the body's geometry, resolved dynamically in the solver from the
+        # live (rotated / deformed) pose each time a keyframe fires. See
+        # :meth:`angular_velocity_pca`.
+        self._angular_velocity_schedule_pca = []
+        # Fixed world-axis angular overwrite keyframes:
+        # list of (time, [wx, wy, wz]) where the vector is the full angular
+        # velocity (rad/s) in solver space. Used by World X/Y/Z and Custom
+        # axis modes; the axis does NOT track the body (it is world-fixed).
+        # See :meth:`angular_velocity_world`.
+        self._angular_velocity_schedule_world = []
         self._collision_windows = []
         self._pin: list[PinHolder] = []
+        # World-space (N, 3) reference vertices for the bending rest angle, or
+        # None. When set, the solver computes this object's hinge rest angles
+        # from these positions instead of the object's own initial pose. Set
+        # by the decoder from the per-object ``bend_rest_vert`` scene field
+        # (already transformed to world space, matching ``vertex(True)``).
+        self._bend_rest_vert: Optional[np.ndarray] = None
         self._normalize = False
         self._stitch = None
         self._uv = None
@@ -235,6 +279,38 @@ class Object:
         # PinData.hide_in_preview so the JupyterLab viewer doesn't draw
         # the all-vertex pin as user-facing pin markers.
         self._is_static_moving = False
+
+    def as_pdrd(self) -> "Object":
+        """Switch the object to Painless Differentiable Rotation Dynamics.
+
+        The body must reference a Tri (surface) asset; PDRD is realized
+        as a single exact per-body rigid transform over the surface mesh,
+        so no tetrahedralization is needed or used. Swaps the parameter set
+        to the PDRD defaults (volumetric ``density``, contact/friction;
+        elastic terms are kept as zero placeholders so the existing
+        per-face param expansion continues to work without
+        per-pipeline branching).
+
+        PDRD and static colliders are mutually exclusive.
+
+        Returns:
+            Object: ``self``, to allow chaining with placement and
+            velocity builders.
+
+        Example:
+            Drop a cube and let contact resolve it as a rigid body::
+
+                scene.add("cube").at(0, 1.0, 0).as_pdrd()
+        """
+        if self.obj_type != "tri":
+            raise ValueError(
+                f"as_pdrd() requires a Tri (surface) asset; got {self.obj_type!r}"
+            )
+        if self._static:
+            raise ValueError("as_pdrd() cannot be applied to a static object")
+        self._is_pdrd = True
+        self._param = ParamHolder(object_param("pdrd"))
+        return self
 
     def report(self):
         """Report the object data.
@@ -272,7 +348,7 @@ class Object:
         """
         vert = self.get("V")
         if vert is None:
-            raise Exception("vertex does not exist")
+            raise ValueError("vertex does not exist")
         # apply_transform handles both the normalize and non-normalize
         # branches; passing identity to the bbox kernel just iterates
         # the already-transformed buffer.
@@ -356,7 +432,7 @@ class Object:
         """
         vert = self.get("V")
         if vert is None:
-            raise Exception("vertex does not exist")
+            raise ValueError("vertex does not exist")
         else:
             return self.apply_transform(vert, translate)
 
@@ -516,18 +592,15 @@ class Object:
         _rust.scene_validate_time_window(float(t_start), float(t_end))
         self._ensure_transform_animation()
         anim = self._transform_animation
+        if len(anim.times) > 1:
+            _rust.scene_validate_collider_time(float(anim.times[-1]), float(t_start))
         start_trans = anim.translations[-1].copy()
         start_quat = anim.quaternions[-1].copy()
         start_scale = anim.scales[-1].copy()
-        if anim.times[-1] < t_start:
-            anim.times.append(t_start)
-            anim.translations.append(start_trans.copy())
-            anim.quaternions.append(start_quat.copy())
-            anim.scales.append(start_scale.copy())
-        anim.times.append(t_end)
-        anim.translations.append(start_trans + delta)
-        anim.quaternions.append(start_quat.copy())
-        anim.scales.append(start_scale.copy())
+        self._append_transform_keyframe(
+            anim, t_start, t_end,
+            start_trans + delta, start_quat.copy(), start_scale.copy(),
+        )
         return self
 
     def animate_rotate(
@@ -562,6 +635,8 @@ class Object:
         _rust.scene_validate_time_window(float(t_start), float(t_end))
         self._ensure_transform_animation()
         anim = self._transform_animation
+        if len(anim.times) > 1:
+            _rust.scene_validate_collider_time(float(anim.times[-1]), float(t_start))
         start_trans = anim.translations[-1].copy()
         start_quat = anim.quaternions[-1].copy()
         start_scale = anim.scales[-1].copy()
@@ -576,6 +651,26 @@ class Object:
         R = _quat_to_mat3(rot_quat)
         new_trans = center + R @ (start_trans - center)
         new_quat = _quat_multiply(rot_quat, start_quat)
+        self._append_transform_keyframe(
+            anim, t_start, t_end,
+            new_trans, new_quat, start_scale.copy(),
+        )
+        return self
+
+    def _append_transform_keyframe(
+        self, anim, t_start, t_end, new_trans, new_quat, new_scale
+    ):
+        """Append a transform keyframe, gap-filling the timeline if needed.
+
+        When the last existing keyframe sits before ``t_start``, a holding
+        keyframe carrying the current transform is inserted at ``t_start``
+        so the new motion starts cleanly. The final keyframe at ``t_end``
+        carries the supplied translation, rotation, and scale. Each appended
+        array is a fresh copy so later callers cannot mutate shared state.
+        """
+        start_trans = anim.translations[-1].copy()
+        start_quat = anim.quaternions[-1].copy()
+        start_scale = anim.scales[-1].copy()
         if anim.times[-1] < t_start:
             anim.times.append(t_start)
             anim.translations.append(start_trans.copy())
@@ -584,8 +679,7 @@ class Object:
         anim.times.append(t_end)
         anim.translations.append(new_trans)
         anim.quaternions.append(new_quat)
-        anim.scales.append(start_scale.copy())
-        return self
+        anim.scales.append(new_scale)
 
     def _ensure_transform_animation(self):
         """Initialize TransformAnimation from current transform if not already set."""
@@ -594,11 +688,24 @@ class Object:
         vert = self.get("V")
         if vert is None:
             raise ValueError("Object has no vertices; cannot create transform animation")
+        # When the object is normalized, the built static geometry is
+        # M @ ((v - center) / max(bbox)) (see apply_transform). The
+        # animation only folds the decomposed T*R*S of self._transform, so
+        # bake the same normalize pre-step into local_vert here; otherwise
+        # evaluate(0) would omit the centering/scaling and the animated
+        # slice would teleport away from the static base at the first frame.
+        # This is a no-op for the common non-normalized path.
+        if self._normalize:
+            center = np.asarray(self._center, dtype=np.float64)
+            bbox_max = np.max(np.asarray(self._bbox, dtype=np.float64))
+            local = (np.asarray(vert, dtype=np.float64) - center) / bbox_max
+        else:
+            local = vert
         translation, quat, scale = _rust.scene_decompose_trs(
             np.ascontiguousarray(self._transform, dtype=np.float64)
         )
         self._transform_animation = TransformAnimation(
-            local_vert=vert.copy(),
+            local_vert=local.copy(),
             times=[0.0],
             translations=[translation],
             quaternions=[quat],
@@ -852,11 +959,82 @@ class Object:
             self._velocity_schedule.append((t, list(vel)))
         return self
 
+    def angular_velocity(self, wx: float, wy: float, wz: float) -> "Object":
+        """Set an initial angular velocity (radians per second) about
+        the object's centroid.
+
+        At scene-build time the angular velocity is baked into the
+        per-vertex initial velocities as ``ω × (x̄ − c̄)``, on top of
+        any linear velocity set via :meth:`velocity`. Primary use case
+        is PDRD bodies that should start spinning; works for any
+        dynamic object's surface vertices.
+
+        Args:
+            wx, wy, wz: Components of the angular velocity vector
+                (rad/s), giving rotation about the object's centroid
+                following the right-hand rule.
+
+        Returns:
+            Object: The object with the updated angular velocity.
+
+        Example:
+            A cube spinning at 1 rad/s about the y-axis::
+
+                scene.add("cube").as_pdrd().angular_velocity(0, 1, 0)
+        """
+        _rust.scene_validate_object_not_static(bool(self.static))
+        self._angular_velocity = [float(wx), float(wy), float(wz)]
+        return self
+
+    def hinge(self, pca_axis: int = 2) -> "Object":
+        """Pin a PDRD body as a hinge about one of its principal axes.
+
+        Filters the body's reduced rigid DOF so its position is fixed
+        and its rotation is restricted to a single axle, a hinge / pin
+        joint. The axle is one of the three principal axes (PCA axes) of
+        the body's rest shape, selected by ``pca_axis`` (like Blender's
+        torque-axis dropdown), and passes through the body centroid.
+
+        This is the building block for gears: hinge each gear to its
+        axle and let tooth contact transmit the torque (no explicit
+        gear-ratio constraint is needed).
+
+        Args:
+            pca_axis: Which principal axis is the free rotation axle,
+                ``0``, ``1`` or ``2``, ordered by descending rest-shape
+                variance (``0`` = largest extent, ``2`` = smallest). A
+                flat gear or disk spins about its smallest-extent axis,
+                so ``pca_axis=2`` is the usual choice (the default).
+
+        Returns:
+            Object: ``self``, for chaining.
+
+        Raises:
+            ValueError: if the object is not a PDRD body, or ``pca_axis``
+                is not in ``{0, 1, 2}``.
+
+        Example:
+            A gear hinged about its thin axis, given an initial spin::
+
+                gear = scene.add("gear").as_pdrd().hinge(2)
+                gear.angular_velocity(0, 0, 6.28)
+        """
+        if not self._is_pdrd:
+            raise ValueError("hinge() requires a PDRD body; call as_pdrd() first")
+        if pca_axis not in (0, 1, 2):
+            raise ValueError(f"hinge() pca_axis must be 0, 1 or 2; got {pca_axis!r}")
+        self._joint = ("hinge", int(pca_axis))
+        return self
+
     def velocity_schedule(self, schedule: list) -> "Object":
         """Set a list of (time, [vx, vy, vz]) velocity overrides.
 
+        Each entry is routed exactly like :meth:`velocity`: an entry at
+        ``t <= 0`` sets the initial velocity (``self._velocity``), while
+        ``t > 0`` entries are timed overrides. The object must not be static.
+
         Example:
-            Kick an object, then stop it a second later::
+            Give an initial downward kick, then stop the object a second later::
 
                 obj = scene.add("armadillo").at(0, 1, 0)
                 obj.velocity_schedule([
@@ -864,7 +1042,118 @@ class Object:
                     (1.0, [0, 0, 0]),
                 ])
         """
-        self._velocity_schedule = schedule
+        _rust.scene_validate_object_not_static(bool(self.static))
+        self._velocity_schedule = []
+        for t, vel in schedule:
+            replace, vel = _rust.scene_classify_velocity_entry(
+                float(vel[0]), float(vel[1]), float(vel[2]), float(t)
+            )
+            if replace:
+                self._velocity = np.array(list(vel))
+            else:
+                self._velocity_schedule.append((t, list(vel)))
+        return self
+
+    def angular_velocity_pca(
+        self, pca_index: int, speed: float, t: float = 0.0
+    ) -> "Object":
+        """Add a principal-axis angular velocity overwrite keyframe.
+
+        Unlike :meth:`angular_velocity` (which bakes a single free-vector spin
+        at t=0), this spins the body about one of its **principal axes**, and
+        the axis is resolved dynamically in the solver from the body's live
+        geometry at the keyframe time, so it tracks the simulated (rotated or
+        deformed) pose. Applies to solid, shell, and PDRD objects.
+
+        Args:
+            pca_index: Principal axis to spin about, 0 = largest extent,
+                1 = medium, 2 = thinnest (same convention as :meth:`hinge`).
+            speed: Signed angular speed in radians per second (right-hand rule
+                about the canonically-oriented axis).
+            t: Time in seconds at which the spin is applied (0.0 = at start).
+
+        Returns:
+            Object: The object with the angular keyframe appended.
+
+        Example:
+            Spin a gear up about its thinnest axis at t = 0.5 s::
+
+                scene.add("gear").as_pdrd().angular_velocity_pca(2, 6.28, t=0.5)
+        """
+        _rust.scene_validate_object_not_static(bool(self.static))
+        if int(pca_index) not in (0, 1, 2):
+            raise ValueError(f"pca_index must be 0, 1, or 2 (got {pca_index})")
+        self._angular_velocity_schedule_pca.append(
+            (float(t), int(pca_index), float(speed))
+        )
+        return self
+
+    def angular_velocity_schedule_pca(self, schedule: list) -> "Object":
+        """Set the list of principal-axis angular velocity overwrite keyframes.
+
+        Replaces the current schedule with ``schedule``, a list of
+        ``(time, pca_index, speed_rad_per_s)`` entries (see
+        :meth:`angular_velocity_pca` for the axis convention). The object must
+        not be static.
+
+        Example:
+            Spin up at 1 s, reverse at 2 s::
+
+                obj.angular_velocity_schedule_pca([
+                    (1.0, 2, 6.28),
+                    (2.0, 2, -6.28),
+                ])
+        """
+        _rust.scene_validate_object_not_static(bool(self.static))
+        self._angular_velocity_schedule_pca = []
+        for t, pca_index, speed in schedule:
+            if int(pca_index) not in (0, 1, 2):
+                raise ValueError(f"pca_index must be 0, 1, or 2 (got {pca_index})")
+            self._angular_velocity_schedule_pca.append(
+                (float(t), int(pca_index), float(speed))
+            )
+        return self
+
+    def angular_velocity_world(
+        self, wx: float, wy: float, wz: float, t: float = 0.0
+    ) -> "Object":
+        """Add a fixed world-axis angular velocity overwrite keyframe.
+
+        Unlike :meth:`angular_velocity_pca` (whose axis tracks the body), the
+        spin axis here is a fixed world-space direction: ``(wx, wy, wz)`` is
+        the full angular velocity vector (rad/s), its direction the axle and
+        its magnitude the speed. Applies to solid, shell, and PDRD objects.
+
+        Args:
+            wx, wy, wz: World-space angular velocity components (rad/s).
+            t: Time in seconds at which the spin is applied.
+
+        Returns:
+            Object: The object with the angular keyframe appended.
+
+        Example:
+            Spin about the world Y axis at 2pi rad/s starting at t = 0.5 s::
+
+                obj.angular_velocity_world(0.0, 6.28, 0.0, t=0.5)
+        """
+        _rust.scene_validate_object_not_static(bool(self.static))
+        self._angular_velocity_schedule_world.append(
+            (float(t), [float(wx), float(wy), float(wz)])
+        )
+        return self
+
+    def angular_velocity_schedule_world(self, schedule: list) -> "Object":
+        """Set the list of fixed world-axis angular overwrite keyframes.
+
+        Replaces the current schedule with ``schedule``, a list of
+        ``(time, [wx, wy, wz])`` entries (see :meth:`angular_velocity_world`).
+        """
+        _rust.scene_validate_object_not_static(bool(self.static))
+        self._angular_velocity_schedule_world = []
+        for t, vec in schedule:
+            self._angular_velocity_schedule_world.append(
+                (float(t), [float(vec[0]), float(vec[1]), float(vec[2])])
+            )
         return self
 
     def collision_windows(self, windows: list) -> "Object":
@@ -895,12 +1184,23 @@ class Object:
                 obj.update_static()
                 assert obj.static
         """
+        # A STATIC promoted into the dynamic namespace to be a cross-stitch
+        # endpoint is fully pinned with no operations, which would otherwise
+        # classify it static (and route it to the unreachable collision-mesh
+        # pool). The _force_dynamic marker keeps it in dyn_objects so the
+        # stitch index can address it; its immovable fixed pins still freeze
+        # it at rest. Set by the frontend decoder's _populate_static.
+        if getattr(self, "_force_dynamic", False):
+            self._static = False
+            return
+
         if not self._pin:
             self._static = False
             return
 
         for p in self._pin:
             if len(p.operations) > 0 or p.pull_strength or p.unpin_time is not None:
+                self._static = False
                 return
 
         vert = self.get("V")
@@ -992,6 +1292,17 @@ class Object:
         self._uv = uv
         return self
 
+    def set_bend_rest_vert(self, vert: np.ndarray) -> "Object":
+        """Set the world-space reference vertices for the bending rest angle.
+
+        ``vert`` is an ``(N, 3)`` array in the SAME vertex order and world
+        space as :meth:`vertex` ``(True)``; the solver uses it to compute
+        this object's hinge rest angles from the reference shape instead of
+        the object's own initial pose.
+        """
+        self._bend_rest_vert = np.ascontiguousarray(vert, dtype=np.float64)
+        return self
+
     def direction(self, _ex: list[float], _ey: list[float]) -> "Object":
         """Set two orthogonal directions of a shell required for Baraff-Witkin model.
 
@@ -1011,18 +1322,15 @@ class Object:
         """
         vert, tri = self.vertex(False), self.get("F")
         if vert is None:
-            raise Exception("vertex does not exist")
+            raise ValueError("vertex does not exist")
         if tri is None:
-            raise Exception("face does not exist")
-        try:
-            uv_arr = _rust.scene_uv_from_directions(
-                np.ascontiguousarray(vert, dtype=np.float64),
-                np.ascontiguousarray(tri, dtype=np.int64),
-                [float(_ex[0]), float(_ex[1]), float(_ex[2])],
-                [float(_ey[0]), float(_ey[1]), float(_ey[2])],
-                EPS,
-            )
-        except ValueError as e:
-            raise Exception(str(e))
+            raise ValueError("face does not exist")
+        uv_arr = _rust.scene_uv_from_directions(
+            np.ascontiguousarray(vert, dtype=np.float64),
+            np.ascontiguousarray(tri, dtype=np.int64),
+            [float(_ex[0]), float(_ex[1]), float(_ex[2])],
+            [float(_ey[0]), float(_ey[1]), float(_ey[2])],
+            EPS,
+        )
         self._uv = [uv_arr[i] for i in range(uv_arr.shape[0])]
         return self

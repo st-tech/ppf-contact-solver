@@ -8,6 +8,7 @@ dynamic overrides.
 :maxdepth: 1
 
 material
+fabric_presets
 scene
 dynamic
 ```

@@ -141,9 +141,9 @@ try:
     # callback do not bump on their own, but object_type / color have
     # update= callbacks that route through apply_object_overlays and
     # call invalidate_overlays, AND the operator path tail explicitly
-    # calls invalidate_overlays once. The shipped guarantee is "after
-    # the batch the version moved forward at least once"; we record
-    # the observed delta in details for diagnostics.
+    # calls invalidate_overlays once. The guarantee is that after the
+    # batch the version moved forward at least once; we record the
+    # observed delta in details for diagnostics.
     delta = post_overlay_version - pre_overlay_version_after_path
     dh.record(
         "A_overlay_version_bumps_once_per_batch",

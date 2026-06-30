@@ -29,6 +29,23 @@ class FetchedFrameItem(PropertyGroup):
     value: IntProperty(name="Frame", default=0)  # pyright: ignore
 
 
+class CheckpointFrameItem(PropertyGroup):
+    """A single saved-checkpoint frame for the Resume-From dialog UIList."""
+
+    frame: IntProperty(name="Frame", default=0)  # pyright: ignore
+
+
+class SaveCheckpointFrameItem(PropertyGroup):
+    """A user-requested frame at which the solver saves a resumable state.
+
+    ``frame`` is the Blender 1-based frame the artist enters in the "Save
+    Checkpoints" UIList. The encoder converts it to the solver's 0-based
+    frame index before it ships to the backend.
+    """
+
+    frame: IntProperty(name="Frame", default=1, min=1)  # pyright: ignore
+
+
 class MergePairItem(PropertyGroup):
     object_a: StringProperty(name="Object A", default="")  # pyright: ignore
     object_b: StringProperty(name="Object B", default="")  # pyright: ignore
@@ -42,6 +59,9 @@ class MergePairItem(PropertyGroup):
     )  # pyright: ignore
     stitch_stiffness: FloatProperty(
         name="Stitch Stiffness",
+        # Direct stiffness factor for the cross-object stitch force: the solver
+        # scales the stitch gradient and Hessian by this value, with no mass or
+        # dt normalization. Raise it to hold seams harder.
         default=1.0,
         min=0.0,
         soft_max=10000.0,
@@ -292,6 +312,17 @@ class VelocityKeyframe(PropertyGroup):
         description="Frame at which this velocity is applied",
         update=_invalidate_overlay,
     )  # pyright: ignore
+    # Per-component overwrite gates. A keyframe overwrites the translational
+    # velocity only when enable_translational is on, and the angular velocity
+    # only when enable_angular is on (either or both). The two are
+    # independent: a pure-spin keyframe (angular only) leaves the translation
+    # untouched, and a pure-translation keyframe (linear only) emits no spin.
+    enable_translational: BoolProperty(
+        name="Enable Translational Velocity Overwrite",
+        default=True,
+        description="Overwrite the object's translational velocity at this frame",
+        update=_invalidate_overlay,
+    )  # pyright: ignore
     direction: FloatVectorProperty(
         name="Direction", subtype="XYZ", size=3,
         default=(0.0, 0.0, 0.0),
@@ -301,6 +332,45 @@ class VelocityKeyframe(PropertyGroup):
     speed: FloatProperty(
         name="Speed (m/s)", default=0.0, min=0.0, precision=2,
         description="Velocity magnitude",
+        update=_invalidate_overlay,
+    )  # pyright: ignore
+    # Angular (spin) component, shown only for solid / shell / PDRD. The axis
+    # is one of the body's principal axes (like the PDRD hinge axle); the
+    # solver resolves the world axis from the live geometry each firing, so it
+    # tracks the simulated pose. Speed is signed (right-hand rule).
+    enable_angular: BoolProperty(
+        name="Enable Angular Velocity Overwrite",
+        default=False,
+        description="Overwrite the object's angular (spin) velocity at this frame",
+        update=_invalidate_overlay,
+    )  # pyright: ignore
+    angular_axis: EnumProperty(
+        name="Spin Axis",
+        items=[
+            ("PC1", "Principal Axis 1", "Largest-extent principal axis, resolved dynamically from the simulated geometry"),
+            ("PC2", "Principal Axis 2", "Middle-extent principal axis, resolved dynamically from the simulated geometry"),
+            ("PC3", "Principal Axis 3", "Smallest-extent principal axis (the usual axle for a flat gear or disk), resolved dynamically"),
+            ("X", "World X", "Fixed world X axis"),
+            ("Y", "World Y", "Fixed world Y axis"),
+            ("Z", "World Z", "Fixed world Z axis"),
+            ("CUSTOM", "Custom Axis", "User-specified fixed world-space axis (set below)"),
+        ],
+        default="PC3",
+        description=(
+            "Axis to spin about. Principal axes (PC1-3) track the simulated "
+            "geometry; World X/Y/Z and Custom are fixed world-space directions"
+        ),
+        update=_invalidate_overlay,
+    )  # pyright: ignore
+    angular_axis_custom: FloatVectorProperty(
+        name="Custom Axis", subtype="XYZ", size=3,
+        default=(0.0, 0.0, 1.0),
+        description="Custom world-space spin axis (normalized before use); used when Spin Axis is Custom",
+        update=_invalidate_overlay,
+    )  # pyright: ignore
+    angular_speed: FloatProperty(
+        name="Angular Speed (°/s)", default=0.0, precision=2,
+        description="Signed spin speed in degrees per second about the chosen axis (0 = no spin)",
         update=_invalidate_overlay,
     )  # pyright: ignore
     preview: BoolProperty(
@@ -401,8 +471,141 @@ class AssignedObject(PropertyGroup):
     velocity_keyframes_index: IntProperty(default=0)  # pyright: ignore
     collision_windows: CollectionProperty(type=CollisionWindowEntry)  # pyright: ignore
     collision_windows_index: IntProperty(default=0)  # pyright: ignore
+    # PDRD hinge joint (per object): pin the body and lock its rotation to a
+    # single principal (PCA) axis. Per-object because one PDRD group can hold
+    # several bodies (e.g. a gear train), each on its own axle.
+    pdrd_hinge_enable: BoolProperty(
+        name="Hinge",
+        default=False,
+        description=(
+            "Pin this PDRD body and lock its rotation to a single principal "
+            "axis (a hinge / pin joint). Build gears by hinging each gear to "
+            "its axle and letting tooth contact transmit the torque"
+        ),
+        update=_invalidate_overlay,
+    )  # pyright: ignore
+    pdrd_hinge_axis: EnumProperty(
+        name="Axle",
+        items=[
+            ("0", "Principal Axis 1", "Spin about the largest-extent principal axis of the rest shape"),
+            ("1", "Principal Axis 2", "Spin about the middle-extent principal axis of the rest shape"),
+            ("2", "Principal Axis 3", "Spin about the smallest-extent principal axis (the usual axle for a flat gear or disk)"),
+        ],
+        default="2",
+        description="Which principal (PCA) axis of the rest shape is the free hinge axle, like Blender's torque-axis dropdown",
+        update=_invalidate_overlay,
+    )  # pyright: ignore
+    # Per-object bending reference rest angle (SHELL). When enabled with a
+    # valid reference object set, this object's bending rest angle is computed
+    # from the reference geometry (a topological copy whose vertices were
+    # moved, e.g. by a modifier or geometry nodes) instead of from its own
+    # initial pose. This overrides the group's Rest Angle source for just this
+    # object. The reference is stored by UUID so it survives renames;
+    # ``bend_ref_name`` is kept only as a fallback display label.
+    bend_ref_enable: BoolProperty(
+        name="Enable Reference Rest Angle",
+        default=False,
+        description=(
+            "Compute this object's bending rest angle from a reference "
+            "object's geometry instead of its own initial pose. Overrides the "
+            "group's Rest Angle source for this object"
+        ),
+    )  # pyright: ignore
+    bend_ref_uuid: StringProperty(default="")  # pyright: ignore
+    bend_ref_name: StringProperty(default="")  # pyright: ignore
     static_ops: CollectionProperty(type=StaticOpItem)  # pyright: ignore
     static_ops_index: IntProperty(default=-1, options={"HIDDEN"})  # pyright: ignore
+
+    # Per-object tetrahedralizer config (SOLID only; ignored otherwise).
+    # The backend picker and its knobs live on the object, not the group,
+    # so each SOLID mesh in a group can choose fTetWild or TetGen and its
+    # own overrides (mirrors the per-object Velocity Overwrite surface).
+    #
+    # Numeric IDs are explicit: Blender stores EnumProperty values as the
+    # item's integer when none is given, so renaming/reordering items
+    # would silently remap the backend on existing .blend files.
+    tet_backend: EnumProperty(
+        name="Tetrahedralizer",
+        items=[
+            (
+                "FTETWILD", "fTetWild",
+                "Tolerant remesher: handles open, cracked, or non-manifold "
+                "input, but resamples the surface so input vertices are "
+                "reconstructed through a surface map",
+                0,
+            ),
+            (
+                "TETGEN", "TetGen",
+                "Preserves the input surface exactly (1-1 vertex map); "
+                "requires a clean, closed, manifold mesh",
+                1,
+            ),
+        ],
+        default="FTETWILD",
+    )  # pyright: ignore
+    # fTetWild per-field overrides. Each value is forwarded to pytetwild
+    # only when its override flag is on; with none set, fTetWild defaults
+    # apply.
+    ftetwild_override_edge_length_fac: BoolProperty(name="Override", default=False)  # pyright: ignore
+    ftetwild_edge_length_fac: FloatProperty(
+        name="Edge Length Factor",
+        default=0.05, min=1e-4, max=1.0, precision=4,
+        description="Ideal tet edge length as fraction of bbox diagonal (fTetWild -l)",
+    )  # pyright: ignore
+    ftetwild_override_epsilon: BoolProperty(name="Override", default=False)  # pyright: ignore
+    ftetwild_epsilon: FloatProperty(
+        name="Epsilon",
+        default=1e-3, min=1e-6, max=1.0, precision=6,
+        description="Envelope size as fraction of bbox diagonal (fTetWild -e)",
+    )  # pyright: ignore
+    ftetwild_override_stop_energy: BoolProperty(name="Override", default=False)  # pyright: ignore
+    ftetwild_stop_energy: FloatProperty(
+        name="Stop Energy",
+        default=10.0, min=3.0, max=1000.0,
+        description="AMIPS energy threshold; larger = faster, lower quality",
+    )  # pyright: ignore
+    ftetwild_override_num_opt_iter: BoolProperty(name="Override", default=False)  # pyright: ignore
+    ftetwild_num_opt_iter: IntProperty(
+        name="Max Opt Iterations",
+        default=80, min=1, max=1000,
+        description="Maximum fTetWild optimization passes",
+    )  # pyright: ignore
+    ftetwild_override_optimize: BoolProperty(name="Override", default=False)  # pyright: ignore
+    ftetwild_optimize: BoolProperty(
+        name="Optimize", default=True,
+        description="Improve cell quality (slower)",
+    )  # pyright: ignore
+    ftetwild_override_simplify: BoolProperty(name="Override", default=False)  # pyright: ignore
+    ftetwild_simplify: BoolProperty(
+        name="Simplify Input", default=True,
+        description="Simplify the input surface before tetrahedralization",
+    )  # pyright: ignore
+    ftetwild_override_coarsen: BoolProperty(name="Override", default=False)  # pyright: ignore
+    ftetwild_coarsen: BoolProperty(
+        name="Coarsen Output", default=False,
+        description="Coarsen output while preserving quality",
+    )  # pyright: ignore
+    # TetGen per-field overrides. The surface is always preserved (nobisect
+    # / -Y); these only tune the interior refinement.
+    tetgen_override_min_ratio: BoolProperty(name="Override", default=False)  # pyright: ignore
+    tetgen_min_ratio: FloatProperty(
+        name="Min Radius-Edge Ratio",
+        default=2.0, min=1.0, soft_max=5.0, precision=2,
+        description=(
+            "TetGen quality bound (-q): smaller forces rounder cells via "
+            "more interior Steiner points. The input surface is never "
+            "touched"
+        ),
+    )  # pyright: ignore
+    tetgen_override_max_volume: BoolProperty(name="Override", default=False)  # pyright: ignore
+    tetgen_max_volume: FloatProperty(
+        name="Max Tet Volume",
+        default=0.0, min=0.0, precision=6,
+        description=(
+            "TetGen maximum tetrahedron volume (-a), in object units; caps "
+            "interior cell size for a finer mesh. 0 leaves it uncapped"
+        ),
+    )  # pyright: ignore
 
 
 class PinOperation(PropertyGroup):
@@ -561,6 +764,12 @@ class PinVertexGroupItem(PropertyGroup):
         description="Include this pin in the simulation",
         update=_invalidate_pin_overlay,
     )  # pyright: ignore
+    show_overlay: BoolProperty(
+        name="Show",
+        default=True,
+        description="Show this pin's vertices as overlay circles in the viewport",
+        update=_invalidate_pin_overlay,
+    )  # pyright: ignore
     use_pin_duration: BoolProperty(
         name="Duration",
         default=False,
@@ -594,10 +803,28 @@ class PinVertexGroupItem(PropertyGroup):
         soft_max=10000.0,
         precision=2,
         description=(
-            "Stiffness scale for this pin's moving (animated) constraint "
-            "force. 1.0 is the default; raise it if an animated pin lags "
-            "or wobbles away from its target, lower it for a softer pull. "
-            "Has no effect on a stationary pin"
+            "Stiffness scale for this pin's moving (animated) hard "
+            "constraint force. 1.0 is the default; raise it if an animated "
+            "pin lags or wobbles away from its target, lower it for a softer "
+            "hold. Has no effect on a stationary pin or a Pull pin"
+        ),
+    )  # pyright: ignore
+    fix_weight_threshold: FloatProperty(
+        name="Fix Weight Threshold",
+        default=0.5,
+        min=0.0,
+        max=1.0,
+        soft_min=0.0,
+        soft_max=1.0,
+        precision=3,
+        description=(
+            "SOLID hard pin only: tet vertices whose diffused pin weight "
+            "reaches this threshold are held as hard kinematic fixes; "
+            "lower-weight vertices stay soft-pulled. Lower it toward 0 to "
+            "hold more of the pinned surface region rigidly, raise it to "
+            "soften the skirt. Interior vertices are never hard-fixed (they "
+            "would crash the solver). No effect on pull pins or non-SOLID "
+            "groups"
         ),
     )  # pyright: ignore
     operations: CollectionProperty(type=PinOperation)  # pyright: ignore
@@ -608,3 +835,34 @@ class PinVertexGroupItem(PropertyGroup):
     # and the encoder's PC2-wins branch. Reconciled against on-disk
     # cache presence on file load via a load_post handler.
     has_captured_anim: BoolProperty(default=False)  # pyright: ignore
+    # Cached result of the O(N) full-pin coverage check
+    # (``pin_covers_all_vertices``), refreshed on demand by the Refresh button
+    # next to the rest-pose toggle rather than recomputed on every panel
+    # redraw. ``full_pin_checked`` stays False until the user clicks Refresh;
+    # once True, ``full_pin_cached`` holds whether the pin's vertex group
+    # covered every vertex of the mesh. The cache can go stale if the group is
+    # edited afterward (re-click Refresh to update it); the encoder
+    # independently re-verifies coverage at encode time, so a stale UI cache
+    # only gates the toggle's editability and never changes sim behavior.
+    full_pin_checked: BoolProperty(default=False)  # pyright: ignore
+    full_pin_cached: BoolProperty(default=False)  # pyright: ignore
+    # User opt-in, drawn under "Capture Deformation" for SOLID pins. When
+    # checked, a captured deformation also drives a time-varying rest pose (the
+    # encoder sets ``rest_shape_track``) so the dynamic body settles into the
+    # captured shape instead of straining against it. Requires a FULL pin
+    # (every vertex in the group), so the whole captured mesh becomes the rest;
+    # disabled for a partial pin. Off by default: the capture then only
+    # pulls/fixes the pinned vertices and the rest pose stays the undeformed
+    # shape.
+    track_rest_pose_deformation: BoolProperty(
+        name="Track Rest-Pose Deformation",
+        default=False,
+        description=(
+            "Also drive a time-varying rest pose from the captured "
+            "deformation, so the dynamic body settles into the captured shape "
+            "instead of straining against it. Requires a SOLID pin that covers "
+            "every vertex of the mesh (a full pin) with a captured deformation; "
+            "disabled otherwise. When unchecked, the capture only pulls or "
+            "fixes the pinned vertices and the rest pose is unchanged"
+        ),
+    )  # pyright: ignore

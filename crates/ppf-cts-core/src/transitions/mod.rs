@@ -22,7 +22,8 @@ use crate::effects::Effect;
 use crate::events::Event;
 use crate::state::{Build, Data, ServerState, Solver};
 
-/// Single entry point. Replaces `server.transitions.server_transition`.
+/// Single entry point (formerly the Python
+/// `server.transitions.server_transition`, now removed).
 ///
 /// Returns `(new_state, effects)`. The caller (engine) is responsible
 /// for replacing its held state and dispatching the effects.
@@ -36,6 +37,7 @@ pub fn transition(state: ServerState, event: Event) -> (ServerState, Vec<Effect>
             has_param,
             has_app,
             is_resumable,
+            has_crashed,
             upload_id,
             data_hash,
             param_hash,
@@ -85,6 +87,18 @@ pub fn transition(state: ServerState, event: Event) -> (ServerState, Vec<Effect>
             } else {
                 Build::None
             };
+            // Reconstruct a crash from disk: a restarted server has no
+            // in-memory Solver::Failed, but the solver-authored status.cbor
+            // survives, so a reconnect after a crash still reports the
+            // failure (and, with checkpoints present, "Failed (Resumable)").
+            // Only when the app actually built -- status_string masks solver
+            // state behind NO_BUILD otherwise, and a crash without a build
+            // can't resume.
+            let solver = if has_app && has_crashed {
+                Solver::Failed
+            } else {
+                Solver::Idle
+            };
             let mut effects: Vec<Effect> = Vec::new();
             if !has_app {
                 effects.push(Effect::DoLoadApp {
@@ -98,7 +112,7 @@ pub fn transition(state: ServerState, event: Event) -> (ServerState, Vec<Effect>
                     root,
                     data,
                     build,
-                    solver: Solver::Idle,
+                    solver,
                     resumable: is_resumable,
                     frame: 0,
                     initialized: false,
@@ -174,7 +188,7 @@ pub fn transition(state: ServerState, event: Event) -> (ServerState, Vec<Effect>
         }
 
         // ── Build ───────────────────────────────────────────────────
-        Event::BuildRequested
+        Event::BuildRequested { preserve_output }
             if state.data == Data::Uploaded && state.build != Build::Building =>
         {
             (
@@ -186,7 +200,7 @@ pub fn transition(state: ServerState, event: Event) -> (ServerState, Vec<Effect>
                     error: String::new(),
                     ..state
                 },
-                vec![Effect::DoSpawnBuild],
+                vec![Effect::DoSpawnBuild { preserve_output }],
             )
         }
 
@@ -223,6 +237,12 @@ pub fn transition(state: ServerState, event: Event) -> (ServerState, Vec<Effect>
                 build_progress: 1.0,
                 build_info: "Build complete.".to_string(),
                 resumable: false,
+                // A successful build supersedes any prior run, so clear a
+                // lingering Solver::Failed; otherwise status_string would
+                // keep reporting FAILED after a clean rebuild-after-crash
+                // (the on-disk crash marker is already cleared at build
+                // start, so this keeps the in-memory state consistent).
+                solver: Solver::Idle,
                 violations: vec![],
                 ..state
             },
@@ -292,11 +312,21 @@ pub fn transition(state: ServerState, event: Event) -> (ServerState, Vec<Effect>
             )
         }
 
-        Event::ResumeRequested
+        // Accept Solver::Failed as well as Idle: after a crash the
+        // monitor sets solver=Failed but leaves the on-disk checkpoints
+        // intact (a poll refreshes `resumable` from them), so resuming
+        // from a saved state is valid. Mirrors StartRequested, which also
+        // accepts Failed. The `resumable` guard still gates on a real
+        // checkpoint existing.
+        Event::ResumeRequested { from_frame }
             if state.build == Build::Built
-                && state.solver == Solver::Idle
+                && matches!(state.solver, Solver::Idle | Solver::Failed)
                 && state.resumable =>
         {
+            let message = match from_frame {
+                Some(n) => format!("Solver resuming from frame {n}."),
+                None => "Solver resuming from latest checkpoint.".to_string(),
+            };
             (
                 ServerState {
                     solver: Solver::Running,
@@ -306,11 +336,9 @@ pub fn transition(state: ServerState, event: Event) -> (ServerState, Vec<Effect>
                 },
                 vec![
                     Effect::DoLaunchSolver {
-                        resume_from: Some(-1),
+                        resume_from: Some(from_frame.unwrap_or(-1)),
                     },
-                    Effect::DoLog {
-                        message: "Solver resuming.".to_string(),
-                    },
+                    Effect::DoLog { message },
                 ],
             )
         }

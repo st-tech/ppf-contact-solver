@@ -92,6 +92,11 @@ pub fn triangle_areas(verts: &[f64], tris: &[[u32; 3]]) -> Vec<f64> {
     out
 }
 
+/// Count-smoothing epsilon for `face_to_vert_weights`. The production
+/// scene-build path uses this value; the PyO3 wrapper exposes `epsilon`
+/// as a runtime-tunable parameter that defaults to this same constant.
+pub const FACE_TO_VERT_WEIGHT_EPS: f64 = 1e-4;
+
 /// Per-vertex `1.0 / (count + epsilon)` where `count` is the number of
 /// incident triangles.
 pub fn face_to_vert_weights(

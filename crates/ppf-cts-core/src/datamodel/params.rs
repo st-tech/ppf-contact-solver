@@ -28,6 +28,18 @@ pub enum ObjectKind {
     Tri,
     Tet,
     Rod,
+    /// Painless Differentiable Rotation Dynamics: a Tri-asset body whose vertices move
+    /// exactly rigidly via a single best-fit rigid transform shared by
+    /// the whole body. No per-element elastic energy, no bending; only
+    /// `density` (volumetric kg/m^3) and the standard contact/friction
+    /// params are user-tunable.
+    Pdrd,
+    /// Granular / sand body: a faceless cloud of free particles with no
+    /// elements and no elastic energy. The solver advances the points
+    /// directly (the emulated backend drifts them under gravity; the real
+    /// granular kernel replaces that). Only `density` and the standard
+    /// contact/friction params are meaningful.
+    Points,
 }
 
 impl ObjectKind {
@@ -36,6 +48,8 @@ impl ObjectKind {
             "tri" => Ok(Self::Tri),
             "tet" => Ok(Self::Tet),
             "rod" => Ok(Self::Rod),
+            "pdrd" => Ok(Self::Pdrd),
+            "points" => Ok(Self::Points),
             _ => Err(ParamError::UnknownObjectKind(s.to_string())),
         }
     }
@@ -57,11 +71,6 @@ pub enum ParamValue {
 impl From<bool> for ParamValue {
     fn from(b: bool) -> Self {
         ParamValue::Bool(b)
-    }
-}
-impl From<i32> for ParamValue {
-    fn from(v: i32) -> Self {
-        ParamValue::Int(v as i64)
     }
 }
 impl From<i64> for ParamValue {
@@ -227,8 +236,6 @@ pub fn app_param() -> ParamHolder {
         "PCG solver is regarded as diverged if this is exceeded."));
     m.insert("cg-tol".into(), entry(1e-3f64, "Relative Tolerance for PCG",
         "Relative tolerance for PCG solver termination."));
-    m.insert("ccd-eps".into(), entry(1e-7f64, "ACCD Epsilon",
-        "Small thickness tolerance for ACCD gap distance checks."));
     m.insert("ccd-reduction".into(), entry(0.01f64, "CCD Reduction Factor",
         "Factor multiplied to the initial gap to set the CCD threshold."));
     m.insert("ccd-max-iter".into(), entry(4096i64, "Maximum CCD Iterations",
@@ -246,12 +253,18 @@ pub fn app_param() -> ParamHolder {
         "Maximal number of frames to simulate."));
     m.insert("auto-save".into(), entry(0i64, "Auto Save Interval",
         "Interval (in frames) for auto-saving simulation state. 0 disables auto-save."));
+    m.insert("save-state-on-finish".into(), entry(false, "Save State on Finish",
+        "Save the simulation state on the final frame before the solver exits, even when auto-save is off."));
+    m.insert("checkpoints".into(), entry("", "Save Checkpoints",
+        "Comma-separated frame indices at which to save a resumable state, independent of the auto-save interval. Empty disables explicit checkpoints."));
     m.insert("barrier".into(), entry("cubic", "Barrier Model for Contact",
         "Contact barrier potential model. Choices: cubic, quad, log."));
     m.insert("friction-mode".into(), entry("min", "Friction Combination Mode",
         "How to combine the friction coefficients of two contacting elements. Choices: min, max, mean. Default min preserves the prior behavior (the more slippery side wins)."));
-    m.insert("stitch-stiffness".into(), entry(1.0f64, "Stiffness Factor for Stitches",
-        "Stiffness factor for the stitches."));
+    m.insert("precond".into(), entry("block-jacobi", "Linear Solver Preconditioner",
+        "Preconditioner for the PCG linear solve. Choices: block-jacobi (3x3 per-vertex diagonal, default; fast with the device-resident PCG loop and does not run out of memory on heavy-contact scenes), schwarz (additive aggregate-Schwarz; fewer iterations on mixed stiff/soft systems but heavier per iteration and can OOM on large contact counts; its level count is set by schwarz-levels)."));
+    m.insert("schwarz-levels".into(), entry(2i64, "Schwarz Levels",
+        "Number of additive levels for the Schwarz preconditioner (only used when precond is schwarz). 1 = single-level smoother; 2 = two-level coarse correction over the connectivity partition (default), which reduces the worst-case PCG iteration count on stiff multibody contact. Values above the solver's internal cap are clamped."));
     m.insert("stitch-length-factor".into(), entry(10.0f64, "Stitch Length Factor",
         "Multiplier on the stitch rest length when capping the stitch separation in the strain force. Cap = stitch_length_factor * l0 + offset_src + max(offset_target). Larger values let stitches stretch farther before the cap saturates the force."));
     m.insert("air-density".into(), entry(1e-3f64, "Air Density",
@@ -268,6 +281,8 @@ pub fn app_param() -> ParamHolder {
         "Fix xz positions for falling objects if y > this value. 0.0 disables. Use an extremely small value if nearly a zero is needed."));
     m.insert("fake-crash-frame".into(), entry(-1i64, "Fake Crash Frame",
         "Frame number to intentionally crash simulation for testing. -1 disables."));
+    m.insert("world-scaling".into(), entry(1.0f64, "World Scaling Factor",
+        "Uniform spatial scale applied to all input geometry before the simulation runs; output positions are divided back by it. Values below 1 shrink (e.g. 0.1 simulates a 15 m mesh at 1.5 m and writes results back at 15 m). Only geometry and relative contact gaps scale; gravity and absolute contact gaps do not."));
 
     ParamHolder::new(m)
 }
@@ -276,10 +291,21 @@ pub fn app_param() -> ParamHolder {
 /// conditional fields (plasticity, bend-plasticity,
 /// bend-rest-from-geometry) are added based on `kind`.
 pub fn object_param(kind: ObjectKind) -> ParamHolder {
+    // For PDRD bodies the solver advances an exact per-body rigid motion.
+    // The face-level keys (model, young-mod, bend, ...) are still emitted
+    // so the existing per-face param expansion continues to work unchanged;
+    // elastic dispatch trips on `Model::Pdrd` and is a no-op. Density on
+    // PDRD is volumetric (kg/m^3); the builder computes enclosed volume and
+    // writes a uniform `mass_per_vertex` scaled to match rotational inertia.
     let (model, young_mod, density, offset, bend) = match kind {
         ObjectKind::Tri => ("baraff-witkin", 1000.0f64, 1.0f64, 0.0f64, 10.0f64),
-        ObjectKind::Tet => ("arap", 500.0, 1000.0, 0.0, 1.0),
+        ObjectKind::Tet => ("arap", 500.0, 100.0, 0.0, 1.0),
         ObjectKind::Rod => ("arap", 1e4, 1.0, 1e-3, 0.0),
+        ObjectKind::Pdrd => ("pdrd", 0.0, 100.0, 0.0, 0.0),
+        // Faceless particle cloud: no elements, so the per-element elastic
+        // expansion produces nothing and the model string is never applied.
+        // ARAP + zero young keeps it inert; density is the only live knob.
+        ObjectKind::Points => ("arap", 0.0, 100.0, 0.0, 0.0),
     };
 
     let mut m: BTreeMap<String, ParamEntry> = BTreeMap::new();
@@ -293,6 +319,12 @@ pub fn object_param(kind: ObjectKind) -> ParamHolder {
         "Poisson's ratio used together with Young's modulus to derive the Lame parameters. Valid range is (0, 0.5); values near 0.5 produce near-incompressible behavior. Used by 'tri' and 'tet' elements only."));
     m.insert("bend".into(), entry(bend, "Bending Stiffness",
         "Dimensionless bending stiffness for shell hinges (between adjacent 'tri' faces) and for rod-joint bending at interior rod vertices. Must be non-negative. Not used by 'tet' elements."));
+    m.insert("deformation-damping".into(), entry(0.0f64, "Deformation Damping",
+        "Stiffness-proportional Rayleigh damping coefficient (beta) for stretch/membrane/solid deformation, in seconds. Damps high-frequency deformation by reusing the element tangent stiffness: it adds (beta/dt)*K to the system matrix. 0.0 disables it. Must be non-negative."));
+    m.insert("bending-damping".into(), entry(0.0f64, "Bending Damping",
+        "Stiffness-proportional Rayleigh damping coefficient (beta) for shell and rod bending, in seconds, applied to the bending tangent stiffness. Usually smaller than deformation damping. 0.0 disables it. Must be non-negative. Not used by 'tet' elements."));
+    m.insert("stitch-stiffness".into(), entry(1.0f64, "Stitch Stiffness",
+        "Direct stiffness factor for the stitch force on this object's stitches (loose-edge / intra-object stitches). Scales the stitch gradient and Hessian directly, with no mass or dt normalization. Must be non-negative. Resolved per object at scene build and applied per stitch row in the solver."));
     m.insert("shrink-x".into(), entry(1.0f64, "Shrink X",
         "Anisotropic rest-shape scale along the UV X (warp) direction for 'tri' shells. Values below 1.0 pre-shrink the cloth, above 1.0 pre-stretch it. Must be positive. Cannot be combined with a non-zero strain limit on the same face."));
     m.insert("shrink-y".into(), entry(1.0f64, "Shrink Y",
@@ -312,7 +344,7 @@ pub fn object_param(kind: ObjectKind) -> ParamHolder {
     m.insert("pressure".into(), entry(0.0f64, "Inflation Pressure",
         "Per-face inflation pressure pushing 'tri' shells outward along the face normal. Must be non-negative; 0.0 disables inflation. Ignored by 'tet' and 'rod' elements."));
 
-    if matches!(kind, ObjectKind::Tri | ObjectKind::Tet) {
+    if matches!(kind, ObjectKind::Tri | ObjectKind::Tet | ObjectKind::Pdrd) {
         m.insert("plasticity".into(), entry(0.0f64, "Plasticity Rate",
             "Rate constant (per second) for stretch plasticity, driving the rest shape toward the current deformation via alpha = 1 - exp(-rate * dt). 0.0 disables plasticity; higher values creep faster. Must be non-negative."));
         m.insert("plasticity-threshold".into(), entry(0.0f64, "Plasticity Threshold",
@@ -330,6 +362,20 @@ pub fn object_param(kind: ObjectKind) -> ParamHolder {
         "Angular dead zone (radians) around the rest angle. Bend plasticity only activates when |theta - theta_rest| exceeds this threshold. 0.0 means any angular deviation triggers creep."));
     m.insert("bend-rest-from-geometry".into(), entry(0.0f64, "Bend Rest From Initial Geometry",
         "If non-zero, initialize each hinge or rod-joint rest angle from the initial pose instead of the default (flat for shells, straight for rods). Treated as a boolean flag."));
+
+    // Granular (sand) material knobs. Defined only for the faceless particle
+    // kind so the addon's `sand-*` params resolve at decode. The emulated
+    // backend ignores them (it just drifts the cloud); the real granular
+    // kernel consumes them.
+    if matches!(kind, ObjectKind::Points) {
+        m.insert("sand-particle-mass".into(), entry(1e-3f64, "Sand Particle Mass",
+            "Mass of a single sand particle, in kilograms (the addon authors it in grams and \
+             converts). Must be positive."));
+        m.insert("sand-friction".into(), entry(0.5f64, "Sand Friction",
+            "Inter-grain Coulomb friction coefficient (dimensionless). Must be non-negative."));
+        // The grain radius is sent via the standard `contact-offset` key (the
+        // grain's physical contact skin), so there is no separate sand radius.
+    }
 
     ParamHolder::new(m)
 }
@@ -399,7 +445,7 @@ mod tests {
     fn object_param_tet_has_arap_default() {
         let p = object_param(ObjectKind::Tet);
         assert_eq!(p.get("model").unwrap(), &ParamValue::String("arap".into()));
-        assert_eq!(p.get("density").unwrap(), &ParamValue::Float(1000.0));
+        assert_eq!(p.get("density").unwrap(), &ParamValue::Float(100.0));
         // tet has plasticity but tet keeps bend-plasticity placeholders too.
         assert!(p.get("plasticity").is_ok());
         assert!(p.get("bend-plasticity").is_ok());
@@ -420,7 +466,35 @@ mod tests {
         assert_eq!(ObjectKind::from_str("tri").unwrap(), ObjectKind::Tri);
         assert_eq!(ObjectKind::from_str("tet").unwrap(), ObjectKind::Tet);
         assert_eq!(ObjectKind::from_str("rod").unwrap(), ObjectKind::Rod);
+        assert_eq!(ObjectKind::from_str("pdrd").unwrap(), ObjectKind::Pdrd);
         assert!(ObjectKind::from_str("blob").is_err());
+    }
+
+    #[test]
+    fn object_param_pdrd_zero_elastic() {
+        let p = object_param(ObjectKind::Pdrd);
+        assert_eq!(p.get("model").unwrap(), &ParamValue::String("pdrd".into()));
+        assert_eq!(p.get("young-mod").unwrap(), &ParamValue::Float(0.0));
+        assert_eq!(p.get("bend").unwrap(), &ParamValue::Float(0.0));
+        assert_eq!(p.get("density").unwrap(), &ParamValue::Float(100.0));
+        // Key-set parity with Tri/Tet for concat_tri_param: PDRD also
+        // carries plasticity/plasticity-threshold and bend-plasticity*
+        // placeholders even though they're ignored at runtime.
+        assert!(p.get("plasticity").is_ok());
+        assert!(p.get("plasticity-threshold").is_ok());
+        assert!(p.get("bend-plasticity").is_ok());
+    }
+
+    #[test]
+    fn tri_tet_pdrd_share_param_key_set_for_concat() {
+        let tri = object_param(ObjectKind::Tri);
+        let tet = object_param(ObjectKind::Tet);
+        let pdrd = object_param(ObjectKind::Pdrd);
+        let tri_keys = tri.key_list();
+        let tet_keys = tet.key_list();
+        let pdrd_keys = pdrd.key_list();
+        assert_eq!(tri_keys, tet_keys, "Tri and Tet must share param keys for concat_tri_param parity");
+        assert_eq!(tri_keys, pdrd_keys, "PDRD must share Tri's key set so concat_tri_param can mix shells and PDRD bodies");
     }
 
     #[test]

@@ -87,9 +87,9 @@ With the **Wind** disclosure triangle open, the sub-section reveals a
 zero-direction vector disables wind regardless of the strength value.
 ```
 
-- **Advanced Params**: contact NNZ, vertex air damp, auto-save + its
-  interval, CCD line-search max t, constraint ghat, CG max iter, CG
-  tol, include-face-mass, friction-mode, and disable-contact toggles.
+- **Advanced Params**: contact NNZ, vertex air damp, CCD line-search
+  max t, constraint ghat, CG max iter, CG tol, preconditioner choice,
+  include-face-mass, friction-mode, and disable-contact toggles.
 
 ```{figure} ../../images/scene_params/advanced_expanded.png
 :alt: Scene Configuration panel with the Advanced Params sub-section expanded. Max Contact, Vertex Air Damping, Auto Save, Line Search Max T, Constraint Gap, PCG Max Iterations, PCG Tolerance, Include Face Mass, Disable Contact
@@ -97,9 +97,11 @@ zero-direction vector disables wind regardless of the strength value.
 
 **Advanced Params** exposes the tuning knobs most users never need to
 touch: contact-matrix capacity (**Max Contact**), per-vertex air drag,
-checkpointing (**Auto Save**), CCD line-search bounds, PCG iteration
-cap and tolerance, and two debugging toggles. Raise PCG limits for
+CCD line-search bounds, PCG iteration cap and tolerance, the
+preconditioner choice, and two debugging toggles. Raise PCG limits for
 stiff systems; raise Max Contact only when the solver reports overflow.
+Checkpointing lives in its own [Save and Checkpoints](#save-and-checkpoints)
+section.
 ```
 
 - **Dynamic Parameters**: keyframed gravity / wind / air density /
@@ -196,12 +198,12 @@ and normalized direction live.
 | ------------------------- | -------------------- | ----------- | ---------------------------------------------------------------- |
 | **Max Contact**           | `contact_nnz`        | 100 000 000 | Capacity of the contact sparse matrix (non-zero entries).        |
 | **Vertex Air Damping**    | `vertex_air_damp`    | 0.0         | Per-vertex isotropic air damping, 0 – 1.                         |
-| **Auto Save**             | `auto_save`          | `False`     | Enable periodic solver-state snapshots on the remote.            |
-| **Auto Save Interval**    | `auto_save_interval` | 10          | Auto-save interval, in frames. Minimum 1.                        |
 | **Line Search Max T**     | `line_search_max_t`  | 1.25        | CCD line-search maximum step factor. Range 0.1 – 10.             |
 | **Constraint Gap**        | `constraint_ghat`    | 0.001       | Barrier gap distance. Range 0.0001 – 0.1.                        |
 | **PCG Max Iterations**    | `cg_max_iter`        | 10 000      | Max iterations for the PCG linear solver. 100 – 100 000.         |
-| **PCG Tolerance**         | `cg_tol`             | 0.001       | PCG relative tolerance. 0.0001 – 0.1.                            |
+| **PCG Tolerance**         | `cg_tol`             | 0.001       | PCG relative tolerance. 0.00001 – 0.1.                           |
+| **Preconditioner**        | `precond`            | `BLOCK_JACOBI` | Preconditioner used by the PCG linear solver. Choices: `BLOCK_JACOBI` (default), `SCHWARZ`. See [Preconditioner](#preconditioner). |
+| **Schwarz Levels**        | `schwarz_levels`     | `LEVEL_2`   | Number of additive Schwarz levels (used only when **Preconditioner** is `SCHWARZ`). Choices: `LEVEL_1` (single-level smoother), `LEVEL_2` (two-level coarse correction, default). See [Schwarz Levels](#schwarz-levels). |
 | **Include Face Mass**     | `include_face_mass`  | `False`     | Fold shell face mass into attached solids.                       |
 | **Friction Mode**         | `friction_mode`      | `MIN`       | How to combine the two contacting objects' friction coefficients. Choices: `MIN`, `MAX`, `MEAN`. See [Friction at a contact](material.md#shared-parameters). |
 | **Disable Contact**       | `disable_contact`    | `False`     | Turn off contact detection entirely (debugging / ablation).      |
@@ -209,6 +211,73 @@ and normalized direction live.
 Raise **PCG Max Iterations** (and lower **PCG Tolerance**) for stiff
 systems that fail to converge. Raise **Max Contact** only if the solver
 reports a contact-matrix overflow; it's an upper bound, not a target.
+
+### Preconditioner
+
+The **Preconditioner** selects how the PCG linear solver is accelerated.
+Both choices produce the same result; they differ only in how quickly
+the solver converges and, with it, the wall-clock cost per frame.
+
+- **Block Jacobi** (the default) treats each vertex on its own. Each PCG
+  iteration is cheap, so it is fast in practice, and it keeps a small,
+  steady memory footprint even on scenes with very heavy contact.
+- **Schwarz** groups nearby vertices and solves each group together. On
+  scenes that mix stiff and soft materials it can converge in fewer PCG
+  iterations, but each iteration costs more and it uses more memory, which
+  on scenes with very heavy contact can be enough to run out of memory.
+
+If you are unsure, leave it on **Block Jacobi**. Switch to **Schwarz**
+only if a scene that mixes stiff and soft materials is slow to converge
+and you have memory to spare.
+
+### Schwarz Levels
+
+When the **Preconditioner** is set to **Schwarz**, the **Schwarz Levels**
+control picks how many additive levels the preconditioner uses. It has no
+effect on **Block Jacobi**, and the row is shown only while **Schwarz** is
+selected.
+
+- **Level 2** (the default) adds a coarse correction over the connectivity
+  partition on top of the per-aggregate solve. On stiff multibody contact
+  this lowers the worst-case PCG iteration count, so it is the better
+  all-around choice.
+- **Level 1** uses a single-level additive aggregate-Schwarz smoother only.
+  It is cheaper to set up per iteration but can take more PCG iterations on
+  stiff or mixed scenes.
+
+Leave it on **Level 2** unless you are profiling and want to compare against
+the single-level smoother.
+
+## Save and Checkpoints
+
+A long simulation can save its state along the way so you can resume it
+later instead of starting over. These settings control when those saves
+happen and how many are kept.
+
+| UI label                | Python / TOML key        | Default     | Description                                                        |
+| ----------------------- | ------------------------ | ----------- | ----------------------------------------------------------------- |
+| **Save State on Finish**| `save_state_on_finish`   | `False`     | Save the state on the final frame before the solver exits, so the finished result stays resumable even when **Auto Save** is off. |
+| **Auto Save**           | `auto_save`              | `False`     | Save the state periodically while the simulation runs.            |
+| **Auto Save Interval**  | `auto_save_interval`     | 10          | How often to auto-save, in frames. Minimum 1.                     |
+| **Keep Saved States**   | `keep_states`            | 0           | How many auto-saved states to keep. `0` keeps all of them.        |
+| **Save Checkpoints**    | `save_checkpoint_frames` | (empty)     | An explicit list of frames at which to save a resumable state.    |
+
+**Auto Save** writes a fresh state every **Auto Save Interval** frames.
+With **Keep Saved States** at its default `0`, every one of those states
+is kept, so you can resume from any of them later. Set it to a positive
+number to keep only that many of the most recent states; older ones are
+discarded as new ones are written. Keep it at `0` if you want the option
+to resume from earlier frames.
+
+**Save Checkpoints** lets you pick specific frames to save, in addition
+to (or instead of) the regular **Auto Save** schedule. Add the frames
+you care about to the list and the solver writes a resumable state at
+each one. The list is empty by default.
+
+The **Resume** dialog offers exactly the frames that have been saved.
+Auto-saved frames, the on-finish save, and your explicit **Save
+Checkpoints** all show up there; pick one to continue the simulation
+from that point without re-sending geometry or rebuilding.
 
 ## Previewing Direction
 
@@ -256,7 +325,8 @@ require a full **Transfer**, because the mesh hash changes.
 ## Scene Profiles
 
 A **scene profile** is a named set of scene parameters saved to a TOML
-file. The shipped example contains:
+file with the **Save** icon. A file can hold any number of presets; for
+example:
 
 | Preset        | Highlights                                                                  |
 | ------------- | --------------------------------------------------------------------------- |
@@ -267,8 +337,8 @@ file. The shipped example contains:
 | `ZeroGravity` | `gravity = (0, 0, 0)`, 300 frames.                                          |
 
 ```{note}
-The `Default` preset above is a **profile name** in the shipped TOML, not
-the addon's new-scene default. The presets deliberately tighten `step_size`
+The `Default` preset above is just a **profile name** in this example, not
+the addon's new-scene default. These presets deliberately tighten `step_size`
 to 0.001 s for the more demanding example setups; a fresh Blender scene
 still starts at the addon default of 0.01 s (see the [Basic](#basic) table).
 ```
@@ -377,7 +447,7 @@ At transfer time the scene parameters are sent under solver-side names:
 dt, min-newton-steps, air-density, air-friction, gravity[3], wind[3],
 frames, fps, csrmat-max-nnz, constraint-ghat, cg-max-iter, cg-tol,
 include-face-mass, disable-contact, inactive-momentum,
-line-search-max-t, auto-save, stitch-stiffness, ...
+line-search-max-t, auto-save, ...
 ```
 
 **Update Params** reships this payload without re-encoding geometry.

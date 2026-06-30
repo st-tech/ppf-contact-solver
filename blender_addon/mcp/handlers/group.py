@@ -41,6 +41,28 @@ def get_group_index_by_uuid(group_uuid: str):
     raise ValidationError(f"Active group with UUID {group_uuid} not found")
 
 
+def resolve_assigned_with_index(group_uuid: str, object_name: str):
+    """Return (group, assigned, idx, obj_uuid) for an object in a group.
+
+    Resolves the group by UUID, the object by name -> UUID, then locates the
+    assigned-object row by a single scan. Raises MCPError if the group is
+    unknown, the object is missing/has no UUID, or it is not a member.
+    """
+    group = get_active_group_by_uuid_helper(group_uuid)
+    from ...core.uuid_registry import get_object_uuid
+
+    obj = bpy.data.objects.get(object_name)
+    if not obj:
+        raise MCPError(f"Object '{object_name}' not found in scene")
+    obj_uuid = get_object_uuid(obj)
+    if not obj_uuid:
+        raise MCPError(f"Object '{object_name}' has no UUID")
+    for i, assigned in enumerate(group.assigned_objects):
+        if assigned.uuid == obj_uuid:
+            return group, assigned, i, obj_uuid
+    raise MCPError(f"Object '{object_name}' not in group {group_uuid}")
+
+
 def _serialize_group(group) -> dict:
     """Return a stable MCP-facing representation of an active group."""
     return {
@@ -78,38 +100,26 @@ def _add_pin_vertex_group_impl(
     group = get_active_group_by_uuid_helper(group_uuid)
     obj_name, vg_name = _parse_pin_identifier(vertex_group_identifier)
 
+    # Mirror the scripting API (ops/api/group.py::Group.create_pin): the only
+    # handler-side responsibility is writing the curve's _pin_<vg> property when
+    # indices are supplied. Existence/type/vertex-group/curve-pin validation is
+    # owned by mutation.create_pin so the LLM sees one unified error text.
     obj = bpy.data.objects.get(obj_name)
-    if not obj:
-        raise ValidationError(f"Object '{obj_name}' not found")
-    if obj.type == "MESH":
-        if indices is not None:
+    if obj is not None and indices is not None:
+        if obj.type != "CURVE":
             raise ValidationError(
-                f"'indices' is only valid for curve objects; '{obj_name}' is MESH"
+                f"'indices' is only valid for curve objects; "
+                f"'{obj_name}' is {obj.type}"
             )
-        if vg_name not in [vg.name for vg in obj.vertex_groups]:
-            raise ValidationError(
-                f"Vertex group '{vg_name}' not found in object '{obj_name}'"
-            )
-    elif obj.type == "CURVE":
-        if indices is not None:
-            import json
+        import json
 
-            try:
-                encoded_indices = [int(index) for index in indices]
-            except (TypeError, ValueError) as exc:
-                raise ValidationError(
-                    "indices must be a list of integers for curve pins"
-                ) from exc
-            obj[f"_pin_{vg_name}"] = json.dumps(encoded_indices)
-        elif f"_pin_{vg_name}" not in obj:
+        try:
+            encoded_indices = [int(index) for index in indices]
+        except (TypeError, ValueError) as exc:
             raise ValidationError(
-                f"Curve pin '_pin_{vg_name}' not found on '{obj_name}'; "
-                "pass indices to define and bind the pin in one call"
-            )
-    else:
-        raise ValidationError(
-            f"Object '{obj_name}' has type {obj.type!r}; expected MESH or CURVE"
-        )
+                "indices must be a list of integers for curve pins"
+            ) from exc
+        obj[f"_pin_{vg_name}"] = json.dumps(encoded_indices)
 
     from ...core import mutation
 
@@ -134,9 +144,9 @@ def create_group(name: str = "", type: str = "SOLID"):
 
     Args:
         name: Display name for the new group (optional)
-        type: Group type (SOLID, SHELL, ROD, STATIC)
+        type: Group type (SOLID, SHELL, ROD, STATIC, PDRD, SAND)
     """
-    valid_types = {"SOLID", "SHELL", "ROD", "STATIC"}
+    valid_types = {"SOLID", "SHELL", "ROD", "STATIC", "PDRD", "SAND"}
     if type not in valid_types:
         raise ValidationError(
             f"Invalid type '{type}'. Valid types: {sorted(valid_types)}"
@@ -274,22 +284,7 @@ def bake_group_animation(group_uuid: str, object_name: str):
         group_uuid: UUID of group containing the object
         object_name: Name of the object to bake
     """
-    group = get_active_group_by_uuid_helper(group_uuid)
-    from ...core.uuid_registry import get_object_uuid
-    obj = bpy.data.objects.get(object_name)
-    if not obj:
-        raise MCPError(f"Object '{object_name}' not found in scene")
-    obj_uuid = get_object_uuid(obj)
-    if not obj_uuid:
-        raise MCPError(f"Object '{object_name}' has no UUID")
-
-    idx = -1
-    for i, a in enumerate(group.assigned_objects):
-        if a.uuid == obj_uuid:
-            idx = i
-            break
-    if idx < 0:
-        raise MCPError(f"Object '{object_name}' not in group {group_uuid}")
+    group, _, idx, obj_uuid = resolve_assigned_with_index(group_uuid, object_name)
     group.assigned_objects_index = idx
 
     group_index = get_group_index_by_uuid(group_uuid)
@@ -310,22 +305,7 @@ def bake_group_single_frame(group_uuid: str, object_name: str):
         group_uuid: UUID of group containing the object
         object_name: Name of the object to bake
     """
-    group = get_active_group_by_uuid_helper(group_uuid)
-    from ...core.uuid_registry import get_object_uuid
-    obj = bpy.data.objects.get(object_name)
-    if not obj:
-        raise MCPError(f"Object '{object_name}' not found in scene")
-    obj_uuid = get_object_uuid(obj)
-    if not obj_uuid:
-        raise MCPError(f"Object '{object_name}' has no UUID")
-
-    idx = -1
-    for i, a in enumerate(group.assigned_objects):
-        if a.uuid == obj_uuid:
-            idx = i
-            break
-    if idx < 0:
-        raise MCPError(f"Object '{object_name}' not in group {group_uuid}")
+    group, _, idx, obj_uuid = resolve_assigned_with_index(group_uuid, object_name)
     group.assigned_objects_index = idx
 
     group_index = get_group_index_by_uuid(group_uuid)
@@ -378,13 +358,6 @@ def get_group(group_uuid: str):
     """
     group = get_active_group_by_uuid_helper(group_uuid)
     return {"group": _serialize_group(group)}
-
-
-@group_handler
-def get_groups():
-    """Get list of all active groups."""
-    groups = _list_groups()
-    return {"groups": groups, "group_count": len(groups)}
 
 
 @group_handler
@@ -639,9 +612,9 @@ def set_group_type(group_uuid: str, type: str):
 
     Args:
         group_uuid: UUID of group
-        type: Group type (SOLID, SHELL, ROD, STATIC)
+        type: Group type (SOLID, SHELL, ROD, STATIC, PDRD, SAND)
     """
-    valid_types = ["SOLID", "SHELL", "ROD", "STATIC"]
+    valid_types = ["SOLID", "SHELL", "ROD", "STATIC", "PDRD", "SAND"]
     if type not in valid_types:
         raise ValidationError(f"Invalid type '{type}'. Valid types: {valid_types}")
 
@@ -686,7 +659,6 @@ def remove_pin_vertex_group(group_uuid: str, vertex_group_identifier: str):
     """
     group = get_active_group_by_uuid_helper(group_uuid)
     obj_name, vg_name = _parse_pin_identifier(vertex_group_identifier)
-    from ...models.groups import decode_vertex_group_identifier
     from ...core.uuid_registry import get_object_uuid
 
     # Resolve the target object via name -> UUID up front; match pins by UUID
@@ -806,10 +778,18 @@ def set_group_material_properties(group_uuid: str, properties: dict):
 
     Supported properties by group type:
 
-    - SHELL: enable_strain_limit, strain_limit, shell_density, shell_young_modulus, shell_poisson_ratio, shell_model, bend, shrink_x, shrink_y, friction, enable_inflate, inflate_pressure, stitch_stiffness
-    - SOLID: solid_density, solid_young_modulus, solid_poisson_ratio, solid_model, shrink, friction, stitch_stiffness
-    - ROD: rod_density, rod_young_modulus, rod_model, friction, bend, enable_strain_limit, strain_limit, stitch_stiffness
+    - SHELL: enable_strain_limit, strain_limit_percent, shell_density, shell_young_modulus, shell_poisson_ratio, shell_model, bend, shrink_x, shrink_y, deformation_damping, bending_damping, young_mod_density_normalized, friction, enable_inflate, inflate_pressure, stitch_stiffness
+    - SOLID: solid_density, solid_young_modulus, solid_poisson_ratio, solid_model, shrink, deformation_damping, young_mod_density_normalized, friction, stitch_stiffness
+    - ROD: rod_density, rod_young_modulus, rod_model, deformation_damping, bending_damping, young_mod_density_normalized, friction, bend, enable_strain_limit, strain_limit_percent, stitch_stiffness
+    - PDRD: pdrd_density, friction, stitch_stiffness (the hinge joint is per-object; use the set_pdrd_hinge tool)
+    - SAND: sand_grain_radius, sand_particle_mass, sand_friction (faceless granular body of loose grain-center vertices)
     - STATIC: friction (limited set)
+
+    Rayleigh damping (deformation_damping on Solid/Shell/Rod, bending_damping on
+    Shell/Rod only) and young_mod_density_normalized (interpret Young's modulus
+    as true pascals when False) are per-group. Solid has no bending term, so
+    bending_damping is rejected for Solid. PDRD groups carry only density,
+    friction, contact, and stitch settings.
 
     Contact properties (mutually exclusive modes):
 
@@ -846,7 +826,7 @@ def set_group_material_properties(group_uuid: str, properties: dict):
         type_specific_props = {
             "SHELL": {
                 "enable_strain_limit",
-                "strain_limit",
+                "strain_limit_percent",
                 "shell_density",
                 "shell_young_modulus",
                 "shell_poisson_ratio",
@@ -854,6 +834,9 @@ def set_group_material_properties(group_uuid: str, properties: dict):
                 "bend",
                 "shrink_x",
                 "shrink_y",
+                "deformation_damping",
+                "bending_damping",
+                "young_mod_density_normalized",
                 "friction",
                 "enable_inflate",
                 "inflate_pressure",
@@ -865,6 +848,7 @@ def set_group_material_properties(group_uuid: str, properties: dict):
                 "bend_plasticity",
                 "bend_plasticity_threshold",
                 "bend_rest_angle_source",
+                "bend_rest_from_reference",
                 "contact_gap",
                 "contact_offset",
                 "contact_gap_rat",
@@ -877,6 +861,8 @@ def set_group_material_properties(group_uuid: str, properties: dict):
                 "solid_poisson_ratio",
                 "solid_model",
                 "shrink",
+                "deformation_damping",
+                "young_mod_density_normalized",
                 "friction",
                 "stitch_stiffness",
                 "enable_plasticity",
@@ -892,15 +878,19 @@ def set_group_material_properties(group_uuid: str, properties: dict):
                 "rod_density",
                 "rod_young_modulus",
                 "rod_model",
+                "deformation_damping",
+                "bending_damping",
+                "young_mod_density_normalized",
                 "friction",
                 "bend",
                 "enable_strain_limit",
-                "strain_limit",
+                "strain_limit_percent",
                 "stitch_stiffness",
                 "enable_bend_plasticity",
                 "bend_plasticity",
                 "bend_plasticity_threshold",
                 "bend_rest_angle_source",
+                "bend_rest_from_reference",
                 "contact_gap",
                 "contact_offset",
                 "contact_gap_rat",
@@ -909,6 +899,26 @@ def set_group_material_properties(group_uuid: str, properties: dict):
             },
             "STATIC": {
                 "friction",
+                "contact_gap",
+                "contact_offset",
+                "contact_gap_rat",
+                "contact_offset_rat",
+                "use_group_bounding_box_diagonal",
+            },
+            "PDRD": {
+                "pdrd_density",
+                "friction",
+                "stitch_stiffness",
+                "contact_gap",
+                "contact_offset",
+                "contact_gap_rat",
+                "contact_offset_rat",
+                "use_group_bounding_box_diagonal",
+            },
+            "SAND": {
+                "sand_grain_radius",
+                "sand_particle_mass",
+                "sand_friction",
                 "contact_gap",
                 "contact_offset",
                 "contact_gap_rat",

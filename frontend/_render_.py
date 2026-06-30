@@ -12,7 +12,7 @@ import numpy as np
 
 from . import _rust  # type: ignore[attr-defined]
 
-from ._rasterizer_ import SoftwareRenderer
+from ._rasterizer_ import DEFAULT_HEIGHT, DEFAULT_WIDTH, SoftwareRenderer
 from ._utils_ import get_cache_dir
 
 # SoftwareRenderer dispatches to the Rust rasterizer kernel.
@@ -45,9 +45,13 @@ class MitsubaRenderer:
         """Initialize the renderer and validate that Mitsuba is available.
 
         Args:
-            args (Optional[dict]): Optional configuration merged with
-                :data:`default_args`. See ``default_args`` for recognized keys.
+            args (Optional[dict]): Optional configuration; missing keys are
+                filled by :func:`update_default_args` (which delegates to
+                :func:`_ppf_cts_py.render_default_args`). Recognized keys:
+                ``variant``, ``max_depth``, ``width``, ``height``, ``fov``,
+                ``camera``, ``up``, ``sample_count``, ``tmp_path``.
         """
+        self._args = None
         if args is None:
             args = {}
         assert shutil.which("mitsuba") is not None
@@ -56,8 +60,9 @@ class MitsubaRenderer:
 
     def __del__(self):
         """Remove the temporary PLY file written during rendering, if any."""
-        if os.path.exists(self._args["tmp_path"]):
-            os.remove(self._args["tmp_path"])
+        args = getattr(self, "_args", None)
+        if args is not None and os.path.exists(args["tmp_path"]):
+            os.remove(args["tmp_path"])
 
     def render(
         self,
@@ -104,13 +109,13 @@ class MitsubaRenderer:
         if len(seg):
             print("Mitsuba does not support line primitives with varying colors.")
 
-        bounds = np.max(vert, axis=0) - np.min(vert, axis=0)
         width, height = self._args["width"], self._args["height"]
         if type(self._args["camera"]) is dict:
             origin = self._args["camera"]["origin"]
             target = self._args["camera"]["target"]
+            wall_z = float(np.max(vert[:, 2]) - np.min(vert[:, 2]))
         else:
-            origin, target = _rust.mitsuba_auto_camera(
+            origin, target, wall_z = _rust.mitsuba_auto_camera(
                 np.ascontiguousarray(vert, dtype=np.float32), int(width), int(height)
             )
             origin, target = list(origin), list(target)
@@ -154,7 +159,7 @@ class MitsubaRenderer:
                     },
                     "to_world": mi.ScalarTransform4f()
                     .scale(mi.ScalarPoint3f([1000, 1000, 1]))
-                    .translate(mi.ScalarPoint3f([0, 0, -5 * bounds[2]])),
+                    .translate(mi.ScalarPoint3f([0, 0, -5 * wall_z])),
                 },
                 "my-mesh": mesh,
             }
@@ -190,8 +195,8 @@ if __name__ == "__main__":
     arg_parser.add_argument("-o", "--output", type=str, required=True)
     arg_parser.add_argument("--origin", type=float, nargs=3)
     arg_parser.add_argument("--target", type=float, nargs=3)
-    arg_parser.add_argument("--width", type=int, default=640)
-    arg_parser.add_argument("--height", type=int, default=480)
+    arg_parser.add_argument("--width", type=int, default=DEFAULT_WIDTH)
+    arg_parser.add_argument("--height", type=int, default=DEFAULT_HEIGHT)
     arg_parser.add_argument("--sample-count", type=int, default=64)
     args = arg_parser.parse_args()
     if args.origin is not None and args.target is not None:
@@ -214,6 +219,23 @@ if __name__ == "__main__":
     else:
         raise ValueError(f"unsupported engine {args.engine}")
 
+    def load_mesh_entry(ply_path):
+        """Load a ``.ply`` mesh and its optional ``.seg`` sidecar.
+
+        Returns the vertices, per-vertex colors normalized to [0, 1], the line
+        segment indices (Sx2, empty if no sidecar), and the triangle faces.
+        """
+        print(f"loading mesh {ply_path}")
+        mesh = trimesh.load_mesh(ply_path)
+        segpath = os.path.splitext(ply_path)[0] + ".seg"
+        if os.path.exists(segpath):
+            seg = np.loadtxt(segpath, dtype=np.uint32).reshape((-1, 2))
+        else:
+            seg = np.zeros((0, 2), dtype=np.uint32)
+        color = mesh.visual.vertex_colors  # type: ignore
+        color = color[:, :3] / 255.0
+        return mesh.vertices, color, seg, mesh.faces
+
     if os.path.isdir(args.input):
         if not os.path.exists(args.output):
             os.makedirs(args.output)
@@ -221,17 +243,7 @@ if __name__ == "__main__":
         for filename in os.listdir(args.input):
             if filename.endswith(".ply"):
                 filepath = os.path.join(args.input, filename)
-                segpath = filepath.replace(".ply", ".seg")
-                if os.path.exists(segpath):
-                    seg = np.loadtxt(segpath, dtype=np.uint32).reshape((-1, 2))
-                else:
-                    seg = np.zeros((0, 2), dtype=np.uint32)
-                print(f"loading mesh {filepath}")
-                mesh = trimesh.load_mesh(filepath)
-                vert = mesh.vertices
-                face = mesh.faces
-                color = mesh.visual.vertex_colors  # type: ignore
-                color = color[:, :3] / 255.0
+                vert, color, seg, face = load_mesh_entry(filepath)
                 output_file = os.path.join(
                     args.output, f"{os.path.splitext(filename)[0]}.png"
                 )
@@ -241,16 +253,6 @@ if __name__ == "__main__":
             r.render(vert, color, seg, face, output_file)
     else:
         assert args.input.endswith(".ply")
-        print(f"loading mesh {args.input}")
-        mesh = trimesh.load_mesh(args.input)
-        vert = mesh.vertices
-        segpath = args.input.replace(".ply", ".seg")
-        if os.path.exists(segpath):
-            seg = np.loadtxt(segpath, dtype=np.uint32).reshape((-1, 2))
-        else:
-            seg = np.zeros((0, 2), dtype=np.uint32)
-        face = mesh.faces
-        color = mesh.visual.vertex_colors  # type: ignore
-        color = color[:, :3] / 255.0
+        vert, color, seg, face = load_mesh_entry(args.input)
         print(f"rendering mesh to {args.output}")
         r.render(vert, color, seg, face, args.output)

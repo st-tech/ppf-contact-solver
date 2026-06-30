@@ -69,6 +69,7 @@ class OBJECT_OT_RemoveMergePair(Operator):
 
     bl_idname = "object.remove_merge_pair"
     bl_label = "Remove"
+    bl_options = {"REGISTER", "UNDO"}
 
     def execute(self, context):
         state = get_addon_data(context.scene).state

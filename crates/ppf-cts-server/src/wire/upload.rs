@@ -15,7 +15,7 @@ use ppf_cts_formats::files::{DATA_PICKLE, PARAM_PICKLE};
 use serde_json::Value;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-use super::{json_u64, write_response};
+use super::{json_u64, write_response, MAX_PAYLOAD_BYTES};
 use crate::engine::ServerEngine;
 use crate::error::ServerError;
 use crate::executor::{dispatch_with_executor, EffectExecutor};
@@ -67,6 +67,21 @@ where
         .into_response();
         return write_response(writer, &resp).await;
     }
+    // Bound each declared size, and their sum, on the u64 before the
+    // `as usize` casts feed read_exact_n_chunked. The sum check guards
+    // against two individually-legal sizes that together still ask for
+    // an outsized total transfer; `saturating_add` keeps the
+    // comparison sound at the u64 ceiling.
+    if data_size > MAX_PAYLOAD_BYTES
+        || param_size > MAX_PAYLOAD_BYTES
+        || data_size.saturating_add(param_size) > MAX_PAYLOAD_BYTES
+    {
+        let resp = ServerError::BadRequest(format!(
+            "declared payload (data_size {data_size}, param_size {param_size}) exceeds max payload {MAX_PAYLOAD_BYTES}"
+        ))
+        .into_response();
+        return write_response(writer, &resp).await;
+    }
     if engine.state().build == ppf_cts_core::state::Build::Building {
         let resp = ServerError::Conflict(
             "Cannot upload while a build is in progress. Abort the build first, then retry the upload.".into(),
@@ -86,14 +101,7 @@ where
         return write_response(writer, &resp).await;
     }
 
-    let stamp = format!(
-        "{}.{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0),
-    );
+    let stamp = upload::temp_suffix();
     let data_final = project_root.join(DATA_PICKLE);
     let param_final = project_root.join(PARAM_PICKLE);
     let data_tmp = project_root.join(format!("{DATA_PICKLE}.tmp.{stamp}"));

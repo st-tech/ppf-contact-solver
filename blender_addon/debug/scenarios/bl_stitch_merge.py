@@ -3,8 +3,9 @@
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
 # License: Apache v2.0
 #
-# Cloth-to-cloth stitching across two SHELL pieces, redesigned so the
-# stitch is under active separating tension during the run.
+# Cloth-to-cloth stitching across two SHELL pieces. Every supported
+# pair (including shell-shell) is now a soft, mass-scaled stitch plus a
+# post-snap closure at fetch time; there is no DOF-folding hard merge.
 #
 # Layout (rest, world coordinates):
 #
@@ -16,43 +17,30 @@
 #                                ^----STITCH----^
 #
 # A spans x in [-1, 0] and B spans x in [0.5, 1.5]. The stitch ties
-# A.v0 -> B.v0 and the rest gap is 0.5m, so the stitch has real work
-# to do at frame 0. The pinned outer edges (A verts 2,3 at x=-1 and B
-# verts 2,3 at x=1.5) are then driven outward in opposite X directions
-# via MOVE_BY, applying separating tension across the stitch.
-#
-# Why this avoids the area-zero panic at src/scene.rs:1341. The
-# explicit shell-shell merge in frontend/_scene_.py aliases A.v0 to
-# B.v0, so A's two triangles end up referencing B.v0_pos in place of
-# A.v0_pos. Computed rest areas after alias:
-#   * (B.v0=(0.5,0,0), A.v2=(-1,0,0), A.v3=(-1,1,0))  -> area 0.75
-#   * (B.v0=(0.5,0,0), A.v3=(-1,1,0), A.v1=(0,1,0))   -> area 0.50
-# Both strictly positive, so the area > 0 assertion passes. The
-# original coincident layout (A.v0 == B.v0 at rest) made the assertion
-# vacuous: the stitch was a no-op weld at frame 0 and the
-# "stays close" check never had to distinguish a working stitch from
-# silence.
+# A.v0 -> B.v0 and the rest gap is 0.5m. The pinned outer edges (A
+# verts 2,3 at x=-1 and B verts 2,3 at x=1.5) are driven outward in
+# opposite X directions via MOVE_BY, applying separating tension across
+# the stitch.
 #
 # Subtests:
 #   A. ``stitch_encoded``: encode the params via encode_param, decode
-#      the pickle, and assert the decoded ``explicit_merge_pairs``
-#      section contains a single entry whose source_uuid/target_uuid
-#      match the authored UUIDs and whose ``pairs`` row is [0, 0]. This
-#      exercises ``_encode_explicit_merge_pairs`` (cross_stitch_json
-#      JSON parse + barycentric argmax + UUID resolution) rather than
-#      a PropertyGroup string round-trip.
-#   B. ``stitched_pair_stays_close``: across every PC2 frame, the
-#      world distance between A[0] and B[0] stays under TOL.
-#      Tolerance derivation: shell-shell explicit merges create a hard
-#      vertex alias in frontend/_scene_.py:3337 (A.v0 and B.v0 share a
-#      single solver DOF), so the PC2 readback for A[0] and B[0] are
-#      written from the same shared position; the deviation is bounded
-#      by float32 PC2 quantization (~1e-6). If the alias were dropped
-#      entirely (the failure mode we want to catch), the pin MOVE_BY
-#      separates the outer edges by SEP_PER_SIDE * 2 = 0.4m, leaving
-#      the inner verts to drift by hundreds of millimeters. TOL=0.01
-#      passes comfortably under the working alias and fails by orders
-#      of magnitude under a dropped alias.
+#      the pickle, and assert the decoded ``cross_stitch`` section
+#      contains a single entry whose source_uuid/target_uuid match the
+#      authored UUIDs and whose 6-wide ``ind`` row is [0, 0, 0, 0, 2, 3].
+#      This
+#      exercises ``_encode_cross_stitch`` (cross_stitch_json JSON parse
+#      + UUID resolution + stitch_stiffness stamping) for a shell-shell
+#      pair, the path that previously hard-merged DOFs.
+#   B. ``stitched_pair_stays_close``: from the first simulated frame
+#      onward, the world distance between A[0] and B[0] stays under
+#      TOL. With ``post_snap_exactly`` on (the default), fetch moves
+#      each stitch source vertex onto its barycentric target on B, so
+#      A[0] is written onto B's solved v0 and the two PC2 readbacks
+#      coincide to within float32 PC2 quantization. If the closure were
+#      dropped (the failure mode we want to catch), the pin MOVE_BY
+#      separates the outer edges by SEP_PER_SIDE * 2 = 0.4m and the
+#      inner verts drift by hundreds of millimeters. TOL=0.01 passes
+#      under the closure and fails by orders of magnitude without it.
 #   C. ``simulation_completes``: solver leaves FAILED, both PC2 files
 #      exist, sample counts match the requested frame range.
 
@@ -102,8 +90,8 @@ def _make_strip(name, inner_x, outer_x):
     ]
     verts = [bm.verts.new(c) for c in coords]
     bm.verts.ensure_lookup_table()
-    # Two triangles forming the quad. Triangles avoid n-gon rejection
-    # on the encoder side.
+    # Two triangles forming the quad (an explicit triangulation for the
+    # test's seam geometry).
     bm.faces.new((verts[0], verts[2], verts[3]))
     bm.faces.new((verts[0], verts[3], verts[1]))
     bm.to_mesh(mesh)
@@ -155,8 +143,8 @@ try:
 
     # Pin the outer edges and drive them apart in opposite X directions
     # over the timeline. This puts the stitch under active separating
-    # tension; without the merge alias the inner verts would drift by
-    # the full separation distance.
+    # tension; without the stitch (and its post-snap closure) the inner
+    # verts would drift by the full separation distance.
     pin_a = cloth.create_pin(mesh_a.name, "OuterPinA")
     pin_a.move_by(delta=(-SEP_PER_SIDE, 0.0, 0.0),
                   frame_start=1, frame_end=FRAME_COUNT - 1,
@@ -176,11 +164,12 @@ try:
 
     # Author one stitch pair: A.v0 <-> B.v0. The schema follows the
     # snap operator's SHELL-target branch in mesh_ops/snap_ops.py:
-    # ``ind`` rows are [src_vert, t0, t1, t2] over a target triangle,
-    # ``w`` rows are [1.0, alpha, beta, gamma]. Using a real B
-    # triangle (verts 0, 2, 3 from _make_strip) with weights
-    # [1.0, 1.0, 0.0, 0.0] tells _encode_explicit_merge_pairs to pick
-    # B.v0 (highest barycentric weight) as the merge partner.
+    # 6-wide barycentric-barycentric ``ind`` rows are [s0, s1, s2, t0, t1,
+    # t2] and ``w`` rows are [ws0, ws1, ws2, wt0, wt1, wt2]. A shell source
+    # degenerates to [0, 0, 0] / [1, 0, 0] (A.v0); a real B triangle (verts
+    # 0, 2, 3 from _make_strip) with target weights [1, 0, 0] places the
+    # barycentric target on B.v0, so the soft stitch (and the post-snap
+    # closure) tie A.v0 to B.v0.
     state = dh.groups.get_addon_data(bpy.context.scene).state
     pair = state.merge_pairs.add()
     pair.object_a = mesh_a.name
@@ -191,8 +180,9 @@ try:
     cs_payload = {
         "source_uuid": uuid_a,
         "target_uuid": uuid_b,
-        "ind": [[0, 0, 2, 3]],
-        "w": [[1.0, 1.0, 0.0, 0.0]],
+        "ind": [[0, 0, 0, 0, 2, 3]],
+        "w": [[1.0, 0.0, 0.0, 1.0, 0.0, 0.0]],
+        "source_points": [[0.0, 0.0, 0.0]],
         "target_points": [[0.5, 0.0, 0.0]],
         "a_vert_count": len(mesh_a.data.vertices),
         "b_vert_count": len(mesh_b.data.vertices),
@@ -203,28 +193,30 @@ try:
 
     # ----- A: stitch encoded into param.pickle -------------------
     # Encode params and decode the pickle. Assert the decoded
-    # explicit_merge_pairs section is present with the expected
-    # source/target UUIDs and a [0, 0] index pair. This exercises
-    # _encode_explicit_merge_pairs's JSON parse + barycentric argmax,
-    # not just a PropertyGroup string round-trip.
+    # cross_stitch section is present with the expected source/target
+    # UUIDs and the authored 6-wide ind row [0, 0, 0, 0, 2, 3]
+    # (degenerate shell source + target tri). This exercises
+    # _encode_cross_stitch's JSON parse + UUID resolution for a
+    # shell-shell pair, not just a PropertyGroup string round-trip.
     param_bytes = dh.encoder_param.encode_param(bpy.context)
     decoded = dh.decode_addon_blob(param_bytes)
-    decoded_emp = decoded.get("explicit_merge_pairs", [])
+    decoded_cs = decoded.get("cross_stitch", [])
+    entry = decoded_cs[0] if decoded_cs else None
     encoder_ok = (
-        len(decoded_emp) == 1
-        and decoded_emp[0].get("source_uuid") == uuid_a
-        and decoded_emp[0].get("target_uuid") == uuid_b
-        and list(decoded_emp[0].get("pairs", [])) == [[0, 0]]
+        len(decoded_cs) == 1
+        and entry.get("source_uuid") == uuid_a
+        and entry.get("target_uuid") == uuid_b
+        and [list(row) for row in entry.get("ind", [])] == [[0, 0, 0, 0, 2, 3]]
     )
     dh.record(
         "A_stitch_encoded",
         encoder_ok,
         {
-            "n_entries": len(decoded_emp),
-            "decoded_entry": decoded_emp[0] if decoded_emp else None,
+            "n_entries": len(decoded_cs),
+            "decoded_entry": entry,
             "expected_source_uuid": uuid_a,
             "expected_target_uuid": uuid_b,
-            "expected_pairs": [[0, 0]],
+            "expected_ind": [[0, 0, 0, 0, 2, 3]],
         },
     )
 
@@ -292,20 +284,21 @@ try:
     # ----- B: stitched pair stays close every simulated frame -----
     # The PC2 vertex order matches Blender's vertex order (the addon
     # remaps solver -> Blender on fetch). Vertex 0 of each PC2 is the
-    # inner-edge vertex we stitched. With the hard alias in place the
-    # two readbacks come from the same solver DOF and should match to
-    # within float32 PC2 quantization (~1e-6).
+    # inner-edge vertex we stitched. With post_snap_exactly on (the
+    # default), fetch moves the stitch source A.v0 onto its barycentric
+    # target on B (B.v0 for weights [1,0,0]), so the two readbacks
+    # coincide to within float32 PC2 quantization (~1e-6).
     #
     # PC2 sample 0 is the Blender rest geometry (A.v0 at (0,0,0),
-    # B.v0 at (0.5,0,0)) written before the solver applies the merge
-    # alias, so we skip it and compare from sample 1 onward (the first
-    # simulated frame). TOL=0.01 is chosen to fail by orders of
-    # magnitude if the alias were dropped: the pin MOVE_BY drives the
-    # outer edges by SEP_PER_SIDE in opposite X directions over
-    # frames 1..FRAME_COUNT-1, and without the merge constraint the
-    # inner verts would drift toward those outer edges, producing a
-    # gap on the order of SEP_PER_SIDE * 2 = 0.4m plus the rest 0.5m
-    # gap. 0.01 << 0.5 cleanly separates the two regimes.
+    # B.v0 at (0.5,0,0)) written before the post-snap closure runs, so
+    # we skip it and compare from sample 1 onward (the first simulated
+    # frame). TOL=0.01 is chosen to fail by orders of magnitude if the
+    # closure were dropped: the pin MOVE_BY drives the outer edges by
+    # SEP_PER_SIDE in opposite X directions over frames 1..FRAME_COUNT-1,
+    # and without the closure the inner verts would drift toward those
+    # outer edges, producing a gap on the order of SEP_PER_SIDE * 2 =
+    # 0.4m plus the rest 0.5m gap. 0.01 << 0.5 cleanly separates the two
+    # regimes.
     TOL = 0.01
     max_dist = 0.0
     per_frame = []

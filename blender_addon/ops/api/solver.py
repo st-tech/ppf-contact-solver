@@ -40,7 +40,7 @@ class _Solver:
         solver.param.gravity = (0, 0, -9.8)
         group = solver.create_group("Sphere", type="SOLID")
         group.add("Sphere")
-        group.param.solid_density = 1000
+        group.param.solid_density = 100
     """
 
     #: Scene parameter proxy; see :class:`SceneParam`.
@@ -55,7 +55,8 @@ class _Solver:
         Args:
             name: Display name for the group.  Empty string leaves the
                 auto-generated name in place.
-            type: One of ``"SOLID"``, ``"SHELL"``, ``"ROD"``, ``"STATIC"``.
+            type: One of ``"SOLID"``, ``"SHELL"``, ``"ROD"``, ``"STATIC"``,
+                ``"PDRD"``, ``"SAND"``.
 
         Returns:
             A :class:`Group` proxy for the newly created group.
@@ -151,16 +152,14 @@ class _Solver:
             solver.clear()
             solver.param.gravity = (0, 0, -9.8)
         """
-        from ...models.groups import N_MAX_GROUPS
+        from ...models.groups import iterate_active_object_groups
 
         root = get_addon_data(bpy.context.scene)
         state = root.state
 
         # Delete all groups and reset their properties
-        for i in range(N_MAX_GROUPS):
-            group = getattr(root, f"object_group_{i}", None)
-            if group and group.active:
-                group.reset_to_defaults()
+        for group in iterate_active_object_groups(bpy.context.scene):
+            group.reset_to_defaults()
 
         # Reset scene parameters to defaults
         bl_props = state.bl_rna.properties

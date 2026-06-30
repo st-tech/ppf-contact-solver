@@ -13,6 +13,33 @@ use std::time::Duration;
 
 use crate::config::HardwareInfo;
 
+/// Per-subprocess wall-clock cap shared by every `run_with_timeout`
+/// call site. A stuck nvidia-smi (bad driver state) is the main
+/// motivation; the slow path is a Windows powershell cold start.
+/// Defined once so a tuning change touches a single spot.
+const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// MiB to GiB. Input is nvidia-smi output under `--format=...,nounits`,
+/// which reports memory in MiB, so the divisor is 1024.
+fn mib_to_gib(mib: u64) -> f64 {
+    mib as f64 / 1024.0
+}
+
+/// Bytes to GiB. Input is sysinfo total_memory()/used_memory(), which
+/// report bytes, so the divisor is 1024^3. Kept distinct from
+/// `mib_to_gib` on purpose: the two source units must not be unified.
+fn bytes_to_gib(b: u64) -> f64 {
+    b as f64 / 1024_f64.powi(3)
+}
+
+/// Shared "<pct>% (<used>/<total> GB)" formatter for the two
+/// used/total rows (VRAM, RAM). `pct` is passed in already computed
+/// from the raw source units so the displayed percentage matches the
+/// historical rounding rather than recomputing from the rounded GiB.
+fn fmt_usage(pct: u64, used_gib: f64, total_gib: f64) -> String {
+    format!("{}% ({:.1}/{:.1} GB)", pct, used_gib, total_gib)
+}
+
 /// Runtime utilization snapshot built fresh on every status
 /// response, to populate the live "Realtime Statistics" rows (GPU
 /// Util / VRAM Usage / CPU Usage / RAM Usage) the addon panel
@@ -32,7 +59,8 @@ pub struct RuntimeUsage {
 /// `None` so the response builder can omit it without blocking the
 /// poll cycle. Caller is expected to clamp the cost: on hosts without
 /// a GPU, nvidia-smi prints to stderr and returns quickly; on hosts
-/// with a stuck driver, `run_with_timeout` kills the child after 5s.
+/// with a stuck driver, `run_with_timeout` kills the child after
+/// PROBE_TIMEOUT.
 pub fn runtime_usage() -> RuntimeUsage {
     let mut out = RuntimeUsage::default();
 
@@ -41,7 +69,7 @@ pub fn runtime_usage() -> RuntimeUsage {
             "--query-gpu=utilization.gpu,memory.used,memory.total",
             "--format=csv,noheader,nounits",
         ]),
-        Duration::from_secs(5),
+        PROBE_TIMEOUT,
     ) {
         if let Some(line) = s.lines().next() {
             let parts: Vec<&str> = line.split(',').map(str::trim).collect();
@@ -55,12 +83,8 @@ pub fn runtime_usage() -> RuntimeUsage {
                     } else {
                         0
                     };
-                    out.vram_usage = Some(format!(
-                        "{}% ({:.1}/{:.1} GB)",
-                        pct,
-                        used as f64 / 1024.0,
-                        total as f64 / 1024.0
-                    ));
+                    out.vram_usage =
+                        Some(fmt_usage(pct, mib_to_gib(used), mib_to_gib(total)));
                 }
             }
         }
@@ -86,12 +110,7 @@ pub fn runtime_usage() -> RuntimeUsage {
     let used = sys.used_memory();
     if total > 0 {
         let pct = (100.0 * used as f64 / total as f64).round() as u64;
-        out.ram_usage = Some(format!(
-            "{}% ({:.1}/{:.1} GB)",
-            pct,
-            used as f64 / 1024_f64.powi(3),
-            total as f64 / 1024_f64.powi(3),
-        ));
+        out.ram_usage = Some(fmt_usage(pct, bytes_to_gib(used), bytes_to_gib(total)));
     }
 
     out
@@ -110,34 +129,39 @@ pub fn probe() -> HardwareInfo {
     probe_gpu(&mut hw);
     probe_cpu_and_ram(&mut hw);
 
+    // Compile-time backend: the `emulated` feature swaps the CUDA
+    // backend for a CPU stub (see ppf-cts-solver/build.rs). The addon
+    // warns before running on such a build.
+    hw.emulated = cfg!(feature = "emulated");
+
     hw
 }
 
 /// `nvidia-smi --query-gpu=name,memory.total,compute_cap` parses the
 /// CSV row for GPU/VRAM/SM, then a plain `nvidia-smi` for the CUDA
-/// driver line. Both calls run under a 5-second `run_with_timeout`
-/// so a stuck driver can't block startup.
+/// driver line. Both calls run under a `run_with_timeout` capped at
+/// PROBE_TIMEOUT so a stuck driver can't block startup.
 fn probe_gpu(hw: &mut HardwareInfo) {
     if let Some(out) = run_with_timeout(
         Command::new("nvidia-smi").args([
             "--query-gpu=name,memory.total,compute_cap",
             "--format=csv,noheader,nounits",
         ]),
-        Duration::from_secs(5),
+        PROBE_TIMEOUT,
     ) {
         if let Some(line) = out.lines().next() {
             let parts: Vec<&str> = line.split(',').map(str::trim).collect();
             if parts.len() == 3 {
                 hw.gpu = parts[0].to_string();
                 if let Ok(mb) = parts[1].parse::<u64>() {
-                    hw.vram = format!("{:.1} GB", mb as f64 / 1024.0);
+                    hw.vram = format!("{:.1} GB", mib_to_gib(mb));
                 }
                 hw.sm = format!("sm_{}", parts[2].replace('.', ""));
             }
         }
     }
 
-    if let Some(out) = run_with_timeout(&mut Command::new("nvidia-smi"), Duration::from_secs(5)) {
+    if let Some(out) = run_with_timeout(&mut Command::new("nvidia-smi"), PROBE_TIMEOUT) {
         for line in out.lines() {
             if line.contains("CUDA Version") {
                 for part in line.split_whitespace() {
@@ -161,20 +185,25 @@ fn probe_cpu_and_ram(hw: &mut HardwareInfo) {
     sys.refresh_cpu_specifics(sysinfo::CpuRefreshKind::new().with_frequency());
     sys.refresh_memory();
 
+    let mut got_brand = false;
     if let Some(cpu) = sys.cpus().first() {
         let brand = cpu.brand().trim().to_string();
         if !brand.is_empty() {
             hw.cpu = brand;
+            got_brand = true;
         }
     }
-    if hw.cpu == "Unknown" {
+    // Gate on probe success, not the default sentinel string, so
+    // changing HardwareInfo::default().cpu cannot silently disable
+    // this OS-subprocess fallback.
+    if !got_brand {
         if cfg!(target_os = "windows") {
             if let Some(out) = run_with_timeout(
                 Command::new("powershell").args([
                     "-Command",
                     "(Get-CimInstance Win32_Processor).Name",
                 ]),
-                Duration::from_secs(5),
+                PROBE_TIMEOUT,
             ) {
                 let trimmed = out.trim().to_string();
                 if !trimmed.is_empty() {
@@ -182,7 +211,7 @@ fn probe_cpu_and_ram(hw: &mut HardwareInfo) {
                 }
             }
         } else if let Some(out) =
-            run_with_timeout(&mut Command::new("lscpu"), Duration::from_secs(5))
+            run_with_timeout(&mut Command::new("lscpu"), PROBE_TIMEOUT)
         {
             for line in out.lines() {
                 if let Some(rest) = line.strip_prefix("Model name:") {
@@ -195,7 +224,7 @@ fn probe_cpu_and_ram(hw: &mut HardwareInfo) {
 
     let total_bytes = sys.total_memory();
     if total_bytes > 0 {
-        hw.ram = format!("{:.1} GB", total_bytes as f64 / 1024_f64.powi(3));
+        hw.ram = format!("{:.1} GB", bytes_to_gib(total_bytes));
     }
 }
 
@@ -203,6 +232,15 @@ fn probe_cpu_and_ram(hw: &mut HardwareInfo) {
 /// the driver is in a bad state, so we cap each probe at `timeout`.
 /// On timeout we kill the child and return `None`; the caller leaves
 /// the corresponding HardwareInfo field as "Unknown".
+///
+/// stdout is drained on a dedicated thread so the pipe never
+/// backpressures the child: if we only read after the process exited,
+/// any command that writes more than the OS pipe buffer (~64 KB on
+/// Linux) before exiting would block in write(), never exit, and get
+/// killed at `timeout` with its output lost. stderr stays null, so
+/// only stdout needs a draining thread. The blocking read returns as
+/// soon as the child closes stdout (on exit or kill), so the join
+/// after the poll loop is prompt.
 fn run_with_timeout(cmd: &mut Command, timeout: Duration) -> Option<String> {
     let mut child = cmd
         .stdout(std::process::Stdio::piped())
@@ -210,16 +248,22 @@ fn run_with_timeout(cmd: &mut Command, timeout: Duration) -> Option<String> {
         .spawn()
         .ok()?;
 
+    let stdout = child.stdout.take();
+    let reader = std::thread::spawn(move || {
+        let mut buf = String::new();
+        if let Some(mut stdout) = stdout {
+            use std::io::Read;
+            let _ = stdout.read_to_string(&mut buf);
+        }
+        buf
+    });
+
     let start = std::time::Instant::now();
     loop {
         match child.try_wait().ok()? {
             Some(status) if status.success() => {
-                let mut buf = String::new();
-                if let Some(mut stdout) = child.stdout.take() {
-                    use std::io::Read;
-                    let _ = stdout.read_to_string(&mut buf);
-                }
-                return Some(buf);
+                let _ = child.wait();
+                return reader.join().ok();
             }
             Some(_) => return None,
             None => {

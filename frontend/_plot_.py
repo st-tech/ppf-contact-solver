@@ -4,6 +4,7 @@
 # License: Apache v2.0
 
 import copy
+import warnings
 
 from dataclasses import dataclass, field
 from typing import Optional
@@ -13,7 +14,7 @@ import pythreejs as p3s  # pyright: ignore
 
 from IPython.display import display
 
-from frontend._utils_ import Utils
+from ._utils_ import Utils
 
 from ._render_ import Rasterizer
 
@@ -171,10 +172,22 @@ class Plot:
                     plot.update(vert=V_t)
         """
         if vert is not None:
-            self._vert[0 : len(vert)] = vert
+            # Overwrite only the leading len(vert) rows and keep the tail.
+            # Live previews push just the dynamic vertices while the cached
+            # buffer also holds appended static-collider and stitch verts at
+            # higher indices; replace the whole buffer only when it is unset
+            # or too small to hold the incoming rows (otherwise the static
+            # tail would be dropped and its triangles would vanish).
+            if self._vert is None or len(self._vert) < len(vert):
+                self._vert = vert.copy()
+            else:
+                self._vert[0 : len(vert)] = vert
             vert = self._vert
         if color is not None:
-            self._color[0 : len(color)] = color
+            if self._color is None or len(self._color) < len(color):
+                self._color = color.copy()
+            else:
+                self._color[0 : len(color)] = color
             color = self._color
         self._engine.update(vert, color, recompute_normals)
 
@@ -196,7 +209,7 @@ class Plot:
                 are padded to 3D by appending a zero column.
             tri (np.ndarray): The triangle elements (Fx3) of the mesh.
             stitch (tuple[np.ndarray, np.ndarray]): Stitch data as a pair of
-                arrays: an index array (Sx3) and a weight array (Sx2).
+                arrays: an index array (Sx4) and a weight array (Sx4).
             color (np.ndarray): Per-vertex colors (Nx3) with each value in [0, 1].
             param_override (Optional[dict]): Fields to override on a copy of the plot parameters.
 
@@ -219,7 +232,7 @@ class Plot:
                 raise ValueError("triangles must have 3 vertices")
             if vert.shape[1] == 2:
                 vert = np.concatenate(
-                    [vert, np.zeros((vert.shape[0], 1), dtype=np.uint32)], axis=1
+                    [vert, np.zeros((vert.shape[0], 1), dtype=vert.dtype)], axis=1
                 )
             else:
                 vert = vert.copy()
@@ -229,11 +242,11 @@ class Plot:
                 new_vert = []
                 for ind_item, w_item in zip(ind, w, strict=False):
                     x0, y0, y1 = vert[ind_item[0]], vert[ind_item[1]], vert[ind_item[2]]
-                    w0, w1 = w_item[0], w_item[1]
+                    w1, w2 = w_item[1], w_item[2]
                     idx0 = len(new_vert) + len(vert)
                     idx1 = idx0 + 1
                     new_vert.append(x0)
-                    new_vert.append(w0 * y0 + w1 * y1)
+                    new_vert.append(w1 * y0 + w2 * y1)
                     edge.append([idx0, idx1])
                 vert = np.vstack([vert, np.array(new_vert)])
                 edge = np.array(edge)
@@ -349,7 +362,7 @@ class Plot:
                 edge = _edge
             if vert.shape[1] == 2:
                 _pts = np.concatenate(
-                    [vert, np.zeros((vert.shape[0], 1), dtype=np.uint32)], axis=1
+                    [vert, np.zeros((vert.shape[0], 1), dtype=vert.dtype)], axis=1
                 )
             else:
                 _pts = vert
@@ -390,10 +403,8 @@ class Plot:
                 V, F, T = app.mesh.preset("armadillo").decimate(19000).tetrahedralize()
                 app.plot.create().tet(V, T, axis=0, cut=0.5)
         """
-        if param_override is None:
-            param_override = {}
-        if "flat_shading" not in param_override:
-            param_override["flat_shading"] = True
+        param_override = dict(param_override or {})
+        param_override.setdefault("flat_shading", True)
         if Utils.in_jupyter_notebook():
             param = copy.deepcopy(self.param)
             for key, value in param_override.items():
@@ -476,6 +487,26 @@ class PlotParam:
     height: int = 600
 
 
+def _resolve_colors(
+    vert: np.ndarray, color: np.ndarray, param: "PlotParam"
+) -> np.ndarray:
+    """Validate vertices and substitute the default color when none is given.
+
+    Args:
+        vert (np.ndarray): The vertices (Nx3); must be non-empty.
+        color (np.ndarray): Per-vertex colors (Nx3), or empty to use the default.
+        param (PlotParam): Plot parameters supplying ``default_color``.
+
+    Returns:
+        np.ndarray: The per-vertex color array with one row per vertex.
+    """
+    assert len(vert) > 0
+    if len(color) == 0:
+        color = np.tile(param.default_color, (len(vert), 1))
+    assert len(color) == len(vert)
+    return color
+
+
 class ThreejsPlotEngine:
     def __init__(self):
         self.buff = PlotBuffer()
@@ -490,12 +521,11 @@ class ThreejsPlotEngine:
         tri: np.ndarray,
         seg: np.ndarray,
         pts: np.ndarray,
-        param: PlotParam = PlotParam(),
+        param: Optional[PlotParam] = None,
     ):
-        assert len(vert) > 0
-        if len(color) == 0:
-            color = np.tile(param.default_color, (len(vert), 1))
-        assert len(color) == len(vert)
+        if param is None:
+            param = PlotParam()
+        color = _resolve_colors(vert, color, param)
 
         color = color.astype("float32")
         vert = vert.astype("float32")
@@ -706,12 +736,18 @@ class RasterizerEngine:
         tri: np.ndarray,
         seg: np.ndarray,
         pts: np.ndarray,
-        param: PlotParam = PlotParam(),
+        param: Optional[PlotParam] = None,
     ):
-        assert len(vert) > 0
-        if len(color) == 0:
-            color = np.tile(param.default_color, (len(vert), 1))
-        assert len(color) == len(vert)
+        if param is None:
+            param = PlotParam()
+        color = _resolve_colors(vert, color, param)
+
+        if len(pts):
+            warnings.warn(
+                "the software engine does not render point primitives; "
+                "use the threejs engine to display points",
+                stacklevel=2,
+            )
 
         self._vert = vert.copy()
         self._color = color.copy()
@@ -727,6 +763,7 @@ class RasterizerEngine:
         color: Optional[np.ndarray] = None,
         recompute_normals: bool = True,  # unused, for API compatibility
     ):
+        assert self._handle is not None, "call plot() before update()"
         if vert is not None:
             self._vert = vert.copy()
         if color is not None:

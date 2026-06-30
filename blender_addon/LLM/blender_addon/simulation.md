@@ -86,7 +86,7 @@ The panel is laid out as a single vertical column of buttons, status indicators,
 2. **Primary action buttons.** Below the connection row, the main buttons are stacked vertically in this order:
    - **Transfer**. Uploads geometry and parameters to the solver.
    - **Run**. Starts the simulation.
-   - **Resume**. Continues a paused or partially completed run.
+   - **Resume**. Opens a checkpoint picker and continues an interrupted run from a saved checkpoint, server-side, with no re-upload or rebuild.
    - **Update Params**. Re-uploads parameters without resending geometry.
    - **Fetch All Animation**. Downloads simulation results.
    - **Bake Animation** / **Bake Single Frame**. Convert the fetched cache into standard Blender keyframes (see Baking Animation).
@@ -102,7 +102,7 @@ The panel is laid out as a single vertical column of buttons, status indicators,
 
 5. **Progress bar.** During **Fetch All Animation**, a horizontal progress bar appears inline within the panel, showing download progress as a percentage alongside bandwidth statistics.
 
-Buttons that are not applicable to the current state are grayed out. For example, **Run** is grayed out until a successful **Transfer** has completed, and **Resume** is grayed out unless a simulation has been paused or partially run.
+Buttons that are not applicable to the current state are grayed out. For example, **Run** is grayed out until a successful **Transfer** has completed, and **Resume** is grayed out unless the run is **Resumable** (or failed) and the server still holds at least one saved checkpoint to continue from.
 
 ### The buttons
 
@@ -110,7 +110,7 @@ Buttons that are not applicable to the current state are grayed out. For example
 | ------------------------- | -------------------------------------------------------------------- |
 | **Transfer**              | Multi-stage pipeline: delete existing remote data → send mesh → send params → build. |
 | **Run**                   | Warns on stale mesh hash, clears existing animation, starts the solve. |
-| **Resume**                | Resumes a paused / partially-run simulation.                         |
+| **Resume**                | Opens a checkpoint picker, then continues the run already on the server from the chosen saved checkpoint. No re-upload, no rebuild; frames before the checkpoint are kept, the rest are overwritten. |
 | **Update Params**         | Re-encodes and uploads parameters, then rebuilds. No geometry resend. |
 | **Fetch All Animation**   | Downloads per-frame vertex data and applies it as PC2 animation.     |
 | **Clear Local Animation** | Removes simulation keyframes and cache modifiers. Preserves pin keyframes. |
@@ -145,12 +145,29 @@ If any sub-stage fails, the status line shows an error message in red text descr
 Once the simulation starts:
 
 1. The Solver-panel status line reads **"Simulation Running..."** and a blue progress bar appears on the **Backend Communicator** panel above, labeled with the same status.
-2. Live counters appear on **Backend Communicator** in two blocks. **Realtime Statistics** shows the current `frame`, `time-per-frame` and `time-per-step` wall-clock, `num-contact`, `newton-steps`, `pcg-iter`, and `stretch`. **Scene Info** tracks `Simulated Frames` against `Total Frames` so you can see how far through the run you are.
+2. Live counters appear on **Backend Communicator** in two blocks. **Realtime Statistics** shows the current `frame` plus the solver's emitted set: timing rows (`time-per-frame`, `time-per-step`, `matrix-assembly`, `pcg-linsolve`, `line-search`), count rows (`num-contact`, `newton-steps`, `pcg-iter`), ratio rows (`toi`, `toi-advanced`, `dyn-consumed`, and `stretch` when `max-sigma > 0`), and host-capability rows (`GPU Util`, `VRAM Usage`, `CPU Usage`, `RAM Usage`). **Scene Info** tracks `Simulated Frames` against `Total Frames` so you can see how far through the run you are. See "Realtime statistics" below for what each row means.
 3. When the simulation completes, the status line returns to **"Ready to Run"**, `Simulated Frames` reaches `Total Frames`, and a warning row (*N frames unfetched. Press "Fetch All Animation"*) appears above the Solver panel, directing you at the next step.
 
 Backend Communicator mid-solve: the status line reads *Simulation Running...*, the blue progress bar carries the same label, and the Realtime Statistics block updates in place as each frame lands. The Scene Info block below shows `Simulated Frames` ticking toward `Total Frames`.
 
-After the run finishes, the status line returns to *Ready to Run*, the live counters collapse into an Average Statistics block, and `Simulated Frames` matches `Total Frames`. The warning row above the Solver panel tells you exactly how many frames are still on the remote and which button to press next.
+After the run finishes, the status line returns to *Ready to Run*, the live **Realtime Statistics** block is replaced by an **Average Statistics** block (same row layout, averaged over the whole run), and `Simulated Frames` matches `Total Frames`. The warning row above the Solver panel tells you exactly how many frames are still on the remote and which button to press next.
+
+#### Realtime statistics
+
+While the solver runs, the **Realtime Statistics** block reports `frame` (mapped back to the Blender 1-based frame) plus the solver's emitted channel set, in panel row order:
+
+| Group  | Rows                                                          | Meaning                                                                                                  |
+| ------ | ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| Timing | `time-per-frame`, `time-per-step`, `matrix-assembly`, `pcg-linsolve`, `line-search` | Wall-clock for the whole frame, the latest step, and (averaged over the latest step's Newton iterations) matrix assembly, the PCG linear solve, and line search (CCD plus strain-limit CCD). |
+| Counts | `num-contact`, `newton-steps`, `pcg-iter`                    | Active contact count and PCG iteration count, each averaged over the latest step's Newton iterations, and the step's Newton-step count. |
+| Ratios | `toi`, `toi-advanced`, `dyn-consumed`, `stretch`             | Line-search time of impact (in (0, 1]), the advanced fractional step size, the dynamic contact-Hessian memory-usage ratio (in [0, 1]), and the max stretch. `stretch` appears only when `max-sigma` is readable and positive (no shells / rods means no row). |
+| Host   | `GPU Util`, `VRAM Usage`, `CPU Usage`, `RAM Usage`           | Remote host utilization. Each row is omitted when its probe fails (these are host capabilities, not solver values). |
+
+A channel that cannot be read renders as `N/A` so the row layout stays stable. Count rows abbreviate large numbers: under 1,000 prints the literal value, otherwise a `k` / `M` / `B` suffix (for example `12.44k`, `3.10M`, `1.05B`). The per-iteration channels (`matrix-assembly`, `pcg-linsolve`, `line-search`, `num-contact`, `pcg-iter`, `toi`) are shown as the average over the latest step's Newton iterations, not just the last iteration's value.
+
+When the run ends, the block becomes **Average Statistics**: the same rows averaged over the entire run, read back from the solver's on-disk channel logs. (The live-only ratio `dyn-consumed` does not appear in the average block.)
+
+An MCP agent reads the same numbers through `get_remote_status`, whose `server_response` field carries the raw status payload. `server_response.summary` is the live per-step map (present while simulating) and `server_response.average_summary` is the run-average map (present once frames exist), each keyed by the channel names above.
 
 #### Fetch
 
@@ -243,10 +260,21 @@ The behavior depends on *who* failed. Three cases cover the common ones; the tab
 | What happened                                                         | What the solver has on disk | What to do next                                                                                       |
 | --------------------------------------------------------------------- | --------------------------- | ----------------------------------------------------------------------------------------------------- |
 | You closed Blender or lost the network mid-run. Solver kept running.  | Everything up to "now".     | Reopen the .blend, **Connect**, **Fetch All Animation**. If still running, leave it. If it finished while you were gone, fetch picks up the rest. |
-| You clicked **Terminate** or killed the run.                          | Frames up to terminate.     | The solver transitions to **Resumable**. Click **Resume** to continue from the last completed frame, or **Run** to clear the animation and restart. |
-| Solver process crashed (segfault, OOM, server reboot).                | Whatever was auto-saved (if **Auto Save** was on) or just the frames already written. | Reconnect and **Start Server**. If auto-save snapshots exist, the solver comes up **Resumable** and **Resume** picks up from the last snapshot. If not, press **Run** to re-simulate. |
+| You clicked **Terminate** or killed the run.                          | Frames up to terminate.     | The solver transitions to **Resumable**. Click **Resume** to continue from a saved checkpoint, or **Run** to clear the animation and restart. |
+| Solver process crashed (segfault, OOM, server reboot).                | Whatever was auto-saved (if **Auto Save** was on) or just the frames already written. | Reconnect and **Start Server**. If auto-save snapshots exist, the solver comes up **Resumable** and **Resume** picks up from a saved checkpoint. If not, press **Run** to re-simulate. |
 
 **Auto Save** is what distinguishes "lose a few seconds of solve" from "redo the last hour" in the third case. It's on the Scene Configuration → Advanced Params panel; enable it before long runs and leave the default interval for most scenes.
+
+#### How Resume works
+
+**Resume** is enabled whenever the server still holds at least one saved checkpoint, which covers both the **Resumable** state and a **failed** simulation (a failed-but-resumable run still shows the Resume button so you can pick up from the last good checkpoint). Clicking it opens a checkpoint picker listing the server's saved checkpoint frames; choose one and the solver continues that run from the checkpoint, server-side, with no re-upload and no rebuild. Frames before the chosen checkpoint are kept; the rest are overwritten.
+
+Because Resume continues the build already on the server rather than re-encoding, it runs the same drift guards as **Run** before opening the picker, and refuses when the live scene no longer matches what the server last echoed:
+
+- **Geometry drift**: resume is not possible. The cached state no longer matches the mesh, so press **Transfer** then **Run** for a fresh simulation.
+- **Parameter drift**: press **Update Params** first, then resume. **Update Params** rebuilds with the existing frames preserved, so it keeps the saved checkpoints intact; new material edits do not retroactively apply to the already-simulated frames.
+
+To retain every checkpoint (required for resuming from older frames, not just the latest), leave **Keep Saved States** at its default `0` (keep all) on the Scene Configuration → Advanced Params panel. Enable **Save State on Finish** to keep the final-frame result resumable even when auto-save is off.
 
 If **Fetch** finds a **session ID mismatch** at reconnect, the remote project on disk is not the one your .blend remembers (a fresh server start, a different cloud host, or a colleague's run). Either **Transfer** to replace the remote with your current scene, or connect to the host where the original run lives.
 
@@ -289,7 +317,7 @@ UNDER THE HOOD:
 | --------------------- | ---------------------------- |
 | Transfer              | `solver.transfer`            |
 | Run                   | `solver.run`                 |
-| Resume                | `solver.resume`              |
+| Resume                | `solver.resume_from`         |
 | Update Params         | `solver.update_params`       |
 | Fetch All Animation   | `solver.fetch_remote_data`   |
 | Clear Local Animation | `solver.clear_animation`     |
@@ -299,6 +327,8 @@ UNDER THE HOOD:
 | Abort                 | `ssh.abort`                  |
 
 Any `solver.*` method in Python that is not explicitly defined on the solver proxy is forwarded to the matching Blender operator, which is why the Python API above maps one-to-one onto this table.
+
+The Resume button is `solver.resume_from`: it opens the checkpoint picker and continues from the chosen saved checkpoint. There is also `solver.resume`, the no-dialog variant that continues from the last completed frame without prompting; both share the same poll (enabled in **Resumable** or **failed-but-resumable** states with at least one saved checkpoint) and the same geometry/parameter drift guards.
 
 **Mesh hash**
 

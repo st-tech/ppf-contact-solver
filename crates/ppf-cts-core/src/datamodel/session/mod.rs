@@ -28,8 +28,9 @@ pub mod scripts;
 pub mod types;
 
 pub use format::{
-    convert_integer, convert_integer_optional, convert_time, convert_time_optional,
-    rstrip_newlines, session_violations_message,
+    convert_average_count, convert_average_count_optional, convert_integer, convert_integer_optional,
+    convert_ratio_optional, convert_time, convert_time_optional, format_stretch, rstrip_newlines,
+    session_violations_message,
 };
 pub use frames::{
     latest_vertex_frame, list_saved_states, list_vertex_frames, read_vertex_bin,
@@ -37,7 +38,8 @@ pub use frames::{
 };
 pub use log::{
     analyze_solver_error, average_summary_from_disk, float_or_int_pair, format_log_average_summary,
-    format_log_summary, latest_log_value, log_filename_path, log_tail_path, read_lines_with_newlines,
+    format_log_summary, latest_log_value, latest_step_average, log_filename_path, log_tail_path,
+    read_lines_with_newlines,
     read_log_numbers, read_log_tail, read_log_tail_joined, solver_failed_short_message,
     solver_failed_to_start_message, LogStream,
 };
@@ -46,16 +48,16 @@ pub use log::{
 // `average_summary_from_disk`), the latter test-only.
 pub use paths::{
     autogenerate_session_name, build_symlink_name, command_path, delete_session_dir,
-    export_base_path_for, fixed_session_dir_layout, is_saving_in_progress, marker_exists,
+    delete_session_dir_keep_output, export_base_path_for, fixed_session_dir_layout,
+    is_saving_in_progress, marker_exists,
     max_strain_limit_default_zero, nvidia_smi_text, param_export_to_disk, param_summary_lines,
     prepare_zip_target, project_resumable, project_root_from_frontend_file,
     save_and_quit_file_path, stdout_error_log_paths, symlink_target_path, touch_save_and_quit,
     validate_driver_version, zip_target_path,
 };
-// `cbor_scalar_keep_indices` and `FixedSessionDirLayout` have no
-// callers outside `paths.rs`; reach them via
-// `crate::datamodel::session::paths::FOO` if a future caller needs
-// them.
+// `FixedSessionDirLayout` has no callers outside `paths.rs`; reach it
+// via `crate::datamodel::session::paths::FixedSessionDirLayout` if a
+// future caller needs it.
 pub use scripts::{
     ffmpeg_video_command, locate_bundled_ffmpeg, shell_command_script, solver_subprocess_command,
     write_shell_command_script,

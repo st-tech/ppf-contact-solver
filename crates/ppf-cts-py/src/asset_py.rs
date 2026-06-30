@@ -82,6 +82,21 @@ fn max_index_of_array(e: &Bound<'_, PyAny>) -> PyResult<i128> {
     if let Ok(a) = e.extract::<numpy::PyReadonlyArray1<i64>>() {
         return Ok(a.as_array().iter().copied().max().unwrap_or(0) as i128);
     }
+    if let Ok(a) = e.extract::<numpy::PyReadonlyArray1<u64>>() {
+        return Ok(a.as_array().iter().copied().max().unwrap_or(0) as i128);
+    }
+    if let Ok(a) = e.extract::<numpy::PyReadonlyArray1<i16>>() {
+        return Ok(a.as_array().iter().copied().max().unwrap_or(0) as i128);
+    }
+    if let Ok(a) = e.extract::<numpy::PyReadonlyArray1<u16>>() {
+        return Ok(a.as_array().iter().copied().max().unwrap_or(0) as i128);
+    }
+    if let Ok(a) = e.extract::<numpy::PyReadonlyArray1<i8>>() {
+        return Ok(a.as_array().iter().copied().max().unwrap_or(0) as i128);
+    }
+    if let Ok(a) = e.extract::<numpy::PyReadonlyArray1<u8>>() {
+        return Ok(a.as_array().iter().copied().max().unwrap_or(0) as i128);
+    }
     Err(PyTypeError::new_err(
         "check_bounds: unsupported array dtype (expected integer)",
     ))
@@ -152,6 +167,9 @@ enum AssetEntry {
         v: Py<PyAny>,
         e: Py<PyAny>,
     },
+    Points {
+        v: Py<PyAny>,
+    },
     Stitch {
         ind: Py<PyAny>,
         w: Py<PyAny>,
@@ -164,9 +182,47 @@ impl AssetEntry {
             AssetEntry::Tri { .. } => "tri",
             AssetEntry::Tet { .. } => "tet",
             AssetEntry::Rod { .. } => "rod",
+            AssetEntry::Points { .. } => "points",
             AssetEntry::Stitch { .. } => "stitch",
         }
     }
+}
+
+/// Populate `dict` with this entry's per-variant array keys
+/// (V/F/UV, V/F/T, V/E, Ind/W). Single source of truth for the key
+/// set shared by `get()` and `snapshot()`; the inverse reader lives in
+/// `restore()`, keyed on "kind" and routed through `add_*`.
+fn write_entry_arrays(
+    py: Python<'_>,
+    entry: &AssetEntry,
+    dict: &Bound<'_, PyDict>,
+) -> PyResult<()> {
+    match entry {
+        AssetEntry::Tri { v, f, uv } => {
+            dict.set_item("V", v.clone_ref(py))?;
+            dict.set_item("F", f.clone_ref(py))?;
+            if let Some(uv) = uv {
+                dict.set_item("UV", uv.clone_ref(py))?;
+            }
+        }
+        AssetEntry::Tet { v, f, t } => {
+            dict.set_item("V", v.clone_ref(py))?;
+            dict.set_item("F", f.clone_ref(py))?;
+            dict.set_item("T", t.clone_ref(py))?;
+        }
+        AssetEntry::Rod { v, e } => {
+            dict.set_item("V", v.clone_ref(py))?;
+            dict.set_item("E", e.clone_ref(py))?;
+        }
+        AssetEntry::Points { v } => {
+            dict.set_item("V", v.clone_ref(py))?;
+        }
+        AssetEntry::Stitch { ind, w } => {
+            dict.set_item("Ind", ind.clone_ref(py))?;
+            dict.set_item("W", w.clone_ref(py))?;
+        }
+    }
+    Ok(())
 }
 
 /// Rust-side asset store. Keys are asset names, values are
@@ -216,28 +272,7 @@ impl AssetRegistry {
             PyKeyError::new_err(format!("Asset {name} does not exist"))
         })?;
         let d = PyDict::new(py);
-        match entry {
-            AssetEntry::Tri { v, f, uv } => {
-                d.set_item("V", v.clone_ref(py))?;
-                d.set_item("F", f.clone_ref(py))?;
-                if let Some(uv) = uv {
-                    d.set_item("UV", uv.clone_ref(py))?;
-                }
-            }
-            AssetEntry::Tet { v, f, t } => {
-                d.set_item("V", v.clone_ref(py))?;
-                d.set_item("F", f.clone_ref(py))?;
-                d.set_item("T", t.clone_ref(py))?;
-            }
-            AssetEntry::Rod { v, e } => {
-                d.set_item("V", v.clone_ref(py))?;
-                d.set_item("E", e.clone_ref(py))?;
-            }
-            AssetEntry::Stitch { ind, w } => {
-                d.set_item("Ind", ind.clone_ref(py))?;
-                d.set_item("W", w.clone_ref(py))?;
-            }
-        }
+        write_entry_arrays(py, entry, &d)?;
         Ok(d)
     }
 
@@ -279,6 +314,14 @@ impl AssetRegistry {
         Ok(())
     }
 
+    fn add_points(&mut self, name: &str, v: Py<PyAny>) -> PyResult<()> {
+        if self.assets.contains_key(name) {
+            return Err(PyValueError::new_err(format!("name '{name}' already exists")));
+        }
+        self.assets.insert(name.to_string(), AssetEntry::Points { v });
+        Ok(())
+    }
+
     fn add_stitch(&mut self, name: &str, ind: Py<PyAny>, w: Py<PyAny>) -> PyResult<()> {
         if self.assets.contains_key(name) {
             return Err(PyValueError::new_err(format!("name '{name}' already exists")));
@@ -296,28 +339,7 @@ impl AssetRegistry {
             let body = PyDict::new(py);
             body.set_item("kind", entry.kind())?;
             let arrays = PyDict::new(py);
-            match entry {
-                AssetEntry::Tri { v, f, uv } => {
-                    arrays.set_item("V", v.clone_ref(py))?;
-                    arrays.set_item("F", f.clone_ref(py))?;
-                    if let Some(uv) = uv {
-                        arrays.set_item("UV", uv.clone_ref(py))?;
-                    }
-                }
-                AssetEntry::Tet { v, f, t } => {
-                    arrays.set_item("V", v.clone_ref(py))?;
-                    arrays.set_item("F", f.clone_ref(py))?;
-                    arrays.set_item("T", t.clone_ref(py))?;
-                }
-                AssetEntry::Rod { v, e } => {
-                    arrays.set_item("V", v.clone_ref(py))?;
-                    arrays.set_item("E", e.clone_ref(py))?;
-                }
-                AssetEntry::Stitch { ind, w } => {
-                    arrays.set_item("Ind", ind.clone_ref(py))?;
-                    arrays.set_item("W", w.clone_ref(py))?;
-                }
-            }
+            write_entry_arrays(py, entry, &arrays)?;
             body.set_item("arrays", arrays)?;
             out.set_item(name, body)?;
         }
@@ -325,9 +347,14 @@ impl AssetRegistry {
     }
 
     /// Restore the registry from a `snapshot()` dict. Replays each
-    /// entry through the typed adders so the same bounds-checking
-    /// path runs as on a fresh upload. Mirrors the dispatch loop of
-    /// `frontend/_asset_.py:AssetManager.__setstate__`.
+    /// entry through the typed adders, which perform only the
+    /// name-collision check; it deliberately does NOT re-run the
+    /// numeric bounds/column validators (`check_bounds`/`check_cols`/
+    /// `check_tri_v_cols`) because the arrays were already validated at
+    /// upload time and snapshot/restore is a trusted pickle round-trip.
+    /// It does still validate the structural integrity of the snapshot
+    /// dict (kind dispatch, required-key presence, dict types). Mirrors
+    /// the dispatch loop of `frontend/_asset_.py:AssetManager.__setstate__`.
     fn restore<'py>(
         &mut self,
         _py: Python<'py>,
@@ -386,6 +413,13 @@ impl AssetRegistry {
                         .ok_or_else(|| PyKeyError::new_err("rod missing 'E'"))?
                         .unbind();
                     self.add_rod(&name, v, e)?;
+                }
+                "points" => {
+                    let v = arrays
+                        .get_item("V")?
+                        .ok_or_else(|| PyKeyError::new_err("points missing 'V'"))?
+                        .unbind();
+                    self.add_points(&name, v)?;
                 }
                 "stitch" => {
                     let ind = arrays

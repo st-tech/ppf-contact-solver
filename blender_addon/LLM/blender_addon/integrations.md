@@ -373,7 +373,7 @@ When the user *does* request something material-specific (e.g. "make this cloth 
 If the user asks for a stiff, low-stretch cloth, the common recipe is:
 
 - `enable_strain_limit = true`
-- `strain_limit = 0.05` (≈ 5 %)
+- `strain_limit_percent = 5.0` (5% allowed stretch)
 
 The rest of the defaults can stay as-is unless the user calls them out. See Strain Limit for the semantics.
 
@@ -456,7 +456,7 @@ See Dynamic Parameters for the semantics of `hold()` vs. `change()`.
 ### Groups
 
 ```python
-cloth = solver.create_group("Cloth", type="SHELL")   # SOLID | SHELL | ROD | STATIC
+cloth = solver.create_group("Cloth", type="SHELL")   # SOLID | SHELL | ROD | STATIC | PDRD | SAND
 cloth.add("Shirt", "Pants")
 cloth.param.shell_density       = 0.5
 cloth.param.shell_young_modulus = 50.0

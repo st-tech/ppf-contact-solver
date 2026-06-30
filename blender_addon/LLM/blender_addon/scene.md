@@ -6,12 +6,12 @@ How the solver sees your Blender scene: as a collection of object groups that ca
 
 How the solver sees your Blender scene: as a collection of object groups that carry type, material, and assigned meshes, plus a Static variant for non-deforming colliders and props. Sub-pages: object_groups, static_objects.
 
-WARNING: All objects must not intersect and must not be self-intersecting at the start of the simulation. The solver rejects rest geometry where any face penetrates another face (on the same object or on a different one), and it cannot recover from a start state that is already inside out. Before Transfer, confirm that every mesh is cleanly separated from every other mesh and that no mesh folds through itself. This rule applies to every object type: Solid, Shell, Rod, and Static.
+WARNING: All objects must not intersect and must not be self-intersecting at the start of the simulation. The solver rejects rest geometry where any face penetrates another face (on the same object or on a different one), and it cannot recover from a start state that is already inside out. Before Transfer, confirm that every mesh is cleanly separated from every other mesh and that no mesh folds through itself. This rule applies to every object type: Solid, Shell, Rod, PDRD, and Static.
 
 Accepted geometry:
 
-- Mesh objects may contain triangles, quads, or any mix of the two; n-gons are not supported, so triangulate those before assigning.
-- Solid groups are tetrahedralized internally by fTetWild (https://github.com/wildmeshing/fTetWild), which is tolerant of input quality: the surface does not strictly need to be a closed manifold, and small cracks or near-duplicate vertices are handled automatically.
+- Mesh objects may contain triangles, quads, N-gons, or any mix. Polygons are triangulated for the solver via Blender's `loop_triangles`, so the triangles the solver runs on match the tessellation Blender shows in the viewport; no manual triangulation is required.
+- Solid groups are tetrahedralized internally before simulation, with a per-object backend choice (see the Tetrahedralizer box in parameters.md). The default, fTetWild (https://github.com/wildmeshing/fTetWild), is tolerant of input quality: the surface does not strictly need to be a closed manifold, and small cracks or near-duplicate vertices are handled automatically, but it resamples the surface. TetGen (https://wias-berlin.de/software/tetgen/) is the alternative: it preserves the input surface exactly (a 1-1 input-to-tet-surface vertex map) but requires a clean, closed, manifold mesh.
 - Rod groups additionally accept Bezier curve objects; each control point becomes one rod vertex (edge length therefore equals CP spacing) and the simulation evolves CP positions directly. NURBS curves are sampled per arc at four `t` values because NURBS CPs are off-curve.
 
 ## Object Groups
@@ -41,20 +41,24 @@ Click Create Group at the top of the panel. A new group box is inserted beneath 
 
 Figure: The panel right after a fresh Create Group click: a single `Group 1` box with the default Solid type, an empty object list, and default material parameters.
 
-### The four group types
+### The group types
 
 | Type       | Description                       | Default model    | Available models                           |
 | ---------- | --------------------------------- | ---------------- | ------------------------------------------ |
-| **Shell**  | Thin surfaces (cloth, fabric)     | Baraff-Witkin    | Baraff-Witkin, Stable NeoHookean, ARAP     |
+| **Shell**  | Thin surfaces (cloth, fabric)     | Baraff-Witkin    | Baraff-Witkin, ARAP                        |
 | **Solid**  | Volumetric bodies                 | ARAP             | Stable NeoHookean, ARAP                    |
 | **Rod**    | 1D structures (ropes, wires)      | ARAP             | ARAP only                                  |
+| **PDRD**    | Rigid bodies                      | Rigid            | Rigid only                                 |
+| **Sand**   | Granular bodies (sand, loose grains) | n/a (granular)   | n/a                                     |
 | **Static** | Non-deforming collision objects   | N/A              | N/A                                        |
 
 The type controls which material parameters are relevant and which material models are available. Static groups collapse to just Friction and Contact rows and replace the pin region with a Transform sub-box that holds per-object Move By / Spin / Scale ops (an alternative to Blender transform keyframes). See Static Objects for the full surface.
 
+PDRD (Painless Differentiable Rotation Dynamics) groups simulate exactly-rigid bodies. The surface mesh is moved as a single best-fit rigid transform (translation plus rotation), so there is no tetrahedralization: the body is driven directly from the surface mesh, unlike Solid groups. PDRD bodies collide, pin, and stitch like the other dynamic types. A PDRD group has no Young's modulus, Poisson ratio, bending, shrink, strain limit, or inflate; it is not Rayleigh-damped. It carries only Density (`pdrd_density`, default 100, kg/m³; mass is the density times the enclosed volume of the surface mesh), Friction, and the Contact rows, plus a **per-object** Hinge joint. The Hinge is set on each assigned object (a PDRD group can hold several bodies, e.g. a gear train, each on its own axle): `pdrd_hinge_enable` pins that body and locks its rotation to one principal (PCA) axis chosen by `pdrd_hinge_axis` (`"0"` largest extent, `"1"` middle, `"2"` thinnest); the viewport shows a cyan ring around that axle. Hinges are the building block for gears: hinge each gear to its axle and contact between teeth transmits the torque, so meshing gears counter-rotate with no explicit gear-ratio constraint.
+
 Rod groups additionally accept Blender curve objects. For Bezier curves each control point becomes one rod vertex (1:1 mapping; edge length equals CP spacing), so you control simulation resolution by adding or removing CPs. NURBS curves are sampled per arc at four `t` values (NURBS CPs are off-curve, so interior samples are needed for the solver to track the arc shape).
 
-Figure: Reference matrix of the four types. Shell (green), Solid (red), Rod (yellow), Static (blue). Accepted object types: Shell/Solid/Static take meshes; Rod takes meshes plus Bezier curves. Default material model: Baraff-Witkin for Shell, ARAP for Solid and Rod, none for Static. Available models: Shell offers Baraff-Witkin / Stable NeoHookean / ARAP; Solid offers Stable NeoHookean and ARAP; Rod offers ARAP only; Static none. Density unit: kg/m² for Shell, kg/m³ for Solid, kg/m for Rod. Young's Modulus: Shell/Solid/Rod, not Static. Poisson's Ratio: Shell and Solid. Bend Stiffness: Shell (Rod inherits). Shrink: Shell anisotropic X/Y, Solid uniform, Rod/Static none. Strain Limit: Shell and Rod. Inflate: Shell only. Friction and Contact Gap: all four. Pin storage: Blender vertex groups for Shell/Solid, internal `_pin_name` custom property on curves for Rod, none for Static (uses a Transform sub-box). Default overlay colors: green, red, yellow, blue. Static is the thinnest column because the solver only uses it for collision; no material model and no parameters beyond Friction and Contact Gap. The Material Params box reshapes itself automatically to match the column.
+Figure: Reference matrix of the types. Shell (green), Solid (red), Rod (yellow), PDRD (magenta), Sand (tan), Static (blue). Accepted object types: Shell/Solid/PDRD/Sand/Static take meshes; Rod takes meshes plus Bezier curves. Default material model: Baraff-Witkin for Shell, ARAP for Solid and Rod, Rigid for PDRD, none for Sand or Static. Available models: Shell offers Baraff-Witkin / ARAP; Solid offers Stable NeoHookean and ARAP; Rod offers ARAP only; PDRD offers the rigid model only; Sand and Static none. Density unit: kg/m² for Shell, kg/m³ for Solid and PDRD, kg/m for Rod. Young's Modulus: Shell/Solid/Rod, not PDRD or Static. Poisson's Ratio: Shell and Solid. Bend Stiffness: Shell (Rod inherits). Shrink: Shell anisotropic X/Y, Solid uniform, Rod/PDRD/Static none. Strain Limit: Shell and Rod. Inflate: Shell only. Rayleigh deformation damping: Shell/Solid/Rod; bending damping: Shell and Rod only; PDRD not damped. Friction and Contact Gap: all types. Pin storage: Blender vertex groups for Shell/Solid/PDRD, internal `_pin_name` custom property on curves for Rod, none for Static (uses a Transform sub-box). Default overlay colors: green, red, yellow, magenta, blue. Static is the thinnest column because the solver only uses it for collision; no material model and no parameters beyond Friction and Contact Gap. The Material Params box reshapes itself automatically to match the column.
 
 WARNING: You can have at most 32 active groups in a scene. If you need more, fold objects with similar materials into a shared group; there's no cost to many objects sharing one group.
 
@@ -121,6 +125,7 @@ Each group gets a default overlay color based on its type:
 | **Solid**  | red `(0.75, 0, 0)`    |
 | **Shell**  | green `(0, 0.75, 0)`  |
 | **Rod**    | yellow `(0.75, 0.75, 0)` |
+| **PDRD**    | magenta `(0.75, 0, 0.75)` |
 | **Static** | blue `(0, 0, 0.75)`   |
 
 ### Duplicating a group
@@ -145,6 +150,7 @@ from bl_ext.user_default.ppf_contact_solver.ops.api import solver
 
 # Create groups of each type.
 cloth = solver.create_group("Cloth", "SHELL")
+prop  = solver.create_group("Prop",  "PDRD")     # exactly-rigid body
 body  = solver.create_group("Body",  "STATIC")
 
 # Assign Blender objects by name.
@@ -263,7 +269,7 @@ Static groups expose only the contact-relevant subset of material parameters. Ev
 | **Contact Gap Ratio**                | `contact_gap_rat`                 | 0.001   | Contact gap as a fraction of the group's bounding-box diagonal.       |
 | **Contact Offset Ratio**             | `contact_offset_rat`              | 0.0     | Contact offset as a fraction of the group's bounding-box diagonal.    |
 
-See Material Parameters for the full story on absolute vs ratio contact gap, and `Static` in the shipped material-profile TOML for a minimal example.
+See Material Parameters for the full story on absolute vs ratio contact gap, and the `Static` profile example there for a minimal collider material.
 
 NOTE: Static groups have no collision windows. The Collision Active Duration Windows control, which mutes contact on dynamic objects for chosen frame ranges, is not exposed for Static groups; their meshes collide for the entire timeline. If you need a Static collider to come and go mid-shot, animate its visibility, drive it out of the way with a Static op, or use a per-collider Active Duration on an Invisible Collider instead.
 

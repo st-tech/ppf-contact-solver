@@ -122,6 +122,8 @@ _SCENE_PARAM_FIELDS = {
     "constraint_ghat": "constraint_ghat",
     "cg_max_iter": "cg_max_iter",
     "cg_tol": "cg_tol",
+    "precond": "precond",
+    "schwarz_levels": "schwarz_levels",
     "include_face_mass": "include_face_mass",
     "disable_contact": "disable_contact",
 }
@@ -144,6 +146,7 @@ _MATERIAL_PARAM_FIELDS = {
     "solid_young_modulus": "solid_young_modulus",
     "shell_young_modulus": "shell_young_modulus",
     "rod_young_modulus": "rod_young_modulus",
+    "young_mod_density_normalized": "young_mod_density_normalized",
     "solid_poisson_ratio": "solid_poisson_ratio",
     "shell_poisson_ratio": "shell_poisson_ratio",
     "friction": "friction",
@@ -157,7 +160,7 @@ _MATERIAL_PARAM_FIELDS = {
     "shrink_x": "shrink_x",
     "shrink_y": "shrink_y",
     "enable_strain_limit": "enable_strain_limit",
-    "strain_limit": "strain_limit",
+    "strain_limit_percent": "strain_limit_percent",
     "enable_inflate": "enable_inflate",
     "inflate_pressure": "inflate_pressure",
     "stitch_stiffness": "stitch_stiffness",
@@ -168,6 +171,7 @@ _MATERIAL_PARAM_FIELDS = {
     "bend_plasticity": "bend_plasticity",
     "bend_plasticity_threshold": "bend_plasticity_threshold",
     "bend_rest_angle_source": "bend_rest_angle_source",
+    "bend_rest_from_reference": "bend_rest_from_reference",
     "use_collision_windows": "use_collision_windows",
 }
 
@@ -487,8 +491,6 @@ def read_pin_profiles(object_group) -> dict:
         _, vg_name = decode_vertex_group_identifier(pin_item.name)
         if vg_name:
             entry["vg_name"] = vg_name
-        if pin_item.vg_hash:
-            entry["vg_hash"] = pin_item.vg_hash
         result[pin_item.name] = entry
     return {"pins": result} if result else {}
 

@@ -14,8 +14,16 @@
 - **(Optional) paramiko / docker-py.** Needed only for SSH and Docker
   connections. You do not need to install them yourself. When you pick an SSH
   or Docker server type without the module present, the main panel surfaces an
-  **Install Paramiko** / **Install Docker-Py** button that installs into the
-  add-on's vendored `lib/` directory.
+  **Install Paramiko** / **Install Docker-Py** button that installs into
+  Blender's user `scripts/addons/modules` directory.
+- **cbor2 (bundled).** Every Transfer is encoded with cbor2, so the add-on
+  needs it. It ships as a bundled wheel that is installed for you when you
+  install the extension, so there is normally nothing to do. If the bundled
+  wheel is missing (for example after a manual file copy of the add-on, or a
+  Blender version migration that did not reinstall the wheels), an **Install
+  cbor2 to Add-on Directory** button appears in the **Backend Communicator**
+  panel. Clicking it installs cbor2 into Blender's user
+  `scripts/addons/modules` directory.
 
 :::{note}
 The solver binary itself is not shipped with the add-on. You build or deploy
