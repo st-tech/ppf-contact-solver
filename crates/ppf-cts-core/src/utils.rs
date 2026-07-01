@@ -31,8 +31,37 @@ use sysinfo::Signal;
 /// `solver_busy` and `terminate_solver` filter on this.
 pub const SOLVER_PROCESS_NAME: &str = "ppf-contact";
 
-/// Minimum supported GPU compute-capability (Pascal = sm_60).
-pub const MIN_SM: u32 = 60;
+/// Compute-capability targets (encoded `major*10 + minor`, so sm_86 == 86 and
+/// sm_120 == 120) for which the CUDA solver ships a native SASS cubin. This
+/// list MUST stay in sync with the `-gencode ...,code=sm_XX` lines in
+/// `crates/ppf-cts-solver/src/cpp/Makefile` and `build-win-native/build.bat`.
+/// Device LTO embeds no JIT-able PTX, so a GPU with no matching cubin cannot
+/// launch any kernel (it dies with "named symbol not found"); `check_gpu` gates
+/// launches against this list.
+pub const SUPPORTED_SM: &[u32] = &[86, 89, 90, 100, 120];
+
+/// True iff the solver ships a cubin that can run natively on a device of
+/// compute capability `sm` (encoded `major*10 + minor`). SASS is binary
+/// compatible forward within a major version only, so a shipped cubin `c` runs
+/// on device `d` iff they share a major version and `c`'s minor `<=` `d`'s minor
+/// (e.g. the sm_86 cubin also covers sm_87 and sm_89, but not sm_80). A brand
+/// new major version, or a minor below every cubin we ship for that major, is
+/// unsupported until a cubin is added and the solver is rebuilt.
+pub fn sm_is_supported(sm: u32) -> bool {
+    SUPPORTED_SM
+        .iter()
+        .any(|&c| c / 10 == sm / 10 && c % 10 <= sm % 10)
+}
+
+/// Human-readable `sm_86, sm_89, ...` rendering of [`SUPPORTED_SM`] for error
+/// messages.
+fn supported_sm_list() -> String {
+    SUPPORTED_SM
+        .iter()
+        .map(|s| format!("sm_{s}"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
 
 // ---------------------------------------------------------------------------
 // is_fast_check / set_fast_check
@@ -85,13 +114,15 @@ pub enum GpuError {
     #[error("nvidia-smi failed. An NVIDIA GPU with CUDA support is required.")]
     NvidiaSmiFailed,
     #[error(
-        "GPU '{name}' has compute capability sm_{actual}, but sm_{required} or higher is required. \
-         Please use a newer GPU (Pascal architecture or later)."
+        "GPU '{name}' has compute capability sm_{actual}, which this solver build does not \
+         support. Supported architectures: {supported}. The CUDA kernels ship as native code \
+         per architecture with no JIT fallback, so a GPU outside this set cannot run; a newer \
+         GPU generation requires a solver rebuild with its architecture added."
     )]
-    SmTooLow {
+    SmUnsupported {
         name: String,
         actual: u32,
-        required: u32,
+        supported: String,
     },
     #[error("No NVIDIA GPU detected. An NVIDIA GPU is required to run the solver.")]
     NoGpuDetected,
@@ -130,14 +161,14 @@ pub fn check_gpu() -> Result<(), GpuError> {
             Ok(v) => v,
             Err(_) => continue,
         };
-        if sm_ver < MIN_SM {
-            return Err(GpuError::SmTooLow {
+        if !sm_is_supported(sm_ver) {
+            return Err(GpuError::SmUnsupported {
                 name: gpu_name.to_string(),
                 actual: sm_ver,
-                required: MIN_SM,
+                supported: supported_sm_list(),
             });
         }
-        return Ok(()); // first GPU passes the bar.
+        return Ok(()); // first GPU has a runnable cubin.
     }
     Err(GpuError::NoGpuDetected)
 }
@@ -615,17 +646,36 @@ mod tests {
         let f = format!("{}", GpuError::NvidiaSmiFailed);
         assert!(f.contains("nvidia-smi failed"));
 
-        let lo = format!(
+        let un = format!(
             "{}",
-            GpuError::SmTooLow {
-                name: "Tesla K40".into(),
-                actual: 35,
-                required: 60,
+            GpuError::SmUnsupported {
+                name: "GeForce GTX 1660".into(),
+                actual: 75,
+                supported: supported_sm_list(),
             }
         );
-        assert!(lo.contains("Tesla K40"));
-        assert!(lo.contains("sm_35"));
-        assert!(lo.contains("sm_60"));
-        assert!(lo.contains("Pascal"));
+        assert!(un.contains("GeForce GTX 1660"));
+        assert!(un.contains("sm_75")); // the detected, unsupported arch
+        assert!(un.contains("sm_86")); // the supported set is spelled out
+        assert!(un.contains("sm_120"));
+    }
+
+    #[test]
+    fn sm_coverage_uses_minor_compat_within_major() {
+        // A shipped cubin covers its own arch and higher minors in the same
+        // major (SASS forward minor-compat), but never a different major or a
+        // lower minor.
+        assert!(sm_is_supported(86)); // Ampere (RTX 30, A40)
+        assert!(sm_is_supported(87)); // Jetson Orin: sm_86 cubin, 6 <= 7
+        assert!(sm_is_supported(89)); // Ada (RTX 40, L40S)
+        assert!(sm_is_supported(90)); // Hopper (H100)
+        assert!(sm_is_supported(100)); // Blackwell datacenter (B200)
+        assert!(sm_is_supported(120)); // Blackwell consumer (RTX 50-series)
+        assert!(sm_is_supported(121)); // hypothetical Blackwell minor bump
+
+        assert!(!sm_is_supported(80)); // A100: same major but minor 0 < 6
+        assert!(!sm_is_supported(75)); // Turing (RTX 20 / GTX 16)
+        assert!(!sm_is_supported(61)); // Pascal (GTX 10)
+        assert!(!sm_is_supported(130)); // future major, no cubin shipped yet
     }
 }

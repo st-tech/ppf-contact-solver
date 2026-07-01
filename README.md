@@ -1,7 +1,7 @@
 # ZOZO's Contact Solver 🫶
 
 A contact solver for physics-based simulations
-involving 👚 shells, 🪵 solids, 🪢 rods, 🧱 rigid bodies and ⏳ sand. Started as an in-house physics engine at [ZOZO, Inc.](https://corp.zozo.com/en/), the largest fashion e-commerce company in Japan, and now evolving with the community.
+involving 👚 shells, 🪵 solids, 🪢 rods, 🧱 rigid bodies and ⏳ sand. Started as an in-house physics engine at [ZOZO, Inc.](https://corp.zozo.com/en/), the largest fashion e-commerce company in Japan, and now evolving with the community. All open-source.
 
 [![Getting Started](https://github.com/st-tech/ppf-contact-solver/actions/workflows/getting-started.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/getting-started.yml)
 [![All Examples](https://github.com/st-tech/ppf-contact-solver/actions/workflows/run-all-once.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/run-all-once.yml)

@@ -169,11 +169,14 @@ REM Compiler flags. Device link-time optimization (LTO), matching the Linux
 REM Makefile: compile each TU to an LTO intermediate (code=lto_86), then device-
 REM link with -dlto so cross-TU device callees (notably barrier::compute_stiffness)
 REM inline into the contact-Hessian embed kernels, roughly halving contact
-REM matrix-assembly cost. The .dll carries an sm_86 (Ampere / RTX 30-series, the
-REM CUDA 12.8 floor) SASS anchor plus the LTO-optimized compute_86 PTX, which the
-REM driver JITs and caches for newer GPUs (sm_89, sm_90, ...). nvcc
-REM forbids -dlto beside -gencode at compile (hence code=lto_86), but needs both
-REM at the link.
+REM matrix-assembly cost. The LTO IR is compute_86, so sm_86 (Ampere) is the floor.
+REM IMPORTANT: device LTO CANNOT embed a JIT-able PTX (the -dlto link lowers its IR
+REM straight to SASS; a code=compute_XX request is silently dropped), so the .dll
+REM is frozen to the exact cubins we ship, no forward-JIT fallback. We therefore
+REM emit one native SASS cubin per supported arch at the link (see the -gencode
+REM list below) and add a new entry, then rebuild, when a new GPU generation ships.
+REM nvcc forbids -dlto beside -gencode at compile (hence code=lto_86), but needs
+REM the full -gencode list at the link.
 set NVCC_COMMON=-std=c++17 --expt-relaxed-constexpr --extended-lambda -O3 -Wno-deprecated-gpu-targets
 set NVCC_DEFINES=-DWIN32 -DNDEBUG -D_WINDOWS -D_USRDLL -D__NVCC__ -DEIGEN_WARNINGS_DISABLED -DTHRUST_IGNORE_DEPRECATED_CPP_DIALECT -DCUB_IGNORE_DEPRECATED_CPP_DIALECT
 set NVCC_INCLUDES=-I"%EIGEN_DIR%"
@@ -196,8 +199,12 @@ for %%f in (%CPP_SRCS%) do (
     set OBJS=!OBJS! "%OBJ_DIR%\%%~nf.obj"
 )
 
-echo Device-linking with LTO (-dlto: sm_86 SASS + compute_86 PTX)...
-%NVCC% -shared -dlto -gencode arch=compute_86,code=sm_86 -gencode arch=compute_86,code=compute_86 -Xcompiler "/MD" !OBJS! -lcudart -o "%LIB_DIR%\libsimbackend_cuda.dll"
+echo Device-linking with LTO (-dlto: native SASS cubins sm_86/89/90/100/120, no PTX)...
+REM SASS is forward-compatible within a major version: sm_86 covers sm_87 (Orin)
+REM and sm_89 (Ada: RTX 40, L40S); sm_90 Hopper; sm_100 Blackwell DC (B200);
+REM sm_120 Blackwell consumer (RTX 50-series). Add a cubin + rebuild for new archs.
+REM Keep in sync with SUPPORTED_SM in crates\ppf-cts-core\src\utils.rs (launch gate).
+%NVCC% -shared -dlto -gencode arch=compute_86,code=sm_86 -gencode arch=compute_86,code=sm_89 -gencode arch=compute_86,code=sm_90 -gencode arch=compute_86,code=sm_100 -gencode arch=compute_86,code=sm_120 -Xcompiler "/MD" !OBJS! -lcudart -o "%LIB_DIR%\libsimbackend_cuda.dll"
 if errorlevel 1 (
     echo ERROR: nvcc device-link failed
     exit /b 1
