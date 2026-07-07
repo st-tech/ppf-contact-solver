@@ -7,13 +7,15 @@ NVCC=/usr/local/cuda/bin/nvcc
 
 OUT_DIR=build
 LIBDIR=$(OUT_DIR)/lib
-EIGEN_PATH=/usr/include/eigen3
 
 # Warning suppressions
 SUPPRESS_WARNINGS=1222 2527 2529 2651 2653 2668 2669 2670 2671 2735 2737 2739 20012 20011 20014 177 940 1394
 
-# nvcc flags for CUDA files
-NVCC_FLAGS=-std=c++17 -O3 -MMD --device-c -Xcompiler -fPIC -D__NVCC__ -DEIGEN_WARNINGS_DISABLED --expt-relaxed-constexpr --extended-lambda -Wno-deprecated-gpu-targets
+# nvcc flags for CUDA files. The device solver has no external linear-algebra
+# dependency: the in-house crates/.../cpp/linalg headers replaced Eigen, so
+# there is no -I<eigen> or -DEIGEN_WARNINGS_DISABLED here (Eigen now lives only
+# in the macOS-only cpp_emul emulator, which carries its own include).
+NVCC_FLAGS=-std=c++17 -O3 -MMD --device-c -Xcompiler -fPIC -D__NVCC__ --expt-relaxed-constexpr --extended-lambda -Wno-deprecated-gpu-targets
 NVCC_FLAGS += $(foreach warn,$(SUPPRESS_WARNINGS),--diag-suppress=$(warn))
 
 # Device link-time optimization (LTO). Compile each TU to an LTO intermediate
@@ -55,12 +57,12 @@ all: $(LIBDIR)/libsimbackend_cuda.so $(LIBDIR)/libsimplelog.so
 # mtime view only tracks sources; without this a flag-only edit relinks stale .o).
 $(OUT_DIR)/cuda/%.o: %.cu Makefile
 	mkdir -p $(@D)
-	$(NVCC) -c $(NVCC_FLAGS) $< -I$(EIGEN_PATH) -o $@
+	$(NVCC) -c $(NVCC_FLAGS) $< -o $@
 
 # Compile C++ files with nvcc (uses host compiler internally)
 $(OUT_DIR)/cpp/%.o: %.cpp Makefile
 	mkdir -p $(@D)
-	$(NVCC) -c $(NVCC_CPP_FLAGS) $< -I$(EIGEN_PATH) -o $@
+	$(NVCC) -c $(NVCC_CPP_FLAGS) $< -o $@
 
 # Link CUDA library: -dlto runs whole-program optimization on the lto_86 objects
 # and emits one native SASS cubin per architecture (no PTX, see the note above).

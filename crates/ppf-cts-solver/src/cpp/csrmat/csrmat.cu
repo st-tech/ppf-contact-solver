@@ -375,6 +375,10 @@ __device__ Mat3x3f FixedCSRMat::operator()(unsigned i, unsigned j) const {
         for (unsigned k = start; k < end; ++k) {
             if (index.data[k] == j) {
                 val += value.data[k];
+                break;
+            } else if (index.data[k] > j) {
+                // Rows are sorted (exists() relies on this); no match past j.
+                break;
             }
         }
     }

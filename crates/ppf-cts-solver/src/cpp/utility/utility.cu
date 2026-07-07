@@ -4,11 +4,10 @@
 // License: Apache v2.0
 
 #include "../kernels/reduce.hpp"
+#include "../linalg/eigsolve.hpp"
 #include "dispatcher.hpp"
 #include "utility.hpp"
 #include <limits>
-
-#include <Eigen/Eigenvalues>
 
 namespace utility {
 
@@ -33,69 +32,134 @@ __device__ Vec3f compute_vertex_normal(const DataSet &data,
 
 __device__ void solve_symm_eigen2x2(const Mat2x2f &matrix, Vec2f &eigenvalues,
                                     Mat2x2f &eigenvectors) {
-    Eigen::SelfAdjointEigenSolver<Mat2x2f> eigensolver;
-    eigensolver.computeDirect(matrix);
-    eigenvalues = eigensolver.eigenvalues();
-    eigenvectors = eigensolver.eigenvectors();
+    linalg::eig::symm2x2(matrix, eigenvalues, eigenvectors);
 }
 
 __device__ void solve_symm_eigen3x3(const Mat3x3f &matrix, Vec3f &eigenvalues,
                                     Mat3x3f &eigenvectors) {
-    Eigen::SelfAdjointEigenSolver<Mat3x3f> eigensolver;
-    eigensolver.computeDirect(matrix);
-    eigenvalues = eigensolver.eigenvalues();
-    eigenvectors = eigensolver.eigenvectors();
+    linalg::eig::symm3x3(matrix, eigenvalues, eigenvectors);
+}
+
+// One-sided Jacobi SVD of a 3xN matrix (N in {2,3}) in float32, computed in a
+// FIXED, unrolled op count: no convergence branch, so the time is deterministic
+// and there is no warp divergence. Orthogonalizing F's columns directly, rather
+// than eigensolving the normal equations F^T F, keeps full float relative
+// accuracy in the small singular values: forming F^T F squares the condition
+// number and caps accuracy at ~sqrt(eps) ~ 3e-4 (worst-case singular value ~1%,
+// 3x3 reconstruction ~1e-3), whereas this reaches ~1e-6. One rotation
+// orthogonalizes two columns exactly, so N=2 needs a single sweep; N=3 needs
+// five (three already give float-precise singular values and reconstruction,
+// but a near-degenerate triple needs five to bring U and V to float-orthonormal
+// ~1e-6, vs ~3e-4 at three). Output: F = U diag(sigma) V^T with sigma >= 0,
+// sorted ASCENDING (the prior symm-eigen convention: deda pairing, the
+// svd3x3_rv min-index, the strain-limit maxCoeff). U and V have orthonormal
+// columns; column signs are arbitrary but consistent between U and V (every
+// consumer is sign-invariant: v v^T Hessian modes, U diag V^T force, U S V^T
+// reconstruction).
+template <int N, int SWEEPS>
+__device__ void jacobi_svd(const SMat<float, 3, N> &F, SMat<float, 3, N> &U,
+                           SVec<float, N> &sigma, SMat<float, N, N> &V) {
+    float A[3][N], Vv[N][N];
+    for (int r = 0; r < 3; ++r)
+        for (int c = 0; c < N; ++c) A[r][c] = F(r, c);
+    for (int i = 0; i < N; ++i)
+        for (int j = 0; j < N; ++j) Vv[i][j] = (i == j) ? 1.0f : 0.0f;
+#pragma unroll
+    for (int sweep = 0; sweep < SWEEPS; ++sweep) {
+#pragma unroll
+        for (int p = 0; p < N; ++p) {
+#pragma unroll
+            for (int q = p + 1; q < N; ++q) {
+                float a = 0.0f, b = 0.0f, g = 0.0f;
+                for (int r = 0; r < 3; ++r) {
+                    a += A[r][p] * A[r][p];
+                    b += A[r][q] * A[r][q];
+                    g += A[r][p] * A[r][q];
+                }
+                // Rotation that zeros the (p,q) column inner product. g == 0
+                // gives t = 0 (identity), keeping the op count fixed and the
+                // path branch-free across the warp.
+                float zeta = (b - a) / (2.0f * g);
+                float t = (g == 0.0f)
+                              ? 0.0f
+                              : (zeta >= 0.0f ? 1.0f : -1.0f) /
+                                    (fabsf(zeta) + sqrtf(1.0f + zeta * zeta));
+                float c = 1.0f / sqrtf(1.0f + t * t), s = c * t;
+                for (int r = 0; r < 3; ++r) {
+                    float ap = A[r][p], aq = A[r][q];
+                    A[r][p] = c * ap - s * aq;
+                    A[r][q] = s * ap + c * aq;
+                }
+                for (int r = 0; r < N; ++r) {
+                    float vp = Vv[r][p], vq = Vv[r][q];
+                    Vv[r][p] = c * vp - s * vq;
+                    Vv[r][q] = s * vp + c * vq;
+                }
+            }
+        }
+    }
+    // Singular values are the column norms of the orthogonalized F (accurate to
+    // float precision, unlike sqrt of an F^T F eigenvalue); U is the normalized
+    // columns.
+    float s_[N], u_[3][N];
+    for (int c = 0; c < N; ++c) {
+        float n2 = 0.0f;
+        for (int r = 0; r < 3; ++r) n2 += A[r][c] * A[r][c];
+        float n = sqrtf(n2);
+        s_[c] = n;
+        float inv = (n > 0.0f) ? 1.0f / n : 0.0f;
+        for (int r = 0; r < 3; ++r) u_[r][c] = A[r][c] * inv;
+    }
+    int idx[N];
+    for (int i = 0; i < N; ++i) idx[i] = i;
+#pragma unroll
+    for (int i = 0; i < N; ++i)
+#pragma unroll
+        for (int j = i + 1; j < N; ++j)
+            if (s_[idx[j]] < s_[idx[i]]) {
+                int tmp = idx[i];
+                idx[i] = idx[j];
+                idx[j] = tmp;
+            }
+    for (int c = 0; c < N; ++c) {
+        sigma[c] = s_[idx[c]];
+        for (int r = 0; r < 3; ++r) U(r, c) = u_[r][idx[c]];
+        for (int r = 0; r < N; ++r) V(r, c) = Vv[r][idx[c]];
+    }
 }
 
 __device__ Vec2f singular_vals_minus_one(const Mat3x2f &F) {
-    Mat2x2f A = F.transpose() * F;
-    Eigen::SelfAdjointEigenSolver<Mat2x2f> eigensolver(A, 0);
-    Vec2f lmd = eigensolver.eigenvalues();
-    for (int i = 0; i < 2; ++i) {
-        lmd[i] = sqrtf(lmd[i]) - 1.0f;
-    }
-    return lmd;
+    Mat3x2f U;
+    Vec2f sigma;
+    Mat2x2f V;
+    jacobi_svd<2, 1>(F, U, sigma, V);
+    sigma[0] -= 1.0f;
+    sigma[1] -= 1.0f;
+    return sigma;
 }
 
 __device__ Svd3x2 svd3x2_shifted(const Mat3x2f &F) {
-    Mat2x2f A = F.transpose() * F - Mat2x2f::Identity();
-    Eigen::SelfAdjointEigenSolver<Mat2x2f> eigensolver;
-    eigensolver.computeDirect(A);
-    Mat2x2f V = eigensolver.eigenvectors();
-    Mat3x2f U = F * V;
-    for (unsigned i = 0; i < U.cols(); i++) {
-        U.col(i).normalize();
-    }
-    return {U, singular_vals_minus_one(F), V.transpose()};
+    Mat3x2f U;
+    Vec2f sigma;
+    Mat2x2f V;
+    jacobi_svd<2, 1>(F, U, sigma, V);
+    sigma[0] -= 1.0f;
+    sigma[1] -= 1.0f;
+    return {U, sigma, V.transpose()};
 }
 
 __device__ Svd3x2 svd3x2(const Mat3x2f &F) {
-    Eigen::SelfAdjointEigenSolver<Mat2x2f> eigensolver;
-    eigensolver.computeDirect(F.transpose() * F);
-    Vec2f sigma = eigensolver.eigenvalues();
-    Mat2x2f V = eigensolver.eigenvectors();
-    for (unsigned i = 0; i < 2; ++i) {
-        sigma[i] = sqrtf(fmax(0.0f, sigma[i]));
-    }
-    Mat3x2f U = F * V;
-    for (unsigned i = 0; i < U.cols(); i++) {
-        U.col(i).normalize();
-    }
+    Mat3x2f U;
+    Vec2f sigma;
+    Mat2x2f V;
+    jacobi_svd<2, 1>(F, U, sigma, V);
     return {U, sigma, V.transpose()};
 }
 
 __device__ Svd3x3 svd3x3(const Mat3x3f &F) {
-    Eigen::SelfAdjointEigenSolver<Mat3x3f> eigensolver;
-    eigensolver.computeDirect(F.transpose() * F);
-    Vec3f sigma = eigensolver.eigenvalues();
-    Mat3x3f V = eigensolver.eigenvectors();
-    for (unsigned i = 0; i < 3; ++i) {
-        sigma[i] = sqrtf(fmax(0.0f, sigma[i]));
-    }
-    Mat3x3f U = F * V;
-    for (unsigned i = 0; i < U.cols(); i++) {
-        U.col(i).normalize();
-    }
+    Mat3x3f U, V;
+    Vec3f sigma;
+    jacobi_svd<3, 5>(F, U, sigma, V);
     return {U, sigma, V.transpose()};
 }
 

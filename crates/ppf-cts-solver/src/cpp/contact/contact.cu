@@ -22,6 +22,7 @@
 #include "accd.hpp"
 #include "contact.hpp"
 #include "distance.hpp"
+#include "intersect_core.hpp"
 #include <cassert>
 
 namespace contact {
@@ -144,9 +145,9 @@ extend_contact_force_hess(const Proximity<N> &prox, const Vec3f &force,
 
 template <unsigned N>
 __device__ static void
-atomic_embed_hessian(const Eigen::Vector<unsigned, N> &index,
-                     const Eigen::Matrix<float, N * 3, N * 3> &H,
-                     FixedCSRMat &fixed, DynCSRMat &dyn) {
+atomic_embed_hessian(const SVec<unsigned, N> &index,
+                     const SMatf<N * 3, N * 3> &H, FixedCSRMat &fixed,
+                     DynCSRMat &dyn) {
     for (unsigned ii = 0; ii < N; ++ii) {
         for (unsigned jj = 0; jj < N; ++jj) {
             unsigned i = index[ii];
@@ -163,7 +164,7 @@ atomic_embed_hessian(const Eigen::Vector<unsigned, N> &index,
 
 template <unsigned N>
 __device__ static void
-dry_atomic_embed_hessian(const Eigen::Vector<unsigned, N> &index,
+dry_atomic_embed_hessian(const SVec<unsigned, N> &index,
                          const FixedCSRMat &fixed, DynCSRMat &dyn) {
     for (unsigned ii = 0; ii < N; ++ii) {
         for (unsigned jj = 0; jj < N; ++jj) {
@@ -1375,6 +1376,13 @@ unsigned embed_contact_force_hessian(const DataSet &data,
              vertex_bvh, vertex_aabb, num_contact_vtf_vec, vertex_params,
              edge_params, face_params, stage, dt, vert_active, param, pf_cache,
              pe_cache, pp_cache] __device__(unsigned i) mutable {
+                // Morton remap: leaf t of the vertex BVH stores primitive
+                // node[t][0]-1 in Morton order, so adjacent lanes get spatially
+                // adjacent queries; their BVH traversals touch overlapping node
+                // sets (broadcast/L1 hits instead of scattered loads). Pure
+                // permutation of the query-to-thread assignment; per-query
+                // results and output slots are unchanged.
+                i = vertex_bvh.node[i][0] - 1;
                 unsigned count(0);
                 const VertexParam &vparam =
                     vertex_params[data.prop.vertex[i].param_index];
@@ -1455,6 +1463,13 @@ unsigned embed_contact_force_hessian(const DataSet &data,
              dyn_out, edge_bvh, edge_aabb, num_contact_ee_vec, edge_params,
              stage, dt, edge_active, param, ee_cache] __device__(unsigned i)
                 mutable {
+                // Morton remap: leaf t of the edge BVH stores primitive
+                // node[t][0]-1 in Morton order, so adjacent lanes get spatially
+                // adjacent queries; their BVH traversals touch overlapping node
+                // sets (broadcast/L1 hits instead of scattered loads). Pure
+                // permutation of the query-to-thread assignment; per-query
+                // results and output slots are unchanged.
+                i = edge_bvh.node[i][0] - 1;
                 Vec2u edge = data.mesh.mesh.edge[i];
                 const EdgeParam &eparam =
                     edge_params[data.prop.edge[i].param_index];
@@ -2079,6 +2094,7 @@ float line_search(const DataSet &data, const Vec<Vec3f> &x0,
 
     const BVH &face_bvh = bvhset.face;
     const BVH &edge_bvh = bvhset.edge;
+    const BVH &vertex_bvh = bvhset.vertex;
     const BVH &collision_mesh_face_bvh = bvh_storage::get_collision_mesh_bvh().face;
     const BVH &collision_mesh_edge_bvh = bvh_storage::get_collision_mesh_bvh().edge;
     const Vec<Vec2u> &collision_mesh_edge = data.constraint.mesh.edge;
@@ -2124,8 +2140,16 @@ float line_search(const DataSet &data, const Vec<Vec3f> &x0,
 
     if (!param.disable_contact) {
         DISPATCH_START(surface_vert_count)
-        [data, mesh, x0, x1, face_bvh, face_aabb, toi_vtf_vec, vertex_params,
-         face_params, vert_active, param] __device__(unsigned i) mutable {
+        [data, mesh, x0, x1, face_bvh, face_aabb, vertex_bvh, toi_vtf_vec,
+         vertex_params, face_params, vert_active,
+         param] __device__(unsigned i) mutable {
+            // Morton remap: leaf t of the vertex BVH stores primitive
+            // node[t][0]-1 in Morton order, so adjacent lanes get spatially
+            // adjacent queries; their BVH traversals touch overlapping node
+            // sets (broadcast/L1 hits instead of scattered loads). Pure
+            // permutation of the query-to-thread assignment; per-query
+            // results and output slots are unchanged.
+            i = vertex_bvh.node[i][0] - 1;
             const VertexParam &vparam =
                 vertex_params[data.prop.vertex[i].param_index];
             float ext_eps = 0.5f * vparam.ghat + vparam.offset;
@@ -2145,17 +2169,23 @@ float line_search(const DataSet &data, const Vec<Vec3f> &x0,
                 x0[i], float(toi) * (x1[i] - x0[i]) + x0[i], ext_eps);
             if (vert_active && !vert_active[i]) aabb.active = false;
             aabb::query(face_bvh, face_aabb, op, aabb);
-            toi_vtf_vec[i] = fmin(toi_vtf_vec[i], toi);
+            toi_vtf_vec[i] = fminf(toi_vtf_vec[i], toi);
         } DISPATCH_END;
 
         // Grain-grain (point-point) CCD over the vertex BVH, bounding the step
         // so two free grains never cross the contact wall. Without it a faceless
         // SAND cloud has no point-point CCD candidate and dense piles penetrate.
-        const BVH &vertex_bvh = bvhset.vertex;
         const Vec<AABB> vertex_aabb = storage::vertex_aabb;
         DISPATCH_START(surface_vert_count)
         [data, x0, x1, vertex_bvh, vertex_aabb, toi_vtf_vec, vertex_params,
          vert_active, param] __device__(unsigned i) mutable {
+            // Morton remap: leaf t of the vertex BVH stores primitive
+            // node[t][0]-1 in Morton order, so adjacent lanes get spatially
+            // adjacent queries; their BVH traversals touch overlapping node
+            // sets (broadcast/L1 hits instead of scattered loads). Pure
+            // permutation of the query-to-thread assignment; per-query
+            // results and output slots are unchanged.
+            i = vertex_bvh.node[i][0] - 1;
             const VertexParam &vparam =
                 vertex_params[data.prop.vertex[i].param_index];
             float ext_eps = 0.5f * vparam.ghat + vparam.offset;
@@ -2167,7 +2197,7 @@ float line_search(const DataSet &data, const Vec<Vec3f> &x0,
                 x0[i], float(toi) * (x1[i] - x0[i]) + x0[i], ext_eps);
             if (vert_active && !vert_active[i]) aabb.active = false;
             aabb::query(vertex_bvh, vertex_aabb, op, aabb);
-            toi_vtf_vec[i] = fmin(toi_vtf_vec[i], toi);
+            toi_vtf_vec[i] = fminf(toi_vtf_vec[i], toi);
         } DISPATCH_END;
 
         DISPATCH_START(surface_vert_count)
@@ -2199,7 +2229,7 @@ float line_search(const DataSet &data, const Vec<Vec3f> &x0,
                 if (vert_active && !vert_active[i]) aabb.active = false;
                 aabb::query(collision_mesh_face_bvh, collision_mesh_face_aabb,
                             op, aabb);
-                toi_vtf_vec[i] = fmin(toi_vtf_vec[i], toi);
+                toi_vtf_vec[i] = fminf(toi_vtf_vec[i], toi);
             }
         } DISPATCH_END;
 
@@ -2228,7 +2258,7 @@ float line_search(const DataSet &data, const Vec<Vec3f> &x0,
                                             .param_index];
             float ext_eps = 0.5f * vparam.ghat + vparam.offset;
             aabb::query(face_bvh, face_aabb, op, aabb::make(q, ext_eps));
-            toi_vtf_vec[i] = fmin(toi_vtf_vec[i], toi);
+            toi_vtf_vec[i] = fminf(toi_vtf_vec[i], toi);
         } DISPATCH_END;
 
         // Seed the edge-edge CCD with the vertex/face time-of-impact minimum.
@@ -2244,6 +2274,13 @@ float line_search(const DataSet &data, const Vec<Vec3f> &x0,
         DISPATCH_START(edge_count)
         [data, mesh, x0, x1, edge_bvh, edge_aabb, toi_ee_vec, edge_params,
          edge_active, T_vf_seed, param] __device__(unsigned i) mutable {
+            // Morton remap: leaf t of the edge BVH stores primitive
+            // node[t][0]-1 in Morton order, so adjacent lanes get spatially
+            // adjacent queries; their BVH traversals touch overlapping node
+            // sets (broadcast/L1 hits instead of scattered loads). Pure
+            // permutation of the query-to-thread assignment; per-query
+            // results and output slots are unchanged.
+            i = edge_bvh.node[i][0] - 1;
             Vec2u edge = mesh.mesh.edge[i];
             float toi = T_vf_seed;
             const EdgeParam &eparam =
@@ -2261,7 +2298,7 @@ float line_search(const DataSet &data, const Vec<Vec3f> &x0,
                 data.prop.vertex, i,  toi, param};
             AABB_AABB_Tester<EdgeEdgeCCD> op(ccd);
             aabb::query(edge_bvh, edge_aabb, op, aabb);
-            toi_ee_vec[i] = fmin(toi, toi_ee_vec[i]);
+            toi_ee_vec[i] = fminf(toi, toi_ee_vec[i]);
         } DISPATCH_END;
 
         DISPATCH_START(edge_count)
@@ -2297,7 +2334,7 @@ float line_search(const DataSet &data, const Vec<Vec3f> &x0,
             AABB_AABB_Tester<CollisionMeshEdgeEdgeCCD> op(ccd);
             aabb::query(collision_mesh_edge_bvh, collision_mesh_edge_aabb, op,
                         aabb);
-            toi_ee_vec[i] = fmin(toi, toi_ee_vec[i]);
+            toi_ee_vec[i] = fminf(toi, toi_ee_vec[i]);
         } DISPATCH_END;
     }
 
@@ -2309,29 +2346,11 @@ float line_search(const DataSet &data, const Vec<Vec3f> &x0,
     return toi / param.line_search_max_t;
 }
 
-template <class T, class Y>
-__device__ bool point_triangle_inside(const Vec3<T> &p, const Vec3<T> &t0,
-                                      const Vec3<T> &t1, const Vec3<T> &t2) {
-    Vec3<Y> r0 = (t1 - t0).template cast<Y>();
-    Vec3<Y> r1 = (t2 - t0).template cast<Y>();
-    Mat3x2<Y> a;
-    a << r0, r1;
-    Eigen::Transpose<Mat3x2<Y>> a_t = a.transpose();
-    Y det;
-    Vec2<Y> c;
-    distance::solve<Y>(a_t * a, a_t * (p - t0).template cast<Y>(), c, det);
-    if (det) {
-        Y w0 = c[0] / det;
-        Y w1 = c[1] / det;
-        Y w2 = Y(1.0) - w0 - w1;
-        Y wmin = fmin(fmin(w0, w1), w2);
-        Y wmax = fmax(fmax(w0, w1), w2);
-        return wmin >= 0.0f && wmax <= 1.0f;
-    } else {
-        return false;
-    }
-}
-
+// Edge-triangle pierce test. Thin device wrapper over the shared,
+// dependency-free predicate in intersect_core.hpp (the single source of
+// truth also used by the host build-time check in ppf-cts-core). The
+// routine is translation invariant, so we hand it the vectors already
+// relative to `b0` (v0 = 0).
 __device__ bool edge_triangle_intersect(const Vec3f &a0, const Vec3f &a1,
                                         const Vec3f &b0, const Vec3f &b1,
                                         const Vec3f &b2) {
@@ -2339,15 +2358,12 @@ __device__ bool edge_triangle_intersect(const Vec3f &a0, const Vec3f &a1,
     Vec3f d2 = (b2 - b0);
     Vec3f e0 = (a0 - b0);
     Vec3f e1 = (a1 - b0);
-    Vec3f n = d1.cross(d2);
-    float s1 = e0.dot(n);
-    float s2 = e1.dot(n);
-    if (s1 * s2 < 0.0f) {
-        float t = s1 / (s1 - s2);
-        Vec3f r = (1.0f - t) * e0 + t * e1;
-        return point_triangle_inside<float, float>(r, Vec3f::Zero(), d1, d2);
-    }
-    return false;
+    const float zero[3] = {0.0f, 0.0f, 0.0f};
+    const float e0a[3] = {e0[0], e0[1], e0[2]};
+    const float e1a[3] = {e1[0], e1[1], e1[2]};
+    const float d1a[3] = {d1[0], d1[1], d1[2]};
+    const float d2a[3] = {d2[0], d2[1], d2[2]};
+    return ppf_isect::edge_triangle_intersect<float>(e0a, e1a, zero, d1a, d2a);
 }
 
 class EdgeEdgeIntersectTester {

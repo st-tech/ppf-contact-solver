@@ -849,9 +849,10 @@ void propagate_aabbs(Vec<AABB> &aabb, const Vec<Vec2u> &nodes,
         unsigned grid = (level_size + BLOCK - 1) / BLOCK;
         merge_level_kernel<<<grid, BLOCK>>>(level.data, level.offset,
                                             (unsigned)l, aabb.data, nodes.data);
-        // Synchronize after each level to ensure children are processed before
-        // parents
-        CUDA_HANDLE_ERROR(cudaDeviceSynchronize());
+        // Same-stream launches execute in order, so children are processed
+        // before parents without a host sync; the old per-level
+        // cudaDeviceSynchronize cost ~90 host round-trips per Newton iteration
+        // (~30 levels x 3 trees) for no ordering benefit.
     }
 }
 

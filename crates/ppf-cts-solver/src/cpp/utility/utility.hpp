@@ -26,9 +26,8 @@ __device__ Svd3x3 svd3x3_rv(const Mat3x3f &F);
 
 template <unsigned N, class MatType>
 __device__ static void
-atomic_embed_hessian(const Eigen::Vector<unsigned, N> &index,
-                     const Eigen::Matrix<float, N * 3, N * 3> &H,
-                     MatType &mat) {
+atomic_embed_hessian(const SVec<unsigned, N> &index,
+                     const SMatf<N * 3, N * 3> &H, MatType &mat) {
     for (unsigned ii = 0; ii < N; ++ii) {
         for (unsigned jj = 0; jj < N; ++jj) {
             Mat3x3f val = H.template block<3, 3>(ii * 3, jj * 3);
@@ -39,8 +38,8 @@ atomic_embed_hessian(const Eigen::Vector<unsigned, N> &index,
 
 template <unsigned N>
 __device__ static void
-atomic_embed_force(const Eigen::Vector<unsigned, N> &index,
-                   const Eigen::Matrix<float, 3, N> &f, Vec<float> &force) {
+atomic_embed_force(const SVec<unsigned, N> &index, const SMatf<3, N> &f,
+                   Vec<float> &force) {
     for (unsigned i = 0; i < N; ++i) {
         for (unsigned ii = 0; ii < 3; ++ii) {
             const unsigned row = index[i] * 3 + ii;

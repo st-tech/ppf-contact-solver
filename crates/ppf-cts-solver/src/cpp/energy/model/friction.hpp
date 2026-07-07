@@ -24,7 +24,7 @@ struct Friction {
         if (mu > 0.0f) {
             float denom = (P * dx).squaredNorm();
             if (denom > 0.0f) {
-                lambda = mu * contact / fmax(min_dx, sqrt(denom));
+                lambda = mu * contact / fmaxf(min_dx, sqrtf(denom));
             } else {
                 lambda = mu * contact / min_dx;
             }

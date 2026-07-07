@@ -7,6 +7,7 @@ from . import (
     bake_ops,
     collision_window_ops,
     dyn_param_ops,
+    export_ops,
     group_ops,
     invisible_collider_ops,
     overlay,
@@ -81,6 +82,10 @@ from .bake_ops import (
     SOLVER_OT_BakeAbort,
     SOLVER_OT_BakeAllAnimation,
     SOLVER_OT_BakeAllSingleFrame,
+)
+from .export_ops import (
+    SOLVER_OT_ExportAlembic,
+    SOLVER_OT_ExportUSD,
 )
 from .velocity_keyframe_ops import (
     OBJECT_OT_AddVelocityKeyframe,
@@ -181,6 +186,9 @@ __all__ = [
     "SOLVER_OT_BakeAllAnimation",
     "SOLVER_OT_BakeAllSingleFrame",
     "SOLVER_OT_BakeAbort",
+    # Export operators
+    "SOLVER_OT_ExportUSD",
+    "SOLVER_OT_ExportAlembic",
     # Profile operators
     "SCENE_OT_OpenSceneProfile",
     "SCENE_OT_ClearSceneProfile",
@@ -228,6 +236,7 @@ def register():
     """Register all classes and handlers"""
     group_ops.register()
     bake_ops.register()
+    export_ops.register()
     dyn_param_ops.register()
     invisible_collider_ops.register()
     pin_ops.register()
@@ -259,6 +268,7 @@ def unregister():
     pin_capture_ops.unregister()
     pin_ops.unregister()
     dyn_param_ops.unregister()
+    export_ops.unregister()
     bake_ops.unregister()
     invisible_collider_ops.unregister()
     group_ops.unregister()

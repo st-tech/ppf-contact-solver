@@ -25,6 +25,12 @@ tokio-util.workspace = true
 sysinfo = { version = "0.32", default-features = false, features = ["system"] }
 wide = "0.7"
 
+[build-dependencies]
+# Compiles cpp/intersect_ffi.cpp, the host C ABI over the shared
+# edge-triangle pierce predicate in the solver's C++ tree, so the Rust
+# build-time self-intersection check runs the same geometry as the GPU.
+cc = "1"
+
 [dev-dependencies]
 tempfile = "3.13"
 criterion = "0.5"

@@ -10,6 +10,7 @@
 #include "../simplelog/SimpleLog.h"
 #include "../utility/dispatcher.hpp"
 #include "schwarz.hpp"
+#include <chrono>
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -1623,8 +1624,25 @@ void build(SchwarzHierarchy &H, const DynCSRMat &A, const FixedCSRMat &B,
 
     const bool struct_same = K.valid && K.nrow == nrow && K.kmax == kmax &&
                              K.bptr == (uintptr_t)B.value.data;
-    const unsigned long long h = compute_dyn_hash(A);
-    const bool reuse = struct_same && h == K.dyn_hash;
+    // The aggregation is a PARTITION HEURISTIC: factor_kernel and the coarse
+    // Galerkin always gather the CURRENT A/B/C values, so a stale partition is
+    // still a correct SPD preconditioner, just marginally weaker where the
+    // contact graph drifted. Rehashing the dyn structure invalidated the
+    // aggregation on ~99% of solves (contact sparsity changes every Newton
+    // iteration) at 15.7 ms per recompute vs 0.4 ms for the value refactor
+    // (measured, trapped), so the partition is kept while the structural frame
+    // (nrow / kmax / fixed matrix) is unchanged. PPF_SCHWARZ_REAGG=1 restores
+    // the per-change reaggregation for A/B comparisons.
+    static const bool reagg_env = [] {
+        const char *e = getenv("PPF_SCHWARZ_REAGG");
+        return e && e[0] == '1';
+    }();
+    bool reuse = struct_same;
+    if (reagg_env) {
+        const unsigned long long h = compute_dyn_hash(A);
+        reuse = struct_same && h == K.dyn_hash;
+        K.dyn_hash = h;
+    }
 
     if (!struct_same) {
         K.agg.free();
@@ -1662,10 +1680,31 @@ void build(SchwarzHierarchy &H, const DynCSRMat &A, const FixedCSRMat &B,
         K.valid = false;
     }
 
+    // PPF_SCHWARZ_PROF=1: per-phase host timings (synced; measurement only).
+    static const bool prof = [] {
+        const char *e = getenv("PPF_SCHWARZ_PROF");
+        return e && e[0] == '1';
+    }();
+    static unsigned prof_calls = 0;
+    static double prof_agg_ms = 0.0, prof_fac_ms = 0.0, prof_mas_ms = 0.0;
+    static unsigned prof_agg_runs = 0;
+    auto prof_now = []() {
+        cudaDeviceSynchronize();
+        return std::chrono::steady_clock::now();
+    };
+    std::chrono::steady_clock::time_point t0, t1;
+    if (prof) {
+        t0 = prof_now();
+    }
     if (!reuse || !K.valid) {
         recompute_aggregation(A, B, C);
-        K.dyn_hash = h;
         K.valid = true;
+        ++prof_agg_runs;
+    }
+    if (prof) {
+        t1 = prof_now();
+        prof_agg_ms +=
+            std::chrono::duration<double, std::milli>(t1 - t0).count();
     }
 
     const size_t shmem =
@@ -1681,6 +1720,12 @@ void build(SchwarzHierarchy &H, const DynCSRMat &A, const FixedCSRMat &B,
     factor_kernel<<<K.n_agg, BLOCK_THREADS, shmem>>>(
         A, B, C, K.agg_off, K.members, K.ainv_off, K.ainv, max_dim);
     CUDA_HANDLE_ERROR(cudaGetLastError());
+    if (prof) {
+        auto t2 = prof_now();
+        prof_fac_ms +=
+            std::chrono::duration<double, std::milli>(t2 - t1).count();
+        t1 = t2;
+    }
     // No explicit sync: factor and the subsequent cg ops share the default
     // stream (ordered), and cg's first thrust op synchronizes anyway.
 
@@ -1693,6 +1738,19 @@ void build(SchwarzHierarchy &H, const DynCSRMat &A, const FixedCSRMat &B,
         build_mas(A, B, C, levels, kmax);
     } else {
         K.nlev = 1;
+    }
+
+    if (prof) {
+        auto t3 = prof_now();
+        prof_mas_ms +=
+            std::chrono::duration<double, std::milli>(t3 - t1).count();
+        if (++prof_calls % 64 == 0) {
+            SimpleLog::message(
+                "[schwarz prof] %u builds (%u aggs): agg %.2f ms/build, "
+                "factor %.2f, mas %.2f",
+                prof_calls, prof_agg_runs, prof_agg_ms / prof_calls,
+                prof_fac_ms / prof_calls, prof_mas_ms / prof_calls);
+        }
     }
 
     H.n_agg = K.n_agg;

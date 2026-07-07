@@ -475,6 +475,16 @@ class SOLVER_PT_SolverPanel(Panel):
         )
         box.operator(SOLVER_OT_ClearAllDeformations.bl_idname, icon="TRASH")
 
+        # Export the simulated mesh sequence to a USD / Alembic cache: a
+        # lighter alternative to the shape-key bake for long/heavy animations.
+        # Each button's poll() greys it out when there is nothing to export
+        # (no simulated mesh in the view layer, or a solver activity in flight).
+        box = layout.box()
+        box.label(text="Export", icon="EXPORT")
+        row = box.row()
+        row.operator("solver.export_usd", icon="EXPORT")
+        row.operator("solver.export_alembic", icon="EXPORT")
+
         # JupyterLab expandable box
         box = layout.box()
         row = box.row(align=True)

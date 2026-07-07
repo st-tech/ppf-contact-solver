@@ -136,7 +136,7 @@ class DeviceOperators {
     float norm(const Vec<float> &r, Vec<float> &tmp) const {
         DISPATCH_START(r.size)
         [r, tmp] __device__(unsigned i) mutable {
-            tmp[i] = fabs(r[i]);
+            tmp[i] = fabsf(r[i]);
         } DISPATCH_END;
         return kernels::sum_array(tmp.data, r.size);
     }
@@ -203,6 +203,365 @@ static cudaStream_t cg_device_stream() {
     return s;
 }
 
+// ---- Fused CG iteration kernels (block-Jacobi path) --------------------------
+// The per-iteration vector work was ~10 small launches (two 2-launch
+// reductions, two axpys, the precond, the |r| pass, and three scalar kernels),
+// each a few microseconds of graph-node/launch latency that dominates the
+// non-SpMV time at small system sizes. cg_fused_update_kernel does the x/r
+// updates, the block-Jacobi z = P r, and the block partials of BOTH r.z and
+// ||r||_1 in ONE pass (r is read/written once instead of three times);
+// cg_reduce2_kernel folds both partial arrays in one launch (block 0 -> rz,
+// block 1 -> err); cg_beta_kernel fuses beta = rz1/rz0 (scalar_div semantics,
+// including the breakdown flag) with the rz0 <- rz1 roll. Summation order
+// differs from inner_product_kernel_optimized by reduction shape only; the
+// trajectory stays within the run-to-run band the atomicAdd assembly already
+// has.
+static constexpr unsigned CGF_BLOCK = 256;
+
+__global__ void cg_fused_update_kernel(const float *p, const float *Ap,
+                                       float *x, float *r, float *z,
+                                       const Mat3x3f *inv_diag,
+                                       const float *d_rz0, const float *d_pAp,
+                                       int *breakdown, unsigned nrow,
+                                       float *rz_partials,
+                                       float *err_partials) {
+    __shared__ float s_rz[CGF_BLOCK];
+    __shared__ float s_err[CGF_BLOCK];
+    const unsigned i = blockIdx.x * blockDim.x + threadIdx.x;
+    float rz = 0.0f, err = 0.0f;
+    if (i < nrow) {
+        // alpha = rz0 / pAp computed per thread from the device scalars
+        // (read-only, all threads agree), replicating scalar_div's breakdown
+        // semantics; folds the former scalar_div launch into this kernel.
+        const float pAp = *d_pAp;
+        float alpha;
+        if (pAp > 0.0f) {
+            alpha = (*d_rz0) / pAp;
+        } else {
+            alpha = 0.0f;
+            if (breakdown && i == 0) {
+                *breakdown = 1;
+            }
+        }
+        float ri[3];
+        for (unsigned k = 0; k < 3; ++k) {
+            const unsigned j = 3 * i + k;
+            x[j] += alpha * p[j];
+            ri[k] = r[j] - alpha * Ap[j];
+            r[j] = ri[k];
+        }
+        const Vec3f zi = UnrolledMat3x3f(inv_diag[i].data()) * ri;
+        for (unsigned k = 0; k < 3; ++k) {
+            z[3 * i + k] = zi[k];
+            rz += ri[k] * zi[k];
+            err += fabsf(ri[k]);
+        }
+    }
+    s_rz[threadIdx.x] = rz;
+    s_err[threadIdx.x] = err;
+    __syncthreads();
+    for (unsigned w = CGF_BLOCK / 2; w > 0; w >>= 1) {
+        if (threadIdx.x < w) {
+            s_rz[threadIdx.x] += s_rz[threadIdx.x + w];
+            s_err[threadIdx.x] += s_err[threadIdx.x + w];
+        }
+        __syncthreads();
+    }
+    if (threadIdx.x == 0) {
+        rz_partials[blockIdx.x] = s_rz[0];
+        err_partials[blockIdx.x] = s_err[0];
+    }
+}
+
+__global__ void cg_reduce2_kernel(const float *rz_partials,
+                                  const float *err_partials, unsigned count,
+                                  float *d_rz1, float *d_err, float *d_beta,
+                                  float *d_rz0, int *breakdown, int *d_rzbad,
+                                  int check_spd) {
+    __shared__ float s[CGF_BLOCK];
+    const float *src = (blockIdx.x == 0) ? rz_partials : err_partials;
+    float acc = 0.0f;
+    for (unsigned k = threadIdx.x; k < count; k += CGF_BLOCK) {
+        acc += src[k];
+    }
+    s[threadIdx.x] = acc;
+    __syncthreads();
+    for (unsigned w = CGF_BLOCK / 2; w > 0; w >>= 1) {
+        if (threadIdx.x < w) {
+            s[threadIdx.x] += s[threadIdx.x + w];
+        }
+        __syncthreads();
+    }
+    if (threadIdx.x == 0) {
+        if (blockIdx.x == 0) {
+            // rz1 landing plus the scalar tail of the iteration, folded here:
+            // beta = rz1 / rz0 (scalar_div semantics incl. the breakdown
+            // flag), the SPD sentinel, and the rz0 <- rz1 roll. Single
+            // reader/writer, so the read-then-write order is safe.
+            const float rz1 = s[0];
+            *d_rz1 = rz1;
+            if (check_spd && rz1 <= 0.0f) {
+                *d_rzbad = 1;
+            }
+            const float rz0 = *d_rz0;
+            if (rz0 > 0.0f) {
+                *d_beta = rz1 / rz0;
+            } else {
+                *d_beta = 0.0f;
+                if (breakdown) {
+                    *breakdown = 1;
+                }
+            }
+            *d_rz0 = rz1;
+        } else {
+            *d_err = s[0];
+        }
+    }
+}
+
+// x/r update for the external-preconditioner (Schwarz) path: x += alpha p,
+// r -= alpha Ap with alpha computed in-thread (scalar_div semantics), plus the
+// ||r||_1 block partials. z = M^-1 r is produced afterwards by schwarz::apply,
+// and r.z by an inner product over its output.
+__global__ void cg_update_xr_kernel(const float *p, const float *Ap, float *x,
+                                    float *r, const float *d_rz0,
+                                    const float *d_pAp, int *breakdown,
+                                    unsigned n, float *err_partials) {
+    __shared__ float s_err[CGF_BLOCK];
+    const unsigned j = blockIdx.x * blockDim.x + threadIdx.x;
+    float err = 0.0f;
+    if (j < n) {
+        const float pAp = *d_pAp;
+        float alpha;
+        if (pAp > 0.0f) {
+            alpha = (*d_rz0) / pAp;
+        } else {
+            alpha = 0.0f;
+            if (breakdown && j == 0) {
+                *breakdown = 1;
+            }
+        }
+        x[j] += alpha * p[j];
+        const float rj = r[j] - alpha * Ap[j];
+        r[j] = rj;
+        err = fabsf(rj);
+    }
+    s_err[threadIdx.x] = err;
+    __syncthreads();
+    for (unsigned w = CGF_BLOCK / 2; w > 0; w >>= 1) {
+        if (threadIdx.x < w) {
+            s_err[threadIdx.x] += s_err[threadIdx.x + w];
+        }
+        __syncthreads();
+    }
+    if (threadIdx.x == 0) {
+        err_partials[blockIdx.x] = s_err[0];
+    }
+}
+
+// Single-block strided fold of `count` partials into one device scalar (one
+// launch, vs the generic multi-launch reduce chain).
+__global__ void cg_reduce1_kernel(const float *partials, unsigned count,
+                                  float *out) {
+    __shared__ float s[CGF_BLOCK];
+    float acc = 0.0f;
+    for (unsigned k = threadIdx.x; k < count; k += CGF_BLOCK) {
+        acc += partials[k];
+    }
+    s[threadIdx.x] = acc;
+    __syncthreads();
+    for (unsigned w = CGF_BLOCK / 2; w > 0; w >>= 1) {
+        if (threadIdx.x < w) {
+            s[threadIdx.x] += s[threadIdx.x + w];
+        }
+        __syncthreads();
+    }
+    if (threadIdx.x == 0) {
+        *out = s[0];
+    }
+}
+
+// Fused symmetric SpMV + partial dot, 8 lanes per row. The dyn and fixed
+// matrices store each off-diagonal block ONCE (upper triangle: push() keeps
+// row <= col; the ref/transpose lists are mirrors into the same value buffer).
+// Instead of walking both the direct and mirror lists (reading every block
+// value twice plus 8 B of ref indirection per pair), each stored block (i,j)
+// is read once and scattered BOTH ways: H p_j accumulates into the row sum and
+// H^T p_i is atomically added to out_j (SRBK-style symmetric SpMV, Huang 2025).
+// The p.(Mp) partial comes for free: each off-diagonal block contributes
+// 2 p_i . (H p_j) and each diagonal block p_i . (H p_i), independent of the
+// output vector's completion, so the dot fusion survives the scatter. The
+// caller zeroes `result` before the launch; atomic accumulation makes the
+// result nondeterministic in summation order (same tolerance band as the
+// atomicAdd assembly).
+static constexpr unsigned CG_ROW_LANES = 8;
+
+__global__ void cg_apply_dot_sym_kernel(DynCSRMat A, FixedCSRMat B, Vec<Mat3x3f> C,
+                                    Vec<float> p, Vec<float> result,
+                                    float *dot_partials) {
+    __shared__ float s_dot[CGF_BLOCK];
+    const unsigned t = blockIdx.x * blockDim.x + threadIdx.x;
+    const unsigned i = t / CG_ROW_LANES;
+    const unsigned lane = threadIdx.x % CG_ROW_LANES;
+    float dot = 0.0f;
+    Vec3f sum = Vec3f::Zero();
+    if (i < A.nrow) {
+        const float *xi = p.data + 3 * i;
+        const unsigned head = A.rows[i].head;
+        for (unsigned k = lane; k < head; k += CG_ROW_LANES) {
+            const float *m =
+                reinterpret_cast<const float *>(A.rows[i].value + k);
+            const unsigned j = A.rows[i].index[k];
+            const UnrolledMat3x3f H(m);
+            const Vec3f v = H * (p.data + 3 * j);
+            sum += v;
+            if (j != i) {
+                const Vec3f w = H ^ xi;
+                atomicAdd(result.data + 3 * j + 0, w[0]);
+                atomicAdd(result.data + 3 * j + 1, w[1]);
+                atomicAdd(result.data + 3 * j + 2, w[2]);
+                dot += 2.0f * (xi[0] * v[0] + xi[1] * v[1] + xi[2] * v[2]);
+            } else {
+                dot += xi[0] * v[0] + xi[1] * v[1] + xi[2] * v[2];
+            }
+        }
+        const unsigned b0 = B.index.offset[i], b1 = B.index.offset[i + 1];
+        for (unsigned k = b0 + lane; k < b1; k += CG_ROW_LANES) {
+            const float *m = reinterpret_cast<const float *>(B.value.data + k);
+            const unsigned j = B.index.data[k];
+            const UnrolledMat3x3f H(m);
+            const Vec3f v = H * (p.data + 3 * j);
+            sum += v;
+            if (j != i) {
+                const Vec3f w = H ^ xi;
+                atomicAdd(result.data + 3 * j + 0, w[0]);
+                atomicAdd(result.data + 3 * j + 1, w[1]);
+                atomicAdd(result.data + 3 * j + 2, w[2]);
+                dot += 2.0f * (xi[0] * v[0] + xi[1] * v[1] + xi[2] * v[2]);
+            } else {
+                dot += xi[0] * v[0] + xi[1] * v[1] + xi[2] * v[2];
+            }
+        }
+    }
+    // Width-8 shuffle reduction of the row sum; unguarded so tail warps never
+    // diverge at the full-mask sync (out-of-range lane groups contribute 0).
+    for (unsigned off = CG_ROW_LANES / 2; off > 0; off >>= 1) {
+        for (unsigned c = 0; c < 3; ++c) {
+            sum[c] += __shfl_down_sync(0xffffffffu, sum[c], off, CG_ROW_LANES);
+        }
+    }
+    if (i < A.nrow && lane == 0) {
+        const float *xi = p.data + 3 * i;
+        const Vec3f v = UnrolledMat3x3f(C[i].data()) * xi;
+        sum += v;
+        dot += xi[0] * v[0] + xi[1] * v[1] + xi[2] * v[2];
+        // The row's own accumulation must also be atomic: transpose scatters
+        // from other rows target the same slots.
+        atomicAdd(result.data + 3 * i + 0, sum[0]);
+        atomicAdd(result.data + 3 * i + 1, sum[1]);
+        atomicAdd(result.data + 3 * i + 2, sum[2]);
+    }
+    s_dot[threadIdx.x] = dot;
+    __syncthreads();
+    for (unsigned w = CGF_BLOCK / 2; w > 0; w >>= 1) {
+        if (threadIdx.x < w) {
+            s_dot[threadIdx.x] += s_dot[threadIdx.x + w];
+        }
+        __syncthreads();
+    }
+    if (threadIdx.x == 0) {
+        dot_partials[blockIdx.x] = s_dot[0];
+    }
+}
+
+// Both-triangles row walk (the pre-symmetric form): each row reads its direct
+// blocks plus the mirror (ref / transpose) lists, no atomics, deterministic.
+// Faster than the symmetric scatter on SMALL systems, where the mirror value
+// reads are L2-served and the atomic traffic dominates instead (measured:
+// trapped 45k rows: walk 8.34 vs sym 9.65 ms/solve; twist ~200k rows: walk
+// 94 vs sym 86 ms/step). Selected by CG_SYM_SPMV_MIN_ROWS below.
+__global__ void cg_apply_dot_walk_kernel(DynCSRMat A, FixedCSRMat B,
+                                         Vec<Mat3x3f> C, Vec<float> p,
+                                         Vec<float> result,
+                                         float *dot_partials) {
+    __shared__ float s_dot[CGF_BLOCK];
+    const unsigned t = blockIdx.x * blockDim.x + threadIdx.x;
+    const unsigned i = t / CG_ROW_LANES;
+    const unsigned lane = threadIdx.x % CG_ROW_LANES;
+    float dot = 0.0f;
+    Vec3f sum = Vec3f::Zero();
+    if (i < A.nrow) {
+        const unsigned head = A.rows[i].head;
+        for (unsigned k = lane; k < head; k += CG_ROW_LANES) {
+            const float *m =
+                reinterpret_cast<const float *>(A.rows[i].value + k);
+            unsigned j = A.rows[i].index[k];
+            sum += UnrolledMat3x3f(m) * (p.data + 3 * j);
+        }
+        const unsigned ref_head = A.rows[i].ref_head;
+        for (unsigned k = lane; k < ref_head; k += CG_ROW_LANES) {
+            const float *m = reinterpret_cast<const float *>(
+                A.dyn_value_buff.data + A.rows[i].ref_value[k]);
+            unsigned j = A.rows[i].ref_index[k];
+            sum += UnrolledMat3x3f(m) ^ (p.data + 3 * j);
+        }
+        const unsigned b0 = B.index.offset[i], b1 = B.index.offset[i + 1];
+        for (unsigned k = b0 + lane; k < b1; k += CG_ROW_LANES) {
+            const float *m = reinterpret_cast<const float *>(B.value.data + k);
+            unsigned j = B.index.data[k];
+            sum += UnrolledMat3x3f(m) * (p.data + 3 * j);
+        }
+        const unsigned t0 = B.transpose.offset[i], t1 = B.transpose.offset[i + 1];
+        for (unsigned k = t0 + lane; k < t1; k += CG_ROW_LANES) {
+            Vec2u ref = B.transpose.data[k];
+            const float *m =
+                reinterpret_cast<const float *>(B.value.data + ref[1]);
+            sum += UnrolledMat3x3f(m) ^ (p.data + 3 * ref[0]);
+        }
+    }
+    for (unsigned off = CG_ROW_LANES / 2; off > 0; off >>= 1) {
+        for (unsigned c = 0; c < 3; ++c) {
+            sum[c] += __shfl_down_sync(0xffffffffu, sum[c], off, CG_ROW_LANES);
+        }
+    }
+    if (i < A.nrow && lane == 0) {
+        sum += UnrolledMat3x3f(C[i].data()) * (p.data + 3 * i);
+        for (unsigned k = 0; k < 3; ++k) {
+            result[3 * i + k] = sum[k];
+            dot += p[3 * i + k] * sum[k];
+        }
+    }
+    s_dot[threadIdx.x] = dot;
+    __syncthreads();
+    for (unsigned w = CGF_BLOCK / 2; w > 0; w >>= 1) {
+        if (threadIdx.x < w) {
+            s_dot[threadIdx.x] += s_dot[threadIdx.x + w];
+        }
+        __syncthreads();
+    }
+    if (threadIdx.x == 0) {
+        dot_partials[blockIdx.x] = s_dot[0];
+    }
+}
+
+// Row-count crossover for the symmetric scatter SpMV (see the two kernels).
+static constexpr unsigned CG_SYM_SPMV_MIN_ROWS = 100000;
+
+__global__ void cg_beta_kernel(float *d_beta, float *d_rz0, const float *d_rz1,
+                               int *breakdown) {
+    const float num = *d_rz1;
+    const float den = *d_rz0;
+    if (den > 0.0f) {
+        *d_beta = num / den;
+    } else {
+        *d_beta = 0.0f;
+        if (breakdown) {
+            *breakdown = 1;
+        }
+    }
+    *d_rz0 = num;
+}
+
 // Device-resident PCG, used for both the block-Jacobi and (with check_spd) the
 // Schwarz preconditioner. The same recurrence as the host cg() loop, numerically
 // equivalent up to float rounding (FMA AXPYs and float32 coefficient divisions,
@@ -242,12 +601,43 @@ cg_device(const DeviceOperators &op, Vec<float> &r, Vec<float> &x,
     int *d_rzbad = reinterpret_cast<int *>(sc.data + 7);
     CUDA_HANDLE_ERROR(cudaMemsetAsync(d_break, 0, 2 * sizeof(int), q));
 
+    // Fused iteration path (block-Jacobi base only; the Schwarz apply keeps
+    // the legacy launch sequence). The choice is fixed for the whole solve
+    // (force_bj only changes across cg() invocations), so the captured graph
+    // is consistent. Partial buffers are allocated before capture.
+    const bool fused = (op.H == nullptr || op.force_bj);
+    const bool use_sym_spmv = (vertex_count >= CG_SYM_SPMV_MIN_ROWS);
+    const unsigned grid_f = (vertex_count + CGF_BLOCK - 1) / CGF_BLOCK;
+    // The 8-lane SpMV launches CG_ROW_LANES threads per row.
+    const unsigned grid_mv =
+        (vertex_count * CG_ROW_LANES + CGF_BLOCK - 1) / CGF_BLOCK;
+    // err partials: grid_f blocks on the fused BJ path, 3n/CGF_BLOCK blocks on
+    // the Schwarz path's component-wise update; allocate the larger.
+    const unsigned grid_err =
+        fused ? grid_f : (3 * vertex_count + CGF_BLOCK - 1) / CGF_BLOCK;
+    auto fuse_partials = pool.get<float>(grid_f + grid_err + grid_mv);
+    float *rz_partials = fuse_partials.data;
+    float *err_partials = fuse_partials.data + grid_f;
+    float *pAp_partials = fuse_partials.data + grid_f + grid_err;
+
     // Residual sampling: batch the host read every RESID_CHECK_STRIDE iterations
     // while the residual is far from the tolerance (sync-free bulk), then drop to
     // every iteration once within NEAR_TOL_FACTOR of tol so a sub-tol crossing is
     // never sampled past, matching cg()'s per-iteration convergence test.
     const unsigned RESID_CHECK_STRIDE = 4;
     const double NEAR_TOL_FACTOR = 8.0;
+
+    // Experimental (PPF_CG_SKIPNORM=1): the residual L1-norm (op.norm_into) is
+    // consumed by the host only at scheduled check iters, so computing it every
+    // iteration is discarded work. When set, omit it from the captured iteration
+    // body and compute it on demand at the check site instead. Result-identical:
+    // r is not modified between the in-body norm point and end-of-iteration
+    // (precond only reads r), so the on-demand norm reads the same residual and
+    // the convergence decision at each check iter is unchanged.
+    static bool skip_norm = [] {
+        const char *e = std::getenv("PPF_CG_SKIPNORM");
+        return e && e[0] == '1';
+    }();
 
     // r holds b on entry; form the true residual r = b - A x.
     op.apply(x, tmp, q);
@@ -256,11 +646,16 @@ cg_device(const DeviceOperators &op, Vec<float> &r, Vec<float> &x,
     // err0 = ||r||_1. The one host read at setup (also handles the trivial
     // already-converged case).
     op.norm_into(r, tmp, d_err, q);
-    float err0_host = 0.0f;
-    CUDA_HANDLE_ERROR(cudaMemcpyAsync(&err0_host, d_err, sizeof(float),
+    // Pinned staging: a pageable destination degrades every small D2H to a
+    // ~100 us blocking staged copy (measured: the strided residual probes alone
+    // were ~14.9 s of host API time on the trapped bench); a pinned destination
+    // is a direct DMA (~5 us API). One persistent buffer serves the setup read
+    // and every in-loop probe; each value is consumed before the next read.
+    float *probe_pin = static_cast<float *>(pinned_scratch(4 * sizeof(float)));
+    CUDA_HANDLE_ERROR(cudaMemcpyAsync(probe_pin, d_err, sizeof(float),
                                       cudaMemcpyDeviceToHost, q));
     CUDA_HANDLE_ERROR(cudaStreamSynchronize(q));
-    const double err0 = err0_host;
+    const double err0 = probe_pin[0];
     if (err0 == 0.0) {
         return {true, 1u, 0.0f, false};
     }
@@ -277,21 +672,71 @@ cg_device(const DeviceOperators &op, Vec<float> &r, Vec<float> &x,
     // graph for the rest. Pointers and grid sizes are loop-invariant, so the
     // recorded launches replay correctly each iteration.
     auto issue_iteration = [&]() {
-        op.apply(p, tmp, q);                                     // tmp = A p
-        kernels::inner_product_into(p.data, tmp.data, d_pAp, p.size, q);
-        kernels::scalar_div(d_alpha, d_rz0, d_pAp, d_break, q);   // alpha = rz0/pAp
-        kernels::add_scaled_indirect(p.data, x.data, d_alpha, 1.0f, x.size, q);
-        kernels::add_scaled_indirect(tmp.data, r.data, d_alpha, -1.0f, r.size, q);
-        op.norm_into(r, tmp, d_err, q);                          // err = ||r||_1
-        op.precond(r, z, q);                                     // z = M^-1 r
-        kernels::inner_product_into(r.data, z.data, d_rz1, r.size, q);
-        if (check_spd) {
-            kernels::flag_if_nonpositive(d_rz1, d_rzbad, q);
+        if (fused) {
+            // Five launches per iteration: fused SpMV+dot, the pAp fold, the
+            // fused x/r/z update (alpha computed in-thread), the 2-way reduce
+            // with the beta/roll/SPD scalar tail folded into its block 0, and
+            // the p recurrence below.
+            if (use_sym_spmv) {
+                CUDA_HANDLE_ERROR(
+                    cudaMemsetAsync(tmp.data, 0,
+                                    3 * vertex_count * sizeof(float), q));
+                cg_apply_dot_sym_kernel<<<grid_mv, CGF_BLOCK, 0, q>>>(
+                    op.A, op.B, op.C, p, tmp, pAp_partials);
+            } else {
+                cg_apply_dot_walk_kernel<<<grid_mv, CGF_BLOCK, 0, q>>>(
+                    op.A, op.B, op.C, p, tmp, pAp_partials);
+            }
+            CUDA_HANDLE_ERROR(cudaGetLastError());
+            cg_reduce1_kernel<<<1, CGF_BLOCK, 0, q>>>(pAp_partials, grid_mv,
+                                                      d_pAp);
+            CUDA_HANDLE_ERROR(cudaGetLastError());
+            cg_fused_update_kernel<<<grid_f, CGF_BLOCK, 0, q>>>(
+                p.data, tmp.data, x.data, r.data, z.data, op.P.data, d_rz0,
+                d_pAp, d_break, vertex_count, rz_partials, err_partials);
+            CUDA_HANDLE_ERROR(cudaGetLastError());
+            cg_reduce2_kernel<<<2, CGF_BLOCK, 0, q>>>(
+                rz_partials, err_partials, grid_f, d_rz1, d_err, d_beta,
+                d_rz0, d_break, d_rzbad, check_spd ? 1 : 0);
+            CUDA_HANDLE_ERROR(cudaGetLastError());
+        } else {
+            // Schwarz path: same fused SpMV+dot and x/r update as the
+            // block-Jacobi path (the SpMV is preconditioner-agnostic; alpha is
+            // computed in-thread; the residual norm is a free by-product), with
+            // schwarz::apply supplying z and an inner product supplying r.z.
+            if (use_sym_spmv) {
+                CUDA_HANDLE_ERROR(
+                    cudaMemsetAsync(tmp.data, 0,
+                                    3 * vertex_count * sizeof(float), q));
+                cg_apply_dot_sym_kernel<<<grid_mv, CGF_BLOCK, 0, q>>>(
+                    op.A, op.B, op.C, p, tmp, pAp_partials);
+            } else {
+                cg_apply_dot_walk_kernel<<<grid_mv, CGF_BLOCK, 0, q>>>(
+                    op.A, op.B, op.C, p, tmp, pAp_partials);
+            }
+            CUDA_HANDLE_ERROR(cudaGetLastError());
+            cg_reduce1_kernel<<<1, CGF_BLOCK, 0, q>>>(pAp_partials, grid_mv,
+                                                      d_pAp);
+            CUDA_HANDLE_ERROR(cudaGetLastError());
+            const unsigned grid_3n = (3 * vertex_count + CGF_BLOCK - 1) /
+                                     CGF_BLOCK;
+            cg_update_xr_kernel<<<grid_3n, CGF_BLOCK, 0, q>>>(
+                p.data, tmp.data, x.data, r.data, d_rz0, d_pAp, d_break,
+                3 * vertex_count, err_partials);
+            CUDA_HANDLE_ERROR(cudaGetLastError());
+            cg_reduce1_kernel<<<1, CGF_BLOCK, 0, q>>>(err_partials, grid_3n,
+                                                      d_err);
+            CUDA_HANDLE_ERROR(cudaGetLastError());
+            op.precond(r, z, q);                                 // z = M^-1 r
+            kernels::inner_product_into(r.data, z.data, d_rz1, r.size, q);
+            if (check_spd) {
+                kernels::flag_if_nonpositive(d_rz1, d_rzbad, q);
+            }
+            kernels::scalar_div(d_beta, d_rz1, d_rz0, d_break, q); // beta
+            kernels::scalar_assign(d_rz0, d_rz1, q);             // rz0 <- rz1
         }
-        kernels::scalar_div(d_beta, d_rz1, d_rz0, d_break, q);    // beta = rz1/rz0
         kernels::combine_indirect(z.data, p.data, p.data, 1.0f, d_beta, p.size,
                                   q);                            // p = z + beta p
-        kernels::scalar_assign(d_rz0, d_rz1, q);                 // rz0 <- rz1
     };
 
     // CUDA graph of one iteration, captured lazily after the warm-up iteration so
@@ -374,16 +819,25 @@ cg_device(const DeviceOperators &op, Vec<float> &r, Vec<float> &x,
         // only at a scheduled check or at the cap.
         const bool at_cap = (iter >= max_iter);
         if (iter == next_check || at_cap) {
+            if (false) { // err is a free by-product on both fused paths
+                // Compute the residual L1-norm on demand (it was omitted from the
+                // iteration body); r is the post-iteration residual, so this is
+                // the same value the in-body norm would have produced.
+                op.norm_into(r, tmp, d_err, q);
+            }
             // Read err + the breakdown and rz<=0 flags once; d_err/d_break/
             // d_rzbad (sc.data+5,+6,+7) are adjacent, so one 3-float copy covers
             // all three.
-            float probe[3];
-            CUDA_HANDLE_ERROR(cudaMemcpyAsync(probe, d_err, 3 * sizeof(float),
+            // Re-fetch: the scratch pointer is stable today, but re-fetching
+            // makes this robust to any future scratch growth between checks.
+            probe_pin = static_cast<float *>(pinned_scratch(4 * sizeof(float)));
+            CUDA_HANDLE_ERROR(cudaMemcpyAsync(probe_pin, d_err,
+                                              3 * sizeof(float),
                                               cudaMemcpyDeviceToHost, q));
             CUDA_HANDLE_ERROR(cudaStreamSynchronize(q));
-            const double reresid = (double)probe[0] / err0;
-            const int broke = *reinterpret_cast<const int *>(&probe[1]);
-            const int rzbad = *reinterpret_cast<const int *>(&probe[2]);
+            const double reresid = (double)probe_pin[0] / err0;
+            const int broke = *reinterpret_cast<const int *>(&probe_pin[1]);
+            const int rzbad = *reinterpret_cast<const int *>(&probe_pin[2]);
             // Convergence is tested first, matching the host cg() ordering: a
             // finite residual below tol wins even if a flag latched earlier (a
             // NaN/Inf residual fails the < tol test and falls through).

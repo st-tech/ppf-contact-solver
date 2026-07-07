@@ -215,7 +215,7 @@ Y reduce(const Y *d_input1, const Y *d_input2, Op1 func1, Op2 func2, Y init_val,
     }
 
     if (grid_size == 1) {
-        cudaMemcpy(&result, d_output, sizeof(Y), cudaMemcpyDeviceToHost);
+        result = pinned_read(d_output);
         return result;
     }
 
@@ -226,7 +226,7 @@ Y reduce(const Y *d_input1, const Y *d_input2, Op1 func1, Op2 func2, Y init_val,
             d_output, d_final_result, func1,
             init_val, grid_size);
 
-        cudaMemcpy(&result, d_final_result, sizeof(Y), cudaMemcpyDeviceToHost);
+        result = pinned_read(d_final_result);
     } else {
         Y *d_temp = temp.data;
         cudaMemcpy(d_temp, d_output, grid_size * sizeof(Y),
@@ -250,7 +250,7 @@ Y reduce(const Y *d_input1, const Y *d_input2, Op1 func1, Op2 func2, Y init_val,
             grid_size = new_grid_size;
         }
 
-        cudaMemcpy(&result, d_output, sizeof(Y), cudaMemcpyDeviceToHost);
+        result = pinned_read(d_output);
     }
 
     return result;
@@ -290,7 +290,7 @@ T inner_product(const T *array1, const T *array2, unsigned size) {
 
     T result;
     if (grid_size == 1) {
-        cudaMemcpy(&result, d_output, sizeof(T), cudaMemcpyDeviceToHost);
+        result = pinned_read(d_output);
         return result;
     }
 
@@ -300,7 +300,7 @@ T inner_product(const T *array1, const T *array2, unsigned size) {
         auto add_func = [] __device__(T a, T b) { return a + b; };
         final_reduce_kernel<T><<<1, final_block_size>>>(
             d_output, d_final_result, add_func, T(), grid_size);
-        cudaMemcpy(&result, d_final_result, sizeof(T), cudaMemcpyDeviceToHost);
+        result = pinned_read(d_final_result);
     } else {
         T *d_temp = temp.data;
         cudaMemcpy(d_temp, d_output, grid_size * sizeof(T), cudaMemcpyDeviceToDevice);
@@ -317,7 +317,7 @@ T inner_product(const T *array1, const T *array2, unsigned size) {
             cudaMemcpy(d_temp, d_output, new_grid_size * sizeof(T), cudaMemcpyDeviceToDevice);
             grid_size = new_grid_size;
         }
-        cudaMemcpy(&result, d_output, sizeof(T), cudaMemcpyDeviceToHost);
+        result = pinned_read(d_output);
     }
 
     return result;

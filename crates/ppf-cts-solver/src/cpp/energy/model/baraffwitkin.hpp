@@ -123,17 +123,22 @@ __device__ Mat2x2f helper_adj2x2(const Mat2x2f &A) {
 
 __device__ Mat6x6f shear_hessian(const Mat3x2f &F, float lmd) {
     float I6 = F.col(0).dot(F.col(1));
-    float I2 = (F.array() * F.array()).sum();
-    Mat6x6f H = Mat6x6f::Zero();
-    H.block<3, 3>(0, 3) = Mat3x3f::Identity();
-    H.block<3, 3>(3, 0) = Mat3x3f::Identity();
+    float I2 = F.squaredNorm();
 
     Vec6f g;
     g.segment<3>(0) = F.col(1);
     g.segment<3>(3) = F.col(0);
 
-    float lmd0 = I2 + sqrt(I2 * I2 + 12.0f * I6 * I6);
-    Vec6f q0 = 2.0f * I6 * (H * g) + lmd0 * g;
+    // The 6x6 swap operator H (identity blocks at (0,3)/(3,0)) applied to
+    // g = [F.col(1); F.col(0)] just swaps the halves back: H*g = vec(F).
+    // Build that directly instead of materializing H and paying two 6x6
+    // matvecs (register relief in the 1-block/SM membrane kernel).
+    Vec6f Hg;
+    Hg.segment<3>(0) = F.col(0);
+    Hg.segment<3>(3) = F.col(1);
+
+    float lmd0 = I2 + sqrtf(I2 * I2 + 12.0f * I6 * I6);
+    Vec6f q0 = 2.0f * I6 * Hg + lmd0 * g;
 
     Vec6f z;
     float lmd1, lmd2;
@@ -147,8 +152,8 @@ __device__ Mat6x6f shear_hessian(const Mat3x2f &F, float lmd) {
         w3 << 0, 0, 0, 0, 1, 1;
     } else {
         lmd1 = lmd2 = -2.0f * I6;
-        float tmp = I2 - sqrt(I2 * I2 + 12.0f * I6 * I6);
-        z = 2.0f * I6 * (H * g) + tmp * g;
+        float tmp = I2 - sqrtf(I2 * I2 + 12.0f * I6 * I6);
+        z = 2.0f * I6 * Hg + tmp * g;
         w1 << 1, -1, 0, 0, 0, 0;
         w2 << 0, 0, 1, -1, 0, 0;
         w3 << 0, 0, 0, 0, 1, -1;

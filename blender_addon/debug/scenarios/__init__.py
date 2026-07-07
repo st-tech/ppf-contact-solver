@@ -152,6 +152,7 @@ from . import bl_pdrd_driven_translate
 from . import bl_pdrd_driven_rotate_vertex
 from . import bl_pdrd_panel_draws
 from . import bl_bake_animation
+from . import bl_export_cache
 from . import bl_mcp_roundtrip
 from . import bl_addon_reload_handoff
 from . import bl_ftetwild_overrides
@@ -339,6 +340,7 @@ REGISTRY = {
     "bl_pdrd_driven_rotate_vertex": bl_pdrd_driven_rotate_vertex,
     "bl_pdrd_panel_draws": bl_pdrd_panel_draws,
     "bl_bake_animation": bl_bake_animation,
+    "bl_export_cache": bl_export_cache,
 
     # Tier 3: nice-to-have coverage that needed extra rig plumbing
     # (MCP HTTP, addon reload handoff, fTetWild overrides, project

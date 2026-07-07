@@ -3,12 +3,19 @@
 // Review: Ryoichi Ando (ryoichi.ando@zozo.com)
 // License: Apache v2.0
 //
-// Self-intersection detection. 1:1 functional port of
-// frontend/_intersection_.py's `check_self_intersection` plus the
-// internal primitives:
+// Host-side self-intersection detection for the scene-build check.
 //
-//   * `edge_triangle_intersect` (signed-distance plane test).
-//   * `triangles_coplanar_overlap` (2D-projection fallback).
+// The edge-triangle pierce predicate is NOT reimplemented here: it is a
+// single source of truth shared with the GPU contact kernels. The same
+// templated routine in the solver's C++ tree
+// (crates/ppf-cts-solver/src/cpp/contact/intersect_core.hpp) is
+// instantiated for float on the device and for double here, reached via
+// the `extern "C"` shim in crates/ppf-cts-core/cpp/intersect_ffi.cpp
+// (compiled by build.rs). This module owns only the broad phase, the
+// topological skip rules, and the coplanar-overlap fallback:
+//
+//   * `edge_triangle_intersect` (FFI to the shared device predicate).
+//   * `triangles_coplanar_overlap` (2D-projection fallback; host only).
 //   * `_segments_intersect_2d`, `_point_in_triangle_2d`.
 //   * `_find_edge_tri_intersections` (BVH traversal with skip rules).
 //
@@ -42,32 +49,28 @@ const SEGMENT_2D_EPS_PARAMETER: f64 = 1e-10;
 const SEGMENT_2D_EPS_CROSS: f64 = 1e-14;
 
 // ---------------------------------------------------------------------------
-// Edge-triangle intersection primitives.
+// Edge-triangle intersection primitive (shared with the GPU).
 
-/// True if `p` lies inside the triangle `(0, d1, d2)`. 2x2 Gram solve;
-/// degenerate triangles return false.
-#[inline]
-fn point_triangle_inside(p: [f64; 3], d1: [f64; 3], d2: [f64; 3]) -> bool {
-    let a00 = dot3(d1, d1);
-    let a01 = dot3(d1, d2);
-    let a11 = dot3(d2, d2);
-    let b0 = dot3(d1, p);
-    let b1 = dot3(d2, p);
-    let det = a00 * a11 - a01 * a01;
-    if det == 0.0 {
-        return false;
-    }
-    let w0 = (a11 * b0 - a01 * b1) / det;
-    let w1 = (a00 * b1 - a01 * b0) / det;
-    let w2 = 1.0 - w0 - w1;
-    let wmin = w0.min(w1).min(w2);
-    let wmax = w0.max(w1).max(w2);
-    wmin >= 0.0 && wmax <= 1.0
+extern "C" {
+    /// Single source of truth for the edge-triangle pierce test, defined
+    /// in crates/ppf-cts-solver/src/cpp/contact/intersect_core.hpp and
+    /// linked via the host shim compiled by build.rs. The device contact
+    /// kernels call the same routine (instantiated for float); this is the
+    /// double instantiation, so the host build-check runs it in f64. Each
+    /// pointer addresses three contiguous `f64` coordinates.
+    fn ppf_isect_edge_triangle_intersect(
+        e0: *const f64,
+        e1: *const f64,
+        v0: *const f64,
+        v1: *const f64,
+        v2: *const f64,
+    ) -> bool;
 }
 
 /// True iff segment `(e0, e1)` strictly crosses triangle `(v0, v1, v2)`.
 /// Coplanar / touching cases return false; those are handled by
-/// `triangles_coplanar_overlap` separately.
+/// `triangles_coplanar_overlap` separately. Thin wrapper over the shared
+/// device predicate (see the `extern "C"` block above).
 #[inline]
 fn edge_triangle_intersect(
     e0: [f64; 3],
@@ -76,23 +79,18 @@ fn edge_triangle_intersect(
     v1: [f64; 3],
     v2: [f64; 3],
 ) -> bool {
-    let d1 = sub3(v1, v0);
-    let d2 = sub3(v2, v0);
-    let a0 = sub3(e0, v0);
-    let a1 = sub3(e1, v0);
-    let n = cross3(d1, d2);
-    let s1 = dot3(a0, n);
-    let s2 = dot3(a1, n);
-    if s1 * s2 < 0.0 {
-        let t = s1 / (s1 - s2);
-        let r = [
-            (1.0 - t) * a0[0] + t * a1[0],
-            (1.0 - t) * a0[1] + t * a1[1],
-            (1.0 - t) * a0[2] + t * a1[2],
-        ];
-        return point_triangle_inside(r, d1, d2);
+    // Safety: every pointer addresses a live `[f64; 3]` on this stack
+    // frame; the C routine only reads three doubles from each and does not
+    // retain them.
+    unsafe {
+        ppf_isect_edge_triangle_intersect(
+            e0.as_ptr(),
+            e1.as_ptr(),
+            v0.as_ptr(),
+            v1.as_ptr(),
+            v2.as_ptr(),
+        )
     }
-    false
 }
 
 /// 2D segment intersection in the (open-interval) interior. Used
@@ -660,19 +658,6 @@ mod tests {
         let e0 = [5.0, 5.0, -1.0];
         let e1 = [5.0, 5.0, 1.0];
         assert!(!edge_triangle_intersect(e0, e1, v0, v1, v2));
-    }
-
-    #[test]
-    fn point_triangle_inside_basic() {
-        // d1 / d2 are the two edges from a vertex; p is local space.
-        let d1 = [1.0, 0.0, 0.0];
-        let d2 = [0.0, 1.0, 0.0];
-        // Centroid in local frame.
-        assert!(point_triangle_inside([0.25, 0.25, 0.0], d1, d2));
-        // Outside (sum of barycentric > 1).
-        assert!(!point_triangle_inside([0.6, 0.6, 0.0], d1, d2));
-        // Negative coordinate.
-        assert!(!point_triangle_inside([-0.1, 0.5, 0.0], d1, d2));
     }
 
     #[test]

@@ -8,7 +8,6 @@
 
 #include "../common.hpp"
 #include "../data.hpp"
-#include <Eigen/Cholesky>
 
 namespace distance {
 
@@ -43,7 +42,7 @@ point_triangle_distance_coeff(const Vec3<T> &p, const Vec3<T> &t0,
     Vec3<Y> r1 = (t2 - t0).template cast<Y>();
     Mat3x2<Y> a;
     a << r0, r1;
-    Eigen::Transpose<Mat3x2<Y>> a_t = a.transpose();
+    Mat2x3<Y> a_t = a.transpose();
     Y det;
     Vec2<Y> c;
     solve<Y>(a_t * a, a_t * (p - t0).template cast<Y>(), c, det);
@@ -79,7 +78,7 @@ edge_edge_distance_coeff(const Vec3<T> &ea0, const Vec3<T> &ea1,
     Vec3<Y> r1 = (eb1 - eb0).template cast<Y>();
     Mat3x2<Y> a;
     a << r0, -r1;
-    Eigen::Transpose<Mat3x2<Y>> a_t = a.transpose();
+    Mat2x3<Y> a_t = a.transpose();
     Vec2<Y> x;
     Y det;
     solve<Y>(a.transpose() * a, a.transpose() * (eb0 - ea0).template cast<Y>(),

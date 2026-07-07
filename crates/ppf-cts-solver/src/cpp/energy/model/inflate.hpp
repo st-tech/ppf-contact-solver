@@ -7,6 +7,7 @@
 #define INFLATE_HPP
 
 #include "../../data.hpp"
+#include "../../linalg/eigsolve.hpp"
 
 namespace inflate {
 
@@ -57,10 +58,9 @@ __device__ Mat9x9f face_hessian(float pressure, const Vec3f &v0,
     A <<  0, s2, s1,
          s2,  0, s0,
          s1, s0,  0;
-    Eigen::SelfAdjointEigenSolver<Mat3x3f> eigsolver;
-    eigsolver.computeDirect(A);
-    Vec3f eigvals_A = eigsolver.eigenvalues();
-    Mat3x3f eigvecs_A = eigsolver.eigenvectors();
+    Vec3f eigvals_A;
+    Mat3x3f eigvecs_A;
+    linalg::eig::symm3x3(A, eigvals_A, eigvecs_A);
 
     // --- Collect kept eigenvalues and eigenvectors ---
     // We keep modes where the H = -(P/6)*M eigenvalue is positive:

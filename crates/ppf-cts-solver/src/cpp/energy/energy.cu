@@ -253,7 +253,7 @@ __device__ void embed_vertex_force_hessian(
     }
 
     if (param.fix_xz && y[1] > float(param.fix_xz)) {
-        float t = fmin(1.0f, y[1] - float(param.fix_xz));
+        float t = fminf(1.0f, y[1] - float(param.fix_xz));
         Vec3f n(0.0f, 1.0f, 0.0f);
         Mat3x3f P = Mat3x3f::Identity() - n * n.transpose();
         f += P * t * mass * (y - x) / (dt * dt);
@@ -311,8 +311,9 @@ __device__ void embed_face_force_hessian(const DataSet &data,
         Mat3x3f X;
         X << x0, x1, x2;
         F = utility::compute_deformation_grad(X, data.inv_rest2x2[i]);
-        const Svd3x2 svd = utility::svd3x2(F);
         if (face_param.model == Model::BaraffWitkin) {
+            // BaraffWitkin never reads the SVD; keep it out of this branch so
+            // the default cloth path does not carry the eigensolve's registers.
             Mat3x2f de0dF = BaraffWitkin::stretch_gradient(F, mu);
             Mat3x2f de1dF = BaraffWitkin::shear_gradient(F, face_param.lambda);
             Mat6x6f d2e0dF2 = BaraffWitkin::stretch_hessian(F, mu);
@@ -323,9 +324,8 @@ __device__ void embed_face_force_hessian(const DataSet &data,
             d2edx2 +=
                 mass * utility::convert_hessian(d2edF2, data.inv_rest2x2[i]);
         } else {
+            const Svd3x2 svd = utility::svd3x2(F);
             DiffTable2 table;
-            Mat3x2f dedF;
-            Mat6x6f d2edF2;
             if (face_param.model == Model::ARAP) {
                 table = ARAP::make_diff_table2(svd.S, mu, face_param.lambda);
             } else if (face_param.model == Model::StVK) {
@@ -335,9 +335,9 @@ __device__ void embed_face_force_hessian(const DataSet &data,
             } else {
                 assert(false);
             }
-            dedF = eigenanalysis::compute_force(table, svd);
-            d2edF2 = eigenanalysis::compute_hessian(table, svd,
-                                                    param.eiganalysis_eps);
+            Mat3x2f dedF = eigenanalysis::compute_force(table, svd);
+            Mat6x6f d2edF2 = eigenanalysis::compute_hessian(
+                table, svd, param.eiganalysis_eps);
             dedx += mass * utility::convert_force(dedF, data.inv_rest2x2[i]);
             d2edx2 +=
                 mass * utility::convert_hessian(d2edF2, data.inv_rest2x2[i]);
@@ -381,7 +381,6 @@ __device__ void embed_tet_force_hessian(const DataSet &data,
         Svd3x3 svd = utility::svd3x3_rv(F);
         DiffTable3 table;
         Mat3x3f dedF;
-        Mat9x9f d2edF2;
         Mat3x4f dedx = Mat3x4f::Zero();
         Mat12x12f d2edx2 = Mat12x12f::Zero();
         if (tet_param.model == Model::ARAP) {
@@ -394,10 +393,13 @@ __device__ void embed_tet_force_hessian(const DataSet &data,
             assert(false);
         }
         dedF = eigenanalysis::compute_force(table, svd);
-        d2edF2 =
-            eigenanalysis::compute_hessian(table, svd, param.eiganalysis_eps);
         dedx += mass * utility::convert_force(dedF, data.inv_rest3x3[i]);
-        d2edx2 += mass * utility::convert_hessian(d2edF2, data.inv_rest3x3[i]);
+        // Fused eigenmode -> 12x12 build; skips the 9x9 dF-space intermediate
+        // and the block conversion (equivalent to compute_hessian +
+        // convert_hessian, device-self-tested).
+        eigenanalysis::accumulate_hessian_tet_fused(
+            table, svd, param.eiganalysis_eps, data.inv_rest3x3[i], mass,
+            d2edx2);
         add_stiffness_damping<4>(data, eval_x, tet, tet_param.deform_damping, dt,
                                  dedx, d2edx2);
         utility::atomic_embed_force<4>(tet, dedx, force);
@@ -734,11 +736,11 @@ void embed_stitch_force_hessian(const DataSet &data, const Vec<Vec3f> &eval_x,
                        w[4] * (x4 - cog) +
                        w[5] * (x5 - cog);
             Vec3f t = z0 - z1;
-            float l = fmin(l_cap, t.norm());
+            float l = fminf(l_cap, t.norm());
             Vec3f n = t / l;
-            using Mat3x18f = Eigen::Matrix<float, 3, 18>;
-            using Vec18f = Eigen::Vector<float, 18>;
-            using Mat18x18f = Eigen::Matrix<float, 18, 18>;
+            using Mat3x18f = SMatf<3, 18>;
+            using Vec18f = SVec<float, 18>;
+            using Mat18x18f = SMatf<18, 18>;
             Mat3x18f dtdx;
             dtdx << w[0] * Mat3x3f::Identity(),
                     w[1] * Mat3x3f::Identity(),
@@ -751,7 +753,7 @@ void embed_stitch_force_hessian(const DataSet &data, const Vec<Vec3f> &eval_x,
             float r = (l - l0) / l;
             float c0 = fmaxf(0.0f, 1.0f - r) / l0;
             float c1 = fmaxf(0.0f, r / l0);
-            Eigen::Matrix<float, 3, 6> gradient;
+            SMatf<3, 6> gradient;
             gradient.col(0) = w[0] * dedt;
             gradient.col(1) = w[1] * dedt;
             gradient.col(2) = w[2] * dedt;

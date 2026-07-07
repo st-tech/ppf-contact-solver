@@ -47,7 +47,7 @@ __device__ static float face_dihedral_angle(const Vec3f &v0, const Vec3f &v1,
                                             const Vec3f &v3) {
     const Vec3f n1 = (v1 - v0).cross(v2 - v0);
     const Vec3f n2 = (v2 - v3).cross(v1 - v3);
-    float dot = n1.dot(n2) / sqrt(n1.squaredNorm() * n2.squaredNorm());
+    float dot = n1.dot(n2) / sqrtf(n1.squaredNorm() * n2.squaredNorm());
     float angle = acosf(fmaxf(-1.0f, fminf(1.0f, dot)));
     if (n2.cross(n1).dot(v1 - v2) < 0.0f) {
         angle = -angle;

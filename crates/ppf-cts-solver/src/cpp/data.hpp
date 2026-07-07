@@ -6,11 +6,11 @@
 #ifndef DATA_HPP
 #define DATA_HPP
 
+#include "linalg/smat.hpp"
 #include "vec/vec.hpp"
-#include <Eigen/Dense>
 
-using Eigen::Map;
-template <class T, unsigned N> using SVec = Eigen::Vector<T, N>;
+using linalg::Map;
+template <class T, unsigned N> using SVec = linalg::SVec<T, N>;
 template <unsigned N> using SVecf = SVec<float, N>;
 template <unsigned N> using SVecu = SVec<unsigned, N>;
 
@@ -38,9 +38,8 @@ using Vec6u = Vec6<unsigned>;
 
 
 template <class T, unsigned R, unsigned C>
-using SMat = Eigen::Matrix<T, R, C, Eigen::ColMajor>;
-template <unsigned R, unsigned C>
-using SMatf = Eigen::Matrix<float, R, C, Eigen::ColMajor>;
+using SMat = linalg::SMat<T, R, C>;
+template <unsigned R, unsigned C> using SMatf = linalg::SMat<float, R, C>;
 
 template <class T> using Mat3x2 = SMat<T, 3, 2>;
 template <class T> using Mat2x2 = SMat<T, 2, 2>;
@@ -546,7 +545,11 @@ struct DataSet {
 
 /********** CUSTOM TYPES **********/
 
-struct AABB {
+struct alignas(32) AABB {
+    // alignas(32) pads the 28-byte payload to a 32-byte stride so every
+    // random aabb[index] load in BVH traversal is exactly one 32-byte sector
+    // (at 28 bytes, ~75% of loads straddled two sectors). Device-only struct
+    // (not part of the Rust wire ABI).
     Vec3f min;
     Vec3f max;
     bool active;

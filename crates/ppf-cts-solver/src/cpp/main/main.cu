@@ -32,6 +32,7 @@
 #include "cuda_utils.hpp"
 #include "mem.hpp"
 #include <cassert>
+#include <cstdlib>
 #include <limits>
 
 namespace tmp {
@@ -491,6 +492,29 @@ StepResult advance() {
     auto force = pool.get<float>(3 * vertex_count);
     auto dx = pool.get<float>(3 * vertex_count);
     auto diag_hess = pool.get<Mat3x3f>(vertex_count);
+
+    // Experimental CG warm-start (PPF_CG_WARMSTART=1): seed the first Newton
+    // solve of each frame with the previous frame's converged search direction
+    // instead of zero. PCG converges to the same solution within tol regardless
+    // of the initial guess, so this only changes the iteration count, not the
+    // result. `dx_warm` persists across advance() calls (one process per
+    // session, like PDRD::pdrd_rprev); reseeded if vertex_count changes.
+    // (A 2-frame linear-extrapolation variant was measured as a wash and dropped.)
+    static bool cg_warmstart = [] {
+        const char *e = std::getenv("PPF_CG_WARMSTART");
+        return e && e[0] == '1';
+    }();
+    static Vec<float> dx_warm;
+    static unsigned dx_warm_n = 0;
+    static bool dx_warm_seeded = false;
+    if (cg_warmstart && dx_warm_n != 3u * vertex_count) {
+        if (dx_warm.size) {
+            dx_warm.free();
+        }
+        dx_warm = Vec<float>::alloc(3u * vertex_count);
+        dx_warm_n = 3u * vertex_count;
+        dx_warm_seeded = false;
+    }
     auto rigid_tgt = pool.get<Vec3f>(rigid_pdrd ? vertex_count : 1);
 
     // Anchored-rigidify state (PDRD): R_run integrates the applied rotation
@@ -536,7 +560,11 @@ StepResult advance() {
         diag_hess.clear(Mat3x3f::Zero());
         fixed_hess.clear();
         force.clear();
-        dx.clear();
+        if (cg_warmstart && !final_step && step == 1 && dx_warm_seeded) {
+            kernels::copy(dx_warm.data, dx.data, 3u * vertex_count);
+        } else {
+            dx.clear();
+        }
 
         // SAND grains: zero the transient spin accumulators each iteration so the
         // contact embeds (grain-grain point-point + floor/sphere) ACCUMULATE
@@ -728,6 +756,14 @@ StepResult advance() {
                           reresid, schwarz_fallback, data, dt, pdrd_dtheta_vec);
         logging.pop();
 
+        // Save the converged first-Newton search direction for next frame's
+        // warm-start. dx is only read (never mutated) after the solve, so this
+        // snapshot is the full Newton direction before the toi rescale/apply.
+        if (cg_warmstart && success && !final_step && step == 1) {
+            kernels::copy(dx.data, dx_warm.data, 3u * vertex_count);
+            dx_warm_seeded = true;
+        }
+
         // Name: Linear Solve Iteration Count
         // Format: list[(time, iterations)]
         // Map: pcg_iter
@@ -798,7 +834,7 @@ StepResult advance() {
         // decide whether the search direction must be rescaled before
         // the line search.
         logging.mark("max_dx", max_dx);
-        float toi_recale = fmin(1.0f, prm.max_dx / max_dx);
+        float toi_recale = fminf(1.0f, prm.max_dx / max_dx);
 
         // Name: Search Direction Rescale Factor
         // Format: list[(time, ratio)]
@@ -830,7 +866,7 @@ StepResult advance() {
                 [eval_x_vec, vertex_prev,
                  fix_xz_val] __device__(unsigned i) mutable {
                     if (eval_x_vec[i][1] > float(fix_xz_val)) {
-                        float y = fmin(1.0f, eval_x_vec[i][1] -
+                        float y = fminf(1.0f, eval_x_vec[i][1] -
                                                       float(fix_xz_val));
                         Vec3f z = vertex_prev[i];
                         eval_x_vec[i][0] -= y * (eval_x_vec[i][0] - z[0]);
@@ -870,7 +906,7 @@ StepResult advance() {
         logging.push("line search");
         float SL_toi = 1.0f;
         float toi = 1.0f;
-        toi = fmin(toi, contact::line_search(data, target, eval_x, prm));
+        toi = fminf(toi, contact::line_search(data, target, eval_x, prm));
         if (shell_face_count > 0) {
             auto tmp_scalar = pool.get<float>(shell_face_count);
             SL_toi = strainlimiting::line_search(data, eval_x, target,
