@@ -43,6 +43,22 @@ from ..models.defaults import DEFAULT_SERVER_PORT, DEFAULT_SSH_KEEPALIVE_INTERVA
 DATA_PICKLE = "data.pickle"
 PARAM_PICKLE = "param.pickle"
 
+# Status-query channels (LocalBackend / DockerBackend / WinNativeBackend open
+# a raw socket; SSHBackend a paramiko direct-tcpip channel) carry a short
+# request/response round-trip, so they must complete in well under a second on
+# any backend. None of the open_channel implementations set a timeout, so a
+# blocking recv() waits forever if the server accepts the connection but never
+# answers -- e.g. its accept loop is momentarily stalled while the solver
+# finalizes and writes finished.txt. Because the single I/O worker thread runs
+# one operation at a time, one such stuck query wedges the whole worker: the
+# addon stops polling and hangs indefinitely with a stale solver=RUNNING even
+# though the solve already finished (observed intermittently, and made more
+# likely by build-time timing shifts such as a newer scipy). Capping the query
+# channel lets the `_query_via_channel` except -> (alive=False) path fire on a
+# stall so the next background poll retries on a fresh connection, which the
+# now-freed server answers. Both socket and paramiko Channel expose settimeout.
+_QUERY_CHANNEL_TIMEOUT_S = 30.0
+
 
 def _force_tcp() -> bool:
     """True when ``PPF_FORCE_TCP_TRANSFER`` is set to a truthy value.
@@ -217,6 +233,10 @@ def _query_via_channel(
     channel = None
     try:
         channel = channel_opener()
+        # Bound every send/recv so a wedged server can't block the I/O worker
+        # forever; on timeout the except below returns (alive=False) and the
+        # caller retries on the next poll. See _QUERY_CHANNEL_TIMEOUT_S.
+        channel.settimeout(_QUERY_CHANNEL_TIMEOUT_S)
         payload = flattened.encode()
         channel.sendall(HEADER_TEXT_CMD)
         channel.sendall(len(payload).to_bytes(4, "big"))

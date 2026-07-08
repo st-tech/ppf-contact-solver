@@ -27,6 +27,7 @@ from . import upload_id_changes
 from . import bl_connect_local
 from . import bl_connect_win_native
 from . import bl_connection_path_validation
+from . import bl_win_native_root_resolve
 from . import bl_direct_disk_transfer
 from . import bl_rust_binary_protocol
 
@@ -214,6 +215,7 @@ REGISTRY = {
     "bl_connect_local": bl_connect_local,
     "bl_connect_win_native": bl_connect_win_native,
     "bl_connection_path_validation": bl_connection_path_validation,
+    "bl_win_native_root_resolve": bl_win_native_root_resolve,
     "bl_direct_disk_transfer": bl_direct_disk_transfer,
     "bl_rust_binary_protocol": bl_rust_binary_protocol,
 

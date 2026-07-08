@@ -529,8 +529,20 @@ class EffectRunner:
         # directly; for SSH / Docker we go through ``exec_command``.
         # SSH/Docker targets are always Linux, so use POSIX joins and
         # no .exe regardless of the client OS.
-        is_local = self._backend.backend_type in ("local", "win_native")
-        if is_local:
+        if self._backend.backend_type == "win_native":
+            # win_native ships ppf-cts-server.exe under target/release (a dev /
+            # main repo checkout) OR bin/ (a distributable bundle); accept
+            # either, matching the spawn path's probe so a valid bundle root
+            # isn't spuriously rejected here after connect.
+            from .connection import win_native_server_binary
+            if win_native_server_binary(directory) is None:
+                expected = os.path.join(directory, "target", "release", "ppf-cts-server.exe")
+                self._engine.dispatch(ErrorOccurred(
+                    error=f"Remote path not found ({expected}).",
+                    source="validate_path",
+                ))
+            return
+        if self._backend.backend_type == "local":
             bin_name = "ppf-cts-server.exe" if os.name == "nt" else "ppf-cts-server"
             server_bin = os.path.join(directory, "target", "release", bin_name)
             if not os.path.isfile(server_bin):

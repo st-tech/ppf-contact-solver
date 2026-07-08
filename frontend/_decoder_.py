@@ -28,6 +28,39 @@ _PIN_WEIGHT_EPS = 1e-4
 # Used as the cfg "fix_weight_threshold" fallback.
 _DEFAULT_FIX_WEIGHT_THRESHOLD = 0.5
 
+_SCIPY_MISSING_WARNED = False
+
+
+def _warn_if_scipy_missing(context):
+    """Emit a loud one-time warning when SciPy is absent.
+
+    The partial-pin SOLID diffusion (``_build_solid_pin_fields`` /
+    ``_build_harmonic_interior_operator``) imports SciPy inside a
+    ``try/except`` that returns ``None`` on any failure, so a runtime
+    without SciPy does not crash: it silently takes a different
+    surface-only fallback pin path. That yields a DIFFERENT driven-vertex
+    set than a SciPy-equipped runtime (observed: a Windows bundle missing
+    SciPy diverged from the identical Linux scene). Distinguish the
+    packaging problem (SciPy genuinely absent) from a legitimate solve
+    failure so the former is visible instead of silently wrong.
+    """
+    global _SCIPY_MISSING_WARNED
+    if _SCIPY_MISSING_WARNED:
+        return
+    import importlib.util
+    if importlib.util.find_spec("scipy") is not None:
+        return  # SciPy present; the None came from a real solve failure.
+    _SCIPY_MISSING_WARNED = True
+    import sys
+    print(
+        "WARNING: SciPy is not installed. Partially-pinned SOLID objects fall "
+        "back to a surface-only pin path that differs from the SciPy-based "
+        "two-stage Poisson diffusion, producing a different (and "
+        "platform-inconsistent) driven-vertex set for the same scene. Install "
+        f"scipy so every platform uses the same pin path (context: {context}).",
+        file=sys.stderr, flush=True,
+    )
+
 
 @dataclass
 class ObjectInfo:
@@ -1528,6 +1561,7 @@ def _build_harmonic_interior_operator(n_verts, tets, surf_ids, interior_ids):
         import numpy as np
         import scipy.sparse.linalg as spla
     except Exception:
+        _warn_if_scipy_missing("_build_harmonic_interior_operator")
         return None
     try:
         T = np.asarray(tets, dtype=np.int64)
@@ -1597,6 +1631,7 @@ def _build_solid_pin_fields(tet_mesh, F_arr, pin_index, alpha_rel=0.1):
         import scipy.sparse.linalg as spla
         from ._bvh_ import frame_mapping
     except Exception:
+        _warn_if_scipy_missing("_build_solid_pin_fields")
         return None
     try:
         bl = getattr(tet_mesh, "_pin_blender_surface", None)

@@ -96,6 +96,74 @@ def _probe_ppf_cts_server(port: int, timeout: float = 1.5) -> bool:
     return isinstance(resp, dict) and "protocol_version" in resp
 
 
+# Relative locations ``ppf-cts-server.exe`` can occupy under a valid Windows
+# Native root. Two layouts ship it: a dev / main repo checkout keeps it under
+# ``target/release/``; a distributable bundle keeps it under ``bin/``.
+_WIN_NATIVE_SERVER_SUBPATHS = (
+    ("target", "release", "ppf-cts-server.exe"),  # dev / main repo checkout
+    ("bin", "ppf-cts-server.exe"),                 # distributable bundle
+)
+
+# Parent levels ``resolve_win_native_root`` climbs before giving up. The
+# deepest legitimate selection is ``<root>/target/release`` (two below the
+# root); a small bound keeps the walk from wandering far up the filesystem
+# when the user picked something unrelated to a solver root.
+_WIN_NATIVE_MAX_ASCEND = 6
+
+
+def win_native_server_binary(root):
+    """Return the ``ppf-cts-server.exe`` path under *root*, or ``None``.
+
+    Probes the two shipped layouts (``target/release/`` for a repo checkout,
+    ``bin/`` for a distributable bundle). A directory is a valid Windows Native
+    root exactly when this returns a path, so it is the single source of truth
+    for "does this directory hold the solver", shared by the spawn path and the
+    panel's live validity label.
+    """
+    if not root:
+        return None
+    for parts in _WIN_NATIVE_SERVER_SUBPATHS:
+        candidate = os.path.join(root, *parts)
+        if os.path.exists(candidate):
+            return candidate
+    return None
+
+
+def resolve_win_native_root(selected):
+    """Resolve the real Windows Native solver root from a user *selected* path.
+
+    The user is meant to pick the bundle / repo root that holds
+    ``ppf-cts-server.exe`` (see :func:`win_native_server_binary`), but community
+    users frequently pick a *subdirectory* of it (``target/release``, ``bin``,
+    or the embedded ``python`` folder) and hit a confusing "ppf-cts-server.exe
+    not found" error. Starting at *selected*, walk up parent directories and
+    return the first one that is a valid root: a subdirectory resolves to its
+    parent, and an already-correct selection returns itself (the selected path
+    is tested before any ascent, so a valid root never over-climbs to an outer
+    one).
+
+    Returns ``None`` when neither *selected* nor any parent within
+    :data:`_WIN_NATIVE_MAX_ASCEND` levels is a valid root, so the caller can
+    fall back to the raw selection and surface its own "not found" error
+    against the path the user actually chose.
+    """
+    if not selected or not selected.strip():
+        return None
+    current = selected.strip().rstrip("/\\")
+    # DIR_PATH yields a directory, but a hand-typed path might name the binary
+    # itself; ascend from its containing directory in that case.
+    if os.path.isfile(current):
+        current = os.path.dirname(current)
+    for _ in range(_WIN_NATIVE_MAX_ASCEND + 1):
+        if win_native_server_binary(current) is not None:
+            return current
+        parent = os.path.dirname(current)
+        if not parent or parent == current:
+            break  # reached the filesystem root
+        current = parent
+    return None
+
+
 def spawn_win_native_server(root, port):
     """Spawn a fresh win_native ``ppf-cts-server.exe`` subprocess and return the Popen.
 
@@ -143,12 +211,9 @@ def spawn_win_native_server(root, port):
     # when we actually need to spawn; the attach path above already
     # returned. Resolved before the embedded-Python branch so an
     # all-missing layout surfaces the server.exe error first.
-    candidates = [
-        os.path.join(root, "target", "release", "ppf-cts-server.exe"),
-        os.path.join(root, "bin", "ppf-cts-server.exe"),
-    ]
-    rust_bin = next((p for p in candidates if os.path.exists(p)), None)
+    rust_bin = win_native_server_binary(root)
     if rust_bin is None:
+        candidates = [os.path.join(root, *parts) for parts in _WIN_NATIVE_SERVER_SUBPATHS]
         raise FileNotFoundError(
             "Rust ppf-cts-server.exe not found in "
             f"{candidates}. Build with `cargo build --release -p ppf-cts-server`."
@@ -236,6 +301,15 @@ def connect_win_native(root, port):
     # detection and the Popen, and return ConnectionInfo with
     # ``process=None`` so WinNativeBackend treats the connection as
     # metadata-only, the same shape connect_local has on Linux.
+    # Community users often point the addon at a subdirectory of the real
+    # solver root (target/release, bin, or the embedded python/ folder). Walk
+    # up to the actual bundle / repo root so those selections just work; fall
+    # back to the raw path when nothing qualifies so spawn's FileNotFoundError
+    # still names the path the user chose. Resolving here (not just inside
+    # spawn) keeps current_directory / remote_root pointed at the real root,
+    # which the backend uses as the transfer cwd and PYTHONPATH base and which
+    # start_server re-spawns from after a Stop.
+    root = resolve_win_native_root(root) or root.rstrip("/\\")
     process = spawn_win_native_server(root, port)
     root = root.rstrip("/\\")
 

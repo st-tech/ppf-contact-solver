@@ -149,6 +149,29 @@ def _draw_path_warning(layout, path) -> bool:
     return True
 
 
+def _draw_win_native_status(layout, win_path) -> None:
+    """Draw the Windows Native solver-path validity line(s) for *win_path*.
+
+    Resolves *win_path* to the real solver root (walking up from a selected
+    subdirectory such as ``target/release``, ``bin``, or the embedded
+    ``python`` folder), then draws a CHECKMARK when a root is found, adding a
+    second line naming the resolved root when it differs from what the user
+    selected, or an ERROR when no ancestor holds ``ppf-cts-server.exe``.
+    No-op for a blank path.
+    """
+    win_path = (win_path or "").strip().rstrip("/\\")
+    if not win_path:
+        return
+    from ..core.connection import resolve_win_native_root
+    resolved = resolve_win_native_root(win_path)
+    if resolved is None:
+        layout.label(text="ppf-cts-server.exe not found", icon="ERROR")
+        return
+    layout.label(text="Solver path valid", icon="CHECKMARK")
+    if os.path.normpath(resolved) != os.path.normpath(win_path):
+        layout.label(text=f"Using solver root: {resolved}")
+
+
 def _draw_long_path_warning(layout, path, project_name) -> bool:
     """Draw a warning when the build pipeline's deepest cache file under
     *path* would reach the Windows ``MAX_PATH`` limit for *project_name*, and
@@ -325,16 +348,7 @@ class MAIN_PT_RemotePanel(Panel):
             if props.server_type == "WIN_NATIVE":
                 col.prop(props, "win_native_path")
                 if not _draw_path_warning(col, props.win_native_path):
-                    win_path = props.win_native_path.strip().rstrip("/\\")
-                    if win_path:
-                        candidates = [
-                            os.path.join(win_path, "target", "release", "ppf-cts-server.exe"),
-                            os.path.join(win_path, "bin", "ppf-cts-server.exe"),
-                        ]
-                        if any(os.path.exists(p) for p in candidates):
-                            col.label(text="Solver path valid", icon="CHECKMARK")
-                        else:
-                            col.label(text="ppf-cts-server.exe not found", icon="ERROR")
+                    _draw_win_native_status(col, props.win_native_path)
                     _draw_long_path_warning(col, props.win_native_path, state.project_name)
             elif props.server_type == "LOCAL":
                 col.prop(props, "local_path")

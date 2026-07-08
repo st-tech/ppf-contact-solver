@@ -425,7 +425,17 @@ if errorlevel 1 (
     REM psutil: pulled in by frontend (BUILD_WORKER) and by the response
     REM builder's runtime utilization probe (CPU%/RAM%) on machines
     REM without nvidia-smi.
-    set PACKAGES=numpy numba plyfile requests certifi gdown trimesh pywavefront matplotlib tqdm pythreejs ipywidgets fast-simplification tabulate triangle cbor2 psutil
+    REM scipy: REQUIRED by frontend/_decoder_.py. The two-stage Poisson pin
+    REM diffusion for partially-pinned SOLID objects (_build_solid_pin_fields,
+    REM _build_harmonic_interior_operator) uses scipy.sparse solves. It is
+    REM imported inside a try/except that silently returns None when scipy is
+    REM absent, so a Windows build WITHOUT scipy does not crash: it quietly
+    REM takes a different (surface-only) fallback pin path than the Linux build,
+    REM producing a DIFFERENT driven-vertex set (e.g. 861 vs 845 on a partial-
+    REM pin SOLID) and hence a divergent simulation for the same scene. scipy is
+    REM present transitively on Linux but was never installed here, so it must
+    REM be listed explicitly to keep Windows and Linux on the same code path.
+    set PACKAGES=numpy scipy numba plyfile requests certifi gdown trimesh pywavefront matplotlib tqdm pythreejs ipywidgets fast-simplification tabulate triangle cbor2 psutil
 
     REM Development tools
     set DEV_PACKAGES=ruff black isort
@@ -448,6 +458,24 @@ if errorlevel 1 (
     "%PYTHON%" -m pip install --no-warn-script-location pytetwild tetgen pyvista
     if errorlevel 1 (
         echo WARNING: pytetwild/tetgen failed to install
+    )
+
+    echo.
+    echo === Verifying critical frontend dependencies ===
+    REM The pip installs above only WARN on failure and continue, so a partial
+    REM failure (observed: pytetwild installed but tetgen/pyvista silently
+    REM missing; or scipy absent) would otherwise ship a bundle whose build
+    REM worker cannot run a SOLID simulation. tetgen/pytetwild/pyvista missing =
+    REM ModuleNotFoundError at build time; scipy missing is worse, it does not
+    REM crash but makes the frontend take a different pin-diffusion path so the
+    REM Windows result silently diverges from Linux. Hard-fail here so a broken
+    REM bundle can never be built or published; re-run warmup on a working pip.
+    "%PYTHON%" -c "import importlib.util as u, sys; req=['numpy','scipy','cbor2','tetgen','pytetwild','pyvista']; miss=[m for m in req if u.find_spec(m) is None]; sys.stderr.write('missing critical frontend deps: '+', '.join(miss)+'\n') if miss else sys.stdout.write('all critical frontend deps present\n'); sys.exit(1 if miss else 0)"
+    if errorlevel 1 (
+        echo ERROR: critical frontend dependencies are missing after install.
+        echo A bundle without these cannot run a SOLID simulation. Re-run
+        echo warmup.bat with a working network/pip index and check the log above.
+        exit /b 1
     )
 
     echo.

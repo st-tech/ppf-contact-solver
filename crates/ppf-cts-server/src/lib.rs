@@ -57,6 +57,18 @@ pub use executor::{DefaultExecutor, EffectExecutor};
 /// `frontend` decoder disagrees about payload shape; an un-bumped
 /// version there silently mis-decodes instead of erroring.
 ///
+/// 0.11: SciPy is now a hard requirement of the frontend decoder. The
+/// two-stage Poisson pin diffusion for a partially-pinned SOLID
+/// (`_build_solid_pin_fields` / `_build_harmonic_interior_operator`)
+/// imports SciPy inside a `try/except` that returns `None` when it is
+/// absent, so a SciPy-less build does not error: it silently takes a
+/// different surface-only fallback pin path and decodes the same
+/// `param` payload into a different driven-vertex set (a Windows bundle
+/// shipped without SciPy diverged from the identical Linux scene). The
+/// bundled dependency set is therefore part of the decoder contract;
+/// this bump forces an addon to pair only with a matched, SciPy-equipped
+/// server (warmup now hard-fails a build missing SciPy).
+///
 /// 0.09: additive scene / dyn-param fields for the per-object bending
 /// reference rest shape and the angular velocity overwrite.
 /// `ObjectInfo` gains an optional `bend_rest_vert` (guarded by a
@@ -118,4 +130,4 @@ pub use executor::{DefaultExecutor, EffectExecutor};
 /// to signal end-of-input, but tokio on Windows did not surface that
 /// half-close as `Ok(0)` to AsyncRead, so the server's read loop
 /// hung forever and the connection sat in FIN_WAIT_2 indefinitely.
-pub const PROTOCOL_VERSION: &str = "0.10";
+pub const PROTOCOL_VERSION: &str = "0.11";

@@ -77,7 +77,7 @@ import json
 # tokio did not deliver that half-close to the server's AsyncRead, so
 # the server hung in its read loop and connections piled up in
 # FIN_WAIT_2 until the server stopped responding entirely.
-PROTOCOL_VERSION = "0.10"
+PROTOCOL_VERSION = "0.11"
 HEADER_TEXT_CMD = b"TCMD"
 HEADER_JSON_DATA = b"JSON"
 DEFAULT_CHUNK_SIZE = 32 * 1024
