@@ -100,6 +100,7 @@ involving 👚 shells, 🪵 solids, 🪢 rods, 🧱 rigid bodies and ⏳ sand. S
 
 ## 📝 Change History
 
+- (2026.07.09) Added a [performance article](./articles/performance.md) benchmarking the speedup across all examples.
 - (2026.06.30) Added rigidbody support based on [Painless Differentiable Rotation Dynamics](https://dl.acm.org/doi/10.1145/3730944).
 - (2026.06.30) Added sand support.
 - (2026.06.30) Achieved 2x performance improvement [with help of feedback from @Hurleyworks](https://github.com/st-tech/ppf-contact-solver/discussions/86).
