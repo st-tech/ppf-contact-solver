@@ -7,6 +7,8 @@ import bpy  # pyright: ignore
 
 from bpy.types import UIList  # pyright: ignore
 
+from bpy.app.translations import pgettext_iface as iface_, pgettext_tip as tip_
+
 from ...models.groups import GROUP_TYPE_ICONS
 from ..state import decode_vertex_group_identifier
 
@@ -33,7 +35,7 @@ class OBJECT_UL_AssignedObjectsList(UIList):
             else:
                 row = layout.row()
                 row.prop(item, "included", text="")
-                row.label(text=f"{item.name} (Missing)", icon="ERROR")
+                row.label(text=iface_("{name} (Missing)").format(name=item.name), icon="ERROR")
         elif self.layout_type == "GRID":
             layout.alignment = "CENTER"
             layout.label(text="", icon=object_icon)
@@ -62,7 +64,7 @@ class OBJECT_UL_PinVertexGroupsList(UIList):
                     row.label(text=f"[{obj.name}][{vg_name}]", icon="GROUP_VERTEX")
                 else:
                     row.label(
-                        text=f"[{obj.name}][{vg_name}] (Missing)", icon="ERROR"
+                        text=iface_("[{name}][{group}] (Missing)").format(name=obj.name, group=vg_name), icon="ERROR"
                     )
             else:
                 row.label(text=item.name, icon="ERROR")
@@ -100,13 +102,13 @@ class OBJECT_UL_PinOperationsList(bpy.types.UIList):
             return
         if item.op_type == "MOVE_BY":
             d = item.delta
-            row.label(text=f"Move ({d[0]:.1f}, {d[1]:.1f}, {d[2]:.1f})", icon="ORIENTATION_LOCAL")
+            row.label(text=iface_("Move ({x:.1f}, {y:.1f}, {z:.1f})").format(x=d[0], y=d[1], z=d[2]), icon="ORIENTATION_LOCAL")
         elif item.op_type == "SPIN":
-            row.label(text=f"Spin \u03c9={item.spin_angular_velocity:.0f}\u00b0/s", icon="DRIVER_ROTATIONAL_DIFFERENCE")
+            row.label(text=iface_("Spin \u03c9={speed:.0f}\u00b0/s").format(speed=item.spin_angular_velocity), icon="DRIVER_ROTATIONAL_DIFFERENCE")
         elif item.op_type == "SCALE":
-            row.label(text=f"Scale \u00d7{item.scale_factor:.2f}", icon="FULLSCREEN_ENTER")
+            row.label(text=iface_("Scale \u00d7{factor:.2f}").format(factor=item.scale_factor), icon="FULLSCREEN_ENTER")
         elif item.op_type == "TORQUE":
-            row.label(text=f"Torque {item.torque_magnitude:.1f} N\u00b7m", icon="FORCE_MAGNETIC")
+            row.label(text=iface_("Torque {magnitude:.1f} N\u00b7m").format(magnitude=item.torque_magnitude), icon="FORCE_MAGNETIC")
         eye_icon = "HIDE_OFF" if item.show_overlay else "HIDE_ON"
         row.prop(item, "show_overlay", text="", icon=eye_icon, emboss=False)
 
@@ -119,20 +121,23 @@ class OBJECT_UL_StaticOpsList(bpy.types.UIList):
         if item.op_type == "MOVE_BY":
             d = item.delta
             row.label(
-                text=f"Move ({d[0]:.2f}, {d[1]:.2f}, {d[2]:.2f}) "
-                     f"[{item.frame_start}-{item.frame_end}]",
+                text=iface_("Move ({x:.2f}, {y:.2f}, {z:.2f}) [{start}-{end}]").format(
+                    x=d[0], y=d[1], z=d[2], start=item.frame_start, end=item.frame_end
+                ),
                 icon="ORIENTATION_LOCAL",
             )
         elif item.op_type == "SPIN":
             row.label(
-                text=f"Spin \u03c9={item.spin_angular_velocity:.0f}\u00b0/s "
-                     f"[{item.frame_start}-{item.frame_end}]",
+                text=iface_("Spin \u03c9={speed:.0f}\u00b0/s [{start}-{end}]").format(
+                    speed=item.spin_angular_velocity, start=item.frame_start, end=item.frame_end
+                ),
                 icon="DRIVER_ROTATIONAL_DIFFERENCE",
             )
         elif item.op_type == "SCALE":
             row.label(
-                text=f"Scale \u00d7{item.scale_factor:.2f} "
-                     f"[{item.frame_start}-{item.frame_end}]",
+                text=iface_("Scale \u00d7{factor:.2f} [{start}-{end}]").format(
+                    factor=item.scale_factor, start=item.frame_start, end=item.frame_end
+                ),
                 icon="FULLSCREEN_ENTER",
             )
         eye_icon = "HIDE_OFF" if item.show_overlay else "HIDE_ON"
@@ -148,8 +153,8 @@ class OBJECT_UL_MergePairsList(bpy.types.UIList):
             row = layout.row(align=True)
             obj_a = get_object_by_uuid(item.object_a_uuid) if item.object_a_uuid else None
             obj_b = get_object_by_uuid(item.object_b_uuid) if item.object_b_uuid else None
-            label_a = obj_a.name if obj_a else (item.object_a or "(missing)")
-            label_b = obj_b.name if obj_b else (item.object_b or "(missing)")
+            label_a = obj_a.name if obj_a else (item.object_a or iface_("(missing)"))
+            label_b = obj_b.name if obj_b else (item.object_b or iface_("(missing)"))
             ico = "AUTOMERGE_ON" if (obj_a and obj_b) else "ERROR"
             row.label(text=f"{label_a} \u2194 {label_b}", icon=ico)
             eye_icon = "HIDE_OFF" if item.show_stitch else "HIDE_ON"
@@ -180,9 +185,9 @@ class SCENE_UL_DynParamsList(bpy.types.UIList):
     def draw_item(self, context, layout, data, item, icon, active_data, active_property, index):
         if self.layout_type in {"DEFAULT", "COMPACT"}:
             ico = _DYN_PARAM_ICONS.get(item.param_type, "PREFERENCES")
-            label = _DYN_PARAM_LABELS.get(item.param_type, item.param_type)
+            label = iface_(_DYN_PARAM_LABELS.get(item.param_type, item.param_type))
             n_kf = len(item.keyframes)
-            layout.label(text=f"{label} ({n_kf} kf)", icon=ico)
+            layout.label(text=iface_("{label} ({count} kf)").format(label=label, count=n_kf), icon=ico)
         elif self.layout_type == "GRID":
             layout.alignment = "CENTER"
             layout.label(text="", icon="PREFERENCES")
@@ -192,9 +197,9 @@ class SCENE_UL_DynParamKeyframesList(bpy.types.UIList):
     def draw_item(self, context, layout, data, item, icon, active_data, active_property, index):
         if self.layout_type in {"DEFAULT", "COMPACT"}:
             if index == 0:
-                layout.label(text=f"Frame {item.frame} (Initial)", icon="DECORATE_KEYFRAME")
+                layout.label(text=iface_("Frame {frame} (Initial)").format(frame=item.frame), icon="DECORATE_KEYFRAME")
             else:
-                layout.label(text=f"Frame {item.frame}", icon="KEYFRAME")
+                layout.label(text=iface_("Frame {frame}").format(frame=item.frame), icon="KEYFRAME")
         elif self.layout_type == "GRID":
             layout.alignment = "CENTER"
             layout.label(text="", icon="KEYFRAME")
@@ -210,7 +215,7 @@ class SOLVER_UL_CheckpointFrames(bpy.types.UIList):
             # frame so it matches "Last Saved" in Scene Info.
             from ..main_panel import remote_frame_to_blender
             layout.label(
-                text=f"Frame {remote_frame_to_blender(item.frame)}", icon="KEYFRAME"
+                text=iface_("Frame {frame}").format(frame=remote_frame_to_blender(item.frame)), icon="KEYFRAME"
             )
         elif self.layout_type == "GRID":
             layout.alignment = "CENTER"
@@ -225,7 +230,7 @@ class SCENE_UL_SaveCheckpointFrames(bpy.types.UIList):
             # item.frame is the Blender 1-based frame the artist entered, so
             # show it verbatim (the encoder converts to the solver's 0-based
             # index at upload time).
-            layout.label(text=f"Frame {item.frame}", icon="KEYFRAME")
+            layout.label(text=iface_("Frame {frame}").format(frame=item.frame), icon="KEYFRAME")
         elif self.layout_type == "GRID":
             layout.alignment = "CENTER"
             layout.label(text="", icon="KEYFRAME")
@@ -243,9 +248,9 @@ class SCENE_UL_InvisibleCollidersList(bpy.types.UIList):
             flags = []
             if item.collider_type == "SPHERE":
                 if item.invert:
-                    flags.append("Inv")
+                    flags.append(iface_("Inv"))
                 if item.hemisphere:
-                    flags.append("Hemi")
+                    flags.append(iface_("Hemi"))
             if flags:
                 label += f" ({', '.join(flags)})"
             row.label(text=label, icon=ico)
@@ -260,9 +265,9 @@ class SCENE_UL_ColliderKeyframesList(bpy.types.UIList):
     def draw_item(self, context, layout, data, item, icon, active_data, active_property, index):
         if self.layout_type in {"DEFAULT", "COMPACT"}:
             if index == 0:
-                layout.label(text=f"Frame {item.frame} (Initial)", icon="DECORATE_KEYFRAME")
+                layout.label(text=iface_("Frame {frame} (Initial)").format(frame=item.frame), icon="DECORATE_KEYFRAME")
             else:
-                layout.label(text=f"Frame {item.frame}", icon="KEYFRAME")
+                layout.label(text=iface_("Frame {frame}").format(frame=item.frame), icon="KEYFRAME")
         elif self.layout_type == "GRID":
             layout.alignment = "CENTER"
             layout.label(text="", icon="KEYFRAME")
@@ -278,7 +283,9 @@ class OBJECT_UL_VelocityKeyframesList(bpy.types.UIList):
                 else ""
             )
             layout.label(
-                text=f"Frame {item.frame}  ({item.speed:.1f} m/s  [{d[0]:.1f}, {d[1]:.1f}, {d[2]:.1f}]){spin}",
+                text=iface_("Frame {frame}  ({speed:.1f} m/s  [{x:.1f}, {y:.1f}, {z:.1f}]){spin}").format(
+                    frame=item.frame, speed=item.speed, x=d[0], y=d[1], z=d[2], spin=spin
+                ),
                 icon="KEYFRAME",
             )
         elif self.layout_type == "GRID":
@@ -290,7 +297,7 @@ class OBJECT_UL_CollisionWindowsList(bpy.types.UIList):
     def draw_item(self, context, layout, data, item, icon, active_data, active_property, index):
         if self.layout_type in {"DEFAULT", "COMPACT"}:
             layout.label(
-                text=f"Frame {item.frame_start} - {item.frame_end}",
+                text=iface_("Frame {start} - {end}").format(start=item.frame_start, end=item.frame_end),
                 icon="TIME",
             )
         elif self.layout_type == "GRID":

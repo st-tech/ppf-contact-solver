@@ -35,6 +35,8 @@ from . import _runner as r
 
 
 NEEDS_BLENDER = True
+# Pure path-resolution logic (resolve_win_native_root); backend-agnostic.
+BACKENDS = ("emulated", "real")
 
 
 _DRIVER_BODY = r'''

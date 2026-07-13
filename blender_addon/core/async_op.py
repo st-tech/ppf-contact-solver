@@ -6,6 +6,7 @@
 import time
 
 from bpy.types import Operator  # pyright: ignore
+from bpy.app.translations import pgettext_iface as iface_, pgettext_tip as tip_
 
 from . import encode_progress
 from .utils import get_timer_wait_time, redraw_all_areas
@@ -56,7 +57,7 @@ class AsyncOperator(Operator):
         pass
 
     def on_timeout(self, context):
-        self.report({"ERROR"}, "Operation timed out")
+        self.report({"ERROR"}, iface_("Operation timed out"))
 
     def setup_modal(self, context):
         self._start_time = time.time()
@@ -112,7 +113,7 @@ class AsyncOperator(Operator):
         except Exception as exc:  # noqa: BLE001 - surface any encode failure
             self._end_stages()
             self.cleanup_modal(context)
-            self.report({"ERROR"}, f"Encoding failed: {exc}")
+            self.report({"ERROR"}, iface_("Encoding failed: {error}").format(error=exc))
             redraw_all_areas(context)
             return {"CANCELLED"}
         self._stage_index += 1

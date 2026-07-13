@@ -7,6 +7,7 @@
 
 import bpy  # pyright: ignore
 from bpy.types import Operator  # pyright: ignore
+from bpy.app.translations import pgettext_iface as iface_, pgettext_tip as tip_  # pyright: ignore
 
 from ...core.utils import has_transform_fcurves, redraw_all_areas
 from ...models.collection_utils import safe_update_index
@@ -44,7 +45,7 @@ class OBJECT_OT_AddStaticOp(Operator):
             return {"CANCELLED"}
         assigned = _get_selected_assigned(group)
         if assigned is None:
-            self.report({"ERROR"}, "No assigned object selected")
+            self.report({"ERROR"}, iface_("No assigned object selected"))
             return {"CANCELLED"}
 
         from ...core.uuid_registry import get_object_by_uuid
@@ -54,7 +55,7 @@ class OBJECT_OT_AddStaticOp(Operator):
             # allow adding so the data survives removing the fcurves.
             self.report(
                 {"WARNING"},
-                "Object has Blender keyframes — ops will be ignored at simulate time",
+                iface_("Object has Blender keyframes — ops will be ignored at simulate time"),
             )
 
         op = assigned.static_ops.add()

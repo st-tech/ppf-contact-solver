@@ -9,6 +9,7 @@ import shlex
 import time
 
 import bpy  # pyright: ignore
+from bpy.app.translations import pgettext_iface as iface_, pgettext_tip as tip_  # pyright: ignore
 from bpy.props import StringProperty  # pyright: ignore
 from bpy.types import Operator  # pyright: ignore
 
@@ -143,7 +144,7 @@ class REMOTE_OT_Connect(Operator):
             if not host:
                 self.report(
                     {"ERROR"},
-                    "Failed to parse command. Ensure it includes host.",
+                    iface_("Failed to parse command. Ensure it includes host."),
                 )
                 return {"CANCELLED"}
             container = props.container if "DOCKER" in props.server_type else None
@@ -176,7 +177,7 @@ class REMOTE_OT_Connect(Operator):
         elif props.server_type == "WIN_NATIVE":
             win_path = props.win_native_path.strip()
             if not win_path:
-                self.report({"ERROR"}, "Solver path is not set")
+                self.report({"ERROR"}, iface_("Solver path is not set"))
                 return {"CANCELLED"}
             com.connect_win_native(win_path, props.docker_port)
         elif props.server_type == "LOCAL":
@@ -216,7 +217,7 @@ class REMOTE_OT_Connect(Operator):
             if self._timer:
                 context.window_manager.event_timer_remove(self._timer)
                 self._timer = None
-            self.report({"ERROR"}, "Connection timed out")
+            self.report({"ERROR"}, iface_("Connection timed out"))
             return {"CANCELLED"}
         _refresh_ssh_panel_bridge()
         if self._connection_established and not com.is_connected():
@@ -440,12 +441,12 @@ class REMOTE_OT_SaveProfile(Operator):
         if props.profile_path and props.profile_selection != "NONE":
             abs_path = bpy.path.abspath(props.profile_path)
             save_profile_entry(abs_path, props.profile_selection, data)
-            self.report({"INFO"}, f"Saved to '{props.profile_selection}'")
+            self.report({"INFO"}, iface_("Saved to '{name}'").format(name=props.profile_selection))
         else:
             save_profile_entry(self.filepath, self.entry_name, data)
             props.profile_path = self.filepath
             props.profile_selection = self.entry_name
-            self.report({"INFO"}, f"Saved to '{self.entry_name}'")
+            self.report({"INFO"}, iface_("Saved to '{name}'").format(name=self.entry_name))
         redraw_all_areas(context)
         return {"FINISHED"}
 

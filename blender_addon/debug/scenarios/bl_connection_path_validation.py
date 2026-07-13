@@ -36,6 +36,8 @@ from . import _runner as r
 
 
 NEEDS_BLENDER = True
+# Connection-path validation UI behavior; backend-agnostic.
+BACKENDS = ("emulated", "real")
 
 
 _DRIVER_BODY = r'''

@@ -14,6 +14,11 @@ from __future__ import annotations
 from . import _runner as r
 
 
+# Server-only plumbing (no Blender, no physics); backend-agnostic upload
+# contract, runs on the real-GPU jobs too.
+BACKENDS = ("emulated", "real")
+
+
 def run(ctx: r.ScenarioContext) -> dict:
     client = r.ProtoClient(ctx.host, ctx.server_port, timeout=ctx.timeout)
 

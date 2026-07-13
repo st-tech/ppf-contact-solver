@@ -712,6 +712,28 @@ class EffectRunner:
                 if lines and "SERVER_READY" in lines[-1]:
                     ready_marker_seen = True
 
+            # A failed bind (port already taken) is written to server.log,
+            # not progress.log, so SERVER_READY never appears and the loop
+            # would otherwise burn the full max_wait and report a generic
+            # timeout that leaves the user guessing. Detect the "port in
+            # use" case and fail fast, naming the port: on a shared host the
+            # holder is usually a stale ppf-cts-server or a Docker container
+            # publishing the same port (`-p PORT:PORT`, whose docker-proxy
+            # binds the host port even with nothing live inside).
+            if not ready_marker_seen:
+                log_tail = self._backend.exec_command(
+                    f"tail -20 {server_log} 2>/dev/null", shell=True,
+                )
+                tail_text = "\n".join(log_tail.get("stdout", []))
+                if "Address already in use" in tail_text or "os error 98" in tail_text:
+                    raise ConnectionError(
+                        f"Server port {port} is already in use on the remote "
+                        "host, so ppf-cts-server could not bind it. Stop "
+                        "whatever holds the port (a stale server, or a Docker "
+                        f"container publishing it with `-p {port}:{port}`) or "
+                        f"choose a different server port.\n{tail_text}"
+                    )
+
             if elapsed > max_wait:
                 log_result = self._backend.exec_command(
                     f"tail -20 {server_log}", shell=True,

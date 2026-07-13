@@ -977,6 +977,32 @@ pub fn build(
             }
         }
     }
+    // Rod-bending (j-i-k) stencil. An interior rod vertex i (exactly two rod
+    // edges and no incident faces, matching the gate in
+    // embed_rod_bend_force_hessian) bends about its two edge-neighbors j and k,
+    // assembling a 9x9 Hessian over (j, i, k). The (i,j) and (i,k) pairs are
+    // already covered by the edge loop, but (j,k) is neither an edge nor a shell
+    // hinge, so unless the stencil is registered here the CSR push() silently
+    // drops the (j,k)/(k,j) blocks -- which turns the rank-1 PSD bending Hessian
+    // indefinite and breaks the PCG solve (pAp < 0) whenever the inertia term
+    // (mass / dt^2) is too small to mask it (large dt / light rods).
+    for i in 0..vertex_count as usize {
+        let edges = &mesh.mesh.neighbor.vertex.edge[i];
+        if edges.len() == 2 && mesh.mesh.neighbor.vertex.face[i].is_empty() {
+            let e0 = edges[0] as usize;
+            let e1 = edges[1] as usize;
+            let c0 = mesh.mesh.mesh.edge.column(e0);
+            let c1 = mesh.mesh.mesh.edge.column(e1);
+            let j = if c0[0] == i { c0[1] } else { c0[0] };
+            let k = if c1[0] == i { c1[1] } else { c1[0] };
+            let stencil = [j, i, k];
+            for &a in stencil.iter() {
+                for &b in stencil.iter() {
+                    insert(a, b);
+                }
+            }
+        }
+    }
     for seam in constraint.stitch.iter() {
         for &i in seam.index.iter() {
             for &j in seam.index.iter() {

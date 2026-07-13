@@ -5,6 +5,7 @@
 
 import bpy  # pyright: ignore
 from bpy.types import Operator  # pyright: ignore
+from bpy.app.translations import pgettext_iface as iface_, pgettext_tip as tip_  # pyright: ignore
 
 from ...models.collection_utils import safe_update_index, sort_keyframes_by_frame
 from ...models.groups import get_addon_data
@@ -28,7 +29,12 @@ class SCENE_OT_AddSaveCheckpoint(Operator):
         # frame would only produce a redundant save at the same index.
         for item in state.save_checkpoint_frames:
             if item.frame == frame:
-                self.report({"WARNING"}, f"Checkpoint at frame {frame} already exists")
+                self.report(
+                    {"WARNING"},
+                    iface_("Checkpoint at frame {frame} already exists").format(
+                        frame=frame
+                    ),
+                )
                 return {"CANCELLED"}
         item = state.save_checkpoint_frames.add()
         item.frame = frame

@@ -331,7 +331,21 @@ extern "C" DLL_EXPORT void update_constraint(const Constraint *constraint) {
     // emulator's advance() is a no-op, we do that pin write here so
     // the next fetch() round-trip reflects the constraint.
     auto &dev_curr = g_dev_dataset.vertex.curr;
+    auto &dev_prev = g_dev_dataset.vertex.prev;
     unsigned total = dev_curr.size;
+    // Snapshot each MOVING kinematic vertex's pre-step position into prev
+    // before its curr is overwritten with this step's target, so the frame
+    // writer can interpolate it onto the exact frame time (production
+    // advance() does the same start-of-step copy(curr -> prev), see
+    // cpp/main/main.cu around the eval_x swap). This is deliberately per-pin,
+    // NOT a whole-buffer prev <- curr: free / elastic / sand vertices keep the
+    // prev their own step maintains (pd_arap.hpp and sand.hpp copy curr -> prev
+    // at step END), whose (curr - prev)/dt is the incoming velocity they
+    // integrate. A blanket snapshot here would erase that at the next step's
+    // start and zero momentum carry on any step with no fresh velocity
+    // override (the single-keyframe spin/drape and initial-velocity tests).
+    const bool prev_ok =
+        dev_prev.data && dev_curr.data && dev_prev.size == dev_curr.size;
     for (unsigned i = 0; i < constraint->fix.size; ++i) {
         const FixPair &pair = constraint->fix.data[i];
         if (!pair.kinematic) {
@@ -339,6 +353,9 @@ extern "C" DLL_EXPORT void update_constraint(const Constraint *constraint) {
         }
         if (pair.index >= total) {
             continue;
+        }
+        if (prev_ok) {
+            dev_prev.data[pair.index] = dev_curr.data[pair.index];
         }
         dev_curr.data[pair.index] = pair.position;
     }

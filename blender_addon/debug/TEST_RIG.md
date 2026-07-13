@@ -74,6 +74,57 @@ Two artifacts cover the GPU absence:
 - The Rust binary is built with ``--features emulated`` so it never
   links against ``simbackend_cuda`` and never makes a CUDA call.
 
+## Real vs emulated backend (``--backend``)
+
+The rig grew up against the emulated stub, so most physics scenarios
+assert on emulator-specific behavior (frozen frames via
+``PPF_EMULATED_STEP_MS=0``, the ``PPF_EMULATED_ELASTIC`` ARAP step,
+``PPF_EMULATED_FAIL_AT_FRAME`` fault injection). Those do not reproduce
+on the real CUDA solver.
+
+``runtests --backend {emulated,real}`` (default ``emulated``) gates the
+scenario set on a per-scenario ``BACKENDS`` tag, alongside the existing
+``PLATFORMS`` gate:
+
+- ``BACKENDS`` is unset (the default) => emulated-only. The scenario
+  runs on the free-runner ``emulated`` suite but is skipped by
+  ``--backend real``.
+- ``BACKENDS = ("emulated", "real")`` => backend-agnostic. The scenario
+  asserts plumbing / structure / connection / rejection / liveness /
+  round-trip / kinematic-frozen invariants that hold on both backends,
+  so it also runs on the real-GPU jobs.
+- ``BACKENDS = ("real",)`` => a real-only smoke.
+
+The AWS GPU jobs in ``.github/workflows/blender.yml`` run
+``runtests --backend real``. The macOS job runs the full emulated suite.
+When you add a real-capable scenario, remember the connection path:
+``dh.connect(...)`` picks WIN_NATIVE on Windows and LOCAL elsewhere, so a
+cross-platform real scenario must use it (not ``dh.connect_local``, which
+only works on Linux/macOS). See ``bl_real_solid_smoke`` for the pattern.
+
+### CI: four jobs, two backends
+
+``.github/workflows/blender.yml`` runs the rig on:
+
+- **macOS** - free GitHub runner, emulated build, the full suite.
+- **macOS (SSH)** - macOS Blender (emulated build) drives a REAL CUDA
+  solver on a disposable AWS L4 over the addon's paramiko SSH backend
+  (``server_type`` CUSTOM). Runs the real-only ``bl_ssh_remote_solve``
+  (SHELL) and ``bl_ssh_remote_solid`` (SOLID) smokes, so both encode
+  paths cross the tunnel. This is the only job exercising the SSH
+  backend and the "local Blender + remote GPU" workflow.
+- **Linux** - disposable AWS L4 GPU instance, real CUDA build, the
+  ``--backend real`` subset. Blender's window runs under Xvfb (software
+  GL) while the solver uses the real GPU.
+- **Windows** - disposable AWS L4 GPU instance, real Windows-native
+  build. The rig runs Blender headless (``--background`` via
+  ``PPF_BLENDER_HEADLESS=1``), which needs no OpenGL/desktop, so it runs
+  directly over SSH. The L4 comes up in TCC (compute-only) mode with no
+  WGL/OpenGL, so a GUI launch is avoided entirely. The driver holds the
+  main thread and drains its own PC2 frames, so scenarios complete in a
+  single ``--python`` run with no event loop (see
+  ``.github/workflows/scripts/win/run-blender-rig.ps1``).
+
 ## Scenarios
 
 All registered scenarios live in ``blender_addon/debug/scenarios/`` and
@@ -218,3 +269,28 @@ up the workspace ``emulated`` feature: CUDA calls are stubbed and
 per-frame kinematics are applied directly to vertex positions in
 ``Backend::apply_kinematic_constraint`` (in
 ``crates/ppf-cts-solver/src/backend.rs``).
+
+## Solver math unit tests (host, no CUDA)
+
+Some solver math is pure float code that runs identically on host and
+device, so it can be unit tested with a plain C++ compiler with no nvcc
+(macOS included). These are standalone from the Blender ``runtests``
+rig: the emulated server stubs the CUDA solver with no-ops, so it never
+runs the real solver math and cannot regression-test it.
+
+PDRD exact-rigid polar fit (``rigid_polar_quat`` in
+``crates/ppf-cts-solver/src/cpp/energy/model/pdrd_polar.hpp``):
+
+```sh
+make -C crates/ppf-cts-solver/src/cpp/energy/model/tests test
+```
+
+This guards the rigid-body collapse where a PDRD body settled exactly
+180 degrees from its rest pose lost half its volume in one frame. At
+the 180-degree antipodal singularity of SO(3) an identity-seeded polar
+fit returns a wrong rotation, and the rigidify partial-snap then lerps
+the body linearly across it. The test asserts the fit recovers the true
+rotation at the antipode (and over random rotations) and that a partial
+rigidify snap keeps ``det(F) ~ 1`` (no collapse); it also confirms the
+old identity-seed path collapses, so the test self-verifies it is in
+the bug regime. Exit code is nonzero on any failure.

@@ -6,6 +6,7 @@
 # Profile operators for scene and material parameter profiles.
 
 import bpy  # pyright: ignore
+from bpy.app.translations import pgettext_iface as iface_  # pyright: ignore
 from bpy.props import BoolProperty, IntProperty, PointerProperty, StringProperty  # pyright: ignore
 from bpy.types import Operator  # pyright: ignore
 
@@ -161,12 +162,12 @@ class SCENE_OT_SaveSceneProfile(Operator):
         if state.scene_profile_path and state.scene_profile_selection != "NONE":
             abs_path = bpy.path.abspath(state.scene_profile_path)
             save_profile_entry(abs_path, state.scene_profile_selection, data)
-            self.report({"INFO"}, f"Saved to '{state.scene_profile_selection}'")
+            self.report({"INFO"}, iface_("Saved to '{name}'").format(name=state.scene_profile_selection))
         else:
             save_profile_entry(self.filepath, self.entry_name, data)
             state.scene_profile_path = self.filepath
             state.scene_profile_selection = self.entry_name
-            self.report({"INFO"}, f"Saved to '{self.entry_name}'")
+            self.report({"INFO"}, iface_("Saved to '{name}'").format(name=self.entry_name))
         redraw_all_areas(context)
         return {"FINISHED"}
 
@@ -230,12 +231,12 @@ class OBJECT_OT_SaveMaterialProfile(Operator):
         if group.material_profile_path and group.material_profile_selection != "NONE":
             abs_path = bpy.path.abspath(group.material_profile_path)
             save_profile_entry(abs_path, group.material_profile_selection, data)
-            self.report({"INFO"}, f"Saved to '{group.material_profile_selection}'")
+            self.report({"INFO"}, iface_("Saved to '{name}'").format(name=group.material_profile_selection))
         else:
             save_profile_entry(self.filepath, self.entry_name, data)
             group.material_profile_path = self.filepath
             group.material_profile_selection = self.entry_name
-            self.report({"INFO"}, f"Saved to '{self.entry_name}'")
+            self.report({"INFO"}, iface_("Saved to '{name}'").format(name=self.entry_name))
         redraw_all_areas(context)
         return {"FINISHED"}
 
@@ -256,7 +257,7 @@ class OBJECT_OT_CopyMaterialParams(Operator):
         copy_scalar_props(group, wm.material_clipboard, exclude=MATERIAL_CLIPBOARD_EXCLUDE)
         wm.material_clipboard_src_type = group.object_type
         wm.material_clipboard_valid = True
-        self.report({"INFO"}, "Material params copied")
+        self.report({"INFO"}, iface_("Material params copied"))
         return {"FINISHED"}
 
 
@@ -288,7 +289,7 @@ class OBJECT_OT_PasteMaterialParams(Operator):
             filter_fn=lambda n: material_param_applies(n, src_type),
         )
         redraw_all_areas(context)
-        self.report({"INFO"}, "Material params pasted")
+        self.report({"INFO"}, iface_("Material params pasted"))
         return {"FINISHED"}
 
 
@@ -407,18 +408,18 @@ class OBJECT_OT_SavePinProfile(Operator):
 
         group, pin_item = _get_selected_pin(context, self.group_index)
         if pin_item is None:
-            self.report({"WARNING"}, "No pin vertex group selected")
+            self.report({"WARNING"}, iface_("No pin vertex group selected"))
             return {"CANCELLED"}
         data = read_pin_operations(pin_item)
         if group.pin_profile_path and group.pin_profile_selection != "NONE":
             abs_path = bpy.path.abspath(group.pin_profile_path)
             save_profile_entry(abs_path, group.pin_profile_selection, data)
-            self.report({"INFO"}, f"Saved operations to '{group.pin_profile_selection}'")
+            self.report({"INFO"}, iface_("Saved operations to '{name}'").format(name=group.pin_profile_selection))
         else:
             save_profile_entry(self.filepath, self.entry_name, data)
             group.pin_profile_path = self.filepath
             group.pin_profile_selection = self.entry_name
-            self.report({"INFO"}, f"Saved operations to '{self.entry_name}'")
+            self.report({"INFO"}, iface_("Saved operations to '{name}'").format(name=self.entry_name))
         redraw_all_areas(context)
         return {"FINISHED"}
 
@@ -445,12 +446,12 @@ class OBJECT_OT_CopyPinOps(Operator):
     def execute(self, context):
         _, pin_item = _get_selected_pin(context, self.group_index)
         if pin_item is None:
-            self.report({"WARNING"}, "No pin vertex group selected")
+            self.report({"WARNING"}, iface_("No pin vertex group selected"))
             return {"CANCELLED"}
         wm = context.window_manager
         _copy_operations_collection(pin_item.operations, wm.pin_ops_clipboard.operations)
         wm.pin_ops_clipboard_valid = True
-        self.report({"INFO"}, f"Copied {len(pin_item.operations)} operations")
+        self.report({"INFO"}, iface_("Copied {count} operations").format(count=len(pin_item.operations)))
         return {"FINISHED"}
 
 
@@ -469,13 +470,13 @@ class OBJECT_OT_PastePinOps(Operator):
     def execute(self, context):
         _, pin_item = _get_selected_pin(context, self.group_index)
         if pin_item is None:
-            self.report({"WARNING"}, "No pin vertex group selected")
+            self.report({"WARNING"}, iface_("No pin vertex group selected"))
             return {"CANCELLED"}
         wm = context.window_manager
         _copy_operations_collection(wm.pin_ops_clipboard.operations, pin_item.operations)
         invalidate_overlays()
         redraw_all_areas(context)
-        self.report({"INFO"}, "Pin operations pasted")
+        self.report({"INFO"}, iface_("Pin operations pasted"))
         return {"FINISHED"}
 
 

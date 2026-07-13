@@ -12,6 +12,7 @@ import numpy
 
 try:
     import bpy  # pyright: ignore
+    from bpy.app.translations import pgettext_iface as iface_, pgettext_tip as tip_
 except ImportError:
     bpy = None
 
@@ -1195,8 +1196,10 @@ def warn_missing_frames_on_render(scene, *_args):
         if n_missing <= 0:
             return
 
-        msg = (f"{n_missing} frames unfetched — rendered animation may be "
-               "incomplete. Press \"Fetch All Animation\" first.")
+        msg = iface_(
+            "{count} frames unfetched — rendered animation may be "
+            "incomplete. Press \"Fetch All Animation\" first."
+        ).format(count=n_missing)
 
         def _popup():
             def _draw(self, _ctx):

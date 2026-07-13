@@ -14,6 +14,7 @@ import math
 import bmesh  # pyright: ignore
 import bpy  # pyright: ignore
 import numpy as np
+from bpy.app.translations import pgettext_iface as iface_, pgettext_tip as tip_
 from bpy.types import Operator  # pyright: ignore
 from mathutils import Vector  # pyright: ignore
 from mathutils.bvhtree import BVHTree  # pyright: ignore
@@ -341,7 +342,7 @@ class OBJECT_OT_ConvertToParticleMesh(Operator):
     def execute(self, context):
         obj = context.active_object
         if not _is_convertible_solid_mesh(obj):
-            self.report({"ERROR"}, "Active object must be a solid mesh with faces")
+            self.report({"ERROR"}, iface_("Active object must be a solid mesh with faces"))
             return {"CANCELLED"}
 
         n = build_and_commit_particle_mesh(
@@ -350,10 +351,13 @@ class OBJECT_OT_ConvertToParticleMesh(Operator):
         if n < 1:
             self.report(
                 {"ERROR"},
-                "No grains fit; reduce the grain radius or the extra spacing",
+                iface_("No grains fit; reduce the grain radius or the extra spacing"),
             )
             return {"CANCELLED"}
-        self.report({"INFO"}, f"Converted '{obj.name}' to {n} grain(s)")
+        self.report(
+            {"INFO"},
+            iface_("Converted '{name}' to {count} grain(s)").format(name=obj.name, count=n),
+        )
         return {"FINISHED"}
 
 

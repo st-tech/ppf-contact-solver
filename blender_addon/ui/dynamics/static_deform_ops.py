@@ -24,6 +24,7 @@ import bpy  # pyright: ignore
 import numpy as np
 
 from bpy.types import Operator  # pyright: ignore
+from bpy.app.translations import pgettext_iface as iface_, pgettext_tip as tip_
 
 from ...core.pc2 import (
     remove_static_deform_pc2,
@@ -233,10 +234,10 @@ def _effective_frame_range(scene, obj) -> tuple[int, int, str]:
         n_sim = _sim_frame_count(scene)
         if n_sim is not None and n_sim > 0:
             frame_end = frame_start + n_sim - 1
-            return frame_start, frame_end, f"simulation frame count ({n_sim})"
-        return frame_start, int(scene.frame_end), "scene.frame_end (state unavailable)"
+            return frame_start, frame_end, iface_("simulation frame count ({count})").format(count=n_sim)
+        return frame_start, int(scene.frame_end), iface_("scene.frame_end (state unavailable)")
     frame_end = max(max_kf, frame_start)
-    return frame_start, frame_end, f"last keyframe ({max_kf})"
+    return frame_start, frame_end, iface_("last keyframe ({frame})").format(frame=max_kf)
 
 
 def _build_entries(scene, objects: list, error_collector: list) -> list:
@@ -257,19 +258,20 @@ def _build_entries(scene, objects: list, error_collector: list) -> list:
         uuid = get_or_create_object_uuid(obj)
         if not uuid:
             error_collector.append(
-                f"'{obj.name}' has no UUID (library-linked?); skipped"
+                iface_("'{name}' has no UUID (library-linked?); skipped").format(name=obj.name)
             )
             continue
         n_verts = len(obj.data.vertices)
         if n_verts == 0:
-            error_collector.append(f"'{obj.name}' has no vertices; skipped")
+            error_collector.append(iface_("'{name}' has no vertices; skipped").format(name=obj.name))
             continue
         frame_start, frame_end, range_source = _effective_frame_range(scene, obj)
         n_frames = frame_end - frame_start + 1
         if n_frames <= 0:
             error_collector.append(
-                f"'{obj.name}' frame range is empty "
-                f"(start={frame_start}, end={frame_end})"
+                iface_("'{name}' frame range is empty (start={start}, end={end})").format(
+                    name=obj.name, start=frame_start, end=frame_end
+                )
             )
             continue
         entries.append({
@@ -296,16 +298,23 @@ def _process_one_frame(scene, depsgraph, entry, frame: int) -> tuple[bool, str]:
 
     obj = get_object_by_uuid(entry["obj_uuid"])
     if obj is None:
-        return False, f"'{entry['obj_name']}' disappeared during capture"
+        return False, iface_("'{name}' disappeared during capture").format(name=entry['obj_name'])
     eval_obj = obj.evaluated_get(depsgraph)
     world = _frame_to_world_solver(eval_obj)
     if world.shape[0] != entry["n_verts"]:
         return False, (
-            f"'{entry['obj_name']}' vertex count changed at frame {frame}: "
-            f"{world.shape[0]} vs {entry['n_verts']} at frame_start. "
-            "Move any topology-changing modifiers (Subdivision Surface, "
-            "Remesh, Decimate) ABOVE the deformer, or apply them, then "
-            "retry."
+            iface_(
+                "'{name}' vertex count changed at frame {frame}: "
+                "{actual} vs {expected} at frame_start. "
+                "Move any topology-changing modifiers (Subdivision Surface, "
+                "Remesh, Decimate) ABOVE the deformer, or apply them, then "
+                "retry."
+            ).format(
+                name=entry['obj_name'],
+                frame=frame,
+                actual=world.shape[0],
+                expected=entry['n_verts'],
+            )
         )
     entry["frames"][entry["frames_done"]] = world
     entry["frames_done"] += 1
@@ -314,16 +323,16 @@ def _process_one_frame(scene, depsgraph, entry, frame: int) -> tuple[bool, str]:
 
 def _start_job(context, entries: list) -> tuple[bool, str]:
     if _capture_job["active"]:
-        return False, "Another Capture Deformation job is in progress"
+        return False, iface_("Another Capture Deformation job is in progress")
     # Refuse to start if a pin-deformation capture is in flight: the two
     # share the depsgraph + frame_set side effects and would corrupt each
     # other's running frame cursor (mirrors the symmetric guard in
     # pin_capture_ops._start_job).
     from .pin_capture_ops import is_pin_capture_running as _pin_running
     if _pin_running():
-        return False, "Pin-deformation capture is in progress; wait for it to finish"
+        return False, iface_("Pin-deformation capture is in progress; wait for it to finish")
     if not entries:
-        return False, "No deforming STATIC objects to capture"
+        return False, iface_("No deforming STATIC objects to capture")
     scene = context.scene
     total = sum(e["frames"].shape[0] for e in entries)
     # Suspend each captured object's ContactSolverCache so the per-frame
@@ -344,7 +353,7 @@ def _start_job(context, entries: list) -> tuple[bool, str]:
         "total_frames_processed": 0,
         "total_frames": total,
         "saved_frame": int(scene.frame_current),
-        "status": "Capturing...",
+        "status": iface_("Capturing..."),
         "error": "",
         "suspended_caches": suspended,
     })
@@ -377,9 +386,12 @@ def _tick_job(context, *, budget_ms: int = 40) -> bool:
             return False
         _capture_job["total_frames_processed"] += 1
         _capture_job["status"] = (
-            f"Capturing {entry['obj_name']} "
-            f"[{entry['frames_done']}/{entry['frames'].shape[0]}] "
-            f"({entry['range_source']})"
+            iface_("Capturing {name} [{done}/{total}] ({source})").format(
+                name=entry['obj_name'],
+                done=entry['frames_done'],
+                total=entry['frames'].shape[0],
+                source=entry['range_source'],
+            )
         )
     return _capture_job["object_cursor"] < len(objects)
 
@@ -446,7 +458,7 @@ class _ModalCaptureBase:
         entries = self._build_entries_for(context)
         scene_entries = _build_entries(context.scene, entries, errors)
         if not scene_entries:
-            msg = errors[0] if errors else "No deforming STATIC objects to capture"
+            msg = errors[0] if errors else iface_("No deforming STATIC objects to capture")
             self.report({"WARNING"}, msg)
             return {"CANCELLED"}
         ok, err = _start_job(context, scene_entries)
@@ -473,7 +485,7 @@ class _ModalCaptureBase:
                 if err:
                     self.report({"ERROR"}, err)
                 else:
-                    self.report({"INFO"}, "Capture aborted")
+                    self.report({"INFO"}, iface_("Capture aborted"))
                 return {"CANCELLED"}
             more = _tick_job(context)
             redraw_all_areas(context)
@@ -485,14 +497,16 @@ class _ModalCaptureBase:
                 redraw_all_areas(context)
                 self.report(
                     {"INFO"},
-                    f"Captured {n_frames} frame(s) for {n_objs} object(s)",
+                    iface_("Captured {frames} frame(s) for {objects} object(s)").format(
+                        frames=n_frames, objects=n_objs
+                    ),
                 )
                 return {"FINISHED"}
             return {"RUNNING_MODAL"}
         except Exception as exc:  # noqa: BLE001 — must restore state
             self._teardown(context)
             redraw_all_areas(context)
-            self.report({"ERROR"}, f"Capture failed: {exc}")
+            self.report({"ERROR"}, iface_("Capture failed: {error}").format(error=exc))
             return {"CANCELLED"}
 
     def cancel(self, context):
@@ -569,22 +583,22 @@ class OBJECT_OT_ClearStaticDeformation(Operator):
         scene = context.scene
         group = get_group_from_index(scene, self.group_index)
         if group is None:
-            self.report({"ERROR"}, "Group not found")
+            self.report({"ERROR"}, iface_("Group not found"))
             return {"CANCELLED"}
         idx = group.assigned_objects_index
         if not (0 <= idx < len(group.assigned_objects)):
-            self.report({"ERROR"}, "No object selected")
+            self.report({"ERROR"}, iface_("No object selected"))
             return {"CANCELLED"}
         assigned = group.assigned_objects[idx]
         obj = resolve_assigned(assigned)
         if obj is None or obj.type != "MESH":
-            self.report({"ERROR"}, "Object not found")
+            self.report({"ERROR"}, iface_("Object not found"))
             return {"CANCELLED"}
         remove_static_deform_pc2(obj)
         from .overlay import apply_object_overlays
         apply_object_overlays()
         redraw_all_areas(context)
-        self.report({"INFO"}, f"Cleared deformation cache for '{obj.name}'")
+        self.report({"INFO"}, iface_("Cleared deformation cache for '{name}'").format(name=obj.name))
         return {"FINISHED"}
 
 
@@ -607,7 +621,7 @@ class SOLVER_OT_CaptureAbort(Operator):
 
     def execute(self, context):
         _capture_job["aborted"] = True
-        _capture_job["status"] = "Aborting..."
+        _capture_job["status"] = iface_("Aborting...")
         redraw_all_areas(context)
         return {"FINISHED"}
 
@@ -745,7 +759,7 @@ def start_capture_for_objects(context, objects: list) -> tuple[bool, str]:
     entries = _build_entries(context.scene, objects, errors)
     if not entries:
         return False, (
-            errors[0] if errors else "No deforming STATIC objects to capture"
+            errors[0] if errors else iface_("No deforming STATIC objects to capture")
         )
     return _start_job(context, entries)
 

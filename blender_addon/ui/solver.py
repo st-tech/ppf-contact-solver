@@ -12,6 +12,10 @@ from bpy.types import (  # pyright: ignore
     Operator,
     Panel,
 )
+from bpy.app.translations import (  # pyright: ignore
+    pgettext_iface as iface_,
+    pgettext_tip as tip_,
+)
 
 from ..core.animation import (
     clear_animation_data,
@@ -285,8 +289,10 @@ def _check_project_name_sync(context) -> str:
     if ui_name == runner_name:
         return ""
     return (
-        f"Project name out of sync: UI='{ui_name}' but active session='{runner_name}'. "
-        "Disconnect and reconnect to resync."
+        iface_(
+            "Project name out of sync: UI='{ui_name}' but active session='{runner_name}'. "
+            "Disconnect and reconnect to resync."
+        ).format(ui_name=ui_name, runner_name=runner_name)
     )
 
 
@@ -313,15 +319,53 @@ def _check_uuid_consistency(context) -> str:
                 stale_uuid.append(obj.name)
     if missing_uuid:
         names = ", ".join(missing_uuid[:3])
-        more = f" (+{len(missing_uuid) - 3} more)" if len(missing_uuid) > 3 else ""
-        return f"Objects missing UUID: {names}{more}. Run UUID Migration first."
+        more = iface_(" (+{count} more)").format(count=len(missing_uuid) - 3) if len(missing_uuid) > 3 else ""
+        return iface_("Objects missing UUID: {names}{more}. Run UUID Migration first.").format(names=names, more=more)
     if stale_uuid:
         names = ", ".join(stale_uuid[:3])
-        more = f" (+{len(stale_uuid) - 3} more)" if len(stale_uuid) > 3 else ""
-        return f"Stale UUID references: {names}{more}. Run UUID Migration first."
+        more = iface_(" (+{count} more)").format(count=len(stale_uuid) - 3) if len(stale_uuid) > 3 else ""
+        return iface_("Stale UUID references: {names}{more}. Run UUID Migration first.").format(names=names, more=more)
     # Check if broader migration is needed (pins, pairs, keyframes)
     from ..core.migrate import needs_migration
     return needs_migration()
+
+
+def _check_merge_pairs_stitch(context) -> str:
+    """Reject a transfer when any merge pair carries no stitch points.
+
+    A pair whose ``cross_stitch_json`` is empty, never captured or cleared
+    as stale after a topology edit, is silently dropped by the encoder
+    (:func:`core.encoder.params._encode_cross_stitch`), so its stitch
+    stiffness has no effect and the seam never forms at solve time. Surface
+    it as a hard error instead of shipping a scene that looks stitched but
+    is not. Returns an error message string, or empty string if all OK.
+    """
+    from ..mesh_ops.merge_ops import cleanup_stale_merge_pairs, pair_has_stitch
+    from ..core.uuid_registry import get_object_by_uuid
+
+    # Run the same cleanup the encoder runs first, so a pair whose stored
+    # stitch was invalidated by a mesh edit is seen here as empty rather than
+    # stale-valid, and unassigned pairs are dropped before we inspect them.
+    cleanup_stale_merge_pairs(context.scene)
+    state = get_addon_data(context.scene).state
+    empty = []
+    for pair in state.merge_pairs:
+        if pair_has_stitch(pair):
+            continue
+        obj_a = get_object_by_uuid(pair.object_a_uuid) if pair.object_a_uuid else None
+        obj_b = get_object_by_uuid(pair.object_b_uuid) if pair.object_b_uuid else None
+        name_a = obj_a.name if obj_a else (pair.object_a or iface_("(missing)"))
+        name_b = obj_b.name if obj_b else (pair.object_b or iface_("(missing)"))
+        empty.append(f"{name_a} ↔ {name_b}")
+    if not empty:
+        return ""
+    names = ", ".join(empty[:3])
+    more = iface_(" (+{count} more)").format(count=len(empty) - 3) if len(empty) > 3 else ""
+    return iface_(
+        "Merge pair(s) with no stitch points: {names}{more}. "
+        "Select each under Merge Pairs and click Re-snap, or remove the pair, "
+        "before transferring."
+    ).format(names=names, more=more)
 
 
 class TransferRequestMixin:
@@ -381,7 +425,7 @@ class SOLVER_PT_SolverPanel(Panel):
         if missing_pc2:
             row = box.row()
             row.label(
-                text=f"Data path: {missing_pc2[0]} does not exist.",
+                text=iface_("Data path: {path} does not exist.").format(path=missing_pc2[0]),
                 icon="ERROR",
             )
             mismatch = _detect_pc2_basename_mismatch(context)
@@ -391,10 +435,10 @@ class SOLVER_PT_SolverPanel(Panel):
                 row.operator(
                     SOLVER_OT_MigratePC2Folder.bl_idname,
                     icon="FILE_REFRESH",
-                    text=f"Migrate data/{old_name}/ \u2192 data/{new_name}/",
+                    text=iface_("Migrate data/{old_name}/ \u2192 data/{new_name}/").format(old_name=old_name, new_name=new_name),
                 )
             list_box = box.box()
-            list_box.label(text=f"Missing files ({len(missing_pc2)}):")
+            list_box.label(text=iface_("Missing files ({count}):").format(count=len(missing_pc2)))
             col = list_box.column(align=True)
             for path in missing_pc2:
                 col.label(text=path)
@@ -435,7 +479,7 @@ class SOLVER_PT_SolverPanel(Panel):
             n_missing = remote_frames - len(fetched)
             if n_missing > 0:
                 row = box.row()
-                row.label(text=f"{n_missing} frames unfetched. Press \"Fetch All Animation\".", icon="ERROR")
+                row.label(text=iface_("{count} frames unfetched. Press \"Fetch All Animation\".").format(count=n_missing), icon="ERROR")
 
         if not has_dynamic:
             layout.label(text="No dynamics to simulate", icon="ERROR")
@@ -514,7 +558,7 @@ class SOLVER_PT_SolverPanel(Panel):
             icon="TRIA_DOWN" if state.show_mcp else "TRIA_RIGHT",
             emboss=False, text="",
         )
-        mcp_label = f"MCP Server (Running :{state.mcp_port})" if is_mcp_running() else "MCP Server (Stopped)"
+        mcp_label = iface_("MCP Server (Running :{port})").format(port=state.mcp_port) if is_mcp_running() else "MCP Server (Stopped)"
         row.label(text=mcp_label, icon="NETWORK_DRIVE")
         if state.show_mcp:
             from .mcp_ops import MCP_OT_StartServer, MCP_OT_StopServer
@@ -571,6 +615,10 @@ class SOLVER_OT_Transfer(AsyncOperator):
             self.report({"ERROR"}, error)
             return {"CANCELLED"}
         error = _check_uuid_consistency(context)
+        if error:
+            self.report({"ERROR"}, error)
+            return {"CANCELLED"}
+        error = _check_merge_pairs_stitch(context)
         if error:
             self.report({"ERROR"}, error)
             return {"CANCELLED"}
@@ -637,7 +685,7 @@ class SOLVER_OT_Transfer(AsyncOperator):
     def on_complete(self, context):
         from ..models.console import console as _console
         _console.write(f"[Transfer] complete: {com.info.status.value}")
-        self.report({"INFO"}, "Build completed successfully.")
+        self.report({"INFO"}, iface_("Build completed successfully."))
 
 
 class SOLVER_OT_Run(AsyncOperator):
@@ -722,8 +770,10 @@ class SOLVER_OT_Run(AsyncOperator):
         server_data = engine.state.server_data_hash
         if server_data and local_data != server_data:
             raise StageAbort(
-                "Geometry has changed since the last transfer. "
-                "Click \"Transfer\" to re-upload before running."
+                iface_(
+                    "Geometry has changed since the last transfer. "
+                    "Click \"Transfer\" to re-upload before running."
+                )
             )
 
     def _stage_check_params(self, context):
@@ -732,8 +782,10 @@ class SOLVER_OT_Run(AsyncOperator):
         server_param = engine.state.server_param_hash
         if server_param and local_param != server_param:
             raise StageAbort(
-                "Parameters have changed since the last transfer. "
-                "Click \"Update Params\" before running."
+                iface_(
+                    "Parameters have changed since the last transfer. "
+                    "Click \"Update Params\" before running."
+                )
             )
 
     def _stage_start_run(self, context):
@@ -879,13 +931,13 @@ class SOLVER_OT_ResumeFrom(AsyncOperator):
         server_param = engine.state.server_param_hash
         if server_data and local_data != server_data:
             self.report({"ERROR"},
-                        "Geometry has changed; resume is not possible. Click "
-                        "\"Transfer\" and \"Run\" for a fresh simulation.")
+                        iface_("Geometry has changed; resume is not possible. Click "
+                               "\"Transfer\" and \"Run\" for a fresh simulation."))
             return {"CANCELLED"}
         if server_param and local_param != server_param:
             self.report({"ERROR"},
-                        "Parameters have changed since the last transfer. Click "
-                        "\"Update Params\" before resuming.")
+                        iface_("Parameters have changed since the last transfer. Click "
+                               "\"Update Params\" before resuming."))
             return {"CANCELLED"}
         state = get_addon_data(context.scene).state
         state.checkpoint_frames.clear()
@@ -919,7 +971,7 @@ class SOLVER_OT_ResumeFrom(AsyncOperator):
         frames = state.convert_checkpoint_frames_to_list()
         index = int(state.checkpoint_frames_index)
         if not frames or index < 0 or index >= len(frames):
-            self.report({"ERROR"}, "Select a checkpoint frame to resume from.")
+            self.report({"ERROR"}, iface_("Select a checkpoint frame to resume from."))
             return {"CANCELLED"}
         from_frame = int(frames[index])
         if context.screen and context.screen.is_animation_playing:
@@ -989,7 +1041,7 @@ class SOLVER_OT_UpdateParams(AsyncOperator):
             return {"CANCELLED"}
         remote_root = com.normalized_remote_root()
         if not remote_root:
-            self.report({"ERROR"}, "Not connected; cannot send parameters")
+            self.report({"ERROR"}, iface_("Not connected; cannot send parameters"))
             return {"CANCELLED"}
         try:
             _, param_data, _, param_hash = prepare_upload(
@@ -1027,7 +1079,7 @@ class SOLVER_OT_UpdateParams(AsyncOperator):
         return com.is_aborting()
 
     def on_complete(self, context):
-        self.report({"INFO"}, "Build completed successfully.")
+        self.report({"INFO"}, iface_("Build completed successfully."))
 
 
 class SOLVER_OT_ClearAnimation(Operator):
@@ -1105,12 +1157,12 @@ class SOLVER_OT_RecaptureAllDeformations(Operator):
         if pin_specs:
             self._queue.append((self._PHASE_PIN, pin_specs))
         if not self._queue:
-            self.report({"WARNING"}, "No deformations to capture")
+            self.report({"WARNING"}, iface_("No deformations to capture"))
             return {"CANCELLED"}
         self._phase = None
         self._summary = {"objs": 0, "pins": 0}
         if not self._start_next(context):
-            self.report({"WARNING"}, "Nothing to capture")
+            self.report({"WARNING"}, iface_("Nothing to capture"))
             return {"CANCELLED"}
         wm = context.window_manager
         self._timer = wm.event_timer_add(0.01, window=context.window)
@@ -1174,7 +1226,7 @@ class SOLVER_OT_RecaptureAllDeformations(Operator):
         except Exception as exc:  # noqa: BLE001 — must restore state
             self._cleanup_active(context)
             redraw_all_areas(context)
-            self.report({"ERROR"}, f"Re-capture failed: {exc}")
+            self.report({"ERROR"}, iface_("Re-capture failed: {error}").format(error=exc))
             return self._end_timer(context, {"CANCELLED"})
 
     def _cleanup_active(self, context):
@@ -1193,18 +1245,18 @@ class SOLVER_OT_RecaptureAllDeformations(Operator):
         if err:
             self.report({"ERROR"}, err)
         else:
-            self.report({"INFO"}, "Re-capture aborted")
+            self.report({"INFO"}, iface_("Re-capture aborted"))
         return self._end_timer(context, {"CANCELLED"})
 
     def _finish(self, context):
         redraw_all_areas(context)
         parts = []
         if self._summary["objs"]:
-            parts.append(f"{self._summary['objs']} object(s)")
+            parts.append(iface_("{count} object(s)").format(count=self._summary["objs"]))
         if self._summary["pins"]:
-            parts.append(f"{self._summary['pins']} pin(s)")
-        target = ", ".join(parts) if parts else "nothing"
-        self.report({"INFO"}, f"Re-captured deformation for {target}")
+            parts.append(iface_("{count} pin(s)").format(count=self._summary["pins"]))
+        target = ", ".join(parts) if parts else iface_("nothing")
+        self.report({"INFO"}, iface_("Re-captured deformation for {target}").format(target=target))
         return self._end_timer(context, {"FINISHED"})
 
     def _end_timer(self, context, retval):
@@ -1274,11 +1326,11 @@ class SOLVER_OT_ClearAllDeformations(Operator):
 
         parts = []
         if n_objs:
-            parts.append(f"{n_objs} object(s)")
+            parts.append(iface_("{count} object(s)").format(count=n_objs))
         if n_pins:
-            parts.append(f"{n_pins} pin(s)")
-        target = ", ".join(parts) if parts else "nothing"
-        self.report({"INFO"}, f"Cleared deformation cache for {target}")
+            parts.append(iface_("{count} pin(s)").format(count=n_pins))
+        target = ", ".join(parts) if parts else iface_("nothing")
+        self.report({"INFO"}, iface_("Cleared deformation cache for {target}").format(target=target))
         return {"FINISHED"}
 
 
@@ -1311,8 +1363,8 @@ class SOLVER_OT_MigratePC2Folder(Operator):
         if mismatch:
             old_name, new_name = mismatch
             col = layout.column(align=True)
-            col.label(text=f"From:  data/{old_name}/", icon="FILE_FOLDER")
-            col.label(text=f"To:    data/{new_name}/", icon="FORWARD")
+            col.label(text=iface_("From:  data/{old_name}/").format(old_name=old_name), icon="FILE_FOLDER")
+            col.label(text=iface_("To:    data/{new_name}/").format(new_name=new_name), icon="FORWARD")
         layout.prop(self, "keep_copy")
 
     def execute(self, context):
@@ -1320,7 +1372,7 @@ class SOLVER_OT_MigratePC2Folder(Operator):
 
         mismatch = _detect_pc2_basename_mismatch(context)
         if mismatch is None:
-            self.report({"ERROR"}, "No migration target detected.")
+            self.report({"ERROR"}, iface_("No migration target detected."))
             return {"CANCELLED"}
         old_name, new_name = mismatch
         blend_dir = os.path.dirname(bpy.data.filepath)
@@ -1331,8 +1383,8 @@ class SOLVER_OT_MigratePC2Folder(Operator):
             if not os.path.isdir(new_dir) or os.listdir(new_dir):
                 self.report(
                     {"ERROR"},
-                    f"Target already exists and is non-empty, "
-                    f"resolve manually: {new_dir}",
+                    iface_("Target already exists and is non-empty, "
+                           "resolve manually: {path}").format(path=new_dir),
                 )
                 return {"CANCELLED"}
             # Empty directory — remove it so rename/copytree has a clean
@@ -1343,7 +1395,7 @@ class SOLVER_OT_MigratePC2Folder(Operator):
             except OSError as exc:
                 self.report(
                     {"ERROR"},
-                    f"Could not remove empty target {new_dir}: {exc}",
+                    iface_("Could not remove empty target {path}: {error}").format(path=new_dir, error=exc),
                 )
                 return {"CANCELLED"}
 
@@ -1353,7 +1405,7 @@ class SOLVER_OT_MigratePC2Folder(Operator):
             else:
                 os.rename(old_dir, new_dir)
         except OSError as exc:
-            self.report({"ERROR"}, f"Migration failed: {exc}")
+            self.report({"ERROR"}, iface_("Migration failed: {error}").format(error=exc))
             return {"CANCELLED"}
 
         n_rewritten = 0
@@ -1378,11 +1430,12 @@ class SOLVER_OT_MigratePC2Folder(Operator):
         except Exception:
             pass
 
-        action = "copied" if self.keep_copy else "moved"
+        action = iface_("copied") if self.keep_copy else iface_("moved")
         self.report(
             {"INFO"},
-            f"Migrated {n_rewritten} modifier path(s); "
-            f"data/{old_name}/ {action} to data/{new_name}/",
+            iface_("Migrated {count} modifier path(s); "
+                   "data/{old_name}/ {action} to data/{new_name}/").format(
+                count=n_rewritten, old_name=old_name, action=action, new_name=new_name),
         )
         return {"FINISHED"}
 
@@ -1428,7 +1481,7 @@ class SOLVER_OT_FetchData(AsyncOperator):
 
     def on_complete(self, context):
         redraw_all_areas(context)
-        self.report({"INFO"}, "Animation data fetch finished.")
+        self.report({"INFO"}, iface_("Animation data fetch finished."))
 
         state = get_addon_data(context.scene).state
         fetched = state.convert_fetched_frames_to_list()
@@ -1487,7 +1540,7 @@ class SOLVER_OT_DeleteRemoteData(AsyncOperator):
 
     def on_complete(self, context):
         redraw_all_areas(context)
-        self.report({"INFO"}, "Remote data deleted successfully.")
+        self.report({"INFO"}, iface_("Remote data deleted successfully."))
 
 
 classes = (

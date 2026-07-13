@@ -47,6 +47,7 @@ from . import bl_pin_compose_move_spin
 from . import bl_pin_compose_spin_move
 from . import bl_pin_compose_full
 from . import bl_pin_op_type_enum_stable
+from . import bl_i18n_no_leaks
 from . import bl_pin_capture_deformation
 from . import bl_pin_capture_deformation_persistence
 from . import bl_recapture_all_deformations
@@ -107,6 +108,8 @@ from . import bl_mesh_cache_self_heal
 from . import bl_live_frame_end_tracking
 from . import bl_fetch_failed_watchdog
 from . import bl_server_unknown_recovery
+from . import bl_launch_error_unsticks
+from . import bl_build_worker_faulthandler
 from . import bl_profile_load_batch
 from . import bl_pin_rod_curve
 from . import bl_static_deform_anim
@@ -115,6 +118,7 @@ from . import bl_static_op_anim
 from . import bl_multi_group
 from . import bl_collider_keyframes
 from . import bl_stitch_merge
+from . import bl_merge_pair_no_stitch_rejection
 from . import bl_post_snap_toggle
 from . import bl_solid_solid_stitch
 from . import bl_static_stitch
@@ -164,6 +168,10 @@ from . import bl_self_intersection_build_reject
 from . import bl_solid_zero_volume_reject
 from . import bl_solid_fix_weight_threshold
 from . import bl_tetgen_solid_build
+from . import bl_real_solid_smoke
+from . import bl_ssh_remote_solve
+from . import bl_ssh_remote_solid
+from . import bl_real_shell_drape
 from . import bl_solid_overlap_pin_last_wins
 from . import bl_pin_reorder_and_gating
 
@@ -236,6 +244,7 @@ REGISTRY = {
     "bl_pin_compose_spin_move": bl_pin_compose_spin_move,
     "bl_pin_compose_full": bl_pin_compose_full,
     "bl_pin_op_type_enum_stable": bl_pin_op_type_enum_stable,
+    "bl_i18n_no_leaks": bl_i18n_no_leaks,
     "bl_pin_capture_deformation": bl_pin_capture_deformation,
     "bl_pin_capture_deformation_persistence": bl_pin_capture_deformation_persistence,
     "bl_recapture_all_deformations": bl_recapture_all_deformations,
@@ -297,6 +306,8 @@ REGISTRY = {
     "bl_live_frame_end_tracking": bl_live_frame_end_tracking,
     "bl_fetch_failed_watchdog": bl_fetch_failed_watchdog,
     "bl_server_unknown_recovery": bl_server_unknown_recovery,
+    "bl_launch_error_unsticks": bl_launch_error_unsticks,
+    "bl_build_worker_faulthandler": bl_build_worker_faulthandler,
     "bl_profile_load_batch": bl_profile_load_batch,
 
     # Tier 2: feature-coverage gaps. Each scenario authors a specific
@@ -310,6 +321,7 @@ REGISTRY = {
     "bl_multi_group": bl_multi_group,
     "bl_collider_keyframes": bl_collider_keyframes,
     "bl_stitch_merge": bl_stitch_merge,
+    "bl_merge_pair_no_stitch_rejection": bl_merge_pair_no_stitch_rejection,
     "bl_post_snap_toggle": bl_post_snap_toggle,
     "bl_solid_solid_stitch": bl_solid_solid_stitch,
     "bl_static_stitch": bl_static_stitch,
@@ -362,6 +374,10 @@ REGISTRY = {
     "bl_solid_zero_volume_reject": bl_solid_zero_volume_reject,
     "bl_solid_fix_weight_threshold": bl_solid_fix_weight_threshold,
     "bl_tetgen_solid_build": bl_tetgen_solid_build,
+    "bl_real_solid_smoke": bl_real_solid_smoke,
+    "bl_ssh_remote_solve": bl_ssh_remote_solve,
+    "bl_ssh_remote_solid": bl_ssh_remote_solid,
+    "bl_real_shell_drape": bl_real_shell_drape,
     "bl_solid_overlap_pin_last_wins": bl_solid_overlap_pin_last_wins,
     "bl_pin_reorder_and_gating": bl_pin_reorder_and_gating,
 
@@ -402,13 +418,37 @@ def _platform_supported(mod) -> bool:
     return any(sys.platform.startswith(p) for p in plats)
 
 
-def server_only_names() -> list[str]:
+# Default backend set for a scenario that does not declare ``BACKENDS``.
+# The rig grew up against the emulated CPU-stub solver, and the bulk of
+# the physics scenarios assert on emulator-specific behavior (frozen
+# frames via ``PPF_EMULATED_STEP_MS=0``, ``PPF_EMULATED_ELASTIC`` ARAP
+# steps, ``PPF_EMULATED_FAIL_AT_FRAME`` fault injection). Those do not
+# reproduce on the real CUDA solver, so the conservative default is
+# emulated-only: a scenario runs on a real-GPU job ONLY if it explicitly
+# opts in with ``BACKENDS = ("emulated", "real")`` (or ``("real",)``).
+_DEFAULT_BACKENDS = ("emulated",)
+
+
+def _backend_supported(mod, backend: str) -> bool:
+    """True if *mod* supports the requested solver *backend*.
+
+    ``backend`` is ``"emulated"`` (the free-runner default) or ``"real"``
+    (the AWS GPU jobs, which build and run the real CUDA solver). A
+    scenario opts into the real backend by declaring
+    ``BACKENDS = ("emulated", "real")``; otherwise it is treated as
+    emulated-only (see ``_DEFAULT_BACKENDS``)."""
+    backends = getattr(mod, "BACKENDS", _DEFAULT_BACKENDS)
+    return backend in backends
+
+
+def server_only_names(backend: str = "emulated") -> list[str]:
     """Names of scenarios that don't require Blender. Useful for CI
     runs on hosts without a Blender install."""
     return [
         n for n, mod in REGISTRY.items()
         if not getattr(mod, "NEEDS_BLENDER", False)
         and _platform_supported(mod)
+        and _backend_supported(mod, backend)
     ]
 
 
@@ -417,5 +457,14 @@ def get(name: str):
     return REGISTRY.get(name)
 
 
-def all_names() -> list[str]:
-    return [n for n, m in REGISTRY.items() if _platform_supported(m)]
+def all_names(backend: str = "emulated") -> list[str]:
+    """Scenario names runnable on this platform against *backend*.
+
+    ``backend`` defaults to ``"emulated"`` so existing callers (and the
+    free-runner macOS job) get the full emulated suite. The AWS GPU jobs
+    pass ``"real"`` to get only the backend-agnostic subset plus any
+    real-only smokes."""
+    return [
+        n for n, m in REGISTRY.items()
+        if _platform_supported(m) and _backend_supported(m, backend)
+    ]

@@ -9,6 +9,8 @@ import bpy  # pyright: ignore
 
 from bpy.types import Operator  # pyright: ignore
 
+from bpy.app.translations import pgettext_iface as iface_, pgettext_tip as tip_
+
 from ...core.utils import get_vertices_in_group, redraw_all_areas
 from ...models.collection_utils import safe_update_index
 from ..state import iterate_active_object_groups
@@ -105,25 +107,25 @@ class OBJECT_OT_CreatePinVertexGroup(Operator):
 
         obj = context.edit_object
         if obj is None:
-            self.report({"ERROR"}, "No active edit object")
+            self.report({"ERROR"}, iface_("No active edit object"))
             return {"CANCELLED"}
 
         scene = context.scene
         group = get_group_from_index(scene, self.group_index)
         if group is None:
-            self.report({"ERROR"}, "Group not found")
+            self.report({"ERROR"}, iface_("Group not found"))
             return {"CANCELLED"}
 
         # Check this object is in the group (UUID comparison)
         from ...core.uuid_registry import get_object_uuid as _get_uuid
         _obj_uid = _get_uuid(obj)
         if not _obj_uid or not any(a.uuid == _obj_uid for a in group.assigned_objects):
-            self.report({"ERROR"}, f"'{obj.name}' is not in this group")
+            self.report({"ERROR"}, iface_("'{name}' is not in this group").format(name=obj.name))
             return {"CANCELLED"}
 
         name = self.vg_name.strip()
         if not name:
-            self.report({"ERROR"}, "Name cannot be empty")
+            self.report({"ERROR"}, iface_("Name cannot be empty"))
             return {"CANCELLED"}
 
         # Get selected indices
@@ -149,7 +151,7 @@ class OBJECT_OT_CreatePinVertexGroup(Operator):
             selected = []
 
         if not selected:
-            self.report({"ERROR"}, "No vertices selected")
+            self.report({"ERROR"}, iface_("No vertices selected"))
             return {"CANCELLED"}
 
         # Switch to object mode
@@ -175,7 +177,7 @@ class OBJECT_OT_CreatePinVertexGroup(Operator):
         from ...models.groups import encode_vertex_group_identifier
         obj_uuid = get_or_create_object_uuid(obj)
         if not obj_uuid:
-            self.report({"ERROR"}, f"'{obj.name}' is not writable (library-linked)")
+            self.report({"ERROR"}, iface_("'{name}' is not writable (library-linked)").format(name=obj.name))
             return {"CANCELLED"}
         new_hash = str(compute_vg_hash(obj, name))
         # Duplicate check by UUID + vg_name — consistent with _raw_create_pin
@@ -189,7 +191,7 @@ class OBJECT_OT_CreatePinVertexGroup(Operator):
 
         bpy.ops.object.mode_set(mode="EDIT")
         apply_object_overlays()
-        self.report({"INFO"}, f"Created pin '{name}' with {len(selected)} points")
+        self.report({"INFO"}, iface_("Created pin '{name}' with {count} points").format(name=name, count=len(selected)))
         return {"FINISHED"}
 
 
@@ -208,7 +210,7 @@ class OBJECT_OT_AddPinVertexGroup(Operator):
         scene = context.scene
         group = get_group_from_index(scene, self.group_index)
         if group is None:
-            self.report({"ERROR"}, "Group not found")
+            self.report({"ERROR"}, iface_("Group not found"))
             return {"CANCELLED"}
 
         identifier = group.pin_vertex_group_items
@@ -248,12 +250,12 @@ class OBJECT_OT_AddPinVertexGroup(Operator):
                     if candidate.name == obj_name:
                         break  # exact name still matches — prefer it
         if not obj:
-            self.report({"ERROR"}, "Could not resolve pin object by UUID")
+            self.report({"ERROR"}, iface_("Could not resolve pin object by UUID"))
             return {"CANCELLED"}
 
         resolved_uuid = get_or_create_object_uuid(obj)
         if not resolved_uuid:
-            self.report({"ERROR"}, f"'{obj.name}' is not writable (library-linked)")
+            self.report({"ERROR"}, iface_("'{name}' is not writable (library-linked)").format(name=obj.name))
             return {"CANCELLED"}
 
         # Duplicate check by (resolved UUID, vg_name) — consistent with
@@ -287,7 +289,7 @@ class OBJECT_OT_RemovePinVertexGroup(Operator):
         scene = context.scene
         group = get_group_from_index(scene, self.group_index)
         if group is None:
-            self.report({"ERROR"}, "Group not found")
+            self.report({"ERROR"}, iface_("Group not found"))
             return {"CANCELLED"}
 
         index = group.pin_vertex_groups_index
@@ -362,19 +364,19 @@ class OBJECT_OT_RenamePinVertexGroup(Operator):
         scene = context.scene
         group = get_group_from_index(scene, self.group_index)
         if group is None:
-            self.report({"ERROR"}, "Group not found")
+            self.report({"ERROR"}, iface_("Group not found"))
             return {"CANCELLED"}
 
         idx = group.pin_vertex_groups_index
         if idx < 0 or idx >= len(group.pin_vertex_groups):
-            self.report({"WARNING"}, "No pin vertex group selected")
+            self.report({"WARNING"}, iface_("No pin vertex group selected"))
             return {"CANCELLED"}
 
         pin_item = group.pin_vertex_groups[idx]
         obj = resolve_pin(pin_item)
         obj_name, old_vg = decode_vertex_group_identifier(pin_item.name)
         if not obj or not old_vg:
-            self.report({"ERROR"}, "Cannot resolve pin")
+            self.report({"ERROR"}, iface_("Cannot resolve pin"))
             return {"CANCELLED"}
 
         new_vg = self.new_name.strip()
@@ -385,7 +387,7 @@ class OBJECT_OT_RenamePinVertexGroup(Operator):
         if obj.type == "MESH":
             vg = obj.vertex_groups.get(old_vg)
             if not vg:
-                self.report({"ERROR"}, f"Vertex group '{old_vg}' not found")
+                self.report({"ERROR"}, iface_("Vertex group '{name}' not found").format(name=old_vg))
                 return {"CANCELLED"}
             vg.name = new_vg
         elif obj.type == "CURVE":
@@ -402,7 +404,7 @@ class OBJECT_OT_RenamePinVertexGroup(Operator):
         pin_item.vg_hash = str(compute_vg_hash(obj, new_vg))
 
         apply_object_overlays()
-        self.report({"INFO"}, f"Renamed '{old_vg}' to '{new_vg}'")
+        self.report({"INFO"}, iface_("Renamed '{old_name}' to '{new_name}'").format(old_name=old_vg, new_name=new_vg))
         return {"FINISHED"}
 
 
@@ -415,12 +417,12 @@ def _pin_select(operator, context, select):
     scene = context.scene
     group = get_group_from_index(scene, operator.group_index)
     if group is None:
-        operator.report({"ERROR"}, "Group not found")
+        operator.report({"ERROR"}, iface_("Group not found"))
         return {"CANCELLED"}
 
     idx = group.pin_vertex_groups_index
     if idx < 0 or idx >= len(group.pin_vertex_groups):
-        operator.report({"WARNING"}, "No pin vertex group selected")
+        operator.report({"WARNING"}, iface_("No pin vertex group selected"))
         return {"CANCELLED"}
 
     from ...core.uuid_registry import resolve_pin, get_object_uuid, get_object_by_uuid
@@ -428,14 +430,14 @@ def _pin_select(operator, context, select):
     resolve_pin(pin_item)
     _, vg_name = decode_vertex_group_identifier(pin_item.name)
     if not pin_item.object_uuid or not vg_name:
-        operator.report({"ERROR"}, "Invalid pin identifier")
+        operator.report({"ERROR"}, iface_("Invalid pin identifier"))
         return {"CANCELLED"}
 
     obj = context.edit_object
     if obj is None or get_object_uuid(obj) != pin_item.object_uuid:
         expected = get_object_by_uuid(pin_item.object_uuid)
         expected_name = expected.name if expected else "<unknown>"
-        operator.report({"ERROR"}, f"Edit object must be '{expected_name}'")
+        operator.report({"ERROR"}, iface_("Edit object must be '{name}'").format(name=expected_name))
         return {"CANCELLED"}
 
     # Get pin indices
@@ -446,12 +448,12 @@ def _pin_select(operator, context, select):
     else:
         vg = obj.vertex_groups.get(vg_name)
         if not vg:
-            operator.report({"ERROR"}, f"Vertex group '{vg_name}' not found")
+            operator.report({"ERROR"}, iface_("Vertex group '{name}' not found").format(name=vg_name))
             return {"CANCELLED"}
         pin_indices = set(get_vertices_in_group(obj, vg))
 
     if not pin_indices:
-        operator.report({"WARNING"}, "No pin vertices found")
+        operator.report({"WARNING"}, iface_("No pin vertices found"))
         return {"CANCELLED"}
 
     count = 0
@@ -480,8 +482,8 @@ def _pin_select(operator, context, select):
         bm.select_flush_mode()
         bmesh.update_edit_mesh(obj.data)
 
-    action = "Selected" if select else "Deselected"
-    operator.report({"INFO"}, f"{action} {count} points")
+    action = iface_("Selected") if select else iface_("Deselected")
+    operator.report({"INFO"}, iface_("{action} {count} points").format(action=action, count=count))
     return {"FINISHED"}
 
 
@@ -532,12 +534,12 @@ class OBJECT_OT_MakePinKeyframe(Operator):
         scene = context.scene
         group = get_group_from_index(scene, self.group_index)
         if group is None:
-            self.report({"ERROR"}, "Group not found")
+            self.report({"ERROR"}, iface_("Group not found"))
             return {"CANCELLED"}
 
         idx = group.pin_vertex_groups_index
         if idx < 0 or idx >= len(group.pin_vertex_groups):
-            self.report({"WARNING"}, "No pin vertex group selected")
+            self.report({"WARNING"}, iface_("No pin vertex group selected"))
             return {"CANCELLED"}
 
         from ...core.uuid_registry import resolve_pin, get_object_by_uuid
@@ -545,21 +547,21 @@ class OBJECT_OT_MakePinKeyframe(Operator):
         resolve_pin(pin_item)
         _, vg_name = decode_vertex_group_identifier(pin_item.name)
         if not pin_item.object_uuid or not vg_name:
-            self.report({"ERROR"}, "Invalid pin identifier")
+            self.report({"ERROR"}, iface_("Invalid pin identifier"))
             return {"CANCELLED"}
 
         obj = get_object_by_uuid(pin_item.object_uuid)
         if not obj or obj.type not in ("MESH", "CURVE"):
-            self.report({"ERROR"}, "Pin object not found")
+            self.report({"ERROR"}, iface_("Pin object not found"))
             return {"CANCELLED"}
 
         if obj.type == "CURVE":
-            self.report({"INFO"}, "Keyframing not supported for curve pins")
+            self.report({"INFO"}, iface_("Keyframing not supported for curve pins"))
             return {"FINISHED"}
 
         vg = obj.vertex_groups.get(vg_name)
         if not vg:
-            self.report({"ERROR"}, f"Vertex group '{vg_name}' not found")
+            self.report({"ERROR"}, iface_("Vertex group '{name}' not found").format(name=vg_name))
             return {"CANCELLED"}
 
         # Reject if any non-EMBEDDED_MOVE op exists. EMBEDDED_MOVE is
@@ -572,8 +574,10 @@ class OBJECT_OT_MakePinKeyframe(Operator):
         if non_embedded:
             self.report(
                 {"ERROR"},
-                "Pin has Move/Spin/Scale/Torque operations; keyframed "
-                "animation cannot be combined with them",
+                iface_(
+                    "Pin has Move/Spin/Scale/Torque operations; keyframed "
+                    "animation cannot be combined with them"
+                ),
             )
             return {"CANCELLED"}
 
@@ -584,8 +588,10 @@ class OBJECT_OT_MakePinKeyframe(Operator):
         if getattr(pin_item, "has_captured_anim", False):
             self.report(
                 {"ERROR"},
-                "Pin is captured from the depsgraph; press Clear "
-                "Deformation Cache first before adding manual keyframes",
+                iface_(
+                    "Pin is captured from the depsgraph; press Clear "
+                    "Deformation Cache first before adding manual keyframes"
+                ),
             )
             return {"CANCELLED"}
 
@@ -638,7 +644,9 @@ class OBJECT_OT_MakePinKeyframe(Operator):
 
         self.report(
             {"INFO"},
-            f"Inserted keyframes on {inserted} pin vertices at frame {scene_frame}",
+            iface_("Inserted keyframes on {count} pin vertices at frame {frame}").format(
+                count=inserted, frame=scene_frame
+            ),
         )
         from ...models.groups import invalidate_overlays
         invalidate_overlays()
@@ -661,12 +669,12 @@ class OBJECT_OT_DeletePinKeyframes(Operator):
         scene = context.scene
         group = get_group_from_index(scene, self.group_index)
         if group is None:
-            self.report({"ERROR"}, "Group not found")
+            self.report({"ERROR"}, iface_("Group not found"))
             return {"CANCELLED"}
 
         idx = group.pin_vertex_groups_index
         if idx < 0 or idx >= len(group.pin_vertex_groups):
-            self.report({"WARNING"}, "No pin vertex group selected")
+            self.report({"WARNING"}, iface_("No pin vertex group selected"))
             return {"CANCELLED"}
 
         from ...core.uuid_registry import resolve_pin, get_object_by_uuid
@@ -674,16 +682,16 @@ class OBJECT_OT_DeletePinKeyframes(Operator):
         resolve_pin(pin_item)
         _, vg_name = decode_vertex_group_identifier(pin_item.name)
         if not pin_item.object_uuid or not vg_name:
-            self.report({"ERROR"}, "Invalid pin identifier")
+            self.report({"ERROR"}, iface_("Invalid pin identifier"))
             return {"CANCELLED"}
 
         obj = get_object_by_uuid(pin_item.object_uuid)
         if not obj or obj.type not in ("MESH", "CURVE"):
-            self.report({"ERROR"}, "Pin object not found")
+            self.report({"ERROR"}, iface_("Pin object not found"))
             return {"CANCELLED"}
 
         if obj.type == "CURVE":
-            self.report({"INFO"}, "Keyframe deletion not applicable for curve pins")
+            self.report({"INFO"}, iface_("Keyframe deletion not applicable for curve pins"))
             return {"FINISHED"}
 
         # Remove every vertex-co fcurve on the mesh's action
@@ -705,8 +713,9 @@ class OBJECT_OT_DeletePinKeyframes(Operator):
         ops_removed = _remove_embedded_move_ops(pin_item)
 
         self.report({"INFO"},
-                    f"Removed {removed} pin-vertex fcurves, "
-                    f"{ops_removed} EMBEDDED_MOVE ops")
+                    iface_("Removed {removed} pin-vertex fcurves, "
+                           "{ops_removed} EMBEDDED_MOVE ops").format(
+                        removed=removed, ops_removed=ops_removed))
         from ...models.groups import invalidate_overlays
         invalidate_overlays()
 
@@ -855,17 +864,19 @@ class OBJECT_OT_AddPinOperation(Operator):
         if any(op.op_type == "EMBEDDED_MOVE" for op in pin_item.operations):
             self.report(
                 {"ERROR"},
-                "Pin is keyframed; remove its keyframed animation before "
-                "adding Move/Spin/Scale/Torque operations",
+                iface_(
+                    "Pin is keyframed; remove its keyframed animation before "
+                    "adding Move/Spin/Scale/Torque operations"
+                ),
             )
             return {"CANCELLED"}
         # Torque cannot be mixed with other operation types
         existing_types = {o.op_type for o in pin_item.operations}
         if self.op_type == "TORQUE" and existing_types - {"TORQUE"}:
-            self.report({"ERROR"}, "Torque cannot be mixed with Move/Spin/Scale operations")
+            self.report({"ERROR"}, iface_("Torque cannot be mixed with Move/Spin/Scale operations"))
             return {"CANCELLED"}
         if self.op_type != "TORQUE" and "TORQUE" in existing_types:
-            self.report({"ERROR"}, "Cannot add Move/Spin/Scale to a pin that has Torque")
+            self.report({"ERROR"}, iface_("Cannot add Move/Spin/Scale to a pin that has Torque"))
             return {"CANCELLED"}
         op = pin_item.operations.add()
         op.op_type = self.op_type
@@ -969,7 +980,7 @@ class OBJECT_OT_PickCenterFromSelected(Operator):
         bpy.ops.object.mode_set(mode="EDIT")
 
         if not selected:
-            self.report({"WARNING"}, "No vertices selected")
+            self.report({"WARNING"}, iface_("No vertices selected"))
             return {"CANCELLED"}
 
         mat = obj.matrix_world
@@ -993,7 +1004,7 @@ class OBJECT_OT_PickCenterFromSelected(Operator):
         elif self.target == "scale":
             op.scale_center = tuple(centroid)
 
-        self.report({"INFO"}, f"Center set from {len(selected)} vertices")
+        self.report({"INFO"}, iface_("Center set from {count} vertices").format(count=len(selected)))
         return {"FINISHED"}
 
 
@@ -1023,7 +1034,7 @@ class OBJECT_OT_PickVertexCenter(Operator):
         bpy.ops.object.mode_set(mode="EDIT")
 
         if len(selected) != 1:
-            self.report({"WARNING"}, "Select exactly one vertex")
+            self.report({"WARNING"}, iface_("Select exactly one vertex"))
             return {"CANCELLED"}
 
         vi = selected[0].index
@@ -1046,7 +1057,7 @@ class OBJECT_OT_PickVertexCenter(Operator):
         elif self.target == "scale":
             op.scale_center_vertex = vi
 
-        self.report({"INFO"}, f"Center vertex set to {vi}")
+        self.report({"INFO"}, iface_("Center vertex set to {index}").format(index=vi))
         return {"FINISHED"}
 
 

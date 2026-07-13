@@ -24,6 +24,7 @@ import bpy  # pyright: ignore
 import numpy as np
 
 from bpy.types import Operator  # pyright: ignore
+from bpy.app.translations import pgettext_iface as iface_, pgettext_tip as tip_
 
 from ...core.pc2 import (
     has_pin_anim_pc2,
@@ -150,10 +151,10 @@ def _build_entry(scene, group_index, pin_index, error_collector: list):
 
     group = get_group_from_index(scene, group_index)
     if group is None or group.object_type == "STATIC":
-        error_collector.append("Pin capture: invalid or STATIC group")
+        error_collector.append(iface_("Pin capture: invalid or STATIC group"))
         return None
     if not (0 <= pin_index < len(group.pin_vertex_groups)):
-        error_collector.append("Pin capture: pin index out of range")
+        error_collector.append(iface_("Pin capture: pin index out of range"))
         return None
     pin_item = group.pin_vertex_groups[pin_index]
     try:
@@ -162,36 +163,44 @@ def _build_entry(scene, group_index, pin_index, error_collector: list):
         error_collector.append(str(exc))
         return None
     if obj is None or obj.type != "MESH":
-        error_collector.append("Pin capture: only mesh pins can be captured")
+        error_collector.append(iface_("Pin capture: only mesh pins can be captured"))
         return None
     _, vg_name = decode_vertex_group_identifier(pin_item.name)
     if not vg_name:
-        error_collector.append("Pin capture: pin identifier is missing the vertex group")
+        error_collector.append(iface_("Pin capture: pin identifier is missing the vertex group"))
         return None
     if any(op.op_type == "TORQUE" for op in pin_item.operations):
         error_collector.append(
-            f"Pin '{vg_name}' on '{obj.name}': torque cannot be combined with "
-            "captured embedded animation"
+            iface_(
+                "Pin '{pin}' on '{object}': torque cannot be combined with "
+                "captured embedded animation"
+            ).format(pin=vg_name, object=obj.name)
         )
         return None
     pin_indices = _get_pin_indices(obj, vg_name)
     if not pin_indices:
         error_collector.append(
-            f"Pin '{vg_name}' on '{obj.name}': no pinned vertices to capture"
+            iface_(
+                "Pin '{pin}' on '{object}': no pinned vertices to capture"
+            ).format(pin=vg_name, object=obj.name)
         )
         return None
     uid = get_or_create_object_uuid(obj)
     if not uid:
         error_collector.append(
-            f"'{obj.name}' has no UUID (library-linked?); skipped"
+            iface_(
+                "'{name}' has no UUID (library-linked?); skipped"
+            ).format(name=obj.name)
         )
         return None
     frame_start, frame_end, range_source = _effective_frame_range(scene, obj)
     n_frames = frame_end - frame_start + 1
     if n_frames <= 0:
         error_collector.append(
-            f"Pin '{vg_name}' on '{obj.name}': empty frame range "
-            f"(start={frame_start}, end={frame_end})"
+            iface_(
+                "Pin '{pin}' on '{object}': empty frame range "
+                "(start={start}, end={end})"
+            ).format(pin=vg_name, object=obj.name, start=frame_start, end=frame_end)
         )
         return None
     return {
@@ -215,23 +224,33 @@ def _process_one_frame(scene, depsgraph, entry, frame: int) -> tuple[bool, str]:
 
     obj = get_object_by_uuid(entry["obj_uuid"])
     if obj is None:
-        return False, f"'{entry['obj_name']}' disappeared during capture"
+        return False, iface_("'{name}' disappeared during capture").format(name=entry['obj_name'])
     n_verts_total = len(obj.data.vertices)
     pin_idx = entry["pin_indices"]
     if int(pin_idx.max(initial=-1)) >= n_verts_total:
         return False, (
-            f"Pin '{entry['vg_name']}' on '{entry['obj_name']}': vertex "
-            f"count dropped below pin's max index at frame {frame} "
-            f"(have {n_verts_total} verts, need >{int(pin_idx.max())}). "
-            "A topology-changing modifier moved above the deformer mid-"
-            "capture, or the mesh was edited; re-bind the pin and retry."
+            iface_(
+                "Pin '{pin}' on '{object}': vertex count dropped below "
+                "pin's max index at frame {frame} (have {count} verts, "
+                "need >{max_index}). A topology-changing modifier moved "
+                "above the deformer mid-capture, or the mesh was edited; "
+                "re-bind the pin and retry."
+            ).format(
+                pin=entry['vg_name'],
+                object=entry['obj_name'],
+                frame=frame,
+                count=n_verts_total,
+                max_index=int(pin_idx.max()),
+            )
         )
     eval_obj = obj.evaluated_get(depsgraph)
     world = _sample_pin_frame_world(eval_obj, pin_idx)
     if world.shape != (len(pin_idx), 3):
         return False, (
-            f"Pin '{entry['vg_name']}' on '{entry['obj_name']}': "
-            f"unexpected sample shape {world.shape} at frame {frame}"
+            iface_(
+                "Pin '{pin}' on '{object}': unexpected sample shape "
+                "{shape} at frame {frame}"
+            ).format(pin=entry['vg_name'], object=entry['obj_name'], shape=world.shape, frame=frame)
         )
     entry["frames"][entry["frames_done"]] = world
     entry["frames_done"] += 1
@@ -240,15 +259,15 @@ def _process_one_frame(scene, depsgraph, entry, frame: int) -> tuple[bool, str]:
 
 def _start_job(context, entries: list) -> tuple[bool, str]:
     if _capture_job["active"]:
-        return False, "Another Capture Deformation job is in progress"
+        return False, iface_("Another Capture Deformation job is in progress")
     # Refuse to start if a STATIC capture is in flight: the two share
     # the depsgraph + frame_set side effects and would corrupt each
     # other's running frame cursor.
     from .static_deform_ops import is_capture_running as _static_running
     if _static_running():
-        return False, "Static-collider capture is in progress; wait for it to finish"
+        return False, iface_("Static-collider capture is in progress; wait for it to finish")
     if not entries:
-        return False, "No eligible pins to capture"
+        return False, iface_("No eligible pins to capture")
     scene = context.scene
     total = sum(e["frames"].shape[0] for e in entries)
     # Suspend each captured object's ContactSolverCache so the per-frame
@@ -270,7 +289,7 @@ def _start_job(context, entries: list) -> tuple[bool, str]:
         "total_frames_processed": 0,
         "total_frames": total,
         "saved_frame": int(scene.frame_current),
-        "status": "Capturing pin...",
+        "status": iface_("Capturing pin..."),
         "error": "",
         "suspended_caches": suspended,
     })
@@ -302,9 +321,16 @@ def _tick_job(context, *, budget_ms: int = 40) -> bool:
             return False
         _capture_job["total_frames_processed"] += 1
         _capture_job["status"] = (
-            f"Capturing pin '{entry['vg_name']}' on '{entry['obj_name']}' "
-            f"[{entry['frames_done']}/{entry['frames'].shape[0]}] "
-            f"({entry['range_source']})"
+            iface_(
+                "Capturing pin '{pin}' on '{object}' "
+                "[{done}/{total}] ({source})"
+            ).format(
+                pin=entry['vg_name'],
+                object=entry['obj_name'],
+                done=entry['frames_done'],
+                total=entry['frames'].shape[0],
+                source=entry['range_source'],
+            )
         )
     return _capture_job["entry_cursor"] < len(entries)
 
@@ -391,9 +417,11 @@ class OBJECT_OT_CapturePinDeformation(Operator):
             if _pin_has_vertex_co_fcurves(pin_item):
                 self.report(
                     {"WARNING"},
-                    "Pin has manual keyframes (vertex-co fcurves); press "
-                    "Delete All Keyframes first, then re-run Capture "
-                    "Deformation",
+                    iface_(
+                        "Pin has manual keyframes (vertex-co fcurves); press "
+                        "Delete All Keyframes first, then re-run Capture "
+                        "Deformation"
+                    ),
                 )
                 return {"CANCELLED"}
             # Refuse on non-deformable objects up front so EXEC_DEFAULT
@@ -409,16 +437,18 @@ class OBJECT_OT_CapturePinDeformation(Operator):
             if _pin_obj is None or _pin_obj.type != "MESH" or not has_deforming_modifier_stack(_pin_obj):
                 self.report(
                     {"WARNING"},
-                    "Pin object has no deforming modifier stack "
-                    "(Armature, Lattice, Mesh Deform, Shape Keys, ...); "
-                    "Capture Deformation has nothing to record",
+                    iface_(
+                        "Pin object has no deforming modifier stack "
+                        "(Armature, Lattice, Mesh Deform, Shape Keys, ...); "
+                        "Capture Deformation has nothing to record"
+                    ),
                 )
                 return {"CANCELLED"}
 
         errors: list = []
         entry = _build_entry(scene, self.group_index, self.pin_index, errors)
         if entry is None:
-            self.report({"WARNING"}, errors[0] if errors else "Nothing to capture")
+            self.report({"WARNING"}, errors[0] if errors else iface_("Nothing to capture"))
             return {"CANCELLED"}
         ok, err = _start_job(context, [entry])
         if not ok:
@@ -444,7 +474,7 @@ class OBJECT_OT_CapturePinDeformation(Operator):
                 if err:
                     self.report({"ERROR"}, err)
                 else:
-                    self.report({"INFO"}, "Pin capture aborted")
+                    self.report({"INFO"}, iface_("Pin capture aborted"))
                 return {"CANCELLED"}
             more = _tick_job(context)
             redraw_all_areas(context)
@@ -456,14 +486,16 @@ class OBJECT_OT_CapturePinDeformation(Operator):
                 invalidate_overlays()
                 self.report(
                     {"INFO"},
-                    f"Captured {n_frames} frame(s) across {n_pins} pin(s)",
+                    iface_("Captured {frames} frame(s) across {pins} pin(s)").format(
+                        frames=n_frames, pins=n_pins
+                    ),
                 )
                 return {"FINISHED"}
             return {"RUNNING_MODAL"}
         except Exception as exc:  # noqa: BLE001 — must restore state
             self._teardown(context)
             redraw_all_areas(context)
-            self.report({"ERROR"}, f"Pin capture failed: {exc}")
+            self.report({"ERROR"}, iface_("Pin capture failed: {error}").format(error=exc))
             return {"CANCELLED"}
 
     def cancel(self, context):
@@ -532,10 +564,10 @@ class OBJECT_OT_ClearPinDeformation(Operator):
         scene = context.scene
         group = get_group_from_index(scene, self.group_index)
         if group is None:
-            self.report({"ERROR"}, "Group not found")
+            self.report({"ERROR"}, iface_("Group not found"))
             return {"CANCELLED"}
         if not (0 <= self.pin_index < len(group.pin_vertex_groups)):
-            self.report({"ERROR"}, "Pin index out of range")
+            self.report({"ERROR"}, iface_("Pin index out of range"))
             return {"CANCELLED"}
         pin_item = group.pin_vertex_groups[self.pin_index]
         try:
@@ -544,11 +576,11 @@ class OBJECT_OT_ClearPinDeformation(Operator):
             self.report({"ERROR"}, str(exc))
             return {"CANCELLED"}
         if obj is None or obj.type != "MESH":
-            self.report({"ERROR"}, "Pin object not found")
+            self.report({"ERROR"}, iface_("Pin object not found"))
             return {"CANCELLED"}
         _, vg_name = decode_vertex_group_identifier(pin_item.name)
         if not vg_name:
-            self.report({"ERROR"}, "Invalid pin identifier")
+            self.report({"ERROR"}, iface_("Invalid pin identifier"))
             return {"CANCELLED"}
         remove_pin_anim_pc2(obj, vg_name)
         pin_item.has_captured_anim = False
@@ -562,7 +594,9 @@ class OBJECT_OT_ClearPinDeformation(Operator):
         invalidate_overlays()
         self.report(
             {"INFO"},
-            f"Cleared captured deformation for pin '{vg_name}' on '{obj.name}'",
+            iface_("Cleared captured deformation for pin '{pin}' on '{object}'").format(
+                pin=vg_name, object=obj.name
+            ),
         )
         return {"FINISHED"}
 
@@ -585,7 +619,7 @@ class SOLVER_OT_PinCaptureAbort(Operator):
 
     def execute(self, context):
         _capture_job["aborted"] = True
-        _capture_job["status"] = "Aborting..."
+        _capture_job["status"] = iface_("Aborting...")
         redraw_all_areas(context)
         return {"FINISHED"}
 
@@ -683,10 +717,10 @@ class OBJECT_OT_RefreshFullPinState(Operator):
         scene = context.scene
         group = get_group_from_index(scene, self.group_index)
         if group is None:
-            self.report({"ERROR"}, "Group not found")
+            self.report({"ERROR"}, iface_("Group not found"))
             return {"CANCELLED"}
         if not (0 <= self.pin_index < len(group.pin_vertex_groups)):
-            self.report({"ERROR"}, "Pin index out of range")
+            self.report({"ERROR"}, iface_("Pin index out of range"))
             return {"CANCELLED"}
         pin_item = group.pin_vertex_groups[self.pin_index]
         try:
@@ -705,9 +739,9 @@ class OBJECT_OT_RefreshFullPinState(Operator):
         redraw_all_areas(context)
         self.report(
             {"INFO"},
-            "Full pin: rest-pose tracking available"
+            iface_("Full pin: rest-pose tracking available")
             if is_full
-            else "Partial pin: rest-pose tracking unavailable",
+            else iface_("Partial pin: rest-pose tracking unavailable"),
         )
         return {"FINISHED"}
 
@@ -766,7 +800,7 @@ def start_capture_for_pins(context, specs: list) -> tuple[bool, str]:
         if entry is not None:
             entries.append(entry)
     if not entries:
-        return False, (errors[0] if errors else "No eligible pins to capture")
+        return False, (errors[0] if errors else iface_("No eligible pins to capture"))
     return _start_job(context, entries)
 
 

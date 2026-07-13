@@ -214,6 +214,91 @@ static LA_HD void symm3x3(const M3 &A, V3 &val, M3 &vec) {
 }
 
 } // namespace eig
+
+// Project a symmetric NxN matrix (in place) onto its nearest positive-
+// semidefinite matrix in the Frobenius sense: eigen-decompose and clamp every
+// eigenvalue up to `floor` (pass 0 for the nearest PSD). Cyclic Jacobi in
+// float32; meant for the small dense bending Hessians (rod bend N=9, shell bend
+// N=12). The caller must pass a numerically symmetric matrix. This is the
+// projected-Newton step: it keeps the exact Hessian's positive-curvature
+// content and only removes the indefinite directions, so the assembled Newton
+// system stays SPD (the true bending Hessian, g g^T plus (theta-theta0) d2theta,
+// is otherwise indefinite and breaks the SPD PCG solve).
+template <int N> static LA_HD void psd_project_symmetric(SMat<float, N, N> &A,
+                                                         float floor) {
+    SMat<float, N, N> V = SMat<float, N, N>::Identity();
+    float scale = 0.0f;
+    for (int i = 0; i < N; ++i)
+        for (int j = 0; j < N; ++j)
+            scale = fmaxf(scale, fabsf(A(i, j)));
+    if (scale == 0.0f) {
+        if (floor > 0.0f)
+            for (int i = 0; i < N; ++i)
+                A(i, i) = floor;
+        return;
+    }
+    const float tiny = 1e-7f * scale;
+    for (int sweep = 0; sweep < 24; ++sweep) {
+        float off = 0.0f;
+        for (int p = 0; p < N; ++p)
+            for (int q = p + 1; q < N; ++q)
+                off = fmaxf(off, fabsf(A(p, q)));
+        if (off <= tiny)
+            break;
+        for (int p = 0; p < N; ++p) {
+            for (int q = p + 1; q < N; ++q) {
+                const float apq = A(p, q);
+                if (fabsf(apq) <= tiny)
+                    continue;
+                const float app = A(p, p);
+                const float aqq = A(q, q);
+                // Jacobi rotation angle that zeroes A(p, q).
+                const float tau = (aqq - app) / (2.0f * apq);
+                const float t = (tau >= 0.0f ? 1.0f : -1.0f) /
+                                (fabsf(tau) + sqrtf(1.0f + tau * tau));
+                const float c = 1.0f / sqrtf(1.0f + t * t);
+                const float s = t * c;
+                A(p, p) = c * c * app - 2.0f * s * c * apq + s * s * aqq;
+                A(q, q) = s * s * app + 2.0f * s * c * apq + c * c * aqq;
+                A(p, q) = 0.0f;
+                A(q, p) = 0.0f;
+                for (int k = 0; k < N; ++k) {
+                    if (k == p || k == q)
+                        continue;
+                    const float akp = A(k, p);
+                    const float akq = A(k, q);
+                    const float np = c * akp - s * akq;
+                    const float nq = s * akp + c * akq;
+                    A(k, p) = np;
+                    A(p, k) = np;
+                    A(k, q) = nq;
+                    A(q, k) = nq;
+                }
+                for (int k = 0; k < N; ++k) {
+                    const float vkp = V(k, p);
+                    const float vkq = V(k, q);
+                    V(k, p) = c * vkp - s * vkq;
+                    V(k, q) = s * vkp + c * vkq;
+                }
+            }
+        }
+    }
+    // Eigenvalues are the converged diagonal; clamp and reconstruct
+    // A = V diag(max(lambda, floor)) V^T.
+    float lam[N];
+    for (int i = 0; i < N; ++i)
+        lam[i] = fmaxf(A(i, i), floor);
+    for (int i = 0; i < N; ++i) {
+        for (int j = i; j < N; ++j) {
+            float sum = 0.0f;
+            for (int k = 0; k < N; ++k)
+                sum += V(i, k) * lam[k] * V(j, k);
+            A(i, j) = sum;
+            A(j, i) = sum;
+        }
+    }
+}
+
 } // namespace linalg
 
 #undef LA_HD

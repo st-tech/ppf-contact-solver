@@ -6,6 +6,7 @@
 import bpy  # pyright: ignore
 
 from bpy.types import Operator  # pyright: ignore
+from bpy.app.translations import pgettext_iface as iface_, pgettext_tip as tip_
 
 from ...models.collection_utils import safe_update_index
 from ...models.groups import get_addon_data
@@ -30,7 +31,7 @@ class OBJECT_OT_CreateGroup(Operator):
         scene = context.scene
         slot_index = find_available_group_slot(scene)
         if slot_index is None:
-            self.report({"WARNING"}, "Maximum number of groups reached")
+            self.report({"WARNING"}, iface_("Maximum number of groups reached"))
             return {"CANCELLED"}
 
         prop_name = f"object_group_{slot_index}"
@@ -71,7 +72,7 @@ class OBJECT_OT_DeleteGroup(Operator):
         scene = context.scene
         group = get_group_from_index(scene, self.group_index)
         if group is None:
-            self.report({"ERROR"}, "Group not found or not active")
+            self.report({"ERROR"}, iface_("Group not found or not active"))
             return {"CANCELLED"}
 
         # Reset object display properties
@@ -115,12 +116,12 @@ class OBJECT_OT_DuplicateGroup(Operator):
         scene = context.scene
         src = get_group_from_index(scene, self.group_index)
         if src is None:
-            self.report({"ERROR"}, "Source group not found")
+            self.report({"ERROR"}, iface_("Source group not found"))
             return {"CANCELLED"}
 
         slot_index = find_available_group_slot(scene)
         if slot_index is None:
-            self.report({"WARNING"}, "Maximum number of groups reached")
+            self.report({"WARNING"}, iface_("Maximum number of groups reached"))
             return {"CANCELLED"}
 
         addon_data = get_addon_data(scene)
@@ -213,7 +214,7 @@ class OBJECT_OT_AddObjectsToGroup(Operator):
                 if not obj_uid:
                     self.report(
                         {"WARNING"},
-                        f"Object '{obj.name}' is library-linked and cannot be assigned",
+                        iface_("Object '{name}' is library-linked and cannot be assigned").format(name=obj.name),
                     )
                     continue
                 if not is_acceptable or obj_uid in existing_uuids:
@@ -234,8 +235,7 @@ class OBJECT_OT_AddObjectsToGroup(Operator):
                     if not is_particle_mesh:
                         self.report(
                             {"ERROR"},
-                            f"Object '{obj.name}' is not a particle mesh. "
-                            f"Convert to particle mesh first.",
+                            iface_("Object '{name}' is not a particle mesh. Convert to particle mesh first.").format(name=obj.name),
                         )
                         continue
 
@@ -250,10 +250,7 @@ class OBJECT_OT_AddObjectsToGroup(Operator):
                 if siblings:
                     self.report(
                         {"ERROR"},
-                        f"Object '{obj.name}' is a Linked Duplicate (shares mesh "
-                        f"data with {siblings[0]!r}). Make it single-user "
-                        f"(Object > Relations > Make Single User > Object & Data) "
-                        f"before assigning.",
+                        iface_("Object '{name}' is a Linked Duplicate (shares mesh data with {sibling!r}). Make it single-user (Object > Relations > Make Single User > Object & Data) before assigning.").format(name=obj.name, sibling=siblings[0]),
                     )
                     continue
 
@@ -267,12 +264,7 @@ class OBJECT_OT_AddObjectsToGroup(Operator):
                 if dup_count > 0:
                     self.report(
                         {"ERROR"},
-                        f"Object '{obj.name}' has {dup_count} duplicate "
-                        f"face(s) (two triangles sharing the same three "
-                        f"vertices), usually from doubled geometry. Select "
-                        f"the mesh in Edit Mode and run Mesh > Merge > By "
-                        f"Distance (or delete the duplicate faces) before "
-                        f"assigning.",
+                        iface_("Object '{name}' has {count} duplicate face(s) (two triangles sharing the same three vertices), usually from doubled geometry. Select the mesh in Edit Mode and run Mesh > Merge > By Distance (or delete the duplicate faces) before assigning.").format(name=obj.name, count=dup_count),
                     )
                     continue
 
@@ -283,7 +275,7 @@ class OBJECT_OT_AddObjectsToGroup(Operator):
                         if obj_uid in other_uuids:
                             self.report(
                                 {"WARNING"},
-                                f"Object '{obj.name}' is already in another group",
+                                iface_("Object '{name}' is already in another group").format(name=obj.name),
                             )
                             in_other = True
                             break
@@ -339,7 +331,7 @@ class OBJECT_OT_AddObjectsToGroup(Operator):
 
             return {"FINISHED"}
 
-        self.report({"ERROR"}, "Group not found")
+        self.report({"ERROR"}, iface_("Group not found"))
         return {"CANCELLED"}
 
 
@@ -378,7 +370,7 @@ class OBJECT_OT_RemoveObjectFromGroup(Operator):
             apply_object_overlays()
             return {"FINISHED"}
 
-        self.report({"ERROR"}, "Group not found")
+        self.report({"ERROR"}, iface_("Group not found"))
         return {"CANCELLED"}
 
 

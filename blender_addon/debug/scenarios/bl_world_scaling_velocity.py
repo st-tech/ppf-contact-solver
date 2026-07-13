@@ -3,28 +3,26 @@
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
 # License: Apache v2.0
 #
-# world_scaling round-trip for an INITIAL VELOCITY launch -- and a
-# DETECTOR for a confirmed double-scaling bug in the feature.
+# world_scaling round-trip for an INITIAL VELOCITY launch.
 #
 # A free (unpinned) shell is given a frame-1 initial translational
-# velocity and drifts with zero gravity. Velocity has units length/time,
-# so for the authored motion to survive the scale-out it must be scaled
-# by world_scaling exactly ONCE. We run the scene at base size + base
-# speed (world_scaling=1) and at 10x size + 10x speed (world_scaling=0.1)
-# and assert the 10x run reproduces 10x the base run.
+# velocity and drifts with zero gravity. Velocity has units length/time
+# and is authored in Blender units, so world_scaling must stay transparent
+# to the look: the seeded motion has to be scaled by world_scaling exactly
+# ONCE (the solver scales vel.bin on ingest, like geometry, and divides the
+# output back out). We run the scene at base size + base speed
+# (world_scaling=1) and at 10x size + 10x speed (world_scaling=0.1) and
+# assert the 10x run reproduces 10x the base run.
 #
-# This currently FAILS its C_scale_invariant check: the frame-1 initial
-# velocity is scaled TWICE -- once in the addon encoder
-# (core/encoder/params.py: ``speed * state.world_scaling`` in the
-# "velocity" dict) and again in the solver (scene.rs scales the vel.bin
-# matrix by ws). The net ws^2 factor shrinks the seeded motion of the
-# 10x run by 1/ws, so it does not reproduce 10x the base drift. The fix
-# is to scale the initial velocity in exactly one place. (The velocity
-# SCHEDULE path is scaled only once -- see
-# bl_world_scaling_velocity_schedule, which passes.)
-#
-# Kept RED on purpose as a regression guard: it must turn GREEN once the
-# double-scaling is removed.
+# History: this once double-scaled the frame-1 velocity (encoder * ws AND
+# solver * ws, a net ws^2), fixed in c8a61856 by scaling only in the solver
+# so the encoder now passes the raw Blender-unit speed. (The velocity
+# SCHEDULE path is instead scaled once in the encoder and left alone by the
+# solver; see bl_world_scaling_velocity_schedule.) Because this is a single
+# frame-1 impulse followed by pure drift, the test also guards that the
+# emulator carries momentum across steps: a7ffd916's frame-time
+# interpolation zeroed it until the emulator curr->prev snapshot was gated
+# off the elastic path.
 #
 # (The emulator integrates injected velocity only with its implicit
 # ARAP step enabled, hence PPF_EMULATED_ELASTIC=1.)

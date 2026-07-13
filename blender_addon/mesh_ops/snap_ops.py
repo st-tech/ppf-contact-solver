@@ -8,6 +8,7 @@ import json
 import bpy  # pyright: ignore
 
 from bpy.types import Operator  # pyright: ignore
+from bpy.app.translations import pgettext_iface as iface_, pgettext_tip as tip_  # pyright: ignore
 from mathutils import Vector, kdtree  # pyright: ignore
 
 from ..models.groups import get_addon_data, iterate_active_object_groups, pair_supports_cross_stitch
@@ -384,7 +385,7 @@ def _snap_pair(operator, context, obj_a, obj_b):
     state = get_addon_data(context.scene).state
 
     if not obj_a or not obj_b:
-        operator.report({"ERROR"}, "One or both objects not found")
+        operator.report({"ERROR"}, iface_("One or both objects not found"))
         return {"CANCELLED"}
 
     try:
@@ -395,7 +396,7 @@ def _snap_pair(operator, context, obj_a, obj_b):
         return {"CANCELLED"}
 
     if not points_a or not points_b:
-        operator.report({"ERROR"}, "Could not find snap points on one or both objects")
+        operator.report({"ERROR"}, iface_("Could not find snap points on one or both objects"))
         return {"CANCELLED"}
 
     # Soft stitch (NOT a weld): find the SOURCE object's vertex whose closest
@@ -411,7 +412,7 @@ def _snap_pair(operator, context, obj_a, obj_b):
     )
     if source_obj is None:
         operator.report(
-            {"ERROR"}, "This object pair does not support stitching",
+            {"ERROR"}, iface_("This object pair does not support stitching"),
         )
         return {"CANCELLED"}
 
@@ -419,7 +420,7 @@ def _snap_pair(operator, context, obj_a, obj_b):
         context.scene, source_obj, target_obj, target_type,
     )
     if source_point is None or target_point is None:
-        operator.report({"ERROR"}, "Could not find a closest source/target feature")
+        operator.report({"ERROR"}, iface_("Could not find a closest source/target feature"))
         return {"CANCELLED"}
 
     gap_a, gap_b = _get_pair_contact_gaps(context.scene, obj_a, obj_b)
@@ -476,7 +477,7 @@ def _snap_pair(operator, context, obj_a, obj_b):
     if not uuid_a or not uuid_b:
         operator.report(
             {"ERROR"},
-            "Cannot snap: one or both objects are library-linked (unwritable)",
+            iface_("Cannot snap: one or both objects are library-linked (unwritable)"),
         )
         return {"CANCELLED"}
     pair_item = None
@@ -514,8 +515,9 @@ def _snap_pair(operator, context, obj_a, obj_b):
 
     operator.report(
         {"INFO"},
-        f"Stitched {obj_a.name} to {obj_b.name} "
-        f"(was {min_distance:.4f} apart, positioned at gap {keep:.4g})",
+        iface_("Stitched {object_a} to {object_b} (was {distance:.4f} apart, positioned at gap {gap:.4g})").format(
+            object_a=obj_a.name, object_b=obj_b.name, distance=min_distance, gap=keep,
+        ),
     )
     return {"FINISHED"}
 
@@ -570,7 +572,7 @@ class OBJECT_OT_ResnapMergePair(Operator):
         state = get_addon_data(context.scene).state
         idx = state.merge_pairs_index
         if not (0 <= idx < len(state.merge_pairs)):
-            self.report({"ERROR"}, "No merge pair selected")
+            self.report({"ERROR"}, iface_("No merge pair selected"))
             return {"CANCELLED"}
         pair = state.merge_pairs[idx]
         obj_a = get_object_by_uuid(pair.object_a_uuid)
@@ -599,10 +601,10 @@ class OBJECT_OT_PickSnapObject(Operator):
         valid = {item[0] for item in get_snap_objects(state, context)}
         identifier = get_or_create_object_uuid(obj)
         if not identifier:
-            self.report({"WARNING"}, f"'{obj.name}' is not writable (library-linked)")
+            self.report({"WARNING"}, iface_("'{name}' is not writable (library-linked)").format(name=obj.name))
             return {"CANCELLED"}
         if identifier not in valid:
-            self.report({"WARNING"}, f"'{obj.name}' is not a snap-eligible object")
+            self.report({"WARNING"}, iface_("'{name}' is not a snap-eligible object").format(name=obj.name))
             return {"CANCELLED"}
         if self.target == "A":
             state.snap_object_a = identifier

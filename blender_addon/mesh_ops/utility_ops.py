@@ -15,6 +15,7 @@
 
 import bmesh  # pyright: ignore
 import bpy  # pyright: ignore
+from bpy.app.translations import pgettext_iface as iface_, pgettext_tip as tip_
 from bpy.types import Operator  # pyright: ignore
 
 
@@ -59,12 +60,14 @@ class OBJECT_OT_SymmetricTriangulate(Operator):
                 bm.free()
 
         if n_obj == 0:
-            self.report({"WARNING"}, "Select one or more mesh objects")
+            self.report({"WARNING"}, iface_("Select one or more mesh objects"))
             return {"CANCELLED"}
         self.report(
             {"INFO"},
-            f"Symmetric-triangulated {n_obj} object(s) "
-            f"({len(seen_data)} mesh data-block(s))",
+            iface_(
+                "Symmetric-triangulated {obj_count} object(s) "
+                "({data_count} mesh data-block(s))"
+            ).format(obj_count=n_obj, data_count=len(seen_data)),
         )
         return {"FINISHED"}
 

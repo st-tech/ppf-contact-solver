@@ -15,6 +15,8 @@
 import os
 import tomllib
 
+from bpy.app.translations import pgettext_iface as iface_, pgettext_tip as tip_
+
 from .param_introspect import MATERIAL_CLIPBOARD_EXCLUDE
 from .profile import _VECTOR_PROPERTIES
 
@@ -70,7 +72,7 @@ def get_preset_items(object_type: str) -> list:
     the returned list in a module-level reference, or Blender frees the strings
     and the dropdown renders garbage (see ``ui/object_group.py``).
     """
-    items = [("NONE", "Select Preset...", "")]
+    items = [("NONE", iface_("Select Preset..."), "")]
     for name, preset in load_material_presets().items():
         if preset.get("object_type") == object_type:
             items.append((name, name, preset.get("description", "")))

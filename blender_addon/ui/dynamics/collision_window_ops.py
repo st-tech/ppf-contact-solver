@@ -5,6 +5,7 @@
 
 import bpy  # pyright: ignore
 from bpy.types import Operator  # pyright: ignore
+from bpy.app.translations import pgettext_iface as iface_, pgettext_tip as tip_  # pyright: ignore
 
 from ...core.utils import redraw_all_areas
 from ...models.collection_utils import safe_update_index
@@ -28,16 +29,16 @@ class OBJECT_OT_AddCollisionWindow(Operator):
     def execute(self, context):
         group = get_group_from_index(context.scene, self.group_index)
         if group is None:
-            self.report({"ERROR"}, "Group not found")
+            self.report({"ERROR"}, iface_("Group not found"))
             return {"CANCELLED"}
 
         assigned = _get_selected_assigned(group)
         if assigned is None:
-            self.report({"ERROR"}, "No object selected")
+            self.report({"ERROR"}, iface_("No object selected"))
             return {"CANCELLED"}
 
         if len(assigned.collision_windows) >= MAX_COLLISION_WINDOWS:
-            self.report({"ERROR"}, f"Maximum {MAX_COLLISION_WINDOWS} collision windows per object")
+            self.report({"ERROR"}, iface_("Maximum {count} collision windows per object").format(count=MAX_COLLISION_WINDOWS))
             return {"CANCELLED"}
 
         item = assigned.collision_windows.add()
@@ -66,12 +67,12 @@ class OBJECT_OT_RemoveCollisionWindow(Operator):
     def execute(self, context):
         group = get_group_from_index(context.scene, self.group_index)
         if group is None:
-            self.report({"ERROR"}, "Group not found")
+            self.report({"ERROR"}, iface_("Group not found"))
             return {"CANCELLED"}
 
         assigned = _get_selected_assigned(group)
         if assigned is None:
-            self.report({"ERROR"}, "No object selected")
+            self.report({"ERROR"}, iface_("No object selected"))
             return {"CANCELLED"}
 
         idx = assigned.collision_windows_index

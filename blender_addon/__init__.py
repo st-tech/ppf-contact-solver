@@ -8,6 +8,7 @@ from bpy.app.handlers import persistent  # pyright: ignore
 from .ui import main_panel, console, solver, state
 from .ui import dynamics  # Import the dynamics package
 from . import mesh_ops  # Import the mesh_ops package (snap + merge only)
+from . import i18n  # Import the localization package (bpy.app.translations catalogs)
 from .ops import zozo_contact_solver
 
 reload_server = None
@@ -217,6 +218,9 @@ def register():
 
 def _register_body():
     global reload_server
+    # Register translation catalogs first so the very first UI draw is
+    # already localized when the user has interface translation enabled.
+    i18n.register()
     state.register()
     main_panel.register()
     solver.register()
@@ -527,3 +531,4 @@ def unregister():
     solver.unregister()
     main_panel.unregister()
     state.unregister()
+    i18n.unregister()

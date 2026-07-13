@@ -23,7 +23,12 @@ REM If not already being logged, restart with logging
 if "%WARMUP_LOGGING%"=="" (
     set WARMUP_LOGGING=1
     echo Logging to %LOGFILE%
-    powershell -Command "& { cmd /c 'set WARMUP_LOGGING=1&& set NOPAUSE=!NOPAUSE!&& \"%~f0\"' 2>&1 | Tee-Object -FilePath '%LOGFILE%' }"
+    REM `exit $LASTEXITCODE` inside the -Command is REQUIRED: a PowerShell
+    REM pipeline ending in the Tee-Object cmdlet exits 0 regardless of the
+    REM inner cmd's failure, so without it every warmup failure (bad MSVC
+    REM install, missing dep) is masked as success and only surfaces steps
+    REM later. This forwards the re-launched warmup's real exit code.
+    powershell -Command "& { cmd /c 'set WARMUP_LOGGING=1&& set NOPAUSE=!NOPAUSE!&& \"%~f0\"' 2>&1 | Tee-Object -FilePath '%LOGFILE%'; exit $LASTEXITCODE }"
     exit /b %ERRORLEVEL%
 )
 
@@ -387,9 +392,22 @@ if not exist "%MSVC_SETUP%" (
     echo Installing MSVC to %MSVC_DIR% (this takes a while^)...
     pushd "%BUILD_WIN%"
     "%PYTHON%" "!PBT_SCRIPT!" --accept-license --vs 2022
+    REM Capture the installer's exit code BEFORE popd: popd can reset
+    REM errorlevel and hide a failed MSVC install.
+    set MSVC_RC=!errorlevel!
     popd
-    if errorlevel 1 (
-        echo ERROR: Failed to install Portable MSVC
+    if not "!MSVC_RC!"=="0" (
+        echo ERROR: Failed to install Portable MSVC ^(exit !MSVC_RC!^)
+        exit /b 1
+    )
+
+    REM Belt-and-suspenders: portable-msvc.py is fetched from a mutable gist
+    REM and could exit 0 yet leave no setup script (an upstream regression
+    REM once did exactly this). Assert the toolchain env script the rest of
+    REM the build calls actually exists, so a silent no-op fails here loudly
+    REM instead of two build steps later.
+    if not exist "%MSVC_DIR%\setup_x64.bat" if not exist "%MSVC_DIR%\setup.bat" (
+        echo ERROR: portable-msvc.py finished but no setup_x64.bat/setup.bat under %MSVC_DIR%
         exit /b 1
     )
 
@@ -435,7 +453,20 @@ if errorlevel 1 (
     REM pin SOLID) and hence a divergent simulation for the same scene. scipy is
     REM present transitively on Linux but was never installed here, so it must
     REM be listed explicitly to keep Windows and Linux on the same code path.
-    set PACKAGES=numpy scipy numba plyfile requests certifi gdown trimesh pywavefront matplotlib tqdm pythreejs ipywidgets fast-simplification tabulate triangle cbor2 psutil
+    REM PIN the ABI-coupled / native-extension deps to a verified-good set.
+    REM Left unpinned, every warmup bundles whatever was latest that day.
+    REM scipy is built against a specific numpy ABI; when pip pairs a scipy
+    REM with a numpy it was not built against, the
+    REM SuperLU solve in the partial-pin SOLID harmonic extension crashed the
+    REM build worker NATIVELY (no Python exception, so the graceful scipy
+    REM fallback never ran and no ERROR line was emitted, the add-on only
+    REM showed "build worker exited with code 1" at ~10%). Pinning numpy +
+    REM scipy + numba (numpy-coupled) and the native tetra stack keeps the
+    REM bundle reproducible so a good combo cannot silently drift into a bad
+    REM one. Bump these together, and re-verify a partial-pin SOLID build,
+    REM whenever the bundled Python minor changes. Pure-Python deps stay
+    REM unpinned (they cannot cause an ABI crash).
+    set PACKAGES=numpy==2.4.4 scipy==1.17.1 numba==0.65.1 plyfile requests certifi gdown trimesh==4.12.2 pywavefront matplotlib tqdm pythreejs ipywidgets fast-simplification==0.1.13 tabulate triangle==20250106 cbor2==6.0.1 psutil==7.2.2
 
     REM Development tools
     set DEV_PACKAGES=ruff black isort
@@ -455,7 +486,7 @@ if errorlevel 1 (
     echo Installing pytetwild (fTetWild^) + tetgen (TetGen^) + pyvista...
     rem pyvista is imported at the top of pytetwild._accessor but is not
     rem declared as a hard dependency, so install it explicitly.
-    "%PYTHON%" -m pip install --no-warn-script-location pytetwild tetgen pyvista
+    "%PYTHON%" -m pip install --no-warn-script-location pytetwild==0.2.3 tetgen==0.8.4 pyvista==0.48.4
     if errorlevel 1 (
         echo WARNING: pytetwild/tetgen failed to install
     )

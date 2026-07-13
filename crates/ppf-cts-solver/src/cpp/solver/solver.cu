@@ -17,6 +17,46 @@
 
 namespace solver {
 
+// A correct assembly makes the Newton system matrix and the preconditioner both
+// SPD, so p^T A p > 0 and r^T M^-1 r > 0 for every PCG search direction. If
+// either turns non-positive the assembly is wrong: a per-element Hessian missing
+// its SPD projection, a sign error, a stale/garbage block, or an off-diagonal
+// block silently dropped because its (i, j) pair was never registered in the
+// fixed CSR sparsity pattern (which turns even a PSD element indefinite). Rather
+// than limp on with a broken solve -- or silently mask a non-SPD preconditioner
+// behind the block-Jacobi fallback -- abort at the detection site so the wrong
+// matrix is spotted immediately. Convergence is always tested before these fire,
+// so a benign near-tolerance float underflow of the inner product never trips
+// them. The reported Rayleigh quotient p^T A p / |p|^2 is the negative-curvature
+// eigenvalue estimate: order-of-magnitude values are a genuine indefinite term,
+// values near float epsilon are a near-singular direction / round-off.
+[[noreturn]] static void fatal_indefinite_system_matrix(unsigned iter,
+                                                        double reresid,
+                                                        double rayleigh) {
+    fprintf(stderr,
+            "PPF FATAL: indefinite system matrix -- p^T A p <= 0 in the PCG "
+            "solve at iter %u (reresid %.3e). Negative-curvature Rayleigh "
+            "quotient p^T A p / |p|^2 = %.3e (order-1-and-up magnitude is a "
+            "genuine indefinite term; near float epsilon is a near-singular "
+            "direction / round-off). The assembled Newton Hessian is not SPD "
+            "(a per-element Hessian is missing its SPD projection, has a "
+            "sign/assembly error, or a dropped off-diagonal block).\n",
+            iter, reresid, rayleigh);
+    fflush(stderr);
+    std::abort();
+}
+
+[[noreturn]] static void fatal_nonspd_preconditioner(unsigned iter,
+                                                     double reresid) {
+    fprintf(stderr,
+            "PPF FATAL: non-SPD preconditioner -- r^T M^-1 r <= 0 in the PCG "
+            "solve at iter %u (reresid %.3e). The preconditioner (Schwarz / "
+            "block-Jacobi) is not SPD.\n",
+            iter, reresid);
+    fflush(stderr);
+    std::abort();
+}
+
 struct UnrolledMat3x3f {
     const float *data;
     __device__ UnrolledMat3x3f(const float *data) : data(data) {}
@@ -844,20 +884,35 @@ cg_device(const DeviceOperators &op, Vec<float> &r, Vec<float> &x,
             if (reresid < (double)tol) {
                 return {true, iter, (float)reresid, false};
             }
-            // Non-SPD preconditioner residual (Schwarz only): signal the caller
-            // to fall back to the block-Jacobi loop (4th element true). The flag
-            // latches but is read only at a scheduled check, so up to a few
-            // corrupted iterations can run first. This stays harmless only
-            // because the Gram-SPD apply rounds rz <= 0 just when r is already
-            // tiny, by which point NEAR_TOL_FACTOR has forced stride == 1, so the
-            // corrupted window is ~1 iteration. Convergence is tested above this:
-            // a residual already below tol is accepted (matching cg_hostsync,
-            // which also tests convergence before the rz<=0 restart). Do not
-            // widen RESID_CHECK_STRIDE / NEAR_TOL_FACTOR without revisiting this.
-            if (rzbad) {
-                return {false, iter, (float)reresid, true};
+            // Hard invariant checks (convergence is tested above, so these fire
+            // only on a NON-converged breakdown, never on a benign near-tol
+            // float edge). p^T A p <= 0 means the assembled Newton system matrix
+            // is not SPD; r^T M^-1 r <= 0 means the preconditioner is not SPD.
+            // Both are assembly bugs, so abort loudly with the exact site instead
+            // of silently failing (or masking a non-SPD preconditioner with the
+            // block-Jacobi fallback) -- an indefinite matrix must surface here.
+            if (broke) {
+                // Form the negative-curvature Rayleigh quotient p^T A p / |p|^2.
+                // Read the breakdown p^T A p (d_pAp = sc.data+2) through the
+                // spare 4th pinned slot (a pageable D2H stalls ~100us; see the
+                // probe_pin note above); |p|^2 is the host-returning reduction
+                // and the stream is idle (the check synced q). These are this
+                // scheduled check's values, so they approximate the breakdown
+                // iterate; the Rayleigh sign and magnitude are the reliable
+                // diagnostic, not the raw scale.
+                CUDA_HANDLE_ERROR(cudaMemcpyAsync(probe_pin + 3, d_pAp,
+                                                  sizeof(float),
+                                                  cudaMemcpyDeviceToHost, q));
+                CUDA_HANDLE_ERROR(cudaStreamSynchronize(q));
+                const double pAp = (double)probe_pin[3];
+                const double pp = kernels::inner_product(p.data, p.data, p.size);
+                fatal_indefinite_system_matrix(iter, reresid,
+                                               pp > 0.0 ? pAp / pp : 0.0);
             }
-            if (broke || !std::isfinite(reresid)) {
+            if (rzbad) {
+                fatal_nonspd_preconditioner(iter, reresid);
+            }
+            if (!std::isfinite(reresid)) {
                 return {false, iter, (float)reresid, false};
             }
             if (at_cap) {

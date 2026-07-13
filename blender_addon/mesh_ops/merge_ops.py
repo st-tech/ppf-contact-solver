@@ -64,6 +64,35 @@ def cleanup_stale_merge_pairs(scene):
         apply_object_overlays()
 
 
+def pair_stitch_row_count(pair) -> int:
+    """Return the number of usable cross-stitch rows a merge pair carries.
+
+    Mirrors the gate in ``core.encoder.params._encode_cross_stitch``: a pair
+    whose ``cross_stitch_json`` is empty, unparseable, or missing the
+    source/target UUIDs contributes no stitch and is silently skipped by the
+    encoder. Such a pair returns 0 here. Run ``cleanup_stale_merge_pairs``
+    first if the stored stitch may have been invalidated by a mesh edit."""
+    import json
+
+    if not pair.cross_stitch_json:
+        return 0
+    if not pair.object_a_uuid or not pair.object_b_uuid:
+        return 0
+    try:
+        data = json.loads(pair.cross_stitch_json)
+    except (ValueError, json.JSONDecodeError):
+        return 0
+    if not data or not data.get("source_uuid") or not data.get("target_uuid"):
+        return 0
+    ind = data.get("ind")
+    return len(ind) if ind else 0
+
+
+def pair_has_stitch(pair) -> bool:
+    """True when a merge pair carries at least one usable cross-stitch row."""
+    return pair_stitch_row_count(pair) > 0
+
+
 class OBJECT_OT_RemoveMergePair(Operator):
     """Remove the selected merge pair"""
 

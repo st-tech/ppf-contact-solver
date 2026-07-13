@@ -17,6 +17,9 @@ from . import REPO_ROOT_POSIX
 
 
 NEEDS_BLENDER = True
+# Backend-agnostic: a connection handshake, no emulated physics. Runs on
+# the real-GPU Windows job (this is THE Windows-native connect path).
+BACKENDS = ("emulated", "real")
 # WIN_NATIVE backend is the Windows path; on Linux/macOS this connect
 # call has no production analogue. See bl_connect_local for the Linux
 # counterpart.

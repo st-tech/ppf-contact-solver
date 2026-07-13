@@ -560,6 +560,12 @@ class TriMesh(tuple[np.ndarray, np.ndarray]):
         """
         status_callback = kwargs.pop("status_callback", None)
         status_interval = float(kwargs.pop("status_interval", 5.0))
+        # fTetWild wall-clock guard (opt-in), popped here BEFORE the cache-key
+        # arg string so they never change the cache key. Default None ->
+        # resolved from PPF_FTETWILD_TIMEOUT / PPF_FTETWILD_RETRIES in the
+        # subprocess driver. fTetWild backend only (TetGen runs in-process).
+        _ftw_timeout = kwargs.pop("timeout", None)
+        _ftw_retries = kwargs.pop("retries", None)
         # Build the cache-key arg string in Rust to keep formatting
         # logic out of Python. ``backend`` (when present) rides in the
         # kwargs here, so fTetWild and TetGen results cache under distinct
@@ -616,7 +622,8 @@ class TriMesh(tuple[np.ndarray, np.ndarray]):
                 )
             elif backend == "ftetwild":
                 vert, tri, tet = self._tetrahedralize_ftetwild(
-                    kwargs, status_callback, status_interval
+                    kwargs, status_callback, status_interval,
+                    timeout=_ftw_timeout, retries=_ftw_retries,
                 )
             else:
                 raise ValueError(
@@ -652,7 +659,10 @@ class TriMesh(tuple[np.ndarray, np.ndarray]):
                 tri_indices, coefs
             )
 
-    def _tetrahedralize_ftetwild(self, kwargs, status_callback, status_interval):
+    def _tetrahedralize_ftetwild(
+        self, kwargs, status_callback, status_interval,
+        timeout=None, retries=None,
+    ):
         """Tetrahedralize with fTetWild (pytetwild) in a subprocess.
 
         Returns ``(vert, tri, tet)`` after degenerate-tet filtering and
@@ -682,6 +692,8 @@ class TriMesh(tuple[np.ndarray, np.ndarray]):
                 kwargs,
                 status_callback,
                 status_interval,
+                timeout=timeout,
+                retries=retries,
             )
         finally:
             # Reap a still-running child (e.g. a status_callback raised
@@ -697,16 +709,37 @@ class TriMesh(tuple[np.ndarray, np.ndarray]):
                     os.unlink(p)
 
     def _run_ftetwild_subprocess(
-        self, input_path, output_path, kwargs, status_callback, status_interval
+        self, input_path, output_path, kwargs, status_callback,
+        status_interval, timeout=None, retries=None,
     ):
         """Spawn the fTetWild subprocess and return the extracted surface.
 
         Temp-file and child-process cleanup is handled by the caller's
         ``finally`` block; this method only drives the subprocess and loads
         its result.
+
+        ``timeout`` bounds each attempt's wall-clock. fTetWild's C++ call
+        cannot be interrupted from Python, so a stalled run (a nondeterministic
+        pathological case, seen hanging ~400s on CI) would otherwise burn the
+        caller's whole per-scenario budget. On timeout the child is killed and
+        the run is retried up to ``retries`` times (a fresh run clears the
+        stall in practice); if every attempt times out a clear ``RuntimeError``
+        is raised. ``timeout=None`` disables the cap (unbounded historical
+        behavior), so nothing changes unless a caller or the env opts in.
         """
         import pytetwild  # noqa: F401
         import subprocess as _sp
+
+        # Resolve the cap + retry budget: explicit arg wins, else the env
+        # knobs (so CI can bound a hang without a code change), else no cap /
+        # one retry. Retries only apply when a timeout is set (a non-timeout
+        # failure raises immediately).
+        if timeout is None:
+            _env_t = os.environ.get("PPF_FTETWILD_TIMEOUT")
+            timeout = float(_env_t) if _env_t else None
+        if retries is None:
+            _env_r = os.environ.get("PPF_FTETWILD_RETRIES")
+            retries = int(_env_r) if _env_r else 1
 
         # Whitelist + default fTetWild kwargs in Rust to keep the
         # subprocess script stable against stray keys from callers.
@@ -738,38 +771,71 @@ if os.path.exists("__tracked_surface.stl"):
     os.remove("__tracked_surface.stl")
 np.savez({output_path!r}, vert=vert, tet=tet)
 """
-        proc = _sp.Popen(
-            [sys.executable, "-c", tet_script],
-            stdout=_sp.DEVNULL, stderr=_sp.DEVNULL,
-        )
-        # Expose the child so the caller's finally can reap it if the poll
-        # loop below leaves through an exception (e.g. a raising callback).
-        self._ftw_proc = proc
-        start_time = time.time()
-        while proc.poll() is None:
-            try:
-                proc.wait(timeout=status_interval)
-            except _sp.TimeoutExpired:
-                pass
-            if proc.poll() is None and status_callback is not None:
+        # One attempt normally; with a timeout, up to retries+1 tries,
+        # re-spawning a fresh child after each stall.
+        attempts = (retries + 1) if timeout is not None else 1
+        last_timeout_err = None
+        for attempt in range(attempts):
+            proc = _sp.Popen(
+                [sys.executable, "-c", tet_script],
+                stdout=_sp.DEVNULL, stderr=_sp.DEVNULL,
+            )
+            # Expose the child so the caller's finally can reap it if the poll
+            # loop below leaves through an exception (e.g. a raising callback).
+            self._ftw_proc = proc
+            start_time = time.time()
+            timed_out = False
+            while proc.poll() is None:
+                try:
+                    proc.wait(timeout=status_interval)
+                except _sp.TimeoutExpired:
+                    pass
                 elapsed = time.time() - start_time
-                status_callback(f"running fTetWild ({elapsed:.0f}s elapsed)")
+                if (
+                    timeout is not None
+                    and elapsed > timeout
+                    and proc.poll() is None
+                ):
+                    proc.kill()
+                    proc.wait()
+                    timed_out = True
+                    break
+                if proc.poll() is None and status_callback is not None:
+                    status_callback(f"running fTetWild ({elapsed:.0f}s elapsed)")
 
-        if proc.returncode != 0:
-            raise RuntimeError(f"fTetWild subprocess failed (exit code {proc.returncode})")
+            if timed_out:
+                last_timeout_err = RuntimeError(
+                    f"fTetWild subprocess timed out after {timeout:.0f}s "
+                    f"(attempt {attempt + 1}/{attempts}); killed"
+                )
+                if status_callback is not None:
+                    _more = attempt + 1 < attempts
+                    status_callback(
+                        f"fTetWild timed out after {timeout:.0f}s; "
+                        + ("retrying" if _more else "giving up")
+                    )
+                continue
 
-        # NpzFile keeps the .npz open (a ZipFile handle); on Windows that
-        # blocks unlink with WinError 32. Use `with` so the handle is closed
-        # before the caller's finally tries to delete the file.
-        with np.load(output_path) as out_data:
-            vert = out_data["vert"]
-            tet = out_data["tet"]
+            if proc.returncode != 0:
+                raise RuntimeError(
+                    f"fTetWild subprocess failed (exit code {proc.returncode})"
+                )
 
-        return _rust.mesh_tet_extract_surface(
-            np.ascontiguousarray(vert, dtype=np.float64),
-            np.ascontiguousarray(tet, dtype=np.int32),
-            _MIN_TET_VOLUME,
-        )
+            # NpzFile keeps the .npz open (a ZipFile handle); on Windows that
+            # blocks unlink with WinError 32. Use `with` so the handle is
+            # closed before the caller's finally tries to delete the file.
+            with np.load(output_path) as out_data:
+                vert = out_data["vert"]
+                tet = out_data["tet"]
+
+            return _rust.mesh_tet_extract_surface(
+                np.ascontiguousarray(vert, dtype=np.float64),
+                np.ascontiguousarray(tet, dtype=np.int32),
+                _MIN_TET_VOLUME,
+            )
+
+        # Every attempt hit the wall-clock cap.
+        raise last_timeout_err
 
     def _tetrahedralize_tetgen(self, kwargs, status_callback):
         """Tetrahedralize with TetGen, preserving the input surface 1-1.

@@ -16,6 +16,7 @@ from bpy.props import (  # pyright: ignore
     StringProperty,
 )
 from bpy.types import PropertyGroup  # pyright: ignore
+from bpy.app.translations import pgettext_iface as iface_, pgettext_tip as tip_  # pyright: ignore
 
 from ..models.groups import OBJECT_GROUP_DEFAULTS, get_object_type, get_vertex_group_items
 from .state_types import AssignedObject, PinVertexGroupItem
@@ -50,7 +51,7 @@ def _build_assigned_object_enum_items(group) -> list:
             label = obj.name if obj else (assigned.name or assigned.uuid[:8])
             items.append((assigned.uuid, label, ""))
     if not items:
-        items.append(("NONE", "None", "No objects assigned"))
+        items.append(("NONE", iface_("None"), tip_("No objects assigned")))
     return items
 
 
@@ -70,13 +71,13 @@ def _get_material_profile_items(self, context):
 
     path = self.material_profile_path
     if not path:
-        return [("NONE", "(No Profile)", "")]
+        return [("NONE", iface_("(No Profile)"), "")]
 
     abs_path = bpy.path.abspath(path)
     names = get_profile_names(abs_path)
     if not names:
-        return [("NONE", "(No Profile)", "")]
-    return [(n, n, f"Material profile: {n}") for n in names]
+        return [("NONE", iface_("(No Profile)"), "")]
+    return [(n, n, tip_("Material profile: {name}").format(name=n)) for n in names]
 
 
 def _on_material_profile_selected(self, context):
@@ -141,13 +142,13 @@ def _get_pin_profile_items(self, context):
 
     path = self.pin_profile_path
     if not path:
-        return [("NONE", "(No Profile)", "")]
+        return [("NONE", iface_("(No Profile)"), "")]
 
     abs_path = bpy.path.abspath(path)
     names = get_profile_names(abs_path)
     if not names:
-        return [("NONE", "(No Profile)", "")]
-    return [(n, n, f"Pin profile: {n}") for n in names]
+        return [("NONE", iface_("(No Profile)"), "")]
+    return [(n, n, tip_("Pin profile: {name}").format(name=n)) for n in names]
 
 
 def _on_pin_profile_selected(self, context):

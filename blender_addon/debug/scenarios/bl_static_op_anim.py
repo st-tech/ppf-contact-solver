@@ -40,16 +40,15 @@
 #
 # Time mapping: PC2 sample 0 is the rest pose recorded when the
 # shell is created (solver time 0). Sample ``i >= 1`` corresponds
-# to remote frame ``i``. The Rust solver records the actual
-# (frame, time) pairs in ``output/data/frame_to_time.out``; for
-# this scenario's frame_rate=100 / step_size=0.01 the recorded
-# mapping is ``time(i) = (i + 1) * step_size`` (the solver does
-# one initial advance bringing frame 1 to t=0.02, then each
-# subsequent frame adds step_size). The off-by-one matters: a
-# naive ``i * dt`` mapping would put sample 5 at 0.05 / progress
-# 0.5, but the solver actually evaluates the op at 0.06 /
-# progress 0.6. The expected-position formula below uses
-# ``(i + 1) * dt`` to match what the solver did.
+# to remote frame ``i``, which the solver emits at exactly
+# ``time(i) = i / fps = i * step_size`` (frame_rate=100 /
+# step_size=0.01 here). The solver interpolates each output frame
+# onto its exact frame boundary rather than snapping it to the
+# overshot post-step time, so ``output/data/frame_to_time.out``
+# records ``i / fps`` and the expected-position formula below uses
+# ``i * dt``. (Before that fix the mapping drifted to the first
+# substep past the boundary, e.g. sample 5 landing at 0.06 instead
+# of 0.05, which showed up as a sawtooth in relative frame time.)
 #
 # Subtests:
 #   A. static_pc2_exists_and_has_expected_shape
@@ -78,6 +77,13 @@ from . import REPO_ROOT_POSIX
 
 
 NEEDS_BLENDER = True
+
+# Backend-agnostic: the assertions below are robust invariants (finite PC2,
+# pinned/anchored region tracks its prescribed motion, free region lags,
+# body not FAILED) that hold on BOTH the emulated CPU stub and the real
+# CUDA solver, so this runs on the free-runner macOS suite AND the real-GPU
+# AWS jobs selected by ``runtests --backend real``.
+BACKENDS = ("emulated", "real")
 
 
 # Timeline. frame_rate=100, step_size=0.01 means PC2 sample i is at
@@ -178,7 +184,7 @@ try:
     dh.log(f"static_ops storage order={op_types}")
 
     data_bytes, param_bytes = dh.encode_payload()
-    dh.connect_local(
+    dh.connect(
         local_path=LOCAL_PATH,
         server_port=SERVER_PORT,
         project_name=root.state.project_name,
@@ -231,7 +237,8 @@ try:
             dh.record(name, False, {"reason": "PC2 unavailable or wrong shape"})
     else:
         # Solver time for sample i, given fps=100, step_size=0.01.
-        # See header doc: solver records time(i) = (i + 1) * dt
+        # See header doc: the solver interpolates output frames onto
+        # exact frame boundaries, so time(i) = i / fps = i * dt
         # (verified against output/data/frame_to_time.out). Sample 0
         # is special -- it is the rest pose written at shell creation,
         # not a fetched simulation frame -- so the closed-form below
@@ -244,7 +251,7 @@ try:
         rest = pc2_arr[0, 0, :].astype(float)
 
         def sample_time(idx):
-            return (idx + 1) * dt
+            return idx * dt
 
         def expected_v0_at_sample(idx):
             # Replicates MoveByOperation.apply() with the encoder's

@@ -15,6 +15,7 @@ from ..core.client import communicator as com
 from ..core.derived import is_server_busy_from_response as is_running
 from bpy.props import StringProperty  # pyright: ignore
 from bpy.types import Operator  # pyright: ignore
+from bpy.app.translations import pgettext_iface as iface_, pgettext_tip as tip_
 
 from ..core.async_op import AsyncOperator
 from ..core.utils import redraw_all_areas
@@ -64,7 +65,7 @@ class DEBUG_OT_ExecuteServer(AsyncOperator):
         for key, value in result.items():
             console.write(f"{key}: {value}\n")
         console.write("------")
-        self.report({"INFO"}, "Python script result ready.")
+        self.report({"INFO"}, iface_("Python script result ready."))
 
 
 class DEBUG_OT_ExecuteShell(Operator):
@@ -86,7 +87,7 @@ class DEBUG_OT_ExecuteShell(Operator):
         if command:
             com.exec(command, shell=state.use_shell)
         else:
-            self.report({"ERROR"}, "Shell command is empty.")
+            self.report({"ERROR"}, iface_("Shell command is empty."))
         return {"FINISHED"}
 
 
@@ -110,7 +111,7 @@ class DEBUG_OT_DataSend(AsyncOperator):
         # Remote is always Linux; build a POSIX path regardless of local OS.
         remote_root = com.normalized_remote_root()
         if not remote_root:
-            self.report({"ERROR"}, "Not connected; cannot send test data")
+            self.report({"ERROR"}, iface_("Not connected; cannot send test data"))
             return {"CANCELLED"}
         com.data_send(
             f"{remote_root}/dummy_data.pickle",
@@ -127,7 +128,7 @@ class DEBUG_OT_DataSend(AsyncOperator):
 
     def on_complete(self, context):
         if not com.is_server_running():
-            self.report({"ERROR"}, "Connection lost during data transfer")
+            self.report({"ERROR"}, iface_("Connection lost during data transfer"))
         redraw_all_areas(context)
 
 
@@ -163,9 +164,9 @@ class DEBUG_OT_DataReceive(AsyncOperator):
         global test_data
         received_data = com.data
         if received_data == test_data:
-            self.report({"INFO"}, "Data received matches test data.")
+            self.report({"INFO"}, iface_("Data received matches test data."))
         else:
-            self.report({"ERROR"}, "Data received does not match test data.")
+            self.report({"ERROR"}, iface_("Data received does not match test data."))
 
 
 class DEBUG_OT_TransferWithoutBuild(TransferRequestMixin, AsyncOperator):
@@ -197,7 +198,7 @@ class DEBUG_OT_TransferWithoutBuild(TransferRequestMixin, AsyncOperator):
         if status in (RemoteStatus.READY, RemoteStatus.RESUMABLE):
             self.report(
                 {"INFO"},
-                "Remote data already exists. Deleting first.",
+                iface_("Remote data already exists. Deleting first."),
             )
             self.request_delete()
         else:
@@ -224,7 +225,7 @@ class DEBUG_OT_TransferWithoutBuild(TransferRequestMixin, AsyncOperator):
 
     def on_complete(self, context):
         redraw_all_areas(context)
-        self.report({"INFO"}, "Transfer completed successfully.")
+        self.report({"INFO"}, iface_("Transfer completed successfully."))
 
     def modal(self, context, event):
         if event.type != "TIMER":
@@ -262,7 +263,7 @@ class DEBUG_OT_TransferWithoutBuild(TransferRequestMixin, AsyncOperator):
                     message="Uploading scene (no build)...",
                 )
                 self._mode = "uploading"
-                self.report({"INFO"}, "Remote data deleted successfully.")
+                self.report({"INFO"}, iface_("Remote data deleted successfully."))
 
         if self.is_complete():
             self.cleanup_modal(context)
@@ -308,7 +309,7 @@ class DEBUG_OT_Build(AsyncOperator):
 
     def on_complete(self, context):
         redraw_all_areas(context)
-        self.report({"INFO"}, "Build completed successfully.")
+        self.report({"INFO"}, iface_("Build completed successfully."))
 
 
 class DEBUG_OT_GitPull(Operator):
@@ -323,7 +324,7 @@ class DEBUG_OT_GitPull(Operator):
 
     def execute(self, _):
         com.exec("git pull")
-        self.report({"INFO"}, "Git pull executed.")
+        self.report({"INFO"}, iface_("Git pull executed."))
         return {"FINISHED"}
 
 
@@ -339,7 +340,7 @@ class DEBUG_OT_Compile(Operator):
 
     def execute(self, _):
         com.exec("/root/.cargo/bin/cargo build --release")
-        self.report({"INFO"}, "Project compiled.")
+        self.report({"INFO"}, iface_("Project compiled."))
         return {"FINISHED"}
 
 
@@ -405,11 +406,17 @@ class DEBUG_OT_DeleteLog(Operator):
         if log_path and os.path.exists(log_path):
             try:
                 os.remove(log_path)
-                self.report({"INFO"}, f"Deleted log file: {log_path}")
+                self.report(
+                    {"INFO"},
+                    iface_("Deleted log file: {path}").format(path=log_path),
+                )
             except Exception as e:
-                self.report({"ERROR"}, f"Failed to delete log: {e}")
+                self.report(
+                    {"ERROR"},
+                    iface_("Failed to delete log: {error}").format(error=e),
+                )
         else:
-            self.report({"WARNING"}, "Log file does not exist.")
+            self.report({"WARNING"}, iface_("Log file does not exist."))
         return {"FINISHED"}
 
 
@@ -442,10 +449,10 @@ class DEBUG_OT_GitPullLocal(AsyncOperator):
                 text=True,
             )
             self.setup_modal(context)
-            self.report({"INFO"}, "Local git pull started...")
+            self.report({"INFO"}, iface_("Local git pull started..."))
             return {"RUNNING_MODAL"}
         except Exception as e:
-            self.report({"ERROR"}, f"Exception: {e}")
+            self.report({"ERROR"}, iface_("Exception: {error}").format(error=e))
             type(self)._process = None
             return {"FINISHED"}
 
@@ -462,9 +469,14 @@ class DEBUG_OT_GitPullLocal(AsyncOperator):
         retcode = proc.poll()
         _, stderr = proc.communicate()
         if retcode == 0:
-            self.report({"INFO"}, "Local git pull succeeded.")
+            self.report({"INFO"}, iface_("Local git pull succeeded."))
         else:
-            self.report({"ERROR"}, f"Local git pull failed: {stderr.strip()}")
+            self.report(
+                {"ERROR"},
+                iface_("Local git pull failed: {error}").format(
+                    error=stderr.strip()
+                ),
+            )
         type(self)._process = None
         redraw_all_areas(context)
 
@@ -473,7 +485,7 @@ class DEBUG_OT_GitPullLocal(AsyncOperator):
         if proc is not None:
             proc.kill()
             type(self)._process = None
-        self.report({"ERROR"}, "Local git pull timed out")
+        self.report({"ERROR"}, iface_("Local git pull timed out"))
 
 
 class WM_OT_OpenGitHubLink(Operator):
@@ -660,8 +672,10 @@ class DEBUG_OT_RenderAnimation(Operator):
     def draw(self, context):
         layout = self.layout
         layout.label(
-            text=f"Output directory already contains {self._existing_count} "
-                 f"matching frame file(s).",
+            text=iface_(
+                "Output directory already contains {count} "
+                "matching frame file(s)."
+            ).format(count=self._existing_count),
             icon="ERROR",
         )
         layout.label(text="They will be deleted before rendering starts.")
@@ -695,10 +709,18 @@ class DEBUG_OT_RenderAnimation(Operator):
         _render_anim_state["saved_filepath"] = scene.render.filepath
         _render_anim_state["saved_frame"] = scene.frame_current
 
-        suffix = f" ({deleted} previous file(s) removed)" if deleted else ""
-        self.report({"INFO"},
-                    f"Render Animation: frames {start}..{end} step {step} "
-                    f"-> {n_total} frames{suffix}")
+        suffix = (
+            iface_(" ({count} previous file(s) removed)").format(count=deleted)
+            if deleted
+            else ""
+        )
+        self.report(
+            {"INFO"},
+            iface_(
+                "Render Animation: frames {start}..{end} step {step} "
+                "-> {total} frames{suffix}"
+            ).format(start=start, end=end, step=step, total=n_total, suffix=suffix),
+        )
         bpy.app.timers.register(_render_anim_tick, first_interval=0.05)
         return {"FINISHED"}
 
@@ -721,8 +743,10 @@ class DEBUG_OT_StopRender(Operator):
 
     def execute(self, _):
         _render_anim_state["cancel"] = True
-        self.report({"INFO"},
-                    "Stop requested; in-flight frame will finish, then halt")
+        self.report(
+            {"INFO"},
+            iface_("Stop requested; in-flight frame will finish, then halt"),
+        )
         return {"FINISHED"}
 
 

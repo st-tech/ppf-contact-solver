@@ -24,7 +24,11 @@ REM If not already being logged, restart with logging
 if "%BUILD_LOGGING%"=="" (
     set BUILD_LOGGING=1
     echo Logging to %LOGFILE%
-    powershell -Command "& { cmd /c 'set BUILD_LOGGING=1&& set NOPAUSE=!NOPAUSE!&& \"%~f0\"' 2>&1 | Tee-Object -FilePath '%LOGFILE%' }"
+    REM `exit $LASTEXITCODE` inside the -Command is REQUIRED: a PowerShell
+    REM pipeline ending in the Tee-Object cmdlet exits 0 regardless of the
+    REM inner cmd's failure, so without it a failed build (or the MSVC-not-
+    REM found guard below) is masked as success. This forwards the real code.
+    powershell -Command "& { cmd /c 'set BUILD_LOGGING=1&& set NOPAUSE=!NOPAUSE!&& \"%~f0\"' 2>&1 | Tee-Object -FilePath '%LOGFILE%'; exit $LASTEXITCODE }"
     exit /b %ERRORLEVEL%
 )
 

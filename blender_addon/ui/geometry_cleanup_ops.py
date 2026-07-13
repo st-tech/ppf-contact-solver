@@ -9,6 +9,7 @@
 
 import bmesh
 import bpy  # pyright: ignore
+from bpy.app.translations import pgettext_iface as iface_, pgettext_tip as tip_
 
 from ..core.client import communicator as com
 from ..core.utils import redraw_all_areas
@@ -81,7 +82,9 @@ class MESH_OT_RemoveIsolatedVertices(bpy.types.Operator):
 
         offenders = _static_isolated_offenders(context)
         if not offenders:
-            self.report({"INFO"}, "No isolated vertices found on STATIC colliders.")
+            self.report(
+                {"INFO"}, iface_("No isolated vertices found on STATIC colliders.")
+            )
             return {"CANCELLED"}
 
         total = 0
@@ -95,8 +98,9 @@ class MESH_OT_RemoveIsolatedVertices(bpy.types.Operator):
         redraw_all_areas(context)
         self.report(
             {"INFO"},
-            f"Removed {total} isolated vertex(es) from {', '.join(parts)}. "
-            f"Transfer again.",
+            iface_(
+                "Removed {count} isolated vertex(es) from {objects}. Transfer again."
+            ).format(count=total, objects=", ".join(parts)),
         )
         return {"FINISHED"}
 

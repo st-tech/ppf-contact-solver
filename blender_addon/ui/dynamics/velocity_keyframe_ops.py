@@ -6,6 +6,7 @@
 import bpy  # pyright: ignore
 from bpy.props import BoolProperty, PointerProperty  # pyright: ignore
 from bpy.types import Operator  # pyright: ignore
+from bpy.app.translations import pgettext_iface as iface_, pgettext_tip as tip_
 
 from ...core.param_introspect import copy_scalar_props
 from ...core.utils import redraw_all_areas
@@ -42,19 +43,19 @@ class OBJECT_OT_AddVelocityKeyframe(Operator):
     def execute(self, context):
         group = get_group_from_index(context.scene, self.group_index)
         if group is None:
-            self.report({"ERROR"}, "Group not found")
+            self.report({"ERROR"}, iface_("Group not found"))
             return {"CANCELLED"}
 
         assigned = _get_selected_assigned(group)
         if assigned is None:
-            self.report({"ERROR"}, "No object selected")
+            self.report({"ERROR"}, iface_("No object selected"))
             return {"CANCELLED"}
 
         frame = max(1, context.scene.frame_current)
 
         for kf in assigned.velocity_keyframes:
             if kf.frame == frame:
-                self.report({"WARNING"}, f"Frame {frame} already has a keyframe")
+                self.report({"WARNING"}, iface_("Frame {frame} already has a keyframe").format(frame=frame))
                 return {"CANCELLED"}
 
         item = assigned.velocity_keyframes.add()
@@ -79,12 +80,12 @@ class OBJECT_OT_RemoveVelocityKeyframe(Operator):
     def execute(self, context):
         group = get_group_from_index(context.scene, self.group_index)
         if group is None:
-            self.report({"ERROR"}, "Group not found")
+            self.report({"ERROR"}, iface_("Group not found"))
             return {"CANCELLED"}
 
         assigned = _get_selected_assigned(group)
         if assigned is None:
-            self.report({"ERROR"}, "No object selected")
+            self.report({"ERROR"}, iface_("No object selected"))
             return {"CANCELLED"}
 
         idx = assigned.velocity_keyframes_index
@@ -110,12 +111,12 @@ class OBJECT_OT_CopyVelocityKeyframes(Operator):
     def execute(self, context):
         group = get_group_from_index(context.scene, self.group_index)
         if group is None:
-            self.report({"ERROR"}, "Group not found")
+            self.report({"ERROR"}, iface_("Group not found"))
             return {"CANCELLED"}
 
         assigned = _get_selected_assigned(group)
         if assigned is None:
-            self.report({"WARNING"}, "No object selected")
+            self.report({"WARNING"}, iface_("No object selected"))
             return {"CANCELLED"}
 
         wm = context.window_manager
@@ -125,7 +126,7 @@ class OBJECT_OT_CopyVelocityKeyframes(Operator):
         )
         wm.velocity_keyframes_clipboard_valid = True
         self.report(
-            {"INFO"}, f"Copied {len(assigned.velocity_keyframes)} velocity keyframe(s)"
+            {"INFO"}, iface_("Copied {count} velocity keyframe(s)").format(count=len(assigned.velocity_keyframes))
         )
         return {"FINISHED"}
 
@@ -146,12 +147,12 @@ class OBJECT_OT_PasteVelocityKeyframes(Operator):
     def execute(self, context):
         group = get_group_from_index(context.scene, self.group_index)
         if group is None:
-            self.report({"ERROR"}, "Group not found")
+            self.report({"ERROR"}, iface_("Group not found"))
             return {"CANCELLED"}
 
         assigned = _get_selected_assigned(group)
         if assigned is None:
-            self.report({"WARNING"}, "No object selected")
+            self.report({"WARNING"}, iface_("No object selected"))
             return {"CANCELLED"}
 
         wm = context.window_manager
@@ -165,7 +166,7 @@ class OBJECT_OT_PasteVelocityKeyframes(Operator):
         invalidate_overlays()
         redraw_all_areas(context)
         self.report(
-            {"INFO"}, f"Pasted {len(assigned.velocity_keyframes)} velocity keyframe(s)"
+            {"INFO"}, iface_("Pasted {count} velocity keyframe(s)").format(count=len(assigned.velocity_keyframes))
         )
         return {"FINISHED"}
 

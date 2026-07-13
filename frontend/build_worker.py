@@ -24,11 +24,23 @@
 # ``KeyboardInterrupt``, BlenderApp.populate().make() unwinds, and we
 # exit with code 130 so the parent can distinguish cancel from crash.
 
+import faulthandler
 import json
 import os
 import signal
 import sys
 import traceback
+
+# Dump a Python-level traceback to stderr on a hard crash (SIGSEGV /
+# Windows access violation, etc.). A native crash inside a C extension,
+# e.g. an ABI-mismatched scipy/numpy blowing up in the SuperLU solve of
+# the partial-pin SOLID harmonic extension, or a tetrahedralizer binding,
+# kills this worker WITHOUT raising a Python exception, so the ``except``
+# below never runs and no ``ERROR`` line is emitted. The parent then only
+# sees the bare exit code and reports the useless "build worker exited
+# with code 1". faulthandler turns that into a stack that names the exact
+# frame, which the server forwards to ``server.log`` as ``[BUILD stderr]``.
+faulthandler.enable()
 
 
 def _emit(line: str) -> None:

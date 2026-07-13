@@ -5,6 +5,7 @@
 #
 # Reload server lifecycle operators.
 
+from bpy.app.translations import pgettext_iface as iface_, pgettext_tip as tip_
 from bpy.types import Operator  # pyright: ignore
 
 from ..models.groups import get_addon_data
@@ -23,9 +24,17 @@ class ADDON_OT_StartReloadServer(Operator):
 
         try:
             start_reload_server(state.reload_port)
-            self.report({"INFO"}, f"Reload server started on port {state.reload_port}")
+            self.report(
+                {"INFO"},
+                iface_("Reload server started on port {port}").format(
+                    port=state.reload_port
+                ),
+            )
         except Exception as e:
-            self.report({"ERROR"}, f"Failed to start reload server: {e}")
+            self.report(
+                {"ERROR"},
+                iface_("Failed to start reload server: {error}").format(error=e),
+            )
             return {"CANCELLED"}
 
         return {"FINISHED"}
@@ -42,9 +51,12 @@ class ADDON_OT_StopReloadServer(Operator):
 
         try:
             stop_reload_server()
-            self.report({"INFO"}, "Reload server stopped")
+            self.report({"INFO"}, iface_("Reload server stopped"))
         except Exception as e:
-            self.report({"ERROR"}, f"Failed to stop reload server: {e}")
+            self.report(
+                {"ERROR"},
+                iface_("Failed to stop reload server: {error}").format(error=e),
+            )
             return {"CANCELLED"}
 
         return {"FINISHED"}
@@ -61,9 +73,12 @@ class ADDON_OT_TriggerReload(Operator):
 
         try:
             trigger_reload_now()
-            self.report({"INFO"}, "Add-on reload triggered")
+            self.report({"INFO"}, iface_("Add-on reload triggered"))
         except Exception as e:
-            self.report({"ERROR"}, f"Failed to trigger reload: {e}")
+            self.report(
+                {"ERROR"},
+                iface_("Failed to trigger reload: {error}").format(error=e),
+            )
             return {"CANCELLED"}
 
         return {"FINISHED"}
@@ -83,9 +98,12 @@ class ADDON_OT_TriggerFullReload(Operator):
 
         try:
             trigger_full_reload_now()
-            self.report({"INFO"}, "Add-on full reload triggered")
+            self.report({"INFO"}, iface_("Add-on full reload triggered"))
         except Exception as e:
-            self.report({"ERROR"}, f"Failed to trigger full reload: {e}")
+            self.report(
+                {"ERROR"},
+                iface_("Failed to trigger full reload: {error}").format(error=e),
+            )
             return {"CANCELLED"}
 
         return {"FINISHED"}

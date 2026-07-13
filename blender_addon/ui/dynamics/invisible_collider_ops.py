@@ -6,6 +6,7 @@
 import bpy  # pyright: ignore
 from bpy.props import EnumProperty  # pyright: ignore
 from bpy.types import Operator  # pyright: ignore
+from bpy.app.translations import pgettext_iface as iface_, pgettext_tip as tip_  # pyright: ignore
 
 from ...models.collection_utils import (
     generate_unique_name,
@@ -91,7 +92,7 @@ class SCENE_OT_AddColliderKeyframe(Operator):
         # Reject duplicate frames
         for kf in item.keyframes:
             if kf.frame == current_frame:
-                self.report({"WARNING"}, f"Keyframe at frame {current_frame} already exists")
+                self.report({"WARNING"}, iface_("Keyframe at frame {frame} already exists").format(frame=current_frame))
                 return {"CANCELLED"}
         kf = item.keyframes.add()
         kf.frame = current_frame
@@ -120,7 +121,7 @@ class SCENE_OT_RemoveColliderKeyframe(Operator):
         item = state.invisible_colliders[idx]
         kf_idx = item.keyframes_index
         if kf_idx <= 0:
-            self.report({"WARNING"}, "Cannot remove the initial keyframe")
+            self.report({"WARNING"}, iface_("Cannot remove the initial keyframe"))
             return {"CANCELLED"}
         if kf_idx >= len(item.keyframes):
             return {"CANCELLED"}

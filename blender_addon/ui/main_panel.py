@@ -11,6 +11,7 @@ from dataclasses import dataclass
 
 import bpy  # pyright: ignore
 from bpy.types import Panel  # pyright: ignore
+from bpy.app.translations import pgettext_iface as iface_, pgettext_tip as tip_
 
 from ..core.client import RemoteStatus
 from ..core.client import communicator as com
@@ -169,7 +170,7 @@ def _draw_win_native_status(layout, win_path) -> None:
         return
     layout.label(text="Solver path valid", icon="CHECKMARK")
     if os.path.normpath(resolved) != os.path.normpath(win_path):
-        layout.label(text=f"Using solver root: {resolved}")
+        layout.label(text=iface_("Using solver root: {path}").format(path=resolved))
 
 
 def _draw_long_path_warning(layout, path, project_name) -> bool:
@@ -188,7 +189,9 @@ def _draw_long_path_warning(layout, path, project_name) -> bool:
     if projected is None:
         return False
     layout.label(
-        text=f"Path too long: cache files reach {projected} chars (Windows limit {WINDOWS_MAX_PATH})",
+        text=iface_("Path too long: cache files reach {chars} chars (Windows limit {limit})").format(
+            chars=projected, limit=WINDOWS_MAX_PATH
+        ),
         icon="ERROR",
     )
     layout.label(text="Use a shorter solver path, or enable Windows long paths")
@@ -222,9 +225,9 @@ def _draw_install_prompt(layout, *, operator_idname, module_label) -> None:
             if error_msg:
                 layout.label(text=error_msg, icon="ERROR")
             else:
-                layout.label(text=f"{module_label} installation failed.", icon="ERROR")
+                layout.label(text=iface_("{module_label} installation failed.").format(module_label=module_label), icon="ERROR")
         else:
-            layout.label(text=f"{module_label} needs to be installed.", icon="ERROR")
+            layout.label(text=iface_("{module_label} needs to be installed.").format(module_label=module_label), icon="ERROR")
 
 
 class MAIN_OT_ProjectNameFromFile(bpy.types.Operator):
@@ -399,10 +402,10 @@ class MAIN_PT_RemotePanel(Panel):
         # saved checkpoints, so surface both: "Simulation Failed (Resumable)"
         # rather than a bare "Resumable" (which hides the failure) or a bare
         # "Simulation Failed" (which hides that a resume is still possible).
-        status_text = status.value
+        status_text = iface_(status.value)
         if status == RemoteStatus.SIMULATION_FAILED and len(com.saved_state_frames()) > 0:
-            status_text = f"{status.value} (Resumable)"
-        message = com.message or f"Status: {status_text}"
+            status_text = iface_("{status} (Resumable)").format(status=iface_(status.value))
+        message = com.message or iface_("Status: {status}").format(status=status_text)
         if com.is_connecting():
             layout.label(text=message, icon=status.icon)
             layout.operator(REMOTE_OT_CancelConnect.bl_idname, text="Cancel", icon="X")
@@ -459,7 +462,7 @@ class MAIN_PT_RemotePanel(Panel):
 
         server_error = com.server_error
         if server_error:
-            layout.label(text=f"Remote: {server_error}", icon="ERROR")
+            layout.label(text=iface_("Remote: {error}").format(error=server_error), icon="ERROR")
 
         row = layout.row()
         row.operator(SOLVER_OT_UpdateStatus.bl_idname, icon="FILE_REFRESH")
@@ -656,7 +659,7 @@ class MAIN_PT_RemotePanel(Panel):
                 col.row().progress(
                     factor=pct,
                     type="BAR",
-                    text=f"Frame {current_frame}  ({current}/{total}, {pct*100:.0f}%)",
+                    text=iface_("Frame {frame}  ({current}/{total}, {pct:.0f}%)").format(frame=current_frame, current=current, total=total, pct=pct*100),
                 )
 
             col = box.column()

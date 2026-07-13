@@ -5,6 +5,7 @@
 #
 # MCP server start/stop operators.
 
+from bpy.app.translations import pgettext_iface as iface_, pgettext_tip as tip_
 from bpy.types import Operator  # pyright: ignore
 
 from ..core.utils import redraw_all_areas
@@ -33,17 +34,21 @@ class MCP_OT_StartServer(Operator):
                 if actual_port != original_port:
                     self.report(
                         {"WARNING"},
-                        f"MCP server started on alternative port {actual_port} "
-                        + f"(requested port {original_port} was unavailable)",
+                        iface_(
+                            "MCP server started on alternative port {actual_port} "
+                            "(requested port {original_port} was unavailable)"
+                        ).format(actual_port=actual_port, original_port=original_port),
                     )
                     state.mcp_port = actual_port
                 else:
                     self.report(
                         {"INFO"},
-                        f"MCP server started successfully on port {actual_port}",
+                        iface_("MCP server started successfully on port {actual_port}").format(
+                            actual_port=actual_port
+                        ),
                     )
             else:
-                self.report({"ERROR"}, "Failed to start MCP server - unknown error")
+                self.report({"ERROR"}, iface_("Failed to start MCP server - unknown error"))
                 return {"CANCELLED"}
 
             redraw_all_areas(context)
@@ -54,10 +59,15 @@ class MCP_OT_StartServer(Operator):
             if "port" in error_msg.lower():
                 self.report(
                     {"ERROR"},
-                    f"Port conflict: {error_msg}. Try reloading the addon or using a different port.",
+                    iface_(
+                        "Port conflict: {error}. Try reloading the addon or using a different port."
+                    ).format(error=error_msg),
                 )
             else:
-                self.report({"ERROR"}, f"Failed to start MCP server: {error_msg}")
+                self.report(
+                    {"ERROR"},
+                    iface_("Failed to start MCP server: {error}").format(error=error_msg),
+                )
             return {"CANCELLED"}
 
 
@@ -72,24 +82,24 @@ class MCP_OT_StopServer(Operator):
 
         try:
             if not is_mcp_running():
-                self.report({"INFO"}, "MCP server is not running")
+                self.report({"INFO"}, iface_("MCP server is not running"))
                 return {"FINISHED"}
 
             stop_mcp_server()
 
             if not is_mcp_running():
-                self.report({"INFO"}, "MCP server stopped successfully")
+                self.report({"INFO"}, iface_("MCP server stopped successfully"))
             else:
                 self.report(
                     {"WARNING"},
-                    "MCP server may still be running - check console for details",
+                    iface_("MCP server may still be running - check console for details"),
                 )
 
             redraw_all_areas(context)
             return {"FINISHED"}
 
         except Exception as e:
-            self.report({"ERROR"}, f"Error stopping MCP server: {e}")
+            self.report({"ERROR"}, iface_("Error stopping MCP server: {error}").format(error=e))
             return {"CANCELLED"}
 
 

@@ -13,6 +13,7 @@
 # rejected early with a clear message.
 
 import bpy  # pyright: ignore
+from bpy.app.translations import pgettext_iface as iface_, pgettext_tip as tip_
 from bpy.props import IntProperty, StringProperty  # pyright: ignore
 from bpy.types import Operator  # pyright: ignore
 
@@ -24,7 +25,7 @@ def _resolve_target_assigned(self, context):
     ``(None, None)`` after reporting a warning."""
     group = get_group_from_index(context.scene, self.group_index)
     if group is None:
-        self.report({"WARNING"}, "Object group not found.")
+        self.report({"WARNING"}, iface_("Object group not found."))
         return None, None
     # Prefer the explicit operator argument; fall back to the pulldown.
     if self.object_uuid:
@@ -36,7 +37,9 @@ def _resolve_target_assigned(self, context):
     else:
         assigned = get_assigned_by_selection_uuid(group, "bend_ref_object_selection")
     if assigned is None:
-        self.report({"WARNING"}, "Select a shell object in the pulldown first.")
+        self.report(
+            {"WARNING"}, iface_("Select a shell object in the pulldown first.")
+        )
         return None, None
     return group, assigned
 
@@ -67,14 +70,17 @@ class OBJECT_OT_PickBendReference(Operator):
 
         source_obj = get_object_by_uuid(assigned.uuid)
         if source_obj is None:
-            self.report({"WARNING"}, "Source object could not be resolved.")
+            self.report({"WARNING"}, iface_("Source object could not be resolved."))
             return {"CANCELLED"}
 
         ref_obj = context.active_object
         ref_uuid = get_or_create_object_uuid(ref_obj)
         if not ref_uuid:
             self.report(
-                {"WARNING"}, f"'{ref_obj.name}' is not writable (library-linked)."
+                {"WARNING"},
+                iface_("'{name}' is not writable (library-linked).").format(
+                    name=ref_obj.name
+                ),
             )
             return {"CANCELLED"}
 
@@ -89,7 +95,9 @@ class OBJECT_OT_PickBendReference(Operator):
         assigned.bend_ref_name = ref_obj.name
         self.report(
             {"INFO"},
-            f"Reference rest angle for '{source_obj.name}' set to '{ref_obj.name}'.",
+            iface_("Reference rest angle for '{source}' set to '{name}'.").format(
+                source=source_obj.name, name=ref_obj.name
+            ),
         )
         return {"FINISHED"}
 
@@ -109,7 +117,7 @@ class OBJECT_OT_ClearBendReference(Operator):
             return {"CANCELLED"}
         assigned.bend_ref_uuid = ""
         assigned.bend_ref_name = ""
-        self.report({"INFO"}, "Reference rest angle cleared.")
+        self.report({"INFO"}, iface_("Reference rest angle cleared."))
         return {"FINISHED"}
 
 

@@ -18,6 +18,7 @@ from bpy.props import (  # pyright: ignore
     StringProperty,
 )
 from bpy.types import PropertyGroup  # pyright: ignore
+from bpy.app.translations import pgettext_iface as iface_, pgettext_tip as tip_  # pyright: ignore
 
 from ..models.defaults import DEFAULT_MCP_PORT, DEFAULT_RELOAD_PORT, DEFAULT_SERVER_PORT
 # `decode_vertex_group_identifier`, `assign_display_indices`,
@@ -57,13 +58,13 @@ def _get_profile_items(self, context):
 
     path = self.profile_path
     if not path:
-        return [("NONE", "(No Profile)", "")]
+        return [("NONE", iface_("(No Profile)"), "")]
 
     abs_path = bpy.path.abspath(path)
     names = get_profile_names(abs_path)
     if not names:
-        return [("NONE", "(No Profile)", "")]
-    return [(n, n, f"Profile: {n}") for n in names]
+        return [("NONE", iface_("(No Profile)"), "")]
+    return [(n, n, tip_("Profile: {name}").format(name=n)) for n in names]
 
 
 def _on_profile_selected(self, context):
@@ -166,7 +167,7 @@ def get_snap_objects(self=None, context=None):
     from ..core.uuid_registry import get_object_uuid
 
     global _snap_objects_cache
-    items = [("NONE", "None", "No object selected")]
+    items = [("NONE", iface_("None"), tip_("No object selected"))]
     rod_curve_uuids = set()
     if context is not None:
         for group in iterate_active_object_groups(context.scene):
@@ -180,9 +181,9 @@ def get_snap_objects(self=None, context=None):
         if not uid:
             continue
         if obj.type == "MESH":
-            items.append((uid, obj.name, f"Mesh object: {obj.name}"))
+            items.append((uid, obj.name, tip_("Mesh object: {name}").format(name=obj.name)))
         elif obj.type == "CURVE" and uid in rod_curve_uuids:
-            items.append((uid, obj.name, f"Curve object: {obj.name}"))
+            items.append((uid, obj.name, tip_("Curve object: {name}").format(name=obj.name)))
     _snap_objects_cache = items
     return items
 
@@ -193,13 +194,13 @@ def _get_scene_profile_items(self, context):
 
     path = self.scene_profile_path
     if not path:
-        return [("NONE", "(No Profile)", "")]
+        return [("NONE", iface_("(No Profile)"), "")]
 
     abs_path = bpy.path.abspath(path)
     names = get_profile_names(abs_path)
     if not names:
-        return [("NONE", "(No Profile)", "")]
-    return [(n, n, f"Scene profile: {n}") for n in names]
+        return [("NONE", iface_("(No Profile)"), "")]
+    return [(n, n, tip_("Scene profile: {name}").format(name=n)) for n in names]
 
 
 def _on_scene_profile_selected(self, context):
@@ -840,10 +841,10 @@ class State(PropertyGroup):
         for key in set(current) | set(stored):
             if current.get(key) != stored.get(key):
                 diverged.append(key)
-        return (
+        return iface_(
             "Mesh topology changed since last transfer "
-            f"(groups differing: {', '.join(diverged)}). Re-transfer to sync."
-        )
+            "(groups differing: {groups}). Re-transfer to sync."
+        ).format(groups=", ".join(diverged))
 
 
 class SceneRoot(PropertyGroup):

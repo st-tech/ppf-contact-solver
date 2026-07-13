@@ -24,6 +24,8 @@ from . import REPO_ROOT_POSIX
 
 
 NEEDS_BLENDER = True
+# Launcher -> Rust-binary handshake + --version; backend-agnostic.
+BACKENDS = ("emulated", "real")
 # Linux runs the Rust binary directly via the LOCAL backend. macOS
 # usually goes through SSH/Docker; Windows uses bl_connect_win_native
 # which probes ppf-cts-server.exe at a different code path.

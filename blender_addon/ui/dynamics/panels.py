@@ -8,6 +8,7 @@ import os
 import bpy  # pyright: ignore
 
 from bpy.types import Panel  # pyright: ignore
+from bpy.app.translations import pgettext_iface as iface_, pgettext_tip as tip_
 
 from ...core.utils import get_category_name
 from ...models.groups import (
@@ -362,7 +363,7 @@ def _draw_pdrd_pins(pin_box, group, actual_index, context):
             # built in the generic panel). Surface it rather than silently
             # hiding motion the body actually carries.
             op_box.label(
-                text=f"{op.op_type}: edit in the generic panel",
+                text=iface_("{op_type}: edit in the generic panel").format(op_type=op.op_type),
                 icon="INFO",
             )
 
@@ -513,7 +514,7 @@ def _draw_bend_reference(layout, group, actual_index):
     if ref_obj is not None:
         label, icon = ref_obj.name, "MESH_DATA"
     elif assigned.bend_ref_uuid:
-        label = f"Missing: {assigned.bend_ref_name or assigned.bend_ref_uuid[:8]}"
+        label = iface_("Missing: {name}").format(name=assigned.bend_ref_name or assigned.bend_ref_uuid[:8])
         icon = "ERROR"
     else:
         label, icon = "No reference set", "RADIOBUT_OFF"
@@ -684,7 +685,7 @@ class MAIN_PT_SceneConfiguration(Panel):
                 btn_row = cp_box.row(align=True)
                 btn_row.operator(
                     "scene.add_save_checkpoint",
-                    text=f"Add Frame {context.scene.frame_current}",
+                    text=iface_("Add Frame {frame}").format(frame=context.scene.frame_current),
                     icon="ADD",
                 )
                 rm_row = btn_row.row()
@@ -917,7 +918,8 @@ class DYNAMICS_PT_Groups(Panel):
             row = box.row()
             # Use custom name if provided, otherwise default to "Group N"
             group_label = (
-                group.name if group.name.strip() else f"Group {display_index + 1}"
+                group.name if group.name.strip()
+                else iface_("Group {index}").format(index=display_index + 1)
             )
             group_icon = GROUP_TYPE_ICONS.get(group.object_type, {}).get(
                 "header", "OBJECT_DATA"
@@ -1042,7 +1044,7 @@ class DYNAMICS_PT_Groups(Panel):
                     if _has_cache:
                         n = _df_count(_sd_obj)
                         box.label(
-                            text=f"Deform cache: {n} frame(s)",
+                            text=iface_("Deform cache: {count} frame(s)").format(count=n),
                             icon="FILE_CACHE",
                         )
                     elif _deforms:
@@ -1267,7 +1269,7 @@ class DYNAMICS_PT_Groups(Panel):
                         if _pin_has_cache:
                             n = _pin_cap_count(pin_item)
                             col.label(
-                                text=f"Pin cache: {n} frame(s)",
+                                text=iface_("Pin cache: {count} frame(s)").format(count=n),
                                 icon="FILE_CACHE",
                             )
                         elif _pin_can_capture:
@@ -1553,8 +1555,8 @@ class DYNAMICS_PT_Groups(Panel):
                         if obj_data and obj_data.type == "MESH":
                             row = col.row()
                             row.label(text=obj_data.name)
-                            row.label(text=f"#Vert: {len(obj_data.data.vertices)}")
-                            row.label(text=f"#Face: {len(obj_data.data.polygons)}")
+                            row.label(text=iface_("#Vert: {count}").format(count=len(obj_data.data.vertices)))
+                            row.label(text=iface_("#Face: {count}").format(count=len(obj_data.data.polygons)))
 
                 param_box = box.box()
                 row = param_box.row()
@@ -1922,6 +1924,15 @@ class SNAPMERGE_PT_SnapAndMerge(Panel):
                             type_b = group.object_type
                 if pair_supports_cross_stitch(type_a, type_b):
                     merge_box.prop(pair, "stitch_stiffness")
+                # A pair with no captured stitch anchors is dropped by the
+                # encoder, so the stitch never forms at solve time. Warn the
+                # artist and point them at Re-snap.
+                from ...mesh_ops.merge_ops import pair_has_stitch
+                if not pair_has_stitch(pair):
+                    merge_box.label(
+                        text=iface_("No stitch points found. Try Re-snap."),
+                        icon="INFO",
+                    )
 
         # Global (not per-pair): post-snap exact join applied on fetch.
         # Drawn outside the Merge Pairs box because it governs every stitch.
@@ -1961,7 +1972,7 @@ class UTILITY_PT_UtilityTools(Panel):
         elif n_mesh == 0:
             tri_box.label(text="Select one or more mesh objects", icon="INFO")
         else:
-            tri_box.label(text=f"{n_mesh} mesh object(s) selected", icon="CHECKMARK")
+            tri_box.label(text=iface_("{count} mesh object(s) selected").format(count=n_mesh), icon="CHECKMARK")
 
 
 class VISUALIZATION_PT_Visualization(Panel):

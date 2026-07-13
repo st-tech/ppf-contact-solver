@@ -1,114 +1,128 @@
 # File: blender.yml
-# Purpose: Run the headless Blender debug rig (blender_addon/debug/) on
-# free GitHub-hosted Linux + macOS runners in parallel.
-# License: Apache v2.0
+# Purpose: Run the headless Blender debug rig (blender_addon/debug/)
+# across several platforms:
 #
-# Both runners install Blender 5.1.1 from the Blender Foundation's
-# official download mirror, build the Rust solver with `--features
-# emulated --no-default-features` (no CUDA), install the addon as a
-# Blender 5 extension via install-blender-addon.sh, and run the full
-# scenario registry. Linux uses Xvfb for the virtual display the
-# bootstrap's event loop needs; macOS has a real WindowServer.
+#   * macos       - free GitHub-hosted runner, EMULATED CPU-stub solver,
+#                   the FULL scenario suite (physics-reference scenarios
+#                   included). This is the fast correctness smoke.
+#   * linux-emulated - free GitHub-hosted runner, EMULATED CPU-stub solver,
+#                   the FULL scenario suite on x86 Linux under Xvfb. Same
+#                   role as the macOS job but broadens the emulated canary
+#                   beyond macOS/ARM and exercises the server-side frontend
+#                   decode (fTetWild + the scipy partial-pin SOLID Poisson
+#                   diffusion) on Linux without a GPU.
+#   * linux-gpu   - disposable AWS L4 GPU instance, REAL CUDA solver,
+#                   the backend-agnostic subset + the real SOLID smoke.
+#                   Blender's window runs under Xvfb (software GL) while
+#                   the solver uses the real GPU.
+#   * windows-gpu - disposable AWS L4 GPU instance, REAL Windows-native
+#                   build (warmup.bat + build.bat + ppf-cts-server.exe).
+#                   The rig runs Blender headless (--background, via
+#                   PPF_BLENDER_HEADLESS=1), which needs no OpenGL/WGL
+#                   context or desktop, so it runs directly over the
+#                   Session-0 SSH shell. The L4 comes up in TCC
+#                   (compute-only) mode with no OpenGL, so a GUI launch is
+#                   avoided entirely (see scripts/win/run-blender-rig.ps1).
+#
+# The GPU jobs reuse the disposable-AWS launcher pattern from
+# template/aws-template.yml (Linux) and template/aws-template-win.yml
+# (Windows). Only macOS uses the emulated build; Linux and Windows test
+# the real CUDA solver on a real L4. The real-vs-emulated scenario split
+# is enforced by the BACKENDS gate in scenarios/__init__.py and selected
+# with `runtests --backend real`.
+#
+# License: Apache v2.0
 
 name: Blender CI
 
 on:
   workflow_dispatch:
+    inputs:
+      platforms:
+        description: 'Platforms to run'
+        required: true
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - macos
+          - linux-emulated
+          - macos-ssh
+          - linux-gpu
+          - windows-gpu
+      instance_type:
+        description: 'EC2 instance type (linux-gpu / windows-gpu / macos-ssh)'
+        required: true
+        default: 'g6.xlarge'
+        type: choice
+        options:
+          # L4 (sm_89), minimal single-GPU current gen. T4/g4dn (sm_75)
+          # is intentionally absent: the shipped cubins cover sm_86/89/
+          # 90/100/120 only, so a T4 would fail "named symbol not found".
+          - g6.xlarge
+          - g6.2xlarge
+          - g6e.2xlarge
+      region:
+        description: 'AWS Region'
+        required: true
+        default: 'us-east-2'
+        type: choice
+        options:
+          - us-east-1
+          - us-east-2
+          - ap-northeast-1
 
 permissions:
   contents: read
 
 jobs:
-  test:
-    name: ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
+  # ====================================================================
+  # macOS - free GitHub-hosted runner, emulated solver, full suite.
+  # ====================================================================
+  macos:
+    name: macOS (emulated)
+    if: ${{ inputs.platforms == 'all' || inputs.platforms == 'macos' }}
+    # Pinned, not macos-latest: that label flips to macos-26 (Xcode 26 /
+    # Clang 21 / OpenSSL 3.x) by 2026-07-15. Freeze on the validated arm64
+    # macos-15 image (what the emulated toolchain + arm64 Blender build are
+    # verified against) and migrate to macos-26 deliberately after testing.
+    runs-on: macos-15
     timeout-minutes: 90
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
     env:
       BLENDER_VERSION: '5.1.1'
-      # Speed up emulated solver steps (default 1000ms wall-clock per
-      # step is fine for local dev but stretches CI runs).
       PPF_EMULATED_STEP_MS: '100'
-      # Flush Python stdout line-by-line so the orchestrator's per-
-      # scenario start/finish lines appear in the Actions log UI as
-      # they happen, not in one block at the end of the step.
       PYTHONUNBUFFERED: '1'
-
+      # Bound + retry a stalled fTetWild tetrahedralization (SOLID tests): a
+      # nondeterministic hang then fails fast and self-recovers instead of
+      # eating the per-scenario timeout. Normal runs are well under this.
+      PPF_FTETWILD_TIMEOUT: '120'
     steps:
       - uses: actions/checkout@v5
 
       - name: Pin debug root under runner temp
-        # Job-level env can't reference ``runner.*`` because the runner
-        # isn't provisioned yet; do it from a step so the failure-
-        # artifact upload at the end finds the rig's worker dirs in the
-        # same place on every OS.
         shell: bash
         run: echo "PPF_DEBUG_ROOT=$RUNNER_TEMP/ppf-debug" >> "$GITHUB_ENV"
 
-      # ------------------------------------------------------------------
-      # Graphics-layer setup comes first so the slow Rust build and
-      # Python venv install only happen once we know Blender can start.
-      # ------------------------------------------------------------------
-      - name: Linux runtime deps + Xvfb
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            xvfb x11-xserver-utils \
-            libxi6 libxxf86vm1 libxfixes3 libxrender1 \
-            libgl1 libglu1-mesa libxkbcommon0 libsm6 \
-            libdbus-1-3 libsndfile1 \
-            libeigen3-dev
-          # Bring up Xvfb on :99 with a 24-bit screen large enough for
-          # any panel redraws the rig might trigger.
-          Xvfb :99 -screen 0 1280x720x24 -ac >/tmp/xvfb.log 2>&1 &
-          for _ in 1 2 3 4 5; do
-            xset -q -display :99 >/dev/null 2>&1 && break || sleep 1
-          done
-          echo "DISPLAY=:99" >> "$GITHUB_ENV"
-
       - name: macOS native deps
         # ppf-cts-solver's build.rs invokes make under the `emulated`
-        # feature, and the C++ stub includes <Eigen/Dense>. The macOS
-        # runner image doesn't ship Eigen; brew install puts the
-        # headers at /opt/homebrew/opt/eigen/include/eigen3, which is
-        # the path the Makefile already passes via -I.
-        if: runner.os == 'macOS'
-        run: brew install eigen
-
-      # ------------------------------------------------------------------
-      # Blender 5.1.1 from the Blender Foundation's official mirror
-      # ------------------------------------------------------------------
-      - name: Download Blender (Linux)
-        if: runner.os == 'Linux'
+        # feature, and the C++ stub includes <Eigen/Dense>. Untap aws/tap
+        # first: the runner image pre-taps it and Homebrew's tap-trust check
+        # warns on every brew call, but we don't use it (the aws CLI is the
+        # runner's pkg install, not this tap). Non-fatal via `|| true`.
         run: |
-          url="https://download.blender.org/release/Blender5.1/blender-${BLENDER_VERSION}-linux-x64.tar.xz"
-          curl -fL -o /tmp/blender.tar.xz "$url"
-          mkdir -p "$HOME/blender"
-          tar -xf /tmp/blender.tar.xz -C "$HOME/blender" --strip-components=1
-          echo "PPF_BLENDER_BIN=$HOME/blender/blender" >> "$GITHUB_ENV"
+          brew untap aws/tap 2>/dev/null || true
+          brew install eigen
 
       - name: Download Blender (macOS)
-        if: runner.os == 'macOS'
         run: |
           url="https://download.blender.org/release/Blender5.1/blender-${BLENDER_VERSION}-macos-arm64.dmg"
           curl -fL -o /tmp/blender.dmg "$url"
-          # hdiutil prints the mount path; we capture it instead of
-          # hard-coding /Volumes/Blender so a renamed volume label
-          # doesn't break the workflow silently.
           mount=$(hdiutil attach -nobrowse /tmp/blender.dmg | awk '/\/Volumes\// {print $NF; exit}')
           cp -R "$mount/Blender.app" /Applications/
           hdiutil detach "$mount"
           echo "PPF_BLENDER_BIN=/Applications/Blender.app/Contents/MacOS/Blender" >> "$GITHUB_ENV"
 
       - name: Probe Blender launch
-        # Cross-platform sanity check: launch Blender in full UI with a
-        # 3s timer-driven quit. Fails the workflow if Blender can't
-        # initialize, so we don't waste the ~5 min Rust build on a
-        # broken runner.
         shell: bash
         run: |
           set -euo pipefail
@@ -116,56 +130,33 @@ jobs:
           "$PPF_BLENDER_BIN" \
             --python-expr "import threading, os, time; threading.Thread(target=lambda: (time.sleep(3), os._exit(0)), daemon=True).start()" \
             2>&1 | tee "$LOG" || true
-          echo "----- probe log tail -----"
           tail -n 40 "$LOG"
-          echo "--------------------------"
           if grep -qE 'Probably a libepoxy bug|missing WGL_ARB_extensions_string' "$LOG"; then
             echo "::error::Blender failed to initialize OpenGL"
             exit 1
           fi
           echo "Blender launch probe OK"
 
-      # ------------------------------------------------------------------
-      # Heavy build steps: only run if the launch probe passed.
-      # ------------------------------------------------------------------
       - uses: dtolnay/rust-toolchain@stable
-
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: emulated-${{ matrix.os }}
+          shared-key: emulated-macos
 
       - name: Build emulated solver
         env:
-          PPF_ALLOW_EMULATED: "1"   # CI intentionally builds the CPU stub
+          PPF_ALLOW_EMULATED: "1"
         run: cargo build --release --features emulated --no-default-features
 
-      # ------------------------------------------------------------------
-      # Build the Rust ppf-cts-server binary (workspace member). The
-      # cargo line above only builds the root `ppf-contact-solver`
-      # crate; ppf-cts-server is a separate workspace member with its
-      # own `emulated` feature mirror. The Blender addon launcher
-      # (blender_addon/core/connection.py) checks for the .exe under
-      # target/release/ whenever PPF_USE_RUST_SERVER=1 is opted in,
-      # so build it here and smoke-check `--help` to confirm the
-      # binary loaded its deps.
-      # ------------------------------------------------------------------
       - name: Build ppf-cts-server (emulated)
         shell: bash
         env:
-          PPF_ALLOW_EMULATED: "1"   # CI intentionally builds the CPU stub
+          PPF_ALLOW_EMULATED: "1"
         run: |
           cargo build --release -p ppf-cts-server --features emulated
-          if [ ! -f target/release/ppf-cts-server ]; then
-            echo "ERROR: target/release/ppf-cts-server not found after build"
-            exit 1
-          fi
+          test -f target/release/ppf-cts-server
           ./target/release/ppf-cts-server --help >/dev/null
           echo "ppf-cts-server --help OK"
 
-      # ------------------------------------------------------------------
-      # Python venv + frontend deps (the rig's debug server runs the real
-      # frontend module, which needs numpy/scipy/numba/pythreejs/...)
-      # ------------------------------------------------------------------
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
@@ -182,49 +173,26 @@ jobs:
             tabulate triangle psutil tomli ipython pillow pytetwild \
             tetgen pyvista cbor2
 
-      # ------------------------------------------------------------------
-      # The emulated `cargo build --release` steps above build the PyO3
-      # cdylib into target/release/. frontend/__init__.py loads that
-      # cdylib by absolute path and registers it as `_ppf_cts_py`, so
-      # importing `frontend` first makes the Rust extension available.
-      # ------------------------------------------------------------------
       - name: Verify Rust extension importable
         shell: bash
         run: |
           .venv/bin/python -c "from frontend import _rust as m; print('schema_version', m.schema_version()); print('process_name', m.process_name())"
 
-      # ------------------------------------------------------------------
-      # Install the addon as a Blender 5 extension. install-blender-
-      # addon.sh honors PPF_BLENDER_BIN as its cold-start path so the
-      # install works before Blender has booted to materialize the
-      # user-prefs tree. It also fetches the cbor2 wheels declared in
-      # blender_manifest.toml (gitignored) from PyPI before symlinking,
-      # via blender_addon/wheels/fetch.py.
-      # ------------------------------------------------------------------
       - name: Install addon
         run: ./install-blender-addon.sh
 
-      # ------------------------------------------------------------------
-      # Run all registered scenarios. Default --parallel=1 keeps RAM
-      # under the 7 GB free-runner ceiling; bump later if green and
-      # we want to shave wall-clock.
-      # ------------------------------------------------------------------
-      - name: Run all scenarios
+      - name: Run all scenarios (emulated, full suite)
         shell: bash
         run: |
           .venv/bin/python blender_addon/debug/main.py runtests \
             --timeout 360 \
             --report report.json
 
-      # ------------------------------------------------------------------
-      # Always upload the aggregated report; on failure, also upload the
-      # per-worker dirs (server logs, blender stdout/stderr, probe events).
-      # ------------------------------------------------------------------
       - name: Upload report
         if: always()
         uses: actions/upload-artifact@v6
         with:
-          name: report-${{ matrix.os }}
+          name: report-macos
           path: report.json
           if-no-files-found: warn
 
@@ -232,6 +200,936 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v6
         with:
-          name: ppf-debug-${{ matrix.os }}
+          name: ppf-debug-macos
           path: ${{ runner.temp }}/ppf-debug/
           if-no-files-found: ignore
+
+  # ====================================================================
+  # Linux - free GitHub-hosted runner, emulated solver, the full suite on
+  # x86 Linux under Xvfb (software GL). Mirrors the macOS emulated job.
+  # ====================================================================
+  linux-emulated:
+    name: Linux (emulated)
+    if: ${{ inputs.platforms == 'all' || inputs.platforms == 'linux-emulated' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      PPF_EMULATED_STEP_MS: '100'
+      PYTHONUNBUFFERED: '1'
+      # See the macos job: bound + retry a stalled fTetWild run on SOLID tests.
+      PPF_FTETWILD_TIMEOUT: '120'
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Pin debug root under runner temp
+        shell: bash
+        run: echo "PPF_DEBUG_ROOT=$RUNNER_TEMP/ppf-debug" >> "$GITHUB_ENV"
+
+      - name: Linux native deps
+        # ppf-cts-solver's build.rs invokes make under the `emulated`
+        # feature; the C++ stub Makefile compiles against Eigen at
+        # -I/usr/include/eigen3 on Linux (libeigen3-dev). install-blender.sh
+        # installs Blender's own runtime deps + Xvfb separately.
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends libeigen3-dev build-essential
+
+      - name: Install Blender (Linux) + Xvfb
+        run: |
+          ./install-blender.sh
+          # Export the Blender binary path so the addon-install and rig-run
+          # steps can locate it (install-blender-addon.sh needs PPF_BLENDER_BIN
+          # to derive the extensions dir). --env prints an eval-able block;
+          # capture just the binary line here (no eval, so no Xvfb side effect).
+          # The rig-run step re-evals --env to start Xvfb + set DISPLAY.
+          BIN=$(./install-blender.sh --env | sed -n 's/^export PPF_BLENDER_BIN=//p')
+          echo "PPF_BLENDER_BIN=$BIN" >> "$GITHUB_ENV"
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: emulated-linux
+
+      - name: Build emulated solver
+        env:
+          PPF_ALLOW_EMULATED: "1"
+        run: cargo build --release --features emulated --no-default-features
+
+      - name: Build ppf-cts-server (emulated)
+        shell: bash
+        env:
+          PPF_ALLOW_EMULATED: "1"
+        run: |
+          cargo build --release -p ppf-cts-server --features emulated
+          test -f target/release/ppf-cts-server
+          ./target/release/ppf-cts-server --help >/dev/null
+          echo "ppf-cts-server --help OK"
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Create venv + install Python deps
+        shell: bash
+        run: |
+          python -m venv .venv
+          .venv/bin/python -m pip install --upgrade pip
+          .venv/bin/python -m pip install \
+            numpy scipy numba plyfile requests trimesh pywavefront \
+            matplotlib tqdm pythreejs ipywidgets fast-simplification \
+            tabulate triangle psutil tomli ipython pillow pytetwild \
+            tetgen pyvista cbor2
+
+      - name: Verify Rust extension importable
+        shell: bash
+        run: |
+          .venv/bin/python -c "from frontend import _rust as m; print('schema_version', m.schema_version()); print('process_name', m.process_name())"
+
+      - name: Install addon
+        run: ./install-blender-addon.sh
+
+      - name: Run all scenarios (emulated, full suite, under Xvfb)
+        shell: bash
+        run: |
+          # --env starts Xvfb on :99 and exports DISPLAY + PPF_BLENDER_BIN.
+          eval "$(./install-blender.sh --env)"
+          echo "PPF_BLENDER_BIN=$PPF_BLENDER_BIN DISPLAY=$DISPLAY"
+          .venv/bin/python blender_addon/debug/main.py runtests \
+            --timeout 360 \
+            --report report.json
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: report-linux-emulated
+          path: report.json
+          if-no-files-found: warn
+
+      - name: Upload worker artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: ppf-debug-linux-emulated
+          path: ${{ runner.temp }}/ppf-debug/
+          if-no-files-found: ignore
+
+  # ====================================================================
+  # macOS -> L4 over SSH - the runner is a free macOS box running real
+  # Blender (installed the same way as the emulated macOS job), but the
+  # solver runs on a disposable AWS L4 that the addon reaches via its
+  # SSH backend (server_type CUSTOM / paramiko). This is the "local
+  # Blender + remote GPU box" workflow. The macOS side still builds the
+  # emulated backend because the rig's local-server spawn + numba
+  # precompile + addon warmup need `frontend` importable locally; that
+  # local server is spawned-and-unused (bl_ssh_remote_solve reaches the
+  # remote server independently).
+  # ====================================================================
+  macos-ssh:
+    name: macOS -> L4 (real over SSH)
+    if: ${{ inputs.platforms == 'all' || inputs.platforms == 'macos-ssh' }}
+    # Pinned to macos-15 (see the macos job): avoid the macos-latest ->
+    # macos-26 flip landing on this job unvalidated by 2026-07-15.
+    runs-on: macos-15
+    timeout-minutes: 120
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      BLENDER_VERSION: '5.1.1'
+      PYTHONUNBUFFERED: '1'
+      AWS_REGION: ${{ github.event.inputs.region }}
+      INSTANCE_TYPE: ${{ github.event.inputs.instance_type }}
+      BRANCH: ${{ github.ref_name }}
+      WORKDIR: /home/ubuntu
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Pin debug root under runner temp
+        shell: bash
+        run: echo "PPF_DEBUG_ROOT=$RUNNER_TEMP/ppf-debug" >> "$GITHUB_ENV"
+
+      - name: macOS native deps
+        # Untap aws/tap (unused here; only trips Homebrew's tap-trust
+        # warning). The aws CLI this job uses is the runner's pkg install.
+        run: |
+          brew untap aws/tap 2>/dev/null || true
+          brew install eigen
+
+      - name: Download Blender (macOS) + probe
+        run: |
+          set -euo pipefail
+          url="https://download.blender.org/release/Blender5.1/blender-${BLENDER_VERSION}-macos-arm64.dmg"
+          curl -fL -o /tmp/blender.dmg "$url"
+          mount=$(hdiutil attach -nobrowse /tmp/blender.dmg | awk '/\/Volumes\// {print $NF; exit}')
+          cp -R "$mount/Blender.app" /Applications/
+          hdiutil detach "$mount"
+          echo "PPF_BLENDER_BIN=/Applications/Blender.app/Contents/MacOS/Blender" >> "$GITHUB_ENV"
+          LOG="$RUNNER_TEMP/blender_probe.log"
+          /Applications/Blender.app/Contents/MacOS/Blender \
+            --python-expr "import threading, os, time; threading.Thread(target=lambda: (time.sleep(3), os._exit(0)), daemon=True).start()" \
+            2>&1 | tee "$LOG" || true
+          if grep -qE 'Probably a libepoxy bug|missing WGL_ARB_extensions_string' "$LOG"; then
+            echo "::error::Blender failed to initialize OpenGL"; exit 1
+          fi
+          echo "Blender launch probe OK"
+
+      # ------------------------------------------------------------------
+      # AWS side: launch the L4, build the REAL solver on it, and
+      # pre-start ppf-cts-server so the addon's SSH connect reaches
+      # RUNNING without the start_server dance.
+      # ------------------------------------------------------------------
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-duration-seconds: 21600
+
+      - name: Find Deep Learning AMI and network resources
+        id: setup
+        run: |
+          AMI_ID=$(aws ec2 describe-images \
+            --owners amazon \
+            --filters \
+              "Name=name,Values=Deep Learning Base OSS Nvidia Driver GPU AMI (Ubuntu 24.04)*" \
+              "Name=state,Values=available" \
+              "Name=architecture,Values=x86_64" \
+            --query 'sort_by(Images, &CreationDate)[-1].ImageId' \
+            --region "$AWS_REGION" --output text)
+          if [ "$AMI_ID" = "None" ] || [ -z "$AMI_ID" ]; then
+            echo "ERROR: Deep Learning AMI not found in $AWS_REGION"; exit 1
+          fi
+          echo "AMI_ID=$AMI_ID" >> $GITHUB_OUTPUT
+          VPC_ID=$(aws ec2 describe-vpcs --filters "Name=tag:Name,Values=github-actions-vpc" --query 'Vpcs[0].VpcId' --output text)
+          SUBNET_ID=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$VPC_ID" --query 'Subnets[0].SubnetId' --output text)
+          SG_ID=$(aws ec2 describe-security-groups --filters "Name=vpc-id,Values=$VPC_ID" "Name=group-name,Values=github-actions-sg" --query 'SecurityGroups[0].GroupId' --output text)
+          if [ "$VPC_ID" = "None" ] || [ -z "$VPC_ID" ]; then
+            echo "ERROR: github-actions-vpc not found in $AWS_REGION"; exit 1
+          fi
+          echo "::add-mask::$VPC_ID"
+          echo "::add-mask::$SUBNET_ID"
+          echo "::add-mask::$SG_ID"
+          echo "SUBNET_ID=$SUBNET_ID" >> $GITHUB_OUTPUT
+          echo "SG_ID=$SG_ID" >> $GITHUB_OUTPUT
+
+      - name: Generate identifiers and SSH key
+        id: ids
+        run: |
+          TIMESTAMP=$(date +%Y%m%d%H%M%S)
+          echo "TIMESTAMP=$TIMESTAMP" >> $GITHUB_OUTPUT
+          rm -f /tmp/ec2key /tmp/ec2key.pub
+          ssh-keygen -t rsa -f /tmp/ec2key -N "" -q
+
+      - name: Create user data script
+        run: |
+          SSH_PUBKEY=$(cat /tmp/ec2key.pub)
+          cat > /tmp/user-data.sh << EOF
+          #!/bin/bash
+          set -x
+          exec > >(tee /var/log/user-data.log) 2>&1
+          sleep 5
+          mkdir -p /home/ubuntu/.ssh
+          echo "${SSH_PUBKEY}" >> /home/ubuntu/.ssh/authorized_keys
+          chown -R ubuntu:ubuntu /home/ubuntu/.ssh
+          chmod 700 /home/ubuntu/.ssh
+          chmod 600 /home/ubuntu/.ssh/authorized_keys
+          nvidia-smi | tee /tmp/nvidia-smi-output.txt || true
+          touch /tmp/setup-complete
+          EOF
+
+      - name: Launch EC2 instance
+        id: instance
+        run: |
+          # macOS base64 has no -w flag; strip newlines portably.
+          USER_DATA=$(base64 < /tmp/user-data.sh | tr -d '\n')
+          INSTANCE_ID=$(aws ec2 run-instances \
+            --image-id "${{ steps.setup.outputs.AMI_ID }}" \
+            --instance-type "$INSTANCE_TYPE" \
+            --subnet-id "${{ steps.setup.outputs.SUBNET_ID }}" \
+            --security-group-ids "${{ steps.setup.outputs.SG_ID }}" \
+            --associate-public-ip-address \
+            --user-data "$USER_DATA" \
+            --block-device-mappings "DeviceName=/dev/sda1,Ebs={VolumeSize=256,VolumeType=gp3,DeleteOnTermination=true}" \
+            --tag-specifications \
+              "ResourceType=instance,Tags=[{Key=Name,Value=blender-macos-ssh-${{ steps.ids.outputs.TIMESTAMP }}},{Key=ManagedBy,Value=GitHubActions},{Key=Purpose,Value=BlenderCI},{Key=RunId,Value=${{ github.run_id }}}]" \
+            --instance-initiated-shutdown-behavior terminate \
+            --query 'Instances[0].InstanceId' --region "$AWS_REGION" --output text)
+          echo "INSTANCE_ID=$INSTANCE_ID" >> $GITHUB_OUTPUT
+          echo "$INSTANCE_ID" > /tmp/instance_id.txt
+
+      - name: Wait for instance and setup-complete
+        run: |
+          INSTANCE_ID="${{ steps.instance.outputs.INSTANCE_ID }}"
+          aws ec2 wait instance-running --instance-ids "$INSTANCE_ID" --region "$AWS_REGION"
+          for i in $(seq 1 60); do
+            aws ec2-instance-connect open-tunnel --instance-id "$INSTANCE_ID" --local-port 2222 &
+            TUNNEL_PID=$!; sleep 3
+            if ssh -i /tmp/ec2key -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 \
+              ubuntu@localhost "test -f /tmp/setup-complete && echo READY" 2>/dev/null | grep -q READY; then
+              kill $TUNNEL_PID 2>/dev/null || true; break
+            fi
+            kill $TUNNEL_PID 2>/dev/null || true
+            [ $i -eq 60 ] && echo "setup timeout, continuing" && break
+            sleep 10
+          done
+
+      - name: Transfer repository to instance
+        run: |
+          git archive --format=tar.gz --output=/tmp/repo.tar.gz HEAD
+          INSTANCE_ID=$(cat /tmp/instance_id.txt)
+          aws ec2-instance-connect open-tunnel --instance-id "$INSTANCE_ID" --local-port 2222 &
+          TUNNEL_PID=$!; sleep 5
+          rsync -az -e "ssh -i /tmp/ec2key -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" \
+            /tmp/repo.tar.gz ubuntu@localhost:${WORKDIR}/
+          ssh -i /tmp/ec2key -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            ubuntu@localhost "cd ${WORKDIR} && tar -xzf repo.tar.gz && rm repo.tar.gz"
+          kill $TUNNEL_PID 2>/dev/null || true
+
+      - name: Build real solver on instance + pre-start server
+        run: |
+          INSTANCE_ID=$(cat /tmp/instance_id.txt)
+          aws ec2-instance-connect open-tunnel --instance-id "$INSTANCE_ID" --local-port 2222 &
+          TUNNEL_PID=$!; sleep 5
+          ssh -i /tmp/ec2key -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=30 ubuntu@localhost << 'ENDSSH'
+          set -e
+          cd "$HOME"
+          echo "=== warmup.py (venv + deps) ==="
+          python3 warmup.py --skip-confirmation
+          source "$HOME/.cargo/env"
+          echo "=== cargo build --release (REAL CUDA) ==="
+          cargo build --release
+          cargo build --release -p ppf-cts-server
+          test -f target/release/ppf-cts-server
+          echo "=== pre-start ppf-cts-server on :9090 (real, production mode) ==="
+          # nohup + redirect so the server survives this SSH session close.
+          source "$HOME/.local/share/ppf-cts/venv/bin/activate" || true
+          PPF_CTS_BUILD_PYTHON="$HOME/.local/share/ppf-cts/venv/bin/python" \
+            nohup ./target/release/ppf-cts-server --port 9090 \
+            > "$HOME/ppf-cts-server.log" 2>&1 &
+          sleep 4
+          echo "server log tail:"; tail -n 20 "$HOME/ppf-cts-server.log" || true
+          (ss -tlnp 2>/dev/null || netstat -tlnp 2>/dev/null) | grep 9090 || echo "warn: 9090 not visible yet"
+          ENDSSH
+          kill $TUNNEL_PID 2>/dev/null || true
+
+      # ------------------------------------------------------------------
+      # macOS side: emulated build (for the rig's local server + numba +
+      # addon), venv, addon, and paramiko in Blender's Python.
+      # ------------------------------------------------------------------
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: emulated-macos
+
+      - name: Build emulated solver (local, for the rig)
+        env:
+          PPF_ALLOW_EMULATED: "1"
+        run: |
+          cargo build --release --features emulated --no-default-features
+          cargo build --release -p ppf-cts-server --features emulated
+          test -f target/release/ppf-cts-server
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Create venv + install Python deps
+        shell: bash
+        run: |
+          python -m venv .venv
+          .venv/bin/python -m pip install --upgrade pip
+          .venv/bin/python -m pip install \
+            numpy scipy numba plyfile requests trimesh pywavefront \
+            matplotlib tqdm pythreejs ipywidgets fast-simplification \
+            tabulate triangle psutil tomli ipython pillow pytetwild \
+            tetgen pyvista cbor2
+
+      - name: Verify Rust extension importable
+        shell: bash
+        run: |
+          .venv/bin/python -c "from frontend import _rust as m; print('schema_version', m.schema_version())"
+
+      - name: Install addon + paramiko into Blender's Python
+        run: |
+          ./install-blender-addon.sh
+          # The SSH (CUSTOM) backend needs paramiko importable inside
+          # Blender's bundled Python; it is not a bundled wheel. Mirror
+          # the addon's install_module(): ensurepip + pip --target the
+          # addon modules dir (on Blender's sys.path).
+          "$PPF_BLENDER_BIN" -b --factory-startup --python-expr "import bpy,sys,subprocess,os; t=bpy.utils.user_resource('SCRIPTS', path='addons/modules', create=True); subprocess.run([sys.executable,'-m','ensurepip','--upgrade'], check=False); subprocess.check_call([sys.executable,'-m','pip','install','--target',t,'paramiko']); print('PARAMIKO_TARGET', t)"
+          "$PPF_BLENDER_BIN" -b --factory-startup --python-expr "import bpy,sys,os; sys.path.insert(0, bpy.utils.user_resource('SCRIPTS', path='addons/modules')); import paramiko; print('PARAMIKO_OK', paramiko.__version__)"
+
+      # ------------------------------------------------------------------
+      # Drive the SSH scenario: macOS Blender -> remote L4 server. Keep an
+      # ec2-instance-connect tunnel (localhost:2222 -> instance:22) alive
+      # for the whole run; the addon's paramiko connects to localhost:2222
+      # and opens a direct-tcpip channel to the remote server on :9090.
+      # ------------------------------------------------------------------
+      - name: Run SSH rig (macOS Blender -> remote L4)
+        run: |
+          INSTANCE_ID=$(cat /tmp/instance_id.txt)
+          aws ec2-instance-connect open-tunnel --instance-id "$INSTANCE_ID" --remote-port 22 --local-port 2222 &
+          TUNNEL_PID=$!
+          sleep 8
+          nc -z localhost 2222 || echo "::warning::tunnel port 2222 not answering yet"
+          set +e
+          .venv/bin/python blender_addon/debug/main.py runtests \
+            bl_ssh_remote_solve bl_ssh_remote_solid \
+            --backend real \
+            --timeout 600 \
+            --report report.json \
+            --knob PPF_SSH_HOST=localhost \
+            --knob PPF_SSH_PORT=2222 \
+            --knob PPF_SSH_USER=ubuntu \
+            --knob PPF_SSH_KEY=/tmp/ec2key \
+            --knob PPF_SSH_REMOTE_PATH=/home/ubuntu \
+            --knob PPF_SSH_SERVER_PORT=9090
+          RIG_RC=$?
+          kill $TUNNEL_PID 2>/dev/null || true
+          echo "rig exit code: $RIG_RC"
+          echo "RIG_RC=$RIG_RC" >> "$GITHUB_ENV"
+
+      - name: Collect remote server log
+        if: success() || failure()
+        run: |
+          INSTANCE_ID=$(cat /tmp/instance_id.txt)
+          aws ec2-instance-connect open-tunnel --instance-id "$INSTANCE_ID" --local-port 2222 &
+          TUNNEL_PID=$!; sleep 5
+          mkdir -p ci
+          rsync -az -e "ssh -i /tmp/ec2key -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" \
+            ubuntu@localhost:/home/ubuntu/ppf-cts-server.log ./ci/ 2>/dev/null || echo "no server log"
+          cp report.json ./ci/ 2>/dev/null || true
+          kill $TUNNEL_PID 2>/dev/null || true
+          ls -la ci/ || true
+
+      - name: Upload report
+        if: success() || failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: report-macos-ssh
+          path: ci
+          if-no-files-found: warn
+          retention-days: 5
+
+      - name: Upload worker artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: ppf-debug-macos-ssh
+          path: ${{ runner.temp }}/ppf-debug/
+          if-no-files-found: ignore
+
+      - name: Gate on rig result
+        if: success() || failure()
+        run: |
+          echo "rig exit code was: ${RIG_RC:-unknown}"
+          [ "${RIG_RC:-1}" = "0" ]
+
+      - name: Re-authenticate for cleanup
+        if: always()
+        continue-on-error: true
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-duration-seconds: 21600
+
+      - name: Cleanup - terminate instance
+        if: always()
+        continue-on-error: true
+        run: |
+          if [ -n "${{ steps.instance.outputs.INSTANCE_ID }}" ]; then
+            aws ec2 terminate-instances --instance-ids "${{ steps.instance.outputs.INSTANCE_ID }}" --region "$AWS_REGION" || true
+          fi
+          rm -f /tmp/ec2key /tmp/ec2key.pub /tmp/instance_id.txt
+
+  # ====================================================================
+  # Linux GPU - disposable AWS L4 instance, REAL CUDA solver.
+  # Blender runs under Xvfb (software GL); the solver uses the real GPU.
+  # ====================================================================
+  linux-gpu:
+    name: Linux L4 (real)
+    if: ${{ inputs.platforms == 'all' || inputs.platforms == 'linux-gpu' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      AWS_REGION: ${{ github.event.inputs.region }}
+      INSTANCE_TYPE: ${{ github.event.inputs.instance_type }}
+      BRANCH: ${{ github.ref_name }}
+      WORKDIR: /home/ubuntu
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-duration-seconds: 21600
+
+      - name: Find Deep Learning AMI and network resources
+        id: setup
+        run: |
+          AMI_ID=$(aws ec2 describe-images \
+            --owners amazon \
+            --filters \
+              "Name=name,Values=Deep Learning Base OSS Nvidia Driver GPU AMI (Ubuntu 24.04)*" \
+              "Name=state,Values=available" \
+              "Name=architecture,Values=x86_64" \
+            --query 'sort_by(Images, &CreationDate)[-1].ImageId' \
+            --region "$AWS_REGION" --output text)
+          if [ "$AMI_ID" = "None" ] || [ -z "$AMI_ID" ]; then
+            echo "ERROR: Deep Learning AMI not found in $AWS_REGION"; exit 1
+          fi
+          echo "AMI_ID=$AMI_ID" >> $GITHUB_OUTPUT
+          VPC_ID=$(aws ec2 describe-vpcs --filters "Name=tag:Name,Values=github-actions-vpc" --query 'Vpcs[0].VpcId' --output text)
+          SUBNET_ID=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$VPC_ID" --query 'Subnets[0].SubnetId' --output text)
+          SG_ID=$(aws ec2 describe-security-groups --filters "Name=vpc-id,Values=$VPC_ID" "Name=group-name,Values=github-actions-sg" --query 'SecurityGroups[0].GroupId' --output text)
+          if [ "$VPC_ID" = "None" ] || [ -z "$VPC_ID" ]; then
+            echo "ERROR: github-actions-vpc not found in $AWS_REGION"; exit 1
+          fi
+          echo "::add-mask::$VPC_ID"
+          echo "::add-mask::$SUBNET_ID"
+          echo "::add-mask::$SG_ID"
+          echo "SUBNET_ID=$SUBNET_ID" >> $GITHUB_OUTPUT
+          echo "SG_ID=$SG_ID" >> $GITHUB_OUTPUT
+
+      - name: Generate identifiers and SSH key
+        id: ids
+        run: |
+          TIMESTAMP=$(date +%Y%m%d%H%M%S)
+          echo "TIMESTAMP=$TIMESTAMP" >> $GITHUB_OUTPUT
+          rm -f /tmp/ec2key /tmp/ec2key.pub
+          ssh-keygen -t rsa -f /tmp/ec2key -N "" -q
+
+      - name: Create user data script
+        run: |
+          SSH_PUBKEY=$(cat /tmp/ec2key.pub)
+          cat > /tmp/user-data.sh << EOF
+          #!/bin/bash
+          set -x
+          exec > >(tee /var/log/user-data.log) 2>&1
+          sleep 5
+          mkdir -p /home/ubuntu/.ssh
+          echo "${SSH_PUBKEY}" >> /home/ubuntu/.ssh/authorized_keys
+          chown -R ubuntu:ubuntu /home/ubuntu/.ssh
+          chmod 700 /home/ubuntu/.ssh
+          chmod 600 /home/ubuntu/.ssh/authorized_keys
+          nvidia-smi | tee /tmp/nvidia-smi-output.txt || true
+          touch /tmp/setup-complete
+          EOF
+
+      - name: Launch EC2 instance
+        id: instance
+        run: |
+          USER_DATA=$(base64 -w 0 /tmp/user-data.sh)
+          INSTANCE_ID=$(aws ec2 run-instances \
+            --image-id "${{ steps.setup.outputs.AMI_ID }}" \
+            --instance-type "$INSTANCE_TYPE" \
+            --subnet-id "${{ steps.setup.outputs.SUBNET_ID }}" \
+            --security-group-ids "${{ steps.setup.outputs.SG_ID }}" \
+            --associate-public-ip-address \
+            --user-data "$USER_DATA" \
+            --block-device-mappings "DeviceName=/dev/sda1,Ebs={VolumeSize=256,VolumeType=gp3,DeleteOnTermination=true}" \
+            --tag-specifications \
+              "ResourceType=instance,Tags=[{Key=Name,Value=blender-linux-${{ steps.ids.outputs.TIMESTAMP }}},{Key=ManagedBy,Value=GitHubActions},{Key=Purpose,Value=BlenderCI},{Key=RunId,Value=${{ github.run_id }}}]" \
+            --instance-initiated-shutdown-behavior terminate \
+            --query 'Instances[0].InstanceId' --region "$AWS_REGION" --output text)
+          echo "INSTANCE_ID=$INSTANCE_ID" >> $GITHUB_OUTPUT
+          echo "$INSTANCE_ID" > /tmp/instance_id.txt
+
+      - name: Wait for instance and setup-complete
+        run: |
+          INSTANCE_ID="${{ steps.instance.outputs.INSTANCE_ID }}"
+          aws ec2 wait instance-running --instance-ids "$INSTANCE_ID" --region "$AWS_REGION"
+          for i in $(seq 1 60); do
+            aws ec2-instance-connect open-tunnel --instance-id "$INSTANCE_ID" --local-port 2222 &
+            TUNNEL_PID=$!; sleep 3
+            if ssh -i /tmp/ec2key -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 \
+              ubuntu@localhost "test -f /tmp/setup-complete && echo READY" 2>/dev/null | grep -q READY; then
+              kill $TUNNEL_PID 2>/dev/null || true; break
+            fi
+            kill $TUNNEL_PID 2>/dev/null || true
+            [ $i -eq 60 ] && echo "setup timeout, continuing" && break
+            sleep 10
+          done
+
+      - name: Transfer repository
+        run: |
+          git archive --format=tar.gz --output=/tmp/repo.tar.gz HEAD
+          INSTANCE_ID=$(cat /tmp/instance_id.txt)
+          aws ec2-instance-connect open-tunnel --instance-id "$INSTANCE_ID" --local-port 2222 &
+          TUNNEL_PID=$!; sleep 5
+          rsync -az -e "ssh -i /tmp/ec2key -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" \
+            /tmp/repo.tar.gz ubuntu@localhost:${WORKDIR}/
+          ssh -i /tmp/ec2key -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            ubuntu@localhost "cd ${WORKDIR} && tar -xzf repo.tar.gz && rm repo.tar.gz"
+          kill $TUNNEL_PID 2>/dev/null || true
+
+      - name: Warmup + build real solver + install Blender/addon
+        run: |
+          INSTANCE_ID=$(cat /tmp/instance_id.txt)
+          aws ec2-instance-connect open-tunnel --instance-id "$INSTANCE_ID" --local-port 2222 &
+          TUNNEL_PID=$!; sleep 5
+          ssh -i /tmp/ec2key -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=30 ubuntu@localhost << 'ENDSSH'
+          set -e
+          cd "$HOME"
+          echo "=== warmup.py (venv + deps) ==="
+          python3 warmup.py --skip-confirmation
+          source "$HOME/.cargo/env"
+          echo "=== cargo build --release (REAL CUDA) ==="
+          cargo build --release
+          cargo build --release -p ppf-cts-server
+          test -f target/release/ppf-cts-server
+          ./target/release/ppf-cts-server --help >/dev/null
+          echo "=== install Blender (Linux) + Xvfb ==="
+          ./install-blender.sh
+          eval "$(./install-blender.sh --env)"
+          echo "PPF_BLENDER_BIN=$PPF_BLENDER_BIN"
+          echo "=== install addon ==="
+          ./install-blender-addon.sh
+          ENDSSH
+          kill $TUNNEL_PID 2>/dev/null || true
+
+      - name: Run Blender rig (real backend, under Xvfb)
+        run: |
+          INSTANCE_ID=$(cat /tmp/instance_id.txt)
+          aws ec2-instance-connect open-tunnel --instance-id "$INSTANCE_ID" --local-port 2222 &
+          TUNNEL_PID=$!; sleep 5
+          set +e
+          ssh -i /tmp/ec2key -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=60 ubuntu@localhost << 'ENDSSH'
+          set -e
+          cd "$HOME"
+          export PPF_DEBUG_ROOT=/home/ubuntu/ppf-debug
+          export PYTHONUNBUFFERED=1
+          # Xvfb + DISPLAY + PPF_BLENDER_BIN from the install helper.
+          eval "$(./install-blender.sh --env)"
+          VENV="$HOME/.local/share/ppf-cts/venv/bin/python"
+          "$VENV" blender_addon/debug/main.py runtests \
+            --backend real \
+            --timeout 420 \
+            --report /home/ubuntu/report.json
+          ENDSSH
+          RIG_RC=$?
+          kill $TUNNEL_PID 2>/dev/null || true
+          echo "rig exit code: $RIG_RC"
+          echo "RIG_RC=$RIG_RC" >> "$GITHUB_ENV"
+
+      - name: Collect results
+        if: success() || failure()
+        run: |
+          mkdir -p ci
+          INSTANCE_ID=$(cat /tmp/instance_id.txt)
+          aws ec2-instance-connect open-tunnel --instance-id "$INSTANCE_ID" --local-port 2222 &
+          TUNNEL_PID=$!; sleep 5
+          rsync -az -e "ssh -i /tmp/ec2key -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" \
+            ubuntu@localhost:/home/ubuntu/report.json ./ci/ 2>/dev/null || echo "no report.json"
+          # Prune large binaries from worker dirs before pulling logs.
+          ssh -i /tmp/ec2key -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null ubuntu@localhost \
+            "find /home/ubuntu/ppf-debug -type f \( -name '*.bin' -o -name '*.pickle' -o -name '*.ply' -o -name '*.blend' \) -delete 2>/dev/null" || true
+          rsync -az -e "ssh -i /tmp/ec2key -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" \
+            ubuntu@localhost:/home/ubuntu/ppf-debug/ ./ci/ppf-debug/ 2>/dev/null || echo "no worker dirs"
+          kill $TUNNEL_PID 2>/dev/null || true
+          ls -laR ci/ | head -60
+
+      - name: Upload report
+        if: success() || failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: report-linux-gpu
+          path: ci
+          retention-days: 5
+
+      - name: Gate on rig result
+        if: success() || failure()
+        run: |
+          echo "rig exit code was: ${RIG_RC:-unknown}"
+          [ "${RIG_RC:-1}" = "0" ]
+
+      - name: Re-authenticate for cleanup
+        if: always()
+        continue-on-error: true
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-duration-seconds: 21600
+
+      - name: Cleanup - terminate instance
+        if: always()
+        continue-on-error: true
+        run: |
+          if [ -n "${{ steps.instance.outputs.INSTANCE_ID }}" ]; then
+            aws ec2 terminate-instances --instance-ids "${{ steps.instance.outputs.INSTANCE_ID }}" --region "$AWS_REGION" || true
+          fi
+          rm -f /tmp/ec2key /tmp/ec2key.pub /tmp/instance_id.txt
+
+  # ====================================================================
+  # Windows GPU - disposable AWS L4 instance, REAL Windows-native build.
+  # The rig runs Blender headless (--background), which needs no OpenGL /
+  # desktop, so it runs directly over SSH (no console session required).
+  # ====================================================================
+  windows-gpu:
+    name: Windows L4 (real)
+    if: ${{ inputs.platforms == 'all' || inputs.platforms == 'windows-gpu' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      AWS_REGION: ${{ github.event.inputs.region }}
+      INSTANCE_TYPE: ${{ github.event.inputs.instance_type }}
+      BRANCH: ${{ github.ref_name }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-duration-seconds: 21600
+
+      - name: Find Windows Server AMI and network resources
+        id: setup
+        run: |
+          AMI_ID=$(aws ec2 describe-images \
+            --owners amazon \
+            --filters \
+              "Name=name,Values=Windows_Server-2025-English-Full-Base-*" \
+              "Name=state,Values=available" \
+            --query 'sort_by(Images, &CreationDate)[-1].ImageId' \
+            --region "$AWS_REGION" --output text)
+          if [ "$AMI_ID" = "None" ] || [ -z "$AMI_ID" ]; then
+            echo "ERROR: Windows Server 2025 AMI not found in $AWS_REGION"; exit 1
+          fi
+          echo "AMI_ID=$AMI_ID" >> $GITHUB_OUTPUT
+          VPC_ID=$(aws ec2 describe-vpcs --filters "Name=tag:Name,Values=github-actions-vpc" --query 'Vpcs[0].VpcId' --output text)
+          SUBNET_ID=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$VPC_ID" --query 'Subnets[0].SubnetId' --output text)
+          SG_ID=$(aws ec2 describe-security-groups --filters "Name=vpc-id,Values=$VPC_ID" "Name=group-name,Values=github-actions-sg" --query 'SecurityGroups[0].GroupId' --output text)
+          if [ "$VPC_ID" = "None" ] || [ -z "$VPC_ID" ]; then
+            echo "ERROR: github-actions-vpc not found in $AWS_REGION"; exit 1
+          fi
+          echo "::add-mask::$VPC_ID"
+          echo "::add-mask::$SUBNET_ID"
+          echo "::add-mask::$SG_ID"
+          echo "SUBNET_ID=$SUBNET_ID" >> $GITHUB_OUTPUT
+          echo "SG_ID=$SG_ID" >> $GITHUB_OUTPUT
+
+      - name: Generate identifiers
+        id: ids
+        run: |
+          TIMESTAMP=$(date +%Y%m%d%H%M%S)
+          echo "TIMESTAMP=$TIMESTAMP" >> $GITHUB_OUTPUT
+
+      - name: Create EC2 key pair
+        id: keypair
+        run: |
+          KEY_NAME="blender-win-${{ steps.ids.outputs.TIMESTAMP }}-${{ github.run_id }}"
+          echo "::add-mask::$KEY_NAME"
+          echo "KEY_NAME=$KEY_NAME" >> $GITHUB_OUTPUT
+          aws ec2 create-key-pair --key-name "$KEY_NAME" --query 'KeyMaterial' --output text > /tmp/ec2key.pem
+          chmod 600 /tmp/ec2key.pem
+
+      - name: Create Windows user data (SSH)
+        run: |
+          sed "s/SSH_PORT_PLACEHOLDER/22/g" .github/workflows/scripts/win/user-data.ps1 > /tmp/user-data.ps1
+
+      - name: Launch EC2 instance
+        id: instance
+        run: |
+          INSTANCE_ID=$(aws ec2 run-instances \
+            --image-id "${{ steps.setup.outputs.AMI_ID }}" \
+            --instance-type "$INSTANCE_TYPE" \
+            --key-name "${{ steps.keypair.outputs.KEY_NAME }}" \
+            --subnet-id "${{ steps.setup.outputs.SUBNET_ID }}" \
+            --security-group-ids "${{ steps.setup.outputs.SG_ID }}" \
+            --associate-public-ip-address \
+            --user-data file:///tmp/user-data.ps1 \
+            --block-device-mappings "DeviceName=/dev/sda1,Ebs={VolumeSize=120,VolumeType=gp3,DeleteOnTermination=true}" \
+            --tag-specifications \
+              "ResourceType=instance,Tags=[{Key=Name,Value=blender-win-${{ steps.ids.outputs.TIMESTAMP }}},{Key=ManagedBy,Value=GitHubActions},{Key=Purpose,Value=BlenderCI},{Key=RunId,Value=${{ github.run_id }}}]" \
+            --instance-initiated-shutdown-behavior terminate \
+            --query 'Instances[0].InstanceId' --region "$AWS_REGION" --output text)
+          echo "INSTANCE_ID=$INSTANCE_ID" >> $GITHUB_OUTPUT
+          echo "$INSTANCE_ID" > /tmp/instance_id.txt
+
+      - name: Wait for instance and SSH
+        run: |
+          INSTANCE_ID="${{ steps.instance.outputs.INSTANCE_ID }}"
+          aws ec2 wait instance-status-ok --instance-ids "$INSTANCE_ID"
+          for i in $(seq 1 30); do
+            timeout 15 aws ec2-instance-connect open-tunnel --instance-id "$INSTANCE_ID" --remote-port 22 --local-port 2222 &
+            TUNNEL_PID=$!; sleep 5
+            if nc -z localhost 2222 2>/dev/null; then kill $TUNNEL_PID 2>/dev/null || true; break; fi
+            kill $TUNNEL_PID 2>/dev/null || true
+            [ $i -eq 30 ] && echo "SSH not ready" && exit 1
+            sleep 10
+          done
+
+      - name: Install NVIDIA driver
+        run: |
+          INSTANCE_ID=$(cat /tmp/instance_id.txt)
+          aws ec2-instance-connect open-tunnel --instance-id "$INSTANCE_ID" --remote-port 22 --local-port 2222 &
+          TUNNEL_PID=$!; sleep 5
+          scp -P 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
+            -i /tmp/ec2key.pem .github/workflows/scripts/win/install-nvidia-driver.ps1 Administrator@localhost:C:/install_driver.ps1
+          ssh -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
+            -i /tmp/ec2key.pem Administrator@localhost "powershell -ExecutionPolicy Bypass -File C:/install_driver.ps1"
+          kill $TUNNEL_PID 2>/dev/null || true
+
+      - name: Transfer repository
+        run: |
+          git archive --format=zip --output=/tmp/repo.zip HEAD
+          INSTANCE_ID=$(cat /tmp/instance_id.txt)
+          aws ec2-instance-connect open-tunnel --instance-id "$INSTANCE_ID" --remote-port 22 --local-port 2222 &
+          TUNNEL_PID=$!; sleep 5
+          scp -P 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
+            -i /tmp/ec2key.pem /tmp/repo.zip Administrator@localhost:C:/source.zip
+          ssh -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
+            -i /tmp/ec2key.pem Administrator@localhost \
+            "powershell -Command \"if (Test-Path 'C:\\ppf-contact-solver') { Remove-Item -Recurse -Force 'C:\\ppf-contact-solver' }; New-Item -ItemType Directory -Path 'C:\\ppf-contact-solver' -Force; Expand-Archive -Path 'C:\\source.zip' -DestinationPath 'C:\\ppf-contact-solver' -Force; Remove-Item 'C:\\source.zip'\""
+          kill $TUNNEL_PID 2>/dev/null || true
+
+      - name: Warmup (embedded Python + deps incl scipy)
+        run: |
+          INSTANCE_ID=$(cat /tmp/instance_id.txt)
+          aws ec2-instance-connect open-tunnel --instance-id "$INSTANCE_ID" --remote-port 22 --local-port 2222 &
+          TUNNEL_PID=$!; sleep 5
+          ssh -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=60 -o ServerAliveCountMax=30 \
+            -i /tmp/ec2key.pem Administrator@localhost \
+            "cmd /c 'cd C:\\ppf-contact-solver\\build-win-native && warmup.bat /nopause'"
+          kill $TUNNEL_PID 2>/dev/null || true
+
+      - name: Build real solver (build.bat)
+        run: |
+          INSTANCE_ID=$(cat /tmp/instance_id.txt)
+          aws ec2-instance-connect open-tunnel --instance-id "$INSTANCE_ID" --remote-port 22 --local-port 2222 &
+          TUNNEL_PID=$!; sleep 5
+          ssh -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=60 -o ServerAliveCountMax=30 \
+            -i /tmp/ec2key.pem Administrator@localhost \
+            "cmd /c 'cd C:\\ppf-contact-solver\\build-win-native && build.bat /nopause'"
+          kill $TUNNEL_PID 2>/dev/null || true
+
+      - name: Build ppf-cts-server.exe
+        run: |
+          INSTANCE_ID=$(cat /tmp/instance_id.txt)
+          aws ec2-instance-connect open-tunnel --instance-id "$INSTANCE_ID" --remote-port 22 --local-port 2222 &
+          TUNNEL_PID=$!; sleep 5
+          scp -P 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
+            -i /tmp/ec2key.pem .github/workflows/scripts/win/build-ppf-cts-server.ps1 Administrator@localhost:C:/build_ppf_cts_server.ps1
+          ssh -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=60 -o ServerAliveCountMax=30 \
+            -i /tmp/ec2key.pem Administrator@localhost "powershell -ExecutionPolicy Bypass -File C:/build_ppf_cts_server.ps1"
+          kill $TUNNEL_PID 2>/dev/null || true
+
+      - name: Download Blender + install addon
+        run: |
+          INSTANCE_ID=$(cat /tmp/instance_id.txt)
+          aws ec2-instance-connect open-tunnel --instance-id "$INSTANCE_ID" --remote-port 22 --local-port 2222 &
+          TUNNEL_PID=$!; sleep 5
+          scp -P 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i /tmp/ec2key.pem \
+            .github/workflows/scripts/win/download-blender.ps1 Administrator@localhost:C:/download_blender.ps1
+          scp -P 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i /tmp/ec2key.pem \
+            .github/workflows/scripts/win/install-addon.ps1 Administrator@localhost:C:/install_addon.ps1
+          ssh -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=60 -o ServerAliveCountMax=20 \
+            -i /tmp/ec2key.pem Administrator@localhost "powershell -ExecutionPolicy Bypass -File C:/download_blender.ps1 -Version 5.1.1"
+          # Install the addon (cold-start: derive version from the binary,
+          # fetch cbor2 wheels via the embedded Python). Run as a -File
+          # script; an inline -Command with $env: would be double-evaluated
+          # because the SSH DefaultShell is PowerShell.
+          ssh -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=60 -o ServerAliveCountMax=20 \
+            -i /tmp/ec2key.pem Administrator@localhost "powershell -ExecutionPolicy Bypass -File C:/install_addon.ps1"
+          kill $TUNNEL_PID 2>/dev/null || true
+
+      - name: Run rig headless over SSH (no OpenGL/desktop)
+        run: |
+          # PPF_BLENDER_HEADLESS=1 (set inside run-blender-rig.ps1) launches
+          # Blender with --background, which needs NO WGL/OpenGL context and
+          # no desktop, so the rig runs directly in this Session-0 SSH shell.
+          # No auto-logon, console session, or interactive scheduled task
+          # required: the L4 comes up in TCC (compute-only) mode with no
+          # OpenGL, and the whole real subset is verified to pass headless.
+          # The run is synchronous; the build.bat step already proves long
+          # SSH runs survive this tunnel (strong keepalives below).
+          INSTANCE_ID=$(cat /tmp/instance_id.txt)
+          aws ec2-instance-connect open-tunnel --instance-id "$INSTANCE_ID" --remote-port 22 --local-port 2222 &
+          TUNNEL_PID=$!; sleep 5
+          scp -P 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i /tmp/ec2key.pem \
+            .github/workflows/scripts/win/run-blender-rig.ps1 Administrator@localhost:C:/run_blender_rig.ps1
+          set +e
+          ssh -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=30 -o ServerAliveCountMax=60 \
+            -i /tmp/ec2key.pem Administrator@localhost \
+            "powershell -ExecutionPolicy Bypass -File C:/run_blender_rig.ps1 -Timeout 420 -Parallel 1"
+          RIG_RC=$?
+          set -e
+          kill $TUNNEL_PID 2>/dev/null || true
+          echo "rig exit code: $RIG_RC"
+          echo "RIG_RC=$RIG_RC" >> "$GITHUB_ENV"
+
+      - name: Collect results + read exit code
+        if: success() || failure()
+        run: |
+          mkdir -p ci
+          INSTANCE_ID=$(cat /tmp/instance_id.txt)
+          aws ec2-instance-connect open-tunnel --instance-id "$INSTANCE_ID" --remote-port 22 --local-port 2222 &
+          TUNNEL_PID=$!; sleep 5
+          RC=$(ssh -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -i /tmp/ec2key.pem Administrator@localhost \
+            "powershell -Command \"if (Test-Path 'C:\\ci\\rig_exit.txt') { Get-Content 'C:\\ci\\rig_exit.txt' -Raw } else { '1' }\"" 2>/dev/null | tr -d '\r\n ' || echo 1)
+          echo "RIG_RC=${RC:-1}" >> "$GITHUB_ENV"
+          # Prune heavy binaries, then pull report + logs.
+          ssh -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i /tmp/ec2key.pem Administrator@localhost \
+            "powershell -Command \"Get-ChildItem -Path C:\\ppf-debug -Recurse -Include '*.bin','*.pickle','*.ply','*.blend' -ErrorAction SilentlyContinue | Remove-Item -Force\"" || true
+          scp -P 2222 -r -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i /tmp/ec2key.pem \
+            "Administrator@localhost:C:/ci/*" ./ci/ 2>/dev/null || echo "no ci files"
+          scp -P 2222 -r -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i /tmp/ec2key.pem \
+            "Administrator@localhost:C:/ppf-debug/*" ./ci/ppf-debug/ 2>/dev/null || echo "no worker dirs"
+          kill $TUNNEL_PID 2>/dev/null || true
+          ls -laR ci/ | head -60
+
+      - name: Upload report
+        if: success() || failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: report-windows-gpu
+          path: ci
+          retention-days: 5
+
+      - name: Gate on rig result
+        if: success() || failure()
+        run: |
+          echo "rig exit code was: ${RIG_RC:-unknown}"
+          [ "${RIG_RC:-1}" = "0" ]
+
+      - name: Re-authenticate for cleanup
+        if: always()
+        continue-on-error: true
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-duration-seconds: 21600
+
+      - name: Cleanup - terminate instance + delete key pair
+        if: always()
+        continue-on-error: true
+        run: |
+          if [ -n "${{ steps.instance.outputs.INSTANCE_ID }}" ]; then
+            aws ec2 terminate-instances --instance-ids "${{ steps.instance.outputs.INSTANCE_ID }}" --region "$AWS_REGION" || true
+          fi
+          if [ -n "${{ steps.keypair.outputs.KEY_NAME }}" ]; then
+            aws ec2 delete-key-pair --key-name "${{ steps.keypair.outputs.KEY_NAME }}" || true
+          fi
+          rm -f /tmp/ec2key.pem /tmp/instance_id.txt

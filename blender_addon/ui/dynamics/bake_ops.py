@@ -10,6 +10,7 @@ import bpy  # pyright: ignore
 import numpy  # pyright: ignore
 
 from bpy.types import Operator  # pyright: ignore
+from bpy.app.translations import pgettext_iface as iface_, pgettext_tip as tip_  # pyright: ignore
 
 from ...core.client import communicator as com
 from ...core.derived import is_server_busy_from_response as is_running
@@ -353,7 +354,7 @@ def _check_mesh_shape_keys(queue: list) -> list[str]:
         if extras:
             preview = ", ".join(extras[:3])
             if len(extras) > 3:
-                preview += f" (+{len(extras) - 3} more)"
+                preview += iface_(" (+{count} more)").format(count=len(extras) - 3)
             blockers.append(f"{entry['obj_name']} [{preview}]")
     return blockers
 
@@ -365,9 +366,9 @@ def _check_mesh_shape_keys(queue: list) -> list[str]:
 
 def _start_job(queue: list, kind: str) -> tuple[bool, str]:
     if _bake_job["active"]:
-        return False, "Another bake job is in progress"
+        return False, iface_("Another bake job is in progress")
     if not queue:
-        return False, "No bakeable objects"
+        return False, iface_("No bakeable objects")
 
     from ...core.uuid_registry import get_object_by_uuid
     for entry in queue:
@@ -493,9 +494,10 @@ def _tick_job(*, budget_ms: int = 40) -> bool:
         if entry["frames_done"] >= entry["n_frames"]:
             _bake_job["object_cursor"] += 1
             continue
-        _bake_job["status"] = (
-            f"Baking {entry['obj_name']} "
-            f"[{entry['frames_done'] + 1}/{entry['n_frames']}]"
+        _bake_job["status"] = iface_("Baking {name} [{done}/{total}]").format(
+            name=entry["obj_name"],
+            done=entry["frames_done"] + 1,
+            total=entry["n_frames"],
         )
         if not _process_one_frame(entry):
             _bake_job["object_cursor"] += 1
@@ -696,8 +698,10 @@ class _ModalBakeBase:
             joined = "; ".join(blockers)
             self.report(
                 {"ERROR"},
-                "Remove all shape keys except Basis before baking — "
-                f"conflicts on: {joined}",
+                iface_(
+                    "Remove all shape keys except Basis before baking — "
+                    "conflicts on: {conflicts}"
+                ).format(conflicts=joined),
             )
             return {"CANCELLED"}
         ok, err = _start_job(queue, kind=self._kind)
@@ -717,7 +721,7 @@ class _ModalBakeBase:
             _abort_job()
             self._teardown(context)
             redraw_all_areas(context)
-            self.report({"INFO"}, "Bake aborted")
+            self.report({"INFO"}, iface_("Bake aborted"))
             return {"CANCELLED"}
         more = _tick_job()
         redraw_all_areas(context)
@@ -729,7 +733,9 @@ class _ModalBakeBase:
             redraw_all_areas(context)
             self.report(
                 {"INFO"},
-                f"Baked {n_frames} frame(s) for {n_objs} object(s)",
+                iface_("Baked {frame_count} frame(s) for {object_count} object(s)").format(
+                    frame_count=n_frames, object_count=n_objs
+                ),
             )
             return {"FINISHED"}
         return {"RUNNING_MODAL"}
@@ -772,8 +778,10 @@ class OBJECT_OT_BakeAnimation(_ModalBakeBase, Operator):
         if _has_unfetched_frames(context.scene):
             self.report(
                 {"ERROR"},
-                "Unfetched animation frames exist. "
-                "Fetch all animation frames first.",
+                iface_(
+                    "Unfetched animation frames exist. "
+                    "Fetch all animation frames first."
+                ),
             )
             return {"CANCELLED"}
         from ...core.uuid_registry import get_object_by_uuid
@@ -846,12 +854,12 @@ class OBJECT_OT_BakeSingleFrame(Operator):
         scene = context.scene
         group = get_group_from_index(scene, self.group_index)
         if group is None:
-            self.report({"ERROR"}, "Group not found")
+            self.report({"ERROR"}, iface_("Group not found"))
             return {"CANCELLED"}
 
         index = group.assigned_objects_index
         if not (0 <= index < len(group.assigned_objects)):
-            self.report({"ERROR"}, "No object selected")
+            self.report({"ERROR"}, iface_("No object selected"))
             return {"CANCELLED"}
 
         assigned = group.assigned_objects[index]
@@ -859,11 +867,11 @@ class OBJECT_OT_BakeSingleFrame(Operator):
         obj = resolve_assigned(assigned)
         obj_name = assigned.name
         if not obj or obj.type not in ("MESH", "CURVE"):
-            self.report({"ERROR"}, f"Object '{obj_name}' not found")
+            self.report({"ERROR"}, iface_("Object '{name}' not found").format(name=obj_name))
             return {"CANCELLED"}
 
         if not _is_bakeable(obj):
-            self.report({"WARNING"}, f"No animation data on '{obj_name}'")
+            self.report({"WARNING"}, iface_("No animation data on '{name}'").format(name=obj_name))
             return {"CANCELLED"}
 
         data = obj.data
@@ -893,7 +901,7 @@ class OBJECT_OT_BakeSingleFrame(Operator):
         group.assigned_objects_index = safe_update_index(index, len(group.assigned_objects))
 
         apply_object_overlays()
-        self.report({"INFO"}, f"Baked frame {scene.frame_current} as Frame 1 for '{obj_name}'")
+        self.report({"INFO"}, iface_("Baked frame {frame} as Frame 1 for '{name}'").format(frame=scene.frame_current, name=obj_name))
         return {"FINISHED"}
 
 
@@ -920,8 +928,10 @@ class SOLVER_OT_BakeAllAnimation(_ModalBakeBase, Operator):
         if _has_unfetched_frames(context.scene):
             self.report(
                 {"ERROR"},
-                "Unfetched animation frames exist. "
-                "Fetch all animation frames first.",
+                iface_(
+                    "Unfetched animation frames exist. "
+                    "Fetch all animation frames first."
+                ),
             )
             return {"CANCELLED"}
         from ...core.uuid_registry import get_object_by_uuid
@@ -1050,9 +1060,9 @@ class SOLVER_OT_BakeAllSingleFrame(Operator):
 
         apply_object_overlays()
         if failed:
-            self.report({"ERROR"}, f"UUID resolve failed for: {', '.join(failed)}")
+            self.report({"ERROR"}, iface_("UUID resolve failed for: {names}").format(names=', '.join(failed)))
             return {"CANCELLED"}
-        self.report({"INFO"}, f"Baked single frame for {count} object(s)")
+        self.report({"INFO"}, iface_("Baked single frame for {count} object(s)").format(count=count))
         return {"FINISHED"}
 
 

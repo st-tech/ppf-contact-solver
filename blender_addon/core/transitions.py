@@ -634,9 +634,21 @@ def transition(state: AppState, event: Event) -> tuple[AppState, list[Effect]]:
         # ── Errors ─────────────────────────────────────────
         case ErrorOccurred(error=e, source=src):
             msg = f"[{src}] {e}" if src else e
+            # A launch that errors out (e.g. the server bound its port on the
+            # remote but the client can't reach it because the port isn't
+            # forwarded) must not leave the UI pinned at "Server Launching...".
+            # LAUNCHING is a transient state with no other exit once the launch
+            # effect fails, so drop it back to SERVER_NOT_RUNNING; the error is
+            # shown and the user can retry. A RUNNING server that hit an
+            # unrelated error (a failed data send, say) keeps its state.
+            server = (
+                Server.UNKNOWN if state.server == Server.LAUNCHING
+                else state.server
+            )
             return (
                 replace(
                     state,
+                    server=server,
                     error=e,
                     activity=Activity.IDLE,
                     progress=0.0,

@@ -10,6 +10,7 @@ import webbrowser
 import bpy  # pyright: ignore
 
 from bpy.types import Operator  # pyright: ignore
+from bpy.app.translations import pgettext_iface as iface_, pgettext_tip as tip_
 
 from ..core.client import communicator as com
 from ..core.protocol import HEADER_JSON_DATA
@@ -161,10 +162,10 @@ class JUPYTER_OT_Export(Operator):
     def execute(self, context):
         filepath = self.filepath.strip()
         if not filepath:
-            self.report({"ERROR"}, "Filepath is empty")
+            self.report({"ERROR"}, iface_("Filepath is empty"))
             return {"CANCELLED"}
         if not filepath.endswith(".ipynb"):
-            self.report({"ERROR"}, "Filename must end with .ipynb")
+            self.report({"ERROR"}, iface_("Filename must end with .ipynb"))
             return {"CANCELLED"}
 
         state = get_addon_data(context.scene).state
@@ -195,7 +196,7 @@ class JUPYTER_OT_Export(Operator):
         # The server resolves relative_path against <src>/examples/.
         connection = com.connection
         if not connection.instance or not com.is_connected():
-            self.report({"ERROR"}, "Not connected to solver server. Connect first.")
+            self.report({"ERROR"}, iface_("Not connected to solver server. Connect first."))
             return {"CANCELLED"}
 
         ok, rejected, err = _notebook_request(
@@ -210,13 +211,13 @@ class JUPYTER_OT_Export(Operator):
         )
         if not ok:
             if rejected:
-                self.report({"ERROR"}, f"Server rejected notebook: {err}")
+                self.report({"ERROR"}, iface_("Server rejected notebook: {error}").format(error=err))
             else:
-                self.report({"ERROR"}, f"Export failed: {err}")
+                self.report({"ERROR"}, iface_("Export failed: {error}").format(error=err))
             return {"CANCELLED"}
 
         state.jupyter_last_export = filepath
-        self.report({"INFO"}, f"Exported {filepath} via solver server")
+        self.report({"INFO"}, iface_("Exported {path} via solver server").format(path=filepath))
         redraw_all_areas(context)
         return {"FINISHED"}
 
@@ -237,7 +238,7 @@ class JUPYTER_OT_OpenURL(Operator):
         path = state.jupyter_last_export.strip()
         url = f"http://localhost:{port}/lab/tree/{path}"
         webbrowser.open(url)
-        self.report({"INFO"}, f"Opened {url}")
+        self.report({"INFO"}, iface_("Opened {url}").format(url=url))
         return {"FINISHED"}
 
 
@@ -259,7 +260,7 @@ class JUPYTER_OT_Delete(Operator):
 
         connection = com.connection
         if not connection.instance or not com.is_connected():
-            self.report({"ERROR"}, "Not connected to solver server. Connect first.")
+            self.report({"ERROR"}, iface_("Not connected to solver server. Connect first."))
             return {"CANCELLED"}
 
         ok, rejected, err = _notebook_request(
@@ -272,13 +273,13 @@ class JUPYTER_OT_Delete(Operator):
         )
         if not ok:
             if rejected:
-                self.report({"ERROR"}, f"Server rejected delete: {err}")
+                self.report({"ERROR"}, iface_("Server rejected delete: {error}").format(error=err))
             else:
-                self.report({"ERROR"}, f"Delete failed: {err}")
+                self.report({"ERROR"}, iface_("Delete failed: {error}").format(error=err))
             return {"CANCELLED"}
 
         state.jupyter_last_export = ""
-        self.report({"INFO"}, f"Deleted {filepath}")
+        self.report({"INFO"}, iface_("Deleted {path}").format(path=filepath))
         redraw_all_areas(context)
         return {"FINISHED"}
 

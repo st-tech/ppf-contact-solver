@@ -249,8 +249,18 @@ def _start():
     return None
 
 
-# 2s delay so addon registration and any post-load handlers settle.
-bpy.app.timers.register(_start, first_interval=2.0)
+# In --background (headless) mode there is no event loop, so bpy.app.timers
+# callbacks never fire. Run _start synchronously: the rig driver holds the
+# main thread and drains its own PC2 frames via fetch_and_drain (direct
+# apply_animation calls), so no modal / event-loop tick is required. This is
+# what lets the real-GPU jobs run the rig headless (no OpenGL/desktop needed,
+# sidestepping the GPU's TCC-mode lack of WGL) via PPF_BLENDER_HEADLESS=1.
+# In UI mode keep the 2s deferral so addon registration + post-load handlers
+# settle before the driver runs.
+if bpy.app.background:
+    _start()
+else:
+    bpy.app.timers.register(_start, first_interval=2.0)
 """
 
 

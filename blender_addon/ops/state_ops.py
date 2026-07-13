@@ -6,6 +6,7 @@ or ObjectGroup properties based on the key (and optional group_uuid).
 
 import bpy  # pyright: ignore
 from bpy.props import StringProperty  # pyright: ignore
+from bpy.app.translations import pgettext_iface as iface_, pgettext_tip as tip_
 
 from ..models.defaults import SCENE_PARAM_ALIASES
 from ..models.groups import get_addon_data
@@ -66,7 +67,7 @@ class ZOZO_CTS_OT_Set(bpy.types.Operator):
         value_str = self.value
 
         if not key:
-            self.report({"ERROR"}, "key is required")
+            self.report({"ERROR"}, iface_("key is required"))
             return {"CANCELLED"}
 
         # If group_uuid is provided, target ObjectGroup
@@ -75,7 +76,7 @@ class ZOZO_CTS_OT_Set(bpy.types.Operator):
 
             group = get_group_by_uuid(scene, self.group_uuid)
             if not group:
-                self.report({"ERROR"}, f"Group with UUID '{self.group_uuid}' not found")
+                self.report({"ERROR"}, iface_("Group with UUID '{uuid}' not found").format(uuid=self.group_uuid))
                 return {"CANCELLED"}
             try:
                 converted = _coerce_value(group, key, value_str)
@@ -83,10 +84,10 @@ class ZOZO_CTS_OT_Set(bpy.types.Operator):
                 self._refresh_ui(context)
                 return {"FINISHED"}
             except KeyError:
-                self.report({"ERROR"}, f"Property '{key}' not found on ObjectGroup")
+                self.report({"ERROR"}, iface_("Property '{key}' not found on ObjectGroup").format(key=key))
                 return {"CANCELLED"}
             except Exception as e:
-                self.report({"ERROR"}, f"Failed to set group property '{key}': {e}")
+                self.report({"ERROR"}, iface_("Failed to set group property '{key}': {error}").format(key=key, error=e))
                 return {"CANCELLED"}
 
         # Scene/SSH parameter aliases for backward compatibility. Applied only
@@ -106,7 +107,7 @@ class ZOZO_CTS_OT_Set(bpy.types.Operator):
                     self._refresh_ui(context)
                     return {"FINISHED"}
                 except Exception as e:
-                    self.report({"ERROR"}, f"Failed to set state.{key}: {e}")
+                    self.report({"ERROR"}, iface_("Failed to set state.{key}: {error}").format(key=key, error=e))
                     return {"CANCELLED"}
 
         # Try addon_data.ssh_state
@@ -120,12 +121,12 @@ class ZOZO_CTS_OT_Set(bpy.types.Operator):
                     self._refresh_ui(context)
                     return {"FINISHED"}
                 except Exception as e:
-                    self.report({"ERROR"}, f"Failed to set ssh_state.{key}: {e}")
+                    self.report({"ERROR"}, iface_("Failed to set ssh_state.{key}: {error}").format(key=key, error=e))
                     return {"CANCELLED"}
 
         self.report(
             {"ERROR"},
-            f"Property '{key}' not found in addon state or ssh_state",
+            iface_("Property '{key}' not found in addon state or ssh_state").format(key=key),
         )
         return {"CANCELLED"}
 

@@ -48,6 +48,13 @@ from . import REPO_ROOT_POSIX
 
 NEEDS_BLENDER = True
 
+# Backend-agnostic: the assertions below are robust invariants (finite PC2,
+# pinned/anchored region tracks its prescribed motion, free region lags,
+# body not FAILED) that hold on BOTH the emulated CPU stub and the real
+# CUDA solver, so this runs on the free-runner macOS suite AND the real-GPU
+# AWS jobs selected by ``runtests --backend real``.
+BACKENDS = ("emulated", "real")
+
 
 _FRAME_COUNT = 4
 _GAP = 0.02  # face-to-face gap between the two cubes (meters)
@@ -174,7 +181,7 @@ try:
 
     # ----- B: build + run completes through the 6-wide ABI path ----------
     data_bytes, param_bytes = dh.encode_payload()
-    dh.connect_local(
+    dh.connect(
         local_path=LOCAL_PATH,
         server_port=SERVER_PORT,
         project_name=root.state.project_name,

@@ -9,6 +9,7 @@ import os
 import subprocess
 
 from bpy.types import Operator  # pyright: ignore
+from bpy.app.translations import pgettext_iface as iface_, pgettext_tip as tip_
 
 from ..core.client import RemoteStatus, communicator as com
 from ..models.console import console
@@ -56,7 +57,7 @@ class SOLVER_OT_SaveAndQuit(Operator):
 
     def execute(self, _):
         com.save_and_quit()
-        self.report({"INFO"}, "Save and Quit executed.")
+        self.report({"INFO"}, iface_("Save and Quit executed."))
         return {"FINISHED"}
 
 
@@ -178,7 +179,9 @@ class SOLVER_OT_ForceTerminatePort(Operator):
         if pid is None:
             self.report(
                 {"WARNING"},
-                f"No LISTENING process found on port {port}.",
+                iface_("No LISTENING process found on port {port}.").format(
+                    port=port
+                ),
             )
             return {"CANCELLED"}
         try:
@@ -187,18 +190,24 @@ class SOLVER_OT_ForceTerminatePort(Operator):
             stderr = (exc.stderr or b"").decode(errors="replace").strip()
             self.report(
                 {"ERROR"},
-                f"Failed to kill PID {pid} on port {port}: {stderr or exc}",
+                iface_(
+                    "Failed to kill PID {pid} on port {port}: {detail}"
+                ).format(pid=pid, port=port, detail=stderr or exc),
             )
             return {"CANCELLED"}
         except Exception as exc:
             self.report(
                 {"ERROR"},
-                f"Failed to kill PID {pid} on port {port}: {exc}",
+                iface_(
+                    "Failed to kill PID {pid} on port {port}: {detail}"
+                ).format(pid=pid, port=port, detail=exc),
             )
             return {"CANCELLED"}
         self.report(
             {"INFO"},
-            f"Killed PID {pid} (was holding port {port}).",
+            iface_("Killed PID {pid} (was holding port {port}).").format(
+                pid=pid, port=port
+            ),
         )
         return {"FINISHED"}
 

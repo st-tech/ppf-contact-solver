@@ -9,6 +9,7 @@ import json
 from typing import Any, Union, get_type_hints
 
 import bpy  # pyright: ignore
+from bpy.app.translations import pgettext_iface as iface_, pgettext_tip as tip_  # pyright: ignore
 from bpy.props import BoolProperty, FloatProperty, IntProperty, StringProperty  # pyright: ignore
 
 # All dynamically generated operator classes
@@ -138,14 +139,14 @@ def _build_operator_class(name: str, handler_info: dict[str, Any]) -> type:
                 try:
                     value = json.loads(value)
                 except json.JSONDecodeError:
-                    self.report({"ERROR"}, f"Invalid JSON for parameter '{p_name}': {value}")
+                    self.report({"ERROR"}, iface_("Invalid JSON for parameter '{param}': {value}").format(param=p_name, value=value))
                     return {"CANCELLED"}
             args[p_name] = value
 
         result = _wrapper(args)
 
         if isinstance(result, dict) and result.get("status") == "error":
-            self.report({"ERROR"}, result.get("message", "Unknown error"))
+            self.report({"ERROR"}, result.get("message", iface_("Unknown error")))
             return {"CANCELLED"}
 
         return {"FINISHED"}

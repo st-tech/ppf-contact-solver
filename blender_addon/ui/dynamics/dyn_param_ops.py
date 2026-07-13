@@ -6,6 +6,7 @@
 import bpy  # pyright: ignore
 from bpy.props import EnumProperty  # pyright: ignore
 from bpy.types import Operator  # pyright: ignore
+from bpy.app.translations import pgettext_iface as iface_, pgettext_tip as tip_  # pyright: ignore
 
 from ...models.collection_utils import safe_update_index, sort_keyframes_by_frame
 from ...models.groups import get_addon_data, invalidate_overlays
@@ -35,7 +36,7 @@ class SCENE_OT_AddDynParam(Operator):
         # Reject duplicates
         for item in state.dyn_params:
             if item.param_type == self.param_type:
-                self.report({"WARNING"}, f"{self.param_type} already added")
+                self.report({"WARNING"}, iface_("{param_type} already added").format(param_type=self.param_type))
                 return {"CANCELLED"}
         # Create new dynamic param entry
         item = state.dyn_params.add()
@@ -86,7 +87,7 @@ class SCENE_OT_AddDynParamKeyframe(Operator):
         # Reject duplicate frames
         for kf in dyn_item.keyframes:
             if kf.frame == current_frame:
-                self.report({"WARNING"}, f"Keyframe at frame {current_frame} already exists")
+                self.report({"WARNING"}, iface_("Keyframe at frame {frame} already exists").format(frame=current_frame))
                 return {"CANCELLED"}
         # Add keyframe with default values from global params
         kf = dyn_item.keyframes.add()
@@ -123,7 +124,7 @@ class SCENE_OT_RemoveDynParamKeyframe(Operator):
         dyn_item = state.dyn_params[idx]
         kf_idx = dyn_item.keyframes_index
         if kf_idx <= 0:
-            self.report({"WARNING"}, "Cannot remove the initial keyframe")
+            self.report({"WARNING"}, iface_("Cannot remove the initial keyframe"))
             return {"CANCELLED"}
         if kf_idx >= len(dyn_item.keyframes):
             return {"CANCELLED"}

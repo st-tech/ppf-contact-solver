@@ -510,7 +510,8 @@ def run_many(scenario_names: list[str], *,
              timeout: float = 60.0,
              parallel: int = 1,
              repeat: int = 1,
-             report_path: str | None = None) -> dict:
+             report_path: str | None = None,
+             backend: str = "emulated") -> dict:
     """Run every named scenario in its own fresh worker, optionally
     repeated and / or parallelized. Returns the aggregated report dict
     (also written to ``report_path`` if given).
@@ -656,6 +657,7 @@ def run_many(scenario_names: list[str], *,
     summary = {
         "run_id": run_id,
         "run_root": run_root,
+        "backend": backend,
         "parallel": parallel,
         "repeat": repeat,
         "total": len(results),
@@ -709,10 +711,15 @@ def _cli(argv: list[str]) -> int:
                         help="Write the aggregated report to this path.")
     parser.add_argument("--knob", action="append", default=[],
                         help='Extra env knob, "KEY=value". Repeatable.')
+    parser.add_argument("--backend", choices=["emulated", "real"],
+                        default="emulated",
+                        help="Solver backend the run targets (default: "
+                             "emulated). 'real' selects only backend-agnostic "
+                             "scenarios plus real-only smokes.")
     args = parser.parse_args(argv)
 
     if args.list:
-        for name in scenarios.all_names():
+        for name in scenarios.all_names(args.backend):
             print(name)
         return 0
 
@@ -724,7 +731,7 @@ def _cli(argv: list[str]) -> int:
         k, v = kv.split("=", 1)
         knobs[k] = v
 
-    names = args.scenarios or scenarios.all_names()
+    names = args.scenarios or scenarios.all_names(args.backend)
     summary = run_many(
         names,
         python=args.python,
@@ -735,6 +742,7 @@ def _cli(argv: list[str]) -> int:
         parallel=args.parallel,
         repeat=args.repeat,
         report_path=args.report,
+        backend=args.backend,
     )
     print(json.dumps({
         "run_id": summary["run_id"],

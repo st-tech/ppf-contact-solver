@@ -41,6 +41,7 @@ import bpy  # pyright: ignore
 from bpy.props import StringProperty  # pyright: ignore
 from bpy.types import Operator  # pyright: ignore
 from bpy_extras.io_utils import ExportHelper  # pyright: ignore
+from bpy.app.translations import pgettext_iface as iface_, pgettext_tip as tip_
 
 from ...core.client import communicator as com
 from ...core.derived import is_server_busy_from_response as is_running
@@ -164,16 +165,16 @@ class _ExportSimCacheBase(ExportHelper):
         None. Mirrors the Bake operators' guards so a truncated or malformed
         cache is never written with a success toast."""
         if _busy(context):
-            return "Another solver activity is in progress"
+            return iface_("Another solver activity is in progress")
         if context.mode != "OBJECT":
-            return "Exit Edit/Sculpt mode before exporting"
+            return iface_("Exit Edit/Sculpt mode before exporting")
         if _has_unfetched_frames(context.scene):
-            return (
+            return iface_(
                 "Unfetched animation frames exist. "
                 "Fetch all animation frames first."
             )
         if not _exportable_meshes(context):
-            return "No simulated mesh sequence to export"
+            return iface_("No simulated mesh sequence to export")
         return None
 
     def invoke(self, context, event):
@@ -290,31 +291,34 @@ class _ExportSimCacheBase(ExportHelper):
             scene.frame_set(saved_current)
 
         if export_error is not None:
-            self.report({"ERROR"}, f"Export failed: {export_error}")
+            self.report({"ERROR"}, iface_("Export failed: {error}").format(error=export_error))
             return {"CANCELLED"}
         if "FINISHED" not in result:
-            self.report({"ERROR"}, "Export wrote nothing")
+            self.report({"ERROR"}, iface_("Export wrote nothing"))
             return {"CANCELLED"}
 
         n_exported = len(objs) - len(invisible)
-        msg = (
-            f"Exported {n_exported} mesh(es), frames 1-{max_n} to "
-            f"{bpy.path.abspath(self.filepath)}"
+        msg = iface_("Exported {count} mesh(es), frames 1-{max_n} to {path}").format(
+            count=n_exported, max_n=max_n, path=bpy.path.abspath(self.filepath)
         )
         if len(set(counts)) > 1:
-            msg += " (shorter caches hold their final pose past their length)"
+            msg += iface_(" (shorter caches hold their final pose past their length)")
         self.report({"INFO"}, msg)
         if invisible:
             self.report(
                 {"WARNING"},
-                f"{len(invisible)} object(s) hidden in the viewport were not "
-                f"exported: {', '.join(invisible)}",
+                iface_(
+                    "{count} object(s) hidden in the viewport were not "
+                    "exported: {names}"
+                ).format(count=len(invisible), names=', '.join(invisible)),
             )
         if excluded_curves:
             self.report(
                 {"WARNING"},
-                f"{len(excluded_curves)} rod/curve object(s) not exported "
-                f"(unsupported by this cache export): {', '.join(excluded_curves)}",
+                iface_(
+                    "{count} rod/curve object(s) not exported "
+                    "(unsupported by this cache export): {names}"
+                ).format(count=len(excluded_curves), names=', '.join(excluded_curves)),
             )
         return {"FINISHED"}
 

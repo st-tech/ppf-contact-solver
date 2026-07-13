@@ -161,7 +161,7 @@ def cmd_runtests(args):
     import scenarios
 
     if args.list:
-        for name in scenarios.all_names():
+        for name in scenarios.all_names(args.backend):
             print(name)
         return
 
@@ -173,7 +173,7 @@ def cmd_runtests(args):
         k, v = kv.split("=", 1)
         knobs[k] = v
 
-    names = args.scenarios or scenarios.all_names()
+    names = args.scenarios or scenarios.all_names(args.backend)
     kwargs = dict(
         knobs=knobs,
         keep_on_fail=not args.no_keep,
@@ -182,6 +182,7 @@ def cmd_runtests(args):
         parallel=args.parallel,
         repeat=args.repeat,
         report_path=args.report,
+        backend=args.backend,
     )
     if args.python is not None:
         kwargs["python"] = args.python
@@ -287,10 +288,18 @@ def main():
     )
     p_run.add_argument(
         "scenarios", nargs="*",
-        help="Scenario names (default: all). Use --list to enumerate.",
+        help="Scenario names (default: all supported by --backend). "
+             "Use --list to enumerate.",
     )
     p_run.add_argument("--list", action="store_true",
                       help="List registered scenarios and exit.")
+    p_run.add_argument(
+        "--backend", choices=["emulated", "real"], default="emulated",
+        help="Solver backend the run targets. 'emulated' (default) is the "
+             "free-runner CPU stub and selects the full suite; 'real' is the "
+             "AWS GPU build and selects only backend-agnostic scenarios plus "
+             "real-only smokes (see the BACKENDS scenario gate).",
+    )
     p_run.add_argument(
         "--python",
         default=None,

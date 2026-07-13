@@ -30,7 +30,13 @@ FILE_PYTHON=python-3.11.9-embed-amd64.zip
 URL_GET_PIP=https://bootstrap.pypa.io/get-pip.py
 FILE_GET_PIP=get-pip.py
 
-URL_PORTABLE_MSVC=https://gist.github.com/mmozeiko/7f3162ec2988e81e56d5c4e22cde9977/raw/portable-msvc.py
+# Pinned to a specific gist revision: the raw pointer is mutable, and the
+# 2026-07-11 revision (1fd0e2a4) shipped a NameError in the msi-unpacking
+# loop that silently produced no MSVC toolchain (no setup_x64.bat), which
+# only surfaced two build steps later. ba48b0a3 (2026-04-14) is the last
+# good revision, verified end-to-end (setup_x64.bat produced, cl.exe usable).
+# Verify any new SHA on a Windows host before bumping.
+URL_PORTABLE_MSVC=https://gist.github.com/mmozeiko/7f3162ec2988e81e56d5c4e22cde9977/raw/ba48b0a3d9ea05c6caa5e583eda60fa7510da4bc/portable-msvc.py
 FILE_PORTABLE_MSVC=portable-msvc.py
 
 URL_EIGEN=https://gitlab.com/libeigen/eigen/-/archive/3.4.0/eigen-3.4.0.zip

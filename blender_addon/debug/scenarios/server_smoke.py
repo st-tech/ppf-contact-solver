@@ -14,6 +14,11 @@ import os
 from . import _runner as r
 
 
+# Server-only plumbing (no Blender, no physics); runs on the real-GPU
+# jobs too, where it talks to the real ppf-cts-server.
+BACKENDS = ("emulated", "real")
+
+
 def _load_protocol_version() -> str:
     path = os.path.normpath(
         os.path.join(os.path.dirname(__file__), "..", "..", "core", "protocol.py")

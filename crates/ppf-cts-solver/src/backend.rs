@@ -242,9 +242,16 @@ impl Backend {
     /// `run` so the rest pose (frame 0) and post-advance frames share
     /// the same write path.
     ///
-    /// `time` is the sim time recorded for this frame; on the
-    /// post-advance path it equals `self.state.time` after the step
-    /// that produced the frame.
+    /// The frame is emitted at the EXACT frame time `t_frame` (= `frame /
+    /// fps`), not at the variable, TOI-limited post-step time the solver
+    /// happened to land on. The step that crossed this frame boundary ran
+    /// from `t_prev` to `t_curr`, bracketing it, so the written vertex
+    /// positions are linearly interpolated between `prev_vertex` and
+    /// `curr_vertex` to `t_frame`. This keeps each output frame on the
+    /// scene's framerate base instead of drifting by up to one substep,
+    /// which otherwise shows up as a sawtooth in relative frame time. For
+    /// the rest pose (frame 0) the caller passes `t_prev == t_curr`, which
+    /// collapses the interpolation to `curr_vertex`.
     fn write_frame_outputs(
         &mut self,
         program_args: &ProgramArgs,
@@ -253,7 +260,9 @@ impl Backend {
         param: &ParamSet,
         last_time: &mut Instant,
         frame: i32,
-        time: f64,
+        t_frame: f64,
+        t_prev: f64,
+        t_curr: f64,
     ) {
         // Name: Time Per Video Frame
         // Format: list[(frame, ms)]
@@ -294,7 +303,7 @@ impl Backend {
         // this call, so updating curr_frame here does not affect iteration.
         self.state.curr_frame = frame;
         writeln!(time_per_frame, "{} {}", frame, elapsed.as_millis()).unwrap();
-        writeln!(frame_to_time, "{} {}", frame, time).unwrap();
+        writeln!(frame_to_time, "{} {}", frame, t_frame).unwrap();
         let path = format!(
             "{}/{}.tmp",
             program_args.output,
@@ -324,16 +333,27 @@ impl Backend {
         } else {
             1.0
         };
+        // Linear-interpolation weight that lands the written positions on the
+        // exact frame time. `prev_vertex` is the pose at `t_prev` (step start),
+        // `curr_vertex` the pose at `t_curr` (step end, which overshoots the
+        // boundary); alpha places the output at `t_frame` in between. A zero
+        // span (frame 0 rest pose, or a degenerate step) writes `curr_vertex`
+        // verbatim. This is output-only: `self.state.*_vertex` stay as the true
+        // GPU readback so `save_state` checkpoints the real solver state.
+        let alpha = frame_interp_alpha(t_frame, t_prev, t_curr);
         // Write vertices in chunks to avoid large RAM allocation.
         const CHUNK_SIZE: usize = 4096;
         let mut chunk_buf: Vec<f32> = Vec::with_capacity(CHUNK_SIZE);
-        for v in self
+        for (p, c) in self
             .state
-            .curr_vertex
+            .prev_vertex
             .columns(0, surface_vert_count)
             .iter()
+            .zip(self.state.curr_vertex.columns(0, surface_vert_count).iter())
         {
-            chunk_buf.push(*v * inv_world);
+            let pf = *p;
+            let cf = *c;
+            chunk_buf.push((pf + alpha * (cf - pf)) * inv_world);
             if chunk_buf.len() >= CHUNK_SIZE {
                 let buff = unsafe {
                     std::slice::from_raw_parts(
@@ -516,7 +536,7 @@ impl Backend {
         if self.state.curr_frame < 0 && self.state.time == 0.0 {
             self.write_frame_outputs(
                 program_args, sim_args, &dataset, &param,
-                &mut last_time, 0, 0.0,
+                &mut last_time, 0, 0.0, 0.0, 0.0,
             );
             self.state.curr_frame = 0;
             crate::status_writer::progress(Phase::Running, 0, self.state.time);
@@ -760,7 +780,15 @@ impl Backend {
                 );
                 panic!("failed to advance");
             }
+            // Step start/end times bracket this advance. `t_prev` is the time
+            // before the step, `t_curr` the (possibly overshot) time after.
+            // Both are handed to write_frame_outputs so each crossed frame is
+            // interpolated onto its exact frame time rather than snapped to the
+            // overshot post-step time (which drifts as a sawtooth in relative
+            // frame time when the substep dt does not divide 1/fps).
+            let t_prev = self.state.time;
             self.state.time = result.time;
+            let t_curr = self.state.time;
 
             // Frame detection now happens AFTER advance: the post-step
             // state is what gets recorded, with pin and free verts
@@ -771,12 +799,13 @@ impl Backend {
                 // the timestep spans several frame periods (dt * fps >= 2).
                 // Emit every integer frame in the crossed span so the output
                 // stays contiguous (downstream readers index frames
-                // sequentially); each crossed index records the same post-step
-                // positions and time, matching the post-step-state semantics.
+                // sequentially); each crossed index is interpolated to its own
+                // exact frame time t_frame = f / fps within [t_prev, t_curr].
                 for f in self.state.curr_frame + 1..=new_frame {
+                    let t_frame = f as f64 / sim_args.fps;
                     self.write_frame_outputs(
                         program_args, sim_args, &dataset, &param,
-                        &mut last_time, f, self.state.time,
+                        &mut last_time, f, t_frame, t_prev, t_curr,
                     );
                 }
                 self.state.curr_frame = new_frame;
@@ -789,6 +818,24 @@ impl Backend {
             }
         }
         write_current_time_to_file(finished_path.to_str().unwrap()).unwrap();
+    }
+}
+
+/// Interpolation weight that places an output frame at its exact frame time.
+///
+/// `t_prev` is the sim time whose pose lives in `prev_vertex` (step start) and
+/// `t_curr` the time in `curr_vertex` (step end, which overshoots the frame
+/// boundary because the substep dt rarely divides `1/fps`). `t_frame` is the
+/// exact boundary `frame / fps`. Returns the lerp weight `alpha` in `[0, 1]`
+/// such that `prev + alpha * (curr - prev)` is the pose at `t_frame`. A
+/// zero/degenerate span (frame 0 rest pose where `t_prev == t_curr`) returns
+/// `1.0`, which writes `curr_vertex` verbatim.
+fn frame_interp_alpha(t_frame: f64, t_prev: f64, t_curr: f64) -> f32 {
+    let span = t_curr - t_prev;
+    if span > 1e-12 {
+        (((t_frame - t_prev) / span).clamp(0.0, 1.0)) as f32
+    } else {
+        1.0
     }
 }
 
@@ -1027,5 +1074,45 @@ mod rest_shape_tests {
         let r = interp_rest_shape(&keyframes, 2.0);
         assert!(r.inv_rest2x2.as_slice().is_empty());
         assert!((r.inv_rest3x3.as_slice()[0] - i3 * 3.0).amax() < 1e-6);
+    }
+}
+
+#[cfg(test)]
+mod frame_interp_tests {
+    use super::frame_interp_alpha;
+
+    // dt=0.01, fps=30 (3.333 substeps/frame): the step that crosses frame 1
+    // runs from t=0.03 to 0.04, and the exact boundary 1/30 = 0.03333 sits one
+    // third of the way in. Without interpolation the frame would be recorded at
+    // the overshot 0.04 (a 0.2-frame error); the weight pulls it back to 0.0333.
+    #[test]
+    fn alpha_places_frame_on_the_exact_boundary() {
+        let a = frame_interp_alpha(1.0 / 30.0, 0.03, 0.04);
+        assert!((a - 1.0 / 3.0).abs() < 1e-5, "alpha={a}");
+    }
+
+    // A full step that lands exactly on the boundary (alpha 1) writes curr; a
+    // boundary sitting exactly on the step start writes prev (alpha 0). These
+    // are the integer-substeps-per-frame endpoints, where the output is exact.
+    #[test]
+    fn alpha_endpoints_are_exact() {
+        assert_eq!(frame_interp_alpha(0.04, 0.03, 0.04), 1.0);
+        assert_eq!(frame_interp_alpha(0.03, 0.03, 0.04), 0.0);
+    }
+
+    // The rest pose (frame 0) is emitted with t_prev == t_curr; the degenerate
+    // span must collapse to curr (weight 1.0) instead of dividing by zero.
+    #[test]
+    fn alpha_zero_span_is_curr() {
+        assert_eq!(frame_interp_alpha(0.0, 0.0, 0.0), 1.0);
+    }
+
+    // A boundary outside the bracketing step (should never happen given the
+    // caller only emits crossed frames) clamps into range rather than
+    // extrapolating past prev/curr.
+    #[test]
+    fn alpha_clamps_out_of_range() {
+        assert_eq!(frame_interp_alpha(0.05, 0.03, 0.04), 1.0);
+        assert_eq!(frame_interp_alpha(0.02, 0.03, 0.04), 0.0);
     }
 }

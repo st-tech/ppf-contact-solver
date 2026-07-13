@@ -143,6 +143,92 @@ class DriverHelpers:
             f"server={self.facade.engine.state.server.name})"
         )
 
+    def connect_win_native(self, *, local_path, server_port, project_name,
+                           timeout=30.0):
+        # Windows-native counterpart to connect_local. The rig owns the
+        # ppf-cts-server (PPF_WIN_NATIVE_NO_SPAWN=1 in the worker env), so
+        # the addon attaches to the server already listening on
+        # server_port instead of spawning its own. win_native_path points
+        # at the repo root; resolve_win_native_root walks up to it if a
+        # subdirectory is given.
+        root = self.groups.get_addon_data(bpy.context.scene)
+        root.ssh_state.server_type = "WIN_NATIVE"
+        root.ssh_state.win_native_path = local_path
+        root.ssh_state.docker_port = server_port
+        self.com.set_project_name(project_name)
+        self.com.connect_win_native(local_path, server_port)
+
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            self.facade.engine.dispatch(self.events.PollTick())
+            self.facade.tick()
+            s = self.facade.engine.state
+            if s.phase.name == "ONLINE" and s.server.name == "RUNNING":
+                return
+            time.sleep(0.2)
+        raise RuntimeError(
+            f"win_native server never reached RUNNING within {timeout}s "
+            f"(phase={self.facade.engine.state.phase.name}, "
+            f"server={self.facade.engine.state.server.name})"
+        )
+
+    def connect(self, *, local_path, server_port, project_name, timeout=30.0):
+        # Platform-appropriate connect: WIN_NATIVE on Windows, LOCAL
+        # elsewhere. Both attach to the rig-owned server on server_port,
+        # so a single cross-platform scenario runs on the emulated
+        # macOS/Linux jobs (LOCAL) and the real-GPU Windows job
+        # (WIN_NATIVE) without branching in the scenario body.
+        import sys as _sys
+        if _sys.platform.startswith("win"):
+            return self.connect_win_native(
+                local_path=local_path, server_port=server_port,
+                project_name=project_name, timeout=timeout)
+        return self.connect_local(
+            local_path=local_path, server_port=server_port,
+            project_name=project_name, timeout=timeout)
+
+    def connect_ssh(self, *, host, port, username, key_path, remote_path,
+                    server_port, project_name, timeout=60.0):
+        # Connect to a REMOTE ppf-cts-server over SSH (server_type
+        # CUSTOM). Unlike LOCAL/WIN_NATIVE this does not attach to the
+        # rig-owned local server; it drives the addon's paramiko backend
+        # to a server on another machine (a GPU box). The remote server
+        # is expected to be already listening on server_port at the
+        # remote loopback -- pre-start it so this call reaches
+        # phase=ONLINE, server=RUNNING without the start_server dance.
+        # ``remote_path`` is the remote repo root holding
+        # target/release/ppf-cts-server. paramiko must be importable in
+        # Blender's Python.
+        root = self.groups.get_addon_data(bpy.context.scene)
+        root.ssh_state.server_type = "CUSTOM"
+        root.ssh_state.host = host
+        root.ssh_state.port = port
+        root.ssh_state.username = username
+        root.ssh_state.key_path = key_path
+        root.ssh_state.ssh_remote_path = remote_path
+        # docker_port is the shared "server port on the remote loopback"
+        # field for every backend (see models/defaults).
+        root.ssh_state.docker_port = server_port
+        self.com.set_project_name(project_name)
+        self.com.connect_ssh(host=host, port=port, username=username,
+                             key_path=key_path, path=remote_path,
+                             container=None, server_port=server_port)
+
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            self.facade.engine.dispatch(self.events.PollTick())
+            self.facade.tick()
+            s = self.facade.engine.state
+            if s.phase.name == "ONLINE" and s.server.name == "RUNNING":
+                return
+            time.sleep(0.3)
+        s = self.facade.engine.state
+        raise RuntimeError(
+            f"ssh server never reached ONLINE/RUNNING within {timeout}s "
+            f"(phase={s.phase.name}, server={s.server.name}, "
+            f"error={getattr(s, 'error', None)!r})"
+        )
+
     def encode_payload(self):
         return (self.encoder_mesh.encode_obj(bpy.context),
                 self.encoder_param.encode_param(bpy.context))

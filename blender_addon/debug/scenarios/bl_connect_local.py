@@ -17,6 +17,8 @@ from . import REPO_ROOT_POSIX
 
 
 NEEDS_BLENDER = True
+# Backend-agnostic connection handshake; runs on the real-GPU Linux job.
+BACKENDS = ("emulated", "real")
 # LOCAL backend is the Linux path; macOS uses SSH/Docker remotely and
 # Windows uses WIN_NATIVE (see bl_connect_win_native). Restricting this
 # scenario keeps the rig from hanging on platforms where the LOCAL

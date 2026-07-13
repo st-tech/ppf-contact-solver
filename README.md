@@ -83,14 +83,8 @@ involving 👚 shells, 🪵 solids, 🪢 rods, 🧱 rigid bodies and ⏳ sand. S
   - [📣 Sharing Your Work](#-sharing-your-work)
 - [💼 Commercial Use and Beyond](#-commercial-use-and-beyond)
 - [📬 Contributing](#-contributing)
-  - [🔀 Pull Requests and Indirect Contributions](#-pull-requests-and-indirect-contributions)
-  - [🏷️ How Issues Are Handled](#️-how-issues-are-handled)
-  - [⚖️ Licensing of Contributions](#️-licensing-of-contributions)
 - [💬 Participating Discussions](#-participating-discussions)
 - [📨 Reaching the Author](#-reaching-the-author)
-- [📈 Project Trends](#-project-trends)
-  - [🏆 Trendshift](#-trendshift)
-  - [⭐ Star History](#-star-history)
 - [🙏 Acknowledgements](#-acknowledgements)
 
 ### 📚 Advanced Contents
@@ -809,6 +803,14 @@ Below, we describe how to deploy our solver on major cloud services. These instr
 <td valign="top"><a href="https://www.youtube.com/watch?v=wPjqsq0N0ns"><em>Blender Now Has Mind-blowing Physics!</em></a> by <a href="https://www.youtube.com/@DECODEDVFX">DECODED</a>.</td>
 <td valign="top"><a href="https://www.youtube.com/watch?v=0huIwBTcKHU&t=108s"><em>Blender Physics Just Got Insane</em></a> by <a href="https://www.youtube.com/@CGDive">CGDive</a>.</td>
 </tr>
+<tr>
+<td width="50%" valign="top"><a href="https://www.youtube.com/watch?v=ivDtWRFewVM"><img src="https://img.youtube.com/vi/ivDtWRFewVM/maxresdefault.jpg" alt="Houdini Level Cloth Simulation in Blender?"></a></td>
+<td width="50%" valign="top"></td>
+</tr>
+<tr>
+<td valign="top"><a href="https://www.youtube.com/watch?v=ivDtWRFewVM"><em>Houdini Level Cloth Simulation in Blender?</em></a> by <a href="https://www.youtube.com/@InspirationTuts">InspirationTuts</a>.</td>
+<td valign="top"></td>
+</tr>
 </table>
 
 - [*Visual Components - ZOZO's Contact Solver Handshanking*](https://www.youtube.com/watch?v=k000SaPXK4Q) by [idkfa](https://www.youtube.com/@idkfa3).
@@ -852,26 +854,11 @@ If you build something on top of this solver, we would love to hear about it, bu
 
 ## 📬 Contributing
 
-### 🔀 Pull Requests and Indirect Contributions
+We cannot accept pull requests directly, since that involves resolving copyright and licensing matters with [ZOZO, Inc.](https://corp.zozo.com/en/) Instead, please open an issue for bug reports and proposals, or fork the repository and share a reference implementation for us to review. Substantial contributions will be credited here.
 
-We appreciate your interest in opening pull requests, but we are not ready to accept them directly, as this involves resolving copyright and licensing matters with [ZOZO, Inc.](https://corp.zozo.com/en/) We do, however, welcome indirect contributions, such as suggested fixes and feature requests that are compatible with the [Apache License, Version 2.0](./LICENSE). For instance, you can fork the repository and share a reference implementation; we will review it and consider how it can benefit the codebase. If your contribution is substantial, we will gladly credit your account name here. For now, please open issues for bug reports and proposals under the terms described below.
+Issues are triaged in batches by a single part-time maintainer (Ryoichi Ando) and labeled `queued` (seen), `in-progress` (started), or `worked` (answered at least once), so please be patient if a response takes a while.
 
-### 🏷️ How Issues Are Handled
-
-This project has a single maintainer (Ryoichi Ando), who cannot work on it full time, so issues are triaged with labels that show where yours stands:
-
-- `queued`: the author has seen the issue.
-- `in-progress`: work on it has started.
-- `worked`: it has been answered at least once.
-
-Issues are handled in batches, so please be patient if a response takes a while.
-
-### ⚖️ Licensing of Contributions
-
-By submitting an Issue, suggestion, or reference implementation (including code shared via Issues or Discussions) to this repository, you agree that your contribution is provided under the terms of the [Apache License, Version 2.0](./LICENSE). Any bug reports, feature proposals, or code you provide will be deemed to be licensed to us and the community on a royalty-free, unrestricted basis for the purpose of improving this software.
-
-See [CONTRIBUTING.md](./CONTRIBUTING.md) for details.
-Thank you!
+Anything you submit through Issues or Discussions, including code, is licensed to us and the community under the [Apache License, Version 2.0](./LICENSE) on a royalty-free, unrestricted basis. See [CONTRIBUTING.md](./CONTRIBUTING.md) for details. Thank you!
 
 ## 💬 Participating Discussions
 
@@ -888,25 +875,6 @@ If you would prefer to reach out privately, you can also email the author at ryo
 Please refrain from attaching code patches or other materials that would be considered contributions to this project. Anything you do send is treated under the terms of [CONTRIBUTING.md](./CONTRIBUTING.md): by sending it you agree it is licensed to us and the community under the [Apache License, Version 2.0](./LICENSE) on a royalty-free, unrestricted basis.
 
 If you used this project in a public piece of work, whether a paper, a production credit, or a personal project, the author would love to feature it here. A link to your article, project page, or website is all we need (rather than images or clips themselves, since hosting them here may run into licensing issues), and we will be happy to add it.
-
-## 📈 Project Trends
-
-### 🏆 Trendshift
-
-<a href="https://trendshift.io/repositories/34395" target="_blank"><img src="https://trendshift.io/api/badge/repositories/34395" alt="st-tech%2Fppf-contact-solver | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
-
-### ⭐ Star History
-
-<a href="https://www.star-history.com/?repos=st-tech%2Fppf-contact-solver&type=date&legend=top-left">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=st-tech/ppf-contact-solver&type=date&theme=dark&legend=top-left" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=st-tech/ppf-contact-solver&type=date&legend=top-left" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=st-tech/ppf-contact-solver&type=date&legend=top-left" />
- </picture>
-</a>
-
-- The first sharp rise came when [Two Minute Papers](https://www.youtube.com/watch?v=VOORiyip4_c) discovered the project and shared it with their audience.
-- The second spike was sparked by our initial release of the Blender 5+ add-on.
 
 ## 🙏 Acknowledgements
 
