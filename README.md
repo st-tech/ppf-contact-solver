@@ -818,6 +818,7 @@ Below, we describe how to deploy our solver on major cloud services. These instr
 - [*Testing ZoZo's contact solver in blender*](https://www.youtube.com/watch?v=DkIWXsxFJLs) by [Colin T](https://www.youtube.com/@ManiacalV).
 - [*Zozo's Contact Solver | Blender Test*](https://www.youtube.com/watch?v=EcTBUaeOu2U) by [YEETboys_666](https://www.youtube.com/@YEETboys_555).
 - [*Zozo's Multi-Cloth Simulation | Blender Test*](https://www.youtube.com/watch?v=VVphAZokcjs) by [YEETboys_666](https://www.youtube.com/@YEETboys_555).
+- [*Testing the new ZOZO Physics Contact Solver Addon for Blender*](https://www.youtube.com/shorts/50dQrbSYoWk) by [Max Grob](https://www.youtube.com/@maxgrob1412).
 
 ### 📰 Articles
 
