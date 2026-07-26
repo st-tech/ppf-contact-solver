@@ -62,6 +62,23 @@ fn main() {
     let path = PathBuf::from(out_dir).join("log_channels_baked.rs");
     fs::write(&path, out).expect("write log_channels_baked.rs");
 
+    // Bake the single-source wire protocol version. It is authored once in
+    // `blender_addon/protocol_version.toml`, read here at build time and read
+    // by the addon's `core/protocol.py` at run time, so the two separately
+    // shipped halves cannot drift. `lib.rs` picks this up via
+    // `env!("PPF_PROTOCOL_VERSION")`.
+    let proto_path = workspace.join("blender_addon").join("protocol_version.toml");
+    let proto_src = fs::read_to_string(&proto_path)
+        .unwrap_or_else(|e| panic!("read {}: {e}", proto_path.display()));
+    let protocol_version = parse_protocol_version(&proto_src).unwrap_or_else(|| {
+        panic!(
+            "no `protocol = \"...\"` key in {}",
+            proto_path.display()
+        )
+    });
+    println!("cargo:rustc-env=PPF_PROTOCOL_VERSION={protocol_version}");
+    println!("cargo:rerun-if-changed={}", proto_path.display());
+
     // Re-run the build script when any logging-bearing source changes.
     // The walker only looks at `.cu` and `.rs` files, so directory
     // mtime tracking is sufficient (cargo treats `rerun-if-changed`
@@ -72,6 +89,27 @@ fn main() {
         }
     }
     println!("cargo:rerun-if-changed=build.rs");
+}
+
+/// Extract the value of the single `protocol = "..."` key from
+/// `protocol_version.toml`. A deliberately tiny parser (the file has one key)
+/// so `build.rs` needs no toml build-dependency; comment lines are skipped.
+fn parse_protocol_version(src: &str) -> Option<String> {
+    for line in src.lines() {
+        let line = line.trim();
+        if line.starts_with('#') {
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix("protocol") {
+            if let Some(rest) = rest.trim_start().strip_prefix('=') {
+                let val = rest.trim().trim_matches('"');
+                if !val.is_empty() {
+                    return Some(val.to_string());
+                }
+            }
+        }
+    }
+    None
 }
 
 fn escape(s: &str) -> String {

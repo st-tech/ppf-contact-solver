@@ -109,8 +109,11 @@ _SCENE_PARAM_FIELDS = {
     "air_friction": "air_friction",
     "gravity": "gravity_3d",
     "frame_count": "frame_count",
+    "frame_start": "frame_start",
+    "use_scene_frame_start": "use_scene_frame_start",
     "frame_rate": "frame_rate",
-    "use_frame_rate_in_output": "use_frame_rate_in_output",
+    "use_scene_fps": "use_scene_fps",
+    "time_scale": "time_scale",
     "inactive_momentum_frames": "inactive_momentum_frames",
     "wind_direction": "wind_direction",
     "wind_strength": "wind_strength",
@@ -177,9 +180,20 @@ _MATERIAL_PARAM_FIELDS = {
 
 _VECTOR_PROPERTIES = {"gravity_3d", "wind_direction", "color"}
 
+# Retired TOML key -> its replacement. A profile written by an older build still
+# carries the old key; without this the value is dropped and the profile quietly
+# loads with a different simulation time base than it was saved with.
+_LEGACY_SCENE_PARAM_KEYS = {
+    "use_frame_rate_in_output": "use_scene_fps",
+}
+
 
 def apply_scene_profile(profile: dict, state) -> bool:
     """Apply a scene param profile dict to State properties."""
+    profile = dict(profile)
+    for old_key, new_key in _LEGACY_SCENE_PARAM_KEYS.items():
+        if old_key in profile and new_key not in profile:
+            profile[new_key] = profile.pop(old_key)
     for toml_key, prop_name in _SCENE_PARAM_FIELDS.items():
         if toml_key in profile:
             value = profile[toml_key]

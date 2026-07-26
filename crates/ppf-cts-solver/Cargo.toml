@@ -51,7 +51,6 @@ bytemuck = "1.13.1"
 git_info = "^0.1.2"
 toml = "0.8.19"
 chrono = "0.4"
-num-traits = "0.2.19"
 
 [build-dependencies]
 num_cpus = "1.16.0"

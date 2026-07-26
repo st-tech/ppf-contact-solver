@@ -150,6 +150,10 @@ impl<'de, T: serde::Deserialize<'de>> serde::Deserialize<'de> for CVecVec<T> {
             pub offset_allocated: u32,
         }
         let inner: Inner<T> = Inner::deserialize(deserializer)?;
+        // The wire carries `nnz_allocated`/`offset_allocated` (Serialize mirrors the
+        // repr(C) struct), but their transmitted values are deliberately discarded: they
+        // are consumed here only to keep the bincode layout in lockstep with Serialize.
+        let _ = (inner.nnz_allocated, inner.offset_allocated);
         // Drop reconstructs each Vec from its pointer plus the stored allocated count, so
         // those counts must match the kept pointers' real allocations. Derive them from the
         // decoded Vecs' own capacities (not the serialized `*_allocated` fields, which only

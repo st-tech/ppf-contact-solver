@@ -13,6 +13,11 @@ on:
         required: true
         type: boolean
         default: true
+      run_extension_release:
+        description: 'Build Release Add-on After Success (run the extension release when the build succeeds)'
+        required: true
+        type: boolean
+        default: false
 
 jobs:
   release-windows:
@@ -21,6 +26,9 @@ jobs:
     permissions:
       id-token: write
       contents: write
+      # Needed to dispatch release-extension.yml via `gh workflow run` when
+      # the "Build Release Add-on After Success" option is checked.
+      actions: write
 
     env:
       AWS_REGION: us-east-2
@@ -802,6 +810,28 @@ jobs:
           echo ""
           echo "Archive uploaded as artifact: ppf-contact-solver-${VERSION}-win64"
           ls -lh "ppf-contact-solver-${VERSION}-win64.zip"
+
+      # ============================================================
+      # Optional: chain the extension release workflow on a successful
+      # build. Gated on the "Build Release Add-on After Success" input,
+      # and on success() so a failed build / verification does not trigger
+      # it. The dry_run of the extension release mirrors this workflow's
+      # own dry_run. The GITHUB_TOKEN can dispatch a workflow_dispatch
+      # event (the one documented exception to the "GITHUB_TOKEN does not
+      # trigger new runs" recursion guard), so no PAT is required; it needs
+      # the actions: write permission granted on this job.
+      # ============================================================
+      - name: Build Release Add-on (trigger extension release on success)
+        if: success() && github.event.inputs.run_extension_release == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "Windows build succeeded and the extension release was requested."
+          echo "Dispatching release-extension.yml on ref '${{ github.ref_name }}'..."
+          gh workflow run release-extension.yml \
+            --ref "${{ github.ref_name }}" \
+            -f dry_run=${{ steps.version.outputs.DRY_RUN }}
+          echo "Extension release workflow dispatched."
 
       - name: Re-authenticate for cleanup
         if: always()

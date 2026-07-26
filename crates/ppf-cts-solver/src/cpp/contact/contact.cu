@@ -5,6 +5,7 @@
 
 #include "../barrier/barrier.hpp"
 #include "../buffer/buffer.hpp"
+#include "../csrmat/asm_profile.hpp"
 #include "../csrmat/csrmat.hpp"
 #include "../data.hpp"
 #include "../lbvh/bvh_storage.hpp"
@@ -24,6 +25,32 @@
 #include "distance.hpp"
 #include "intersect_core.hpp"
 #include <cassert>
+
+namespace accd {
+// Definition of the "contact starts overlapping" flag and the recorded pair
+// declared in accd.hpp. Only this translation unit includes accd.hpp, so they
+// are defined once here.
+__device__ unsigned g_ccd_overlap = 0u;
+__device__ unsigned g_ccd_overlap_v0 = 0xFFFFFFFFu;
+__device__ unsigned g_ccd_overlap_v1 = 0xFFFFFFFFu;
+__device__ unsigned g_ccd_overlap_kind = 0xFFFFFFFFu;
+__device__ float g_ccd_overlap_d2 = -1.0f;
+__device__ float g_ccd_overlap_offset = -1.0f;
+
+// Record one representative overlapping pair (the first CCD thread to detect an
+// overlap wins the atomicCAS; later threads leave it untouched, so the reported
+// pair is consistent). Kinds 0-2 are dynamic-dynamic (vertex-face, edge-edge,
+// point-point; both indices are dynamic vertices). Kinds 3-5 are against the
+// static collision mesh (vertex-face, face-vertex, edge-edge; the dynamic
+// vertex index comes first, the collision-mesh vertex index second).
+__device__ inline void record_overlap_pair(unsigned v0, unsigned v1,
+                                           unsigned kind) {
+    if (atomicCAS(&g_ccd_overlap_v0, 0xFFFFFFFFu, v0) == 0xFFFFFFFFu) {
+        g_ccd_overlap_v1 = v1;
+        g_ccd_overlap_kind = kind;
+    }
+}
+} // namespace accd
 
 namespace contact {
 
@@ -202,28 +229,34 @@ __device__ inline Vec3f grain_clamp_spin(const Vec3f &spin, const Vec3f &dx,
 
 // SAND implicit (Schur-condensed) rolling: accumulate one analytic contact's
 // Schur blocks for a grain.
-// fric_hess is the friction Hessian lambda*P (P = I - n n^T, trace 2*lambda); dx
-// the grain's center slip; n the OUTWARD contact normal; r the grain radius. With
-// the slip u = P(dx - r(dtheta x n)) = P dx + r P [n]x dtheta, the per-contact
-// friction energy 1/2 lambda |u|^2 gives:
-//   A_c = lambda r^2 (P [n]x)^T (P [n]x)   (angular, SPD; symmetric by construction)
-//   B_c = lambda r   P [n]x                 (translation<->rotation coupling)
-//   grot_c = B_c^T (P dx)                   (rotational gradient at dtheta = 0)
+// fric_hess is the friction stiffness Lambda (lambda*P, see
+// Friction::hessian); dx the
+// grain's center slip; n the OUTWARD contact normal; r the grain radius. With
+// the contact-point displacement dx_c = dx + r [n]x dtheta and the friction
+// model 1/2 dx_c^T Lambda dx_c (Lambda already carries the tangential
+// projection), S = [n]x gives:
+//   A_c = r^2 S^T Lambda S       (angular; symmetric PSD since Lambda is)
+//   B_c = r   Lambda S           (translation<->rotation coupling)
+//   grot_c = r S^T Lambda dx     (rotational gradient at dtheta = 0)
+// For Lambda = lambda*P these reduce exactly to the previous closed forms
+// lambda r^2 (P S)^T (P S), lambda r P S, and B_c^T (P dx).
 __device__ inline void accumulate_grain_schur(const Mat3x3f &fric_hess,
                                               const Vec3f &dx, const Vec3f &n,
                                               float r, Mat3x3f &A_loc,
                                               Mat3x3f &B_loc, Vec3f &grot_loc) {
-    float lambda =
-        (fric_hess(0, 0) + fric_hess(1, 1) + fric_hess(2, 2)) * 0.5f;
-    if (lambda <= 0.0f) {
+    float trace = fric_hess(0, 0) + fric_hess(1, 1) + fric_hess(2, 2);
+    if (trace <= 0.0f) {
         return; // no friction (mu = 0 or zero normal force): no coupling
     }
-    Mat3x3f P = Mat3x3f::Identity() - n * n.transpose();
-    Mat3x3f PS = P * RigidCore::rigid_skew(n);
-    Mat3x3f B_c = (lambda * r) * PS;
-    A_loc += (lambda * r * r) * (PS.transpose() * PS);
-    B_loc += B_c;
-    grot_loc += B_c.transpose() * (P * dx);
+    Mat3x3f S = RigidCore::rigid_skew(n);
+    Mat3x3f StL = S.transpose() * fric_hess;
+    A_loc += (r * r) * (StL * S);
+    B_loc += r * (fric_hess * S);
+    // Row-dot form instead of a Mat3x3f * Vec3f product: device Eigen
+    // matrix-vector expressions can evaluate incorrectly, dot products are
+    // safe.
+    grot_loc += r * Vec3f(StL.row(0).dot(dx), StL.row(1).dot(dx),
+                          StL.row(2).dot(dx));
 }
 
 template <unsigned N>
@@ -251,14 +284,26 @@ __device__ void embed_contact_force_hess(
     Vec3f ex = Vec3f::Zero();
     float area = 0.0f;
     float wsum = 0.0f;
+    // A proximity's weights sum to ZERO (1 for the query point against the
+    // barycentric weights of the primitive it is measured to), so ex is the
+    // SEPARATION between the two primitives, not a position: it is exactly
+    // invariant under translating the whole pair. Accumulate each term against
+    // an anchor so the intermediate stays at separation scale instead of at
+    // absolute-coordinate scale; otherwise the products float(w)*x are formed
+    // at the coordinate magnitude (up to the domain bound) and their rounding
+    // swamps the offset-scale separation for a contact far from the origin.
+    // Algebraically identical because sum_i w_i (x_i - a) = sum_i w_i x_i when
+    // sum_i w_i = 0.
+    const Vec3f anchor0 = x0[prox.index[0]];
+    const Vec3f anchor = x[prox.index[0]];
     for (int ii = 0; ii < N; ++ii) {
         unsigned index = prox.index[ii];
         mass[ii] = vert_prop[index].mass;
         float w = prox.value[ii];
         area += fabsf(w) * vert_prop[index].area;
         wsum += fabsf(w);
-        ex0 += float(w) * x0[index];
-        ex += float(w) * x[index];
+        ex0 += float(w) * (x0[index] - anchor0);
+        ex += float(w) * (x[index] - anchor);
     }
 
     Vec3f ex_fp = ex;
@@ -290,11 +335,14 @@ __device__ void embed_contact_force_hess(
         H += fh;
         // Export the friction gradient + stiffness by value (Friction has a
         // reference member and no default ctor, so it cannot be returned).
+        // lambda comes from the struct rather than being recovered from the
+        // Hessian trace, so it stays correct regardless of how the tangential
+        // stiffness is shaped.
         if (out_fric_grad) {
             *out_fric_grad = fg;
         }
         if (out_lambda) {
-            *out_lambda = (fh(0, 0) + fh(1, 1) + fh(2, 2)) * 0.5f;
+            *out_lambda = _friction.lambda;
         }
     }
 
@@ -1036,26 +1084,33 @@ __device__ unsigned embed_vertex_constraint_force_hessian(
     const Vec3f &dx = (x - data.vertex.curr[i]);
 
     if (prop.fix_index > 0) {
-        const FixPair &fix = data.constraint.fix[prop.fix_index - 1];
-        const Vec3f &y = fix.position;
-        Vec3f w = (x - y);
-        float d = w.norm();
-        float gap = fix.ghat - d;
-        if (fix.kinematic) {
-            gap = fmaxf(gap, param.constraint_tol * fix.ghat);
-        } else {
-            assert(gap >= 0.0f);
+        // A fix pin is an exact Dirichlet BC: main.cu eliminates its row, so a
+        // barrier here would be dead work the elimination pass overwrites.
+        //
+        // The exception is an anchor INSIDE a PDRD rigid body. That vertex owns
+        // no per-vertex DOF (the solve is reduced through the rigid Jacobian and
+        // the post-solve rigidify refits the body), so a per-vertex Dirichlet row
+        // is not representable for it, and main.cu's mask deliberately skips it.
+        // The barrier below is what holds such an anchor, and it is the only
+        // penalty pin left in the codebase.
+        if (prop.pdrd_body_index > 0 || param.disable_pin_dof_removal) {
+            const FixPair &fix = data.constraint.fix[prop.fix_index - 1];
+            const Vec3f &y = fix.position;
+            Vec3f w = (x - y);
+            float d = w.norm();
+            float gap = fix.ghat - d;
+            if (fix.kinematic) {
+                gap = fmaxf(gap, param.constraint_tol * fix.ghat);
+            } else {
+                assert(gap >= 0.0f);
+            }
+            float tmp = w.squaredNorm()
+                            ? (local_hess * w).dot(w) / w.squaredNorm()
+                            : 0.0f;
+            float stiff_k = tmp + mass / (gap * gap);
+            f += stiff_k * fix::gradient(x, y);
+            H += stiff_k * fix::hessian();
         }
-        float tmp =
-            w.squaredNorm() ? (local_hess * w).dot(w) / w.squaredNorm() : 0.0f;
-        float stiff_k = tmp + mass / (gap * gap);
-        // Per-pin stiffness scales the moving-pin pull (force + Hessian).
-        // Static pins keep stiffness == 1.0 effect (left unscaled).
-        if (fix.kinematic) {
-            stiff_k *= fix.stiffness;
-        }
-        f += stiff_k * fix::gradient(x, y);
-        H += stiff_k * fix::hessian();
     } else if (mass > 0.0f) {
         // Zero-mass vertices are static solids; skip walls and spheres
         // (both are static themselves; no contact between static solids).
@@ -1221,6 +1276,20 @@ __device__ unsigned embed_vertex_constraint_force_hessian(
     return num_contact;
 }
 
+// Capacity a detect-once cache should hold for `count` pairs: the power of two
+// at or above twice it, never below a floor of 4096 pairs (32 KB, so a type
+// with no pairs yet does not shrink to nothing and reallocate on its first
+// contact). Saturates rather than wrapping, since a count near 2^30 would
+// otherwise round to zero.
+static unsigned cc_cap_for(unsigned count) {
+    unsigned cap = 4096u;
+    const unsigned want = count > (1u << 30) ? (1u << 31) : 2u * count;
+    while (cap < want && cap < (1u << 31)) {
+        cap <<= 1;
+    }
+    return cap;
+}
+
 unsigned embed_contact_force_hessian(const DataSet &data,
                                      const Vec<Vec3f> &eval_x,
                                      Vec<float> force,
@@ -1268,11 +1337,43 @@ unsigned embed_contact_force_hessian(const DataSet &data,
     // skipping a second BVH traversal (the dominant assembly cost). A shared
     // overflow flag triggers a full-BVH fallback in stage 1, so correctness
     // never depends on the capacity.
-    const unsigned CC_CAP = 1u << 21; // 2M pairs per type (16 MB)
-    auto pf_buf = pool.get<Vec2u>(CC_CAP); // point-face
-    auto pe_buf = pool.get<Vec2u>(CC_CAP); // point-edge
-    auto pp_buf = pool.get<Vec2u>(CC_CAP); // point-point
-    auto ee_buf = pool.get<Vec2u>(CC_CAP); // edge-edge
+    // Capacity of the detect-once caches, in pairs, tracked SEPARATELY per
+    // type. Sized from what the scene has been producing rather than fixed,
+    // because a fixed cap is a cliff with no edge you can see: the moment one
+    // type does not fit, stage 1 abandons the replay for ALL FOUR types and
+    // walks the BVH a second time, and the only evidence is that the step got
+    // slower.
+    //
+    // Per type matters because the types are not remotely the same size. On a
+    // crushed fluffy stack, edge-edge runs 2.1M pairs while point-point runs
+    // 15k, three orders apart: one capacity shared across all four would size
+    // every buffer for the largest, so a scene whose edge-edge count spikes
+    // would pay that spike four times over in scratch it cannot use.
+    //
+    // Capacity is the power of two at or above twice the count, per type. Twice
+    // gives a step's worth of headroom, so the cliff is avoided rather than
+    // recovered from, since a contact set moves by a few percent per step. The
+    // rounding is what makes the size STABLE: a capacity computed directly from
+    // the count moves whenever the count does, and since the count creeps up
+    // every step of a squeeze, every buffer would be reallocated every step.
+    // Quantising means the size changes only when the count crosses a power of
+    // two, i.e. only when it doubles. Capacity therefore sits between 2x and 4x
+    // real demand, adjusts in both directions, and no type is inflated by
+    // another's peak. The pool grows to a high-water mark and reuses the
+    // largest buffer that fits (buffer.hpp), so a shrink costs nothing and a
+    // growth costs one reallocation per doubling.
+    //
+    // Correctness never depends on any of this: stage 0 counts every pair
+    // whether or not it fit, and the fallback below re-walks the BVH and finds
+    // the same pairs. The starting value is the capacity this cache had when it
+    // was a single fixed number, so no scene that fits today starts out worse.
+    static unsigned cc_capacity[4] = {1u << 21, 1u << 21, 1u << 21, 1u << 21};
+    const unsigned cap_pf = cc_capacity[0], cap_pe = cc_capacity[1];
+    const unsigned cap_pp = cc_capacity[2], cap_ee = cc_capacity[3];
+    auto pf_buf = pool.get<Vec2u>(cap_pf); // point-face
+    auto pe_buf = pool.get<Vec2u>(cap_pe); // point-edge
+    auto pp_buf = pool.get<Vec2u>(cap_pp); // point-point
+    auto ee_buf = pool.get<Vec2u>(cap_ee); // edge-edge
     auto cc_cnt = pool.get<unsigned>(4);   // per-type active counts
     auto cc_overflow = pool.get<unsigned>(1);
     cc_cnt.clear(0);
@@ -1282,18 +1383,25 @@ unsigned embed_contact_force_hessian(const DataSet &data,
     Vec<unsigned> cc_cnt_vec = cc_cnt.as_vec();
     Vec<unsigned> cc_overflow_vec = cc_overflow.as_vec();
     ContactPairCache pf_cache{pf_vec.data, cc_cnt_vec.data + 0,
-                              cc_overflow_vec.data, CC_CAP};
+                              cc_overflow_vec.data, cap_pf};
     ContactPairCache pe_cache{pe_vec.data, cc_cnt_vec.data + 1,
-                              cc_overflow_vec.data, CC_CAP};
+                              cc_overflow_vec.data, cap_pe};
     ContactPairCache pp_cache{pp_vec.data, cc_cnt_vec.data + 2,
-                              cc_overflow_vec.data, CC_CAP};
+                              cc_overflow_vec.data, cap_pp};
     ContactPairCache ee_cache{ee_vec.data, cc_cnt_vec.data + 3,
-                              cc_overflow_vec.data, CC_CAP};
+                              cc_overflow_vec.data, cap_ee};
+
+    const bool prof = asm_profile::enabled();
+    double ms_start_rebuild = 0.0, ms_traverse[2] = {0.0, 0.0};
+    double ms_finish_rebuild = 0.0, ms_finalize = 0.0;
+    auto t_phase = asm_profile::tick();
 
     for (int stage = 0; stage < 2; ++stage) {
         if (stage == 0) {
             dyn_out.start_rebuild_buffer();
+            ms_start_rebuild = asm_profile::ms_since(t_phase);
         }
+        t_phase = asm_profile::tick();
 
         // At the fill stage, replay the detect-once caches (no second BVH
         // traversal) unless stage 0 overflowed a cache, in which case fall back
@@ -1309,6 +1417,37 @@ unsigned embed_contact_force_hessian(const DataSet &data,
                                          4 * sizeof(unsigned),
                                          cudaMemcpyDeviceToHost));
             replay = (of == 0);
+
+            // record() increments its counter whether or not the pair fit, so
+            // these are the true per-type requirements, not saturated ones.
+            unsigned peak = 0;
+            for (unsigned k = 0; k < 4; ++k) {
+                if (cc_n[k] > peak) {
+                    peak = cc_n[k];
+                }
+                cc_capacity[k] = cc_cap_for(cc_n[k]);
+            }
+            if (of) {
+                // The fallback is correct, just slow, so this is a warning and
+                // not a failure. It has to be said out loud all the same: a
+                // step that quietly doubles its broad phase is otherwise only
+                // findable with a profiler.
+                SimpleLog::message(
+                    "* contact pair cache overflow: pf %u/%u pe %u/%u pp %u/%u "
+                    "ee %u/%u (found/capacity), so this step re-walks the BVH "
+                    "for every type instead of replaying the pairs stage 0 "
+                    "already found. The type that did not fit is resized, so "
+                    "the next step replays again.",
+                    cc_n[0], cap_pf, cc_n[1], cap_pe, cc_n[2], cap_pp,
+                    cc_n[3], cap_ee);
+            }
+            if (prof) {
+                SimpleLog::message(
+                    "[asm-prof] paircache: overflow=%u replay=%d  pf=%u/%u "
+                    "pe=%u/%u pp=%u/%u ee=%u/%u (found/capacity)",
+                    of, replay ? 1 : 0, cc_n[0], cap_pf, cc_n[1], cap_pe,
+                    cc_n[2], cap_pp, cc_n[3], cap_ee);
+            }
         }
 
         if (replay) {
@@ -1494,16 +1633,33 @@ unsigned embed_contact_force_hessian(const DataSet &data,
             } DISPATCH_END;
         }
 
+        ms_traverse[stage] = asm_profile::ms_since(t_phase);
+        t_phase = asm_profile::tick();
+
         if (stage == 0) {
             // After the dry pass, recompute the dynamic contact-matrix memory
             // layout so the fill pass can assemble into it.
-            dyn_out.finish_rebuild_buffer(max_nnz_row, dyn_consumed);
+            double ms_report = 0.0;
+            dyn_out.finish_rebuild_buffer(max_nnz_row, dyn_consumed, ms_report);
+            // charge the diagnostic back out, so this phase reports the rebuild
+            // and not the profiler watching it
+            ms_finish_rebuild = asm_profile::ms_since(t_phase) - ms_report;
         } else {
             // After the fill pass, compress the contact matrix (dedup entries).
             if (dyn_consumed) {
                 dyn_out.finalize();
             }
+            ms_finalize = asm_profile::ms_since(t_phase);
         }
+        t_phase = asm_profile::tick();
+    }
+
+    if (prof) {
+        SimpleLog::message(
+            "[asm-prof] contact: start_rebuild %.1f  dry_traverse %.1f  "
+            "finish_rebuild %.1f  fill_traverse %.1f  finalize %.1f (ms)",
+            ms_start_rebuild, ms_traverse[0], ms_finish_rebuild, ms_traverse[1],
+            ms_finalize);
     }
 
     DISPATCH_START(3 * surface_vert_count)
@@ -1716,7 +1872,13 @@ struct CollisionMeshPointFaceCCD_M2C {
                                                 offset, param);
         if (result < param.line_search_max_t) {
             toi = fminf(toi, result);
-            assert(toi > 0.0f);
+            if (result == 0.0f)
+                accd::record_overlap_pair(vertex_index, f[0], 3u);
+            // A zero result means ccd_helper recorded an overlapping start in
+            // g_ccd_overlap (a contact pair began the step inside the offset).
+            // The host reads that flag right after the line search and fails
+            // the step with a structured OverlappingStart crash, so propagate
+            // the zero toi rather than trapping the device here.
             return true;
         }
         return false;
@@ -1754,7 +1916,13 @@ struct CollisionMeshPointFaceCCD_C2M {
                                                     t11, t12, offset, param);
             if (result < param.line_search_max_t) {
                 toi = fminf(toi, result);
-                assert(toi > 0.0f);
+                if (result == 0.0f)
+                    accd::record_overlap_pair(f[0], vertex_index, 4u);
+                // A zero result means ccd_helper recorded an overlapping start
+                // in g_ccd_overlap (a contact pair began the step inside the
+                // offset). The host reads that flag right after the line search
+                // and fails the step with a structured OverlappingStart crash,
+                // so propagate the zero toi rather than trapping the device.
                 return true;
             }
         }
@@ -1794,7 +1962,13 @@ struct CollisionMeshEdgeEdgeCCD {
                                                q1, offset, param);
             if (result < param.line_search_max_t) {
                 toi = fminf(toi, result);
-                assert(toi > 0.0f);
+                if (result == 0.0f)
+                    accd::record_overlap_pair(e0[0], e1[0], 5u);
+                // A zero result means ccd_helper recorded an overlapping start
+                // in g_ccd_overlap (a contact pair began the step inside the
+                // offset). The host reads that flag right after the line search
+                // and fails the step with a structured OverlappingStart crash,
+                // so propagate the zero toi rather than trapping the device.
                 return true;
             }
         }
@@ -1863,7 +2037,13 @@ struct PointFaceCCD {
             }
             if (result < param.line_search_max_t) {
                 toi = fminf(toi, result);
-                assert(toi > 0.0f);
+                if (result == 0.0f)
+                    accd::record_overlap_pair(vertex_index, f[0], 0u);
+                // A zero result means ccd_helper recorded an overlapping start
+                // in g_ccd_overlap (a contact pair began the step inside the
+                // offset). The host reads that flag right after the line search
+                // and fails the step with a structured OverlappingStart crash,
+                // so propagate the zero toi rather than trapping the device.
                 return true;
             }
         }
@@ -1934,7 +2114,13 @@ struct EdgeEdgeCCD {
             }
             if (result < param.line_search_max_t) {
                 toi = fminf(toi, result);
-                assert(toi > 0.0f);
+                if (result == 0.0f)
+                    accd::record_overlap_pair(e0[0], e1[0], 1u);
+                // A zero result means ccd_helper recorded an overlapping start
+                // in g_ccd_overlap (a contact pair began the step inside the
+                // offset). The host reads that flag right after the line search
+                // and fails the step with a structured OverlappingStart crash,
+                // so propagate the zero toi rather than trapping the device.
                 return true;
             }
         }
@@ -1973,7 +2159,13 @@ struct PointPointCCD {
                                                  x0[index], x1[index], offset, param);
             if (result < param.line_search_max_t) {
                 toi = fminf(toi, result);
-                assert(toi > 0.0f);
+                if (result == 0.0f)
+                    accd::record_overlap_pair(vertex_index, index, 2u);
+                // A zero result means ccd_helper recorded an overlapping start
+                // in g_ccd_overlap (a contact pair began the step inside the
+                // offset). The host reads that flag right after the line search
+                // and fails the step with a structured OverlappingStart crash,
+                // so propagate the zero toi rather than trapping the device.
                 return true;
             }
         }
@@ -1985,14 +2177,70 @@ __device__ void vertex_constraint_line_search(const DataSet &data,
                                               const Vec<Vec3f> &y0,
                                               const Vec<Vec3f> &y1,
                                               Vec<float> toi_vert,
-                                              ParamSet param, unsigned i) {
+                                              ParamSet param,
+                                              unsigned *pin_infeasible,
+                                              unsigned i) {
     const Vec3f x1 =
         float(param.line_search_max_t) * (y1[i] - y0[i]) + y0[i];
     const Vec3f &x0 = y0[i];
     const VertexProp &prop = data.prop.vertex[i];
     if (prop.fix_index > 0) {
         const FixPair &fix = data.constraint.fix[prop.fix_index - 1];
-        if (fix.kinematic == false) {
+        // A fix-pinned vertex is excluded from the sphere / floor sweep below
+        // (that is the `else` branch), so nothing has ever stopped a pinned
+        // vertex from being driven straight THROUGH an analytic collider, and
+        // check_intersection does not test analytic primitives at all: it
+        // tunnels silently. Clamping the time of impact would not help, because
+        // a prescribed vertex has no freedom to yield with; the clamp would only
+        // stall the whole solve. The prescription itself is infeasible, so
+        // report it and let the step fail loudly.
+        //
+        // Test the SWEPT segment, not the endpoints: max_u (main.cu) excludes
+        // fix pins, so dt is sized blind to a pin's speed and a fast pin can
+        // cross a primitive entirely within one step. Fire only on a genuine
+        // outside->inside crossing, so a collider the user deliberately embedded
+        // a pin inside is not flagged.
+        for (unsigned j = 0; j < data.constraint.sphere.size; ++j) {
+            const Sphere &sphere = data.constraint.sphere[j];
+            if (sphere.kinematic) {
+                continue;
+            }
+            const Vec3f &center = sphere.center;
+            const Vec3f center0 = (sphere.bowl && (x0[1] > center[1]))
+                                       ? Vec3f(center[0], x0[1], center[2])
+                                       : center;
+            const Vec3f center1 = (sphere.bowl && (x1[1] > center[1]))
+                                       ? Vec3f(center[0], x1[1], center[2])
+                                       : center;
+            float r = sphere.radius;
+            float r0 = (x0 - center0).norm();
+            float r1 = (x1 - center1).norm();
+            // Signed feasible depth, matching the sphere block below: outside
+            // for a solid sphere, inside for a reversed one (a container).
+            float d0 = sphere.reverse ? (r - r0) : (r0 - r);
+            float d1 = sphere.reverse ? (r - r1) : (r1 - r);
+            if (d0 >= 0.0f && d1 < 0.0f) {
+                atomicMin(pin_infeasible, i);
+            }
+        }
+        for (unsigned j = 0; j < data.constraint.floor.size; ++j) {
+            const Floor &floor = data.constraint.floor[j];
+            if (floor.kinematic) {
+                continue;
+            }
+            float h0 = floor.up.dot(x0 - floor.ground);
+            float h1 = floor.up.dot(x1 - floor.ground);
+            if (h0 >= 0.0f && h1 < 0.0f) {
+                atomicMin(pin_infeasible, i);
+            }
+        }
+        // Confine a STATIC barrier-held pin to its ghat ball. Only a PDRD anchor
+        // is still held by the barrier (or every fix pin, under the A/B lever);
+        // an exact Dirichlet pin sits at its target by construction, so this
+        // clamp would have nothing to enforce and could only throttle the
+        // shared toi.
+        if ((prop.pdrd_body_index > 0 || param.disable_pin_dof_removal) &&
+            fix.kinematic == false) {
             const Vec3f &position = fix.position;
             float r0 = (x0 - position).norm();
             float r1 = (x1 - position).norm();
@@ -2080,7 +2328,8 @@ __device__ void vertex_constraint_line_search(const DataSet &data,
 }
 
 float line_search(const DataSet &data, const Vec<Vec3f> &x0,
-                  const Vec<Vec3f> &x1, const ParamSet &param) {
+                  const Vec<Vec3f> &x1, const ParamSet &param,
+                  unsigned *pin_infeasible) {
 
     const MeshInfo &mesh = data.mesh;
     const BVHSet &bvhset = bvh_storage::get_bvh();
@@ -2131,8 +2380,10 @@ float line_search(const DataSet &data, const Vec<Vec3f> &x0,
         data.constraint.mesh.param_arrays.face;
 
     DISPATCH_START(surface_vert_count)
-    [data, x0, x1, toi_vtf_vec, param] __device__(unsigned i) mutable {
-        vertex_constraint_line_search(data, x0, x1, toi_vtf_vec, param, i);
+    [data, x0, x1, toi_vtf_vec, param,
+     pin_infeasible] __device__(unsigned i) mutable {
+        vertex_constraint_line_search(data, x0, x1, toi_vtf_vec, param,
+                                      pin_infeasible, i);
     } DISPATCH_END;
 
     const bool *vert_active = get_vert_collision_active();
@@ -2382,9 +2633,24 @@ class EdgeEdgeIntersectTester {
         if (index < edge_index) {
             const Vec2u &e0 = edge[edge_index];
             const Vec2u &e1 = edge[index];
+            // Gated on "dynamic": at least one element must be free to move.
+            // An intersection between two fully PRESCRIBED elements cannot be
+            // resolved by the solver (neither side can yield), so reporting it
+            // only aborts the run over geometry the user authored and the solver
+            // was never going to fix. The canonical case is a fully-pinned
+            // kinematic body whose own animation self-intersects (an armpit, a
+            // crotch): `examples/fitting` pins an entire dancing body mesh, and
+            // ungating this aborts it at initialize. That is the same reason
+            // `same_pdrd_body` exists (a rigid body's self-intersection is fixed
+            // and physically meaningless).
+            //
+            // This does NOT re-open a silent penetration. A fix pin is now an
+            // exact Dirichlet BC, so contact can no longer shove a pinned patch
+            // into a collider; and a pin PRESCRIBED into one fails loudly
+            // (NewtonStall / PinInfeasible) with zero penetration.
+            // Two zero-mass edges (both static solids) still never intersect.
             bool either_dyn =
                 prop[edge_index].fixed == false || prop[index].fixed == false;
-            // Two zero-mass edges (both static solids) never intersect.
             bool either_nonzero =
                 prop[edge_index].mass > 0.0f || prop[index].mass > 0.0f;
             unsigned bid_a = vert_prop[e0[0]].pdrd_body_index;
@@ -2481,9 +2747,12 @@ class FaceEdgeIntersectTester {
           vertex(vertex), face(face), edge(edge), edge_index(edge_index),
           records(records), record_counter(record_counter) {}
     __device__ bool operator()(unsigned index) {
+        // Gated on "dynamic" (see EdgeEdgeIntersectTester): an intersection
+        // between two fully prescribed elements is unresolvable, and reporting it
+        // aborts a run over a kinematic body's own self-intersection.
+        // Two zero-mass elements (both static solids) never intersect.
         bool either_dyn = face_prop[index].fixed == false ||
                           edge_prop[edge_index].fixed == false;
-        // Two zero-mass elements (both static solids) never intersect.
         bool either_nonzero = face_prop[index].mass > 0.0f ||
                               edge_prop[edge_index].mass > 0.0f;
         // Skip intra-PDRD-body edge/face pairs: a rigid body never deforms, so
@@ -2582,12 +2851,18 @@ class PointPointIntersectTester {
           record_counter(record_counter) {}
     __device__ bool operator()(unsigned index) {
         if (index < vertex_index) {
+            // Gated on "dynamic" (see EdgeEdgeIntersectTester). Unlike the
+            // edge-edge / face-edge testers this one carried no zero-mass filter
+            // at all; it gets one here, since two zero-mass grains (static solids
+            // / pin-shell verts) never intersect.
             bool either_dyn = vert_prop[vertex_index].fix_index == 0 ||
                               vert_prop[index].fix_index == 0;
+            bool either_nonzero = vert_prop[vertex_index].mass > 0.0f ||
+                                  vert_prop[index].mass > 0.0f;
             unsigned bid_a = vert_prop[vertex_index].pdrd_body_index;
             unsigned bid_b = vert_prop[index].pdrd_body_index;
             bool same_pdrd_body = bid_a != 0 && bid_a == bid_b;
-            if (either_dyn && !same_pdrd_body) {
+            if (either_dyn && either_nonzero && !same_pdrd_body) {
                 const VertexParam &vp_a =
                     vertex_params[vert_prop[vertex_index].param_index];
                 const VertexParam &vp_b =
@@ -2742,6 +3017,45 @@ unsigned get_intersection_count() {
 
 const IntersectionRecord *get_intersection_records() {
     return storage::host_intersection_records;
+}
+
+void clear_ccd_overlap() {
+    unsigned zero = 0u;
+    unsigned unset = 0xFFFFFFFFu;
+    CUDA_HANDLE_ERROR(
+        cudaMemcpyToSymbol(accd::g_ccd_overlap, &zero, sizeof(unsigned)));
+    CUDA_HANDLE_ERROR(
+        cudaMemcpyToSymbol(accd::g_ccd_overlap_v0, &unset, sizeof(unsigned)));
+    CUDA_HANDLE_ERROR(
+        cudaMemcpyToSymbol(accd::g_ccd_overlap_v1, &unset, sizeof(unsigned)));
+    CUDA_HANDLE_ERROR(
+        cudaMemcpyToSymbol(accd::g_ccd_overlap_kind, &unset, sizeof(unsigned)));
+    float unset_f = -1.0f;
+    CUDA_HANDLE_ERROR(
+        cudaMemcpyToSymbol(accd::g_ccd_overlap_d2, &unset_f, sizeof(float)));
+    CUDA_HANDLE_ERROR(cudaMemcpyToSymbol(accd::g_ccd_overlap_offset, &unset_f,
+                                         sizeof(float)));
+}
+
+bool ccd_overlap_detected() {
+    unsigned flag = 0u;
+    CUDA_HANDLE_ERROR(
+        cudaMemcpyFromSymbol(&flag, accd::g_ccd_overlap, sizeof(unsigned)));
+    return flag != 0u;
+}
+
+void ccd_overlap_info(unsigned &v0, unsigned &v1, unsigned &kind, float &d2,
+                      float &offset) {
+    CUDA_HANDLE_ERROR(
+        cudaMemcpyFromSymbol(&v0, accd::g_ccd_overlap_v0, sizeof(unsigned)));
+    CUDA_HANDLE_ERROR(
+        cudaMemcpyFromSymbol(&v1, accd::g_ccd_overlap_v1, sizeof(unsigned)));
+    CUDA_HANDLE_ERROR(
+        cudaMemcpyFromSymbol(&kind, accd::g_ccd_overlap_kind, sizeof(unsigned)));
+    CUDA_HANDLE_ERROR(
+        cudaMemcpyFromSymbol(&d2, accd::g_ccd_overlap_d2, sizeof(float)));
+    CUDA_HANDLE_ERROR(
+        cudaMemcpyFromSymbol(&offset, accd::g_ccd_overlap_offset, sizeof(float)));
 }
 
 } // namespace contact

@@ -220,6 +220,10 @@ pub fn app_param() -> ParamHolder {
         "Playback speed. 1.0 is normal, >1.0 is faster, <1.0 is slower."));
     m.insert("min-newton-steps".into(), entry(0i64, "Lower Bound of Newton Steps",
         "Minimal Newton's steps to advance a step. Recommended 32 if static friction is present."));
+    m.insert("max-newton-steps".into(), entry(2048i64, "Upper Bound of Newton Steps",
+        "Maximum Newton's steps per substep. An over-constrained configuration (a pinned vertex \
+         driven into geometry that cannot yield) otherwise loops forever; this bound turns that \
+         into a reported failure. 0 removes the bound."));
     m.insert("target-toi".into(), entry(0.25f64, "Target Accumulated Time of Impact (TOI)",
         "Accumulated TOI threshold for Newton's loop termination."));
     m.insert("air-friction".into(), entry(0.2f64, "Air Tangental Friction",

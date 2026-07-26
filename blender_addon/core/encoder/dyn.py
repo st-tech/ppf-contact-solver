@@ -3,7 +3,7 @@
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
 # License: Apache v2.0
 
-from . import _normalize_and_scale, _swap_axes, _to_solver
+from . import _normalize_and_scale, _swap_axes, _to_solver, frame_to_time
 
 
 _DYN_PARAM_SOLVER_KEYS = {
@@ -16,16 +16,22 @@ _DYN_PARAM_SOLVER_KEYS = {
 
 
 # "Active Until frame N" means frame < N is active, frame >= N is inactive.
-# The cutoff sits half a frame before N's time: 1 frame to map the 1-based
-# "Active Until N" to a < N boundary, plus half a frame margin so all substeps
-# of the transition TO frame N see the collider as off. The displayed state at
-# frame N carries no residual collider effect, and f32 drift at the boundary
-# can't leak an extra frame through.
-_COLLIDER_CUTOFF_MARGIN_FRAMES = 1.5
+# The cutoff sits half a frame before N's time, so all substeps of the
+# transition TO frame N see the collider as off. The displayed state at frame N
+# carries no residual collider effect, and f32 drift at the boundary can't leak
+# an extra frame through.
+_COLLIDER_CUTOFF_MARGIN_FRAMES = 0.5
 
 
-def _active_duration_cutoff(item, fps):
-    """Encode a collider's active-duration cutoff in seconds.
+def _active_duration_cutoff(item, fps, start_frame):
+    """Encode a collider's active-until cutoff in seconds.
+
+    Despite the property's name, ``active_duration`` is an absolute Blender
+    frame ("Active Until (frame)"), not a duration, so it goes through the same
+    frame-to-time conversion as every keyframe: the starting frame is the
+    origin. Getting that wrong keeps the collider alive for the whole solve
+    whenever the solve does not start at frame 1, and puts the viewport overlay
+    (which compares against the raw frame) out of step with the run.
 
     Shared by wall and sphere encoding so the half-frame boundary margin
     (see _COLLIDER_CUTOFF_MARGIN_FRAMES) stays identical for both kinds.
@@ -33,11 +39,15 @@ def _active_duration_cutoff(item, fps):
     """
     if not item.enable_active_duration:
         return -1.0
-    return max(0.0, (float(item.active_duration) - _COLLIDER_CUTOFF_MARGIN_FRAMES) / fps)
+    cutoff_frame = float(item.active_duration) - _COLLIDER_CUTOFF_MARGIN_FRAMES
+    return max(0.0, frame_to_time(cutoff_frame, fps, start_frame))
 
 
-def _encode_dyn_params(state, fps):
+def _encode_dyn_params(state, fps, start_frame):
     """Encode dynamic scene parameters as dyn_param dict.
+
+    ``start_frame`` is the Blender frame that is simulated time zero (see
+    ``resolve_start_frame``); keyframe times are relative to it.
 
     Returns:
         dict mapping solver param key to list of (time_seconds, value_list) entries.
@@ -50,10 +60,10 @@ def _encode_dyn_params(state, fps):
 
         entries = []
         for i, kf in enumerate(dyn_item.keyframes):
-            time_seconds = float(kf.frame - 1) / fps
+            time_seconds = max(0.0, frame_to_time(kf.frame, fps, start_frame))
 
             if i == 0:
-                # Frame 1: read from global State params
+                # First keyframe (t=0): read from global State params
                 if dyn_item.param_type == "GRAVITY":
                     value = _swap_axes(state.gravity_3d)
                 elif dyn_item.param_type == "WIND":
@@ -86,8 +96,11 @@ def _encode_dyn_params(state, fps):
     return dyn_param
 
 
-def _encode_invisible_colliders(state, fps):
-    """Encode invisible colliders as a dict for the CBOR scene payload.
+def _encode_invisible_colliders(state, fps, start_frame):
+    """Encode invisible colliders as a dict for the CBOR PARAM payload (lands in param.pickle via _build_param_dict, stays seconds).
+
+    ``start_frame`` is the Blender frame that is simulated time zero (see
+    ``resolve_start_frame``); keyframe times are relative to it.
 
     Returns:
         dict with "walls" and "spheres" lists, or None if empty.
@@ -103,11 +116,11 @@ def _encode_invisible_colliders(state, fps):
                 "thickness": float(item.thickness),
                 # Half-frame boundary margin shared with sphere encoding; see
                 # _active_duration_cutoff / _COLLIDER_CUTOFF_MARGIN_FRAMES.
-                "active_duration": _active_duration_cutoff(item, fps),
+                "active_duration": _active_duration_cutoff(item, fps, start_frame),
                 "keyframes": [],
             }
             for i, kf in enumerate(item.keyframes):
-                time_seconds = float(kf.frame - 1) / fps
+                time_seconds = max(0.0, frame_to_time(kf.frame, fps, start_frame))
                 if i == 0:
                     pos = _to_solver(item.position)
                 elif kf.use_hold and wall["keyframes"]:
@@ -127,11 +140,11 @@ def _encode_invisible_colliders(state, fps):
                 "thickness": float(item.thickness),
                 # Same half-frame boundary margin as walls; see
                 # _active_duration_cutoff / _COLLIDER_CUTOFF_MARGIN_FRAMES.
-                "active_duration": _active_duration_cutoff(item, fps),
+                "active_duration": _active_duration_cutoff(item, fps, start_frame),
                 "keyframes": [],
             }
             for i, kf in enumerate(item.keyframes):
-                time_seconds = float(kf.frame - 1) / fps
+                time_seconds = max(0.0, frame_to_time(kf.frame, fps, start_frame))
                 if i == 0:
                     pos = _to_solver(item.position)
                     r = float(item.radius)

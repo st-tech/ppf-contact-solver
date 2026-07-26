@@ -49,7 +49,7 @@ pub fn read_vertex_bin<'py>(
     // Disk I/O + parse don't touch Python state. Release the GIL so a
     // notebook polling for live frames doesn't block the rest of the
     // wheel from progress.
-    let raw = match py.allow_threads(|| {
+    let raw = match py.detach(|| {
         core::read_vertex_bin(std::path::Path::new(output_dir), frame)
     }) {
         Some(v) => v,

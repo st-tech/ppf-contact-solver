@@ -211,9 +211,6 @@ struct Pin {
     /// pull different vertices with different (graceful, diffused)
     /// strengths. Absent for hard pins and scalar pull pins.
     pull_weights: Option<Vec<f32>>,
-    /// Per-pin scale on the moving (kinematic) constraint force.
-    /// 1.0 leaves it unchanged; applied only when the pin is kinematic.
-    stiffness: f32,
     pin_group_id: String,
 }
 
@@ -636,10 +633,6 @@ impl Scene {
             let pull_w = read_f32(count, "pull");
             // Defaults to 1.0 (no scaling) when absent so older saved
             // states without the key keep their original pin force.
-            let stiffness = count
-                .get("stiffness")
-                .and_then(|v| v.as_float())
-                .unwrap_or(1.0) as f32;
             let pin_group_id = count
                 .get("pin_group_id")
                 .and_then(|v| v.as_str())
@@ -838,7 +831,6 @@ impl Scene {
                 unpin_time,
                 pull_w,
                 pull_weights,
-                stiffness,
                 pin_group_id,
             });
         }
@@ -1795,7 +1787,13 @@ impl Scene {
         self.vel.clone()
     }
 
-    pub fn make_constraint(&self, time: f64) -> Constraint {
+    /// Build the constraint set for a step that runs from `prev_time` to
+    /// `time`. Pins are evaluated at `time` (the step's target end), and a
+    /// kinematic fix pin also records the displacement it covers from
+    /// `prev_time` in `FixPair::step_delta`, so the solver can stop it partway
+    /// along that displacement when the CCD line search truncates the step.
+    /// Pass `prev_time == time` for a standalone snapshot with no step.
+    pub fn make_constraint(&self, time: f64, prev_time: f64) -> Constraint {
         let collision_mesh = if self.static_vert.ncols() > 0 {
             let mut vert = self.static_vert.clone();
             apply_displacement(&mut vert, &self.displacement, &self.static_vert_dmap);
@@ -1898,156 +1896,6 @@ impl Scene {
         };
         let mut fix = Vec::new();
         let mut pull = Vec::new();
-        // Bridge into the centralized primitive-typed helpers in
-        // `ppf_cts_core::datamodel::pin_apply`. Both this solver crate
-        // and the migration's frontend preview kernels call into the
-        // same module so preview and simulation produce identical
-        // positions for the same input.
-        use ppf_cts_core::datamodel::pin_apply;
-        let to_arr = |v: Vector3<f32>| -> [f64; 3] {
-            [f64::from(v[0]), f64::from(v[1]), f64::from(v[2])]
-        };
-        let from_arr = |a: [f64; 3]| -> Vector3<f32> {
-            Vector3::new(
-                a[0] as f32,
-                a[1] as f32,
-                a[2] as f32,
-            )
-        };
-        let apply_op = |op: &PinOperation,
-                        position: Vector3<f32>,
-                        vert_idx: usize,
-                        time: f64|
-         -> (Vector3<f32>, bool) {
-            match op {
-                PinOperation::MoveBy {
-                    delta,
-                    t_start,
-                    t_end,
-                    transition,
-                    bezier_handles,
-                } => {
-                    if time < *t_start {
-                        return (position, false);
-                    }
-                    let progress = if time >= *t_end {
-                        1.0
-                    } else {
-                        pin_apply::progress_at(
-                            time,
-                            *t_start,
-                            *t_end,
-                            transition,
-                            *bezier_handles,
-                        )
-                    };
-                    let d_col = delta.column(vert_idx);
-                    let d = [f64::from(d_col[0]), f64::from(d_col[1]), f64::from(d_col[2])];
-                    let r = pin_apply::move_by_step(to_arr(position), d, progress);
-                    (from_arr(r), true)
-                }
-                PinOperation::MoveTo {
-                    target,
-                    t_start,
-                    t_end,
-                    transition,
-                    bezier_handles,
-                } => {
-                    if time < *t_start {
-                        return (position, false);
-                    }
-                    if time >= *t_end {
-                        return (target.column(vert_idx).into(), true);
-                    }
-                    let progress = pin_apply::progress_at(
-                        time,
-                        *t_start,
-                        *t_end,
-                        transition,
-                        *bezier_handles,
-                    );
-                    let t_col = target.column(vert_idx);
-                    let t = [f64::from(t_col[0]), f64::from(t_col[1]), f64::from(t_col[2])];
-                    let r = pin_apply::move_to_step(to_arr(position), t, progress);
-                    (from_arr(r), true)
-                }
-                PinOperation::Spin {
-                    center,
-                    axis,
-                    angular_velocity,
-                    t_start,
-                    t_end,
-                } => {
-                    let angle =
-                        pin_apply::spin_angle_rad(*angular_velocity as f64, *t_start, *t_end, time);
-                    if angle <= 0.0 {
-                        return (position, false);
-                    }
-                    let c = to_arr(*center);
-                    let ax = [axis[0] as f64, axis[1] as f64, axis[2] as f64];
-                    let r = pin_apply::spin_step(to_arr(position), c, ax, angle);
-                    (from_arr(r), true)
-                }
-                PinOperation::Scale {
-                    center,
-                    factor,
-                    t_start,
-                    t_end,
-                    transition,
-                    bezier_handles,
-                } => {
-                    if time < *t_start {
-                        return (position, false);
-                    }
-                    let cur = pin_apply::scale_factor_at(
-                        time,
-                        *t_start,
-                        *t_end,
-                        *factor as f64,
-                        transition,
-                        *bezier_handles,
-                    );
-                    let r = pin_apply::scale_step(to_arr(position), to_arr(*center), cur);
-                    (from_arr(r), true)
-                }
-                PinOperation::Torque { .. } => {
-                    // Torque is a force, not kinematic. Handled separately.
-                    (position, false)
-                }
-                PinOperation::TransformKeyframes {
-                    local,
-                    times,
-                    translations,
-                    quaternions,
-                    scales,
-                    interps,
-                    handles,
-                    rest_t,
-                } => {
-                    if times.is_empty() {
-                        return (position, false);
-                    }
-                    // Evaluate the sparse TRS keyframe timeline through the
-                    // shared core helper so this branch stays bit-identical
-                    // with the frontend preview path (slerp on Q, optional
-                    // Bezier easing, R*S*local + T - rest_t).
-                    let lv = local.column(vert_idx);
-                    let l = [f64::from(lv[0]), f64::from(lv[1]), f64::from(lv[2])];
-                    let out = ppf_cts_core::datamodel::quat::transform_keyframes_step(
-                        l,
-                        times,
-                        translations,
-                        quaternions,
-                        scales,
-                        interps,
-                        handles,
-                        *rest_t,
-                        time,
-                    );
-                    (from_arr(out), true)
-                }
-            }
-        };
 
         for pin in self.pin.iter() {
             // Check if this pin should be active at current time
@@ -2073,10 +1921,29 @@ impl Scene {
 
                 for op in pin.operations.iter() {
                     let (new_pos, did_move) =
-                        apply_op(op, position, i, time);
+                        apply_pin_op(op, position, i, time);
                     position = new_pos;
                     kinematic = kinematic || did_move;
                 }
+
+                // Run the same op chain at the step's start time to get the
+                // displacement this pin is scheduled to cover. `advance` walks a
+                // kinematic fix pin back along it when the line search truncates
+                // the step, so a driven collider advances in lockstep with the
+                // clock instead of jumping to the full step's pose and snapping
+                // back on the next step.
+                let step_delta = if kinematic {
+                    let mut start: Vector3<f32> = self.vert.column(ind).into();
+                    for op in pin.operations.iter() {
+                        let (new_pos, _) = apply_pin_op(op, start, i, prev_time);
+                        start = new_pos;
+                    }
+                    position - start
+                } else {
+                    // A static pin holds still, so it has nowhere to be walked
+                    // back to.
+                    Vec3f::zeros()
+                };
 
                 // Per-vertex pull weight overrides the scalar when present.
                 // The decoder drops weight-~0 verts from `index`, so every
@@ -2098,10 +1965,10 @@ impl Scene {
                 } else {
                     fix.push(FixPair {
                         position: position + dx,
+                        step_delta,
                         ghat: self.args.constraint_ghat,
                         index: ind as u32,
                         kinematic,
-                        stiffness: pin.stiffness,
                     });
                 }
             }
@@ -2296,15 +2163,20 @@ impl Scene {
         }
     }
 
-    /// Vertices that are strict kinematic `fix` constraints at time `t0` and
-    /// therefore excluded from velocity overrides. Mirrors the
-    /// fix/pull/torque_only classification in the pin-building loop: a pin
-    /// becomes a strict `fix` constraint iff it's not torque-only and
-    /// `pull_w == 0`. Weak pins (pull) and torque-only pins stay dynamic.
+    /// Vertices that are strict `fix` constraints at time `t0` (now exact
+    /// Dirichlet BCs, so their DOF are eliminated) and therefore excluded from
+    /// velocity overrides.
+    ///
+    /// This MUST agree, vertex for vertex, with the fix/pull split in the
+    /// pin-building loop, so it applies the same per-vertex rule: a per-vertex
+    /// `pull_weights` entry overrides the scalar `pull_w`, and `w == 0` is what
+    /// makes a vertex a fix. Classifying by the pin-level `pull_w` alone would
+    /// diverge for a holder that carries per-vertex weights, and a vertex
+    /// misclassified here gets a velocity override it must not have (its
+    /// position is prescribed) or is denied one it should get.
     fn hard_pinned_at(&self, t0: f64) -> std::collections::HashSet<usize> {
         self.pin
             .iter()
-            .filter(|pin| pin.pull_w == 0.0)
             .filter(|pin| pin.unpin_time.is_none_or(|ut| t0 < ut))
             .filter(|pin| {
                 let torque_only = !pin.operations.is_empty()
@@ -2314,7 +2186,16 @@ impl Scene {
                         .all(|op| matches!(op, PinOperation::Torque { .. }));
                 !torque_only
             })
-            .flat_map(|pin| pin.index.iter().copied())
+            .flat_map(|pin| {
+                pin.index.iter().enumerate().filter_map(move |(i, &ind)| {
+                    let w = pin
+                        .pull_weights
+                        .as_ref()
+                        .map(|v| v[i])
+                        .unwrap_or(pin.pull_w);
+                    (w == 0.0).then_some(ind)
+                })
+            })
             .collect()
     }
 
@@ -2602,5 +2483,198 @@ impl Scene {
             .map(|f| self.displaced_rest(f, &vert, &self.rest_vert_mask))
             .collect();
         Some((sched.times.clone(), frames))
+    }
+
+    /// Where the prescribed path puts each fix-pinned vertex at `time`, as
+    /// (vertex index, position). A fix pin is an exact Dirichlet BC, so its
+    /// vertex sits on a pose that is a known function of time; an output frame
+    /// can place it at the exact frame time instead of interpolating between
+    /// the two solver steps that happen to bracket it
+    /// (`Backend::write_frame_outputs`).
+    ///
+    /// Pull pins are deliberately absent: they are soft springs, so their
+    /// vertex is not expected to sit at the target and its offset from it is
+    /// neither small nor smooth. This mirrors, vertex for vertex, the
+    /// fix/pull split in `make_constraint` (a per-vertex `pull_weights` entry
+    /// overrides the scalar `pull_w`, and `w == 0` is what makes a fix). It is
+    /// only the pin evaluation, without the collision-mesh rebuild
+    /// `make_constraint` also does, because it runs per output frame rather
+    /// than per step.
+    pub fn fix_pin_positions(&self, time: f64) -> Vec<(u32, Vec3f)> {
+        let mut out = Vec::new();
+        for pin in self.pin.iter() {
+            if let Some(unpin_t) = pin.unpin_time {
+                if time >= unpin_t {
+                    continue;
+                }
+            }
+            let torque_only = !pin.operations.is_empty()
+                && pin.operations.iter().all(|op| matches!(op, PinOperation::Torque { .. }));
+            if torque_only {
+                continue;
+            }
+            for (i, &ind) in pin.index.iter().enumerate() {
+                let w = pin
+                    .pull_weights
+                    .as_ref()
+                    .map(|v| v[i])
+                    .unwrap_or(pin.pull_w);
+                if w > 0.0 {
+                    continue;
+                }
+                let mut position: Vector3<f32> = self.vert.column(ind).into();
+                for op in pin.operations.iter() {
+                    let (new_pos, _) = apply_pin_op(op, position, i, time);
+                    position = new_pos;
+                }
+                let dx = self.displacement.column(self.vert_dmap[ind] as usize);
+                out.push((ind as u32, position + dx));
+            }
+        }
+        out
+    }
+}
+
+// Bridge into the centralized primitive-typed helpers in
+// `ppf_cts_core::datamodel::pin_apply`. Both this solver crate and the
+// migration's frontend preview kernels call into the same module so preview
+// and simulation produce identical positions for the same input.
+use ppf_cts_core::datamodel::pin_apply;
+
+fn to_arr(v: Vector3<f32>) -> [f64; 3] {
+    [f64::from(v[0]), f64::from(v[1]), f64::from(v[2])]
+}
+
+fn from_arr(a: [f64; 3]) -> Vector3<f32> {
+    Vector3::new(a[0] as f32, a[1] as f32, a[2] as f32)
+}
+
+/// Advance `position` through one pin operation as of `time`. Returns the new
+/// position and whether the op actually drives the vertex (i.e. the pin is
+/// kinematic at this time). Shared by `make_constraint`, which builds the
+/// step's constraint set, and by `fix_pin_positions`, which asks the same
+/// question at an arbitrary output-frame time.
+fn apply_pin_op(
+    op: &PinOperation,
+    position: Vector3<f32>,
+    vert_idx: usize,
+    time: f64,
+) -> (Vector3<f32>, bool) {
+    match op {
+        PinOperation::MoveBy {
+            delta,
+            t_start,
+            t_end,
+            transition,
+            bezier_handles,
+        } => {
+            if time < *t_start {
+                return (position, false);
+            }
+            let progress = if time >= *t_end {
+                1.0
+            } else {
+                pin_apply::progress_at(time, *t_start, *t_end, transition, *bezier_handles)
+            };
+            let d_col = delta.column(vert_idx);
+            let d = [f64::from(d_col[0]), f64::from(d_col[1]), f64::from(d_col[2])];
+            let r = pin_apply::move_by_step(to_arr(position), d, progress);
+            (from_arr(r), true)
+        }
+        PinOperation::MoveTo {
+            target,
+            t_start,
+            t_end,
+            transition,
+            bezier_handles,
+        } => {
+            if time < *t_start {
+                return (position, false);
+            }
+            if time >= *t_end {
+                return (target.column(vert_idx).into(), true);
+            }
+            let progress =
+                pin_apply::progress_at(time, *t_start, *t_end, transition, *bezier_handles);
+            let t_col = target.column(vert_idx);
+            let t = [f64::from(t_col[0]), f64::from(t_col[1]), f64::from(t_col[2])];
+            let r = pin_apply::move_to_step(to_arr(position), t, progress);
+            (from_arr(r), true)
+        }
+        PinOperation::Spin {
+            center,
+            axis,
+            angular_velocity,
+            t_start,
+            t_end,
+        } => {
+            let angle =
+                pin_apply::spin_angle_rad(*angular_velocity as f64, *t_start, *t_end, time);
+            if angle <= 0.0 {
+                return (position, false);
+            }
+            let c = to_arr(*center);
+            let ax = [axis[0] as f64, axis[1] as f64, axis[2] as f64];
+            let r = pin_apply::spin_step(to_arr(position), c, ax, angle);
+            (from_arr(r), true)
+        }
+        PinOperation::Scale {
+            center,
+            factor,
+            t_start,
+            t_end,
+            transition,
+            bezier_handles,
+        } => {
+            if time < *t_start {
+                return (position, false);
+            }
+            let cur = pin_apply::scale_factor_at(
+                time,
+                *t_start,
+                *t_end,
+                *factor as f64,
+                transition,
+                *bezier_handles,
+            );
+            let r = pin_apply::scale_step(to_arr(position), to_arr(*center), cur);
+            (from_arr(r), true)
+        }
+        PinOperation::Torque { .. } => {
+            // Torque is a force, not kinematic. Handled separately.
+            (position, false)
+        }
+        PinOperation::TransformKeyframes {
+            local,
+            times,
+            translations,
+            quaternions,
+            scales,
+            interps,
+            handles,
+            rest_t,
+        } => {
+            if times.is_empty() {
+                return (position, false);
+            }
+            // Evaluate the sparse TRS keyframe timeline through the shared core
+            // helper so this branch stays bit-identical with the frontend
+            // preview path (slerp on Q, optional Bezier easing,
+            // R*S*local + T - rest_t).
+            let lv = local.column(vert_idx);
+            let l = [f64::from(lv[0]), f64::from(lv[1]), f64::from(lv[2])];
+            let out = ppf_cts_core::datamodel::quat::transform_keyframes_step(
+                l,
+                times,
+                translations,
+                quaternions,
+                scales,
+                interps,
+                handles,
+                *rest_t,
+                time,
+            );
+            (from_arr(out), true)
+        }
     }
 }

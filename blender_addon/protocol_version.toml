@@ -1,0 +1,87 @@
+# Single source of truth for the addon <-> server WIRE PROTOCOL version.
+#
+# Read by BOTH separately shipped halves so the number can never drift:
+#   - the addon (Python): blender_addon/core/protocol.py loads it at runtime
+#   - the server (Rust):  crates/ppf-cts-server/build.rs bakes it into
+#     ppf_cts_server::PROTOCOL_VERSION at build time (env!)
+# transitions.py does a strict-equality check of the server's advertised
+# version against the addon's, so a stale server carrying an incompatible (or
+# merely different-behavior) frontend is rejected and forced to restart.
+#
+# The addon RELEASE version is a DIFFERENT thing and lives in
+# blender_manifest.toml, which Blender reads directly (core/manifest.py reads
+# it back at runtime). It is not duplicated, so it stays there.
+#
+# BUMP `protocol` whenever the data / param payload schema OR the
+# addon-encoder / frontend-decoder contract changes, OR when a server-side
+# behavior fix must not be served by a stale binary.
+#
+# Changelog:
+#   0.13: timing-free data payload (CBOR SCHEMA_VERSION 1 -> 2). Every DATA
+#         payload animation channel now ships frame-indexed timing instead of
+#         seconds: transform_animation carries frame_offset (was time),
+#         static_ops carry frame_offset_start / frame_offset_end (was
+#         t_start / t_end) plus angular_velocity_anim (raw authored degrees
+#         per animation second; was the pre-scaled angular_velocity), and
+#         static_deform_animation drops its time array (row i IS frame
+#         offset i). The PARAM payload gains a required top-level time_scale.
+#         The frontend derives all seconds from the Param fps at decode, so
+#         a Time Scale / FPS edit flips only the param hash and Update Params
+#         suffices (no geometry re-transfer). Old payloads are refused loudly
+#         by the envelope version gate (re-Transfer from the addon); the
+#         handshake forces a matching addon / server pair.
+#   0.12: driven-collider exactness. Restored the frame-writer exact-pose
+#         placement and the TOI-truncation pin rewind that the universal pin
+#         DOF removal had dropped, so a moving fix-pinned collider tracks its
+#         keyframe to round-off again. Server behavior only; the bump forces a
+#         stale server carrying the old jitter to restart against the on-disk
+#         binary.
+#   0.11: scipy pin-path. A Windows bundle without scipy took a surface-only
+#         pin fallback, changing the pin set; scipy is now installed in the
+#         bundle and numpy / scipy pinned. Frontend behavior only; the bump
+#         forces a fresh frontend.
+#   0.09: additive scene / dyn-param fields for the per-object bending
+#         reference rest shape and the angular velocity overwrite. ObjectInfo
+#         gains an optional bend_rest_vert (guarded by a has_bend_rest_vert
+#         count) carrying per-object reference rest positions for hinge rest
+#         angles, and the dyn-param table gains angular_velocity:<dmap> /
+#         angular_velocity_world:<dmap> keyframe streams (principal-axis spins
+#         resolved from live geometry, and fixed world-axis spins). The new
+#         fields are optional, so an old decoder silently drops the bending
+#         reference and the spins instead of erroring; the handshake forces the
+#         matching pair.
+#   0.08: co-located transfer. When the addon and server share a machine
+#         (local / win_native backends), the addon writes data.pickle /
+#         param.pickle straight to the project root on disk and then sends a
+#         lightweight upload_notify JSON request (carrying the addon-minted
+#         upload_id, the data / param hashes, and has_data / has_param) instead
+#         of streaming the payloads through the socket via upload_atomic. The
+#         server stamps the supplied id, then dispatches the same UploadLanded
+#         event the streamed path does. Set PPF_FORCE_TCP_TRANSFER=1 to keep
+#         local / win_native on the streamed path. An old server paired with a
+#         new addon rejects upload_notify as an unknown request; both
+#         directions are caught by this handshake.
+#   0.07: moving STATIC colliders join the output vertex map. The pin-shells
+#         produced by transform_animation (Case 1) and static_deform_animation
+#         (Case 3) are no longer flagged _exclude_from_output, so their
+#         simulator-projected per-frame positions stream back as a regular
+#         PC2 + ContactSolverCache modifier on the static object.
+#   0.06: deforming STATIC mesh colliders. A STATIC object whose modifier stack
+#         deforms vertices (Armature, MeshDeform, Lattice, shape keys, etc.) can
+#         now carry a static_deform_animation payload alongside vert / transform:
+#         a per-frame absolute vertex buffer in solver world space, captured
+#         from Blender's depsgraph via the Capture Deformation operator.
+#         Mutually exclusive with transform_animation and static_ops; an old
+#         decoder would ignore the new field and play the rest-pose mesh.
+#   0.05: keyframed pin animation. param.pin_config[uuid] stays
+#         {vertex_index: PinData}, but each PinData now carries its own
+#         single-entry pin_anim and the frontend decoder builds genuine
+#         per-vertex MoveByOperation deltas from it instead of broadcasting one
+#         vertex's track. An old decoder would treat the new payload as a rigid
+#         translation.
+#   0.04: TCMD requests carry a 4-byte big-endian length prefix between the
+#         b"TCMD" header and the payload, replacing the prior wire that relied
+#         on shutdown(SHUT_WR) as the end-of-input signal. Windows tokio did not
+#         deliver that half-close to the server's AsyncRead, so the server hung
+#         in its read loop and connections piled up in FIN_WAIT_2.
+protocol = "0.13"

@@ -576,14 +576,24 @@ impl std::str::FromStr for PrecondMode {
 #[repr(C)]
 #[derive(Serialize, Deserialize, Clone, Copy)]
 pub struct FixPair {
+    /// Where the pin's prescribed path puts this vertex at the END of the
+    /// step (the time the host aimed the step at).
     pub position: Vec3f,
+    /// Displacement the pin travels over this step: `position` minus the same
+    /// path evaluated at the step's START time. The CCD line search can
+    /// truncate a step to a fraction of its span, and a kinematic pin must
+    /// then stop at that same fraction of the path it was scheduled to travel,
+    /// or it outruns the clock (`rewind_kinematic_fix` in `main.cu`). Zero for
+    /// a static pin, which never moves.
+    pub step_delta: Vec3f,
     pub ghat: f32,
     pub index: u32,
     pub kinematic: bool,
-    /// Per-pin scale on the constraint force, applied device-side only
-    /// when `kinematic` is true. 1.0 leaves the force unchanged. Field
-    /// order must mirror `FixPair` in `cpp/data.hpp` (repr(C) ABI).
-    pub stiffness: f32,
+    // NOTE: every fix pin is an exact Dirichlet BC (the solver eliminates its
+    // DOF), so there is no per-pin stiffness to scale: there is no penalty force
+    // left. `ghat` and `kinematic` survive only for the PDRD anchor, the one pin
+    // still held by the barrier (a vertex inside a rigid body owns no per-vertex
+    // DOF). Field order must mirror `FixPair` in `cpp/data.hpp` (repr(C) ABI).
 }
 
 #[repr(C)]
@@ -773,6 +783,24 @@ pub struct ParamSet {
     // Appended at the tail; field order and byte layout MUST mirror the C++
     // ParamSet in cpp/data.hpp (repr(C) ABI).
     pub schwarz_levels: u32,
+    // Upper bound on Newton iterations per substep. The loop is otherwise
+    // unbounded, so an over-constrained configuration (a prescribed pin driven
+    // into geometry that cannot yield) spins forever: the line search clamps
+    // the shared toi toward zero to prevent the penetration, that same clamp
+    // throttles every other vertex, and the toi never falls below FLT_EPSILON,
+    // so the CCD trap never fires. This bound turns that hang into a loud
+    // CrashKind::NewtonStall. 0 disables the bound (research only).
+    // Appended at the tail; field order and byte layout MUST mirror the C++
+    // ParamSet in cpp/data.hpp (repr(C) ABI).
+    pub max_newton_steps: u32,
+    // Diagnostic A/B lever (PPF_DISABLE_PIN_DOF_REMOVAL=1, set host-side in
+    // advance()): revert every fix pin from an exact Dirichlet BC back to the
+    // old barrier penalty. It must reach the device, because BOTH halves have to
+    // flip together -- main.cu stops eliminating the rows AND contact.cu must put
+    // the barrier back, or the pin would have neither and simply vanish.
+    // Appended at the tail; field order and byte layout MUST mirror the C++
+    // ParamSet in cpp/data.hpp (repr(C) ABI).
+    pub disable_pin_dof_removal: bool,
 }
 
 #[repr(C)]
@@ -782,11 +810,28 @@ pub struct StepResult {
     pub ccd_success: bool,
     pub pcg_success: bool,
     pub intersection_free: bool,
+    /// False when the Newton loop hit `max_newton_steps` without reaching an
+    /// acceptable step. Field order must mirror `StepResult` in
+    /// `cpp/data.hpp` (repr(C) ABI).
+    pub newton_progress: bool,
+    /// False when a prescribed (fix-pinned) vertex's swept path crosses an
+    /// analytic collider it cannot yield to.
+    pub pin_feasible: bool,
+    /// False when a contact pair begins the step already inside the contact
+    /// offset (two surfaces start out touching or overlapping), so the
+    /// conservative CCD cannot advance from a separated start. Appended at the
+    /// tail; field order must mirror `StepResult` in `cpp/data.hpp`.
+    pub contact_separated: bool,
 }
 
 impl StepResult {
     pub fn success(&self) -> bool {
-        self.ccd_success && self.pcg_success && self.intersection_free
+        self.ccd_success
+            && self.pcg_success
+            && self.intersection_free
+            && self.newton_progress
+            && self.pin_feasible
+            && self.contact_separated
     }
 }
 
@@ -877,9 +922,23 @@ pub struct DataSet {
     /// the inertia reference for the implicit rolling solve. Built as zeros.
     pub grain_omega_prev: CVec<Vec3f>,
     /// Transient per-grain Schur blocks (zeroed each Newton iteration, summed over
-    /// the grain's floor/sphere contacts): `grain_A` SPD angular block, `grain_B`
-    /// translation<->rotation coupling, `grain_grot` rotational gradient.
-    pub grain_A: CVec<Mat3x3f>,
-    pub grain_B: CVec<Mat3x3f>,
+    /// the grain's floor/sphere contacts): `grain_a` is the SPD angular block `A`,
+    /// `grain_b` the translation<->rotation coupling `B`, `grain_grot` the
+    /// rotational gradient. (The C++ DataSet spells `A`/`B` uppercase per the math
+    /// convention for matrices; here they are the same fields in the same order.)
+    pub grain_a: CVec<Mat3x3f>,
+    pub grain_b: CVec<Mat3x3f>,
     pub grain_grot: CVec<Vec3f>,
+    /// Slot-replay assembly tables. Each holds the flat FixedCSRMat
+    /// value-slot index of every 3x3 block the corresponding element writes,
+    /// row-major (ii*N + jj), with 0xFFFFFFFF sentinels for lower-triangle
+    /// (push() no-op) blocks. Empty when PPF_SLOT_REPLAY=0 (kernels fall back to
+    /// push()). Field order and byte layout MUST mirror the Vec<unsigned> tail
+    /// of the C++ DataSet in cpp/data.hpp (repr(C) ABI); tail-append only.
+    pub tet_hess_slots: CVec<u32>,
+    pub face_hess_slots: CVec<u32>,
+    pub edge_hess_slots: CVec<u32>,
+    pub hinge_hess_slots: CVec<u32>,
+    pub rod_bend_hess_slots: CVec<u32>,
+    pub stitch_hess_slots: CVec<u32>,
 }

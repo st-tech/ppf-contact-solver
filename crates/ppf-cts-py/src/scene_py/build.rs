@@ -121,7 +121,7 @@ pub(super) fn scene_build_fixed<'py>(
     }
     let mut dyn_owned: Vec<OwnedDyn> = Vec::with_capacity(dyn_objects.len());
     for obj in dyn_objects.iter() {
-        let d = obj.downcast::<PyDict>().map_err(|_| {
+        let d = obj.cast::<PyDict>().map_err(|_| {
             PyValueError::new_err("each dyn_objects entry must be a dict")
         })?;
         let name: String = d
@@ -259,7 +259,7 @@ pub(super) fn scene_build_fixed<'py>(
     }
     let mut static_owned: Vec<OwnedStatic> = Vec::with_capacity(static_objects.len());
     for obj in static_objects.iter() {
-        let d = obj.downcast::<PyDict>().map_err(|_| {
+        let d = obj.cast::<PyDict>().map_err(|_| {
             PyValueError::new_err("each static_objects entry must be a dict")
         })?;
         let name: String = d
@@ -294,7 +294,7 @@ pub(super) fn scene_build_fixed<'py>(
     // ----- decode dmap order -----
     let mut dmap_owned: Vec<(String, [f64; 3])> = Vec::with_capacity(dmap_order.len());
     for entry in dmap_order.iter() {
-        let tup = entry.downcast::<PyTuple>().map_err(|_| {
+        let tup = entry.cast::<PyTuple>().map_err(|_| {
             PyValueError::new_err("each dmap_order entry must be a (name, [x,y,z]) tuple")
         })?;
         if tup.len() != 2 {
@@ -332,7 +332,7 @@ pub(super) fn scene_build_fixed<'py>(
     }
     let mut cs_owned: Vec<OwnedCross> = Vec::with_capacity(cross_stitches.len());
     for cs in cross_stitches.iter() {
-        let d = cs.downcast::<PyDict>().map_err(|_| {
+        let d = cs.cast::<PyDict>().map_err(|_| {
             PyValueError::new_err("each cross_stitches entry must be a dict")
         })?;
         let source_name: String = d
@@ -444,7 +444,7 @@ pub(super) fn scene_build_fixed<'py>(
         .collect();
 
     let dyn_result = py
-        .allow_threads(|| {
+        .detach(|| {
             sb::assemble_dyn_scene(
                 &dyn_view,
                 &map_owned,
@@ -455,7 +455,7 @@ pub(super) fn scene_build_fixed<'py>(
         })
         .map_err(into_py_err)?;
     let static_result = py
-        .allow_threads(|| sb::assemble_static_scene(&static_view, &dmap_owned))
+        .detach(|| sb::assemble_static_scene(&static_view, &dmap_owned))
         .map_err(into_py_err)?;
 
     // ----- pack output dict -----

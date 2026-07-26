@@ -224,6 +224,12 @@ extern "C" DLL_EXPORT void advance(StepResult *result) {
     result->ccd_success = true;
     result->pcg_success = true;
     result->intersection_free = true;
+    // The emulator runs no Newton loop and no analytic-collider sweep, so it can
+    // neither stall nor observe an infeasible pin. Report both as clean.
+    result->newton_progress = true;
+    result->pin_feasible = true;
+    // No contact CCD either, so contacts never start overlapping here.
+    result->contact_separated = true;
 
     unsigned long long n_calls = g_advance_count.fetch_add(1) + 1;
 

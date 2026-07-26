@@ -49,7 +49,7 @@ pub fn apply_transform_4x4<'py>(
         .as_slice()
         .map_err(|_| PyTypeError::new_err("transform must be C-contiguous"))?;
 
-    let out_flat = py.allow_threads(|| dec::apply_transform_4x4(v, m));
+    let out_flat = py.detach(|| dec::apply_transform_4x4(v, m));
     debug_assert_eq!(out_flat.len(), n * 3);
     let arr = Array2::<f32>::from_shape_vec((n, 3), out_flat)
         .map_err(|e| PyValueError::new_err(format!("reshape failed: {e}")))?;
@@ -67,7 +67,7 @@ pub fn summarize_tetra_jobs(jobs: &Bound<'_, PyList>) -> PyResult<String> {
     let mut cached: Vec<bool> = Vec::with_capacity(jobs.len());
     for job in jobs.iter() {
         let d = job
-            .downcast::<PyDict>()
+            .cast::<PyDict>()
             .map_err(|_| PyTypeError::new_err("each job must be a dict"))?;
         let name_val = d
             .get_item("name")?
@@ -124,7 +124,7 @@ pub fn barycentric_project_anchors<'py>(
         .as_slice()
         .map_err(|_| PyTypeError::new_err("anchors must be C-contiguous"))?;
 
-    let rows = py.allow_threads(|| dec::barycentric_project_anchors(face, pos, an));
+    let rows = py.detach(|| dec::barycentric_project_anchors(face, pos, an));
     let m = rows.tri.len();
     let mut tri_flat = Vec::with_capacity(m * 3);
     let mut bary_flat = Vec::with_capacity(m * 3);
@@ -184,7 +184,7 @@ pub fn solid_orig_to_sim<'py>(
         .as_slice()
         .map_err(|_| PyTypeError::new_err("verts must be C-contiguous"))?;
 
-    Ok(py.allow_threads(|| dec::solid_orig_to_sim(ti, cf, fc, vt)))
+    Ok(py.detach(|| dec::solid_orig_to_sim(ti, cf, fc, vt)))
 }
 
 // ---------------------------------------------------------------------
@@ -380,7 +380,7 @@ pub fn closest_vertex_index<'py>(
     let t = target
         .as_slice()
         .map_err(|_| PyTypeError::new_err("target must be C-contiguous"))?;
-    Ok(py.allow_threads(|| dec::closest_vertex_index(v, t)))
+    Ok(py.detach(|| dec::closest_vertex_index(v, t)))
 }
 
 /// Compute per-segment `(t_start, t_end, dx, dy, dz)` triples for a
@@ -410,7 +410,7 @@ pub fn keyframe_translation_segments<'py>(
     let p = positions
         .as_slice()
         .map_err(|_| PyTypeError::new_err("positions must be C-contiguous"))?;
-    let segs = py.allow_threads(|| dec::keyframe_translation_segments(t, p));
+    let segs = py.detach(|| dec::keyframe_translation_segments(t, p));
     let out = PyList::empty(py);
     for (t_start, t_end, d) in segs {
         out.append((t_start, t_end, (d[0], d[1], d[2])))?;
@@ -446,7 +446,7 @@ pub fn dedup_and_rebuild_tetra_jobs<'py>(
     // First pass: dedup decisions.
     for (i, entry_obj) in object_entries.iter().enumerate() {
         let entry = entry_obj
-            .downcast::<PyDict>()
+            .cast::<PyDict>()
             .map_err(|_| PyTypeError::new_err("each object entry must be a dict"))?;
         let group_type: String = match entry.get_item("group_type")? {
             Some(v) => v.extract().unwrap_or_default(),
@@ -478,7 +478,7 @@ pub fn dedup_and_rebuild_tetra_jobs<'py>(
     let mut tetra_idx: i64 = 0;
     for entry_obj in object_entries.iter() {
         let entry = entry_obj
-            .downcast::<PyDict>()
+            .cast::<PyDict>()
             .map_err(|_| PyTypeError::new_err("each object entry must be a dict"))?;
         let group_type: String = match entry.get_item("group_type")? {
             Some(v) => v.extract().unwrap_or_default(),
@@ -557,21 +557,21 @@ fn project_stitch_side<'py>(
             np.call_method1("asarray", (pos_v,))?
                 .call_method1("astype", ("float64",))?,
         ))?
-        .downcast_into::<PyArray2<f64>>()
+        .cast_into::<PyArray2<f64>>()
         .map_err(|_| PyTypeError::new_err("obj_info V must be (N, 3) f64"))?;
     let face: Bound<'py, PyArray2<i64>> = np
         .call_method1("ascontiguousarray", (
             np.call_method1("asarray", (face_f,))?
                 .call_method1("astype", ("int64",))?,
         ))?
-        .downcast_into::<PyArray2<i64>>()
+        .cast_into::<PyArray2<i64>>()
         .map_err(|_| PyTypeError::new_err("obj_info F must be (M, 3) i64"))?;
     let anchors: Bound<'py, PyArray2<f64>> = np
         .call_method1("ascontiguousarray", (
             np.call_method1("asarray", (points,))?
                 .call_method1("astype", ("float64",))?,
         ))?
-        .downcast_into::<PyArray2<f64>>()
+        .cast_into::<PyArray2<f64>>()
         .map_err(|_| PyTypeError::new_err("stitch points must be (K, 3) f64"))?;
     let face_view = face.readonly();
     let pos_view = pos.readonly();
@@ -585,7 +585,7 @@ fn project_stitch_side<'py>(
     let an = anchors_view
         .as_slice()
         .map_err(|_| PyTypeError::new_err("points must be C-contiguous"))?;
-    let rows = py.allow_threads(|| dec::barycentric_project_anchors(tf, tp, an));
+    let rows = py.detach(|| dec::barycentric_project_anchors(tf, tp, an));
     if rows.tri.len() != n_rows {
         // Degenerate tet surface dropped every anchor; leave side as-is.
         return Ok(None);
@@ -627,7 +627,7 @@ pub fn cross_stitch_apply_batch<'py>(
     let mut appended = 0usize;
     for entry_obj in entries.iter() {
         let entry = entry_obj
-            .downcast::<PyDict>()
+            .cast::<PyDict>()
             .map_err(|_| PyTypeError::new_err("each cross_stitch entry must be a dict"))?;
         let source_name: String = match entry.get_item("source_uuid")? {
             Some(v) => v.extract().unwrap_or_default(),
@@ -664,11 +664,11 @@ pub fn cross_stitch_apply_batch<'py>(
 
         let target_info_dict = target_info
             .expect("validated above")
-            .downcast_into::<PyDict>()
+            .cast_into::<PyDict>()
             .map_err(|_| PyTypeError::new_err("target obj_info entry must be a dict"))?;
         let source_info_dict = source_info
             .expect("validated above")
-            .downcast_into::<PyDict>()
+            .cast_into::<PyDict>()
             .map_err(|_| PyTypeError::new_err("source obj_info entry must be a dict"))?;
         let target_is_solid = match target_info_dict.get_item("type")? {
             Some(t) => t.extract::<String>().unwrap_or_default() == "SOLID",
@@ -691,7 +691,7 @@ pub fn cross_stitch_apply_batch<'py>(
                     np.call_method1("asarray", (&ind_arr,))?
                         .call_method1("astype", ("int64",))?,
                 ))?
-                .downcast_into::<PyArray2<i64>>()
+                .cast_into::<PyArray2<i64>>()
                 .map_err(|_| PyTypeError::new_err("cross stitch ind must be (K, 6) int64"))?;
             let v = a.readonly();
             let s = v.shape();
@@ -710,7 +710,7 @@ pub fn cross_stitch_apply_batch<'py>(
                     np.call_method1("asarray", (&w_arr,))?
                         .call_method1("astype", ("float32",))?,
                 ))?
-                .downcast_into::<PyArray2<f32>>()
+                .cast_into::<PyArray2<f32>>()
                 .map_err(|_| PyTypeError::new_err("cross stitch w must be (K, 6) float32"))?;
             let v = a.readonly();
             let s = v.shape();

@@ -27,8 +27,31 @@ unsigned embed_constraint_force_hessian(const DataSet &data,
                                         FixedCSRMat &fixed_hess_out, float dt,
                                         const ParamSet &param);
 
+// `pin_infeasible` is a device scalar the caller clears to UINT_MAX. If a
+// fix-pinned (prescribed) vertex's swept path crosses an analytic collider it
+// cannot yield to, the smallest such vertex index is written there. The step
+// must then fail: the prescription itself is unsatisfiable.
 float line_search(const DataSet &data, const Vec<Vec3f> &x0,
-                  const Vec<Vec3f> &x1, const ParamSet &param);
+                  const Vec<Vec3f> &x1, const ParamSet &param,
+                  unsigned *pin_infeasible);
+
+// Clear / read the "contact starts overlapping" device flag that the CCD sets
+// when a contact pair begins the step inside the contact offset (two surfaces
+// already touching / interpenetrating). The caller clears it before a line
+// search and reads it after; a detected overlap fails the step with a
+// structured OverlappingStart crash instead of a raw device assert.
+void clear_ccd_overlap();
+bool ccd_overlap_detected();
+// Fills a representative overlapping vertex pair and its kind (0 = vertex-face,
+// 1 = edge-edge, 2 = point-point among dynamic vertices; 3 = vertex-face,
+// 4 = face-vertex, 5 = edge-edge against the static collision mesh, where v0
+// is a dynamic vertex and v1 a collision-mesh vertex); UINT_MAX if none was
+// recorded. d2 and offset are a flagged pair's squared start distance and
+// contact offset in solver coordinate units (-1 if unset); their ratio tells
+// how deep the overlap was, and d2 near 0 means the two surfaces evaluate as
+// touching.
+void ccd_overlap_info(unsigned &v0, unsigned &v1, unsigned &kind, float &d2,
+                      float &offset);
 
 bool check_intersection(const DataSet &data, const Vec<Vec3f> &vertex,
                         const ParamSet &param);

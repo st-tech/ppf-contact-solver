@@ -36,6 +36,28 @@ atomic_embed_hessian(const SVec<unsigned, N> &index,
     }
 }
 
+// Slot-replay variant of atomic_embed_hessian. `slots` points at this
+// element's precomputed value-slot table (row-major ii*N + jj); a 0xFFFFFFFF
+// entry marks a block FixedCSRMat::push would drop (lower triangle / absent),
+// which is skipped. For every live slot the per-component if(y) atomicAdd loop
+// in FixedCSRMat::push_at is bitwise identical to push()'s, so the assembled
+// matrix and its float-atomic fold order are unchanged; only the per-block row
+// search is removed. MatType must expose push_at (FixedCSRMat).
+template <unsigned N, class MatType>
+__device__ static void
+atomic_embed_hessian_at(const unsigned *slots, const SMatf<N * 3, N * 3> &H,
+                        MatType &mat) {
+    for (unsigned ii = 0; ii < N; ++ii) {
+        for (unsigned jj = 0; jj < N; ++jj) {
+            const unsigned slot = slots[ii * N + jj];
+            if (slot != 0xFFFFFFFFu) {
+                Mat3x3f val = H.template block<3, 3>(ii * 3, jj * 3);
+                mat.push_at(slot, val);
+            }
+        }
+    }
+}
+
 template <unsigned N>
 __device__ static void
 atomic_embed_force(const SVec<unsigned, N> &index, const SMatf<3, N> &f,

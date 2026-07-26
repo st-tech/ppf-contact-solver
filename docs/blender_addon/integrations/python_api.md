@@ -142,7 +142,6 @@ cloth.create_pin("Shirt", "HemPins").pull(strength=2.0)
 | Method                                                          | Purpose                                                   |
 | --------------------------------------------------------------- | --------------------------------------------------------- |
 | `pull(strength=1.0)`                                            | Switch to a soft pull force                               |
-| `stiffness(value=1.0)`                                          | Scale a moving pin's kinematic constraint force           |
 | `move_by(delta, frame_start, frame_end, transition="LINEAR")`   | Ramp a translation over a frame range                     |
 | `spin(axis, angular_velocity, flip, center*, frame_start, frame_end, transition)` | Rotate about a derived pivot          |
 | `scale(factor, center*, frame_start, frame_end, transition)`    | Scale from a derived pivot                                |

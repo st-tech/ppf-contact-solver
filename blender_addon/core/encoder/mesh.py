@@ -19,7 +19,14 @@ from ..utils import (
     is_deforming_static_object,
     world_matrix,
 )
-from . import _swap_axes, _to_solver, resolve_fps
+from . import (
+    _swap_axes,
+    _to_solver,
+    frame_to_time,
+    resolve_solver_fps,
+    resolve_start_frame,
+    resolve_time_scale,
+)
 
 # Minimal diagonal used for a group with no usable extent. Both the
 # empty/no-geometry fallback and the co-located-objects floor use this
@@ -31,16 +38,17 @@ MIN_GROUP_DIAGONAL = 1e-6
 
 
 @contextmanager
-def evaluate_at_frame_one(context):
-    """Temporarily move the timeline to frame 1, then restore it.
+def evaluate_at_start_frame(context, state):
+    """Temporarily move the timeline to the starting frame, then restore it.
 
     Geometry-derived encodings must not depend on where the artist parked
     the playhead. The data payload (vertex buffers) and the param payload
     (the per-group bounding-box diagonal that scales contact-gap /
     contact-offset) both read live mesh state, which for an animated
-    collider changes frame to frame. Evaluating them at frame 1 is the
-    single source of truth shared by the upload and the later drift check,
-    so ``compute_data_hash`` / ``compute_param_hash`` reproduce exactly the
+    collider changes frame to frame. Evaluating them at the starting frame
+    (simulated time zero, see ``resolve_start_frame``) is the single source
+    of truth shared by the upload and the later drift check, so
+    ``compute_data_hash`` / ``compute_param_hash`` reproduce exactly the
     fingerprint the server stored at upload. Without it, scrubbing the
     timeline silently shrinks an animated object's bounding box and the
     param fingerprint drifts, surfacing as a spurious "Parameters have
@@ -49,25 +57,25 @@ def evaluate_at_frame_one(context):
     scene = context.scene
     saved = scene.frame_current
     try:
-        scene.frame_set(1)
+        scene.frame_set(resolve_start_frame(state))
         yield
     finally:
         scene.frame_set(saved)
 
 
-def _frame_one_eval_local_verts(obj, context):
-    """Frame-1 deform-evaluated local verts for *obj*, or ``None`` when
-    no usable eval is available (caller keeps the rest mesh).
+def _start_frame_eval_local_verts(obj, context, state):
+    """Starting-frame deform-evaluated local verts for *obj*, or ``None``
+    when no usable eval is available (caller keeps the rest mesh).
 
     Honors a deform-only Geometry Nodes / Armature / Lattice stack so
-    the solver starts in the shape the artist sees at frame 1. Pinned
-    vertices are included: the decoder integrates a captured pin track
-    as deltas from each vertex's INITIAL position, and the captured
-    cache's frame-0 row IS the frame-1 deform pose, so initial ==
-    cache[0] telescopes to the exact wave (frame-1 + (cache[k] -
-    cache[0]) = cache[k]). Holding pinned verts at rest instead would
-    shift the whole track by the frame-1 displacement. The addon's
-    MESH_CACHE is excluded so a prior solve's output isn't read back.
+    the solver starts in the shape the artist sees at the starting frame.
+    Pinned vertices are included: the decoder integrates a captured pin
+    track as deltas from each vertex's INITIAL position, and the captured
+    cache's frame-0 row IS the starting-frame deform pose, so initial ==
+    cache[0] telescopes to the exact wave (start + (cache[k] - cache[0]) =
+    cache[k]). Holding pinned verts at rest instead would shift the whole
+    track by the starting-frame displacement. The addon's MESH_CACHE is
+    excluded so a prior solve's output isn't read back.
     """
     from ..pc2 import MODIFIER_NAME
     return eval_deform_local_positions(
@@ -620,12 +628,17 @@ def _build_obj_data(context, *, persist_topology_hash: bool) -> list:
         state.set_mesh_hash(mesh_hash)
 
     data = []
-    with evaluate_at_frame_one(context):
+    with evaluate_at_start_frame(context, state):
         return _encode_obj_inner(context, scene, state, data)
 
 
 def _encode_obj_inner(context, scene, state, data):
-    fps = resolve_fps(state)
+    # The DATA payload is deliberately timing-free: every animation channel
+    # below ships FRAME OFFSETS relative to the resolved start frame, and
+    # the decoder derives seconds from the PARAM payload's fps. That keeps
+    # the data hash invariant under Time Scale / FPS changes, so a timing
+    # edit needs only Update Params, never a geometry re-transfer.
+    start_frame = resolve_start_frame(state)
 
     # Track canonical meshes for deduplication: hash -> first object name
     canonical_meshes = {}
@@ -742,7 +755,7 @@ def _encode_obj_inner(context, scene, state, data):
                         # except on pin-driven verts (kept at rest so the
                         # pin delta track isn't double-counted).
                         tri, uv = loop_triangulate_mesh(mesh)
-                        eval_verts = _frame_one_eval_local_verts(obj, context)
+                        eval_verts = _start_frame_eval_local_verts(obj, context, state)
                         vert = eval_verts if eval_verts is not None else local_verts
                         stitch_data = detect_stitch_edges(mesh)
 
@@ -776,9 +789,12 @@ def _encode_obj_inner(context, scene, state, data):
                             "last capture changed the topology; click "
                             "'Clear Cache' and re-run 'Capture Deformation'."
                         )
-                    n_frames = int(cache.shape[0])
                     info["static_deform_animation"] = {
-                        "time": [i / fps for i in range(n_frames)],
+                        # Row i IS frame offset i (row 0 = pose at the resolved
+                        # starting frame; ``_effective_frame_range`` anchors the
+                        # capture there). No time array ships: the decoder
+                        # derives row times as i / fps from the PARAM payload,
+                        # so this channel cannot desync from the time base.
                         "vert_frames": np.ascontiguousarray(
                             cache, dtype=np.float32,
                         ),
@@ -805,7 +821,7 @@ def _encode_obj_inner(context, scene, state, data):
 
                 transform_kf = (
                     None if _has_sd_cache
-                    else get_transform_keyframes(obj, context, fps)
+                    else get_transform_keyframes(obj, context, start_frame)
                 )
                 if transform_kf is not None:
                     info["transform_animation"] = transform_kf
@@ -832,12 +848,20 @@ def _encode_obj_inner(context, scene, state, data):
                     # the user that ops will be ignored.
                     ops_out = []
                     for op in _assigned_static.static_ops:
-                        t_start = (op.frame_start - 1) / fps
-                        t_end = (op.frame_end - 1) / fps
+                        # Frame offsets relative to the starting frame,
+                        # clamped at zero: an op window authored before the
+                        # starting frame is partly outside the solve, and the
+                        # solver's schedules begin there. Each bound is clamped
+                        # independently, so an inverted window (frame_end <
+                        # frame_start) still reaches the solver inverted,
+                        # exactly as before. Seconds are derived at decode from
+                        # the PARAM payload's fps.
                         entry = {
                             "op_type": op.op_type,
-                            "t_start": float(t_start),
-                            "t_end": float(t_end),
+                            "frame_offset_start": max(
+                                0.0, float(op.frame_start) - start_frame),
+                            "frame_offset_end": max(
+                                0.0, float(op.frame_end) - start_frame),
                             "transition": str(op.transition).lower(),
                         }
                         # Spin/scale always pivot around the object origin,
@@ -847,7 +871,12 @@ def _encode_obj_inner(context, scene, state, data):
                             entry["delta"] = _to_solver(op.delta)
                         elif op.op_type == "SPIN":
                             entry["axis"] = _swap_axes(op.spin_axis)
-                            entry["angular_velocity"] = float(op.spin_angular_velocity)
+                            # RAW authored degrees per ANIMATION second. The
+                            # decoder multiplies by the PARAM payload's
+                            # time_scale, keeping the data payload invariant
+                            # under Time Scale / FPS changes.
+                            entry["angular_velocity_anim"] = float(
+                                op.spin_angular_velocity)
                         elif op.op_type == "SCALE":
                             entry["factor"] = float(op.scale_factor)
                         ops_out.append(entry)

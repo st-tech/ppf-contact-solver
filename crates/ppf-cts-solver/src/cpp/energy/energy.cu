@@ -236,9 +236,13 @@ __device__ void embed_vertex_force_hessian(
             // Symmetric Hessian approximation so Newton converges for
             // the torque term regardless of iteration count.
             // ∂(axis×r_perp)/∂y has a skew part (unusable) and a
-            // symmetric magnitude part scale*(I - axis⊗axis).
+            // symmetric magnitude part scale*(I - axis⊗axis). scale carries the
+            // signed torque magnitude, so scale < 0 (reverse torque) makes
+            // scale*P negative-semidefinite. Project to the positive part
+            // (projected-Newton: force above is exact, the Hessian stays PSD) so
+            // the assembled system is unconditionally SPD.
             Mat3x3f P = Mat3x3f::Identity() - axis * axis.transpose();
-            H += scale * P;
+            H += fmaxf(0.0f, scale) * P;
         }
     }
 
@@ -287,7 +291,12 @@ __device__ void embed_rod_force_hessian(const DataSet &data,
         add_stiffness_damping<2>(data, eval_x, edge, edge_param.deform_damping,
                                  dt, dedx, d2edx2);
         utility::atomic_embed_force<2>(edge, dedx, force);
-        utility::atomic_embed_hessian<2>(edge, d2edx2, hess);
+        if (data.edge_hess_slots.size) {
+            utility::atomic_embed_hessian_at<2>(
+                data.edge_hess_slots.data + 4 * i, d2edx2, hess);
+        } else {
+            utility::atomic_embed_hessian<2>(edge, d2edx2, hess);
+        }
     }
 }
 
@@ -345,17 +354,40 @@ __device__ void embed_face_force_hessian(const DataSet &data,
         add_stiffness_damping<3>(data, eval_x, face, face_param.deform_damping,
                                  dt, dedx, d2edx2);
         utility::atomic_embed_force<3>(face, dedx, force);
-        utility::atomic_embed_hessian<3>(face, d2edx2, hess);
+        if (data.face_hess_slots.size) {
+            utility::atomic_embed_hessian_at<3>(
+                data.face_hess_slots.data + 9 * i, d2edx2, hess);
+        } else {
+            utility::atomic_embed_hessian<3>(face, d2edx2, hess);
+        }
     }
 
     if (face_param.pressure > 0.0f) {
+        // The pressure gradient is conditioned on the edge vectors (see
+        // inflate::face_gradient_conditioned): crossing two absolute positions
+        // cancels the face area vector down to rounding noise that grows with
+        // distance from the origin. The Hessian below still consumes the
+        // absolute columns; its SVD is of the absolute matrix X = [v0|v1|v2],
+        // so its PSD projection remains a function of where the face sits in
+        // the world, which is a property of the per-face pressure formulation.
         Vec3f v0 = x0;
+        Vec3f e1 = x1 - x0;
+        Vec3f e2 = x2 - x0;
         Vec3f v1 = x1;
         Vec3f v2 = x2;
         utility::atomic_embed_force<3>(
-            face, inflate::face_gradient(face_param.pressure, v0, v1, v2), force);
-        utility::atomic_embed_hessian<3>(
-            face, inflate::face_hessian(face_param.pressure, v0, v1, v2), hess);
+            face,
+            inflate::face_gradient_conditioned(face_param.pressure, v0, e1, e2),
+            force);
+        if (data.face_hess_slots.size) {
+            utility::atomic_embed_hessian_at<3>(
+                data.face_hess_slots.data + 9 * i,
+                inflate::face_hessian(face_param.pressure, v0, v1, v2), hess);
+        } else {
+            utility::atomic_embed_hessian<3>(
+                face, inflate::face_hessian(face_param.pressure, v0, v1, v2),
+                hess);
+        }
     }
 }
 
@@ -403,7 +435,12 @@ __device__ void embed_tet_force_hessian(const DataSet &data,
         add_stiffness_damping<4>(data, eval_x, tet, tet_param.deform_damping, dt,
                                  dedx, d2edx2);
         utility::atomic_embed_force<4>(tet, dedx, force);
-        utility::atomic_embed_hessian<4>(tet, d2edx2, hess);
+        if (data.tet_hess_slots.size) {
+            utility::atomic_embed_hessian_at<4>(
+                data.tet_hess_slots.data + 16 * i, d2edx2, hess);
+        } else {
+            utility::atomic_embed_hessian<4>(tet, d2edx2, hess);
+        }
     }
 }
 
@@ -487,7 +524,15 @@ __device__ void embed_hinge_force_hessian(const DataSet &data,
                                             d2edx2, K_lag);
         }
         utility::atomic_embed_force<4>(hinge, dedx, force);
-        utility::atomic_embed_hessian<4>(hinge, d2edx2, hess);
+        if (data.hinge_hess_slots.size) {
+            // hinge_hess_slots was built in the SAME remapped (2,1,0,3) order the
+            // in-place remap of `hinge` produced, so slot[ii*4+jj] targets the
+            // same (hinge[ii],hinge[jj]) push() would.
+            utility::atomic_embed_hessian_at<4>(
+                data.hinge_hess_slots.data + 16 * i, d2edx2, hess);
+        } else {
+            utility::atomic_embed_hessian<4>(hinge, d2edx2, hess);
+        }
     }
 }
 
@@ -543,7 +588,12 @@ embed_rod_bend_force_hessian(const DataSet &data, const Vec<Vec3f> &eval_x,
                                                 K_lag);
             }
             utility::atomic_embed_force<3>(element, dedx, force);
-            utility::atomic_embed_hessian<3>(element, d2edx2, hess);
+            if (data.rod_bend_hess_slots.size) {
+                utility::atomic_embed_hessian_at<3>(
+                    data.rod_bend_hess_slots.data + 9 * i, d2edx2, hess);
+            } else {
+                utility::atomic_embed_hessian<3>(element, d2edx2, hess);
+            }
         }
     }
 }
@@ -768,8 +818,14 @@ void embed_stitch_force_hessian(const DataSet &data, const Vec<Vec3f> &eval_x,
             // simple to control. Resolved per object at scene-build time.
             utility::atomic_embed_force<6>(
                 index, stitch.stiffness * gradient, force);
-            utility::atomic_embed_hessian<6>(
-                index, stitch.stiffness * hessian, fixed_out);
+            if (data.stitch_hess_slots.size) {
+                utility::atomic_embed_hessian_at<6>(
+                    data.stitch_hess_slots.data + 36 * i,
+                    stitch.stiffness * hessian, fixed_out);
+            } else {
+                utility::atomic_embed_hessian<6>(
+                    index, stitch.stiffness * hessian, fixed_out);
+            }
         } DISPATCH_END;
     }
 }

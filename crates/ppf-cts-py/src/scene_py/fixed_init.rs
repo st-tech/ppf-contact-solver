@@ -175,7 +175,7 @@ pub(super) fn scene_fixed_scene_assemble<'py>(
         })
         .collect();
 
-    let result = py.allow_threads(|| {
+    let result = py.detach(|| {
         fsa::fixed_scene_assemble(fsa::AssembleInput {
             vert_dmap: &dmap,
             vert_local: &vl,

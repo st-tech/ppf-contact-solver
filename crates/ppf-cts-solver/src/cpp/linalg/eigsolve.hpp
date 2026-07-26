@@ -168,6 +168,23 @@ static LA_HD M3 eigvectors3x3(const M3 &A, const V3 &lmd) {
     // three columns mutually orthonormal to float precision.
     V3 w = uv.v1.cross(uv.v2).normalized();
     uv.v2 = w.cross(uv.v1);
+    // Degenerate-triad fallback: for a NEAR-isotropic A whose eigenvalue split
+    // sits between eigvalues3's exact-isotropic cutoff (p < 1e-8) and fp32
+    // eigenvector resolution, every quantity find_ortho3x3 tests is of order
+    // (split)^2 and falls below its absolute eps, both axis probes included,
+    // and normalized() of the resulting exact zeros yields an all-zero triad.
+    // Downstream that zero basis reconstructs a ZERO matrix function: an
+    // all-zero block-Jacobi preconditioner block (for example on a free grain's
+    // mass/dt^2-dominated diagonal block, fed through the eigendecomposition
+    // invert()) silently freezes the vertex's DOF, since an exactly-zero block
+    // contributes nothing to r.z/pAp and no SPD guard fires, and PCG stalls.
+    // A zero triad can only arise when A is isotropic
+    // to within fp32 eigenvector resolution, where ANY orthonormal basis
+    // diagonalizes A to working precision: return Identity. Healthy paths
+    // always produce unit columns, so the 0.5 threshold cannot misfire.
+    if (uv.v1.squaredNorm() < 0.5f || w.squaredNorm() < 0.5f) {
+        return M3::Identity();
+    }
     M3 result;
     result << uv.v1, uv.v2, w;
     return result;

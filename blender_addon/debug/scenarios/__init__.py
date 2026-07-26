@@ -35,6 +35,7 @@ from . import bl_rust_binary_protocol
 # (or composed ops), runs through the full pipeline, and diffs the
 # fetched PC2 against frontend.FixedScene.time(t).
 from . import bl_pin_animation_fidelity
+from . import bl_driven_pin_frame_exact
 from . import bl_pin_spin_centroid
 from . import bl_pin_spin_fixed
 from . import bl_pin_spin_max_towards
@@ -47,15 +48,17 @@ from . import bl_pin_compose_move_spin
 from . import bl_pin_compose_spin_move
 from . import bl_pin_compose_full
 from . import bl_pin_op_type_enum_stable
+from . import bl_pin_vgroup_enum_ref
+from . import bl_enum_props_guard
 from . import bl_i18n_no_leaks
 from . import bl_pin_capture_deformation
 from . import bl_pin_capture_deformation_persistence
+from . import bl_pinned_anim_transform_display
 from . import bl_recapture_all_deformations
 from . import bl_geonode_deform_input
 from . import bl_geonode_capture_range_frame_count
 from . import bl_static_smooth_by_angle_no_capture
 from . import bl_static_keyframe_capture_hint
-from . import bl_pin_stiffness_travel
 from . import bl_bake_aborts_unfetched
 from . import bl_pin_make_keyframe_writes_fcurves
 from . import bl_pin_overlay_follows_edit_mode
@@ -103,6 +106,7 @@ from . import bl_ngon_triangulation
 from . import bl_duplicate_face_rejection
 from . import bl_hanging_stitch_vertex_rejection
 from . import bl_isolated_vertex_rejection
+from . import bl_mesh_cleaning
 from . import bl_upload_id_desync_recovery
 from . import bl_mesh_cache_self_heal
 from . import bl_live_frame_end_tracking
@@ -113,8 +117,15 @@ from . import bl_build_worker_faulthandler
 from . import bl_profile_load_batch
 from . import bl_pin_rod_curve
 from . import bl_static_deform_anim
+from . import bl_static_deform_first_frame
 from . import bl_static_fcurve_anim
 from . import bl_static_op_anim
+from . import bl_static_panel_draws
+from . import bl_fps_source
+from . import bl_time_scale_encoding
+from . import bl_time_scale_kinematic_invariance
+from . import bl_frame_start
+from . import bl_frame_start_leadin
 from . import bl_multi_group
 from . import bl_collider_keyframes
 from . import bl_stitch_merge
@@ -124,6 +135,9 @@ from . import bl_solid_solid_stitch
 from . import bl_static_stitch
 from . import bl_shell_static_stitch
 from . import bl_static_snap_guard
+from . import bl_deformed_target_snap
+from . import bl_snap_parented_move
+from . import bl_transform_translation_roundtrip
 from . import bl_velocity_keyframes
 
 # world_scaling coordinate round-trip suite. The Rust solver scales all
@@ -172,6 +186,7 @@ from . import bl_real_solid_smoke
 from . import bl_ssh_remote_solve
 from . import bl_ssh_remote_solid
 from . import bl_real_shell_drape
+from . import bl_real_frame_start_drape
 from . import bl_solid_overlap_pin_last_wins
 from . import bl_pin_reorder_and_gating
 
@@ -232,6 +247,10 @@ REGISTRY = {
     # .time(t) -- the same source of truth that frontend.preview()
     # uses in a Jupyter notebook.
     "bl_pin_animation_fidelity": bl_pin_animation_fidelity,  # MOVE_BY
+    # Frame-writer exact-pose gate: output frames fall between substeps and a
+    # driven fix pin must still land dead on its prescribed path (the
+    # driven-collider jitter regression).
+    "bl_driven_pin_frame_exact": bl_driven_pin_frame_exact,
     "bl_pin_spin_centroid": bl_pin_spin_centroid,
     "bl_pin_spin_fixed": bl_pin_spin_fixed,
     "bl_pin_spin_max_towards": bl_pin_spin_max_towards,
@@ -244,15 +263,17 @@ REGISTRY = {
     "bl_pin_compose_spin_move": bl_pin_compose_spin_move,
     "bl_pin_compose_full": bl_pin_compose_full,
     "bl_pin_op_type_enum_stable": bl_pin_op_type_enum_stable,
+    "bl_pin_vgroup_enum_ref": bl_pin_vgroup_enum_ref,
+    "bl_enum_props_guard": bl_enum_props_guard,
     "bl_i18n_no_leaks": bl_i18n_no_leaks,
     "bl_pin_capture_deformation": bl_pin_capture_deformation,
     "bl_pin_capture_deformation_persistence": bl_pin_capture_deformation_persistence,
+    "bl_pinned_anim_transform_display": bl_pinned_anim_transform_display,
     "bl_recapture_all_deformations": bl_recapture_all_deformations,
     "bl_geonode_deform_input": bl_geonode_deform_input,
     "bl_geonode_capture_range_frame_count": bl_geonode_capture_range_frame_count,
     "bl_static_smooth_by_angle_no_capture": bl_static_smooth_by_angle_no_capture,
     "bl_static_keyframe_capture_hint": bl_static_keyframe_capture_hint,
-    "bl_pin_stiffness_travel": bl_pin_stiffness_travel,
     "bl_bake_aborts_unfetched": bl_bake_aborts_unfetched,
     "bl_pin_make_keyframe_writes_fcurves": bl_pin_make_keyframe_writes_fcurves,
     "bl_pin_overlay_follows_edit_mode": bl_pin_overlay_follows_edit_mode,
@@ -298,6 +319,7 @@ REGISTRY = {
     "bl_duplicate_face_rejection": bl_duplicate_face_rejection,
     "bl_hanging_stitch_vertex_rejection": bl_hanging_stitch_vertex_rejection,
     "bl_isolated_vertex_rejection": bl_isolated_vertex_rejection,
+    "bl_mesh_cleaning": bl_mesh_cleaning,
 
     # Tier 1: bug-fix-driven coverage (commits ea4303cb, 92546e18, a8766a08,
     # ff0d20ca, ...).
@@ -316,8 +338,15 @@ REGISTRY = {
     # simulated round-trip end-to-end.
     "bl_pin_rod_curve": bl_pin_rod_curve,
     "bl_static_deform_anim": bl_static_deform_anim,
+    "bl_static_deform_first_frame": bl_static_deform_first_frame,
     "bl_static_fcurve_anim": bl_static_fcurve_anim,
     "bl_static_op_anim": bl_static_op_anim,
+    "bl_static_panel_draws": bl_static_panel_draws,
+    "bl_fps_source": bl_fps_source,
+    "bl_time_scale_encoding": bl_time_scale_encoding,
+    "bl_time_scale_kinematic_invariance": bl_time_scale_kinematic_invariance,
+    "bl_frame_start": bl_frame_start,
+    "bl_frame_start_leadin": bl_frame_start_leadin,
     "bl_multi_group": bl_multi_group,
     "bl_collider_keyframes": bl_collider_keyframes,
     "bl_stitch_merge": bl_stitch_merge,
@@ -327,6 +356,9 @@ REGISTRY = {
     "bl_static_stitch": bl_static_stitch,
     "bl_shell_static_stitch": bl_shell_static_stitch,
     "bl_static_snap_guard": bl_static_snap_guard,
+    "bl_deformed_target_snap": bl_deformed_target_snap,
+    "bl_snap_parented_move": bl_snap_parented_move,
+    "bl_transform_translation_roundtrip": bl_transform_translation_roundtrip,
     "bl_velocity_keyframes": bl_velocity_keyframes,
 
     # world_scaling coordinate round-trip suite.
@@ -378,6 +410,7 @@ REGISTRY = {
     "bl_ssh_remote_solve": bl_ssh_remote_solve,
     "bl_ssh_remote_solid": bl_ssh_remote_solid,
     "bl_real_shell_drape": bl_real_shell_drape,
+    "bl_real_frame_start_drape": bl_real_frame_start_drape,
     "bl_solid_overlap_pin_last_wins": bl_solid_overlap_pin_last_wins,
     "bl_pin_reorder_and_gating": bl_pin_reorder_and_gating,
 

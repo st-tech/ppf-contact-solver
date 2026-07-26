@@ -121,7 +121,7 @@ pub fn check_cols(arr: &Bound<'_, PyAny>, name: &str, expected_cols: usize) -> P
 fn ncols_of_array(arr: &Bound<'_, PyAny>) -> PyResult<usize> {
     // Use the untyped numpy interface so we don't have to enumerate
     // every dtype here; we just need shape[1].
-    let untyped = arr.downcast::<numpy::PyUntypedArray>().map_err(|_| {
+    let untyped = arr.cast::<numpy::PyUntypedArray>().map_err(|_| {
         PyTypeError::new_err("expected a numpy.ndarray")
     })?;
     let shape = untyped.shape();
@@ -362,7 +362,7 @@ impl AssetRegistry {
     ) -> PyResult<()> {
         for (name_obj, body_obj) in snapshot.iter() {
             let name: String = name_obj.extract()?;
-            let body = body_obj.downcast::<PyDict>().map_err(|_| {
+            let body = body_obj.cast::<PyDict>().map_err(|_| {
                 PyTypeError::new_err("snapshot entry must be a dict")
             })?;
             let kind: String = body
@@ -372,7 +372,7 @@ impl AssetRegistry {
             let arrays_any = body
                 .get_item("arrays")?
                 .ok_or_else(|| PyKeyError::new_err("snapshot entry missing 'arrays'"))?;
-            let arrays = arrays_any.downcast::<PyDict>().map_err(|_| {
+            let arrays = arrays_any.cast::<PyDict>().map_err(|_| {
                 PyTypeError::new_err("snapshot 'arrays' must be a dict")
             })?;
             match kind.as_str() {

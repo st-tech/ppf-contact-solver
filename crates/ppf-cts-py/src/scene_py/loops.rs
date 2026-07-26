@@ -42,7 +42,7 @@ pub(super) fn scene_stitch_preview_lines<'py>(
     let w_slice = stitch_w
         .as_slice()
         .map_err(|_| PyTypeError::new_err("stitch_w must be C-contiguous"))?;
-    let (sv, se) = py.allow_threads(|| {
+    let (sv, se) = py.detach(|| {
         sl::stitch_preview_lines(v_slice, n_vert, i_slice, w_slice, n_stitch)
     });
     let v_arr = ndarray::Array2::from_shape_vec((2 * n_stitch, 3), sv)
@@ -75,7 +75,7 @@ pub(super) fn scene_face_uv_expand<'py>(
         .as_slice()
         .map_err(|_| PyTypeError::new_err("vertex_uv must be C-contiguous"))?;
     let buf = py
-        .allow_threads(|| sl::face_uv_expand(uv_slice, n_vert, &face_vec, n_face))
+        .detach(|| sl::face_uv_expand(uv_slice, n_vert, &face_vec, n_face))
         .map_err(into_py_err)?;
     let arr = ndarray::Array3::from_shape_vec((n_face, 3, 2), buf)
         .map_err(|e| PyValueError::new_err(format!("face_uv reshape failed: {e}")))?;
@@ -207,18 +207,18 @@ pub(super) fn scene_format_pin_toml<'py>(
     let mut ops_flat: Vec<sl::PinOpToml> = Vec::new();
     for block in pin_blocks.iter() {
         let d = block
-            .downcast::<PyDict>()
+            .cast::<PyDict>()
             .map_err(|_| PyValueError::new_err("each pin_blocks entry must be a dict"))?;
         let header = decode_pin_header(d)?;
         let ops_item = d
             .get_item("ops")?
             .ok_or_else(|| PyValueError::new_err("pin block missing 'ops'"))?;
         let ops_list = ops_item
-            .downcast::<PyList>()
+            .cast::<PyList>()
             .map_err(|_| PyValueError::new_err("'ops' must be a list of dicts"))?;
         for op in ops_list.iter() {
             let od = op
-                .downcast::<PyDict>()
+                .cast::<PyDict>()
                 .map_err(|_| PyValueError::new_err("each op must be a dict"))?;
             ops_flat.push(decode_pin_op(od)?);
         }
@@ -242,13 +242,6 @@ fn decode_pin_header(d: &Bound<'_, PyDict>) -> PyResult<sl::PinHeader> {
         .get_item("pull_strength")?
         .ok_or_else(|| PyValueError::new_err("missing pull_strength"))?
         .extract()?;
-    // Defaults to 1.0 (no scaling) when absent, so older payloads that
-    // predate per-pin stiffness keep their original force.
-    let pin_stiffness: f64 = d
-        .get_item("pin_stiffness")?
-        .map(|v| v.extract::<f64>())
-        .transpose()?
-        .unwrap_or(1.0);
     let unpin_time: Option<f64> = d
         .get_item("unpin_time")?
         .map(|v| v.extract::<Option<f64>>())
@@ -263,7 +256,6 @@ fn decode_pin_header(d: &Bound<'_, PyDict>) -> PyResult<sl::PinHeader> {
         operation_count,
         pin_count,
         pull_strength,
-        pin_stiffness,
         unpin_time,
         pin_group_id,
     })
@@ -375,7 +367,7 @@ pub(super) fn scene_format_wall_toml<'py>(walls: &Bound<'py, PyList>) -> PyResul
     let mut decoded: Vec<sl::WallToml> = Vec::with_capacity(walls.len());
     for w in walls.iter() {
         let d = w
-            .downcast::<PyDict>()
+            .cast::<PyDict>()
             .map_err(|_| PyValueError::new_err("each wall must be a dict"))?;
         let keyframe: usize = d
             .get_item("keyframe")?
@@ -401,7 +393,7 @@ pub(super) fn scene_format_sphere_toml<'py>(spheres: &Bound<'py, PyList>) -> PyR
     let mut decoded: Vec<sl::SphereToml> = Vec::with_capacity(spheres.len());
     for s in spheres.iter() {
         let d = s
-            .downcast::<PyDict>()
+            .cast::<PyDict>()
             .map_err(|_| PyValueError::new_err("each sphere must be a dict"))?;
         let keyframe: usize = d
             .get_item("keyframe")?
@@ -433,7 +425,7 @@ fn decode_param_pairs(d: &Bound<'_, PyDict>) -> PyResult<Vec<(String, String)>> 
         .get_item("params")?
         .ok_or_else(|| PyValueError::new_err("missing 'params'"))?;
     let list = item
-        .downcast::<PyList>()
+        .cast::<PyList>()
         .map_err(|_| PyValueError::new_err("'params' must be a list of (key, value) tuples"))?;
     let mut out: Vec<(String, String)> = Vec::with_capacity(list.len());
     for entry in list.iter() {

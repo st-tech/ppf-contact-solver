@@ -59,9 +59,9 @@ try:
     plane = dh.reset_scene_to_pinned_plane(name="VelMesh")
     # frame_rate=100 keeps fps deterministic and independent of any
     # scene render override; the encoder reads frame_rate when
-    # use_frame_rate_in_output is False (the default we set in
-    # configure_state's caller chain). It also makes the hardcoded
-    # schedule times below trivially exact: t = (frame - 1) / 100.
+    # use_scene_fps is False (the default we set in configure_state's
+    # caller chain). It also makes the hardcoded schedule times below
+    # trivially exact: t = (frame - 1) / 100.
     root = dh.configure_state(project_name="velocity_keyframes",
                               frame_count=12, frame_rate=100)
     cloth = dh.api.solver.create_group("Cloth", "SHELL")

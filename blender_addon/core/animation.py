@@ -10,7 +10,10 @@ from .utils import _get_fcurves
 
 def clear_animation_data(context, move_to_frame: bool = True):
     if move_to_frame:
-        context.scene.frame_set(1)
+        from .encoder import resolve_start_frame
+        context.scene.frame_set(
+            resolve_start_frame(get_addon_data(context.scene).state)
+        )
     get_addon_data(context.scene).state.clear_fetched_frames()
     for group in iterate_active_object_groups(context.scene):
         for assigned in group.assigned_objects:
@@ -145,6 +148,11 @@ def _has_frame_one_geometry_keys(obj):
     # those layouts; the next ``prepare_animation_targets`` pass on a
     # marker-less mesh writes the marker, after which this branch
     # short-circuits above.
+    #
+    # The literal 1 is deliberate and does NOT follow the Starting Frame
+    # setting: this branch only ever reads files saved before the marker
+    # existed, and back then every solve started at frame 1, so 1 is where
+    # their anchor key actually sits.
     for fc in _get_fcurves(action):
         if not fc.data_path.startswith(path_prefixes):
             continue

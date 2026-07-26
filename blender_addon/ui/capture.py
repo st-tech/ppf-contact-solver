@@ -512,8 +512,8 @@ def swap_property_value(obj, attr: str, new_value):
     Example::
 
         state = bpy.context.scene.zozo_contact_solver.state
-        with swap_property_value(state, "use_frame_rate_in_output",
-                                  not state.use_frame_rate_in_output):
+        with swap_property_value(state, "use_scene_fps",
+                                  not state.use_scene_fps):
             screenshot(swap_png)
         # diff baseline vs swap_png → pixel rect of the checkbox
     """

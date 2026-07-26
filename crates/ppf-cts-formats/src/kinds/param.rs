@@ -23,6 +23,13 @@ use serde::{Deserialize, Serialize};
 pub struct ParamPayload {
     pub scene: SceneParams,
 
+    /// Time Scale factor: `scene.fps = animation fps * time_scale`.
+    /// Consumed at decode to convert authored animation rates (a SPIN op's
+    /// `angular_velocity_anim`, degrees per animation second) to solver
+    /// rates. REQUIRED (no serde default): every v2 payload carries it,
+    /// and v1 payloads are refused by the envelope version gate.
+    pub time_scale: f64,
+
     /// Per-group params. Each entry is a 3-tuple
     /// `(params, object_names, object_uuids)`. Encoded as a CBOR
     /// 3-array.
@@ -69,7 +76,13 @@ pub struct SceneParams {
     pub wind: [f64; 3],
     /// Frame count in solver convention (Blender N → solver N-1).
     pub frames: i32,
-    pub fps: i32,
+    /// Solver frame rate: `resolve_solver_fps = scene fps * time_scale`,
+    /// always emitted as a CBOR float by the addon and fractional whenever
+    /// Time Scale != 1. f64 here (widened from i32) so the declared schema
+    /// decodes real payloads; serde's f64 impl also accepts integer CBOR, so
+    /// legacy int-fps payloads still decode and no SCHEMA_VERSION bump is
+    /// needed (widening is backward compatible on the read side).
+    pub fps: f64,
     pub csrmat_max_nnz: i64,
     pub isotropic_air_friction: f64,
     pub auto_save: i32,
@@ -345,7 +358,7 @@ mod tests {
                 dt: 1e-3,
                 gravity: [0.0, -9.8, 0.0],
                 frames: 60,
-                fps: 60,
+                fps: 60.0,
                 friction_mode: "min".into(),
                 ..Default::default()
             },

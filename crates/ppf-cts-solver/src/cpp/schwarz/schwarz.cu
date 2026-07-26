@@ -1500,6 +1500,64 @@ void build_mas(const DynCSRMat &A, const FixedCSRMat &B, const Vec<Mat3x3f> &C,
     }
 }
 
+// ---------------------------------------------------------------------------
+// Memory guard helpers: project the device-memory footprint of the Schwarz
+// build so build() can degrade (fewer levels, then block-Jacobi) instead of
+// letting a cudaMalloc hard-abort (Vec::alloc -> CUDA_HANDLE_ERROR -> exit(1))
+// at high contact counts. Estimates are deliberately conservative (they assume
+// no buffer reuse), so a false degrade only ever costs Schwarz's convergence
+// advantage, never a penetration guarantee or a wrong result: the block-Jacobi
+// base stays SPD and the single-level smoother is bit-for-bit unchanged.
+// ---------------------------------------------------------------------------
+
+// Persistent single-level state that build()'s !struct_same branch allocates,
+// dominated by K.ainv = 9*kmax*nrow floats; the seven nrow-sized index arrays
+// and the grow_cap'd fine graph (fine_col + fine_wgt) are the remainder.
+static inline size_t schwarz_level0_bytes(unsigned nrow, unsigned kmax,
+                                          unsigned fine_nnz) {
+    return (size_t)9u * kmax * nrow * sizeof(float) +
+           (size_t)7u * (nrow + 1) * sizeof(unsigned) +
+           (size_t)grow_cap(fine_nnz) * (sizeof(unsigned) + sizeof(float));
+}
+
+// Peak transient footprint of build_mas at level 1 (the largest coarse level):
+// the materialized level-0 operator M0, the first Galerkin coarse operator dst
+// (live alongside M0), and galerkin's pooled sort transients, all keyed off the
+// materialized block-nnz (m0nnz ~= fine_nnz + nrow). Each block-CSR entry is a
+// 3x3 value plus a column id.
+static inline size_t schwarz_coarse_bytes(unsigned m0nnz) {
+    const size_t per = sizeof(Mat3x3f) + sizeof(unsigned);
+    return (size_t)grow_cap(m0nnz) * per +         // M0 (Galerkin source)
+           (size_t)grow_cap(m0nnz) * per +         // dst = first coarse operator
+           (size_t)m0nnz * 6u * sizeof(unsigned);  // key/perm/tkey/tperm/edge/estart
+}
+
+// Cheap offsets-only pass that projects the current block-nnz of the four
+// neighbor loops (== the level-0 / M0 nnz before the +nrow diagonal) without
+// allocating any nnz-sized value buffer. Uses a pooled scratch offset array.
+// Non-static for Windows nvcc (extended __device__ lambda needs external linkage).
+unsigned project_fine_nnz(const DynCSRMat &A, const FixedCSRMat &B) {
+    const unsigned nrow = A.nrow;
+    if (nrow == 0) {
+        return 0;
+    }
+    buffer::MemoryPool &pool = buffer::get();
+    auto scr = pool.get<unsigned>(nrow + 1);
+    Vec<unsigned> off = scr.as_vec();
+    {
+        DynCSRMat Ac = A;
+        FixedCSRMat Bc = B;
+        DISPATCH_START(nrow)
+        [Ac, Bc, off] __device__(unsigned i) mutable {
+            const Row &row = Ac.rows.data[i];
+            off.data[i] = row.head + row.ref_head +
+                          (Bc.index.offset[i + 1] - Bc.index.offset[i]) +
+                          (Bc.transpose.offset[i + 1] - Bc.transpose.offset[i]);
+        } DISPATCH_END;
+    }
+    return kernels::exclusive_scan(off.data, nrow);
+}
+
 // Apply the preconditioner: result = M_schwarz^-1 x, one additive aggregate-
 // Schwarz sweep. Each block computes z_seg = A_loc^-1 r_seg = G^T (G r_seg), with
 // G the stored inverse Cholesky factor, so result is SPD by construction. For
@@ -1613,6 +1671,28 @@ void build(SchwarzHierarchy &H, const DynCSRMat &A, const FixedCSRMat &B,
             K.coarse_weight = v;
         }
     }
+    // Memory guard: cap the projected Schwarz build footprint at this fraction
+    // of free VRAM, degrading (fewer levels, then block-Jacobi) instead of
+    // aborting on a cudaMalloc failure. PPF_SCHWARZ_MEM_FRAC overrides, in (0,1].
+    static const double mem_frac = [] {
+        double f = 0.5;
+        if (const char *e = getenv("PPF_SCHWARZ_MEM_FRAC")) {
+            double v = atof(e);
+            if (v > 0.0 && v <= 1.0) {
+                f = v;
+            }
+        }
+        return f;
+    }();
+    static const bool s_mem_prof = [] {
+        const char *e = getenv("PPF_SCHWARZ_PROF");
+        return e && e[0] == '1';
+    }();
+    // Largest coarse block-nnz whose multilevel build has already fit. The coarse
+    // guard below skips its cudaMemGetInfo check while the operator is not growing
+    // past this, so steady-state multilevel solves keep the exact path. Reset on a
+    // structural change (new scene / kmax) in the !struct_same branch below.
+    static unsigned s_mas_cap_nnz = 0;
     H.nrow = nrow;
     H.kmax = kmax;
     H.max_dim = max_dim;
@@ -1644,6 +1724,12 @@ void build(SchwarzHierarchy &H, const DynCSRMat &A, const FixedCSRMat &B,
         K.dyn_hash = h;
     }
 
+    // Project the current level-0 / coarse block-nnz once (cheap offsets-only
+    // pass) for the memory guards. Only needed for a fresh level-0 allocation
+    // or when the multilevel coarse operator will be built.
+    const bool need_fine_nnz = !struct_same || levels >= 2;
+    const unsigned fine_nnz = need_fine_nnz ? project_fine_nnz(A, B) : 0u;
+
     if (!struct_same) {
         K.agg.free();
         K.agg_off.free();
@@ -1661,6 +1747,34 @@ void build(SchwarzHierarchy &H, const DynCSRMat &A, const FixedCSRMat &B,
             K.lvl[l].free_all();
         }
         K.nlev = 1;
+        s_mas_cap_nnz = 0; // structural change: re-validate the coarse fit below
+
+        // Memory guard (level 0): the persistent single-level state (dominated
+        // by K.ainv = 9*kmax*nrow floats) must fit or there is no Schwarz base at
+        // all. The old cache was freed just above, so free VRAM now reflects the
+        // room a fresh build has; if the projection exceeds PPF_SCHWARZ_MEM_FRAC
+        // of it, degrade to block-Jacobi (H.n_agg == 0 makes solve() skip
+        // set_schwarz so cg() takes its existing block-Jacobi branch) rather than
+        // aborting on a cudaMalloc failure. Return cleanly with nothing allocated.
+        {
+            size_t free_b = 0, total_b = 0;
+            CUDA_HANDLE_ERROR(cudaMemGetInfo(&free_b, &total_b));
+            const size_t need = schwarz_level0_bytes(nrow, kmax, fine_nnz);
+            const size_t budget = (size_t)(mem_frac * (double)free_b);
+            if (need > budget) {
+                if (s_mem_prof) {
+                    SimpleLog::message(
+                        "[schwarz mem] level0 need=%zu MB free=%zu MB budget=%zu "
+                        "MB -> degrade to block-Jacobi",
+                        need >> 20, free_b >> 20, budget >> 20);
+                }
+                K.valid = false;
+                K.nrow = 0;  // force a fresh attempt on the next solve
+                H.n_agg = 0; // sentinel: solve() falls back to block-Jacobi
+                H.nlev = 1;
+                return;
+            }
+        }
         K.agg = Vec<unsigned>::alloc(nrow);
         K.agg_off = Vec<unsigned>::alloc(nrow + 1);
         K.members = Vec<unsigned>::alloc(nrow);
@@ -1731,11 +1845,40 @@ void build(SchwarzHierarchy &H, const DynCSRMat &A, const FixedCSRMat &B,
 
 
     K.levels_req = levels;
+    // Memory guard (coarse): project the multilevel build peak and, when it
+    // would exceed PPF_SCHWARZ_MEM_FRAC of free VRAM, clamp to the single-level
+    // smoother already built above (factor_kernel ran before this point) instead
+    // of letting build_mas hard-abort on a cudaMalloc at high contact counts.
+    // Only checked when the coarse operator would grow past what has already been
+    // built successfully, so steady-state multilevel solves keep the exact path
+    // (no math change on the paths that fit).
+    bool coarse_fits = true;
     if (levels >= 2) {
+        const unsigned m0nnz = fine_nnz + nrow;
+        if (m0nnz > s_mas_cap_nnz) {
+            size_t free_b = 0, total_b = 0;
+            CUDA_HANDLE_ERROR(cudaMemGetInfo(&free_b, &total_b));
+            const size_t need = schwarz_coarse_bytes(m0nnz);
+            const size_t budget = (size_t)(mem_frac * (double)free_b);
+            coarse_fits = need <= budget;
+            if (s_mem_prof) {
+                SimpleLog::message(
+                    "[schwarz mem] coarse m0nnz=%u need=%zu MB free=%zu MB "
+                    "budget=%zu MB -> %s",
+                    m0nnz, need >> 20, free_b >> 20, budget >> 20,
+                    coarse_fits ? "multilevel" : "clamp to 1 level");
+            }
+        }
+    }
+    if (levels >= 2 && coarse_fits) {
         // Multilevel additive Schwarz coarse correction (Galerkin + per-level
         // domain factor) over the connectivity partition. Rebuilt every solve;
         // K.nlev is the achieved depth.
         build_mas(A, B, C, levels, kmax);
+        const unsigned m0nnz = fine_nnz + nrow;
+        if (m0nnz > s_mas_cap_nnz) {
+            s_mas_cap_nnz = grow_cap(m0nnz); // matches build_mas' grow_cap headroom
+        }
     } else {
         K.nlev = 1;
     }

@@ -28,8 +28,18 @@ if "%WARMUP_LOGGING%"=="" (
     REM inner cmd's failure, so without it every warmup failure (bad MSVC
     REM install, missing dep) is masked as success and only surfaces steps
     REM later. This forwards the re-launched warmup's real exit code.
+    REM
+    REM The `!ERRORLEVEL!` below is equally REQUIRED, for the same reason one
+    REM level up. cmd.exe percent-expands a parenthesized block once, when it
+    REM parses the whole block, so `%ERRORLEVEL%` here would be substituted
+    REM with the value from BEFORE the powershell line ran (0, since the
+    REM preceding statements are successful SETs) and would discard the exit
+    REM code the line above went to such lengths to forward. Delayed
+    REM expansion is evaluated per line at execution time, so it sees the
+    REM real code. Verified on Windows Server 2025: with `%ERRORLEVEL%` a
+    REM child exiting 1 reports success, with `!ERRORLEVEL!` it reports 1.
     powershell -Command "& { cmd /c 'set WARMUP_LOGGING=1&& set NOPAUSE=!NOPAUSE!&& \"%~f0\"' 2>&1 | Tee-Object -FilePath '%LOGFILE%'; exit $LASTEXITCODE }"
-    exit /b %ERRORLEVEL%
+    exit /b !ERRORLEVEL!
 )
 
 echo === ZOZO's Contact Solver Native Windows Environment Setup ===

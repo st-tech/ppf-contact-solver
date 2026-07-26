@@ -11,6 +11,32 @@
 
 namespace accd {
 
+// Set to 1u by ccd_helper when a contact pair begins the step inside the
+// contact offset (d2 <= offset^2): two surfaces start out touching or
+// overlapping, which the conservative advance cannot resolve. Recorded here
+// instead of trapping the device (a bare assert) so the host can end the run
+// with a clear, structured OverlappingStart crash. Defined in contact.cu (the
+// only translation unit that includes this header); cleared host-side before
+// each line search and read after it.
+extern __device__ unsigned g_ccd_overlap;
+
+// A representative overlapping pair (two vertex indices) and its kind
+// (0 = vertex-face, 1 = edge-edge, 2 = point-point), recorded once by the first
+// contact CCD that detects the overlap so the crash can name the elements the
+// way an infeasible-pin crash names its vertex. The CCD structs (which hold the
+// indices) record these; ccd_helper only flips g_ccd_overlap. UINT_MAX means
+// "unset". Cleared host-side alongside g_ccd_overlap.
+extern __device__ unsigned g_ccd_overlap_v0;
+extern __device__ unsigned g_ccd_overlap_v1;
+extern __device__ unsigned g_ccd_overlap_kind;
+
+// The squared start distance and offset of a flagged pair, in solver
+// coordinate units, written at the flag sites (plain last-writer stores: any
+// flagged pair's values answer the diagnostic question of HOW overlapping the
+// start was). Cleared host-side alongside g_ccd_overlap.
+extern __device__ float g_ccd_overlap_d2;
+extern __device__ float g_ccd_overlap_offset;
+
 template <class T, unsigned R, unsigned C>
 __device__ void centerize(SMat<T, R, C> &x) {
     SVec<T, R> mov = SVec<T, R>::Zero();
@@ -23,11 +49,24 @@ __device__ void centerize(SMat<T, R, C> &x) {
     }
 }
 
-template <class T, unsigned R, unsigned C>
+// Lipschitz bound on the rate at which the distance between the two primitives
+// can shrink, used by ccd_helper to size each conservative advance step. The
+// closest point on each primitive is a convex combination of that primitive's
+// vertices, so the relative velocity of the closest-point pair is a convex
+// combination of the INTER-primitive column-velocity differences (columns
+// [0, SPLIT) belong to primitive A, [SPLIT, C) to primitive B). Its norm is
+// therefore bounded by the max over inter-primitive pairs alone; intra-primitive
+// pairs (both columns on the same primitive) cannot increase the closest-point
+// relative velocity and only inflate the bound, wasting advance-loop iterations.
+// Restricting the max to inter-primitive pairs is strictly <= the all-pairs
+// bound and remains a valid Lipschitz constant, so the recovered toi is
+// unchanged (bisection converges to the same root) while penetration-free
+// conservativeness is preserved.
+template <class T, unsigned R, unsigned C, unsigned SPLIT>
 __device__ float max_relative_u(const SMat<T, R, C> &u) {
     float max_u = 0.0f;
-    for (int i = 0; i < C; i++) {
-        for (int j = i + 1; j < C; j++) {
+    for (int i = 0; i < SPLIT; i++) {
+        for (int j = SPLIT; j < C; j++) {
             SVec<float, R> du = (u.col(i) - u.col(j)).template cast<float>();
             max_u = std::max<float>(max_u, du.squaredNorm());
         }
@@ -41,7 +80,21 @@ __device__ float ccd_helper(const SMat<T, R, C> &x0, const SMat<T, R, C> &dx,
                             const ParamSet &param) {
     float toi = 0.0f;
     float max_t = param.line_search_max_t;
-    float eps = param.ccd_reduction * (sqrtf(square_dist_func(x0)) - offset);
+    float d2_start = square_dist_func(x0);
+    // A contact pair that begins the step already inside the contact offset
+    // (two surfaces touching or overlapping) is the one state the barrier and
+    // the conservative advance cannot resolve. Record it and return 0 (no
+    // advance) rather than trapping the device: the host reads g_ccd_overlap
+    // after the line search and ends the run with a structured OverlappingStart
+    // crash and an actionable message. A separated start (d2 > offset^2) is
+    // unaffected.
+    if (!(d2_start > offset * offset)) {
+        g_ccd_overlap = 1u;
+        g_ccd_overlap_d2 = d2_start;
+        g_ccd_overlap_offset = offset;
+        return 0.0f;
+    }
+    float eps = param.ccd_reduction * (sqrtf(d2_start) - offset);
     float target = eps + offset;
     float eps_sqr = eps * eps;
     float inv_u_max = 1.0f / u_max;
@@ -65,7 +118,16 @@ __device__ float ccd_helper(const SMat<T, R, C> &x0, const SMat<T, R, C> &dx,
             break;
         }
     }
-    assert(toi > 0.0f);
+    if (!(toi > 0.0f)) {
+        // Same overlap condition surfacing from the advance loop: the pair
+        // reaches the contact offset at the very start of the step (surfaces
+        // effectively touching), so no positive time of impact exists. Record
+        // it and return 0, as above.
+        g_ccd_overlap = 1u;
+        g_ccd_overlap_d2 = d2_start;
+        g_ccd_overlap_offset = offset;
+        return 0.0f;
+    }
     return toi;
 }
 
@@ -134,7 +196,8 @@ __device__ float point_triangle_ccd(const Vec3f &p0, const Vec3f &p1,
     dx << dp, dt0, dt1, dt2;
     centerize<float, 3, 4>(x0);
     centerize<float, 3, 4>(dx);
-    float u_max = max_relative_u<float, 3, 4>(dx);
+    // point = col 0, triangle = cols 1..3 -> SPLIT = 1
+    float u_max = max_relative_u<float, 3, 4, 1>(dx);
     if (u_max) {
         PointTriangleSquaredDist<float, float> dist_func;
         return ccd_helper<PointTriangleSquaredDist<float, float>, float, 3, 4>(
@@ -157,7 +220,8 @@ __device__ float point_edge_ccd(const Vec3f &p0, const Vec3f &p1,
     dx << dp, dt0, dt1;
     centerize<float, 3, 3>(x0);
     centerize<float, 3, 3>(dx);
-    float u_max = max_relative_u<float, 3, 3>(dx);
+    // point = col 0, edge = cols 1..2 -> SPLIT = 1
+    float u_max = max_relative_u<float, 3, 3, 1>(dx);
     if (u_max) {
         PointEdgeSquaredDist<float, float> dist_func;
         return ccd_helper<PointEdgeSquaredDist<float, float>, float, 3, 3>(
@@ -178,7 +242,8 @@ __device__ float point_point_ccd(const Vec3f &p0, const Vec3f &p1,
     dx << dp, dq;
     centerize<float, 3, 2>(x0);
     centerize<float, 3, 2>(dx);
-    float u_max = max_relative_u<float, 3, 2>(dx);
+    // point = col 0, point = col 1 -> SPLIT = 1 (only the single inter pair)
+    float u_max = max_relative_u<float, 3, 2, 1>(dx);
     if (u_max) {
         PointPointSquaredDist<float, float> dist_func;
         return ccd_helper<PointPointSquaredDist<float, float>, float, 3, 2>(
@@ -203,7 +268,8 @@ __device__ float edge_edge_ccd(const Vec3f &ea00, const Vec3f &ea01,
     dx << dea0, dea1, deb0, deb1;
     centerize<float, 3, 4>(x0);
     centerize<float, 3, 4>(dx);
-    float u_max = max_relative_u<float, 3, 4>(dx);
+    // edge A = cols 0..1, edge B = cols 2..3 -> SPLIT = 2
+    float u_max = max_relative_u<float, 3, 4, 2>(dx);
     if (u_max) {
         EdgeEdgeSquaredDist<float, float> dist_func;
         return ccd_helper<EdgeEdgeSquaredDist<float, float>, float, 3, 4>(

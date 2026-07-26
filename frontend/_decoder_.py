@@ -253,9 +253,27 @@ class BlenderApp:
         # can pick its own backend (fTetWild or TetGen) and per-field
         # overrides.
         ftetwild_by_uuid: dict = {}
+        solver_fps = None
+        time_scale = None
         param_path = os.path.join(self._root, "param.pickle")
         if os.path.exists(param_path):
             self._param_decoder = ParamDecoder().set_path(param_path)
+            # The DATA payload is timing-free (frame offsets / raw animation
+            # rates); the time base lives HERE. Both keys are required in a
+            # v2 param payload; fail loud rather than defaulting.
+            _scene_params = self._param_decoder._data.get("scene")
+            if not isinstance(_scene_params, dict) or "fps" not in _scene_params:
+                raise RuntimeError(
+                    "param.pickle is missing scene.fps; "
+                    "re-Transfer from the Blender addon"
+                )
+            solver_fps = float(_scene_params["fps"])
+            if "time_scale" not in self._param_decoder._data:
+                raise RuntimeError(
+                    "param.pickle is missing time_scale; "
+                    "re-Transfer from the Blender addon"
+                )
+            time_scale = float(self._param_decoder._data["time_scale"])
             for _entry in self._param_decoder._data.get("group", []):
                 if not _entry:
                     continue
@@ -298,6 +316,8 @@ class BlenderApp:
             ),
             ftetwild_by_uuid=ftetwild_by_uuid,
             stitch_endpoint_uuids=stitch_endpoint_uuids,
+            solver_fps=solver_fps,
+            time_scale=time_scale,
         )
         return self
 
@@ -777,17 +797,23 @@ class ParamDecoder:
         """Split a partial-pin SOLID holder into a hard (FixPair) sub-holder
         and a soft (PullPair) sub-holder.
 
-        Runs UNCONDITIONALLY for every hard-intent partial Poisson holder
-        (no ``pull_strength`` in cfg; carries ``_solid_pin`` + ``_solid_full_w``
-        + ``_solid_surf_mask``). This is a correctness fix, not a feature gate:
-        an interior fix pin is a zero-diagonal CG nan (the solver assembles the
-        fix barrier over surface verts only and gates off inertia for fix
-        pins), so interior driven verts must ALWAYS become soft pull. The
+        Runs for every hard-intent partial Poisson holder (no ``pull_strength``
+        in cfg; carries ``_solid_pin`` + ``_solid_full_w`` + ``_solid_surf_mask``).
+
+        This split used to be a correctness workaround: an interior fix pin was
+        a zero-diagonal CG nan, because the solver assembled the fix barrier
+        over surface verts only and gated off inertia for fix pins. That is no
+        longer true -- a fix pin is an exact Dirichlet BC whose diagonal block
+        becomes the identity, so an interior fix pin is now well posed.
+
+        The split is kept as what it also always was: an AUTHORING control. A
+        partially pinned SOLID gets a hard core and a soft skirt, and the
         per-pin ``fix_weight_threshold`` (cfg, default
-        ``_DEFAULT_FIX_WEIGHT_THRESHOLD``) only controls the
-        SURFACE hard/soft split: 0 makes every surface driven vert hard and the
-        interior soft (the legacy "pinned surface is rigid" intent, minus the
-        interior nan); higher values soften the low-weight surface skirt.
+        ``_DEFAULT_FIX_WEIGHT_THRESHOLD``) sets where the boundary falls. 0
+        makes every surface driven vert hard and the interior soft; higher
+        values soften the low-weight surface skirt. Retiring the split would
+        silently stiffen every saved partial-pin SOLID scene, so it is a
+        separate, separately announced change.
 
         Each sub-holder reuses the shared full ``S_t`` / ``M`` operators with
         its own full-axis ``keep`` mask; the move-op builder slices
@@ -832,8 +858,9 @@ class ParamDecoder:
             # FixPair holder (held at rest) so they are rigidly fixed; the
             # original holder stays the pull holder (its pull surface +
             # interior keep following the captured target). Hard verts are
-            # surface-only, so the FixPair is safe (interior fix => CG nan),
-            # and a static hard pin has no captured track so it holds at rest
+            # surface-only (the hard-core / soft-skirt split, see
+            # _split_solid_pin_holder), and a static hard pin has no captured
+            # track so it holds at rest
             # (the pull holder already pulls those verts toward rest too, so
             # there is no conflict; the FixPair just makes them rigid).
             harmonic = getattr(d, "_harmonic", None)
@@ -907,11 +934,11 @@ class ParamDecoder:
             full_w = np.asarray(fw)                  # full axis
             df_arr = np.asarray(df)
             surf_mask = np.asarray(sm)               # full axis, bool
-            # Hard FixPairs are SURFACE-ONLY: the solver assembles the fix
-            # barrier over surface verts only and gates off inertia for fix
-            # pins, so an interior fix pin would be a zero-diagonal CG nan.
-            # Interior high-weight verts fall through to soft pull (safe: pull
-            # is assembled over all verts and weight*I keeps the diagonal > 0).
+            # Hard FixPairs are SURFACE-ONLY. This is the hard-core /
+            # soft-skirt authoring split, not a solver limitation: an interior
+            # fix pin is well posed now that a fix pin is an exact Dirichlet BC
+            # (its diagonal block becomes the identity). Interior high-weight
+            # verts fall through to soft pull.
             # Intent-aware hardening: a pull-intent surface vert (its Blender
             # corners are dominated by pull pins) must NEVER harden. Such verts
             # share this merged holder only because a hard pin-root overlaps
@@ -1023,7 +1050,7 @@ class ParamDecoder:
                                       "rest_full": sp.get("rest_full")}
                 if hard_blender:
                     h._data._blender_pin_indices = hard_blender
-                h.pull(0.0)  # FixPair barrier; its captured ops make it kinematic
+                h.pull(0.0)  # FixPair (exact Dirichlet fix); captured ops make it kinematic
             if soft_index:
                 s = dyn_obj.pin(soft_index)
                 _carry(s, d)
@@ -1061,8 +1088,6 @@ class ParamDecoder:
                 pin_holder.pull_per_vertex(
                     float(cfg["pull_strength"]) * np.asarray(sp_weights)
                 )
-        if "pin_stiffness" in cfg:
-            pin_holder._data.pin_stiffness = float(cfg["pin_stiffness"])
         if "pin_group_id" in cfg:
             # pin_group_id is a mirrored field, but the decode-time override
             # writes only the canonical _data; the Rust validator mirror is
@@ -1811,7 +1836,7 @@ class SceneDecoder:
                 f"  * name: {name}, vert: {vert.shape}, face: {face.shape if face is not None else 'None'}, uv: {len(uv) if uv is not None else 'None'}"
             )
 
-    def populate_objects(self, scene: Scene, verbose: bool = False, progress_callback=None, ftetwild_by_uuid: dict | None = None, stitch_endpoint_uuids: set | None = None) -> Scene:
+    def populate_objects(self, scene: Scene, verbose: bool = False, progress_callback=None, ftetwild_by_uuid: dict | None = None, stitch_endpoint_uuids: set | None = None, solver_fps: float | None = None, time_scale: float | None = None) -> Scene:
         """Populate ``scene`` with objects from the decoder's pickle data.
 
         Handles STATIC, SOLID, SHELL, ROD, PDRD, and SAND groups, including canonical
@@ -1884,6 +1909,8 @@ class SceneDecoder:
                             stitch_endpoint_uuids and obj_uuid in stitch_endpoint_uuids
                         ),
                         verbose=verbose,
+                        solver_fps=solver_fps,
+                        time_scale=time_scale,
                     )
                 elif group_type == "SOLID":
                     _obj, tet_mesh, V, F = self._populate_solid(
@@ -2101,7 +2128,7 @@ class SceneDecoder:
             "progress": progress,
         }
 
-    def _populate_static(self, scene, obj, name, obj_uuid, local_vert, face, transform, vert, is_stitch_endpoint=False, verbose=False):
+    def _populate_static(self, scene, obj, name, obj_uuid, local_vert, face, transform, vert, is_stitch_endpoint=False, verbose=False, solver_fps=None, time_scale=None):
         """STATIC group dispatcher: rest-pose mesh, transform-keyframe
         animation, UI-assigned static ops, or per-vertex deformation
         cache. Returns the Scene Object for downstream pin / stitch
@@ -2127,6 +2154,17 @@ class SceneDecoder:
             bool(static_ops),
             static_deform is not None,
         )
+        if (transform_anim is not None or static_ops
+                or static_deform is not None) and (
+                solver_fps is None or time_scale is None):
+            # The wire carries frame offsets and raw animation rates; only
+            # the Param payload can supply the time base. Fail loud rather
+            # than guessing a rate.
+            raise RuntimeError(
+                f"STATIC '{name}' carries animation; decoding requires the "
+                "Param payload fps/time_scale (param.pickle). A standalone "
+                "SceneDecoder cannot decode animated STATICs."
+            )
         if verbose:
             print(
                 f"      > transform_animation: "
@@ -2169,6 +2207,14 @@ class SceneDecoder:
             )
             return _o, rest_t
 
+        def _driven_pin(_o):
+            """Pin holder for a collider that moves. Every one of its vertices is
+            prescribed by the user's animation, and an ordinary (non-pull) pin is
+            now an exact Dirichlet boundary condition, so no marking is needed:
+            the solver eliminates these DOF and the collider tracks its keyframes
+            exactly instead of being pushed off them by contact."""
+            return _o.pin()
+
         if transform_anim is not None:
             # Case 1: Blender keyframes drive the pose. The simulator
             # enforces the pin as a soft constraint, so its output
@@ -2178,9 +2224,12 @@ class SceneDecoder:
             # collider visually consistent with the cloth. Include in
             # output PC2.
             _obj, rest_translation = _setup_pin_shell()
-            _obj.pin().transform_keyframes(
+            _driven_pin(_obj).transform_keyframes(
                 local_vert=local_vert,
-                times=transform_anim["time"],
+                # Frame offsets on the wire; seconds derived from the Param
+                # payload's fps (the Time-Scaled solver rate).
+                times=[float(o) / solver_fps
+                       for o in transform_anim["frame_offset"]],
                 translations=transform_anim["translation"],
                 quaternions=transform_anim["quaternion"],
                 scales=transform_anim["scale"],
@@ -2193,10 +2242,11 @@ class SceneDecoder:
             # fcurves, so the remote sim is the source of truth (include
             # in output so PC2 can play it back).
             _obj, _ = _setup_pin_shell()
-            pin = _obj.pin()
+            pin = _driven_pin(_obj)
             for op in static_ops:
-                t_start = float(op["t_start"])
-                t_end = float(op["t_end"])
+                # Frame offsets on the wire -> seconds via the Param fps.
+                t_start = float(op["frame_offset_start"]) / solver_fps
+                t_end = float(op["frame_offset_end"]) / solver_fps
                 transition = op.get("transition", "linear")
                 if op["op_type"] == "MOVE_BY":
                     pin.move_by(
@@ -2211,7 +2261,11 @@ class SceneDecoder:
                     pin.spin(
                         center=[0.0, 0.0, 0.0],
                         axis=list(op["axis"]),
-                        angular_velocity=float(op["angular_velocity"]),
+                        # Wire carries the RAW authored degrees per
+                        # ANIMATION second; time_scale converts to the
+                        # solver rate (deg per solver second).
+                        angular_velocity=(
+                            float(op["angular_velocity_anim"]) * time_scale),
                         t_start=t_start,
                         t_end=t_end,
                         center_mode="absolute",
@@ -2241,7 +2295,6 @@ class SceneDecoder:
             # against the drifted positions, so include the shell in
             # output PC2 and let MESH_CACHE overwrite the depsgraph-
             # driven mesh on display.
-            times = list(static_deform["time"])
             vert_frames = np.ascontiguousarray(
                 static_deform["vert_frames"], dtype=np.float64,
             )
@@ -2253,11 +2306,10 @@ class SceneDecoder:
                 )
             n_frames = vert_frames.shape[0]
             n_verts = vert_frames.shape[1]
-            if n_frames != len(times):
-                raise ValueError(
-                    f"static_deform_animation for '{name}': "
-                    f"len(time)={len(times)} != n_frames={n_frames}"
-                )
+            # Row i IS frame offset i (no time array on the wire), so the
+            # row times derive from the Param fps by construction and this
+            # channel cannot desync from the rest of the schedule.
+            times = [k / solver_fps for k in range(n_frames)]
             if n_verts != len(local_vert):
                 raise ValueError(
                     f"static_deform_animation for '{name}': "
@@ -2265,7 +2317,7 @@ class SceneDecoder:
                     f"{len(local_vert)}"
                 )
             _obj, _ = _setup_pin_shell()
-            pin = _obj.pin()
+            pin = _driven_pin(_obj)
             # Successive MoveBy segments compose: at t=times[k],
             # pin pos = local_vert + sum(deltas up to k) = vert_frames[k]
             # (because the encoder set local_vert == vert_frames[0]).
@@ -2296,6 +2348,8 @@ class SceneDecoder:
             # the solver asserts come from apply_to_objects' clear_all() tri
             # defaults at make() time (the STATIC encoder prunes those keys).
             _obj, _ = _setup_pin_shell()
+            # Carries no operations, so its pins never move: every vertex is
+            # held by an exact fixed (Dirichlet) pin and stays frozen at rest.
             _obj.pin()
             _obj._force_dynamic = True
             # A promoted STATIC is a cross-stitch TARGET (a collider), never a
@@ -2608,14 +2662,13 @@ class SceneDecoder:
                         # Surface mask over the full axis. driven_full is
                         # surf_ids + interior_ids, so the first len(surf_ids)
                         # entries are the surface verts (solver tet-index <
-                        # surface_vert_count). Hard FixPairs MUST be surface
-                        # only: the solver assembles the fix barrier/penalty
-                        # over surface_vert_count only (contact.cu) and gates
-                        # off inertia for every fix pin (energy.cu), so an
-                        # interior fix pin has a zero-diagonal block -> CG nan.
-                        # The threshold split keeps interior high-weight verts
-                        # as soft pull instead (pull is assembled over all verts
-                        # and weight*I keeps the diagonal positive).
+                        # surface_vert_count). Hard FixPairs are kept surface
+                        # only as the hard-core / soft-skirt authoring split;
+                        # the old "interior fix pin is a zero-diagonal CG nan"
+                        # reason no longer applies (a fix pin is an exact
+                        # Dirichlet BC whose diagonal block is the identity).
+                        # The threshold keeps interior high-weight verts as
+                        # soft pull.
                         holder._data._solid_surf_mask = (
                             np.arange(len(driven_full)) < len(surf_ids)
                         )

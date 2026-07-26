@@ -104,9 +104,15 @@ def _pc2_frame_positions(obj, scene):
     pc2 = get_pc2_path(object_pc2_key(obj))
     if not os.path.exists(pc2):
         return None
+    from ....core.encoder import resolve_start_frame_or_default
+
     n_verts = len(obj.data.vertices)
     n_frames = read_pc2_frame_count(pc2)
-    frame_idx = scene.frame_current - 1
+    # Same mapping the MESH_CACHE modifier applies to this cache: PC2 index 0
+    # displays at the solve's starting frame. Reading index ``frame_current - 1``
+    # here instead would draw the pin markers at an unrelated moment of the sim
+    # whenever the solve does not start at frame 1.
+    frame_idx = scene.frame_current - resolve_start_frame_or_default(scene)
     if n_frames <= 0 or not (0 <= frame_idx < n_frames):
         return None
     verts = read_pc2_frame(pc2, frame_idx, n_verts)
@@ -185,7 +191,14 @@ def _build_pin_data(scene, depsgraph):
 
     for group in iterate_active_object_groups(scene):
         if group.object_type != "STATIC":
-            current_frame = scene.frame_current
+            # Frames elapsed since the solve began. A pin duration is a COUNT
+            # of frames measured from simulated time zero (the encoder emits
+            # ``pin_duration / fps`` with no origin), so comparing it against
+            # an absolute Blender frame only lines up when the solve starts at
+            # frame 1. Rebasing here keeps the overlay's release moment on the
+            # solver's.
+            from ....core.encoder import resolve_start_frame_or_default
+            current_frame = scene.frame_current - resolve_start_frame_or_default(scene)
             # UUIDs of objects that have at least one pin to draw this
             # frame. Only these objects can contribute a pin dot, so
             # objects with no matching visible pin are skipped before the
@@ -200,7 +213,7 @@ def _build_pin_data(scene, depsgraph):
                 and pin_ref.object_uuid
                 and not (
                     pin_ref.use_pin_duration
-                    and current_frame > pin_ref.pin_duration
+                    and current_frame >= pin_ref.pin_duration
                 )
             }
             if not pinned_obj_uuids:
@@ -252,7 +265,7 @@ def _build_pin_data(scene, depsgraph):
                     for pin_ref in group.pin_vertex_groups:
                         if not pin_ref.show_overlay:
                             continue
-                        if pin_ref.use_pin_duration and current_frame > pin_ref.pin_duration:
+                        if pin_ref.use_pin_duration and current_frame >= pin_ref.pin_duration:
                             continue
                         resolve_pin(pin_ref)
                         _, pin_vg_name = decode_vertex_group_identifier(
@@ -333,7 +346,7 @@ def _build_pin_data(scene, depsgraph):
                     for pin_ref in group.pin_vertex_groups:
                         if not pin_ref.show_overlay:
                             continue
-                        if pin_ref.use_pin_duration and current_frame > pin_ref.pin_duration:
+                        if pin_ref.use_pin_duration and current_frame >= pin_ref.pin_duration:
                             continue
                         resolve_pin(pin_ref)
                         _, pin_vg_name = decode_vertex_group_identifier(
@@ -374,19 +387,44 @@ def _build_pin_data(scene, depsgraph):
     return pin_data
 
 
-def _overlay_object_points(scene, obj_uuid):
+def _overlay_object_points(scene, obj_uuid, depsgraph):
     from ....core.uuid_registry import get_object_by_uuid
     obj = get_object_by_uuid(obj_uuid) if obj_uuid else None
     if obj is None:
         return None
     if obj.type == "MESH":
-        # Read animated positions from the PC2 cache (no depsgraph
-        # access). _pc2_frame_positions returns local-space Vectors or
-        # None on a cache miss / out-of-range frame, so fall back to the
-        # base-mesh rest pose here.
+        # Prefer the simulation PC2 cache (animated output positions).
+        # _pc2_frame_positions returns local-space Vectors or None on a cache
+        # miss / out-of-range frame.
         positions = _pc2_frame_positions(obj, scene)
         if positions is not None:
             return [obj.matrix_world @ p for p in positions]
+        # No PC2: sample the EVALUATED mesh so a modifier-deformed target
+        # (Armature, Lattice, Mesh Deform, shape keys, ...) draws its stitch
+        # endpoints on the DEFORMED surface the snap targeted and the solver
+        # runs on, not the rest/bind pose. For an armature-posed character the
+        # bind pose sits far from the deformed surface, so a rest-pose fallback
+        # makes the stitch lines shoot off to the bind pose. Mirrors
+        # _evaluated_pin_positions; a deform modifier preserves vertex
+        # count/order, so index i still names the same vertex the stitch ``ind``
+        # does. Falls back to obj.data only when the evaluated mesh is
+        # unavailable.
+        if depsgraph is not None:
+            try:
+                eval_obj = obj.evaluated_get(depsgraph)
+                eval_mesh = eval_obj.to_mesh()
+            except Exception:
+                eval_mesh = None
+            if eval_mesh is not None:
+                try:
+                    eval_world = eval_obj.matrix_world
+                    pts = [eval_world @ v.co for v in eval_mesh.vertices]
+                finally:
+                    try:
+                        eval_obj.to_mesh_clear()
+                    except Exception:
+                        pass
+                return pts
         return [obj.matrix_world @ v.co for v in obj.data.vertices]
     if obj.type == "CURVE":
         from ....core.curve_rod import sample_curve
@@ -396,7 +434,7 @@ def _overlay_object_points(scene, obj_uuid):
     return None
 
 
-def _build_snap_batches(scene):
+def _build_snap_batches(scene, depsgraph):
     state = get_addon_data(scene).state
     all_tris = []
     snap_points = []
@@ -419,8 +457,8 @@ def _build_snap_batches(scene):
         if not source_uuid or not target_uuid or not ind or not w:
             continue
 
-        source_points = _overlay_object_points(scene, source_uuid)
-        target_points = _overlay_object_points(scene, target_uuid)
+        source_points = _overlay_object_points(scene, source_uuid, depsgraph)
+        target_points = _overlay_object_points(scene, target_uuid, depsgraph)
         if source_points is None or target_points is None:
             continue
 

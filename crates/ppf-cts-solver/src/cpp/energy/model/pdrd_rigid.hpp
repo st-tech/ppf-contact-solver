@@ -608,6 +608,36 @@ inline void launch_restrict_rigid(const RigidMap &rm, const Vec<float> &y,
     CUDA_HANDLE_ERROR(cudaGetLastError());
 }
 
+// Reduced image of an INITIAL GUESS x (not a force). Cloth rows only.
+//
+// This is deliberately NOT P^T. restrict_rigid_kernel is the force restriction:
+// on a body block it accumulates sum_v J_v^T y_v, which is the right thing for a
+// residual and the wrong thing for a seed (it would sum the body's vertex
+// displacements into its 6 reduced DOFs). On a CLOTH row P is the identity, so
+// the exact reduced image of the seed is a plain copy; a body vertex's seed
+// entry is not representable in the reduced coordinates at all, so the body
+// block is zeroed. That loses nothing: launch_prolong_rigid overwrites every
+// body vertex from the body's reduced DOFs after the solve.
+static __global__ void seed_restrict_rigid_kernel(RigidMap rm, Vec<float> x,
+                                                  Vec<float> u) {
+    unsigned v = blockIdx.x * blockDim.x + threadIdx.x;
+    if (v >= rm.nrow) return;
+    if (rm.vbody.data[v] != RIGID_UNSET) return;
+    unsigned o = rm.cloth_off.data[v];
+    u.data[o + 0] = x.data[3 * v + 0];
+    u.data[o + 1] = x.data[3 * v + 1];
+    u.data[o + 2] = x.data[3 * v + 2];
+}
+
+inline void launch_seed_restrict(const RigidMap &rm, const Vec<float> &x,
+                                 Vec<float> &u) {
+    CUDA_HANDLE_ERROR(cudaMemset(u.data, 0, rm.dim * sizeof(float)));
+    unsigned tpb = 128;
+    seed_restrict_rigid_kernel<<<(rm.nrow + tpb - 1) / tpb, tpb>>>(
+        rm, const_cast<Vec<float> &>(x), u);
+    CUDA_HANDLE_ERROR(cudaGetLastError());
+}
+
 // Extract the per-body rotation DOFs (dtheta_b) of the reduced solution `u`
 // (layout: [3*ncloth cloth dofs][6 per body: dx(3), dtheta(3)]) into
 // dtheta_out[3*nb]. Used to integrate the applied rotation onto R_run.

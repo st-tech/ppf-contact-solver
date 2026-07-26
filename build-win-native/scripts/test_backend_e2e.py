@@ -13,17 +13,20 @@ fix in ``ui/connection_ops.py``.
 
 Run:
 
-    # Dev layout
+    # Source-tree layout
     "C:\\Program Files\\Blender Foundation\\Blender 5.0\\blender.exe" \\
-        -b --python C:\\dev\\build-win-native\\scripts\\test_backend_e2e.py
+        -b --python \\
+        C:\\ppf-contact-solver\\build-win-native\\scripts\\test_backend_e2e.py
 
     # Bundle layout (override via env)
-    set T2_ROOT=C:\\dev\\build-win-native\\dist && set T2_PORT=9092 && \\
+    set T2_ROOT=C:\\ppf-contact-solver\\build-win-native\\dist && \\
+        set T2_PORT=9092 && \\
         "C:\\Program Files\\Blender Foundation\\Blender 5.0\\blender.exe" \\
-        -b --python C:\\dev\\build-win-native\\scripts\\test_backend_e2e.py
+        -b --python \\
+        C:\\ppf-contact-solver\\build-win-native\\scripts\\test_backend_e2e.py
 
 Env:
-    T2_ROOT — solver root directory. Default ``C:\\dev``.
+    T2_ROOT — solver root directory. Default ``C:\\ppf-contact-solver``.
     T2_PORT — socket port. Default ``9091``.
 
 Sub-argv is not used: Blender consumes script args before the ``--``

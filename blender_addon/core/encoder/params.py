@@ -9,9 +9,17 @@ import json
 import numpy as np
 
 from ...models.groups import get_addon_data, iterate_object_groups
-from . import _normalize_and_scale, _swap_axes, _to_solver, resolve_fps
+from . import (
+    _normalize_and_scale,
+    _swap_axes,
+    _to_solver,
+    frame_to_time,
+    resolve_solver_fps,
+    resolve_start_frame,
+    resolve_time_scale,
+)
 from .dyn import _encode_dyn_params, _encode_invisible_colliders
-from .mesh import compute_group_bounding_box_diagonal, evaluate_at_frame_one
+from .mesh import compute_group_bounding_box_diagonal, evaluate_at_start_frame
 from .pin import _encode_pin_config
 
 
@@ -90,7 +98,10 @@ def _encode_scene_params(context, state, fps):
         "schwarz-levels": 1 if state.schwarz_levels == "LEVEL_1" else 2,
         "gravity": _swap_axes(state.gravity_3d),
         "wind": wind_force,
-        "frames": frame_count - 1,  # Blender 1..N → remote 0..N-1
+        # A count, so the starting frame does not enter: the solve always
+        # produces remote frames 0..N-1, which playback places on Blender
+        # frames start..start+N-1.
+        "frames": frame_count - 1,
         "fps": fps,
         "csrmat-max-nnz": int(state.contact_nnz),
         "isotropic-air-friction": np.float32(state.vertex_air_damp),
@@ -134,7 +145,34 @@ def _angular_axis_blender_vector(kf):
     return _ANGULAR_WORLD_VECTOR.get(kf.angular_axis, tuple(kf.angular_axis_custom))
 
 
-def _encode_group_params(context, groups, state, fps):
+def _initial_translational_velocity(assigned, start_frame):
+    """The translational velocity an object enters the solve with.
+
+    The LAST translational keyframe at or before the starting frame wins: that
+    is the value in effect at simulated time zero. Keys strictly after it go to
+    "velocity-schedule" instead. Matching on the starting frame exactly would
+    drop every key authored during a lead-in the solve does not cover, leaving
+    the object at rest with no warning while a spin key on the same row (which
+    clamps to t=0) still applied. At the default starting frame of 1 this
+    selects the frame-1 key, since ``VelocityKeyframe.frame`` has ``min=1``.
+
+    Written to vel.bin, which the solver scales by world_scaling on ingest
+    (like geometry), so it must NOT be scaled here too (that double-scales to
+    ws^2). The schedule is a dyn_param the solver does not scale, so it IS
+    scaled there.
+    """
+    chosen = None
+    for kf in assigned.velocity_keyframes:
+        if not kf.enable_translational or kf.frame > start_frame:
+            continue
+        if chosen is None or kf.frame >= chosen.frame:
+            chosen = kf
+    if chosen is None:
+        return np.array([0.0, 0.0, 0.0], dtype=np.float32)
+    return _swap_axes(_normalize_and_scale(chosen.direction, chosen.speed))
+
+
+def _encode_group_params(context, groups, state, fps, start_frame):
     """Encode per-group material parameters."""
     from ..uuid_registry import resolve_assigned
     group_params = []
@@ -217,7 +255,11 @@ def _encode_group_params(context, groups, state, fps):
                 "velocity-schedule",
                 "collision-windows",
             ],
-            "STATIC": ["contact-gap", "contact-offset", "friction"],
+            "STATIC": [
+                "contact-gap",
+                "contact-offset",
+                "friction",
+            ],
             "SAND": [
                 "sand-particle-mass",
                 "sand-friction",
@@ -410,32 +452,32 @@ def _encode_group_params(context, groups, state, fps):
             # "Enable Translational Velocity Overwrite" box is checked, so a
             # pure-spin keyframe does not zero the translation.
             "velocity": {
-                assigned.uuid: next(
-                    # Initial velocity (frame 1) is written to vel.bin, which the
-                    # solver scales by world_scaling on ingest (like geometry), so
-                    # it must NOT be scaled here too (that double-scales to ws^2).
-                    # The frame>1 schedule below is a dyn_param the solver does
-                    # not scale, so it IS scaled here.
-                    (_swap_axes(_normalize_and_scale(kf.direction, kf.speed))
-                     for kf in assigned.velocity_keyframes
-                     if kf.frame == 1 and kf.enable_translational),
-                    np.array([0.0, 0.0, 0.0], dtype=np.float32),
+                assigned.uuid: _initial_translational_velocity(
+                    assigned, start_frame,
                 )
                 for assigned in group.assigned_objects
                 if assigned.included
             },
             "velocity-schedule": {
                 assigned.uuid: [
-                    (float(kf.frame - 1) / fps, _swap_axes(_normalize_and_scale(kf.direction, kf.speed * state.world_scaling)))
+                    (
+                        frame_to_time(kf.frame, fps, start_frame),
+                        _swap_axes(_normalize_and_scale(
+                            kf.direction,
+                            # Animation m/s -> physical (see resolve_time_scale).
+                            kf.speed * state.world_scaling * resolve_time_scale(state),
+                        )),
+                    )
                     for kf in assigned.velocity_keyframes
-                    if kf.frame > 1 and kf.enable_translational
+                    if kf.frame > start_frame and kf.enable_translational
                 ]
                 for assigned in group.assigned_objects
                 if assigned.included
             },
             # Principal-axis angular (spin) overwrite. ALL keyframes (incl.
-            # frame 1 -> t=0) go through the schedule so the spin axis is
-            # resolved dynamically by the solver from the live geometry; each
+            # the starting frame -> t=0) go through the schedule so the spin
+            # axis is resolved dynamically by the solver from the live
+            # geometry; each
             # entry is (t, pca_index, speed_rad). No axis-swap: a pca_index
             # carries no frame, and the axis is resolved in solver space.
             # Angular overwrite splits by axis mode. Principal axes (PC1-3)
@@ -446,9 +488,10 @@ def _encode_group_params(context, groups, state, fps):
             "angular-velocity-schedule": {
                 assigned.uuid: [
                     (
-                        float(kf.frame - 1) / fps,
+                        max(0.0, frame_to_time(kf.frame, fps, start_frame)),
                         _ANGULAR_PCA_INDEX[kf.angular_axis],
-                        float(np.radians(kf.angular_speed)),
+                        # Animation rad/s -> physical (see resolve_time_scale).
+                        float(np.radians(kf.angular_speed)) * resolve_time_scale(state),
                     )
                     for kf in assigned.velocity_keyframes
                     if kf.enable_angular and kf.angular_speed != 0.0
@@ -460,7 +503,7 @@ def _encode_group_params(context, groups, state, fps):
             "angular-velocity-world-schedule": {
                 assigned.uuid: [
                     (
-                        float(kf.frame - 1) / fps,
+                        max(0.0, frame_to_time(kf.frame, fps, start_frame)),
                         _swap_axes(_normalize_and_scale(
                             _angular_axis_blender_vector(kf),
                             np.radians(kf.angular_speed),
@@ -484,8 +527,10 @@ def _encode_group_params(context, groups, state, fps):
             "collision-windows": {
                 assigned.uuid: [
                     (
-                        float(cw.frame_start - 1) / fps,
-                        float(max(cw.frame_end, cw.frame_start) - 1) / fps,
+                        max(0.0, frame_to_time(cw.frame_start, fps, start_frame)),
+                        max(0.0, frame_to_time(
+                            max(cw.frame_end, cw.frame_start), fps, start_frame,
+                        )),
                     )
                     for cw in assigned.collision_windows
                 ]
@@ -574,24 +619,34 @@ def _build_param_dict(context) -> dict:
     state = get_addon_data(scene).state
     groups = [group for group in iterate_object_groups(scene) if group.active]
 
-    fps = resolve_fps(state)
+    # Solver-fps (Time Scale applied): every frame->seconds conversion below,
+    # and the "fps" param itself, must use the scaled rate so the whole
+    # schedule re-interprets time coherently.
+    fps = resolve_solver_fps(state)
+    start_frame = resolve_start_frame(state)
 
-    # Evaluate the whole param tree at frame 1, matching the data encoder
-    # (_build_obj_data). The per-group bounding-box diagonal that scales
-    # contact-gap / contact-offset reads live mesh state, so without this
-    # the fingerprint would track the artist's current timeline frame and
+    # Evaluate the whole param tree at the starting frame, matching the data
+    # encoder (_build_obj_data). The per-group bounding-box diagonal that
+    # scales contact-gap / contact-offset reads live mesh state, so without
+    # this the fingerprint would track the artist's current timeline frame and
     # drift from what the server stored at upload. The inner keyframe
     # samplers (_encode_pin_config / _encode_dyn_params) save and restore
     # their own frame, so nesting them here is safe.
-    with evaluate_at_frame_one(context):
+    with evaluate_at_start_frame(context, state):
         scene_params = _encode_scene_params(context, state, fps)
-        group_params = _encode_group_params(context, groups, state, fps)
-        pin_config = _encode_pin_config(context, groups, state, fps)
+        group_params = _encode_group_params(context, groups, state, fps, start_frame)
+        pin_config = _encode_pin_config(context, groups, state, fps, start_frame)
         cross_stitch = _encode_cross_stitch(context)
-        dyn_param = _encode_dyn_params(state, fps)
+        dyn_param = _encode_dyn_params(state, fps, start_frame)
 
     result = {
         "scene": scene_params,
+        # TOP-LEVEL on purpose, not inside scene_params: apply_to_session
+        # forwards every scene key to session.param.set, which would demand
+        # a params.rs whitelist entry and pollute param.toml. The decoder
+        # reads this to convert authored animation rates (a SPIN op's
+        # degrees per animation second in the DATA payload) to solver rates.
+        "time_scale": resolve_time_scale(state),
         "group": group_params,
         "pin_config": pin_config,
     }
@@ -599,7 +654,7 @@ def _build_param_dict(context) -> dict:
         result["cross_stitch"] = cross_stitch
     if dyn_param:
         result["dyn_param"] = dyn_param
-    ic = _encode_invisible_colliders(state, fps)
+    ic = _encode_invisible_colliders(state, fps, start_frame)
     if ic:
         result["invisible_colliders"] = ic
     return result

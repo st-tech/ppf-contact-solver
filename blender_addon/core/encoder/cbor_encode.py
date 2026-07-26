@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import numpy as np
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 def _numpy_default(encoder, value):

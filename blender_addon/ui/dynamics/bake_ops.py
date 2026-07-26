@@ -229,6 +229,15 @@ def _force_bezier_free(obj) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _resolve_bake_start_frame() -> int:
+    """Blender frame that PC2 index 0 was displayed at, so a bake reproduces
+    the timeline placement the artist was scrubbing rather than snapping the
+    result back to frame 1."""
+    from ...core.encoder import resolve_start_frame
+    from ...models.groups import get_addon_data
+    return resolve_start_frame(get_addon_data(bpy.context.scene).state)
+
+
 def _make_entry(obj, group_index: int, assigned_uuid: str, assigned_name: str):
     """Build one bake-queue entry.
 
@@ -253,6 +262,10 @@ def _make_entry(obj, group_index: int, assigned_uuid: str, assigned_name: str):
         "group_index": group_index,
         "assigned_uuid": assigned_uuid,
         "frames_done": 0,
+        # Resolved once per bake so every frame of it keys onto the same
+        # timeline placement: PC2 index f bakes onto scene frame
+        # f + start_frame, matching where MESH_CACHE displayed it.
+        "start_frame": _resolve_bake_start_frame(),
     }
 
     pc2_exists = os.path.exists(path)
@@ -411,7 +424,7 @@ def _process_one_frame_mesh(entry, obj) -> None:
     keyframe_insert). Value is keyed 0→1→0 with CONSTANT interpolation
     so each shape key is "on" for exactly its frame."""
     f = entry["frames_done"]
-    scene_frame = f + 1
+    scene_frame = f + entry["start_frame"]
     n_verts = entry["n_verts"]
     positions = read_pc2_frame(entry["path"], f, n_verts)
     flat = numpy.ascontiguousarray(positions, dtype=numpy.float32).ravel()
@@ -438,7 +451,7 @@ def _process_one_frame_curve(entry, obj) -> None:
     """CURVE: per-CV keyframes on bezier_points/points. CV counts are
     small so the per-point keyframe_insert cost is tolerable."""
     f = entry["frames_done"]
-    frame = f + 1
+    frame = f + entry["start_frame"]
     frame_data = entry["cache"][f]
     cv_i = 0
     for spline in obj.data.splines:
@@ -881,7 +894,7 @@ class OBJECT_OT_BakeSingleFrame(Operator):
         if obj.type == "CURVE":
             snapshot = _capture_curve_pose(eval_obj.data)
             cleanup_mesh_cache(obj, keep_baked_pose=True)
-            scene.frame_set(1)
+            scene.frame_set(_resolve_bake_start_frame())
             _apply_curve_pose(data, snapshot)
         else:
             # Capture eval positions FIRST (MESH_CACHE in stack means
@@ -891,7 +904,7 @@ class OBJECT_OT_BakeSingleFrame(Operator):
             current_positions = [v.co.copy() for v in eval_obj.data.vertices]
             strip_modifiers_above_cache(obj)
             cleanup_mesh_cache(obj)
-            scene.frame_set(1)
+            scene.frame_set(_resolve_bake_start_frame())
             for i, pos in enumerate(current_positions):
                 data.vertices[i].co = pos
 
@@ -1030,7 +1043,7 @@ class SOLVER_OT_BakeAllSingleFrame(Operator):
 
         # Tear down existing caches and apply the captured pose at frame 1.
         from ...core.uuid_registry import resolve_assigned as _resolve2
-        scene.frame_set(1)
+        scene.frame_set(_resolve_bake_start_frame())
         count = 0
         for group in iterate_active_object_groups(scene):
             i = len(group.assigned_objects) - 1

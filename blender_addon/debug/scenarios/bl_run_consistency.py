@@ -38,6 +38,11 @@
 #         param error) and the final stage starts the solver.
 #
 #   D. data_drift_run_click_reports_error
+#   E. time_scale_edit_is_param_only: editing Time Scale leaves the data
+#      hash aligned (timing-free data payload) while the param hash
+#      drifts; Run aborts with "Update Params", never "Transfer".
+#   E2. update_params_suffices_for_time_scale: Update Params alone
+#      realigns both hashes.
 #         A bmesh-driven topology change makes ``compute_data_hash``
 #         diverge. The staged geometry check aborts first, so the drained
 #         run ends CANCELLED with a "Transfer" error (the data path is the
@@ -86,6 +91,19 @@ try:
     pin = cloth.create_pin(plane.name, "AllPin")
     pin.move_by(delta=(0.1, 0.0, 0.0), frame_start=1, frame_end=4,
                 transition="LINEAR")
+
+    # A keyframed STATIC gives the DATA payload a timing channel
+    # (transform_animation), the one that used to embed seconds and made a
+    # Time Scale edit flip the data hash. Subtest E asserts it no longer
+    # does.
+    bpy.ops.mesh.primitive_cube_add(size=1.0, location=(3.0, 0.0, 2.0))
+    kf_cube = bpy.context.active_object
+    kf_cube.name = "RunConsistCollider"
+    kf_cube.keyframe_insert(data_path="location", frame=1)
+    kf_cube.location = (3.0, 0.0, 2.5)
+    kf_cube.keyframe_insert(data_path="location", frame=5)
+    static_grp = dh.api.solver.create_group("Stat", "STATIC")
+    static_grp.add(kf_cube.name)
 
     encoder_mesh = __import__(pkg + ".core.encoder.mesh",
                               fromlist=["compute_data_hash"])
@@ -137,6 +155,78 @@ try:
             "server_param": s.server_param_hash[:12],
         },
     )
+
+    # ----- E: Time Scale edit is param-only (the user-visible fix) -----
+    # Editing time_scale must leave the DATA hash aligned with the server
+    # (the data payload is timing-free) while the PARAM hash drifts, so the
+    # Run click passes the geometry stage and aborts at the param stage
+    # with "Update Params" -- never "Transfer". update_params then realigns
+    # without re-uploading geometry.
+    root.state.time_scale = 0.5
+    s = dh.facade.engine.state
+    fresh_data_e = encoder_mesh.compute_data_hash(bpy.context)
+    fresh_param_e = encoder_params.compute_param_hash(bpy.context)
+    stub_e = dh.staged_stub(Run)
+    verdict_e = Run.execute(stub_e, bpy.context)
+    final_e = stub_e.drain_stages(bpy.context)
+    param_error_e = stub_e.error("Update Params")
+    transfer_error_e = stub_e.error("Transfer")
+    s = dh.facade.engine.state
+    dh.record(
+        "E_time_scale_edit_is_param_only",
+        fresh_data_e == s.server_data_hash
+        and fresh_param_e != s.server_param_hash
+        and verdict_e == {"RUNNING_MODAL"}
+        and final_e == {"CANCELLED"}
+        and bool(param_error_e)
+        and not transfer_error_e,
+        {
+            "fresh_data": fresh_data_e[:12],
+            "server_data": s.server_data_hash[:12],
+            "data_hash_unchanged": fresh_data_e == s.server_data_hash,
+            "fresh_param": fresh_param_e[:12],
+            "server_param": s.server_param_hash[:12],
+            "param_error": (param_error_e or "")[:100],
+            "transfer_error": (transfer_error_e or "")[:100],
+        },
+    )
+    # E2: Update Params alone realigns; Run then starts. This is the flow
+    # the artist actually uses to retune Time Scale.
+    bpy.ops.solver.update_params()
+    deadline = time.time() + 60.0
+    while time.time() < deadline:
+        dh.facade.engine.dispatch(dh.events.PollTick())
+        dh.facade.tick()
+        s = dh.facade.engine.state
+        if (s.activity.name == "IDLE"
+                and s.solver.name in ("READY", "RESUMABLE", "FAILED")):
+            break
+        time.sleep(0.3)
+    s = dh.facade.engine.state
+    dh.record(
+        "E2_update_params_suffices_for_time_scale",
+        encoder_params.compute_param_hash(bpy.context) == s.server_param_hash
+        and encoder_mesh.compute_data_hash(bpy.context) == s.server_data_hash,
+        {
+            "param_aligned": encoder_params.compute_param_hash(
+                bpy.context) == s.server_param_hash,
+            "data_aligned": encoder_mesh.compute_data_hash(
+                bpy.context) == s.server_data_hash,
+            "solver": s.solver.name,
+        },
+    )
+    # Restore for the B/C/D baselines.
+    root.state.time_scale = 1.0
+    bpy.ops.solver.update_params()
+    deadline = time.time() + 60.0
+    while time.time() < deadline:
+        dh.facade.engine.dispatch(dh.events.PollTick())
+        dh.facade.tick()
+        s = dh.facade.engine.state
+        if (s.activity.name == "IDLE"
+                and s.solver.name in ("READY", "RESUMABLE", "FAILED")):
+            break
+        time.sleep(0.3)
 
     # ----- B: param drift, click-time error ------------------------
     # execute() returns RUNNING_MODAL and stages the drift checks; the

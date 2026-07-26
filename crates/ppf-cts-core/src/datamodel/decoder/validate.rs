@@ -192,6 +192,8 @@ pub fn validate_scene_object_identity(
 /// At most one may be present per object. The deform cache always wins
 /// over the other two when present, because the depsgraph already
 /// composed those into its evaluation before the cache was captured.
+/// All three ship frame-indexed timing on the wire (frame offsets / raw
+/// animation rates); seconds are derived at decode from the Param fps.
 pub fn validate_static_anim_xor_ops(
     name: &str,
     has_anim: bool,

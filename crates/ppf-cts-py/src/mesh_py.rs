@@ -88,7 +88,7 @@ pub fn mesh_bbox<'py>(
     verts: PyReadonlyArray2<'py, f64>,
 ) -> PyResult<Bound<'py, PyArray1<f64>>> {
     let v = read_verts_array2_f64(&verts)?;
-    let bb = py.allow_threads(|| mesh_core::bbox(&v));
+    let bb = py.detach(|| mesh_core::bbox(&v));
     let extents = if v.nrows() == 0 {
         vec![0.0_f64; 3]
     } else {
@@ -110,7 +110,7 @@ pub fn mesh_normalize_verts<'py>(
     verts: PyReadonlyArray2<'py, f64>,
 ) -> PyResult<Bound<'py, PyArray2<f64>>> {
     let mut v = read_verts_array2_f64(&verts)?;
-    py.allow_threads(|| {
+    py.detach(|| {
         // The Python helper divides by `max(bbox(vert))` after centering;
         // mesh_core::normalize matches that exactly (longest axis -> 1.0).
         if v.nrows() > 0 {
@@ -161,7 +161,7 @@ pub fn mesh_scale_per_axis<'py>(
     sz: f64,
 ) -> PyResult<Bound<'py, PyArray2<f64>>> {
     let mut v = read_verts_array2_f64(&verts)?;
-    py.allow_threads(|| mesh_core::scale_per_axis(&mut v, sx, sy, sz));
+    py.detach(|| mesh_core::scale_per_axis(&mut v, sx, sy, sz));
     Ok(v.into_pyarray(py))
 }
 
@@ -178,7 +178,7 @@ pub fn mesh_generate_rect_faces<'py>(
             "res_x and res_y must be >= 2, got ({res_x}, {res_y})"
         )));
     }
-    let f = py.allow_threads(|| mesh_core::generate_rect_faces(res_x, res_y));
+    let f = py.detach(|| mesh_core::generate_rect_faces(res_x, res_y));
     let n = f.nrows();
     let buf: Vec<i32> = f.iter().map(|&v| v as i32).collect();
     let arr = ndarray::Array2::from_shape_vec((n, 3), buf)
@@ -199,7 +199,7 @@ pub fn mesh_generate_grid_faces<'py>(
             "length_split and width_split must be >= 2, got ({length_split}, {width_split})"
         )));
     }
-    let f = py.allow_threads(|| mesh_core::generate_grid_faces(length_split, width_split));
+    let f = py.detach(|| mesh_core::generate_grid_faces(length_split, width_split));
     let n = f.nrows();
     let buf: Vec<i32> = f.iter().map(|&v| v as i32).collect();
     let arr = ndarray::Array2::from_shape_vec((n, 3), buf)
@@ -219,7 +219,7 @@ pub fn mesh_generate_cylinder_verts<'py>(
     dy: f64,
     r: f64,
 ) -> PyResult<Bound<'py, PyArray2<f64>>> {
-    let v = py.allow_threads(|| mesh_core::generate_cylinder_verts(n, ny, min_x, dx, dy, r));
+    let v = py.detach(|| mesh_core::generate_cylinder_verts(n, ny, min_x, dx, dy, r));
     Ok(v.into_pyarray(py))
 }
 
@@ -231,7 +231,7 @@ pub fn mesh_generate_cylinder_faces<'py>(
     n: usize,
     ny: usize,
 ) -> PyResult<Bound<'py, PyArray2<i32>>> {
-    let f = py.allow_threads(|| mesh_core::generate_cylinder_faces(n, ny));
+    let f = py.detach(|| mesh_core::generate_cylinder_faces(n, ny));
     let nrows = f.nrows();
     let buf: Vec<i32> = f.iter().map(|&v| v as i32).collect();
     let arr = ndarray::Array2::from_shape_vec((nrows, 3), buf)
@@ -277,7 +277,7 @@ pub fn mesh_transform_verts_2d<'py>(
     }
     let ex_v = crate::utils_py::vec3(&ex, "ex")?;
     let ey_v = crate::utils_py::vec3(&ey, "ey")?;
-    let out = py.allow_threads(|| mesh_core::transform_verts_2d(&v, ex_v, ey_v));
+    let out = py.detach(|| mesh_core::transform_verts_2d(&v, ex_v, ey_v));
     Ok(out.into_pyarray(py))
 }
 
@@ -299,7 +299,7 @@ pub fn mesh_mobius<'py>(
             "length_split and width_split must be >= 2, got ({length_split}, {width_split})"
         )));
     }
-    let (v, f) = py.allow_threads(|| {
+    let (v, f) = py.detach(|| {
         mesh_core::mobius(length_split, width_split, twists, r, flatness, width, scale)
     });
     let n_faces = f.nrows();
@@ -320,7 +320,7 @@ pub fn mesh_icosphere<'py>(
     r: f64,
     subdiv_count: usize,
 ) -> PyResult<Bound<'py, PyTuple>> {
-    let (v, f) = py.allow_threads(|| mesh_core::icosphere(r, subdiv_count));
+    let (v, f) = py.detach(|| mesh_core::icosphere(r, subdiv_count));
     let n_faces = f.nrows();
     let buf: Vec<i32> = f.iter().map(|&v| v as i32).collect();
     let f_arr = ndarray::Array2::from_shape_vec((n_faces, 3), buf)
@@ -342,7 +342,7 @@ pub fn mesh_fix_skinny_triangles<'py>(
 ) -> PyResult<Bound<'py, PyTuple>> {
     let v = read_verts_array2_f64(&verts)?;
     let f = read_indices_u32::<3>(faces, "faces")?;
-    let (v_out, f_out) = py.allow_threads(|| mesh_core::fix_skinny_triangles(&v, &f, min_angle_deg));
+    let (v_out, f_out) = py.detach(|| mesh_core::fix_skinny_triangles(&v, &f, min_angle_deg));
     let n_faces = f_out.nrows();
     let buf: Vec<i32> = f_out.iter().map(|&v| v as i32).collect();
     let f_arr = ndarray::Array2::from_shape_vec((n_faces, 3), buf)
@@ -360,7 +360,7 @@ pub fn mesh_polygon_area_2d<'py>(
     pts: PyReadonlyArray2<'py, f64>,
 ) -> PyResult<f64> {
     let p = read_pts_array2_f64(&pts)?;
-    Ok(py.allow_threads(|| mesh_core::polygon_area_2d(&p)))
+    Ok(py.detach(|| mesh_core::polygon_area_2d(&p)))
 }
 
 /// Post-fTetWild tet-mesh cleanup. Filters tets with `|V| <
@@ -377,7 +377,7 @@ pub fn mesh_tet_extract_surface<'py>(
 ) -> PyResult<Bound<'py, PyTuple>> {
     let v = read_verts_array2_f64(&verts)?;
     let t = read_indices_u32::<4>(tet, "tet")?;
-    let out = py.allow_threads(|| mesh_core::tet_extract_surface(&v, &t, min_volume));
+    let out = py.detach(|| mesh_core::tet_extract_surface(&v, &t, min_volume));
     let n_tri = out.tri.nrows();
     let n_tet = out.tet.nrows();
     let tri_buf: Vec<i32> = out.tri.iter().map(|&v| v as i32).collect();
@@ -406,7 +406,7 @@ pub fn mesh_circle_points_2d<'py>(
     n: usize,
     r: f64,
 ) -> PyResult<Bound<'py, PyArray2<f64>>> {
-    let pts = py.allow_threads(|| mesh_core::circle_points_2d(n, r));
+    let pts = py.detach(|| mesh_core::circle_points_2d(n, r));
     Ok(pts.into_pyarray(py))
 }
 
@@ -417,7 +417,7 @@ pub fn mesh_tri_edge_loop<'py>(
     py: Python<'py>,
     n: usize,
 ) -> PyResult<Bound<'py, PyArray2<i32>>> {
-    let e = py.allow_threads(|| mesh_core::tri_edge_loop(n));
+    let e = py.detach(|| mesh_core::tri_edge_loop(n));
     let buf: Vec<i32> = e.iter().map(|&v| v as i32).collect();
     let arr = ndarray::Array2::from_shape_vec((n, 2), buf)
         .map_err(|e| PyValueError::new_err(format!("reshape failed: {e}")))?;
@@ -456,7 +456,7 @@ pub fn mesh_rectangle_with_uv<'py>(
     }
     let ex_v = crate::utils_py::vec3(&ex, "ex")?;
     let ey_v = crate::utils_py::vec3(&ey, "ey")?;
-    let (verts, faces) = py.allow_threads(|| {
+    let (verts, faces) = py.detach(|| {
         mesh_core::rectangle_with_uv(res_x, width, height, ex_v, ey_v, gen_uv)
     });
     let n_faces = faces.nrows();

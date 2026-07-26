@@ -2304,7 +2304,6 @@ class Scene:
                 # remap above is element-wise (same order), so the array
                 # stays aligned. Carry it so pin-pullw is exported.
                 pull_weights=getattr(p, "pull_weights", None),
-                pin_stiffness=p.pin_stiffness,
                 transition=p.transition,
                 pin_group_id=p.pin_group_id,
                 hide_in_preview=bool(getattr(obj, "_is_static_moving", False)),

@@ -10,6 +10,8 @@ import re
 
 import bpy  # pyright: ignore
 
+from .enum_props import dynamic_enum_items
+
 N_MAX_GROUPS = 32
 _ADDON_NAMESPACE = "zozo_contact_solver"
 
@@ -221,6 +223,7 @@ def sand_seeded_radius(group):
     return float(group.sand_grain_radius)
 
 
+@dynamic_enum_items
 def get_vertex_group_items(self, _):
     from ..core.uuid_registry import get_object_by_uuid
 

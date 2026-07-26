@@ -59,7 +59,7 @@ pub(super) fn scene_triangle_areas<'py>(
         .as_slice()
         .map_err(|_| PyTypeError::new_err("verts must be C-contiguous"))?;
     let tris_owned = read_faces_u32(tris)?;
-    let out = py.allow_threads(|| sb::triangle_areas(v, &tris_owned));
+    let out = py.detach(|| sb::triangle_areas(v, &tris_owned));
     Ok(out.into_pyarray(py))
 }
 
@@ -74,7 +74,7 @@ pub(super) fn scene_face_to_vert_weights<'py>(
     epsilon: f64,
 ) -> PyResult<Bound<'py, numpy::PyArray1<f64>>> {
     let tris_owned = read_faces_u32(tris)?;
-    let out = py.allow_threads(|| sb::face_to_vert_weights(n_verts, &tris_owned, epsilon));
+    let out = py.detach(|| sb::face_to_vert_weights(n_verts, &tris_owned, epsilon));
     Ok(out.into_pyarray(py))
 }
 
@@ -108,7 +108,7 @@ pub(super) fn scene_direction_color<'py>(
         .as_slice()
         .map_err(|_| PyTypeError::new_err("verts must be C-contiguous"))?;
     let n = s[0];
-    let out = py.allow_threads(|| sb::direction_color(v, direction));
+    let out = py.detach(|| sb::direction_color(v, direction));
     let arr = ndarray::Array2::from_shape_vec((n, 3), out)
         .map_err(|e| PyValueError::new_err(format!("reshape failed: {e}")))?;
     Ok(arr.into_pyarray(py))
@@ -133,7 +133,7 @@ pub(super) fn scene_cylinder_color<'py>(
         .as_slice()
         .map_err(|_| PyTypeError::new_err("verts must be C-contiguous"))?;
     let n = s[0];
-    let out = py.allow_threads(|| sb::cylinder_color(v, center, direction, up));
+    let out = py.detach(|| sb::cylinder_color(v, center, direction, up));
     let arr = ndarray::Array2::from_shape_vec((n, 3), out)
         .map_err(|e| PyValueError::new_err(format!("reshape failed: {e}")))?;
     Ok(arr.into_pyarray(py))
@@ -183,7 +183,7 @@ pub(super) fn scene_uv_from_directions<'py>(
     let tris_owned = read_faces_u32(tris)?;
     let n_tri = tris_owned.len();
     let out = py
-        .allow_threads(|| sb::uv_from_directions(v, &tris_owned, ex, ey, eps))
+        .detach(|| sb::uv_from_directions(v, &tris_owned, ex, ey, eps))
         .map_err(into_py_err)?;
     let arr = ndarray::Array3::from_shape_vec((n_tri, 3, 2), out)
         .map_err(|e| PyValueError::new_err(format!("reshape failed: {e}")))?;

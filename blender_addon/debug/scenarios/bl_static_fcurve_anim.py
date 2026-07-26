@@ -164,17 +164,27 @@ try:
     has_xform = static_obj is not None and "transform_animation" in static_obj
     has_sd = static_obj is not None and "static_deform_animation" in static_obj
     has_ops = bool((static_obj or {}).get("static_ops") or [])
-    n_keyframes = (
-        len(static_obj["transform_animation"]["time"]) if has_xform else 0
+    offsets = (
+        [float(o) for o in static_obj["transform_animation"]["frame_offset"]]
+        if has_xform else []
+    )
+    n_keyframes = len(offsets)
+    # v2 wire: frame offsets = keyframe frame - start frame (start is 1
+    # here), fps-free by design.
+    expected_offsets = [float(KEY_FRAME_START - 1), float(KEY_FRAME_END - 1)]
+    offsets_ok = (
+        n_keyframes == 2
+        and all(abs(a - b) < 1e-9 for a, b in zip(offsets, expected_offsets))
     )
     dh.record(
         "A_encoder_emits_transform_animation",
-        has_xform and not has_sd and not has_ops and n_keyframes == 2,
+        has_xform and not has_sd and not has_ops and offsets_ok,
         {
             "has_transform_animation": has_xform,
             "has_static_deform_animation": has_sd,
             "has_static_ops": has_ops,
-            "n_keyframes": n_keyframes,
+            "frame_offsets": offsets,
+            "expected_offsets": expected_offsets,
         },
     )
 

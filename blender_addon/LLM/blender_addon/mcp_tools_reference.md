@@ -127,7 +127,7 @@ Create a new dynamics group.
 **Parameters:**
 
 - **name**: Display name for the new group (optional)
-- **type**: Group type (SOLID, SHELL, ROD, STATIC, PDRD, SAND). PDRD is an exactly-rigid body type whose surface mesh moves as a single best-fit rigid transform (no tetrahedralization, no Young's/Poisson/bend/shrink/strain/inflate). SAND is a faceless granular body of loose grain-center vertices.
+- **type**: Group type (SOLID, SHELL, ROD, STATIC, PDRD). PDRD is an exactly-rigid body type whose surface mesh moves as a single best-fit rigid transform (no tetrahedralization, no Young's/Poisson/bend/shrink/strain/inflate).
 
 ### delete_group(group_uuid: str)
 
@@ -241,7 +241,7 @@ Set the type of a dynamics group.
 **Parameters:**
 
 - **group_uuid**: UUID of group
-- **type**: Group type (SOLID, SHELL, ROD, STATIC, PDRD, SAND)
+- **type**: Group type (SOLID, SHELL, ROD, STATIC, PDRD)
 
 ### add_pin_vertex_group(group_uuid: str, vertex_group_identifier: str, indices: Optional[list[int]]=None)
 
@@ -297,7 +297,6 @@ Supported properties by group type:
 - SOLID: solid_density, solid_young_modulus, solid_poisson_ratio, solid_model, shrink, deformation_damping, young_mod_density_normalized, friction, stitch_stiffness
 - ROD: rod_density, rod_young_modulus, rod_model, deformation_damping, bending_damping, young_mod_density_normalized, friction, bend, enable_strain_limit, strain_limit_percent, stitch_stiffness, bend_rest_angle_source, bend_rest_from_reference
 - PDRD: pdrd_density, friction, stitch_stiffness (the hinge joint is per-object; use the `set_pdrd_hinge` tool)
-- SAND: sand_grain_radius, sand_particle_mass, sand_friction (faceless granular body of loose grain-center vertices)
 - STATIC: friction (limited set)
 
 Per-type property notes:
@@ -319,7 +318,7 @@ Contact properties (mutually exclusive modes):
 
 ## Object operations
 
-### set_pin_settings(group_uuid: str, vertex_group_identifier: str, included: Optional[bool]=None, use_pin_duration: Optional[bool]=None, pin_duration: Optional[int]=None, use_pull: Optional[bool]=None, pull_strength: Optional[float]=None, pin_stiffness: Optional[float]=None)
+### set_pin_settings(group_uuid: str, vertex_group_identifier: str, included: Optional[bool]=None, use_pin_duration: Optional[bool]=None, pin_duration: Optional[int]=None, use_pull: Optional[bool]=None, pull_strength: Optional[float]=None)
 
 Set per-pin runtime settings (include/duration/pull).
 
@@ -332,7 +331,6 @@ Set per-pin runtime settings (include/duration/pull).
 - **pin_duration**: Number of frames the pin is active
 - **use_pull**: Use pull force instead of hard constraint
 - **pull_strength**: Pull force strength
-- **pin_stiffness**: Scale on the pin's moving (kinematic) constraint force; 1.0 default, only affects animated pins
 
 ### add_pin_operation(group_uuid: str, vertex_group_identifier: str, op_type: str, frame_start: Optional[int]=None, frame_end: Optional[int]=None, transition: Optional[str]=None, delta: Optional[list[float]]=None, spin_axis: Optional[list[float]]=None, spin_angular_velocity: Optional[float]=None, spin_flip: Optional[bool]=None, spin_center: Optional[list[float]]=None, spin_center_mode: Optional[str]=None, spin_center_vertex: Optional[int]=None, spin_center_direction: Optional[list[float]]=None, scale_factor: Optional[float]=None, scale_center: Optional[list[float]]=None, scale_center_mode: Optional[str]=None, scale_center_vertex: Optional[int]=None, scale_center_direction: Optional[list[float]]=None, torque_axis_component: Optional[str]=None, torque_magnitude: Optional[float]=None, torque_flip: Optional[bool]=None)
 
@@ -865,7 +863,7 @@ Install the Paramiko library.
 
 Install the Docker library.
 
-### set_scene_parameters(step_size: Optional[float]=None, min_newton_steps: Optional[int]=None, frame_count: Optional[int]=None, frame_rate: Optional[int]=None, gravity: Optional[list[float]]=None, wind_direction: Optional[list[float]]=None, wind_strength: Optional[float]=None, air_density: Optional[float]=None, air_friction: Optional[float]=None, vertex_air_damp: Optional[float]=None, inactive_momentum_frames: Optional[int]=None, contact_nnz: Optional[int]=None, line_search_max_t: Optional[float]=None, constraint_ghat: Optional[float]=None, cg_max_iter: Optional[int]=None, cg_tol: Optional[float]=None, include_face_mass: Optional[bool]=None, disable_contact: Optional[bool]=None, auto_save: Optional[bool]=None, auto_save_interval: Optional[int]=None, save_state_on_finish: Optional[bool]=None, keep_states: Optional[int]=None, precond: Optional[str]=None, schwarz_levels: Optional[int]=None, use_frame_rate_in_output: Optional[bool]=None, project_name: Optional[str]=None)
+### set_scene_parameters(step_size: Optional[float]=None, min_newton_steps: Optional[int]=None, frame_count: Optional[int]=None, frame_rate: Optional[int]=None, gravity: Optional[list[float]]=None, wind_direction: Optional[list[float]]=None, wind_strength: Optional[float]=None, air_density: Optional[float]=None, air_friction: Optional[float]=None, vertex_air_damp: Optional[float]=None, inactive_momentum_frames: Optional[int]=None, contact_nnz: Optional[int]=None, line_search_max_t: Optional[float]=None, constraint_ghat: Optional[float]=None, cg_max_iter: Optional[int]=None, cg_tol: Optional[float]=None, include_face_mass: Optional[bool]=None, disable_contact: Optional[bool]=None, auto_save: Optional[bool]=None, auto_save_interval: Optional[int]=None, save_state_on_finish: Optional[bool]=None, keep_states: Optional[int]=None, precond: Optional[str]=None, schwarz_levels: Optional[int]=None, use_scene_fps: Optional[bool]=None, project_name: Optional[str]=None)
 
 Set global scene parameters for physics simulation.
 
@@ -895,7 +893,7 @@ Set global scene parameters for physics simulation.
 - **keep_states**: Number of most-recent saved states to retain (0 = keep all, the default)
 - **precond**: PCG preconditioner, "BLOCK_JACOBI" (default) or "SCHWARZ"
 - **schwarz_levels**: Number of additive Schwarz levels, 1 (single-level smoother) or 2 (two-level coarse correction, default). Only used when precond is "SCHWARZ".
-- **use_frame_rate_in_output**: Use frame rate in output
+- **use_scene_fps**: Run the simulation at the Blender scene's frame rate instead of the `frame_rate` field
 - **project_name**: Project name used for remote session directory
 
 ### get_scene_parameters()

@@ -403,10 +403,16 @@ jobs:
           fi
           echo "AMI_ID=$AMI_ID" >> $GITHUB_OUTPUT
           VPC_ID=$(aws ec2 describe-vpcs --filters "Name=tag:Name,Values=github-actions-vpc" --query 'Vpcs[0].VpcId' --output text)
-          SUBNET_ID=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$VPC_ID" --query 'Subnets[0].SubnetId' --output text)
-          SG_ID=$(aws ec2 describe-security-groups --filters "Name=vpc-id,Values=$VPC_ID" "Name=group-name,Values=github-actions-sg" --query 'SecurityGroups[0].GroupId' --output text)
           if [ "$VPC_ID" = "None" ] || [ -z "$VPC_ID" ]; then
             echo "ERROR: github-actions-vpc not found in $AWS_REGION"; exit 1
+          fi
+          SUBNET_ID=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$VPC_ID" --query 'Subnets[0].SubnetId' --output text)
+          if [ "$SUBNET_ID" = "None" ] || [ -z "$SUBNET_ID" ]; then
+            echo "ERROR: no subnet found in github-actions-vpc ($VPC_ID) in $AWS_REGION"; exit 1
+          fi
+          SG_ID=$(aws ec2 describe-security-groups --filters "Name=vpc-id,Values=$VPC_ID" "Name=group-name,Values=github-actions-sg" --query 'SecurityGroups[0].GroupId' --output text)
+          if [ "$SG_ID" = "None" ] || [ -z "$SG_ID" ]; then
+            echo "ERROR: github-actions-sg not found in github-actions-vpc ($VPC_ID) in $AWS_REGION"; exit 1
           fi
           echo "::add-mask::$VPC_ID"
           echo "::add-mask::$SUBNET_ID"
@@ -463,9 +469,14 @@ jobs:
         run: |
           INSTANCE_ID="${{ steps.instance.outputs.INSTANCE_ID }}"
           aws ec2 wait instance-running --instance-ids "$INSTANCE_ID" --region "$AWS_REGION"
+          # Every tunnel in this job is released by an EXIT trap. The step
+          # shell runs under `bash -e`, so a failing command skips the
+          # explicit kill and leaves the tunnel holding local port 2222,
+          # which makes the NEXT step's tunnel fail to bind it.
           for i in $(seq 1 60); do
             aws ec2-instance-connect open-tunnel --instance-id "$INSTANCE_ID" --local-port 2222 &
             TUNNEL_PID=$!; sleep 3
+            trap 'kill $TUNNEL_PID 2>/dev/null || true' EXIT
             if ssh -i /tmp/ec2key -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 \
               ubuntu@localhost "test -f /tmp/setup-complete && echo READY" 2>/dev/null | grep -q READY; then
               kill $TUNNEL_PID 2>/dev/null || true; break
@@ -481,6 +492,7 @@ jobs:
           INSTANCE_ID=$(cat /tmp/instance_id.txt)
           aws ec2-instance-connect open-tunnel --instance-id "$INSTANCE_ID" --local-port 2222 &
           TUNNEL_PID=$!; sleep 5
+          trap 'kill $TUNNEL_PID 2>/dev/null || true' EXIT
           rsync -az -e "ssh -i /tmp/ec2key -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" \
             /tmp/repo.tar.gz ubuntu@localhost:${WORKDIR}/
           ssh -i /tmp/ec2key -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
@@ -492,10 +504,26 @@ jobs:
           INSTANCE_ID=$(cat /tmp/instance_id.txt)
           aws ec2-instance-connect open-tunnel --instance-id "$INSTANCE_ID" --local-port 2222 &
           TUNNEL_PID=$!; sleep 5
+          trap 'kill $TUNNEL_PID 2>/dev/null || true' EXIT
           ssh -i /tmp/ec2key -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
             -o ServerAliveInterval=60 -o ServerAliveCountMax=30 ubuntu@localhost << 'ENDSSH'
           set -e
           cd "$HOME"
+          # The job-level PYTHONUNBUFFERED is not carried over SSH, and a
+          # block-buffered warmup.py flushes its progress prints only at
+          # exit, which puts them after the subprocess output they describe.
+          export PYTHONUNBUFFERED=1
+          # The Deep Learning AMI ships several CUDA toolkits and points
+          # /usr/local/cuda at the newest one (13.2 on this image). Every
+          # host of this project builds against 12.8, and the solver's
+          # src/cpp/Makefile invokes /usr/local/cuda/bin/nvcc by absolute
+          # path, so the toolkit is selected at that symlink.
+          echo "=== select CUDA 12.8 ==="
+          test -x /usr/local/cuda-12.8/bin/nvcc
+          test -L /usr/local/cuda
+          sudo ln -sfn /usr/local/cuda-12.8 /usr/local/cuda
+          export PATH=/usr/local/cuda/bin:$PATH
+          nvcc --version | tail -n 2
           echo "=== warmup.py (venv + deps) ==="
           python3 warmup.py --skip-confirmation
           source "$HOME/.cargo/env"
@@ -574,6 +602,7 @@ jobs:
           INSTANCE_ID=$(cat /tmp/instance_id.txt)
           aws ec2-instance-connect open-tunnel --instance-id "$INSTANCE_ID" --remote-port 22 --local-port 2222 &
           TUNNEL_PID=$!
+          trap 'kill $TUNNEL_PID 2>/dev/null || true' EXIT
           sleep 8
           nc -z localhost 2222 || echo "::warning::tunnel port 2222 not answering yet"
           set +e
@@ -599,6 +628,7 @@ jobs:
           INSTANCE_ID=$(cat /tmp/instance_id.txt)
           aws ec2-instance-connect open-tunnel --instance-id "$INSTANCE_ID" --local-port 2222 &
           TUNNEL_PID=$!; sleep 5
+          trap 'kill $TUNNEL_PID 2>/dev/null || true' EXIT
           mkdir -p ci
           rsync -az -e "ssh -i /tmp/ec2key -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" \
             ubuntu@localhost:/home/ubuntu/ppf-cts-server.log ./ci/ 2>/dev/null || echo "no server log"
@@ -691,10 +721,16 @@ jobs:
           fi
           echo "AMI_ID=$AMI_ID" >> $GITHUB_OUTPUT
           VPC_ID=$(aws ec2 describe-vpcs --filters "Name=tag:Name,Values=github-actions-vpc" --query 'Vpcs[0].VpcId' --output text)
-          SUBNET_ID=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$VPC_ID" --query 'Subnets[0].SubnetId' --output text)
-          SG_ID=$(aws ec2 describe-security-groups --filters "Name=vpc-id,Values=$VPC_ID" "Name=group-name,Values=github-actions-sg" --query 'SecurityGroups[0].GroupId' --output text)
           if [ "$VPC_ID" = "None" ] || [ -z "$VPC_ID" ]; then
             echo "ERROR: github-actions-vpc not found in $AWS_REGION"; exit 1
+          fi
+          SUBNET_ID=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$VPC_ID" --query 'Subnets[0].SubnetId' --output text)
+          if [ "$SUBNET_ID" = "None" ] || [ -z "$SUBNET_ID" ]; then
+            echo "ERROR: no subnet found in github-actions-vpc ($VPC_ID) in $AWS_REGION"; exit 1
+          fi
+          SG_ID=$(aws ec2 describe-security-groups --filters "Name=vpc-id,Values=$VPC_ID" "Name=group-name,Values=github-actions-sg" --query 'SecurityGroups[0].GroupId' --output text)
+          if [ "$SG_ID" = "None" ] || [ -z "$SG_ID" ]; then
+            echo "ERROR: github-actions-sg not found in github-actions-vpc ($VPC_ID) in $AWS_REGION"; exit 1
           fi
           echo "::add-mask::$VPC_ID"
           echo "::add-mask::$SUBNET_ID"
@@ -750,9 +786,14 @@ jobs:
         run: |
           INSTANCE_ID="${{ steps.instance.outputs.INSTANCE_ID }}"
           aws ec2 wait instance-running --instance-ids "$INSTANCE_ID" --region "$AWS_REGION"
+          # Every tunnel in this job is released by an EXIT trap. The step
+          # shell runs under `bash -e`, so a failing command skips the
+          # explicit kill and leaves the tunnel holding local port 2222,
+          # which makes the NEXT step's tunnel fail to bind it.
           for i in $(seq 1 60); do
             aws ec2-instance-connect open-tunnel --instance-id "$INSTANCE_ID" --local-port 2222 &
             TUNNEL_PID=$!; sleep 3
+            trap 'kill $TUNNEL_PID 2>/dev/null || true' EXIT
             if ssh -i /tmp/ec2key -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 \
               ubuntu@localhost "test -f /tmp/setup-complete && echo READY" 2>/dev/null | grep -q READY; then
               kill $TUNNEL_PID 2>/dev/null || true; break
@@ -768,6 +809,7 @@ jobs:
           INSTANCE_ID=$(cat /tmp/instance_id.txt)
           aws ec2-instance-connect open-tunnel --instance-id "$INSTANCE_ID" --local-port 2222 &
           TUNNEL_PID=$!; sleep 5
+          trap 'kill $TUNNEL_PID 2>/dev/null || true' EXIT
           rsync -az -e "ssh -i /tmp/ec2key -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" \
             /tmp/repo.tar.gz ubuntu@localhost:${WORKDIR}/
           ssh -i /tmp/ec2key -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
@@ -779,10 +821,26 @@ jobs:
           INSTANCE_ID=$(cat /tmp/instance_id.txt)
           aws ec2-instance-connect open-tunnel --instance-id "$INSTANCE_ID" --local-port 2222 &
           TUNNEL_PID=$!; sleep 5
+          trap 'kill $TUNNEL_PID 2>/dev/null || true' EXIT
           ssh -i /tmp/ec2key -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
             -o ServerAliveInterval=60 -o ServerAliveCountMax=30 ubuntu@localhost << 'ENDSSH'
           set -e
           cd "$HOME"
+          # The job-level PYTHONUNBUFFERED is not carried over SSH, and a
+          # block-buffered warmup.py flushes its progress prints only at
+          # exit, which puts them after the subprocess output they describe.
+          export PYTHONUNBUFFERED=1
+          # The Deep Learning AMI ships several CUDA toolkits and points
+          # /usr/local/cuda at the newest one (13.2 on this image). Every
+          # host of this project builds against 12.8, and the solver's
+          # src/cpp/Makefile invokes /usr/local/cuda/bin/nvcc by absolute
+          # path, so the toolkit is selected at that symlink.
+          echo "=== select CUDA 12.8 ==="
+          test -x /usr/local/cuda-12.8/bin/nvcc
+          test -L /usr/local/cuda
+          sudo ln -sfn /usr/local/cuda-12.8 /usr/local/cuda
+          export PATH=/usr/local/cuda/bin:$PATH
+          nvcc --version | tail -n 2
           echo "=== warmup.py (venv + deps) ==="
           python3 warmup.py --skip-confirmation
           source "$HOME/.cargo/env"
@@ -805,6 +863,7 @@ jobs:
           INSTANCE_ID=$(cat /tmp/instance_id.txt)
           aws ec2-instance-connect open-tunnel --instance-id "$INSTANCE_ID" --local-port 2222 &
           TUNNEL_PID=$!; sleep 5
+          trap 'kill $TUNNEL_PID 2>/dev/null || true' EXIT
           set +e
           ssh -i /tmp/ec2key -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
             -o ServerAliveInterval=60 -o ServerAliveCountMax=60 ubuntu@localhost << 'ENDSSH'
@@ -832,6 +891,7 @@ jobs:
           INSTANCE_ID=$(cat /tmp/instance_id.txt)
           aws ec2-instance-connect open-tunnel --instance-id "$INSTANCE_ID" --local-port 2222 &
           TUNNEL_PID=$!; sleep 5
+          trap 'kill $TUNNEL_PID 2>/dev/null || true' EXIT
           rsync -az -e "ssh -i /tmp/ec2key -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" \
             ubuntu@localhost:/home/ubuntu/report.json ./ci/ 2>/dev/null || echo "no report.json"
           # Prune large binaries from worker dirs before pulling logs.
@@ -917,10 +977,16 @@ jobs:
           fi
           echo "AMI_ID=$AMI_ID" >> $GITHUB_OUTPUT
           VPC_ID=$(aws ec2 describe-vpcs --filters "Name=tag:Name,Values=github-actions-vpc" --query 'Vpcs[0].VpcId' --output text)
-          SUBNET_ID=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$VPC_ID" --query 'Subnets[0].SubnetId' --output text)
-          SG_ID=$(aws ec2 describe-security-groups --filters "Name=vpc-id,Values=$VPC_ID" "Name=group-name,Values=github-actions-sg" --query 'SecurityGroups[0].GroupId' --output text)
           if [ "$VPC_ID" = "None" ] || [ -z "$VPC_ID" ]; then
             echo "ERROR: github-actions-vpc not found in $AWS_REGION"; exit 1
+          fi
+          SUBNET_ID=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$VPC_ID" --query 'Subnets[0].SubnetId' --output text)
+          if [ "$SUBNET_ID" = "None" ] || [ -z "$SUBNET_ID" ]; then
+            echo "ERROR: no subnet found in github-actions-vpc ($VPC_ID) in $AWS_REGION"; exit 1
+          fi
+          SG_ID=$(aws ec2 describe-security-groups --filters "Name=vpc-id,Values=$VPC_ID" "Name=group-name,Values=github-actions-sg" --query 'SecurityGroups[0].GroupId' --output text)
+          if [ "$SG_ID" = "None" ] || [ -z "$SG_ID" ]; then
+            echo "ERROR: github-actions-sg not found in github-actions-vpc ($VPC_ID) in $AWS_REGION"; exit 1
           fi
           echo "::add-mask::$VPC_ID"
           echo "::add-mask::$SUBNET_ID"
@@ -970,9 +1036,14 @@ jobs:
         run: |
           INSTANCE_ID="${{ steps.instance.outputs.INSTANCE_ID }}"
           aws ec2 wait instance-status-ok --instance-ids "$INSTANCE_ID"
+          # Every tunnel in this job is released by an EXIT trap. The step
+          # shell runs under `bash -e`, so a failing command skips the
+          # explicit kill and leaves the tunnel holding local port 2222,
+          # which makes the NEXT step's tunnel fail to bind it.
           for i in $(seq 1 30); do
             timeout 15 aws ec2-instance-connect open-tunnel --instance-id "$INSTANCE_ID" --remote-port 22 --local-port 2222 &
             TUNNEL_PID=$!; sleep 5
+            trap 'kill $TUNNEL_PID 2>/dev/null || true' EXIT
             if nc -z localhost 2222 2>/dev/null; then kill $TUNNEL_PID 2>/dev/null || true; break; fi
             kill $TUNNEL_PID 2>/dev/null || true
             [ $i -eq 30 ] && echo "SSH not ready" && exit 1
@@ -984,6 +1055,7 @@ jobs:
           INSTANCE_ID=$(cat /tmp/instance_id.txt)
           aws ec2-instance-connect open-tunnel --instance-id "$INSTANCE_ID" --remote-port 22 --local-port 2222 &
           TUNNEL_PID=$!; sleep 5
+          trap 'kill $TUNNEL_PID 2>/dev/null || true' EXIT
           scp -P 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
             -i /tmp/ec2key.pem .github/workflows/scripts/win/install-nvidia-driver.ps1 Administrator@localhost:C:/install_driver.ps1
           ssh -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
@@ -996,6 +1068,7 @@ jobs:
           INSTANCE_ID=$(cat /tmp/instance_id.txt)
           aws ec2-instance-connect open-tunnel --instance-id "$INSTANCE_ID" --remote-port 22 --local-port 2222 &
           TUNNEL_PID=$!; sleep 5
+          trap 'kill $TUNNEL_PID 2>/dev/null || true' EXIT
           scp -P 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
             -i /tmp/ec2key.pem /tmp/repo.zip Administrator@localhost:C:/source.zip
           ssh -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
@@ -1008,6 +1081,7 @@ jobs:
           INSTANCE_ID=$(cat /tmp/instance_id.txt)
           aws ec2-instance-connect open-tunnel --instance-id "$INSTANCE_ID" --remote-port 22 --local-port 2222 &
           TUNNEL_PID=$!; sleep 5
+          trap 'kill $TUNNEL_PID 2>/dev/null || true' EXIT
           ssh -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=60 -o ServerAliveCountMax=30 \
             -i /tmp/ec2key.pem Administrator@localhost \
             "cmd /c 'cd C:\\ppf-contact-solver\\build-win-native && warmup.bat /nopause'"
@@ -1018,6 +1092,7 @@ jobs:
           INSTANCE_ID=$(cat /tmp/instance_id.txt)
           aws ec2-instance-connect open-tunnel --instance-id "$INSTANCE_ID" --remote-port 22 --local-port 2222 &
           TUNNEL_PID=$!; sleep 5
+          trap 'kill $TUNNEL_PID 2>/dev/null || true' EXIT
           ssh -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=60 -o ServerAliveCountMax=30 \
             -i /tmp/ec2key.pem Administrator@localhost \
             "cmd /c 'cd C:\\ppf-contact-solver\\build-win-native && build.bat /nopause'"
@@ -1028,6 +1103,7 @@ jobs:
           INSTANCE_ID=$(cat /tmp/instance_id.txt)
           aws ec2-instance-connect open-tunnel --instance-id "$INSTANCE_ID" --remote-port 22 --local-port 2222 &
           TUNNEL_PID=$!; sleep 5
+          trap 'kill $TUNNEL_PID 2>/dev/null || true' EXIT
           scp -P 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
             -i /tmp/ec2key.pem .github/workflows/scripts/win/build-ppf-cts-server.ps1 Administrator@localhost:C:/build_ppf_cts_server.ps1
           ssh -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=60 -o ServerAliveCountMax=30 \
@@ -1039,6 +1115,7 @@ jobs:
           INSTANCE_ID=$(cat /tmp/instance_id.txt)
           aws ec2-instance-connect open-tunnel --instance-id "$INSTANCE_ID" --remote-port 22 --local-port 2222 &
           TUNNEL_PID=$!; sleep 5
+          trap 'kill $TUNNEL_PID 2>/dev/null || true' EXIT
           scp -P 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i /tmp/ec2key.pem \
             .github/workflows/scripts/win/download-blender.ps1 Administrator@localhost:C:/download_blender.ps1
           scp -P 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i /tmp/ec2key.pem \
@@ -1066,6 +1143,7 @@ jobs:
           INSTANCE_ID=$(cat /tmp/instance_id.txt)
           aws ec2-instance-connect open-tunnel --instance-id "$INSTANCE_ID" --remote-port 22 --local-port 2222 &
           TUNNEL_PID=$!; sleep 5
+          trap 'kill $TUNNEL_PID 2>/dev/null || true' EXIT
           scp -P 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i /tmp/ec2key.pem \
             .github/workflows/scripts/win/run-blender-rig.ps1 Administrator@localhost:C:/run_blender_rig.ps1
           set +e
@@ -1085,6 +1163,7 @@ jobs:
           INSTANCE_ID=$(cat /tmp/instance_id.txt)
           aws ec2-instance-connect open-tunnel --instance-id "$INSTANCE_ID" --remote-port 22 --local-port 2222 &
           TUNNEL_PID=$!; sleep 5
+          trap 'kill $TUNNEL_PID 2>/dev/null || true' EXIT
           RC=$(ssh -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
             -i /tmp/ec2key.pem Administrator@localhost \
             "powershell -Command \"if (Test-Path 'C:\\ci\\rig_exit.txt') { Get-Content 'C:\\ci\\rig_exit.txt' -Raw } else { '1' }\"" 2>/dev/null | tr -d '\r\n ' || echo 1)

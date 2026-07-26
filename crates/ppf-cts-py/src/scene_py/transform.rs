@@ -103,7 +103,7 @@ pub(super) fn scene_apply_transform_batch<'py>(
     let mut buf = vec![0.0f64; v_slice.len()];
     buf.copy_from_slice(v_slice);
 
-    py.allow_threads(|| sb::apply_transform_batch(&m, &mut buf, translate, normalize));
+    py.detach(|| sb::apply_transform_batch(&m, &mut buf, translate, normalize));
 
     let arr = ndarray::Array2::from_shape_vec((n, 3), buf)
         .map_err(|e| PyValueError::new_err(format!("reshape failed: {e}")))?;
@@ -131,7 +131,7 @@ pub(super) fn scene_area_weighted_center<'py>(
     let tris_owned = read_faces_u32(tris)?;
 
     let result = py
-        .allow_threads(|| sb::area_weighted_center(v_slice, &tris_owned));
+        .detach(|| sb::area_weighted_center(v_slice, &tris_owned));
     let (c, total) = result;
     if total <= 0.0 {
         return Err(PyValueError::new_err("no area"));
@@ -217,7 +217,7 @@ pub(super) fn scene_dynamic_color<'py>(
         )));
     }
 
-    let out = py.allow_threads(|| {
+    let out = py.detach(|| {
         sb::dynamic_color(
             v_slice,
             &tris_owned,
@@ -273,7 +273,7 @@ pub(super) fn scene_bbox_displaced<'py>(
             lv_shape[0]
         )));
     }
-    let (hi, lo) = py.allow_threads(|| sb::bbox_displaced(lv, idx, disp));
+    let (hi, lo) = py.detach(|| sb::bbox_displaced(lv, idx, disp));
     Ok((
         PyArray1::<f64>::from_slice(py, &hi),
         PyArray1::<f64>::from_slice(py, &lo),
@@ -302,7 +302,7 @@ pub(super) fn scene_axis_min_max<'py>(
     let v = verts.as_slice().map_err(|_| {
         PyTypeError::new_err("verts must be C-contiguous")
     })?;
-    Ok(py.allow_threads(|| sb::axis_min_max(v, axis)))
+    Ok(py.detach(|| sb::axis_min_max(v, axis)))
 }
 
 /// Apply a 4x4 matrix's rotation/scale block (no translation) and
@@ -339,7 +339,7 @@ pub(super) fn scene_object_bbox<'py>(
             m[r][c] = m_slice[4 * r + c];
         }
     }
-    let (size, center) = py.allow_threads(|| sb::object_bbox_no_translate(lv, &m));
+    let (size, center) = py.detach(|| sb::object_bbox_no_translate(lv, &m));
     Ok((
         PyArray1::<f64>::from_slice(py, &size),
         PyArray1::<f64>::from_slice(py, &center),
@@ -365,7 +365,7 @@ pub(super) fn scene_grab_indices<'py>(
     let v = verts.as_slice().map_err(|_| {
         PyTypeError::new_err("verts must be C-contiguous")
     })?;
-    Ok(py.allow_threads(|| sb::grab_indices(v, direction, eps)))
+    Ok(py.detach(|| sb::grab_indices(v, direction, eps)))
 }
 
 /// Compose `M @ diag(s, s, s, 1)`. Mirrors `Object.scale`.
@@ -391,7 +391,7 @@ pub(super) fn scene_mat4_apply_scale<'py>(
             m[r][c] = m_slice[4 * r + c];
         }
     }
-    let r = py.allow_threads(|| sb::mat4_apply_uniform_scale(&m, scale));
+    let r = py.detach(|| sb::mat4_apply_uniform_scale(&m, scale));
     let mut buf = vec![0.0f64; 16];
     for i in 0..4 {
         for j in 0..4 {
@@ -432,7 +432,7 @@ pub(super) fn scene_mat4_apply_rotate<'py>(
         }
     }
     let r = py
-        .allow_threads(|| sb::mat4_apply_axis_rotation_keep_translation(&m, axis_char, angle_deg))
+        .detach(|| sb::mat4_apply_axis_rotation_keep_translation(&m, axis_char, angle_deg))
         .map_err(into_py_err)?;
     let mut buf = vec![0.0f64; 16];
     for i in 0..4 {
@@ -576,7 +576,7 @@ pub(super) fn scene_apply_trs_to_verts<'py>(
         .as_slice()
         .map_err(|_| PyTypeError::new_err("local_vert must be C-contiguous"))?;
     let n = s[0];
-    let out = py.allow_threads(|| sb::apply_trs_to_verts(v, translation, quaternion, scale));
+    let out = py.detach(|| sb::apply_trs_to_verts(v, translation, quaternion, scale));
     let arr = ndarray::Array2::from_shape_vec((n, 3), out)
         .map_err(|e| PyValueError::new_err(format!("reshape failed: {e}")))?;
     Ok(arr.into_pyarray(py))

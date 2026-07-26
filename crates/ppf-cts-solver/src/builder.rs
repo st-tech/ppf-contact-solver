@@ -284,17 +284,6 @@ pub struct PdrdSceneData<'a> {
     pub rest_centered: &'a [f32],
 }
 
-impl<'a> PdrdSceneData<'a> {
-    pub fn empty() -> Self {
-        Self {
-            body_rows: &[],
-            vert_index: &[],
-            vert_list: &[],
-            rest_centered: &[],
-        }
-    }
-}
-
 pub fn build(
     sim_args: &SimArgs,
     mesh: &MeshSet,
@@ -1045,6 +1034,152 @@ pub fn build(
         index_sum += row.len();
     }
 
+    // ---- Slot-replay assembly tables. Precompute the FixedCSRMat
+    // value-slot of every 3x3 block each topology-fixed element writes, so the
+    // assembly kernels can replace FixedCSRMat::push's per-block row search with
+    // a direct push_at(slot). Built AFTER the fixed sparsity (including the
+    // post-PDRD dedup above) is final, so row contents and their ascending sort
+    // order match the device FixedCSRMat's value layout exactly. A block whose
+    // (row,col) is lower-triangle (row > col) is a push() no-op, encoded as the
+    // sentinel; the kernel's push_at wrapper skips sentinels, so the folded
+    // atomic sums stay bitwise identical. PPF_SLOT_REPLAY=0 ships empty tables
+    // and every switched kernel falls back to push() (the device push-vs-push_at
+    // A/B). Emitted here (before `mesh` is rebound to FfiMesh below).
+    let slot_replay = std::env::var("PPF_SLOT_REPLAY")
+        .map(|v| v != "0")
+        .unwrap_or(true);
+    let (
+        tet_hess_slots,
+        face_hess_slots,
+        edge_hess_slots,
+        hinge_hess_slots,
+        rod_bend_hess_slots,
+        stitch_hess_slots,
+    ) = if slot_replay {
+        // Sentinel MUST match the 0xFFFFFFFFu literal in
+        // utility::atomic_embed_hessian_at (cpp/utility/utility.hpp).
+        const FIXED_SLOT_SENTINEL: u32 = 0xFFFF_FFFF;
+        // Row-major value base offset of each CSR row, mirroring the flat
+        // FixedCSRMat `value` layout: row i occupies [row_offset[i],
+        // row_offset[i+1]); the position of j within row i is added to it.
+        let mut row_offset = vec![0u32; vertex_count as usize + 1];
+        for i in 0..vertex_count as usize {
+            row_offset[i + 1] = row_offset[i] + fixed_index_table[i].len() as u32;
+        }
+        // Mirror FixedCSRMat::push: only i <= j writes; the lower triangle is a
+        // no-op, encoded as the sentinel. Every upper-triangle element block is
+        // registered in the fixed sparsity by the insert loops above, so a miss
+        // is a builder bug and panics (this is the host assert that
+        // fixed_index_table[i][pos] == j for every emitted slot).
+        let slot_of = |i: usize, j: usize| -> u32 {
+            if i > j {
+                return FIXED_SLOT_SENTINEL;
+            }
+            let pos = fixed_index_table[i]
+                .binary_search(&(j as u32))
+                .unwrap_or_else(|_| {
+                    panic!("slot precompute: block ({i},{j}) missing from fixed sparsity")
+                });
+            row_offset[i] + pos as u32
+        };
+        // tet: 16 blocks/element, index order data.mesh.mesh.tet[i].
+        let mut tet_slots = Vec::with_capacity(16 * mesh.mesh.mesh.tet.ncols());
+        for tet in mesh.mesh.mesh.tet.column_iter() {
+            for k1 in 0..4 {
+                for k2 in 0..4 {
+                    tet_slots.push(slot_of(tet[k1], tet[k2]));
+                }
+            }
+        }
+        // face: 9 blocks/element; shared by the membrane, inflate, and
+        // strain-limit face writes (all use data.mesh.mesh.face[i], same order).
+        let mut face_slots = Vec::with_capacity(9 * mesh.mesh.mesh.face.ncols());
+        for f in mesh.mesh.mesh.face.column_iter() {
+            for k1 in 0..3 {
+                for k2 in 0..3 {
+                    face_slots.push(slot_of(f[k1], f[k2]));
+                }
+            }
+        }
+        // edge: 4 blocks/element; shared by the rod stretch and rod strain-limit
+        // writes (both use data.mesh.mesh.edge[i], i in [0, rod_count)).
+        let mut edge_slots = Vec::with_capacity(4 * mesh.mesh.mesh.edge.ncols());
+        for e in mesh.mesh.mesh.edge.column_iter() {
+            for k1 in 0..2 {
+                for k2 in 0..2 {
+                    edge_slots.push(slot_of(e[k1], e[k2]));
+                }
+            }
+        }
+        // hinge: 16 blocks/element in the REMAPPED (2,1,0,3) order, matching
+        // dihedral_angle::face_compute_force_hessian, which permutes the hinge
+        // in place before embed_hinge_force_hessian calls atomic_embed_hessian.
+        let mut hinge_slots = Vec::with_capacity(16 * mesh.mesh.mesh.hinge.ncols());
+        for hinge in mesh.mesh.mesh.hinge.column_iter() {
+            let remapped = [hinge[2], hinge[1], hinge[0], hinge[3]];
+            for k1 in 0..4 {
+                for k2 in 0..4 {
+                    hinge_slots.push(slot_of(remapped[k1], remapped[k2]));
+                }
+            }
+        }
+        // rod-bend: 9 blocks per interior rod vertex i, stencil (j, i, k), keyed
+        // by vertex index (surface_vert_count rows, the embed's dispatch domain).
+        // Non-interior verts stay all-sentinel. j, k derived exactly as
+        // embed_rod_bend_force_hessian does.
+        let mut rod_bend_slots =
+            vec![FIXED_SLOT_SENTINEL; 9 * surface_vert_count as usize];
+        for i in 0..surface_vert_count as usize {
+            let edges = &mesh.mesh.neighbor.vertex.edge[i];
+            if edges.len() == 2 && mesh.mesh.neighbor.vertex.face[i].is_empty() {
+                let e0 = edges[0] as usize;
+                let e1 = edges[1] as usize;
+                let c0 = mesh.mesh.mesh.edge.column(e0);
+                let c1 = mesh.mesh.mesh.edge.column(e1);
+                let j = if c0[0] == i { c0[1] } else { c0[0] };
+                let k = if c1[0] == i { c1[1] } else { c1[0] };
+                let element = [j, i, k];
+                for a in 0..3 {
+                    for b in 0..3 {
+                        rod_bend_slots[9 * i + a * 3 + b] =
+                            slot_of(element[a], element[b]);
+                    }
+                }
+            }
+        }
+        // stitch: 36 blocks/seam, index order stitch.index. Degenerate repeats
+        // (non-SOLID source = {s,s,s}) fold onto shared slots, exactly as the
+        // repeated push() calls atomicAdd onto the same entry.
+        let mut stitch_slots = Vec::with_capacity(36 * constraint.stitch.size as usize);
+        for seam in constraint.stitch.iter() {
+            for a in 0..6 {
+                for b in 0..6 {
+                    stitch_slots.push(slot_of(
+                        seam.index[a] as usize,
+                        seam.index[b] as usize,
+                    ));
+                }
+            }
+        }
+        (
+            tet_slots,
+            face_slots,
+            edge_slots,
+            hinge_slots,
+            rod_bend_slots,
+            stitch_slots,
+        )
+    } else {
+        (
+            Vec::<u32>::new(),
+            Vec::<u32>::new(),
+            Vec::<u32>::new(),
+            Vec::<u32>::new(),
+            Vec::<u32>::new(),
+            Vec::<u32>::new(),
+        )
+    };
+
     let num_face = mesh.mesh.mesh.face.ncols();
     let mut face_type = vec![0_u8; num_face];
     let mut vertex_type = vec![0_u8; vertex_count as usize];
@@ -1158,9 +1293,15 @@ pub fn build(
         grain_contact_normal: CVec::from(grain_contact_normal_vec.as_slice()),
         grain_inv_inertia_center: CVec::from(grain_inv_inertia_center_vec.as_slice()),
         grain_omega_prev: CVec::from(grain_omega_prev_vec.as_slice()),
-        grain_A: CVec::from(grain_a_vec.as_slice()),
-        grain_B: CVec::from(grain_b_vec.as_slice()),
+        grain_a: CVec::from(grain_a_vec.as_slice()),
+        grain_b: CVec::from(grain_b_vec.as_slice()),
         grain_grot: CVec::from(grain_grot_vec.as_slice()),
+        tet_hess_slots: CVec::from(tet_hess_slots.as_slice()),
+        face_hess_slots: CVec::from(face_hess_slots.as_slice()),
+        edge_hess_slots: CVec::from(edge_hess_slots.as_slice()),
+        hinge_hess_slots: CVec::from(hinge_hess_slots.as_slice()),
+        rod_bend_hess_slots: CVec::from(rod_bend_hess_slots.as_slice()),
+        stitch_hess_slots: CVec::from(stitch_hess_slots.as_slice()),
     }
 }
 
@@ -1211,6 +1352,11 @@ pub fn make_param(args: &SimArgs) -> data::ParamSet {
         // still honors the PPF_SCHWARZ_LEVELS env override. 0 (e.g. from an
         // older param.toml) falls back to the two-level default inside build.
         schwarz_levels: args.schwarz_levels,
+        // Upper bound on Newton iterations per substep; 0 disables it. Without
+        // a bound an over-constrained configuration hangs instead of failing.
+        max_newton_steps: args.max_newton_steps,
+        // Overwritten host-side in advance() from PPF_DISABLE_PIN_DOF_REMOVAL.
+        disable_pin_dof_removal: false,
     }
 }
 

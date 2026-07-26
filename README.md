@@ -859,7 +859,7 @@ We cannot accept pull requests directly, since that involves resolving copyright
 
 Issues are triaged in batches by a single part-time maintainer (Ryoichi Ando) and labeled `queued` (seen), `in-progress` (started), or `worked` (answered at least once), so please be patient if a response takes a while.
 
-Anything you submit through Issues or Discussions, including code, is licensed to us and the community under the [Apache License, Version 2.0](./LICENSE) on a royalty-free, unrestricted basis. See [CONTRIBUTING.md](./CONTRIBUTING.md) for details. Thank you!
+Please do not submit any copyrightable materials through Issues or Discussions. Thank you!
 
 ## 💬 Participating Discussions
 
@@ -871,9 +871,7 @@ This project is owned by [ZOZO, Inc.](https://corp.zozo.com/en/) and maintained 
 
 For bug reports or feature requests, please open an issue on GitHub. For usage questions, [GitHub Discussions](https://github.com/st-tech/ppf-contact-solver/discussions) is the best place to ask. Either route is the fastest way to reach the author and keeps the conversation searchable for other users.
 
-If you would prefer to reach out privately, you can also email the author at ryoichi.ando@zozo.com.
-
-Please refrain from attaching code patches or other materials that would be considered contributions to this project. Anything you do send is treated under the terms of [CONTRIBUTING.md](./CONTRIBUTING.md): by sending it you agree it is licensed to us and the community under the [Apache License, Version 2.0](./LICENSE) on a royalty-free, unrestricted basis.
+If you would prefer to reach out privately, you can also email the author at ryoichi.ando@zozo.com. Please do not send any copyrightable materials; anything of that kind will never be read by the author and will be deleted upon receipt.
 
 If you used this project in a public piece of work, whether a paper, a production credit, or a personal project, the author would love to feature it here. A link to your article, project page, or website is all we need (rather than images or clips themselves, since hosting them here may run into licensing issues), and we will be happy to add it.
 

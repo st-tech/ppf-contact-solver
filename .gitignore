@@ -59,10 +59,7 @@ docs/global_parameters.rst
 docs/object_parameters.rst
 docs/logs.rst
 !docs/requirements.txt
-private/vast-dev
-private/log
 blender_addon/lib
-dev/node_modules
 *.log
 report.json
 src/cpp/kernels/tests/test_exclusive_scan

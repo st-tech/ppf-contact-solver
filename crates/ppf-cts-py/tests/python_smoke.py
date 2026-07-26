@@ -34,7 +34,10 @@ except Exception as e:  # pragma: no cover - environment-dependent
 
 def test_smoke_top_level():
     assert isinstance(_rust.version(), str)
-    assert isinstance(_rust.schema_version(), int)
+    # Pin the frontend literal to the Rust const: the CBOR schema version
+    # must move in lockstep across the three producers/consumers.
+    from frontend import _cbor_bridge_
+    assert _rust.schema_version() == _cbor_bridge_.SCHEMA_VERSION
 
 
 def test_smoke_app():
@@ -92,7 +95,7 @@ def test_smoke_param():
 def test_smoke_pin():
     # Constructing the holder verifies the pyclass surface is wired,
     # not just exposed as a name.
-    h = _rust.PinHolder()
+    h = _rust.PinHolder([0, 1], "uuid:vg")
     assert h is not None
 
 

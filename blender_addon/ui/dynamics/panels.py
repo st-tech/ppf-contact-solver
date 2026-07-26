@@ -141,12 +141,13 @@ def _draw_collision_windows(param_box, group, actual_index):
 
 
 def _draw_static_ops(pin_box, group, actual_index):
-    """Draw the per-object move/spin/scale ops UI for a STATIC group.
+    """Draw the Transform UI for a STATIC group: the per-object
+    move/spin/scale ops.
 
     The outer list (assigned_objects) is already shown in the group box
     above, so this draws the inner ops list plus per-op editor for
     whichever assigned object is active. Controls stay enabled even if
-    the selected object has Blender fcurves — a warning label explains
+    the selected object has Blender fcurves; a warning label explains
     that fcurves will take precedence at simulate time.
     """
     idx = group.assigned_objects_index
@@ -217,9 +218,9 @@ def _draw_pdrd_pins(pin_box, group, actual_index, context):
     hold IS the static anchor; there is no separate anchor type. Optional
     motion steps (Translate / Rotate) drive the whole body along a prescribed
     path. A pin with no steps simply holds; adding a step makes it move. The
-    cloth-only controls (Pull, Pin Stiffness, Fix Weight Threshold, Capture
-    Deformation, rest-pose tracking, pin profile, Scale, Torque) are
-    intentionally absent here.
+    cloth-only controls (Pull, Fix Weight Threshold, Capture Deformation,
+    rest-pose tracking, pin profile, Scale, Torque) are intentionally
+    absent here.
     """
     from ...core.uuid_registry import get_object_uuid
 
@@ -314,12 +315,6 @@ def _draw_pdrd_pins(pin_box, group, actual_index, context):
     dnop = row.operator("object.move_pin_operation", text="", icon="TRIA_DOWN")
     dnop.group_index = actual_index
     dnop.direction = 1
-    # Pin Stiffness scales the moving (kinematic) hard constraint force, so it
-    # only matters once the pin is driven. Greyed for a pin with no steps (a
-    # static hold needs no stiffness), matching the other types.
-    sti = col.row(align=True)
-    sti.enabled = len(pin_item.operations) > 0
-    sti.prop(pin_item, "pin_stiffness")
     if not pin_item.operations:
         col.label(text="No steps: the pin holds fixed", icon="PINNED")
 
@@ -602,15 +597,41 @@ class MAIN_PT_SceneConfiguration(Panel):
                 "scene.save_scene_profile", text="", icon="FILE_TICK"
             )
 
+        # Always name the rate the solver will actually run at. The FPS field
+        # keeps its last value while the scene override is on, so showing the
+        # field alone would quote a rate that is not in use.
         fps_box = layout.box()
-        fps_box.prop(params, "use_frame_rate_in_output")
-        if params.use_frame_rate_in_output:
-            fps = context.scene.render.fps
+        fps_box.prop(params, "use_scene_fps")
+        if params.use_scene_fps:
             row = fps_box.row()
-            row.label(text="FPS:")
-            row.label(text=str(fps))
+            row.label(text="FPS (from Scene):")
+            row.label(text=str(context.scene.render.fps))
         else:
             fps_box.prop(params, "frame_rate")
+        # Time Scale re-interprets how much simulated time one frame covers
+        # (0.5 = the animation plays at half speed in solver seconds). Shown
+        # in the same box as the rate so the two time knobs read together;
+        # flag the slow-motion state whenever it is not real time.
+        fps_box.prop(params, "time_scale")
+        if params.time_scale != 1.0:
+            row = fps_box.row()
+            row.label(
+                text=iface_("Animation at {percent}% speed").format(
+                    percent=round(params.time_scale * 100)
+                ),
+                icon="TIME",
+            )
+        # Same reasoning as the FPS box: the Starting Frame field keeps its
+        # last value while the scene override is on, so name the frame the
+        # solve will actually start on rather than the field alone.
+        start_box = layout.box()
+        start_box.prop(params, "use_scene_frame_start")
+        if params.use_scene_frame_start:
+            row = start_box.row()
+            row.label(text="Starting Frame (from Scene):")
+            row.label(text=str(context.scene.frame_start))
+        else:
+            start_box.prop(params, "frame_start")
         layout.prop(params, "frame_count")
         layout.prop(params, "step_size")
         layout.prop(params, "min_newton_steps")
@@ -1365,23 +1386,6 @@ class DYNAMICS_PT_Groups(Panel):
                         sub.enabled = pin_item.use_pull
                         sub.prop(pin_item, "pull_strength")
 
-                        # Pin stiffness scales the moving (kinematic) hard
-                        # constraint force, so it only matters once the pin
-                        # animates (an op or a captured deformation) AND the
-                        # pin is a hard fix. A Pull pin is a PullPair, which
-                        # uses its weight not stiffness, so stiffness has no
-                        # effect there. Drawn always for discoverability;
-                        # disabled for pull pins and stationary pins.
-                        row = col.row(align=True)
-                        row.enabled = (
-                            not pin_item.use_pull
-                            and (
-                                len(pin_item.operations) > 0
-                                or pin_item.has_captured_anim
-                            )
-                        )
-                        row.prop(pin_item, "pin_stiffness")
-
                         # Fix weight threshold (SOLID hard pins only). Tet
                         # verts whose diffused pin weight reaches this become
                         # hard kinematic fixes; lower-weight verts stay soft.
@@ -1952,7 +1956,11 @@ class UTILITY_PT_UtilityTools(Panel):
         return has_addon_data(context.scene)
 
     def draw(self, context):
+        from ...mesh_ops.cleaning_ops import draw_mesh_cleaning
+
         layout = self.layout
+
+        draw_mesh_cleaning(layout, context)
 
         tri_box = layout.box()
         tri_box.label(text="Symmetric Triangulate")

@@ -50,7 +50,7 @@ pub(super) fn scene_move_by_apply<'py>(
         )));
     }
     let h = bezier_handles.map(|(hr, hl)| ([hr.0, hr.1], [hl.0, hl.1]));
-    let out = py.allow_threads(|| {
+    let out = py.detach(|| {
         sb::move_by_apply(&v_buf, &d_buf, time, t_start, t_end, transition, h)
     });
     let arr = ndarray::Array2::from_shape_vec((n, 3), out)
@@ -80,7 +80,7 @@ pub(super) fn scene_move_to_apply<'py>(
         )));
     }
     let h = bezier_handles.map(|(hr, hl)| ([hr.0, hr.1], [hl.0, hl.1]));
-    let out = py.allow_threads(|| {
+    let out = py.detach(|| {
         sb::move_to_apply(&v_buf, &t_buf, time, t_start, t_end, transition, h)
     });
     let arr = ndarray::Array2::from_shape_vec((n, 3), out)
@@ -103,7 +103,7 @@ pub(super) fn scene_spin_apply<'py>(
     time: f64,
 ) -> PyResult<Bound<'py, numpy::PyArray2<f64>>> {
     let (v_buf, n) = read_n3_f64(&vertex, "vertex")?;
-    let out = py.allow_threads(|| {
+    let out = py.detach(|| {
         sb::spin_apply(&v_buf, center, axis, angular_velocity, t_start, t_end, time)
     });
     let arr = ndarray::Array2::from_shape_vec((n, 3), out)
@@ -126,7 +126,7 @@ pub(super) fn scene_scale_apply<'py>(
     time: f64,
 ) -> PyResult<Bound<'py, numpy::PyArray2<f64>>> {
     let (v_buf, n) = read_n3_f64(&vertex, "vertex")?;
-    let out = py.allow_threads(|| {
+    let out = py.detach(|| {
         sb::scale_apply(&v_buf, center, factor, t_start, t_end, transition, time)
     });
     let arr = ndarray::Array2::from_shape_vec((n, 3), out)
@@ -178,7 +178,7 @@ pub(super) fn scene_transform_keyframe_apply<'py>(
     }
     let mut segs = Vec::with_capacity(expected_segs);
     for (i, item) in segments.iter().enumerate() {
-        let d = item.downcast::<PyDict>().map_err(|_| {
+        let d = item.cast::<PyDict>().map_err(|_| {
             PyValueError::new_err(format!("segment {i} must be a dict"))
         })?;
         let interp: String = match d.get_item("interpolation")? {
@@ -209,7 +209,7 @@ pub(super) fn scene_transform_keyframe_apply<'py>(
         };
         segs.push(seg);
     }
-    let out = py.allow_threads(|| {
+    let out = py.detach(|| {
         sb::transform_keyframe_apply(
             &v_buf,
             &lv_buf,
@@ -252,7 +252,7 @@ pub(super) fn scene_transform_animation_evaluate<'py>(
             "translations/quaternions/scales length must equal times length",
         ));
     }
-    let out = py.allow_threads(|| {
+    let out = py.detach(|| {
         sb::transform_animation_evaluate(
             &lv_buf,
             &times,

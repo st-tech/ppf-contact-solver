@@ -36,10 +36,9 @@ With the Save and Checkpoints disclosure triangle open, the sub-section gathers 
 
 With the Wind disclosure triangle open, the sub-section reveals a Direction XYZ field, a Preview Direction viewport toggle, and a Strength (m/s) scalar. Encoding combines direction x strength, so a zero-direction vector disables wind regardless of the strength value.
 
-- **Linear System Solver**: CG max iter, CG tol, preconditioner, and Schwarz levels.
-- **Advanced Params**: contact NNZ, vertex air damp, CCD line-search max t, constraint ghat, friction mode, include-face-mass and disable-contact toggles.
+- **Advanced Params**: contact NNZ, vertex air damp, CCD line-search max t, constraint ghat, CG max iter, CG tol, include-face-mass and disable-contact toggles.
 
-Advanced Params exposes the tuning knobs most users never need to touch: contact-matrix capacity (Max Contact), per-vertex air drag, CCD line-search bounds, the friction-combination mode, and two debugging toggles. Raise Max Contact only when the solver reports overflow.
+Advanced Params exposes the tuning knobs most users never need to touch: contact-matrix capacity (Max Contact), per-vertex air drag, CCD line-search bounds, PCG iteration cap and tolerance, and two debugging toggles. Raise PCG limits for stiff systems; raise Max Contact only when the solver reports overflow.
 
 - **Dynamic Parameters**: keyframed gravity / wind / air density / air friction / vertex air damp. Covered separately in Dynamic Parameters.
 - **Invisible Colliders**: walls and spheres with their own keyframe lists. Covered separately in Invisible Colliders.
@@ -51,7 +50,8 @@ Only the sub-section headers are visible when collapsed; click the triangle on a
 | UI label                     | Python / TOML key          | Default       | Description                                                         |
 | ---------------------------- | -------------------------- | ------------- | ------------------------------------------------------------------- |
 | **Frame Count**              | `frame_count`              | 180           | Simulation length in frames. Minimum 10.                            |
-| **FPS**                      | `frame_rate`               | 60            | FPS used to convert frames to seconds at encode time. Minimum 24.   |
+| **FPS**                      | `frame_rate`               | 60            | Rate the sim runs at, converting frames to seconds at encode time. Minimum 24. Ignored while `use_scene_fps` is on. |
+| **Take FPS from Scene**      | `use_scene_fps`            | False         | Run at the Blender scene's frame rate instead, so simulated time tracks the scene timeline. |
 | **Step Size**                | `step_size`                | 0.01          | Solver sub-step Δt, in seconds. Range 0.001 – 0.01.                 |
 | **Min Newton Steps**         | `min_newton_steps`         | 1             | Minimum Newton iterations per step. 1 – 64.                         |
 | **Air Density (kg/m³)**      | `air_density`              | 0.001         | Air density, kg/m³. Range 0 – 0.01.                                 |
@@ -80,7 +80,7 @@ $$
 
 What scales: every vertex position (deformable meshes, their rest shapes, pinned and animated targets), collider positions and sizes (sphere radius, wall/sphere thickness), initial and keyframed velocities, both **relative** contact gaps (a fraction of the mesh size) and **absolute** contact gaps/offsets (a fixed distance, scaled so it stays the same size relative to the geometry), and the `fix_xz` threshold. What does **not** scale: gravity and material stiffness. The factor must be greater than 0.
 
-**PDRD** rigid bodies scale correctly as well: their rest centroid, volume, inertia, mass, and joint pivot are each rescaled by the matching power of the factor, so a rigid body keeps its shape and dynamics at any World Scaling.
+Limitation: **PDRD** rigid bodies are not yet supported with a world scaling other than `1.0` (the solver raises a clear error). Pre-scale such scenes or leave World Scaling at `1.0`.
 
 The per-vertex air-damping force is then scaled by the vertex's associated area and by **Air Density** before being added to the Newton solve. A side-effect of that last multiplication: at `air_density = 0` there is no shell air damping at all, regardless of **Air Friction**.
 
@@ -123,7 +123,7 @@ A live example of the Wind fields. With Direction = (0, 1, 0) and Strength = 5.0
 | **Linear System Solver** (disclosure) | `show_linear_system_solver` | `False` | Whether the Linear System Solver sub-section is expanded.        |
 | **PCG Max Iterations**         | `cg_max_iter`                | 10 000      | Max iterations for the PCG linear solver. 100 – 100 000.         |
 | **PCG Tolerance**              | `cg_tol`                     | 0.001       | PCG relative tolerance. 0.00001 – 0.1.                           |
-| **Preconditioner**             | `precond`                    | `BLOCK_JACOBI` | PCG preconditioner. `BLOCK_JACOBI` (default) is the 3x3 per-vertex diagonal preconditioner; `SCHWARZ` is the opt-in additive aggregate-Schwarz, more robust on systems mixing stiff and soft elements. |
+| **Preconditioner**             | `precond`                    | `SCHWARZ`   | PCG preconditioner. `SCHWARZ` (default) is additive aggregate-Schwarz, more robust on systems mixing stiff and soft elements; `BLOCK_JACOBI` is the 3x3 per-vertex diagonal preconditioner. |
 | **Schwarz Levels**             | `schwarz_levels`             | `LEVEL_2`   | Number of additive levels for the Schwarz preconditioner (shown only when the preconditioner is `SCHWARZ`). `LEVEL_1` is the single-level smoother; `LEVEL_2` (default) adds a two-level coarse correction over the connectivity partition, reducing the worst-case PCG iteration count on stiff multibody contact. |
 
 Raise **PCG Max Iterations** (and lower **PCG Tolerance**) for stiff systems that fail to converge.
@@ -137,7 +137,6 @@ Raise **PCG Max Iterations** (and lower **PCG Tolerance**) for stiff systems tha
 | **Line Search Max T**     | `line_search_max_t`  | 1.25        | CCD line-search maximum step factor. Range 0.1 – 10.             |
 | **Constraint Gap**        | `constraint_ghat`    | 0.001       | Barrier gap distance. Range 0.0001 – 0.1.                        |
 | **Include Face Mass**     | `include_face_mass`  | `False`     | Fold shell face mass into attached solids.                       |
-| **Friction Mode**         | `friction_mode`      | `MIN`       | How to combine the two contacting elements' friction coefficients: `MIN` (minimum, default), `MAX` (maximum), or `MEAN` (average). |
 | **Disable Contact**       | `disable_contact`    | `False`     | Turn off contact detection entirely (debugging / ablation).      |
 
 Raise **Max Contact** only if the solver reports a contact-matrix overflow; it's an upper bound, not a target.
@@ -160,7 +159,7 @@ Topology changes (adding or removing vertices, edges, or faces) still require a 
 
 ### Scene profiles
 
-A **scene profile** is a named set of scene parameters saved to a TOML file with the **Save** icon. A file can hold any number of presets; for example:
+A **scene profile** is a named set of scene parameters saved to a TOML file. The shipped example contains:
 
 | Preset        | Highlights                                                                  |
 | ------------- | --------------------------------------------------------------------------- |
@@ -170,7 +169,7 @@ A **scene profile** is a named set of scene parameters saved to a TOML file with
 | `SlowMotion`  | 600 frames at 120 FPS. Step size stays at 0.001 s.                          |
 | `ZeroGravity` | `gravity = (0, 0, 0)`, 300 frames.                                          |
 
-NOTE: The `Default` preset above is just a profile name in this example, not the addon's new-scene default. These presets deliberately tighten `step_size` to 0.001 s for the more demanding example setups; a fresh Blender scene still starts at the addon default of 0.01 s (see the Basic table).
+NOTE: The `Default` preset above is a profile name in the shipped TOML, not the addon's new-scene default. The presets deliberately tighten `step_size` to 0.001 s for the more demanding example setups; a fresh Blender scene still starts at the addon default of 0.01 s (see the Basic table).
 
 Unlike material profiles, scene profiles also capture **dynamic parameters** and **invisible colliders**. Applying the profile clears existing dynamic parameters and invisible colliders first, then rebuilds them from the TOML entries.
 
@@ -241,9 +240,11 @@ solver.update_params()
 
 UNDER THE HOOD:
 
-**Hidden `use_frame_rate_in_output`**
+**`use_scene_fps`**
 
-`use_frame_rate_in_output` is a hidden boolean. When true, Blender's render FPS is used in place of `frame_rate` when converting frames to seconds at encode time. Leave it off unless you want the output time base tied to the render FPS.
+`use_scene_fps` selects where the simulation's frame rate comes from. When true it is the Blender scene's frame rate, so simulated time tracks the scene timeline; when false it is the `frame_rate` field, which lets the simulation run on a different time base than playback. Either way exactly one rate reaches the solver: `resolve_fps()` in `core/encoder/__init__.py`. Note that `frame_rate` keeps its last value while `use_scene_fps` is on, so read `effective_fps` from `get_scene_parameters()`, never `frame_rate`, to learn what the solver will use.
+
+This was named `use_frame_rate_in_output` before, which read as the opposite of what it does. Opening an older .blend or scene profile carries the old value over automatically (`core/migrate_renames.py`).
 
 **Scene profile shape**
 
@@ -270,12 +271,11 @@ Every object group carries its own copy of the full material-parameter set, but 
 - **Solid**: density, stiffness, a single shrink factor, deformation Rayleigh damping, and contact settings.
 - **Rod**: density, stiffness, bend, strain limit, Rayleigh damping (deformation + bending), and contact settings.
 - **PDRD**: an exactly-rigid body type. Only density, friction, contact settings, and an optional hinge joint (no Young's modulus, Poisson ratio, bend, shrink, strain limit, inflate, or Rayleigh damping). The surface mesh is not tetrahedralized.
-- **SAND**: a granular body of loose grains. Only grain radius, particle mass, friction, and contact settings (no Young's modulus, Poisson ratio, bend, shrink, strain limit, inflate, or Rayleigh damping).
 - **Static**: only friction and contact settings (static objects have no deformation to tune). See Static Objects for the full treatment of Static groups, including how to animate them.
 
 Rows that don't apply to the current type are hidden in the UI.
 
-The six options in the group-type dropdown on each group's header row. Picking one changes the Material Params box to match: Solid shows density, stiffness, and a single shrink factor; Shell shows the full cloth stack including anisotropic shrink, strain limit, inflate, and stitch; Rod shows density, stiffness, bend, and strain limit; PDRD shows its rigid-body density, an optional hinge joint, plus shared contact rows; SAND shows its grain radius, particle mass, and friction, plus shared contact rows; Static collapses to just Friction and the contact rows.
+The five options in the group-type dropdown on each group's header row. Picking one changes the Material Params box to match: Solid shows density, stiffness, and a single shrink factor; Shell shows the full cloth stack including anisotropic shrink, strain limit, inflate, and stitch; Rod shows density, stiffness, bend, and strain limit; PDRD shows its rigid-body density, an optional hinge joint, plus shared contact rows; Static collapses to just Friction and the contact rows.
 
 ### The Material Params box
 
@@ -348,7 +348,7 @@ These apply regardless of type.
 | **Contact Gap Ratio**                | `contact_gap_rat`                 | 0.001   | Contact gap as a fraction of the group's bounding-box diagonal.          |
 | **Contact Offset Ratio**             | `contact_offset_rat`              | 0.0     | Contact offset as a fraction of the group's bounding-box diagonal.       |
 
-**Friction at a contact** is asymmetric in the material parameters but symmetric in the solve: each object carries its own **Friction** coefficient, and when two objects come into contact the solver combines the two values using the scene's **Friction Mode** (Advanced Params), which defaults to the **minimum** of the two but can be set to maximum or mean instead. Under the default minimum rule, the lower-friction surface wins: a slippery cloth sliding over a grippy body behaves as if the whole contact were slippery. If you want a particular contact to feel grippy, both sides need to be set high.
+**Friction at a contact** is asymmetric in the material parameters but symmetric in the solve: each object carries its own **Friction** coefficient, and when two objects come into contact the solver takes the **minimum** of the two values as the friction at that contact. In practice, the lower-friction surface wins: a slippery cloth sliding over a grippy body behaves as if the whole contact were slippery. If you want a particular contact to feel grippy, both sides need to be set high.
 
 See Contact gap: absolute vs ratio below for which pair you should be editing.
 
@@ -358,7 +358,7 @@ See Contact gap: absolute vs ratio below for which pair you should be editing.
 | ------------------------ | ---------------------- | ---------------- | -------------------------------------------------------------- |
 | **Model**                | `shell_model`          | `BARAFF_WITKIN`  | Material model. One of `BARAFF_WITKIN`, `STABLE_NEOHOOKEAN`, `ARAP`. |
 | **Density (kg/m²)**      | `shell_density`        | 1.0              | Areal density, kg/m².                                          |
-| **Young's Modulus (Pa/ρ)** | `shell_young_modulus`  | 1000.0         | Young's modulus (see note below). Accepted range 0.01 – 1 G (soft cap 10 M). |
+| **Young's Modulus (Pa/ρ)** | `shell_young_modulus`  | 1000.0         | Young's modulus (see note below). Accepted range 0 – 10 M.     |
 | **Poisson's Ratio**      | `shell_poisson_ratio`  | 0.35             | Poisson ratio, 0 – 0.4999.                                     |
 | **Bend Stiffness**       | `bend`                 | 10.0             | Bending stiffness, 0 – 100. Density-normalized (see note below). |
 | **Shrink X**             | `shrink_x`             | 1.0              | Anisotropic warp scale (min 0.1). < 1 shrinks, > 1 extends.    |
@@ -484,7 +484,7 @@ World and Custom axes are fixed directions and do not track the body. When **Ena
 | -------------------------- | --------------------- | -------------------- | --------------------------------------------------------- |
 | **Model**                  | `solid_model`         | `ARAP`               | Material model. Either `STABLE_NEOHOOKEAN` or `ARAP`.     |
 | **Density (kg/m³)**        | `solid_density`       | 100.0                | Volumetric density, kg/m³.                                |
-| **Young's Modulus (Pa/ρ)** | `solid_young_modulus` | 500.0                | Young's modulus (see note below). Range 0.01 – 1 G (soft cap 10 M). |
+| **Young's Modulus (Pa/ρ)** | `solid_young_modulus` | 500.0                | Young's modulus (see note below). Range 0 – 10 M.         |
 | **Poisson's Ratio**        | `solid_poisson_ratio` | 0.35                 | Poisson ratio, 0 – 0.4999.                                |
 | **Shrink**                 | `shrink`              | 1.0                  | Uniform rest-shape scale (min 0.1).                       |
 
@@ -573,18 +573,6 @@ NOTE: Young's modulus behaves non-conventionally. The solver divides the entered
 - `True` (default): the entered value is a **density-normalized** modulus in `Pa/ρ`, the solver's native convention. It is sent unchanged, so changing a body's density alone leaves its motion unchanged. Keep it on to match existing scenes. The field reads `Young's Modulus (Pa/ρ)`.
 - `False`: the entered value is a **true Young's modulus in pascals** (for example a value from a material reference table). The add-on divides it by this group's density before sending, so a denser body of the same material is correspondingly stiffer to move. The field label flips to plain `Young's Modulus (Pa)`.
 
-### SAND-specific
-
-**SAND** is a granular group type: a faceless mesh of loose vertices simulated as individual grains. It exposes only the three grain parameters below plus the shared friction and contact rows; Young's modulus, Poisson ratio, bend, shrink, strain limit, inflate, and Rayleigh damping do not apply.
-
-| UI label              | Python / TOML key     | Default | Description                                                                 |
-| --------------------- | --------------------- | ------- | --------------------------------------------------------------------------- |
-| **Grain Radius (m)**  | `sand_grain_radius`   | 0.02    | Per-grain radius, in Blender units. Locked in at convert time, so the field is read-only once the group has been converted. |
-| **Particle Mass (g)** | `sand_particle_mass`  | 1.0     | Mass of a single grain, in grams (sent to the solver in kilograms).         |
-| **Friction**          | `sand_friction`       | 0.0     | Inter-grain friction coefficient of the granular body.                      |
-
-The grain radius doubles as the contact offset (the grain's physical skin); the contact gap is the extra barrier-activation distance on top.
-
 ### Contact gap and contact offset
 
 **Contact Gap** and **Contact Offset** are two distances that together shape the invisible contact layer around each group's geometry. They serve different roles and both are configurable.
@@ -609,7 +597,7 @@ Both pairs (**Contact Gap** / **Contact Gap Ratio** and **Contact Offset** / **C
 
 ### Material profiles
 
-A **material profile** is a named set of material parameters saved to a TOML file with the **Save** icon. A single file can hold any number of presets; profiles like these are easy to build:
+A **material profile** is a named set of material parameters saved to a TOML file. The add-on ships an example material profile with the following presets:
 
 | Preset   | Type       | Notes                                                               |
 | -------- | ---------- | ------------------------------------------------------------------- |
@@ -666,7 +654,7 @@ strain_limit_percent = 5.0
 stitch_stiffness = 1.0
 ```
 
-Only the keys you include are applied; missing keys keep their current value on the group. You don't have to list every field for a preset to be valid — a `Static` collider preset, for instance, can carry just a `friction` value.
+Only the keys you include are applied; missing keys keep their current value on the group. You don't have to list every field for a preset to be valid. See `Silk` or `Static` in the shipped file for minimal examples.
 
 ### Blender Python API
 

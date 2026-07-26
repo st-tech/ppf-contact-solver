@@ -7,13 +7,14 @@ import bpy  # pyright: ignore
 from bpy.props import (  # pyright: ignore
     BoolProperty,
     CollectionProperty,
-    EnumProperty,
     FloatProperty,
     FloatVectorProperty,
     IntProperty,
     StringProperty,
 )
 from bpy.types import PropertyGroup  # pyright: ignore
+
+from ..models.enum_props import EnumProperty
 
 
 def _invalidate_overlay(self=None, ctx=None):
@@ -314,9 +315,9 @@ class VelocityKeyframe(PropertyGroup):
     )  # pyright: ignore
     # Per-component overwrite gates. A keyframe overwrites the translational
     # velocity only when enable_translational is on, and the angular velocity
-    # only when enable_angular is on (either or both). The two are
-    # independent: a pure-spin keyframe (angular only) leaves the translation
-    # untouched, and a pure-translation keyframe (linear only) emits no spin.
+    # only when enable_angular is on (either or both). This decouples the two:
+    # a pure-spin keyframe (angular only) no longer zeros the translation, and
+    # a pure-translation keyframe (linear only) does not emit a spin.
     enable_translational: BoolProperty(
         name="Enable Translational Velocity Overwrite",
         default=True,
@@ -433,6 +434,9 @@ class StaticOpItem(PropertyGroup):
     spin_angular_velocity: FloatProperty(
         name="Angular Velocity (\u00b0/s)",
         default=360.0,
+        # Authored degrees per ANIMATION second. STATIC ops ship this raw
+        # (angular_velocity_anim) and the decoder applies Time Scale from
+        # the Param payload; pin ops apply Time Scale at encode.
         description="Degrees per second",
         update=_on_overlay_changed,
     )  # pyright: ignore
@@ -796,19 +800,6 @@ class PinVertexGroupItem(PropertyGroup):
         precision=2,
         description="Pull force strength (0=no pull, 1=default)",
     )  # pyright: ignore
-    pin_stiffness: FloatProperty(
-        name="Pin Stiffness",
-        default=1.0,
-        min=0.0,
-        soft_max=10000.0,
-        precision=2,
-        description=(
-            "Stiffness scale for this pin's moving (animated) hard "
-            "constraint force. 1.0 is the default; raise it if an animated "
-            "pin lags or wobbles away from its target, lower it for a softer "
-            "hold. Has no effect on a stationary pin or a Pull pin"
-        ),
-    )  # pyright: ignore
     fix_weight_threshold: FloatProperty(
         name="Fix Weight Threshold",
         default=0.5,
@@ -822,9 +813,9 @@ class PinVertexGroupItem(PropertyGroup):
             "reaches this threshold are held as hard kinematic fixes; "
             "lower-weight vertices stay soft-pulled. Lower it toward 0 to "
             "hold more of the pinned surface region rigidly, raise it to "
-            "soften the skirt. Interior vertices are never hard-fixed (they "
-            "would crash the solver). No effect on pull pins or non-SOLID "
-            "groups"
+            "soften the skirt. Interior vertices stay soft-pulled, giving the "
+            "body a rigid shell and a compliant core. No effect on pull pins "
+            "or non-SOLID groups"
         ),
     )  # pyright: ignore
     operations: CollectionProperty(type=PinOperation)  # pyright: ignore

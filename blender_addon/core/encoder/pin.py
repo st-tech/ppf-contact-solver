@@ -15,7 +15,14 @@ from ..utils import (
     pin_covers_all_vertices,
     world_matrix,
 )
-from . import _swap_axes, _to_solver, resolve_fps
+from . import (
+    _swap_axes,
+    _to_solver,
+    frame_to_time,
+    resolve_solver_fps,
+    resolve_start_frame,
+    resolve_time_scale,
+)
 
 
 def _solver_rot_matrix(obj):
@@ -161,15 +168,19 @@ def _collect_pin_vertex_fcurve_frames(obj, vg_name):
     return sorted(frames), lookup
 
 
-def _encode_pin_config(context, groups, state, fps=None):
+def _encode_pin_config(context, groups, state, fps=None, start_frame=None):
     """Encode pin vertex group config and animation.
 
-    ``fps`` is resolved once by ``_build_param_dict`` and threaded in so the
-    whole param build shares a single frame rate; callers that omit it (e.g.
-    debug scenarios) fall back to resolving it here.
+    ``fps`` and ``start_frame`` are resolved once by ``_build_param_dict`` and
+    threaded in so the whole param build shares a single frame rate and time
+    origin; callers that omit them (e.g. debug scenarios) fall back to
+    resolving them here.
     """
     if fps is None:
-        fps = resolve_fps(state)
+        # Solver-fps (Time Scale applied): pin schedules are solver seconds.
+        fps = resolve_solver_fps(state)
+    if start_frame is None:
+        start_frame = resolve_start_frame(state)
     # Collect per-object pin config (duration, pull, operations) keyed by vertex index
     # Structure: {obj_name: {vertex_index: {"unpin_time": ..., "pull_strength": ..., "operations": [...]}}}
     pin_config = {}
@@ -228,7 +239,7 @@ def _encode_pin_config(context, groups, state, fps=None):
             # A captured deformation on a SOLID group can drive a time-varying
             # rest shape so the dynamic body settles into the motion instead of
             # fighting it. Applies to BOTH pin modes - a pull pin (weak soft
-            # pull) and a fixed pin (strong FixPair barrier) track the same rest
+            # pull) and a fixed pin (exact Dirichlet fix) track the same rest
             # shape; only the pin constraint differs. This is OPT-IN via the
             # per-pin "Track Rest-Pose Deformation" toggle. Gated on a FULL pin
             # (every vertex in the group): with the whole mesh captured, the
@@ -240,11 +251,6 @@ def _encode_pin_config(context, groups, state, fps=None):
                     and group.object_type == "SOLID"
                     and pin_covers_all_vertices(obj, vg_name)):
                 cfg["rest_shape_track"] = True
-            # Per-pin stiffness scale for the moving (kinematic) pin
-            # constraint force. Always emitted; the solver applies it
-            # only when the pin is kinematic. Defaults to 1.0 server-side
-            # when absent (older payloads).
-            cfg["pin_stiffness"] = float(pin_item.pin_stiffness)
             if has_operations:
                 ops_list = []
                 # Centroid for CENTROID-mode spin/scale: frame-1 vertex
@@ -318,7 +324,14 @@ def _encode_pin_config(context, groups, state, fps=None):
                         if op.spin_flip:
                             axis_arr = -axis_arr
                         op_dict["axis"] = axis_arr.tolist()
-                        op_dict["angular_velocity"] = float(op.spin_angular_velocity)
+                        # Authored in ANIMATION degrees/second; Time Scale re-interprets
+                        # animation seconds, so convert to physical rate by
+                        # multiplying, keeping rotation-per-frame invariant
+                        # and SPIN in sync with keyframed motion.
+                        op_dict["angular_velocity"] = (
+                            float(op.spin_angular_velocity)
+                            * resolve_time_scale(state)
+                        )
                     elif op.op_type == "SCALE":
                         if op.scale_center_mode == "CENTROID" and centroid_blender:
                             op_dict["center_mode"] = "centroid"
@@ -383,10 +396,14 @@ def _encode_pin_config(context, groups, state, fps=None):
                             op_dict["hint_vertex"] = int(pin_indices_hint[np.argmax(projections)])
                     # Clamp inverted ranges to zero duration instead of
                     # emitting a negative interval the solver would reject.
-                    start_frame = op.frame_start
-                    end_frame = max(op.frame_end, start_frame)
-                    op_dict["t_start"] = (start_frame - 1) / fps
-                    op_dict["t_end"] = (end_frame - 1) / fps
+                    op_start = op.frame_start
+                    op_end = max(op.frame_end, op_start)
+                    op_dict["t_start"] = max(
+                        0.0, frame_to_time(op_start, fps, start_frame),
+                    )
+                    op_dict["t_end"] = max(
+                        0.0, frame_to_time(op_end, fps, start_frame),
+                    )
                     op_dict["transition"] = op.transition.lower()
                     ops_list.append(op_dict)
                 if ops_list:
@@ -448,11 +465,11 @@ def _encode_pin_config(context, groups, state, fps=None):
                         "Cache and Capture Deformation again."
                     )
                 n_frames_cache = pin_cache.shape[0]
-                cache_frame_start = int(bpy.context.scene.frame_start)
-                cache_times = [
-                    (cache_frame_start + k - 1) / fps
-                    for k in range(n_frames_cache)
-                ]
+                # Cache row 0 is the pose at the starting frame, which is
+                # simulated time zero, so row k is simply k / fps.
+                # ``_effective_frame_range`` (static_deform_ops) anchors the
+                # capture at the same resolved starting frame.
+                cache_times = [k / fps for k in range(n_frames_cache)]
                 # Cache stores positions in world solver space
                 # (zup_to_yup @ matrix_world @ co_local). The decoder
                 # only uses consecutive deltas, so absolute frame and
@@ -490,7 +507,10 @@ def _encode_pin_config(context, groups, state, fps=None):
                 rest_co = np.empty(n_verts_total * 3, dtype=np.float32)
                 obj.data.vertices.foreach_get("co", rest_co)
                 rest_pose = rest_co.reshape(n_verts_total, 3)
-                times = [(f - 1) / fps for f in fcurve_frames]
+                times = [
+                    max(0.0, frame_to_time(f, fps, start_frame))
+                    for f in fcurve_frames
+                ]
                 pose_stack = np.broadcast_to(
                     rest_pose, (len(fcurve_frames), n_verts_total, 3),
                 ).copy()
@@ -516,10 +536,10 @@ def _encode_pin_config(context, groups, state, fps=None):
             cfg["pin_group_id"] = f"{obj_uuid}:{vg_name}"
             cfg["obj_uuid"] = obj_uuid
             # SOLID hard-pin surface/soft split threshold (per pin). The
-            # decoder always splits a hard-intent partial-pin SOLID holder
-            # (interior fix pins crash the solver); this scalar only sets how
-            # much of the SURFACE is hard vs soft skirt. 0 = whole pinned
-            # surface region hard. Irrelevant to pull pins / non-SOLID.
+            # decoder splits a hard-intent partial-pin SOLID holder into a hard
+            # surface shell and a soft-pulled interior; this scalar sets how much
+            # of the SURFACE is hard vs soft skirt. 0 = whole pinned surface
+            # region hard. Irrelevant to pull pins / non-SOLID.
             if group.object_type == "SOLID":
                 cfg["fix_weight_threshold"] = float(
                     getattr(pin_item, "fix_weight_threshold", 0.5)

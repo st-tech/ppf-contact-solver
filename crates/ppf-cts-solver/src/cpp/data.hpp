@@ -311,14 +311,24 @@ using DiffTable2 = DiffTable<2>;
 using DiffTable3 = DiffTable<3>;
 
 struct FixPair {
+    // Where the pin's prescribed path puts this vertex at the END of the
+    // step (the time the host aimed the step at).
     Vec3f position;
+    // Displacement the pin travels over this step: `position` minus the same
+    // path evaluated at the step's START time. The CCD line search can
+    // truncate a step to a fraction `toi` of its span, and a kinematic pin
+    // must then stop at that same fraction of the path it was scheduled to
+    // travel, or it outruns the clock (see `rewind_kinematic_fix` in main.cu).
+    // Zero for a static pin, which never moves.
+    Vec3f step_delta;
     float ghat;
     unsigned index;
     bool kinematic;
-    // Per-pin force scale, applied only for kinematic pins. 1.0 is the
-    // default (no change). Field order must mirror Rust FixPair in
-    // data.rs (repr(C) ABI).
-    float stiffness;
+    // NOTE: every fix pin is an exact Dirichlet BC (main.cu eliminates its DOF),
+    // so there is no per-pin stiffness to scale: there is no penalty force left.
+    // `ghat` and `kinematic` survive only for the PDRD anchor, the one pin still
+    // held by the barrier (a vertex inside a rigid body owns no per-vertex DOF).
+    // Field order must mirror Rust FixPair in data.rs (repr(C) ABI).
 };
 
 struct PullPair {
@@ -454,6 +464,24 @@ struct ParamSet {
     // Appended at the tail; field order and byte layout MUST mirror the Rust
     // ParamSet in data.rs (repr(C) ABI).
     unsigned schwarz_levels;
+    // Upper bound on Newton iterations per substep. The loop is otherwise
+    // unbounded, so an over-constrained configuration (a prescribed pin driven
+    // into geometry that cannot yield) spins forever: the line search clamps
+    // the shared toi toward zero to prevent the penetration, that same clamp
+    // throttles every other vertex, and the toi never falls below FLT_EPSILON,
+    // so the CCD trap never fires. This bound turns that hang into a loud
+    // CrashKind::NewtonStall. 0 disables the bound (research only).
+    // Appended at the tail; field order and byte layout MUST mirror the Rust
+    // ParamSet in data.rs (repr(C) ABI).
+    unsigned max_newton_steps;
+    // Diagnostic A/B lever (PPF_DISABLE_PIN_DOF_REMOVAL=1, set host-side in
+    // advance()): revert every fix pin from an exact Dirichlet BC back to the
+    // old barrier penalty. Both halves must flip together -- main.cu stops
+    // eliminating the rows AND contact.cu puts the barrier back -- or the pin
+    // would have neither and simply vanish.
+    // Appended at the tail; field order and byte layout MUST mirror the Rust
+    // ParamSet in data.rs (repr(C) ABI).
+    bool disable_pin_dof_removal;
 };
 
 struct StepResult {
@@ -461,8 +489,25 @@ struct StepResult {
     bool ccd_success;
     bool pcg_success;
     bool intersection_free;
+    // False when the Newton loop hit max_newton_steps without reaching an
+    // acceptable step (an over-constrained configuration: the line search
+    // clamps the shared toi toward zero to stop a penetration, and that same
+    // clamp throttles every other vertex, so no iteration progresses). Field
+    // order must mirror Rust StepResult in data.rs (repr(C) ABI).
+    bool newton_progress;
+    // False when a prescribed (fix-pinned) vertex's swept path crosses an
+    // analytic collider (floor / sphere / wall). Such a vertex has no DOF to
+    // yield with, so the prescription itself is infeasible.
+    bool pin_feasible;
+    // False when a contact pair begins the step already inside the contact
+    // offset (two surfaces start out touching or overlapping), so the
+    // conservative CCD cannot advance from a separated start. Appended at the
+    // tail; field order and byte layout MUST mirror the Rust StepResult in
+    // data.rs (repr(C) ABI).
+    bool contact_separated;
     bool success() const {
-        return ccd_success && pcg_success && intersection_free;
+        return ccd_success && pcg_success && intersection_free &&
+               newton_progress && pin_feasible && contact_separated;
     }
 };
 
@@ -541,6 +586,18 @@ struct DataSet {
     Vec<Mat3x3f> grain_A;
     Vec<Mat3x3f> grain_B;
     Vec<Vec3f> grain_grot;
+    // Slot-replay assembly tables. Flat FixedCSRMat value-slot index of
+    // every 3x3 block each topology-fixed element writes, row-major (ii*N + jj),
+    // with 0xFFFFFFFF sentinels for lower-triangle (push() no-op) blocks. Empty
+    // (size 0) when PPF_SLOT_REPLAY=0, in which case the assembly kernels fall
+    // back to push(). Field order/layout MUST mirror the CVec<u32> tail of the
+    // Rust DataSet in data.rs (repr(C) ABI); tail-append only.
+    Vec<unsigned> tet_hess_slots;      // 16 per tet
+    Vec<unsigned> face_hess_slots;     // 9 per face (membrane/inflate/strain)
+    Vec<unsigned> edge_hess_slots;     // 4 per edge (rod stretch/strain)
+    Vec<unsigned> hinge_hess_slots;    // 16 per hinge, REMAPPED (2,1,0,3) order
+    Vec<unsigned> rod_bend_hess_slots; // 9 per surface vertex (j,i,k stencil)
+    Vec<unsigned> stitch_hess_slots;   // 36 per stitch seam
 };
 
 /********** CUSTOM TYPES **********/

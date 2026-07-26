@@ -203,8 +203,11 @@ def _sim_frame_count(scene) -> int | None:
 def _effective_frame_range(scene, obj) -> tuple[int, int, str]:
     """Pick the [frame_start, frame_end] to capture for *obj*.
 
-    Lower bound is always ``scene.frame_start`` (so cache index 0
-    aligns with solver time 0). The upper bound depends on how the
+    Lower bound is always the solve's starting frame (see
+    ``resolve_start_frame``), so cache index 0 aligns with solver time 0. The
+    encoders rely on exactly that: ``static_deform_animation`` and the pin
+    cache both time row ``k`` at ``k / fps``, which is only correct if the
+    capture and the solve share one origin. The upper bound depends on how the
     motion is authored:
 
       - Keyframed deformers (Armature, Lattice, shape keys, animated
@@ -220,7 +223,11 @@ def _effective_frame_range(scene, obj) -> tuple[int, int, str]:
         the addon state is unavailable do we fall back to
         ``scene.frame_end``.
     """
-    frame_start = int(scene.frame_start)
+    # Fall back to frame 1 when the state is not registered yet, matching
+    # ``_sim_frame_count``'s guard below: this helper is reached from panel
+    # draw paths that can run during register / fresh load_post.
+    from ...core.encoder import resolve_start_frame_or_default
+    frame_start = resolve_start_frame_or_default(scene)
     actions = _collect_influencing_actions(obj)
     max_kf = None
     for act in actions:

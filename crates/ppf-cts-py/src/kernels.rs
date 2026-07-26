@@ -6,7 +6,7 @@
 // PyO3 wrappers for the numeric kernels in ppf-cts-core. Each binding:
 //   1. accepts numpy arrays from the Python caller,
 //   2. extracts contiguous f64 / bool slices (zero-copy when possible),
-//   3. releases the GIL via `py.allow_threads`,
+//   3. releases the GIL via `py.detach`,
 //   4. dispatches to the pure-Rust kernel.
 //
 // The Python wrapper at frontend/_invisible_collider_.py owns the
@@ -61,7 +61,7 @@ pub fn check_wall_violations_single(
     let wp = crate::utils_py::vec3(&wall_pos, "wall_pos")?;
     let wn = crate::utils_py::vec3(&wall_normal_unit, "wall_normal_unit")?;
 
-    let out = py.allow_threads(|| ic::check_wall_violations(v_slice, p_slice, wp, wn));
+    let out = py.detach(|| ic::check_wall_violations(v_slice, p_slice, wp, wn));
     Ok(out)
 }
 
@@ -127,7 +127,7 @@ pub fn rasterize_triangles(
         .as_slice()
         .map_err(|_| PyTypeError::new_err("faces must be C-contiguous"))?;
 
-    py.allow_threads(|| {
+    py.detach(|| {
         raster_k::rasterize_triangles(
             fb_slice, dp_slice, width, height, sv, col, nor, fa, lf, ambient,
         );
@@ -177,7 +177,7 @@ pub fn rasterize_lines(
         .as_slice()
         .map_err(|_| PyTypeError::new_err("segments must be C-contiguous"))?;
 
-    py.allow_threads(|| {
+    py.detach(|| {
         raster_k::rasterize_lines(
             fb_slice, dp_slice, width, height, sv, col, seg, line_width,
         );
@@ -206,7 +206,7 @@ pub fn normals<'py>(
         .as_slice()
         .map_err(|_| PyTypeError::new_err("faces must be C-contiguous"))?;
 
-    let normals = py.allow_threads(|| raster_k::normals(v_slice, f_slice));
+    let normals = py.detach(|| raster_k::normals(v_slice, f_slice));
     let arr = ndarray::Array2::from_shape_vec((n_verts, 3), normals)
         .map_err(|e| PyValueError::new_err(format!("normals reshape failed: {e}")))?;
     Ok(arr.into_pyarray(py))
@@ -259,7 +259,7 @@ pub fn eval_sdf_grid<'py>(
     let ny = ys_s.len();
     let nz = zs_s.len();
 
-    let flat = py.allow_threads(|| sdf_k::eval_sdf_grid(xs_s, ys_s, zs_s, t_s, p_s));
+    let flat = py.detach(|| sdf_k::eval_sdf_grid(xs_s, ys_s, zs_s, t_s, p_s));
     let arr = ndarray::Array3::from_shape_vec((nx, ny, nz), flat)
         .map_err(|e| PyValueError::new_err(format!("grid reshape failed: {e}")))?;
     Ok(arr.into_pyarray(py))
@@ -288,7 +288,7 @@ pub fn marching_cubes<'py>(
         .map_err(|_| PyTypeError::new_err("sdf_params must be C-contiguous"))?;
 
     let (verts_flat, faces_flat) =
-        py.allow_threads(|| sdf_k::marching_cubes(xs_s, ys_s, zs_s, step, t_s, p_s));
+        py.detach(|| sdf_k::marching_cubes(xs_s, ys_s, zs_s, step, t_s, p_s));
     let n_verts = verts_flat.len() / 3;
     let n_faces = faces_flat.len() / 3;
     let verts_arr = ndarray::Array2::from_shape_vec((n_verts, 3), verts_flat)
@@ -364,7 +364,7 @@ pub fn check_self_intersection(
         None
     };
 
-    let pairs = py.allow_threads(|| {
+    let pairs = py.detach(|| {
         isect::check_self_intersection(isect::IntersectionInput {
             verts: v_slice,
             tris: t_slice,
@@ -473,7 +473,7 @@ pub fn check_contact_offset_violation(
         None
     };
 
-    let pairs = py.allow_threads(|| {
+    let pairs = py.detach(|| {
         prox::check_contact_offset_violation(prox::ProximityInput {
             verts: v_slice,
             tris: tris_owned,
@@ -513,7 +513,7 @@ pub fn frame_mapping<'py>(
         .map_err(|_| PyTypeError::new_err("new_tri must be C-contiguous"))?;
 
     let (tri_indices, coefs_flat) =
-        py.allow_threads(|| bvh_k::frame_mapping(orig, nv, nt));
+        py.detach(|| bvh_k::frame_mapping(orig, nv, nt));
 
     debug_assert_eq!(tri_indices.len(), n_orig);
     debug_assert_eq!(coefs_flat.len(), n_orig * 3);
@@ -558,7 +558,7 @@ pub fn interpolate_surface<'py>(
         .as_slice()
         .map_err(|_| PyTypeError::new_err("coefs must be C-contiguous"))?;
 
-    let out_flat = py.allow_threads(|| bvh_k::interpolate_surface(dv, st, ti, cf));
+    let out_flat = py.detach(|| bvh_k::interpolate_surface(dv, st, ti, cf));
     let out_arr = ndarray::Array2::from_shape_vec((n_pts, 3), out_flat)
         .map_err(|e| PyValueError::new_err(format!("output reshape failed: {e}")))?;
     Ok(out_arr.into_pyarray(py))

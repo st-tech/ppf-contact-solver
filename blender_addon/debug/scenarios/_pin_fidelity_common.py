@@ -491,8 +491,10 @@ try:
     vmap = np.asarray(vmap[:n_pc2_verts], dtype=np.int64)
 
     # Per-frame diff. PC2 sample N == vert_N.bin (the addon's
-    # ``_apply_single_frame`` maps Rust frame n to Blender frame n+1
-    # to PC2 frame_idx n). Sample 0 is the rest pose; we skip it.
+    # ``_apply_single_frame`` maps Rust frame n to Blender frame
+    # n + start, and back to PC2 frame_idx n, so the offset cancels and
+    # this identity holds at any Starting Frame). Sample 0 is the rest
+    # pose; we skip it.
     for n in range(1, min(frames_total + 1, n_samples)):
         actual = arr[n]
         # Use the exact (frame, time) Rust recorded for this vert_N.bin.

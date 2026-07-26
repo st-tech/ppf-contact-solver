@@ -30,6 +30,7 @@ _PARAM_PROPS = {
     "bend_rest_angle_source", "bend_rest_from_reference",
     "bend", "shrink", "shrink_x", "shrink_y", "length_factor",
     "stitch_stiffness",
+    # STATIC-specific (used only when the group's object_type is "STATIC").
     # PDRD-specific (used only when the group's object_type is "PDRD").
     "pdrd_density",
     # SAND-specific (used only when the group's object_type is "SAND").
@@ -72,9 +73,6 @@ class _ParamProxy:
       ``stitch_stiffness``
     - **PDRD-specific**: ``pdrd_density`` (kg/m^3, volumetric). The PDRD hinge
       joint is per-object, set via :meth:`set_hinge` (not a group material).
-    - **SAND-specific**: ``sand_grain_radius`` (m, per-grain radius),
-      ``sand_particle_mass`` (g, mass of a single grain), ``sand_friction``
-      (inter-grain friction coefficient).
 
     Example::
 

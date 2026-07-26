@@ -6,6 +6,7 @@ import bpy  # pyright: ignore
 
 from ...core import services
 from ...core.client import communicator as com
+from ...core.encoder import resolve_fps, resolve_start_frame
 from ...models.groups import get_addon_data
 from ..decorators import (
     MCPError,
@@ -50,6 +51,8 @@ def set_scene_parameters(
     step_size: Optional[float] = None,
     min_newton_steps: Optional[int] = None,
     frame_count: Optional[int] = None,
+    frame_start: Optional[int] = None,
+    use_scene_frame_start: Optional[bool] = None,
     frame_rate: Optional[int] = None,
     gravity: Optional[list[float]] = None,
     wind_direction: Optional[list[float]] = None,
@@ -71,7 +74,8 @@ def set_scene_parameters(
     keep_states: Optional[int] = None,
     precond: Optional[str] = None,
     schwarz_levels: Optional[int] = None,
-    use_frame_rate_in_output: Optional[bool] = None,
+    use_scene_fps: Optional[bool] = None,
+    time_scale: Optional[float] = None,
     project_name: Optional[str] = None,
 ):
     """Set global scene parameters for physics simulation.
@@ -80,6 +84,10 @@ def set_scene_parameters(
         step_size: Simulation step size (seconds)
         min_newton_steps: Minimum Newton iterations per step
         frame_count: Number of simulation frames
+        frame_start: Blender frame the simulation starts on (simulated time
+            zero). Ignored while use_scene_frame_start is True
+        use_scene_frame_start: Take the starting frame from the Blender
+            scene's start frame instead of the frame_start field
         frame_rate: Frame rate for simulation
         gravity: Gravity acceleration vector [x, y, z] m/s^2
         wind_direction: Wind direction vector [x, y, z]
@@ -103,7 +111,11 @@ def set_scene_parameters(
         schwarz_levels: Number of additive Schwarz levels, 1 (single-level
             smoother) or 2 (two-level coarse correction, default). Only used
             when precond is "SCHWARZ".
-        use_frame_rate_in_output: Use frame rate in output
+        use_scene_fps: Run the simulation at the Blender scene's frame
+            rate instead of the frame_rate field
+        time_scale: Playback speed of the Blender animation in simulated
+            time (1.0 real time, 0.5 half speed); the solver's time
+            mapping runs at effective_fps * time_scale
         project_name: Project name used for remote session directory
     """
     scene = bpy.context.scene
@@ -125,6 +137,8 @@ def set_scene_parameters(
         "step_size": step_size,
         "min_newton_steps": min_newton_steps,
         "frame_count": frame_count,
+        "frame_start": frame_start,
+        "use_scene_frame_start": use_scene_frame_start,
         "frame_rate": frame_rate,
         "gravity_3d": gravity,
         "wind_direction": wind_direction,
@@ -148,7 +162,8 @@ def set_scene_parameters(
         "schwarz_levels": (
             f"LEVEL_{schwarz_levels}" if schwarz_levels is not None else None
         ),
-        "use_frame_rate_in_output": use_frame_rate_in_output,
+        "use_scene_fps": use_scene_fps,
+        "time_scale": time_scale,
         "project_name": project_name,
     }
 
@@ -202,8 +217,20 @@ def get_scene_parameters():
             "keep_states": state.keep_states,
             "precond": state.precond,
             "schwarz_levels": int(state.schwarz_levels.split("_")[1]),
-            "use_frame_rate_in_output": state.use_frame_rate_in_output,
+            "use_scene_fps": state.use_scene_fps,
+            "time_scale": state.time_scale,
+            "frame_start": state.frame_start,
+            "use_scene_frame_start": state.use_scene_frame_start,
             "project_name": state.project_name,
+            # The scene-time rate in use. `frame_rate` above keeps its last
+            # value while `use_scene_fps` is on, so reporting only that would
+            # name a rate the simulation is not using. Time Scale is a separate
+            # knob on top: the solver's time mapping runs at
+            # effective_fps * time_scale (see resolve_solver_fps).
+            "effective_fps": resolve_fps(state),
+            # Same reasoning for the timeline origin: `frame_start` above keeps
+            # its last value while `use_scene_frame_start` is on.
+            "effective_start_frame": resolve_start_frame(state),
         }
     }
 

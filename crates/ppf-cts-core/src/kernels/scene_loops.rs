@@ -303,10 +303,6 @@ pub struct PinHeader {
     pub operation_count: usize,
     pub pin_count: usize,
     pub pull_strength: f64,
-    /// Per-pin scale on the moving (kinematic) constraint force.
-    /// 1.0 leaves the force unchanged; the solver applies it only to
-    /// kinematic pins.
-    pub pin_stiffness: f64,
     pub unpin_time: Option<f64>,
     pub pin_group_id: Option<String>,
 }
@@ -378,7 +374,6 @@ fn format_pin_section(pin_index: usize, header: &PinHeader, ops: &[PinOpToml]) -
     let _ = writeln!(s, "operation_count = {}", header.operation_count);
     let _ = writeln!(s, "pin = {}", header.pin_count);
     let _ = writeln!(s, "pull = {}", format_f64(header.pull_strength));
-    let _ = writeln!(s, "stiffness = {}", format_f64(header.pin_stiffness));
     if let Some(ut) = header.unpin_time {
         let _ = writeln!(s, "unpin_time = {}", format_f64(ut));
     }
@@ -848,7 +843,6 @@ mod tests {
             operation_count: 1,
             pin_count: 4,
             pull_strength: 0.0,
-            pin_stiffness: 1.0,
             unpin_time: None,
             pin_group_id: None,
         };
@@ -875,7 +869,6 @@ mod tests {
             operation_count: 1,
             pin_count: 1,
             pull_strength: 0.0,
-            pin_stiffness: 1.0,
             unpin_time: None,
             pin_group_id: None,
         };
@@ -899,14 +892,12 @@ mod tests {
             operation_count: 0,
             pin_count: 8,
             pull_strength: 0.5,
-            pin_stiffness: 2.0,
             unpin_time: Some(2.5),
             pin_group_id: Some("g0".to_string()),
         };
         let s = format_pin_section(3, &header, &[]);
         assert!(s.contains("unpin_time = 2.5"));
         assert!(s.contains("pin_group_id = \"g0\""));
-        assert!(s.contains("stiffness = 2"));
     }
 
     #[test]
@@ -915,7 +906,6 @@ mod tests {
             operation_count: 1,
             pin_count: 1,
             pull_strength: 0.0,
-            pin_stiffness: 1.0,
             unpin_time: None,
             pin_group_id: None,
         };

@@ -59,6 +59,17 @@ PARAM_PICKLE = "param.pickle"
 # now-freed server answers. Both socket and paramiko Channel expose settimeout.
 _QUERY_CHANNEL_TIMEOUT_S = 30.0
 
+# The data-transfer and upload-notify channels need the same guard as the query
+# channel above. Their recv()/send() loops otherwise block forever when the
+# co-located server accepts the connection but stalls mid-exchange (never writes
+# the OK line or the advertised payload bytes, and never closes), wedging the
+# single serial I/O worker the same way a stuck query does. This is a
+# per-recv/per-send INACTIVITY bound, not a whole-transfer deadline, so a large
+# but healthy transfer (bytes keep moving) is never killed; only a genuine stall
+# trips it, and the worker loop's except path (see effect_runner _worker_loop)
+# turns that into a loud ErrorOccurred / ConnectionLost instead of a silent hang.
+_TRANSFER_CHANNEL_TIMEOUT_S = 30.0
+
 
 def _force_tcp() -> bool:
     """True when ``PPF_FORCE_TCP_TRANSFER`` is set to a truthy value.
@@ -298,6 +309,7 @@ def _send_via_channel(
         "name": project_name,
     }
     channel = channel_opener()
+    channel.settimeout(_TRANSFER_CHANNEL_TIMEOUT_S)
     try:
         socket_data_send(channel, request_data, data, chunk_size,
                          progress_cb, interrupt_cb, bps)
@@ -346,6 +358,7 @@ def _upload_atomic_via_channel(
         "param_hash": param_hash,
     }
     channel = channel_opener()
+    channel.settimeout(_TRANSFER_CHANNEL_TIMEOUT_S)
     try:
         socket_upload_atomic(channel, request_data, data, param,
                              chunk_size, progress_cb, interrupt_cb, bps)
@@ -375,6 +388,7 @@ def _receive_via_channel(
         "name": project_name,
     }
     channel = channel_opener()
+    channel.settimeout(_TRANSFER_CHANNEL_TIMEOUT_S)
     try:
         data = socket_data_receive(channel, request_data, chunk_size,
                                    progress_cb, interrupt_cb, bps)
@@ -454,6 +468,7 @@ def _send_via_disk(
 def _notify_upload_via_channel(channel_opener: Callable, request_data: dict) -> None:
     """Send a payload-free ``upload_notify`` control message and await OK."""
     channel = channel_opener()
+    channel.settimeout(_TRANSFER_CHANNEL_TIMEOUT_S)
     try:
         _send_json_header(channel, request_data)
         _read_ok_response(channel)

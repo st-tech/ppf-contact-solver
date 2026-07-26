@@ -24,6 +24,10 @@ struct Row {
     __device__ void push(unsigned i, const Mat3x3f &val);
     unsigned max_dyn_rows;
     unsigned head{0};
+    // Where finalize() left the boundary between the entries this row carried
+    // over and the ones it gained this step. Both sides are ascending, so the
+    // pattern handed to the next step is a merge rather than a sort.
+    unsigned split{0};
     unsigned ref_head{0};
     State state;
     unsigned *index;
@@ -39,7 +43,8 @@ struct DynCSRMat {
     void fetch(unsigned *index, Mat3x3f *value, unsigned *offset);
     void update(unsigned *index, unsigned *offset);
     void start_rebuild_buffer();
-    void finish_rebuild_buffer(unsigned &max_nnz_row, float &consumed);
+    void finish_rebuild_buffer(unsigned &max_nnz_row, float &consumed,
+                               double &report_overhead_ms);
     void free();
     __device__ Mat3x3f operator()(unsigned i, unsigned j) const;
     __device__ void dry_push(unsigned row, unsigned col);

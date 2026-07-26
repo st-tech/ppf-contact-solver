@@ -103,18 +103,34 @@ pub struct ObjectInfo {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub static_ops: Option<Vec<StaticOp>>,
 
+    // -- STATIC groups only: captured per-frame deformation cache. --
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub static_deform_animation: Option<StaticDeformAnimation>,
+
     // -- Non-STATIC groups only: pin spec. Vertex indices to pin to
     // their world-transformed rest pose. --
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pin: Option<Vec<i32>>,
 }
 
+/// Captured per-frame STATIC deformation. Row i of `vert_frames` IS frame
+/// offset i (row 0 = the pose at the resolved start frame); there is no
+/// time array on the wire, so this channel cannot desync from the Param
+/// payload's fps by construction.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StaticDeformAnimation {
+    pub vert_frames: Vec<Vec<[f32; 3]>>,
+}
+
 /// Keyframe-driven STATIC animation. Decoder reads at
 /// frontend/_decoder_.py:1156, 1202-1206.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TransformAnimation {
-    /// Keyframe times in seconds.
-    pub time: Vec<f32>,
+    /// Keyframe frame offsets relative to the resolved start frame
+    /// (frames, float; fps-free). The decoder derives seconds by dividing
+    /// by the Param payload's fps, so the data payload never carries a
+    /// time base and is invariant under Time Scale / FPS changes.
+    pub frame_offset: Vec<f32>,
     pub translation: Vec<[f32; 3]>,
     /// (x, y, z, w) quaternion components.
     pub quaternion: Vec<[f32; 4]>,
@@ -132,8 +148,12 @@ pub struct TransformAnimation {
 pub struct StaticOp {
     /// "MOVE_BY" | "SPIN" | "SCALE".
     pub op_type: String,
-    pub t_start: f32,
-    pub t_end: f32,
+    /// Op window as frame offsets relative to the resolved start frame,
+    /// each independently clamped >= 0 (an inverted window passes through
+    /// inverted, matching the old seconds-level semantics since fps > 0).
+    /// Seconds are derived at decode from the Param payload's fps.
+    pub frame_offset_start: f32,
+    pub frame_offset_end: f32,
     /// Easing curve name, e.g. "linear". Producer always emits via
     /// `str(...).lower()` (mesh.py:385).
     pub transition: String,
@@ -145,8 +165,11 @@ pub struct StaticOp {
     // SPIN
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub axis: Option<[f32; 3]>,
+    /// Authored degrees per ANIMATION second, unscaled. The decoder
+    /// multiplies by the Param payload's time_scale to get the solver
+    /// rate, keeping the data payload timing-free.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub angular_velocity: Option<f32>,
+    pub angular_velocity_anim: Option<f32>,
 
     // SCALE
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -213,18 +236,18 @@ mod tests {
     fn scene_static_op_spin() {
         let op = StaticOp {
             op_type: "SPIN".into(),
-            t_start: 0.0,
-            t_end: 5.0,
+            frame_offset_start: 0.0,
+            frame_offset_end: 5.0,
             transition: "linear".into(),
             axis: Some([0.0, 1.0, 0.0]),
-            angular_velocity: Some(90.0),
+            angular_velocity_anim: Some(90.0),
             ..no_optionals()
         };
         let mut bytes = Vec::new();
         ciborium::into_writer(&op, &mut bytes).unwrap();
         let back: StaticOp = ciborium::from_reader(bytes.as_slice()).unwrap();
         assert_eq!(back.op_type, "SPIN");
-        assert_eq!(back.angular_velocity, Some(90.0));
+        assert_eq!(back.angular_velocity_anim, Some(90.0));
         assert!(back.delta.is_none());
         assert!(back.factor.is_none());
     }
@@ -232,12 +255,12 @@ mod tests {
     fn no_optionals() -> StaticOp {
         StaticOp {
             op_type: String::new(),
-            t_start: 0.0,
-            t_end: 0.0,
+            frame_offset_start: 0.0,
+            frame_offset_end: 0.0,
             transition: String::new(),
             delta: None,
             axis: None,
-            angular_velocity: None,
+            angular_velocity_anim: None,
             factor: None,
         }
     }

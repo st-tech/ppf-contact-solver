@@ -368,6 +368,135 @@ def _cache_insertion_index(obj) -> int:
     return pos
 
 
+def _cache_visibility_paths():
+    """RNA data paths (object-relative) for the cache modifier's two
+    visibility toggles. Both are keyed together so a render cannot disagree
+    with the viewport about whether the solve has started."""
+    return (
+        f'modifiers["{MODIFIER_NAME}"].show_viewport',
+        f'modifiers["{MODIFIER_NAME}"].show_render',
+    )
+
+
+def _iter_cache_visibility_fcurves(action):
+    """Yield ``(container, fcurve)`` for every cache-visibility fcurve in
+    *action*, across ALL slots of a Blender 5.x layered action (and the legacy
+    flat layout).
+
+    ``container`` is the ``fcurves`` collection the curve lives in, so a caller
+    can remove it. The all-slots walk is load-bearing: when the object already
+    owns an action (an armature-driven cloth, a shape-key-animated mesh), a
+    fresh ``keyframe_insert`` on the modifier lands in the object's OWN slot,
+    which is often not the first channelbag. ``utils._get_fcurves`` returns only
+    the first non-empty channelbag, so reading through it silently misses these
+    keys, and the reader concludes they are absent even though Blender is
+    evaluating them. That false "missing" is what drove the heal pass to rewrite
+    the keys on every tick.
+    """
+    paths = set(_cache_visibility_paths())
+    if action is None:
+        return
+    if hasattr(action, "layers") and len(action.layers) > 0:
+        for layer in action.layers:
+            for strip in layer.strips:
+                for slot in action.slots:
+                    cb = strip.channelbag(slot)
+                    if cb is None:
+                        continue
+                    for fc in list(cb.fcurves):
+                        if fc.data_path in paths:
+                            yield cb.fcurves, fc
+    elif hasattr(action, "fcurves"):
+        for fc in list(action.fcurves):
+            if fc.data_path in paths:
+                yield action.fcurves, fc
+
+
+def remove_cache_visibility_keys(obj) -> int:
+    """Drop the modifier-visibility fcurves this module writes. Returns the
+    number removed."""
+    ad = getattr(obj, "animation_data", None)
+    action = getattr(ad, "action", None) if ad else None
+    if action is None:
+        return 0
+    removed = 0
+    for container, fc in _iter_cache_visibility_fcurves(action):
+        try:
+            container.remove(fc)
+            removed += 1
+        except Exception:
+            pass
+    return removed
+
+
+def needs_cache_visibility_keys(obj, frame_start) -> bool:
+    """True when *obj* is missing the visibility keys its Starting Frame needs.
+
+    Lets the heal pass adopt a cache that was bound before this keying existed,
+    without waiting for a re-fetch. Callers must gate on ``frame_start > 1``:
+    at frame 1 there are no keys to look for, and this walks fcurves, which the
+    heal timer cannot afford to do per object per tick on a large scene.
+    """
+    if frame_start <= 1:
+        return False
+    ad = getattr(obj, "animation_data", None)
+    action = getattr(ad, "action", None) if ad else None
+    if action is None:
+        return True
+    paths = set(_cache_visibility_paths())
+    found = {fc.data_path for _, fc in _iter_cache_visibility_fcurves(action)}
+    return found != paths
+
+
+def sync_cache_visibility_keys(obj, frame_start) -> None:
+    """Keep the cache modifier switched off until the solve's first frame.
+
+    MESH_CACHE clamps a cache index below zero to row 0 and its OVERWRITE
+    deform mode then stamps that row onto the mesh, so a modifier left enabled
+    through the lead-in replaces whatever the artist animated there with the
+    simulation's starting pose. That is not a cosmetic problem: the lead-in is
+    the entire reason a solve would start late.
+
+    Two CONSTANT keys (off at ``frame_start - 1``, on at ``frame_start``) hand
+    the mesh back to its own deformers before the solve and to the cache from
+    the solve onward. CONSTANT because this is a switch, not a blend: a default
+    BEZIER handle would put fractional visibility on the frames in between.
+
+    A solve that starts at frame 1 has no lead-in to protect, so the keys are
+    removed and the modifier goes back to plain always-on. That also restores a
+    scene whose Starting Frame was moved back to 1.
+    """
+    removed = remove_cache_visibility_keys(obj)
+    mod = obj.modifiers.get(MODIFIER_NAME)
+    if mod is None:
+        return
+    if frame_start <= 1:
+        # No lead-in. Leave the modifier visible; the removal above already
+        # cleared any keys a higher Starting Frame had written.
+        if removed:
+            mod.show_viewport = True
+            mod.show_render = True
+        return
+
+    for path, value_off, value_on in (
+        (_cache_visibility_paths()[0], False, True),
+        (_cache_visibility_paths()[1], False, True),
+    ):
+        attr = path.rsplit(".", 1)[1]
+        setattr(mod, attr, value_off)
+        obj.keyframe_insert(data_path=path, frame=frame_start - 1)
+        setattr(mod, attr, value_on)
+        obj.keyframe_insert(data_path=path, frame=frame_start)
+
+    # Walk every slot, not just the first channelbag: when the object already
+    # owns an action the freshly inserted keys land in its own slot, which
+    # utils._get_fcurves would skip, leaving them BEZIER.
+    action = obj.animation_data.action if obj.animation_data else None
+    for _, fc in _iter_cache_visibility_fcurves(action):
+        for kp in fc.keyframe_points:
+            kp.interpolation = "CONSTANT"
+
+
 def setup_mesh_cache_modifier(obj, pc2_path, frame_start=0.0,
                               place_after_deformers=False):
     """Add or update a MESH_CACHE modifier on *obj* pointing to *pc2_path*.
@@ -410,6 +539,9 @@ def setup_mesh_cache_modifier(obj, pc2_path, frame_start=0.0,
     mod.time_mode = "FRAME"
     mod.frame_start = frame_start
     mod.frame_scale = 1.0
+    # Must follow the frame_start write: the keys are derived from it, and a
+    # rebind after the Starting Frame moved has to re-place them.
+    sync_cache_visibility_keys(obj, int(frame_start))
     mod.factor = 1.0
     mod.forward_axis = "POS_Y"
     mod.up_axis = "POS_Z"
@@ -595,6 +727,9 @@ def cleanup_mesh_cache(obj, *, keep_baked_pose: bool = False):
     bezier handle_type restore (AUTO handles would silently overwrite
     the baked handle positions).
     """
+    # Before the modifier goes: these keys name it by data path, so they would
+    # otherwise linger as broken channels on the object.
+    remove_cache_visibility_keys(obj)
     remove_mesh_cache_modifier(obj)
     key = object_pc2_key(obj)
     if obj.type == "CURVE":
@@ -755,7 +890,13 @@ def _apply_curves_at_current_frame():
         if current == _curve_last_frame:
             return
         _curve_last_frame = current
-        frame_idx = current - 1
+        # Rods play back through this handler rather than MESH_CACHE, so the
+        # starting-frame offset the modifier applies for meshes has to be
+        # subtracted by hand here. This is a frame_change_post handler, so it
+        # can fire before the state is registered; the default keeps the
+        # historical frame-1 mapping in that window.
+        from .encoder import resolve_start_frame_or_default
+        frame_idx = current - resolve_start_frame_or_default(bpy.context.scene)
         for obj in bpy.data.objects:
             if obj.type != "CURVE":
                 continue
@@ -948,6 +1089,43 @@ def clear_all_static_deform_animation():
     """Delete every static-deform PC2 file and clear the in-memory cache."""
     _clear_all_by_suffix(STATIC_DEFORM_SUFFIX + ".pc2")
     unload_static_deform_cache()
+
+
+def count_deform_cache_files() -> int:
+    """Number of captured-deformation PC2 files in the cache directory.
+
+    Counts both suffixes, which is exactly the population
+    ``scene_has_static_deform_cache`` gates the Clear All button on. Used to
+    report what an orphan sweep actually removed.
+    """
+    pc2_dir = get_pc2_dir()
+    if not os.path.isdir(pc2_dir):
+        return 0
+    suffixes = (STATIC_DEFORM_SUFFIX + ".pc2", PIN_DEFORM_SUFFIX + ".pc2")
+    try:
+        return sum(1 for f in os.listdir(pc2_dir) if f.endswith(suffixes))
+    except OSError:
+        return 0
+
+
+def clear_orphan_deform_caches() -> int:
+    """Delete captured-deformation caches left behind in the cache directory.
+
+    A cache file outlives the object that owned it: delete the collider, or
+    take it out of its group, and the PC2 stays on disk. Nothing can reach it
+    again, but ``scene_has_static_deform_cache`` (which the Clear All button
+    polls on) scans the DIRECTORY, so those files kept the button enabled
+    while the operator, which walks the active groups, cleared nothing and
+    reported "nothing". Sweeping them is what makes the button's enabled state
+    and its effect agree.
+
+    Returns the number of files removed.
+    """
+    n = count_deform_cache_files()
+    if n:
+        clear_all_static_deform_animation()
+        clear_all_pin_anim_animation()
+    return n
 
 
 # ---------------------------------------------------------------------------

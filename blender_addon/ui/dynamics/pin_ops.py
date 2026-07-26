@@ -13,6 +13,7 @@ from bpy.app.translations import pgettext_iface as iface_, pgettext_tip as tip_
 
 from ...core.utils import get_vertices_in_group, redraw_all_areas
 from ...models.collection_utils import safe_update_index
+from ...models.enum_props import EnumProperty
 from ..state import iterate_active_object_groups
 from .utils import get_group_from_index
 
@@ -839,7 +840,7 @@ class OBJECT_OT_AddPinOperation(Operator):
     bl_options = {"REGISTER", "UNDO"}
 
     group_index: bpy.props.IntProperty(options={'HIDDEN'})  # pyright: ignore
-    op_type: bpy.props.EnumProperty(
+    op_type: EnumProperty(
         items=[
             ("MOVE_BY", "Move By", "Move by delta"),
             ("SPIN", "Spin", "Rotate around axis"),

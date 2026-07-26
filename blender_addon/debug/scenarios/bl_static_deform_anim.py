@@ -278,19 +278,25 @@ try:
     has_xform_anim = static_obj is not None and "transform_animation" in static_obj
     has_static_ops = bool((static_obj or {}).get("static_ops") or [])
     payload_shape = None
+    no_time_key = False
     if has_sd:
-        vf = static_obj["static_deform_animation"]["vert_frames"]
+        sd = static_obj["static_deform_animation"]
+        vf = sd["vert_frames"]
         payload_shape = list(np.asarray(vf).shape)
+        # v2 wire: rows ARE frame offsets; a seconds array must not ship.
+        no_time_key = "time" not in sd
     dh.record(
         "B_encoder_emits_static_deform_animation",
         has_sd
         and not has_xform_anim
         and not has_static_ops
+        and no_time_key
         and payload_shape == list(expected_shape),
         {
             "has_static_deform_animation": has_sd,
             "has_transform_animation": has_xform_anim,
             "has_static_ops": has_static_ops,
+            "no_time_key": no_time_key,
             "payload_shape": payload_shape,
             "expected_shape": list(expected_shape),
         },

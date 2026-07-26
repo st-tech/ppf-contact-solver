@@ -207,7 +207,11 @@ def main(argv: list[str]) -> int:
                 if fss is not None and getattr(fss, "_param", None) is not None:
                     fps = fss._param.get("fps")
                     if fps is not None:
-                        info["FPS"] = str(int(fps))
+                        # Float-safe: the session fps carries Time Scale
+                        # (scene fps * time_scale) and is fractional whenever
+                        # the scale is not 1; int() would misreport the rate
+                        # the solver is actually running at.
+                        info["FPS"] = f"{float(fps):g}"
             except Exception:
                 pass
             with open(os.path.join(root, "scene_info.json"), "w") as fp:

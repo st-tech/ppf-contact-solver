@@ -97,11 +97,20 @@ jobs:
 
           # Get GitHub Actions dedicated VPC, subnet, and security group
           VPC_ID=$(aws ec2 describe-vpcs --filters "Name=tag:Name,Values=github-actions-vpc" --query 'Vpcs[0].VpcId' --output text)
-          SUBNET_ID=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$VPC_ID" --query 'Subnets[0].SubnetId' --output text)
-          SG_ID=$(aws ec2 describe-security-groups --filters "Name=vpc-id,Values=$VPC_ID" "Name=group-name,Values=github-actions-sg" --query 'SecurityGroups[0].GroupId' --output text)
-
           if [ "$VPC_ID" = "None" ] || [ -z "$VPC_ID" ]; then
             echo "ERROR: github-actions-vpc not found in region $AWS_REGION"
+            exit 1
+          fi
+
+          SUBNET_ID=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$VPC_ID" --query 'Subnets[0].SubnetId' --output text)
+          if [ "$SUBNET_ID" = "None" ] || [ -z "$SUBNET_ID" ]; then
+            echo "ERROR: no subnet found in github-actions-vpc ($VPC_ID) in region $AWS_REGION"
+            exit 1
+          fi
+
+          SG_ID=$(aws ec2 describe-security-groups --filters "Name=vpc-id,Values=$VPC_ID" "Name=group-name,Values=github-actions-sg" --query 'SecurityGroups[0].GroupId' --output text)
+          if [ "$SG_ID" = "None" ] || [ -z "$SG_ID" ]; then
+            echo "ERROR: github-actions-sg not found in github-actions-vpc ($VPC_ID) in region $AWS_REGION"
             exit 1
           fi
 

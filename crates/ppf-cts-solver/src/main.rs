@@ -144,7 +144,9 @@ fn main() {
 
         info!("Computing constraints and parameters...");
         let time = backend.state.time;
-        let temp_constraint = scene.make_constraint(time);
+        // Standalone snapshot for the param summary, not a step: prev == time,
+        // so every fix pin's step_delta is zero.
+        let temp_constraint = scene.make_constraint(time, time);
         scene.export_param_summary(&program_args, &props, &face_area, &tet_volumes);
 
         let mut total_rod_mass = 0.0;

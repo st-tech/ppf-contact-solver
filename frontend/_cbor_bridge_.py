@@ -19,7 +19,7 @@ import cbor2
 
 import numpy as np
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 KIND_SCENE = "Scene"
 KIND_PARAM = "Param"
@@ -119,7 +119,7 @@ def loads_envelope(blob: bytes, expected_kind: str):
     return _unwrap(env, expected_kind)
 
 
-def _unwrap(env: object, expected_kind: str) -> object:
+def _unwrap(env: object, expected_kind: str, hint: str = "") -> object:
     if not isinstance(env, dict):
         raise CborSchemaError(
             f"top-level CBOR must be a map, got {type(env).__name__}"
@@ -127,10 +127,13 @@ def _unwrap(env: object, expected_kind: str) -> object:
     version = env.get("version")
     kind = env.get("kind")
     if version != SCHEMA_VERSION:
-        raise CborSchemaError(
+        msg = (
             f"schema version mismatch: payload={version}, this build expects "
             f"{SCHEMA_VERSION}"
         )
+        if hint:
+            msg = f"{msg} ({hint})"
+        raise CborSchemaError(msg)
     if kind != expected_kind:
         raise CborSchemaError(
             f"kind mismatch: payload={kind!r}, expected={expected_kind!r}"
@@ -182,7 +185,7 @@ def _rehydrate_scene_object(obj: dict) -> None:
 def loads_scene(blob: bytes) -> list:
     """Decode a CBOR scene envelope and rehydrate ndarray fields."""
     env = cbor2.loads(blob)
-    payload = _unwrap(env, KIND_SCENE)
+    payload = _unwrap(env, KIND_SCENE, hint="the payload was produced by an older addon; re-Transfer the scene from the Blender addon")
     if not isinstance(payload, list):
         raise CborSchemaError("scene payload must be a list of groups")
     for group in payload:
@@ -203,7 +206,7 @@ def loads_param(blob: bytes) -> dict:
     and pass the payload through.
     """
     env = cbor2.loads(blob)
-    payload = _unwrap(env, KIND_PARAM)
+    payload = _unwrap(env, KIND_PARAM, hint="the payload was produced by an older addon; re-Transfer the scene from the Blender addon")
     if not isinstance(payload, dict):
         raise CborSchemaError("param payload must be a map")
     return payload
@@ -214,7 +217,9 @@ def load_param_file(path: str) -> dict:
 
     Owns the open + read + byte-sniff + dispatch that the decoder sites
     would otherwise repeat: CBOR envelopes route through
-    :func:`loads_param`, legacy raw-pickle files through ``pickle.loads``.
+    :func:`loads_param`; a legacy raw-pickle file is REFUSED loudly (an old
+    seconds-based payload must never silently decode under the v2
+    frame-offset schema).
     Extension validation stays at the call sites (it is not uniform: the
     populate() ftetwild peek does not validate), so this helper does not
     fold it in.
@@ -223,7 +228,10 @@ def load_param_file(path: str) -> dict:
         blob = f.read()
     if is_cbor(blob):
         return loads_param(blob)
-    return pickle.loads(blob)
+    raise CborSchemaError(
+        "param.pickle is a pre-envelope raw pickle written by an old addon; "
+        "this build cannot read it. Re-Transfer from the Blender addon."
+    )
 
 
 def load_scene_file(path: str) -> list:
@@ -231,14 +239,18 @@ def load_scene_file(path: str) -> list:
 
     Scene-side twin of :func:`load_param_file`: CBOR envelopes route
     through :func:`loads_scene`, legacy raw-pickle files through
-    ``pickle.loads``. As with the param reader, extension validation is
-    left to the call site.
+    a loud CborSchemaError, like the param reader (an old seconds-based
+    payload must never silently decode under the v2 frame-offset schema).
+    Extension validation is left to the call site.
     """
     with open(path, "rb") as f:
         blob = f.read()
     if is_cbor(blob):
         return loads_scene(blob)
-    return pickle.loads(blob)
+    raise CborSchemaError(
+        "data.pickle is a pre-envelope raw pickle written by an old addon; "
+        "this build cannot read it. Re-Transfer from the Blender addon."
+    )
 
 
 def loads_vertex_map(blob: bytes) -> dict:
@@ -361,6 +373,13 @@ def load_pickle_payload(path: str, expected_kind: str):
     and the older raw-bytes envelopes left on disk by earlier builds, so
     a single sniff routes both formats. Files predating the CBOR
     envelope are still plain pickle and are read back directly.
+
+    The raw path deliberately SURVIVES the v2 frame-offset schema change
+    that removed the raw fallbacks from ``load_scene_file`` /
+    ``load_param_file``: these sidecars (app.pickle, fixed_session.pickle)
+    are frontend-authored POST-DECODE session graphs whose contents are
+    already seconds, so no frames/seconds misread is possible here. This
+    is a read path for the frontend's own files, not a wire fallback.
     """
     with open(path, "rb") as f:
         blob = f.read()

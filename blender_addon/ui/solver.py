@@ -1109,7 +1109,10 @@ class SOLVER_OT_ClearAnimation(Operator):
     def execute(self, context):
         if context.screen and context.screen.is_animation_playing:
             bpy.ops.screen.animation_cancel(restore_frame=False)
-        context.scene.frame_set(1)
+        from ..core.encoder import resolve_start_frame
+        context.scene.frame_set(
+            resolve_start_frame(get_addon_data(context.scene).state)
+        )
         clear_animation_data(context)
         return {"FINISHED"}
 
@@ -1274,9 +1277,10 @@ class SOLVER_OT_RecaptureAllDeformations(Operator):
 
 class SOLVER_OT_ClearAllDeformations(Operator):
     """Delete every captured deformation cache in one pass: all STATIC-collider
-    deform caches and all animated-pin captures across the active groups. The
-    objects keep their deformers, so Re-capture All Deformations rebuilds the
-    caches."""
+    deform caches and all animated-pin captures across the active groups, plus
+    any cache left behind by an object that was deleted or taken out of its
+    group. The objects keep their deformers, so Re-capture All Deformations
+    rebuilds the caches."""
 
     bl_idname = "solver.clear_all_deformations"
     bl_label = "Clear All Deformations"
@@ -1299,7 +1303,7 @@ class SOLVER_OT_ClearAllDeformations(Operator):
         )
 
     def execute(self, context):
-        from ..core.pc2 import remove_static_deform_pc2
+        from ..core.pc2 import clear_orphan_deform_caches, remove_static_deform_pc2
         from .dynamics.static_deform_ops import collect_objects_with_deform_cache
         from .dynamics.pin_capture_ops import (
             clear_captured_pin,
@@ -1316,6 +1320,11 @@ class SOLVER_OT_ClearAllDeformations(Operator):
         for gi, pi in collect_pins_with_captured_anim(context):
             if clear_captured_pin(context, gi, pi):
                 n_pins += 1
+        # Whatever is left in the cache directory belongs to no object this
+        # pass could reach: deleted objects, or objects taken out of a group.
+        # poll() gates on that directory, so leaving these would keep the
+        # button enabled forever while every click cleared nothing.
+        n_orphans = clear_orphan_deform_caches()
 
         # One overlay refresh + invalidation after the whole batch.
         from .dynamics.overlay import apply_object_overlays
@@ -1329,6 +1338,8 @@ class SOLVER_OT_ClearAllDeformations(Operator):
             parts.append(iface_("{count} object(s)").format(count=n_objs))
         if n_pins:
             parts.append(iface_("{count} pin(s)").format(count=n_pins))
+        if n_orphans:
+            parts.append(iface_("{count} orphaned cache(s)").format(count=n_orphans))
         target = ", ".join(parts) if parts else iface_("nothing")
         self.report({"INFO"}, iface_("Cleared deformation cache for {target}").format(target=target))
         return {"FINISHED"}
@@ -1484,13 +1495,15 @@ class SOLVER_OT_FetchData(AsyncOperator):
         self.report({"INFO"}, iface_("Animation data fetch finished."))
 
         state = get_addon_data(context.scene).state
+        from ..core.encoder import resolve_start_frame
+        start_frame = resolve_start_frame(state)
         fetched = state.convert_fetched_frames_to_list()
         frame_count = max(fetched) if fetched else 0
         if frame_count > 0:
-            context.scene.frame_end = frame_count + 1
-            context.scene.frame_start = 1
+            context.scene.frame_end = frame_count + start_frame
+            context.scene.frame_start = start_frame
 
-        context.scene.frame_set(1)
+        context.scene.frame_set(start_frame)
         bpy.ops.screen.animation_play()
 
 

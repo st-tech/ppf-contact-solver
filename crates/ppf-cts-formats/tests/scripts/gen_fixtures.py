@@ -131,7 +131,7 @@ def make_scene_payload() -> list:
         ),
         "face": np.array([[0, 1, 2]], dtype=np.uint32),
         "transform_animation": {
-            "time": [0.0, 1.0, 2.0],
+            "frame_offset": [0.0, 12.0, 24.0],
             "translation": [[0.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 0.0]],
             "quaternion": [[0.0, 0.0, 0.0, 1.0]] * 3,
             "scale": [[1.0, 1.0, 1.0]] * 3,
@@ -147,21 +147,43 @@ def make_scene_payload() -> list:
         ),
         "face": np.array([[0, 1, 2]], dtype=np.uint32),
         "static_ops": [
-            {"op_type": "MOVE_BY", "t_start": 0.0, "t_end": 1.0,
+            {"op_type": "MOVE_BY", "frame_offset_start": 0.0,
+             "frame_offset_end": 12.0,
              "transition": "linear", "delta": [1.0, 0.0, 0.0]},
-            {"op_type": "SPIN", "t_start": 1.0, "t_end": 3.0,
+            {"op_type": "SPIN", "frame_offset_start": 12.0,
+             "frame_offset_end": 36.0,
              "transition": "ease_in_out", "axis": [0.0, 1.0, 0.0],
-             "angular_velocity": 90.0},
-            {"op_type": "SCALE", "t_start": 3.0, "t_end": 4.0,
+             "angular_velocity_anim": 90.0},
+            {"op_type": "SCALE", "frame_offset_start": 36.0,
+             "frame_offset_end": 48.0,
              "transition": "linear", "factor": 0.5},
         ],
+        "transform": eye4.copy(),
+    }
+
+    static_with_deform = {
+        "name": "deformer",
+        "uuid": "uuid-static-3",
+        "vert": np.array(
+            [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]],
+            dtype=np.float32,
+        ),
+        "face": np.array([[0, 1, 2]], dtype=np.uint32),
+        # Row i IS frame offset i; no time array on the wire.
+        "static_deform_animation": {
+            "vert_frames": np.array(
+                [[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]],
+                 [[0.0, 0.1, 0.0], [1.0, 0.1, 0.0], [0.0, 0.1, 1.0]]],
+                dtype=np.float32,
+            ),
+        },
         "transform": eye4.copy(),
     }
 
     return [
         {"type": "SHELL", "object": [canonical_shell, duplicate_shell]},
         {"type": "ROD", "object": [rod]},
-        {"type": "STATIC", "object": [static_with_anim, static_with_ops]},
+        {"type": "STATIC", "object": [static_with_anim, static_with_ops, static_with_deform]},
     ]
 
 
@@ -180,7 +202,7 @@ def make_param_payload() -> dict:
         "gravity": np.array([0.0, -9.8, 0.0], dtype=np.float64),
         "wind": np.array([0.0, 0.0, 0.0], dtype=np.float32),
         "frames": 59,
-        "fps": 60,
+        "fps": 12.5,
         "csrmat-max-nnz": 10_000_000,
         "isotropic-air-friction": np.float32(0.0),
         "auto-save": 0,
@@ -284,6 +306,8 @@ def make_param_payload() -> dict:
 
     return {
         "scene": scene,
+        # Top-level Time Scale factor (v2): scene fps = animation fps * this.
+        "time_scale": 0.5,
         "group": [
             (shell_group_params, ["cloth_a"], ["uuid-shell-1"]),
             (solid_group_params, ["block"], ["uuid-solid-1"]),

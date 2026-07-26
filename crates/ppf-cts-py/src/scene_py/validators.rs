@@ -220,7 +220,7 @@ pub(super) fn scene_line_mesh<'py>(
     if n == 0 {
         return Err(PyValueError::new_err("n must be > 0"));
     }
-    let (verts, edges) = py.allow_threads(|| mesh_core::line_mesh(p0, p1, n));
+    let (verts, edges) = py.detach(|| mesh_core::line_mesh(p0, p1, n));
     let v_arr = ndarray::Array2::from_shape_vec((n + 1, 3), verts)
         .map_err(|e| PyValueError::new_err(format!("vert reshape failed: {e}")))?;
     let e_arr = ndarray::Array2::from_shape_vec((n, 2), edges)
@@ -290,7 +290,7 @@ pub(super) fn scene_cone_mesh<'py>(
         )));
     }
     let (verts, faces) = py
-        .allow_threads(|| mesh_core::cone_mesh(nr, ny, nb, radius, height, sharpen));
+        .detach(|| mesh_core::cone_mesh(nr, ny, nb, radius, height, sharpen));
     let n_v = verts.len() / 3;
     let n_f = faces.len() / 3;
     let v_arr = ndarray::Array2::from_shape_vec((n_v, 3), verts)

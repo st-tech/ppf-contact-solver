@@ -8,6 +8,7 @@ import platform
 import shutil
 import subprocess
 import sys
+import time
 
 
 def run(command, cwd="/tmp", use_sudo=False, check=True):
@@ -338,9 +339,28 @@ def setup():
     print("Installing system packages...")
     packages = list_packages()
     if shutil.which("apt"):
-        # Update package list
+        # Update the package list. apt exits 100 when ANY configured index
+        # fails, including a third-party repo that momentarily serves an
+        # index disagreeing with the hashes in its own Release file (the
+        # NVIDIA CUDA repo does this mid mirror-sync). That is transient and
+        # unrelated to the packages below, which all come from the
+        # distribution archive, so retry before giving up on it.
+        attempts = 3
         print("Running: apt update")
-        run("apt update", use_sudo=True)
+        for attempt in range(1, attempts + 1):
+            result = run("apt update", use_sudo=True, check=False)
+            if result.returncode == 0:
+                break
+            print(
+                f"apt update failed with exit {result.returncode} "
+                f"(attempt {attempt} of {attempts})"
+            )
+            if attempt < attempts:
+                time.sleep(15)
+        else:
+            # Not a silent fallback: the install below runs with check=True,
+            # so a package that is genuinely unavailable still fails loudly.
+            print("apt update did not succeed; the install below must still succeed")
 
         # Install packages
         print(f"Installing packages: {' '.join(packages)}")

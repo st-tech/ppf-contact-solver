@@ -302,19 +302,56 @@ def _iter_vg_candidates(obj: bpy.types.Object):
                 yield name, _hash_indices(_get_curve_pin_indices(obj, name))
 
 
-def resolve_vg_name(obj: bpy.types.Object, stored_name: str, stored_hash: int) -> str:
-    """Resolve the current vertex group name.
+def _vg_slot_exists(obj: bpy.types.Object, vg_name: str) -> bool:
+    """True when *obj* still carries a vertex group / curve pin slot *vg_name*.
 
-    If ``stored_name`` still exists and its hash matches, return it.
-    Otherwise scan all VGs/pins on the object for a hash match (renamed).
-    Returns the current name, or ``stored_name`` if no match found.
+    O(1)-ish name lookup, with no vertex walk, unlike ``compute_vg_hash``.
+    """
+    if obj.type == "MESH":
+        return obj.vertex_groups.get(vg_name) is not None
+    if obj.type == "CURVE":
+        return obj.get(f"_pin_{vg_name}") is not None
+    return False
+
+
+def resolve_vg_name(obj: bpy.types.Object, stored_name: str, stored_hash: int) -> str:
+    """Resolve the current vertex group name, following a RENAME if one happened.
+
+    The hash exists to survive a rename: same contents, different name. A
+    rename is therefore the only thing it can recover, and a rename always
+    leaves ``stored_name`` absent. So when a slot named ``stored_name`` is
+    still present this returns it immediately, hashing nothing.
+
+    That order matters because the scan is expensive and must stay off the
+    common path. ``_iter_vg_candidates`` calls ``_get_vg_indices`` once per
+    vertex group, and each call walks every vertex and its group memberships,
+    so a rigged character (70 vertex groups over 6.4k vertices) costs ~450k
+    iterations per scan. ``resolve_pin`` reaches this function, and the Groups
+    panel calls ``resolve_pin`` several times per redraw, so a scan on the
+    common path is a per-redraw cost measured in hundreds of milliseconds.
+
+    A membership change must not reach the scan, and does not. Welding or
+    deleting vertices rewrites a pin group's index list, so its content hash
+    stops matching while its name stays valid; the scan would then search for
+    a rename that never happened, find nothing (no slot carries the old hash),
+    and repair nothing, so the same fruitless scan would repeat on every
+    redraw for as long as the mismatch lives in the .blend. Checking the name
+    first is what keeps a content change from being read as a rename.
+
+    Deliberate trade-off: if a group is renamed A -> B AND a NEW group named A
+    is created, the stored name A resolves, so the pin stays on the new A
+    rather than following the old contents to B. Distinguishing those two
+    requires the full scan on every lookup, at the cost above. A plain rename,
+    where the old name is gone, is followed exactly.
     """
     if not obj:
         return stored_name
-    # Quick check: stored name still valid
-    if compute_vg_hash(obj, stored_name) == stored_hash:
+    # The slot is still there: not a rename. Its contents may well have changed
+    # (a weight edit, or a merge), which is not this function's business.
+    if _vg_slot_exists(obj, stored_name):
         return stored_name
-    # Scan all candidates for a hash match (renamed)
+    # The stored name is gone, so a rename is the only thing the hash can
+    # still recover. This is the one path that pays for the scan.
     for name, h in _iter_vg_candidates(obj):
         if h == stored_hash:
             return name

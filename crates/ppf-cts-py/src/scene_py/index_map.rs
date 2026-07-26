@@ -45,7 +45,7 @@ pub(super) fn scene_build_index_map<'py>(
     }
     let mut owned: Vec<Owned> = Vec::with_capacity(objects.len());
     for obj in objects.iter() {
-        let d = obj.downcast::<PyDict>().map_err(|_| {
+        let d = obj.cast::<PyDict>().map_err(|_| {
             PyValueError::new_err("each object must be a dict with name/n_verts/...")
         })?;
         let name: String = d
@@ -84,7 +84,7 @@ pub(super) fn scene_build_index_map<'py>(
         .collect();
 
     let result = py
-        .allow_threads(|| sb::build_index_map(&view))
+        .detach(|| sb::build_index_map(&view))
         .map_err(into_py_err)?;
 
     // Pack output dict.

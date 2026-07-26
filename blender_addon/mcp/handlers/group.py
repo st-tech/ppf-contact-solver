@@ -729,7 +729,6 @@ def list_pins(group_uuid: str):
                 "pin_duration": int(pin_item.pin_duration),
                 "use_pull": bool(pin_item.use_pull),
                 "pull_strength": float(pin_item.pull_strength),
-                "pin_stiffness": float(pin_item.pin_stiffness),
                 "operation_count": len(pin_item.operations),
             }
         )
@@ -783,7 +782,7 @@ def set_group_material_properties(group_uuid: str, properties: dict):
     - ROD: rod_density, rod_young_modulus, rod_model, deformation_damping, bending_damping, young_mod_density_normalized, friction, bend, enable_strain_limit, strain_limit_percent, stitch_stiffness
     - PDRD: pdrd_density, friction, stitch_stiffness (the hinge joint is per-object; use the set_pdrd_hinge tool)
     - SAND: sand_grain_radius, sand_particle_mass, sand_friction (faceless granular body of loose grain-center vertices)
-    - STATIC: friction (limited set)
+    - STATIC: friction (limited set; a moving collider tracks its animation exactly)
 
     Rayleigh damping (deformation_damping on Solid/Shell/Rod, bending_damping on
     Shell/Rod only) and young_mod_density_normalized (interpret Young's modulus

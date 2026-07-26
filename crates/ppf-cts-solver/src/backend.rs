@@ -5,7 +5,7 @@
 
 use super::cvec::CVec;
 use super::data::{
-    Constraint, IntersectionRecord, Mat2x2f, Mat3x3f, RestShapeUpdate, StepResult,
+    Constraint, IntersectionRecord, Mat2x2f, Mat3x3f, RestShapeUpdate, StepResult, Vec3f,
     MAX_INTERSECTION_RECORDS,
 };
 use super::{mesh::Mesh, DataSet, ParamSet, ProgramArgs, Scene, SimArgs};
@@ -14,6 +14,7 @@ use chrono::Local;
 use log::*;
 use na::{Matrix2x3, Matrix3xX};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::Path;
@@ -252,12 +253,16 @@ impl Backend {
     /// which otherwise shows up as a sawtooth in relative frame time. For
     /// the rest pose (frame 0) the caller passes `t_prev == t_curr`, which
     /// collapses the interpolation to `curr_vertex`.
+    ///
+    /// A fix-pinned vertex is the exception, and is placed exactly rather than
+    /// interpolated: see `pin_at_frame` below.
     fn write_frame_outputs(
         &mut self,
         program_args: &ProgramArgs,
         sim_args: &SimArgs,
         dataset: &DataSet,
         param: &ParamSet,
+        scene: &Scene,
         last_time: &mut Instant,
         frame: i32,
         t_frame: f64,
@@ -341,19 +346,72 @@ impl Backend {
         // verbatim. This is output-only: `self.state.*_vertex` stay as the true
         // GPU readback so `save_state` checkpoints the real solver state.
         let alpha = frame_interp_alpha(t_frame, t_prev, t_curr);
+
+        // A fix-pinned vertex rides a prescribed path, so where it belongs at
+        // t_frame is known outright. Interpolating its absolute position
+        // between the two steps bracketing the frame instead draws a chord
+        // across that path and cuts the corner, by up to dt/4 times the path's
+        // curvature. The step boundaries fall wherever the CCD line search
+        // leaves them, so the size of that cut varies frame to frame, and on a
+        // driven collider it reads as a jitter over an animation that should be
+        // perfectly smooth. It is most visible against a camera that shares the
+        // collider's motion: the camera samples the exact keyframe path while
+        // the collider is displayed from the chord, and the mismatch between
+        // them is exactly the jiggle.
+        //
+        // So place the pin at its exact pose for t_frame and interpolate only
+        // the residual: how far the solver's readback sits off that path. For
+        // an exact-Dirichlet fix pin the residual is zero to round-off (its DOF
+        // are eliminated, so the solver holds it dead on the path), which is
+        // why the collider now tracks its keyframe exactly. For the one fix pin
+        // still held by a barrier (a PDRD anchor) the residual is small and
+        // smooth, so interpolating it is genuinely second-order. For a pin that
+        // never moves the residual identity collapses this back to the plain
+        // lerp.
+        //
+        // Only vertices pinned across the whole step qualify; one whose pin
+        // starts or is released mid-step is left to the lerp for that frame.
+        let pin_at_frame: HashMap<u32, (Vec3f, Vec3f, Vec3f)> = {
+            let at_prev: HashMap<u32, Vec3f> =
+                scene.fix_pin_positions(t_prev).into_iter().collect();
+            let at_curr: HashMap<u32, Vec3f> =
+                scene.fix_pin_positions(t_curr).into_iter().collect();
+            scene
+                .fix_pin_positions(t_frame)
+                .into_iter()
+                .filter_map(|(i, at_f)| match (at_prev.get(&i), at_curr.get(&i)) {
+                    (Some(&p), Some(&c)) => Some((i, (at_f, p, c))),
+                    _ => None,
+                })
+                .collect()
+        };
+
         // Write vertices in chunks to avoid large RAM allocation.
         const CHUNK_SIZE: usize = 4096;
         let mut chunk_buf: Vec<f32> = Vec::with_capacity(CHUNK_SIZE);
-        for (p, c) in self
-            .state
-            .prev_vertex
-            .columns(0, surface_vert_count)
-            .iter()
-            .zip(self.state.curr_vertex.columns(0, surface_vert_count).iter())
-        {
-            let pf = *p;
-            let cf = *c;
-            chunk_buf.push((pf + alpha * (cf - pf)) * inv_world);
+        for v in 0..surface_vert_count {
+            let p = self.state.prev_vertex.column(v);
+            let c = self.state.curr_vertex.column(v);
+            match pin_at_frame.get(&(v as u32)) {
+                Some((at_f, at_p, at_c)) => {
+                    for k in 0..3 {
+                        // Interpolate only the residual: the solver readback's
+                        // offset from the exact pinned path, added back onto the
+                        // pin's exact pose for t_frame.
+                        let rp = f32::from(p[k] - at_p[k]);
+                        let rc = f32::from(c[k] - at_c[k]);
+                        let exact = f32::from(at_f[k]);
+                        chunk_buf.push((exact + rp + alpha * (rc - rp)) * inv_world);
+                    }
+                }
+                None => {
+                    for k in 0..3 {
+                        let pf = f32::from(p[k]);
+                        let cf = f32::from(c[k]);
+                        chunk_buf.push((pf + alpha * (cf - pf)) * inv_world);
+                    }
+                }
+            }
             if chunk_buf.len() >= CHUNK_SIZE {
                 let buff = unsafe {
                     std::slice::from_raw_parts(
@@ -535,7 +593,7 @@ impl Backend {
         // surfacing as the bl_pin_* fidelity divergence.
         if self.state.curr_frame < 0 && self.state.time == 0.0 {
             self.write_frame_outputs(
-                program_args, sim_args, &dataset, &param,
+                program_args, sim_args, &dataset, &param, &scene,
                 &mut last_time, 0, 0.0, 0.0, 0.0,
             );
             self.state.curr_frame = 0;
@@ -662,7 +720,7 @@ impl Backend {
             // target which left every pin one step behind by the end
             // of the step.
             let target_time = self.state.time + param.dt as f64;
-            constraint = scene.make_constraint(target_time);
+            constraint = scene.make_constraint(target_time, self.state.time);
             unsafe { update_constraint(&constraint) };
 
             // Stream the time-varying rest shape for this step's target time,
@@ -767,15 +825,23 @@ impl Backend {
                     result.ccd_success,
                     result.pcg_success,
                     result.intersection_free,
+                    result.newton_progress,
+                    result.pin_feasible,
+                    result.contact_separated,
                 );
                 crate::status_writer::terminal_crash(
                     kind,
                     format!(
-                        "advance failed at frame {} (ccd={}, pcg={}, intersection_free={})",
+                        "advance failed at frame {} (ccd={}, pcg={}, \
+                         intersection_free={}, newton_progress={}, \
+                         pin_feasible={}, contact_separated={})",
                         self.state.curr_frame,
                         result.ccd_success,
                         result.pcg_success,
-                        result.intersection_free
+                        result.intersection_free,
+                        result.newton_progress,
+                        result.pin_feasible,
+                        result.contact_separated
                     ),
                 );
                 panic!("failed to advance");
@@ -804,7 +870,7 @@ impl Backend {
                 for f in self.state.curr_frame + 1..=new_frame {
                     let t_frame = f as f64 / sim_args.fps;
                     self.write_frame_outputs(
-                        program_args, sim_args, &dataset, &param,
+                        program_args, sim_args, &dataset, &param, &scene,
                         &mut last_time, f, t_frame, t_prev, t_curr,
                     );
                 }

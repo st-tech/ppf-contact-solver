@@ -10,7 +10,11 @@
 #include "../simplelog/SimpleLog.h"
 #include "../utility/dispatcher.hpp"
 #include "../utility/utility.hpp"
+#include "asm_profile.hpp"
 #include "csrmat.hpp"
+#include "row_dedupe.hpp"
+#include "row_pattern.hpp"
+#include <cstdlib>
 
 __device__ void Row::alloc() {
     head = 0;
@@ -28,59 +32,82 @@ __device__ void Row::clear() {
     fixed_nnz = 0;
     max_dyn_rows = 0;
     head = 0;
+    split = 0;
     ref_head = 0;
 }
 
 __device__ void Row::finalize() {
     assert(state == SUCCESS);
-    unsigned nnz = head;
-    head = 0;
-    for (unsigned i = 0; i < nnz; ++i) {
-        unsigned j = index[i];
-        Mat3x3f &val = value[i];
-        if (!val.isZero()) {
-            bool found = false;
-            for (unsigned k = 0; k < head; ++k) {
-                if (index[k] == j) {
-                    value[k] += val;
-                    found = true;
-                    break;
-                }
-            }
-            if (!found) {
-                unsigned _head = head++;
-                index[_head] = j;
-                value[_head] = val;
-            }
-        }
+    // fixed_nnz is exactly the width push() searched before appending, which is
+    // the boundary row_dedupe needs. See row_dedupe.hpp for why that boundary
+    // is what keeps this out of the row's width squared.
+    head = row_dedupe(index, value, head, fixed_nnz, &split);
+
+    // row_dedupe is allowed to skip comparing an appended column against the
+    // carried ones only because push() appends a column solely after failing to
+    // find it there. Check that rather than take it on faith: the pattern is
+    // sorted, so this bisects instead of scanning and costs a handful of probes
+    // per appended column. Without it a broken appender is close to
+    // undetectable, because the row it produces is still NUMERICALLY right
+    // (operator() and the transpose build both accumulate over every matching
+    // entry) and the only symptom is a step that takes tens of seconds.
+    //
+    // Search the pattern push() ACTUALLY searched, not the compacted survivors.
+    // A column that push() kept missing is pushed nowhere, so its carried slot
+    // keeps the zero finish_rebuild_buffer wrote and row_dedupe drops it before
+    // `split` exists; searching below `split` would therefore look for the
+    // offending column in the one place it is guaranteed not to be, and pass on
+    // exactly the failure it is written to catch. fixed_index still holds that
+    // pattern here, since fixed_row_offsets is not rewritten until after this
+    // dispatch completes.
+    for (unsigned k = split; k < head; ++k) {
+        assert(find_sorted(fixed_index, fixed_nnz, index[k]) == fixed_nnz);
     }
 }
 
 __device__ void Row::dry_push(unsigned i) {
     assert(state == COUNTING);
-    for (unsigned j = 0; j < fixed_nnz; ++j) {
-        if (fixed_index[j] == i) {
-            return;
-        }
+    // The carried pattern is sorted (see row_pattern.hpp), so a column that is
+    // already in it is found by bisection rather than by walking the row.
+    if (find_sorted(fixed_index, fixed_nnz, i) == fixed_nnz) {
+        atomicAdd(&max_dyn_rows, 1);
     }
-    atomicAdd(&max_dyn_rows, 1);
 }
 
+// Accumulate one block into this row. A column already present in the carried
+// pattern is folded into its existing slot; anything else is appended.
+//
+// NOTE: the search below is what makes an appended column provably distinct
+// from every carried one, and finalize() relies on exactly that to skip
+// comparisons it knows cannot match. Appending without first failing this
+// search would leave duplicates that finalize() does not look for.
 __device__ void Row::push(unsigned i, const Mat3x3f &val) {
     assert(state != COUNTING);
-    for (unsigned j = 0; j < fixed_nnz; ++j) {
-        if (index[j] == i) {
-            float *ptr = (float *)(value + j);
-            for (unsigned ii = 0; ii < 9; ++ii) {
-                float y = Map<const Vec9f>(val.data())[ii];
-                if (y) {
-                    atomicAdd(ptr + ii, y);
-                }
+    // The prefix holds the carried pattern in the sorted order finalize() left
+    // it in, so this is a bisection, not a walk over the row.
+    const unsigned slot = find_sorted(index, fixed_nnz, i);
+    if (slot != fixed_nnz) {
+        float *ptr = (float *)(value + slot);
+        for (unsigned ii = 0; ii < 9; ++ii) {
+            float y = Map<const Vec9f>(val.data())[ii];
+            if (y) {
+                atomicAdd(ptr + ii, y);
             }
-            return;
         }
+        return;
     }
     unsigned offset = atomicAdd(&head, 1);
+    // The row's slab is sized by the counting pass (max_dyn_rows starts at
+    // fixed_nnz and dry_push adds one per dynamic entry), so in a consistent
+    // run `offset` never reaches it. If the two passes ever disagree, writing
+    // here would run past this row's slab and into the next row's blocks, which
+    // corrupts a Hessian the solver then treats as valid. Refuse the write and
+    // latch the row so the host turns it into a loud failure instead. Every
+    // thread that trips it writes the same value, so the race is benign.
+    if (offset >= max_dyn_rows) {
+        state = OVERFLOW;
+        return;
+    }
     index[offset] = i;
     value[offset] = val;
 }
@@ -101,7 +128,8 @@ DynCSRMat DynCSRMat::alloc(unsigned nrow, unsigned max_nnz) {
     result.nrow = nrow;
     float tmp_1;
     unsigned tmp_2;
-    result.finish_rebuild_buffer(tmp_2, tmp_1);
+    double tmp_3;
+    result.finish_rebuild_buffer(tmp_2, tmp_1, tmp_3);
     return result;
 }
 
@@ -136,11 +164,22 @@ void DynCSRMat::start_rebuild_buffer() {
         rows[i].fixed_index = fixed_index_buff.data + fixed_row_offsets[i];
         rows[i].fixed_nnz = nnz;
         rows[i].max_dyn_rows = nnz;
+        // Both assembly passes locate a column in this pattern by bisection, so
+        // establish the ordering they need HERE, where a step starts using the
+        // pattern, rather than trusting whoever last wrote it. finalize() is
+        // not the only writer: update_dyn (main.cu) restores the pattern from a
+        // saved state, so a run resumed from a checkpoint would otherwise
+        // bisect an array that was never ordered. sort_pattern returns after a
+        // single pass when the pattern is already in order, which is every step
+        // but the first after a restore.
+        sort_pattern(rows[i].fixed_index, nnz);
     } DISPATCH_END;
 }
 
 void DynCSRMat::finish_rebuild_buffer(unsigned &max_nnz_row,
-                                      float &consumed_rat) {
+                                      float &consumed_rat,
+                                      double &report_overhead_ms) {
+    report_overhead_ms = 0.0;
     Vec<unsigned> fixed_row_offsets = this->fixed_row_offsets;
     Vec<unsigned> fixed_index_buff = this->fixed_index_buff;
     Vec<Row> rows = this->rows;
@@ -149,11 +188,49 @@ void DynCSRMat::finish_rebuild_buffer(unsigned &max_nnz_row,
 
     DISPATCH_START(nrow)
     [dyn_row_offsets, tmp_array, rows] __device__(unsigned i) mutable {
+        // max_dyn_rows already IS this row's full slab width: it was seeded
+        // with the carried pattern and then took one slot per column the dry
+        // pass did not find there. Both the offsets and the reported width are
+        // that one quantity, so neither adds the carried pattern on top of it.
         dyn_row_offsets[i] = rows[i].max_dyn_rows;
-        tmp_array[i] = rows[i].max_dyn_rows + rows[i].fixed_nnz;
+        tmp_array[i] = rows[i].max_dyn_rows;
     } DISPATCH_END;
 
     max_nnz_row = kernels::max_array(tmp_array.data, nrow, 0u);
+
+    if (asm_profile::enabled()) {
+        // Everything below is diagnostic and sits inside a window the caller is
+        // timing, so hand back what it cost and let the caller subtract it. A
+        // profiler that reports its own overhead as part of the phase it is
+        // profiling makes the phase look expensive for the one reason that
+        // vanishes when the profiler is turned off.
+        const auto t_report = asm_profile::tick();
+        // tmp_array holds this row's reserved slab: the carried-forward pattern
+        // plus one slot per column the dry pass did not find in it.
+        std::vector<unsigned> reserved(nrow);
+        CUDA_HANDLE_ERROR(cudaMemcpy(reserved.data(), tmp_array.data,
+                                     nrow * sizeof(unsigned),
+                                     cudaMemcpyDeviceToHost));
+        std::vector<unsigned> carried(nrow + 1);
+        CUDA_HANDLE_ERROR(cudaMemcpy(carried.data(), fixed_row_offsets.data,
+                                     (nrow + 1) * sizeof(unsigned),
+                                     cudaMemcpyDeviceToHost));
+        unsigned argmax = 0, peak = 0;
+        for (unsigned i = 0; i < nrow; ++i) {
+            if (reserved[i] > peak) {
+                peak = reserved[i];
+                argmax = i;
+            }
+        }
+        // fixed_row_offsets is a prefix-sum, so the carried pattern width of a
+        // row is the gap to the next offset.
+        unsigned carried_nnz = carried[argmax + 1] - carried[argmax];
+        SimpleLog::message(
+            "[asm-prof] argmax row %u: carried_pattern=%u new_columns=%u",
+            argmax, carried_nnz, peak - carried_nnz);
+        asm_profile::report_widths("reserved_width", reserved);
+        report_overhead_ms = asm_profile::ms_since(t_report);
+    }
 
     unsigned num_nnz = 0;
     if (max_nnz_row) {
@@ -223,12 +300,25 @@ DynCSRMat DynCSRMat::clear() {
 }
 
 void DynCSRMat::finalize() {
-    assert(check());
+    const bool prof = asm_profile::enabled();
+    auto t_phase = asm_profile::tick();
+
+    // Not `assert(check())`: an assert would take the check out with it if this
+    // ever built with NDEBUG, and an incomplete Hessian must never reach the
+    // solve. check() has already printed what went wrong.
+    if (!check()) {
+        std::abort();
+    }
+    const double ms_check = asm_profile::ms_since(t_phase);
+
+    t_phase = asm_profile::tick();
     Vec<Row> rows = this->rows;
     DISPATCH_START(rows.size)
     [rows] __device__(unsigned i) mutable { rows[i].finalize(); } DISPATCH_END;
+    const double ms_rows = asm_profile::ms_since(t_phase);
     assert(check());
 
+    t_phase = asm_profile::tick();
     Vec<unsigned> fixed_row_offsets = this->fixed_row_offsets;
     Vec<unsigned> fixed_index_buff = this->fixed_index_buff;
 
@@ -236,6 +326,22 @@ void DynCSRMat::finalize() {
     [fixed_row_offsets, rows] __device__(unsigned i) mutable {
         fixed_row_offsets[i] = rows[i].head;
     } DISPATCH_END;
+
+    // fixed_row_offsets currently holds the per-row width AFTER the dedupe,
+    // i.e. the true number of distinct nonzero blocks in that row. Snapshot it
+    // before the scan below turns it back into a prefix-sum. The snapshot is a
+    // blocking copy sitting inside a phase this function is timing, so charge
+    // it back out rather than let a diagnostic inflate the number it reports.
+    std::vector<unsigned> deduped;
+    double ms_snapshot = 0.0;
+    if (prof) {
+        const auto t_snapshot = asm_profile::tick();
+        deduped.resize(nrow);
+        CUDA_HANDLE_ERROR(cudaMemcpy(deduped.data(), fixed_row_offsets.data,
+                                     nrow * sizeof(unsigned),
+                                     cudaMemcpyDeviceToHost));
+        ms_snapshot = asm_profile::ms_since(t_snapshot);
+    }
 
     unsigned num_fixed_nnz =
         kernels::exclusive_scan(fixed_row_offsets.data, nrow);
@@ -249,11 +355,27 @@ void DynCSRMat::finalize() {
 
     DISPATCH_START(nrow)
     [fixed_row_offsets, fixed_index_buff, rows] __device__(unsigned i) mutable {
-        for (int j = 0; j < rows[i].head; j++) {
-            unsigned k = fixed_row_offsets[i] + j;
-            fixed_index_buff[k] = rows[i].index[j];
-        }
+        // Hand the next step this row's columns, in ascending order, so that
+        // the step picking them up finds them already sorted and does not have
+        // to sort a row to be able to bisect it.
+        //
+        // The row is two ascending runs (row_dedupe leaves the carried entries
+        // in the order they arrived, and that order was ascending), so this is
+        // a merge, not a sort: linear, and it replaces a copy that cost the
+        // same. Only the indices travel; the values are zeroed when the pattern
+        // is read back, so there is nothing to permute alongside them, and the
+        // row's own arrays are left as they are because every reader of those
+        // walks the whole row.
+        //
+        unsigned *pattern = fixed_index_buff.data + fixed_row_offsets[i];
+        const unsigned nnz = rows[i].head;
+        const unsigned split = rows[i].split;
+        merge_runs(rows[i].index, split, rows[i].index + split, nnz - split,
+                   pattern);
     } DISPATCH_END;
+
+    const double ms_pattern = asm_profile::ms_since(t_phase) - ms_snapshot;
+    t_phase = asm_profile::tick();
 
     Vec<unsigned> ref_index_buff = this->ref_index_buff;
     Vec<unsigned> ref_index_offsets = this->ref_row_offsets;
@@ -298,14 +420,42 @@ void DynCSRMat::finalize() {
             }
         }
     } DISPATCH_END;
+
+    if (prof) {
+        SimpleLog::message("[asm-prof] finalize: check %.1f ms  dedupe_rows "
+                           "%.1f ms  pattern %.1f ms  transpose %.1f ms",
+                           ms_check, ms_rows, ms_pattern,
+                           asm_profile::ms_since(t_phase));
+        asm_profile::report_widths("deduped_width", deduped);
+    }
 }
 
 bool DynCSRMat::check() {
     Vec<Row> rows = this->rows;
-    DISPATCH_START(rows.size)[rows] __device__(unsigned i) {
-        assert(rows[i].state == Row::SUCCESS);
+    Vec<unsigned> flags = this->tmp_array;
+    // Count the offending rows and report from the HOST. A bare device assert
+    // here would abort with no message (device printf is dropped on an
+    // assert-abort), which for a matrix-assembly fault leaves nothing to act on.
+    DISPATCH_START(rows.size)
+    [rows, flags] __device__(unsigned i) mutable {
+        flags[i] = (rows[i].state == Row::OVERFLOW) ? 1u : 0u;
+    } DISPATCH_END;
+    const unsigned overflowed = kernels::sum_array(flags.data, rows.size);
+    if (overflowed) {
+        fprintf(stderr,
+                "PPF FATAL: dynamic CSR overflow in %u of %u rows. The counting "
+                "pass (dry_push) reserved fewer entries for those rows than the "
+                "fill pass (push) then wrote, so the fill was refused to keep it "
+                "from running into the neighboring row's blocks. The two passes "
+                "must visit the same pairs: a predicate that differs between "
+                "them, or a contact set that changed between counting and "
+                "filling, will do this. The assembled matrix is incomplete, so "
+                "the step is abandoned rather than solved against a silently "
+                "wrong Hessian.\n",
+                overflowed, rows.size);
+        fflush(stderr);
+        return false;
     }
-    DISPATCH_END;
     return true;
 }
 
@@ -412,6 +562,15 @@ __device__ bool FixedCSRMat::push(unsigned i, unsigned j, const Mat3x3f &val) {
                 }
             }
         }
+        // NOTE: a false return here is NOT an error and must not be flagged as
+        // one. Callers push a block speculatively and fall back to the dynamic
+        // matrix when the pair has no fixed slot (contact assembly takes
+        // exactly that route), so a miss is ordinary control flow: wiring it to
+        // `status` fires on healthy scenes, headless.py included. That is why
+        // `status` and check() are unwired. The hazard worth catching, an
+        // element stencil never registered in builder.rs fixed_index_table, is
+        // indistinguishable from this fallback at push time and has to be
+        // caught where the pattern is built, not here.
     }
     return found;
 }

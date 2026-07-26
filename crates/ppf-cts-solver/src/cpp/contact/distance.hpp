@@ -85,18 +85,23 @@ edge_edge_distance_coeff(const Vec3<T> &ea0, const Vec3<T> &ea1,
              x, det);
     Vec2<Y> c = point_edge_distance_coeff<T, Y>(ea0, eb0, eb1);
     Vec4<Y> result(Y(1), Y(0), c(0), c(1));
-    Vec3<Y> pa = ea0.template cast<Y>();
-    Vec3<Y> pb = c(0) * eb0.template cast<Y>() + c(1) * eb1.template cast<Y>();
-    Vec3<Y> diff = pa - pb;
+    // Both candidate closest-point differences are formed from pairwise
+    // endpoint differences, never from the absolute endpoints: a closest-point
+    // pair is separated by far less than its distance from the origin, so
+    // combining absolute coordinates first cancels the leading digits away and
+    // leaves rounding noise that grows with that distance, which can flip the
+    // candidate selection below.
+    // The parameterized forms are exact identities of the barycentric
+    // combinations: ea0 - (c0 eb0 + c1 eb1) = d00 - c1 r1 (c0 + c1 = 1) and
+    // ((1-x0) ea0 + x0 ea1) - ((1-x1) eb0 + x1 eb1) = d00 + x0 r0 - x1 r1,
+    // with d00 = ea0 - eb0 and r0, r1 the edge vectors above.
+    Vec3<Y> d00 = (ea0 - eb0).template cast<Y>();
+    Vec3<Y> diff = d00 - c(1) * r1;
     Y min_dist = diff.dot(diff);
     if (det) {
         x = x / det;
         Vec4<Y> direct(Y(1) - x(0), x(0), Y(1) - x(1), x(1));
-        Vec3<Y> pa_direct = direct(0) * ea0.template cast<Y>() +
-                            direct(1) * ea1.template cast<Y>();
-        Vec3<Y> pb_direct = direct(2) * eb0.template cast<Y>() +
-                            direct(3) * eb1.template cast<Y>();
-        Vec3<Y> diff_direct = pa_direct - pb_direct;
+        Vec3<Y> diff_direct = d00 + x(0) * r0 - x(1) * r1;
         Y dist = diff_direct.dot(diff_direct);
         if (dist < min_dist) {
             result = direct;

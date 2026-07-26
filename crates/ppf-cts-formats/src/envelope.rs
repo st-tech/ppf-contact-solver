@@ -12,7 +12,7 @@
 
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Envelope<T> {
@@ -94,9 +94,17 @@ pub fn from_cbor_with_version<T: DeserializeOwned>(
     kind: &str,
     bytes: &[u8],
 ) -> Result<T, FormatError> {
-    let env: Envelope<T> = ciborium::from_reader(bytes)?;
+    // Version-first: decode the envelope with an untyped payload, check the
+    // version/kind, and only then deserialize the typed payload. A blob from
+    // an older schema whose payload shape no longer matches must report
+    // VersionMismatch (actionable: re-produce the payload), not a CborDe
+    // error about some renamed field.
+    let env: Envelope<ciborium::Value> = ciborium::from_reader(bytes)?;
     check_envelope_meta(&env.version, expected_version, &env.kind, kind)?;
-    Ok(env.payload)
+    let payload: T = env.payload.deserialized().map_err(|e| {
+        FormatError::CborDe(format!("payload decode after version check: {e}"))
+    })?;
+    Ok(payload)
 }
 
 fn check_envelope_meta(

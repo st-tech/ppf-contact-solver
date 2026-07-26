@@ -260,7 +260,7 @@ pub fn render_default_args<'py>(
     // DEFAULT_HEIGHT in frontend/_rasterizer_.py, which is the single
     // source of truth shared by SoftwareRenderer and the CLI. Keep these
     // values in sync so the Mitsuba and software paths cannot diverge.
-    let pairs: [(&str, PyObject); 9] = [
+    let pairs: [(&str, Py<PyAny>); 9] = [
         ("variant", "cuda_ad_rgb".into_py_any(py)?),
         ("max_depth", 12i64.into_py_any(py)?),
         ("width", 640i64.into_py_any(py)?),
@@ -442,7 +442,7 @@ pub fn check_walls_violations_for_objs(
     if descs.is_empty() {
         return Ok((Vec::new(), idxs));
     }
-    let out = py.allow_threads(|| ic::check_walls_violations_batch(v_slice, p_slice, &descs, &idxs));
+    let out = py.detach(|| ic::check_walls_violations_batch(v_slice, p_slice, &descs, &idxs));
     Ok((out, idxs))
 }
 
@@ -516,7 +516,7 @@ pub fn check_spheres_violations_for_objs(
     if descs.is_empty() {
         return Ok((Vec::new(), idxs, tags));
     }
-    let out = py.allow_threads(|| {
+    let out = py.detach(|| {
         ic::check_spheres_violations_batch(v_slice, p_slice, &descs, &idxs)
     });
     Ok((out, idxs, tags))
@@ -586,7 +586,7 @@ pub fn concat_sdf_primitives_from_children<'py>(
     let mut params_out: Vec<f64> = Vec::new();
     for child in children.iter() {
         let pair = child.call_method0("get_kernel_primitives")?;
-        let tup = pair.downcast::<pyo3::types::PyTuple>().map_err(|_| {
+        let tup = pair.cast::<pyo3::types::PyTuple>().map_err(|_| {
             PyTypeError::new_err("get_kernel_primitives() must return a (types, params) tuple")
         })?;
         if tup.len() != 2 {
@@ -597,11 +597,11 @@ pub fn concat_sdf_primitives_from_children<'py>(
         }
         let t_arr = tup
             .get_item(0)?
-            .downcast_into::<PyArray1<i32>>()
+            .cast_into::<PyArray1<i32>>()
             .map_err(|_| PyTypeError::new_err("types must be a (N,) int32 ndarray"))?;
         let p_arr = tup
             .get_item(1)?
-            .downcast_into::<PyArray2<f64>>()
+            .cast_into::<PyArray2<f64>>()
             .map_err(|_| PyTypeError::new_err("params must be a (N, 8) f64 ndarray"))?;
         let t_view = t_arr.readonly();
         let p_view = p_arr.readonly();

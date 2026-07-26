@@ -52,7 +52,7 @@ pub(crate) fn pyany_to_param_value(value: &Bound<'_, PyAny>) -> PyResult<ParamVa
     ))
 }
 
-fn param_value_to_pyobject(py: Python<'_>, v: &ParamValue) -> PyResult<PyObject> {
+fn param_value_to_pyobject(py: Python<'_>, v: &ParamValue) -> PyResult<Py<PyAny>> {
     use pyo3::IntoPyObjectExt;
     match v {
         ParamValue::Bool(b) => b.into_py_any(py),
@@ -82,7 +82,7 @@ impl ParamHolder {
         let mut entries: BTreeMap<String, ParamEntry> = BTreeMap::new();
         for (key, value) in param.iter() {
             let k: String = key.extract()?;
-            let tup = value.downcast::<PyTuple>().map_err(|_| {
+            let tup = value.cast::<PyTuple>().map_err(|_| {
                 PyValueError::new_err(
                     "ParamHolder: each value must be a (default, display_name, description) tuple",
                 )
@@ -127,7 +127,7 @@ impl ParamHolder {
         Ok(slf)
     }
 
-    fn get(&self, py: Python<'_>, key: &str) -> PyResult<PyObject> {
+    fn get(&self, py: Python<'_>, key: &str) -> PyResult<Py<PyAny>> {
         let v = self
             .inner
             .get(key)
@@ -147,7 +147,7 @@ impl ParamHolder {
         self.inner.key_list().into_iter().map(String::from).collect()
     }
 
-    fn items(&self, py: Python<'_>) -> PyResult<Vec<(String, PyObject)>> {
+    fn items(&self, py: Python<'_>) -> PyResult<Vec<(String, Py<PyAny>)>> {
         self.inner
             .items()
             .into_iter()

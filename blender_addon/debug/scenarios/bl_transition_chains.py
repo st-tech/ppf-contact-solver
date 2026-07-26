@@ -117,9 +117,21 @@ try:
             f"solver={last_state.solver.name if last_state else '?'}"
         )
 
+    # Halt the chain on the first failed step. The steps are a stateful
+    # sequence: each depends on the state the previous one left behind, so
+    # once one breaks the rest are meaningless. Worse, letting them run
+    # anyway turns a single failure into a hang: each later step burns its
+    # own multi-second-to-multi-minute timeout waiting for a state the
+    # wedged chain never reaches, and the cumulative wait blows past the
+    # harness's 600s result cap, so the scenario reads as an opaque 600s
+    # process-kill instead of a named single-step failure. Mirrors
+    # _chain_lib.run_steps' ``halted`` flag (a list so the closure can
+    # mutate it without a ``global`` declaration).
+    halted = [False]
+
     def step(name, fn):
-        if result.get("errors"):
-            dh.record(name, False, {"skipped": "earlier step raised"})
+        if result.get("errors") or halted[0]:
+            dh.record(name, False, {"skipped": "earlier step failed"})
             return
         try:
             details = fn() or {}
@@ -131,6 +143,7 @@ try:
                 "tb": traceback.format_exc()[-500:],
             })
             dh.log(f"FAIL {name}: {exc}")
+            halted[0] = True
 
     def output_state_files():
         return sorted(glob.glob(os.path.join(

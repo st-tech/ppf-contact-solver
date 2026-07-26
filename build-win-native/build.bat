@@ -28,8 +28,18 @@ if "%BUILD_LOGGING%"=="" (
     REM pipeline ending in the Tee-Object cmdlet exits 0 regardless of the
     REM inner cmd's failure, so without it a failed build (or the MSVC-not-
     REM found guard below) is masked as success. This forwards the real code.
+    REM
+    REM The `!ERRORLEVEL!` below is equally REQUIRED, for the same reason one
+    REM level up. cmd.exe percent-expands a parenthesized block once, when it
+    REM parses the whole block, so `%ERRORLEVEL%` here would be substituted
+    REM with the value from BEFORE the powershell line ran (0, since the
+    REM preceding statements are successful SETs) and would discard the exit
+    REM code the line above went to such lengths to forward. Delayed
+    REM expansion is evaluated per line at execution time, so it sees the
+    REM real code. Verified on Windows Server 2025: with `%ERRORLEVEL%` a
+    REM child exiting 1 reports success, with `!ERRORLEVEL!` it reports 1.
     powershell -Command "& { cmd /c 'set BUILD_LOGGING=1&& set NOPAUSE=!NOPAUSE!&& \"%~f0\"' 2>&1 | Tee-Object -FilePath '%LOGFILE%'; exit $LASTEXITCODE }"
-    exit /b %ERRORLEVEL%
+    exit /b !ERRORLEVEL!
 )
 
 echo ============================================================

@@ -116,6 +116,17 @@ def _reconcile_manifest_on_load(*_args):
     that now require UUIDs (merge_ops cleanup, encoder, overlay) don't
     silently drop un-migrated data.
     """
+    # Renamed properties first: a stranded legacy key (e.g. the pre-rename fps
+    # flag) otherwise leaves the scene reading a default that silently changes
+    # its simulation time base.
+    try:
+        from .core.migrate_renames import migrate_renamed_state_props
+        moved = migrate_renamed_state_props()
+        if moved:
+            from .models.console import console
+            console.write(f"[auto-migrate] {moved}")
+    except Exception:
+        pass
     try:
         from .core.migrate import needs_migration, migrate_legacy_data
         if needs_migration():

@@ -13,9 +13,10 @@ deformed mesh at each frame. The result is a standard point cache that Blender
 and other DCC tools can play back and retime efficiently.
 
 Design notes (verified against Blender 5.1.2, live):
-  * The MESH_CACHE modifier is set up with ``frame_start=1.0`` (core/client.py),
-    so PC2 frame ``f`` shows at scene frame ``f + 1``; ``n`` cached frames occupy
-    scene frames ``[1, n]``. Exporting that inclusive range samples the deform at
+  * The MESH_CACHE modifier is set up with ``frame_start`` at the solve's
+    starting frame (core/client.py, see ``resolve_start_frame``), so PC2 frame
+    ``f`` shows at scene frame ``f + start``; ``n`` cached frames occupy scene
+    frames ``[start, start + n - 1]``. Exporting that inclusive range samples the deform at
     each PC2 frame (USD stores sparse time samples, so a run of identical poses,
     e.g. a static tail, is written once, spanning the full range via the stage's
     start/end time codes).
@@ -250,11 +251,15 @@ class _ExportSimCacheBase(ExportHelper):
             # common case; flag whatever remains invisible so the omission is
             # reported rather than silent.
             invisible = [obj.name for obj in objs if not obj.visible_get()]
-            scene.frame_start = 1
-            scene.frame_end = max_n
+            from ...core.encoder import resolve_start_frame
+            from ...models.groups import get_addon_data
+            export_start = resolve_start_frame(get_addon_data(scene).state)
+            export_end = export_start + max_n - 1
+            scene.frame_start = export_start
+            scene.frame_end = export_end
             scene.frame_step = 1
             try:
-                result = self._run_exporter(context, 1, max_n)
+                result = self._run_exporter(context, export_start, export_end)
             except Exception as exc:  # noqa: BLE001 - surfaced as a clean report
                 export_error = str(exc)
         finally:
@@ -298,8 +303,9 @@ class _ExportSimCacheBase(ExportHelper):
             return {"CANCELLED"}
 
         n_exported = len(objs) - len(invisible)
-        msg = iface_("Exported {count} mesh(es), frames 1-{max_n} to {path}").format(
-            count=n_exported, max_n=max_n, path=bpy.path.abspath(self.filepath)
+        msg = iface_("Exported {count} mesh(es), frames {start}-{end} to {path}").format(
+            count=n_exported, start=export_start, end=export_end,
+            path=bpy.path.abspath(self.filepath),
         )
         if len(set(counts)) > 1:
             msg += iface_(" (shorter caches hold their final pose past their length)")

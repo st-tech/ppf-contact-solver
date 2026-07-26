@@ -989,7 +989,9 @@ def get_pin_vertex_indices(obj, context, frame: int | None = None) -> list[int]:
     return list(indices)
 
 
-def get_transform_keyframes(obj, context, fps: float) -> dict | None:
+def get_transform_keyframes(
+    obj, context, start_frame: int = 1,
+) -> dict | None:
     """Extract sparse object-level transform keyframes for a STATIC object.
 
     Only extracts keyframes from object-level animation (location, rotation, scale).
@@ -998,11 +1000,17 @@ def get_transform_keyframes(obj, context, fps: float) -> dict | None:
     Args:
         obj: The Blender object.
         context: The Blender context.
-        fps: Frames per second for time conversion.
+        start_frame: Blender frame that is simulated time zero (see
+            ``resolve_start_frame``). Keyframes authored before it clamp to
+            zero, since the solver's schedules begin there.
 
     Returns:
-        dict with keys "time", "translation", "quaternion", "scale", "segments",
-        or None if no animation.
+        dict with keys "frame_offset", "translation", "quaternion", "scale",
+        "segments", or None if no animation. ``frame_offset`` values are
+        FRAME offsets relative to *start_frame* (float on the wire for
+        future-proofing; ``int(kp.co[0])`` truncation is retained, so this
+        is NOT subframe support). The decoder derives seconds from the
+        Param payload's fps, keeping the data payload timing-free.
     """
     if not obj or not hasattr(obj, "animation_data"):
         return None
@@ -1049,7 +1057,7 @@ def get_transform_keyframes(obj, context, fps: float) -> dict | None:
         scene.frame_set(frame)
         mat = world_matrix(obj)
         loc, quat, scale = mat.decompose()
-        times.append((frame - 1) / fps)
+        times.append(max(0.0, float(frame) - start_frame))
         translations.append([float(loc.x), float(loc.y), float(loc.z)])
         quaternions.append([float(quat.w), float(quat.x), float(quat.y), float(quat.z)])
         scales.append([float(scale.x), float(scale.y), float(scale.z)])
@@ -1098,7 +1106,7 @@ def get_transform_keyframes(obj, context, fps: float) -> dict | None:
     scene.frame_set(current_frame)
 
     return {
-        "time": times,
+        "frame_offset": times,
         "translation": translations,
         "quaternion": quaternions,
         "scale": scales,

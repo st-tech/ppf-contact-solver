@@ -232,6 +232,15 @@ inline void launch_recover_grains(const DataSet &data, Vec<float> dx, float dt) 
         Vec3f g_theta = data.grain_grot[i] - (kin * dt) * data.grain_omega_prev[i];
         Mat3x3f Ainv = A.inverse();
         Vec3f dxi(dx.data[3 * i], dx.data[3 * i + 1], dx.data[3 * i + 2]);
+        // A PINNED grain needs no special case here. Its translation is an exact
+        // Dirichlet BC (main.cu eliminates the row, so the condense pass's
+        // diag_hess / force writes for it are overwritten, which is correct: the
+        // row is prescribed). This kernel reads only dx, never diag_hess or
+        // force, so substituting the PRESCRIBED dx below is exactly the
+        // rotational equation of motion with the translation prescribed. The
+        // grain still spins, which is the physical answer: a nailed ball bearing
+        // rotates. Freezing its spin would be the fiction.
+        //
         // Back-substitution: solve increment dtheta_s = A^-1 (g_theta - B^T dx);
         // the applied increment is its negation (Newton subtracts), so
         // omega = -A^-1 (g_theta - B^T dx) / dt.

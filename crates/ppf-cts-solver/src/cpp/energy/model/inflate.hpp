@@ -23,6 +23,35 @@ __device__ Mat3x3f face_gradient(float pressure, const Vec3f &v0,
     return g;
 }
 
+// Same gradient, conditioned for faces far from the origin. `v0` is the
+// (absolute) first vertex; e1 = x1 - x0 and e2 = x2 - x0 are the edge vectors,
+// which the caller MUST form as differences so they carry no absolute
+// magnitude.
+//
+// The plain form above crosses two ABSOLUTE positions: v1 x v2 has terms of
+// order |x|^2 whose difference is the face area vector (~1e-4 for a centimeter
+// triangle), so in fp32 the leading digits cancel and the surviving result is
+// dominated by truncation noise that grows with distance from the origin.
+// Re-associating with v1 = v0 + e1,
+// v2 = v0 + e2 gives the exact identities
+//   v1 x v2 = e1 x e2 + (e1 - e2) x v0,   v2 x v0 = e2 x v0,   v0 x v1 = v0 x e1,
+// which isolate the translation-invariant part (e1 x e2, the area vector) into
+// an exact small-times-small product and leave the absolute position only in
+// well-conditioned small-times-large products. The per-face gradient is
+// genuinely translation-variant (only the sum over a closed surface is
+// invariant), so the large terms are real signal, not error; what this removes
+// is the catastrophic cancellation that previously destroyed the small part.
+__device__ Mat3x3f face_gradient_conditioned(float pressure, const Vec3f &v0,
+                                             const Vec3f &e1,
+                                             const Vec3f &e2) {
+    float coeff = -pressure / 6.0f;
+    Mat3x3f g;
+    g.col(0) = coeff * (e1.cross(e2) + (e1 - e2).cross(v0));
+    g.col(1) = coeff * e2.cross(v0);
+    g.col(2) = coeff * v0.cross(e1);
+    return g;
+}
+
 // Analytically PSD-projected Hessian of the pressure potential.
 //
 // Under the SVD X = U*diag(s0,s1,s2)*V^T, the 9x9 Hessian of det(X)

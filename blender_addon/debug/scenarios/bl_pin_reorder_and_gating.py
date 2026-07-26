@@ -7,13 +7,11 @@
 #   * the pin reorder operator (object.move_pin_vertex_group),
 #   * per-vertex last-wins follows pin ORDER (the lower/last pin wins for
 #     vertices shared by overlapping pins),
-#   * the Pin Stiffness enabled-gate (disabled when Pull is on),
 #   * the per-pin Show overlay default (eye open on a freshly added pin).
 #
 # Subtests:
 #   A. reorder_operator_moves_pin
 #   B. last_wins_follows_order  (pin-root last => bottom hard; first => pull)
-#   C. pin_stiffness_disabled_when_pull
 #   D. show_overlay_default_on
 
 from __future__ import annotations
@@ -92,26 +90,6 @@ try:
         {"pin0": bool(group.pin_vertex_groups[0].show_overlay),
          "pin1": bool(group.pin_vertex_groups[1].show_overlay)},
     )
-
-    # ----- C: Pin Stiffness disabled when Pull on -----------------
-    # Mirror the panel gate: enabled = not use_pull and (ops or captured).
-    def stiffness_enabled(p):
-        return (not p.use_pull) and (
-            len(p.operations) > 0 or p.has_captured_anim)
-    pull_pin = group.pin_vertex_groups[0]   # use_pull True
-    hard_pin = group.pin_vertex_groups[1]   # use_pull False
-    # give the hard pin an op so its gate would be enabled if not for pull
-    op = hard_pin.operations.add()
-    op.op_type = "MOVE_BY"
-    dh.record(
-        "C_pin_stiffness_disabled_when_pull",
-        (stiffness_enabled(pull_pin) is False)
-        and (stiffness_enabled(hard_pin) is True),
-        {"pull_pin_enabled": stiffness_enabled(pull_pin),
-         "hard_pin_with_op_enabled": stiffness_enabled(hard_pin)},
-    )
-    # remove the op so it does not perturb the last-wins check
-    hard_pin.operations.remove(0)
 
     # ----- B (part 1): pin-root LAST => bottom is HARD (no pull) ---
     bottom_pull_before = bottom_has_pull()

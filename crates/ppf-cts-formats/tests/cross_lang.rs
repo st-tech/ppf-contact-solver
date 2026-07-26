@@ -67,17 +67,50 @@ fn scene_fixture_decodes() {
 
     let static_anim = &payload[2].objects[0];
     let anim = static_anim.transform_animation.as_ref().unwrap();
-    assert_eq!(anim.time, vec![0.0, 1.0, 2.0]);
+    // Frame offsets on the wire (v2), not seconds.
+    assert_eq!(anim.frame_offset, vec![0.0, 12.0, 24.0]);
 
     let static_ops = &payload[2].objects[1];
     let ops = static_ops.static_ops.as_ref().unwrap();
     assert_eq!(ops.len(), 3);
     assert_eq!(ops[0].op_type, "MOVE_BY");
     assert_eq!(ops[0].delta.unwrap(), [1.0, 0.0, 0.0]);
+    assert_eq!(ops[0].frame_offset_start, 0.0);
+    assert_eq!(ops[0].frame_offset_end, 12.0);
     assert_eq!(ops[1].op_type, "SPIN");
-    assert_eq!(ops[1].angular_velocity.unwrap(), 90.0);
+    // Raw authored degrees per ANIMATION second (unscaled on the wire).
+    assert_eq!(ops[1].angular_velocity_anim.unwrap(), 90.0);
     assert_eq!(ops[2].op_type, "SCALE");
     assert_eq!(ops[2].factor.unwrap(), 0.5);
+
+    // Captured deformation: rows ARE frame offsets, no time array.
+    let static_deform = &payload[2].objects[2];
+    let deform = static_deform.static_deform_animation.as_ref().unwrap();
+    assert_eq!(deform.vert_frames.len(), 2);
+    assert_eq!(deform.vert_frames[0].len(), 3);
+    assert_eq!(deform.vert_frames[1][0][1], 0.1);
+}
+
+#[test]
+fn v1_scene_fixture_is_refused_with_version_mismatch() {
+    // Version-first decode: a v1 blob whose payload shape no longer matches
+    // must report VersionMismatch (actionable), not a CborDe field error.
+    let bytes = fixture("scene_v1.cbor");
+    let err = from_cbor::<ScenePayload>(KIND_SCENE, &bytes).unwrap_err();
+    assert!(
+        matches!(err, ppf_cts_formats::envelope::FormatError::VersionMismatch { .. }),
+        "expected VersionMismatch, got {err:?}"
+    );
+}
+
+#[test]
+fn v1_param_fixture_is_refused_with_version_mismatch() {
+    let bytes = fixture("param_v1.cbor");
+    let err = from_cbor::<ParamPayload>(KIND_PARAM, &bytes).unwrap_err();
+    assert!(
+        matches!(err, ppf_cts_formats::envelope::FormatError::VersionMismatch { .. }),
+        "expected VersionMismatch, got {err:?}"
+    );
 }
 
 #[test]
@@ -89,7 +122,8 @@ fn param_fixture_decodes() {
     approx_eq(payload.scene.dt, 1e-3);
     assert_eq!(payload.scene.gravity, [0.0, -9.8, 0.0]); // f64 in producer, exact
     assert_eq!(payload.scene.frames, 59);
-    assert_eq!(payload.scene.fps, 60);
+    approx_eq(payload.scene.fps, 12.5); // fractional: fps carries Time Scale
+    approx_eq(payload.time_scale, 0.5); // required top-level v2 key
     assert_eq!(payload.scene.friction_mode, "min");
     assert_eq!(payload.scene.csrmat_max_nnz, 10_000_000);
     approx_eq(payload.scene.inactive_momentum.unwrap(), 0.5);

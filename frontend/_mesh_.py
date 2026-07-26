@@ -67,6 +67,41 @@ def create_mobius(
     )
 
 
+def _tet_boundary(vert: np.ndarray, tet: np.ndarray) -> np.ndarray:
+    """Outward-facing surface triangles of a tetrahedral mesh.
+
+    Every tet contributes its four faces; a face that two tets share is
+    interior, so the faces occurring exactly once form the boundary. Multiplicity
+    is counted on the sorted vertex triple, which is invariant to winding.
+
+    Orientation is then resolved per face against the geometry: a face is
+    flipped when its normal points toward the tet's remaining vertex instead of
+    away from it. Deciding it this way, rather than from a fixed table of vertex
+    orderings, keeps the result correct even when the input tets are not
+    consistently wound.
+
+    Fully vectorized because the meshes this is used on reach millions of
+    tetrahedra, where a per-face Python loop dominates the load time.
+    """
+    # The face opposite vertex k is the tet with column k removed.
+    face = np.concatenate(
+        [np.delete(tet, k, axis=1) for k in range(4)], axis=0
+    )
+    opposite = np.concatenate([tet[:, k] for k in range(4)], axis=0)
+
+    _, inverse, counts = np.unique(
+        np.sort(face, axis=1), axis=0, return_inverse=True, return_counts=True
+    )
+    on_boundary = counts[inverse.ravel()] == 1
+    face, opposite = face[on_boundary], opposite[on_boundary]
+
+    a, b, c = vert[face[:, 0]], vert[face[:, 1]], vert[face[:, 2]]
+    normal = np.cross(b - a, c - a)
+    inward = np.einsum("ij,ij->i", normal, a - vert[opposite]) < 0.0
+    face[inward] = face[inward][:, ::-1]
+    return face
+
+
 def _fix_skinny_triangles(
     vert: np.ndarray, tri: np.ndarray, min_angle_deg: float = 1.0
 ) -> tuple[np.ndarray, np.ndarray]:
@@ -244,6 +279,91 @@ class MeshManager:
 
         mesh = trimesh.load_mesh(path, process=False)
         return self._from_trimesh(mesh)
+
+    def load_tet(self, path: str) -> "TetMesh":
+        """Load a tetrahedral mesh from a MEDIT/INRIA ``.mesh`` file.
+
+        Each section of the format is a keyword, a record count, then that many
+        whitespace-separated records, ending at ``End``. Every record carries a
+        trailing reference tag that is discarded here, and indices are 1-based.
+        Sections are read by their declared count off a whitespace token stream,
+        so a count may share the keyword's line and records may wrap freely.
+
+        When the file has no ``Triangles`` section the surface is recovered from
+        the tetrahedra. A face shared by two tets is interior, so the faces
+        appearing exactly once are the boundary; each is then turned to face away
+        from its own tet's opposite vertex, which makes the result independent of
+        how the input tets happen to be wound.
+
+        Args:
+            path (str): Path to the ``.mesh`` file.
+
+        Returns:
+            TetMesh: Vertices, surface triangles, and tetrahedra.
+
+        Example:
+            Load a tet mesh and register it as a volumetric asset::
+
+                V, F, T = app.mesh.load_tet("bunny.mesh")
+                app.asset.add.tet("bunny", V, F, T)
+        """
+        # Fields per record, EXCLUDING the trailing reference tag.
+        widths = {"Vertices": 3, "Edges": 2, "Triangles": 3, "Tetrahedra": 4}
+
+        # `#` runs to end of line, so comments have to go before the stream is
+        # flattened; real files use them as section banners.
+        with open(path) as handle:
+            tokens = [
+                tok
+                for line in handle
+                for tok in line.split("#", 1)[0].split()
+            ]
+
+        blocks, cursor = {}, 0
+        while cursor < len(tokens):
+            keyword = tokens[cursor]
+            cursor += 1
+            if keyword == "End":
+                break
+            if keyword in ("MeshVersionFormatted", "Dimension"):
+                cursor += 1  # single scalar operand, not a counted table
+                continue
+            if keyword not in widths:
+                # An unknown section has no declared width, so it cannot be
+                # skipped safely. Stop rather than mis-read everything after it.
+                raise ValueError(f"{path}: unsupported MEDIT section {keyword!r}")
+
+            count = int(tokens[cursor])
+            cursor += 1
+            stride = widths[keyword] + 1
+            stop = cursor + count * stride
+            if stop > len(tokens):
+                raise ValueError(f"{path}: {keyword} section is truncated")
+            # Reshape the slab and drop the reference column in one step, rather
+            # than accumulating rows.
+            slab = np.array(tokens[cursor:stop], dtype=object).reshape(count, stride)
+            blocks[keyword] = slab[:, : widths[keyword]]
+            cursor = stop
+
+        for required in ("Vertices", "Tetrahedra"):
+            if required not in blocks:
+                raise ValueError(f"{path}: no {required} section")
+
+        vert = blocks["Vertices"].astype(np.float64)
+        tet = blocks["Tetrahedra"].astype(np.int64) - 1
+
+        if "Triangles" in blocks and len(blocks["Triangles"]):
+            tri = blocks["Triangles"].astype(np.int64) - 1
+        else:
+            tri = _tet_boundary(vert, tet)
+
+        for name, block in (("Triangles", tri), ("Tetrahedra", tet)):
+            if block.size and (block.min() < 0 or block.max() >= len(vert)):
+                raise ValueError(
+                    f"{path}: {name} index out of range for {len(vert)} vertices"
+                )
+
+        return TetMesh((vert, tri.astype(np.int32), tet.astype(np.int32)))
 
     def make_cache_dir(self):
         """Create the cache directory if it does not already exist."""

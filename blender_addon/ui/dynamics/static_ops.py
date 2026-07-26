@@ -7,6 +7,8 @@
 
 import bpy  # pyright: ignore
 from bpy.types import Operator  # pyright: ignore
+
+from ...models.enum_props import EnumProperty
 from bpy.app.translations import pgettext_iface as iface_, pgettext_tip as tip_  # pyright: ignore
 
 from ...core.utils import has_transform_fcurves, redraw_all_areas
@@ -31,7 +33,7 @@ class OBJECT_OT_AddStaticOp(Operator):
     bl_options = {"REGISTER", "UNDO"}
 
     group_index: bpy.props.IntProperty(options={"HIDDEN"})  # pyright: ignore
-    op_type: bpy.props.EnumProperty(
+    op_type: EnumProperty(
         items=[
             ("MOVE_BY", "Move By", "Translate by a delta over a time range"),
             ("SPIN", "Spin", "Rotate around an axis over a time range"),

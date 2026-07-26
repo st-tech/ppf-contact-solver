@@ -86,10 +86,20 @@ pub struct SimArgs {
     /// default to 1.0 (no scaling).
     #[serde(default = "default_world_scaling")]
     pub world_scaling: f32,
+    /// Upper bound on Newton iterations per substep. The loop is otherwise
+    /// unbounded, so an over-constrained configuration spins forever instead of
+    /// failing (see `ParamSet::max_newton_steps`). 0 disables the bound.
+    /// `#[serde(default)]` keeps older `param.toml` files loadable for resume.
+    #[serde(default = "default_max_newton_steps")]
+    pub max_newton_steps: u32,
 }
 
 fn default_precond() -> String {
     "block-jacobi".to_string()
+}
+
+fn default_max_newton_steps() -> u32 {
+    2048
 }
 
 fn default_schwarz_levels() -> u32 {

@@ -95,6 +95,30 @@ pub enum CrashKind {
     Ccd,
     /// `!pcg_success` from a `StepResult`.
     Cg,
+    /// `!newton_progress` from a `StepResult`: the Newton loop hit
+    /// `max-newton-steps` without reaching an acceptable step. The usual
+    /// cause is an over-constrained configuration, e.g. a prescribed pin
+    /// driven into geometry that cannot yield: the contact line search
+    /// clamps the shared time of impact toward zero to prevent the
+    /// penetration, and that same clamp throttles everything else, so no
+    /// iteration makes progress. Without this bound the loop spins
+    /// forever (the time of impact stays above `FLT_EPSILON`, so the CCD
+    /// trap never fires).
+    NewtonStall,
+    /// `!pin_feasible` from a `StepResult`: a prescribed (fix-pinned)
+    /// vertex's swept path crosses an analytic collider (floor, sphere,
+    /// wall). Such a vertex has no degrees of freedom to yield with, so
+    /// the prescription itself is infeasible and the scene must be
+    /// re-authored (or the pin made a soft pull pin).
+    PinInfeasible,
+    /// `!contact_separated` from a `StepResult`: a contact pair begins the
+    /// timestep already inside the contact offset, i.e. two surfaces start
+    /// out touching or overlapping. The conservative CCD advances from a
+    /// separated start and cannot proceed from an overlapping one, so the
+    /// scene must start with a small clearance. Usual causes are geometry
+    /// authored in contact, a self-overlapping mesh, or a stitch / pin
+    /// pulling elements together faster than contact can resolve.
+    OverlappingStart,
     /// Intersection at t=0 detected inside `initialize()`.
     InitIntersection,
     /// GPU / host out of memory, from the fatal-exit hook.
@@ -120,6 +144,13 @@ impl CrashKind {
             CrashKind::Intersection => "Intersection detected",
             CrashKind::Ccd => "Continuous collision detection failed",
             CrashKind::Cg => "Linear solver failed to converge",
+            CrashKind::NewtonStall => {
+                "Newton solve made no progress (over-constrained configuration)"
+            }
+            CrashKind::PinInfeasible => "A pinned vertex is driven into a collider it cannot yield to",
+            CrashKind::OverlappingStart => {
+                "Two surfaces start the step already touching or overlapping"
+            }
             CrashKind::InitIntersection => "Intersection in the initial configuration",
             CrashKind::Oom => "Out of GPU or host memory",
             CrashKind::CudaDriver => "Unrecoverable CUDA runtime or driver error",
@@ -129,17 +160,36 @@ impl CrashKind {
     }
 }
 
-/// Map the three `StepResult` success booleans to a [`CrashKind`]. The
-/// solver host calls this on a failed advance, so the sub-kind is never
-/// derived by parsing a log line. Priority matches the solver's own
-/// reporting order (intersection, then CCD, then CG).
-pub fn crash_kind_from_step(ccd_ok: bool, pcg_ok: bool, isect_free: bool) -> CrashKind {
-    if !isect_free {
+/// Map the `StepResult` success booleans to a [`CrashKind`]. The solver
+/// host calls this on a failed advance, so the sub-kind is never derived
+/// by parsing a log line.
+///
+/// Priority runs from the most specific diagnosis to the least. An
+/// infeasible pin and an overlapping start are root causes, so they outrank
+/// the symptoms they would otherwise surface as (a collapsed time of impact
+/// reads as a CCD failure or a Newton stall). A Newton stall ranks last: it
+/// is the generic "no iteration made progress" outcome, and any more precise
+/// boolean explains it better.
+pub fn crash_kind_from_step(
+    ccd_ok: bool,
+    pcg_ok: bool,
+    isect_free: bool,
+    newton_progress: bool,
+    pin_feasible: bool,
+    contact_separated: bool,
+) -> CrashKind {
+    if !pin_feasible {
+        CrashKind::PinInfeasible
+    } else if !contact_separated {
+        CrashKind::OverlappingStart
+    } else if !isect_free {
         CrashKind::Intersection
     } else if !ccd_ok {
         CrashKind::Ccd
     } else if !pcg_ok {
         CrashKind::Cg
+    } else if !newton_progress {
+        CrashKind::NewtonStall
     } else {
         // success()==true yet the host chose to fail: defensive, should
         // not happen, reported coarsely rather than silently dropped.
@@ -150,7 +200,8 @@ pub fn crash_kind_from_step(ccd_ok: bool, pcg_ok: bool, isect_free: bool) -> Cra
 /// Fatal error codes set on the non-`StepResult` paths (init failure and
 /// the C++ `exit(1)` fatal-exit hook), mapped to a [`CrashKind`]. The
 /// numeric values are the contract between the C++ fatal hook and the
-/// Rust host; keep them in sync with the C++ side.
+/// Rust host; keep them in sync with the C++ side when that lands
+/// (Phase B).
 pub mod error_code {
     /// No fatal code set (the StepResult booleans are authoritative).
     pub const NONE: u8 = 0;
@@ -539,17 +590,26 @@ mod tests {
 
     #[test]
     fn crash_kind_from_step_priority() {
-        // intersection > ccd > cg, matching the solver's report order.
-        assert_eq!(
-            crash_kind_from_step(false, false, false),
-            CrashKind::Intersection
-        );
-        assert_eq!(crash_kind_from_step(false, true, true), CrashKind::Ccd);
-        assert_eq!(crash_kind_from_step(true, false, true), CrashKind::Cg);
-        assert_eq!(
-            crash_kind_from_step(true, true, true),
-            CrashKind::UnknownAbrupt
-        );
+        // Most specific diagnosis first: an infeasible pin is a root cause, so it
+        // outranks the symptoms it would otherwise surface as (a collapsed time of
+        // impact reads as a CCD failure or a Newton stall). A Newton stall ranks
+        // last: any more precise boolean explains it better.
+        // pin_infeasible > overlapping_start > intersection > ccd > cg > newton_stall.
+        let ok = |ccd, pcg, isect, newton, pin, sep| {
+            crash_kind_from_step(ccd, pcg, isect, newton, pin, sep)
+        };
+        // Everything failed at once: the pin diagnosis wins.
+        assert_eq!(ok(false, false, false, false, false, false), CrashKind::PinInfeasible);
+        // Pin feasible, contacts overlapping: the overlap outranks the rest.
+        assert_eq!(ok(false, false, false, false, true, false), CrashKind::OverlappingStart);
+        // Pin feasible, contacts separated, everything else failed: intersection wins.
+        assert_eq!(ok(false, false, false, false, true, true), CrashKind::Intersection);
+        assert_eq!(ok(false, true, true, true, true, true), CrashKind::Ccd);
+        assert_eq!(ok(true, false, true, true, true, true), CrashKind::Cg);
+        // Only the Newton bound tripped: nothing more precise to report.
+        assert_eq!(ok(true, true, true, false, true, true), CrashKind::NewtonStall);
+        // Nothing failed, yet the host chose to fail: reported coarsely.
+        assert_eq!(ok(true, true, true, true, true, true), CrashKind::UnknownAbrupt);
     }
 
     #[test]

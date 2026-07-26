@@ -29,7 +29,23 @@ def _get_group_type_by_obj(scene, obj):
 
 def _get_snap_points(scene, obj):
     if obj.type == "MESH":
-        return [obj.matrix_world @ vert.co for vert in obj.data.vertices]
+        # Evaluated (post-modifier) vertices in world space, so the snap uses the
+        # DEFORMED surface the artist sees and the solver runs on. The encoder
+        # likewise reads evaluated geometry at the start frame
+        # (evaluate_at_start_frame); reading obj.data here would snap against the
+        # undeformed bind pose, which for an armature-posed character sits far
+        # from the target (a cape rest-posed metres off the body). A deform
+        # modifier preserves vertex count and order, so these indices still match
+        # the buffer the solver ships (a topology-changing modifier is rejected
+        # upstream for dynamics objects).
+        depsgraph = bpy.context.evaluated_depsgraph_get()
+        obj_eval = obj.evaluated_get(depsgraph)
+        mesh_eval = obj_eval.to_mesh()
+        try:
+            mat = obj_eval.matrix_world
+            return [mat @ vert.co for vert in mesh_eval.vertices]
+        finally:
+            obj_eval.to_mesh_clear()
     if obj.type == "CURVE" and _get_group_type_by_obj(scene, obj) == "ROD":
         from ..core.curve_rod import sample_curve
 
@@ -73,8 +89,15 @@ def _apply_world_translation(obj, world_translation):
         obj.location += world_translation
         return
 
-    parent_inv = obj.parent.matrix_world.inverted_safe().to_3x3()
-    obj.location += parent_inv @ world_translation
+    # ``obj.location`` is the translation of ``matrix_basis``, and the object's
+    # world position maps it through ``parent.matrix_world @
+    # matrix_parent_inverse``. A world translation therefore needs the inverse
+    # of THAT combined 3x3, not the parent's alone: for a mesh parented to a
+    # scaled rig (an armature imported at 0.01, say) ``matrix_parent_inverse``
+    # carries the compensating 100x scale, so omitting it moves the object 100x
+    # too far, a 2 cm snap becomes a 2 m fling across the scene.
+    basis = (obj.parent.matrix_world @ obj.matrix_parent_inverse).to_3x3()
+    obj.location += basis.inverted_safe() @ world_translation
 
 
 def _closest_point_on_segment(point, a, b):
@@ -132,23 +155,21 @@ def _closest_source_target_pair(scene, source_obj, target_obj, target_type):
                     best_tgt = proj
         return best_src, best_tgt, best_dist
 
-    # MESH / SOLID target: closest point on the nearest triangle.
-    if target_obj.type != "MESH":
-        return None, None, float("inf")
-    triangles = list(_iter_mesh_triangles(target_obj))
-    if not triangles:
+    # MESH / SOLID target: closest point on the nearest triangle, found through
+    # a world-space BVH over the target's loop-triangles (O(N log M)). The
+    # nearest triangle by surface distance is exactly the minimum the old
+    # per-triangle scan picked.
+    bvh, _tris, _verts_world = _build_target_triangle_bvh(target_obj)
+    if bvh is None:
         return None, None, float("inf")
     for src in source_points:
-        for _tri, p0, p1, p2 in triangles:
-            result = _closest_point_on_triangle(src, p0, p1, p2)
-            if result is None:
-                continue
-            proj, _bary = result
-            dist = (src - proj).length
-            if dist < best_dist:
-                best_dist = dist
-                best_src = src
-                best_tgt = proj
+        loc, _normal, idx, dist = bvh.find_nearest(src)
+        if idx is None:
+            continue
+        if dist < best_dist:
+            best_dist = dist
+            best_src = src
+            best_tgt = loc
     return best_src, best_tgt, best_dist
 
 
@@ -194,22 +215,42 @@ def _resolve_stitch_source_target(scene, obj_a, obj_b):
     return obj_a, obj_b, "ROD"
 
 
-def _iter_mesh_triangles(obj):
-    # Triangulate via Blender's loop_triangles, the same tessellation the
-    # encoder ships to the solver (see numpy_mesh_utils.loop_triangle_indices),
-    # so a cross-stitch anchor lands on a triangle the solver actually has.
-    # Identical to the old fan split for tris/quads; only concave / non-planar
-    # N-gons differ, where the fan could place anchors on triangles outside
-    # the real face.
+def _build_target_triangle_bvh(obj):
+    """World-space BVH over a target mesh's loop-triangles, with parallel
+    ``(tris, verts_world)`` tables.
+
+    Returns ``(bvh, tris, verts_world)``, or ``(None, None, None)`` when the
+    target is not a mesh or has no triangles. Geometry is the EVALUATED
+    (post-modifier) mesh in world space, matching ``_get_snap_points`` and the
+    encoder: anchors land on the deformed target the solver runs on, not the
+    bind pose. ``tris`` is the ``(M, 3)`` list of mesh-vertex indices from
+    Blender's loop-triangle tessellation (via
+    ``numpy_mesh_utils.loop_triangle_indices``, the same split the encoder
+    ships), so a ``bvh.find_nearest`` hit indexes the exact triangle the solver
+    has. A deform modifier preserves vertex count/order, so these indices stay
+    aligned with the solver's buffer.
+
+    Building the tree once and querying it is O(N log M). The previous path
+    compared every source point against every target triangle (O(N*M)) and
+    froze the UI on dense targets, e.g. a cape against a 50k-triangle collider.
+    """
+    from mathutils.bvhtree import BVHTree
     from ..core.numpy_mesh_utils import loop_triangle_indices
-    mesh = obj.data
-    mat = obj.matrix_world
-    for row in loop_triangle_indices(mesh):
-        tri = [int(row[0]), int(row[1]), int(row[2])]
-        p0 = mat @ mesh.vertices[tri[0]].co
-        p1 = mat @ mesh.vertices[tri[1]].co
-        p2 = mat @ mesh.vertices[tri[2]].co
-        yield tri, p0, p1, p2
+    if obj.type != "MESH":
+        return None, None, None
+    depsgraph = bpy.context.evaluated_depsgraph_get()
+    obj_eval = obj.evaluated_get(depsgraph)
+    mesh_eval = obj_eval.to_mesh()
+    try:
+        mat = obj_eval.matrix_world
+        verts_world = [mat @ v.co for v in mesh_eval.vertices]
+        tris = [[int(r[0]), int(r[1]), int(r[2])] for r in loop_triangle_indices(mesh_eval)]
+    finally:
+        obj_eval.to_mesh_clear()
+    if not tris:
+        return None, None, None
+    bvh = BVHTree.FromPolygons(verts_world, tris, all_triangles=True)
+    return bvh, tris, verts_world
 
 
 def _closest_point_on_triangle(point, p0, p1, p2):
@@ -323,36 +364,37 @@ def _build_explicit_cross_stitch(scene, obj_a, obj_b, threshold):
     if target_obj.type != "MESH":
         return None
 
+    # World-space BVH over the target loop-triangles: one nearest-triangle
+    # query per source point (O(N log M)) replaces the per-source scan over
+    # every target triangle that froze the UI on dense targets. The BVH nearest
+    # triangle by surface distance is the same minimum the brute force picked;
+    # _closest_point_on_triangle then yields the barycentric anchor and the
+    # projected target point exactly as before.
+    bvh, tris, verts_world = _build_target_triangle_bvh(target_obj)
+    if bvh is None:
+        return None
+
     ind = []
     w = []
     target_positions = []
     for si, source_point in enumerate(source_points):
-        best_dist = float("inf")
-        best_tri = None
-        best_bary = None
-        best_proj = None
-        for tri, p0, p1, p2 in _iter_mesh_triangles(target_obj):
-            result = _closest_point_on_triangle(source_point, p0, p1, p2)
-            if result is None:
-                continue
-            proj, bary = result
-            dist = (source_point - proj).length
-            if dist < best_dist:
-                best_dist = dist
-                best_tri = tri
-                best_bary = bary
-                best_proj = proj
-        if best_tri is None or best_bary is None or best_dist > threshold:
+        _loc, _normal, idx, dist = bvh.find_nearest(source_point, threshold)
+        if idx is None or dist > threshold:
             continue
+        tri = tris[idx]
+        result = _closest_point_on_triangle(
+            source_point, verts_world[tri[0]], verts_world[tri[1]], verts_world[tri[2]],
+        )
+        if result is None:
+            continue
+        proj, bary = result
         # 6-wide baseline: degenerate source [si, si, si] / [1, 0, 0] and
         # the snap-time target barycentric on the Blender mesh. A SOLID
         # source/target side is re-projected onto its tet surface in the
         # PyO3 decoder (using source_points / target_points below).
-        ind.append([si, si, si, int(best_tri[0]), int(best_tri[1]), int(best_tri[2])])
-        w.append([1.0, 0.0, 0.0, float(best_bary[0]), float(best_bary[1]), float(best_bary[2])])
-        target_positions.append(
-            [float(best_proj.x), float(best_proj.y), float(best_proj.z)]
-        )
+        ind.append([si, si, si, int(tri[0]), int(tri[1]), int(tri[2])])
+        w.append([1.0, 0.0, 0.0, float(bary[0]), float(bary[1]), float(bary[2])])
+        target_positions.append([float(proj.x), float(proj.y), float(proj.z)])
 
     if not ind:
         return None

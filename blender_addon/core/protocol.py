@@ -7,77 +7,23 @@
 
 import json
 
-# Must match crates/ppf-cts-server/src/lib.rs:PROTOCOL_VERSION.
-# A mismatch trips transitions.py's strict-equality protocol check.
-#
-# BUMP THIS whenever the data / param payload schema OR the
-# addon-encoder / frontend-decoder contract changes. The handshake is
-# the only thing that catches an addon paired with a server whose
-# frontend decoder disagrees about payload shape; an un-bumped version
-# there silently mis-decodes instead of erroring.
-#
-# 0.09: additive scene / dyn-param fields for the per-object bending
-# reference rest shape and the angular velocity overwrite. ObjectInfo
-# gains an optional bend_rest_vert (guarded by a has_bend_rest_vert
-# count) carrying per-object reference rest positions for hinge rest
-# angles, and the dyn-param table gains angular_velocity:<dmap> /
-# angular_velocity_world:<dmap> keyframe streams (principal-axis spins
-# resolved from live geometry, and fixed world-axis spins). The new
-# fields are optional, so an old decoder silently drops the bending
-# reference and the spins instead of erroring; the handshake forces the
-# matching pair.
-#
-# 0.08: co-located transfer. When the addon and server share a
-# machine (local / win_native backends), the addon writes
-# data.pickle / param.pickle straight to the project root on disk and
-# then sends a lightweight upload_notify JSON request (carrying the
-# addon-minted upload_id, the data / param hashes, and has_data /
-# has_param) instead of streaming the payloads through the socket via
-# upload_atomic. The server stamps the supplied id, then dispatches
-# the same UploadLanded event the streamed path does. Set
-# PPF_FORCE_TCP_TRANSFER=1 to keep local / win_native on the streamed
-# path (the test rig does this so every scenario but the dedicated
-# direct-disk one still exercises the wire handlers). An old server
-# paired with a new addon rejects upload_notify as an unknown
-# request; both directions are caught by this handshake.
-#
-# 0.07: moving STATIC colliders join the output vertex map. The
-# pin-shells produced by transform_animation (Case 1) and
-# static_deform_animation (Case 3) are no longer flagged
-# `_exclude_from_output`, so their simulator-projected per-frame
-# positions stream back as a regular PC2 + ContactSolverCache
-# modifier on the static object. An old client paired with a new
-# server would receive vertex frames for static UUIDs its decoder
-# wasn't expecting; a new client paired with an old server would
-# silently keep displaying the input animation while the cloth
-# resolves against the soft-pinned positions.
-#
-# 0.06: deforming STATIC mesh colliders. A STATIC object whose
-# modifier stack deforms vertices (Armature, MeshDeform, Lattice,
-# shape keys, etc.) can now carry a static_deform_animation payload
-# alongside vert / transform: a per-frame absolute vertex buffer in
-# solver world space, captured from Blender's depsgraph via the new
-# Capture Deformation operator. The decoder builds a zero-stiffness
-# pin shell whose every vertex is driven by MoveByOperation segments
-# derived from consecutive frames, just like the per-vertex pin
-# animation in 0.05 but spanning the whole mesh. Mutually exclusive
-# with transform_animation and static_ops; an old decoder would
-# ignore the new field and play the rest-pose mesh.
-#
-# 0.05: keyframed pin animation. param.pin_config[uuid] stays
-# {vertex_index: PinData}, but each PinData now carries its own
-# single-entry pin_anim ({that_vertex: PinAnim}) and the frontend
-# decoder builds genuine per-vertex MoveByOperation deltas from it
-# instead of broadcasting one vertex's track. An old decoder would
-# treat the new payload as a rigid translation.
-#
-# 0.04: TCMD requests carry a 4-byte big-endian length prefix between
-# the b"TCMD" header and the payload, replacing the prior wire that
-# relied on shutdown(SHUT_WR) as the end-of-input signal. Windows
-# tokio did not deliver that half-close to the server's AsyncRead, so
-# the server hung in its read loop and connections piled up in
-# FIN_WAIT_2 until the server stopped responding entirely.
-PROTOCOL_VERSION = "0.11"
+# The wire PROTOCOL version is single-sourced in
+# blender_addon/protocol_version.toml (read here at runtime, baked into the
+# Rust server by crates/ppf-cts-server/build.rs so both separately-shipped
+# halves read the SAME number). See that file for the changelog and bump
+# policy. transitions.py does a strict-equality check against the server's
+# advertised value.
+def _read_protocol_version() -> str:
+    import tomllib
+    from pathlib import Path
+
+    # protocol.py lives in blender_addon/core/, so the file is one level up.
+    path = Path(__file__).resolve().parent.parent / "protocol_version.toml"
+    with path.open("rb") as f:
+        return str(tomllib.load(f)["protocol"])
+
+
+PROTOCOL_VERSION = _read_protocol_version()
 HEADER_TEXT_CMD = b"TCMD"
 HEADER_JSON_DATA = b"JSON"
 DEFAULT_CHUNK_SIZE = 32 * 1024

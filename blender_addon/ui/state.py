@@ -11,7 +11,6 @@ import bpy  # pyright: ignore
 from bpy.props import (  # pyright: ignore
     BoolProperty,
     CollectionProperty,
-    EnumProperty,
     FloatProperty,
     FloatVectorProperty,
     IntProperty,
@@ -21,6 +20,7 @@ from bpy.types import PropertyGroup  # pyright: ignore
 from bpy.app.translations import pgettext_iface as iface_, pgettext_tip as tip_  # pyright: ignore
 
 from ..models.defaults import DEFAULT_MCP_PORT, DEFAULT_RELOAD_PORT, DEFAULT_SERVER_PORT
+from ..models.enum_props import EnumProperty, dynamic_enum_items
 # `decode_vertex_group_identifier`, `assign_display_indices`,
 # `find_available_group_slot` are imported here because ui.dynamics
 # submodules import them via ``from ..state import ...``.
@@ -52,6 +52,7 @@ from .state_types import (
 from .object_group import ObjectGroup
 
 
+@dynamic_enum_items
 def _get_profile_items(self, context):
     """Dynamic callback for profile_selection EnumProperty."""
     from ..core.profile import get_profile_names
@@ -59,9 +60,7 @@ def _get_profile_items(self, context):
     path = self.profile_path
     if not path:
         return [("NONE", iface_("(No Profile)"), "")]
-
-    abs_path = bpy.path.abspath(path)
-    names = get_profile_names(abs_path)
+    names = get_profile_names(bpy.path.abspath(path))
     if not names:
         return [("NONE", iface_("(No Profile)"), "")]
     return [(n, n, tip_("Profile: {name}").format(name=n)) for n in names]
@@ -154,8 +153,7 @@ class SSHState(PropertyGroup):
     )  # pyright: ignore
 
 
-_snap_objects_cache = []
-
+@dynamic_enum_items
 def get_snap_objects(self=None, context=None):
     """Get all objects supported by the snap tool.
 
@@ -166,7 +164,6 @@ def get_snap_objects(self=None, context=None):
     """
     from ..core.uuid_registry import get_object_uuid
 
-    global _snap_objects_cache
     items = [("NONE", iface_("None"), tip_("No object selected"))]
     rod_curve_uuids = set()
     if context is not None:
@@ -184,10 +181,10 @@ def get_snap_objects(self=None, context=None):
             items.append((uid, obj.name, tip_("Mesh object: {name}").format(name=obj.name)))
         elif obj.type == "CURVE" and uid in rod_curve_uuids:
             items.append((uid, obj.name, tip_("Curve object: {name}").format(name=obj.name)))
-    _snap_objects_cache = items
     return items
 
 
+@dynamic_enum_items
 def _get_scene_profile_items(self, context):
     """Dynamic callback for scene_profile_selection EnumProperty."""
     from ..core.profile import get_profile_names
@@ -195,9 +192,7 @@ def _get_scene_profile_items(self, context):
     path = self.scene_profile_path
     if not path:
         return [("NONE", iface_("(No Profile)"), "")]
-
-    abs_path = bpy.path.abspath(path)
-    names = get_profile_names(abs_path)
+    names = get_profile_names(bpy.path.abspath(path))
     if not names:
         return [("NONE", iface_("(No Profile)"), "")]
     return [(n, n, tip_("Scene profile: {name}").format(name=n)) for n in names]
@@ -436,13 +431,36 @@ class State(PropertyGroup):
     def convert_save_checkpoint_frames_to_remote(self) -> list[int]:
         """Sorted, de-duplicated solver 0-based frames for the encoder.
 
-        The UIList stores Blender 1-based frames; the solver counts frames
-        from 0 (Blender N -> solver N-1), so subtract one. Solver frame 0
-        is the rest pose written before the step loop and is never a
-        checkpoint, so frames that map to a negative index are dropped.
+        The UIList stores Blender frames; the solver counts frames from 0 at
+        the resolved starting frame (Blender N -> solver N - start). Solver
+        frame 0 is the rest pose written before the step loop and is never a
+        checkpoint, so frames at or before the starting frame are dropped.
         """
-        remote = {int(item.frame) - 1 for item in self.save_checkpoint_frames}
+        # Local import: ``core.encoder`` pulls in the encoders, which read
+        # this module's PropertyGroups.
+        from ..core.encoder import resolve_start_frame
+        start = resolve_start_frame(self)
+        remote = {int(item.frame) - start for item in self.save_checkpoint_frames}
         return sorted(f for f in remote if f > 0)
+    frame_start: IntProperty(
+        name="Starting Frame",
+        default=1,
+        min=0,
+        description=(
+            "Blender frame the simulation's first output frame lands on, so a "
+            "solve can be placed after a hand-animated lead-in. Simulated time "
+            "zero is this frame. Ignored while Take Starting Frame from Scene "
+            "is on"
+        ),
+    )  # pyright: ignore
+    use_scene_frame_start: BoolProperty(  # pyright: ignore
+        name="Take Starting Frame from Scene",
+        default=False,
+        description=(
+            "Start the simulation at the Blender scene's start frame instead of "
+            "the Starting Frame field, so the solve tracks the scene timeline"
+        ),
+    )
     frame_count: IntProperty(
         name="Frame Count",
         default=180,
@@ -452,13 +470,41 @@ class State(PropertyGroup):
     frame_rate: IntProperty(
         name="FPS",
         default=60,
-        min=24,
-        description="Frame rate for simulation",
+        # Low rates (1, 2, 6, ...) are legitimate: each frame simply covers
+        # more simulated time, and the solver already runs fractional rates
+        # below 24 under Time Scale (substep dt is clamped to a frame
+        # fraction solver-side, so a long frame just takes more substeps).
+        min=1,
+        soft_max=240,
+        description=(
+            "Frame rate the simulation runs at: how much simulated time one "
+            "frame covers. Ignored while Take FPS from Scene is on"
+        ),
     )  # pyright: ignore
-    use_frame_rate_in_output: BoolProperty(  # pyright: ignore
-        name="Use Frame Rate in Output",
+    use_scene_fps: BoolProperty(  # pyright: ignore
+        name="Take FPS from Scene",
         default=False,
-        description="Use frame rate in output. If unchecked, FPS field is shown.",
+        description=(
+            "Run the simulation at the Blender scene's frame rate instead of "
+            "the FPS field, so simulated time matches the scene timeline"
+        ),
+    )
+    time_scale: FloatProperty(  # pyright: ignore
+        name="Time Scale",
+        default=1.0,
+        min=0.01,
+        max=10.0,
+        soft_min=0.1,
+        soft_max=1.0,
+        description=(
+            "Playback speed of the Blender animation in simulated time. "
+            "1.0 runs the animation in real time; 0.5 re-interprets it at "
+            "half speed, so fast keyframed motion (a combat move driving a "
+            "collider) covers the same path over twice the simulated time "
+            "and the cloth has time to respond. Gravity and materials stay "
+            "physical, so cloth settles more per frame at lower values. "
+            "Solve cost grows as 1 / Time Scale"
+        ),
     )
     show_advanced_parameters: BoolProperty(
         name="Advanced Params",

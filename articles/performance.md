@@ -1,37 +1,41 @@
 ## 🚀 How We Made the Solver 2 to 3 Times Faster
 
-The solver is now 2 to 3 times faster than the previous version (commit 97ac227, May 21, 2026). Running the same scenes on the same machine, every scene got faster: on average about **2.9x per solver step** and **2.2x per finished frame**, and up to **5.8x** on the lightest scenes.
+The solver is now 2 to 3 times faster per finished frame than the previous
+version (commit 97ac227, May 21, 2026). Running the same scenes on the same
+machine, every scene got faster: on average about **2.9x per finished frame**,
+with a median of **2.2x**, and up to **5.4x** on the scenes that benefit most.
 
 ### 🧪 Method
 
 - Same scenes and settings for both versions; only the solver differed.
 - One NVIDIA L40S, scenes run one at a time so nothing competed for the card.
-- "Per step" is one internal calculation. "Per frame" is one frame of the animation.
+- "Per frame" is the wall-clock time to finish one frame of the animation. This
+  is the number that matters, because it is what you actually wait for.
 
 ### 📊 Results
 
-| Scene | Faster per step | Faster per frame |
-|:--|:--:|:--:|
-| [cards](../examples/cards.ipynb) | 5.80x | 5.65x |
-| [yarn](../examples/yarn.ipynb) | 4.19x | 2.41x |
-| [belt](../examples/belt.ipynb) | 4.00x | 3.69x |
-| [friction](../examples/friction.ipynb) | 3.98x | 3.70x |
-| [domino](../examples/domino.ipynb) | 3.45x | 3.06x |
-| [trampoline](../examples/trampoline.ipynb) | 3.38x | 2.63x |
-| [fitting](../examples/fitting.ipynb) | 3.21x | 2.08x |
-| [woven](../examples/woven.ipynb) | 3.16x | 1.96x |
-| [stack](../examples/stack.ipynb) | 3.13x | 2.51x |
-| [noodle](../examples/noodle.ipynb) | 3.01x | 1.67x |
-| [codim](../examples/codim.ipynb) | 2.89x | 1.92x |
-| [drape](../examples/drape.ipynb) | 2.82x | 2.75x |
-| [hang](../examples/hang.ipynb) | 2.72x | 1.67x |
-| [roller](../examples/roller.ipynb) | 2.42x | 2.40x |
-| [fishingknot](../examples/fishingknot.ipynb) | 2.41x | 1.44x |
-| [trapped](../examples/trapped.ipynb) | 2.32x | 1.92x |
-| [five-twist](../examples/five-twist.ipynb) | 2.32x | 1.97x |
-| [ribbon](../examples/ribbon.ipynb) | 2.29x | 1.51x |
-| [twist](../examples/twist.ipynb) | 2.27x | 2.11x |
-| [curtain](../examples/curtain.ipynb) | 2.20x | 1.10x |
-| [needle](../examples/needle.ipynb) | 2.02x | 1.85x |
+| Scene | Faster per frame |
+|:--|:--:|
+| [trampoline](../examples/trampoline.ipynb) | 5.40x |
+| [drape](../examples/drape.ipynb) | 5.16x |
+| [cards](../examples/cards.ipynb) | 4.82x |
+| [friction](../examples/friction.ipynb) | 3.75x |
+| [belt](../examples/belt.ipynb) | 3.65x |
+| [hang](../examples/hang.ipynb) | 3.62x |
+| [yarn](../examples/yarn.ipynb) | 3.23x |
+| [domino](../examples/domino.ipynb) | 3.17x |
+| [roller](../examples/roller.ipynb) | 2.55x |
+| [woven](../examples/woven.ipynb) | 2.50x |
+| [fishingknot](../examples/fishingknot.ipynb) | 2.23x |
+| [stack](../examples/stack.ipynb) | 2.23x |
+| [needle](../examples/needle.ipynb) | 2.14x |
+| [curtain](../examples/curtain.ipynb) | 2.13x |
+| [fitting](../examples/fitting.ipynb) | 2.11x |
+| [ribbon](../examples/ribbon.ipynb) | 2.06x |
+| [twist](../examples/twist.ipynb) | 2.03x |
+| [five-twist](../examples/five-twist.ipynb) | 2.01x |
+| [trapped](../examples/trapped.ipynb) | 1.94x |
+| [noodle](../examples/noodle.ipynb) | 1.91x |
+| [codim](../examples/codim.ipynb) | 1.73x |
 
-Average: about 2.9x per step, 2.2x per frame. Nothing got slower.
+Average: about 2.9x per finished frame, with a median of 2.2x. Nothing got slower.

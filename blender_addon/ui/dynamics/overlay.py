@@ -33,6 +33,16 @@ overlay_handler = None
 _overlay_cache = {
     "version": -1,
     "frame": -1,
+    # Per-builder cache keys for the three scene-topology builders (rod, pin,
+    # snap). Each promotes its OWN key, so one builder cannot force the other
+    # two to rebuild every redraw. See ``_rebuild_cached`` for why a FAILING
+    # builder promotes its key too.
+    "rod_key": None,
+    "pin_key": None,
+    "snap_key": None,
+    # builder name -> repr of the last reported exception, so a persistent
+    # failure is reported once rather than once per frame.
+    "failures": {},
     # Keys used by view-distance-dependent builders. Stored separately so a
     # zoom-only change only rebuilds the view-scaled batches, not the
     # scene-topology batches.
@@ -65,6 +75,57 @@ _OP_POINT_SIZE = 8.0
 _VIOLATION_POINT_SIZE = 16.0
 
 _direction_manager = DirectionPreviewManager()
+
+
+def _rebuild_cached(name, key, build, *, force=False):
+    """Run one scene-topology overlay builder at most once per *key*.
+
+    Returns True when *build* ran and succeeded on this call.
+
+    A builder that RAISES still promotes its key, which is the load-bearing
+    part. Re-running a builder over unchanged scene state cannot change the
+    outcome, but it does re-pay the full build cost, and these builders are
+    expensive: ``_build_pin_data`` resolves pin vertex groups through
+    ``get_vertices_in_group``, an O(verts x groups) walk that costs a few
+    hundred milliseconds on a rigged character (70 vertex groups over 6.4k
+    vertices). Retrying it on every viewport draw is therefore a permanent
+    frame cost for as long as the failing condition holds, and since that
+    condition typically lives in the saved scene, reopening the file does not
+    clear it. A builder is retried only when the scene state changes, the one
+    circumstance under which the outcome can differ.
+
+    The condition to expect is an edit that changes a mesh's vertex count.
+    Blender maintains its own vertex groups across such an edit, so the pin
+    groups stay valid, but the addon's derived per-vertex caches do not: a PC2
+    display cache and a captured STATIC deformation are both sized for the old
+    vertex count, and the pin builder reads them.
+
+    Each failure is reported ONCE per distinct (builder, exception) rather than
+    once per frame, so a persistent fault is visible without flooding the
+    console.
+    """
+    key_name = name + "_key"
+    if not force and _overlay_cache[key_name] == key:
+        return False
+    try:
+        build()
+    except Exception as exc:
+        signature = repr(exc)
+        if _overlay_cache["failures"].get(name) != signature:
+            _overlay_cache["failures"][name] = signature
+            print(
+                f"[ppf] overlay builder '{name}' failed: {signature}. "
+                f"Skipping it until the scene changes, so it cannot rebuild "
+                f"every redraw. If this followed an edit that changed a "
+                f"vertex count, that object's display cache and captured "
+                f"deformation are sized for the old count: clear them and "
+                f"re-run Transfer."
+            )
+        _overlay_cache[key_name] = key
+        return False
+    _overlay_cache["failures"].pop(name, None)
+    _overlay_cache[key_name] = key
+    return True
 
 
 def draw_overlay_callback():
@@ -151,10 +212,15 @@ def draw_overlay_callback():
             )
     except Exception:
         any_pin_obj_in_edit = False
+    # One key shared by the three scene-topology builders, compared per
+    # builder so a failure in one does not drag the others into a per-redraw
+    # rebuild (see ``_rebuild_cached``).
+    scene_key = (version, frame)
     rod_needs_rebuild = (
-        version != _overlay_cache["version"]
-        or frame != _overlay_cache["frame"]
-        or any_pin_obj_in_edit
+        any_pin_obj_in_edit
+        or _overlay_cache["rod_key"] != scene_key
+        or _overlay_cache["pin_key"] != scene_key
+        or _overlay_cache["snap_key"] != scene_key
     )
     # View-scaled batches also need to refresh on zoom.
     view_needs_rebuild = (
@@ -172,34 +238,32 @@ def draw_overlay_callback():
     if rod_needs_rebuild:
         if depsgraph is None:
             depsgraph = context.evaluated_depsgraph_get()
-        rebuilt_rod = False
-        rebuilt_pin = False
-        rebuilt_snap = False
-        try:
+
+        def _rebuild_rod():
             _overlay_cache["rod_batches"] = _build_rod_batches(scene, depsgraph)
-            rebuilt_rod = True
-        except Exception as exc:
-            print(f"[ppf] _build_rod_batches failed: {exc!r}")
-        try:
+
+        def _rebuild_pin():
             _overlay_cache["pin_data"] = _build_pin_data(scene, depsgraph)
-            rebuilt_pin = True
-        except Exception as exc:
-            print(f"[ppf] _build_pin_data failed: {exc!r}")
-        # Snap batches: reads PC2 files directly (no depsgraph), independent
-        # of view_distance — gated on the same scene-topology key.
-        try:
+
+        def _rebuild_snap():
+            # Snap batches: prefer the PC2 cache, else sample the evaluated
+            # mesh (via depsgraph) so stitch endpoints track modifier
+            # deformation instead of drawing at the rest/bind pose.
             (
                 _overlay_cache["snap_batches"],
                 _overlay_cache["snap_points"],
-            ) = _build_snap_batches(scene)
-            rebuilt_snap = True
-        except Exception as exc:
-            print(f"[ppf] _build_snap_batches failed: {exc!r}")
-        # Only promote the cache key if all builds succeeded; otherwise we
-        # want to retry next frame rather than freezing a stale/empty result.
-        if rebuilt_rod and rebuilt_pin and rebuilt_snap:
-            _overlay_cache["version"] = version
-            _overlay_cache["frame"] = frame
+            ) = _build_snap_batches(scene, depsgraph)
+
+        # Each builder promotes its own key, so a failure in one does not force
+        # the other two to rebuild on every redraw. An edit-mode drag forces
+        # all three, since BMesh positions do not bump overlay_version.
+        _rebuild_cached("rod", scene_key, _rebuild_rod, force=any_pin_obj_in_edit)
+        _rebuild_cached("pin", scene_key, _rebuild_pin, force=any_pin_obj_in_edit)
+        _rebuild_cached("snap", scene_key, _rebuild_snap, force=any_pin_obj_in_edit)
+
+        # Kept in step for any reader that inspects the legacy shared key.
+        _overlay_cache["version"] = version
+        _overlay_cache["frame"] = frame
 
     rod_batches = _overlay_cache["rod_batches"]
     snap_batches = _overlay_cache["snap_batches"]

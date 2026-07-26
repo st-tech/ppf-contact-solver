@@ -15,7 +15,7 @@
 // same argument validation and stores its own `PinData` for the fields
 // it carries: `index`, `transition`, `unpin_time`, `pull_strength`,
 // `pin_group_id`, and `operations`. The Python-only fields that the
-// Rust `PinData` has no counterpart for (`pin_stiffness`,
+// Rust `PinData` has no counterpart for (
 // `pull_weights`, `rest_shape_track`) are validated and stored on the
 // Python side alone, so they are NOT mirrored here. The parity test exercises the public surface and
 // confirms both stores agree on the mirrored field set after a builder
@@ -127,7 +127,7 @@ fn coerce_move_by_delta(
         return Ok(MoveByDelta::PerVertex(owned));
     }
     // Fallback: a python list-of-lists.
-    if let Ok(list) = delta.downcast::<PyList>() {
+    if let Ok(list) = delta.cast::<PyList>() {
         let mut rows: Vec<[f64; 3]> = Vec::with_capacity(list.len());
         for item in list.iter() {
             let row: Vec<f64> = item.extract().map_err(|_| {
@@ -184,7 +184,7 @@ fn coerce_move_to_target(
         }
         return Ok(arr2.as_array().to_owned());
     }
-    if let Ok(list) = target.downcast::<PyList>() {
+    if let Ok(list) = target.cast::<PyList>() {
         let mut rows: Vec<[f64; 3]> = Vec::with_capacity(list.len());
         for item in list.iter() {
             let row: Vec<f64> = item.extract().map_err(|_| {
@@ -498,7 +498,7 @@ impl PinHolder {
         let allowed = ["LINEAR", "BEZIER", "CONSTANT"];
         for i in 0..segments.len() {
             let item = segments.get_item(i)?;
-            let dict = item.downcast::<PyDict>().map_err(|_| {
+            let dict = item.cast::<PyDict>().map_err(|_| {
                 PyValueError::new_err("transform_keyframes segment must be a dict")
             })?;
             let interp_str: String = match dict.get_item("interpolation")? {
@@ -646,7 +646,7 @@ impl PinHolder {
         &self,
         py: Python<'py>,
         i: usize,
-    ) -> PyResult<(String, PyObject)> {
+    ) -> PyResult<(String, Py<PyAny>)> {
         let op = self.inner.operations.get(i).ok_or_else(|| {
             PyException::new_err(format!("op index {i} out of range"))
         })?;

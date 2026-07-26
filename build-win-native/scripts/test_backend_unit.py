@@ -15,19 +15,21 @@ behaviors of WinNativeBackend:
 
 Designed to work under either project layout:
 
-  - **Dev layout**  (``C:\\dev``): has ``build-win-native\\python\\…``.
+  - **Source-tree layout** (``C:\\ppf-contact-solver``): has
+    ``build-win-native\\python\\…``.
   - **Bundle layout** (``<dist>``): has ``python\\…`` directly at the root.
 
-Run over SSH against the Windows box:
+Run over SSH against the Windows box, writing ``<root>`` for the checkout
+(``C:\\ppf-contact-solver`` below):
 
-    # Dev layout, embedded Python
-    C:\\dev\\build-win-native\\python\\python.exe \\
-        C:\\dev\\build-win-native\\scripts\\test_backend_unit.py  C:\\dev  9091
+    # Source-tree layout, embedded Python
+    <root>\\build-win-native\\python\\python.exe \\
+        <root>\\build-win-native\\scripts\\test_backend_unit.py <root> 9091
 
     # Bundle layout, bundled Python
-    C:\\dev\\build-win-native\\dist\\python\\python.exe \\
-        C:\\dev\\build-win-native\\scripts\\test_backend_unit.py \\
-        C:\\dev\\build-win-native\\dist  9092
+    <root>\\build-win-native\\dist\\python\\python.exe \\
+        <root>\\build-win-native\\scripts\\test_backend_unit.py \\
+        <root>\\build-win-native\\dist  9092
 
 Argv: ``<root>  [port]`` — ``root`` must contain ``blender_addon/`` and
 ``server.py``. Both layouts satisfy that.

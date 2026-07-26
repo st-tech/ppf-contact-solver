@@ -30,6 +30,7 @@
 #include "../utility/dispatcher.hpp"
 #include "../utility/utility.hpp"
 #include "cuda_utils.hpp"
+#include "dump_linsys.hpp"
 #include "mem.hpp"
 #include <cassert>
 #include <cstdlib>
@@ -272,6 +273,13 @@ StepResult advance() {
     result.pcg_success = true;
     result.ccd_success = true;
     result.intersection_free = true;
+    result.newton_progress = true;
+    result.pin_feasible = true;
+    result.contact_separated = true;
+    // Clear the CCD "starts overlapping" flag once for this advance; every
+    // contact line search below sets it if a pair begins the step inside the
+    // contact offset, and the checks after each line search read it.
+    contact::clear_ccd_overlap();
 
     DataSet &host_data = host_dataset;
     DataSet data = dev_dataset;
@@ -480,6 +488,40 @@ StepResult advance() {
         } DISPATCH_END;
     };
 
+    // Walk every kinematic fix pin back to the fraction of its scheduled step
+    // it is actually going to travel. The host aims a step at some end time and
+    // writes each pin's pose there into FixPair::position, but the CCD line
+    // search may only get `toi` of the way through the step, and the clock is
+    // then advanced by that same fraction (`dt *= toi_advanced` below). A pin
+    // left at the full step's pose would therefore sit where the animation puts
+    // it at a time the simulation never reached: the collider outruns its own
+    // animation for the rest of the step and snaps back on the next one. That
+    // shows up as a jitter on the collider and, worse, as a spurious contact
+    // impulse handed to whatever it is touching. (An exact-Dirichlet fix pin
+    // makes this sharper than the old penalty, not softer: its DOF are
+    // eliminated, so it lands on the full-step pose exactly.)
+    //
+    // A pin's path bends only where its keyframes sit, which is far apart
+    // relative to a step, so over one step it is straight to within O(dt^2) and
+    // the pose at fraction `toi` is `position - (1 - toi) * step_delta`. Static
+    // pins hold a zero delta and do not move. Rewrites the constraint in place:
+    // the host uploads a fresh one every step, and this runs once per step.
+    auto rewind_kinematic_fix = [&](double toi) {
+        unsigned fix_count = data.constraint.fix.size;
+        if (toi >= 1.0 || fix_count == 0) {
+            return;
+        }
+        float back = 1.0f - static_cast<float>(toi);
+        Vec<FixPair> fix_vec = data.constraint.fix;
+        DISPATCH_START(fix_count)
+        [fix_vec, back] __device__(unsigned i) mutable {
+            FixPair &fix = fix_vec[i];
+            if (fix.kinematic) {
+                fix.position = fix.position - back * fix.step_delta;
+            }
+        } DISPATCH_END;
+    };
+
     compute_target(dt);
 
     kernels::copy(data.vertex.curr.data, eval_x.data, eval_x.size);
@@ -487,11 +529,78 @@ StepResult advance() {
     double toi_advanced = 0.0f;
     unsigned step(1);
     bool final_step(false);
+    // Last line-search fraction, hoisted out of the loop purely so the
+    // Newton-stall diagnostic can report it (`toi` itself is loop-scoped).
+    float last_toi = 1.0f;
 
     // Allocate buffers for Newton loop (auto-release when function exits)
     auto force = pool.get<float>(3 * vertex_count);
     auto dx = pool.get<float>(3 * vertex_count);
     auto diag_hess = pool.get<Mat3x3f>(vertex_count);
+
+    // THE PIN MODEL. A pin is one of exactly two things, and which one is decided
+    // by its pull weight, not by a stiffness scalar in between:
+    //
+    //   pull weight > 0  ->  PULL pin: a soft spring (f = w(y-x), H = wI). It
+    //                        yields to contact and elasticity. This is the only
+    //                        way to hold a vertex compliantly.
+    //   pull weight == 0 ->  FIX pin: an exact DIRICHLET BOUNDARY CONDITION. Its
+    //                        DOF are eliminated from the Newton system below, so
+    //                        it tracks its prescribed position to round-off and
+    //                        never yields.
+    //
+    // A fix pin used to be a barrier PENALTY (stiff_k = tmp + mass/gap^2, scaled
+    // by a per-pin stiffness), i.e. a stiff spring. That was wrong twice over.
+    // It let cloth contact shove a moving collider off its keyframe (a visible
+    // jiggle), and, worse, a fully-pinned element is excluded from collision CCD
+    // (`either_dyn` is false when neither side is free), so a pinned patch driven
+    // into a static collider TUNNELED IT SILENTLY. A prescribed vertex is not a
+    // compromise between contact and animation: the user gave it its entire
+    // trajectory. Imposing it exactly is both more faithful and strictly safer
+    // (the same scene now reports a loud NewtonStall instead of penetrating).
+    //
+    // THE ONE EXCEPTION: a vertex inside a PDRD rigid body owns no per-vertex
+    // DOF. The solve is reduced through the rigid Jacobian and `launch_rigidify`
+    // refits the body afterward, so a per-vertex Dirichlet row is not
+    // representable there. Such an anchor keeps the barrier, and it is the only
+    // penalty pin left in the codebase. (Partial-pinned SOLIDs are excluded for
+    // free: the decoder reroutes their interior pins to PULL, so they are not
+    // fix pins at all.)
+    //
+    // fix_index and pdrd_body_index are constant across this advance(), so the
+    // mask is computed once here.
+    //
+    // Escape hatch / A-B switch: PPF_DISABLE_PIN_DOF_REMOVAL=1 leaves the mask
+    // all-zero, reverting every fix pin to the barrier penalty. Diagnostic only.
+    static const bool disable_dof_removal = [] {
+        const char *e = std::getenv("PPF_DISABLE_PIN_DOF_REMOVAL");
+        return e && e[0] == '1';
+    }();
+    // The device needs this too: contact.cu must put the fix barrier back for
+    // exactly the pins whose rows we stop eliminating, or they would have
+    // neither a Dirichlet row nor a penalty and would not be held at all.
+    prm.disable_pin_dof_removal = disable_dof_removal;
+    auto dof_removed_mask = pool.get<unsigned>(vertex_count);
+    dof_removed_mask.clear();
+    if (!disable_dof_removal) {
+        Vec<unsigned> mask = dof_removed_mask.as_vec();
+        DISPATCH_START(vertex_count)
+        [prop_vertex, mask] __device__(unsigned i) mutable {
+            const VertexProp &prop = prop_vertex[i];
+            mask[i] = (prop.fix_index > 0 && prop.pdrd_body_index == 0) ? 1u : 0u;
+        } DISPATCH_END;
+    }
+    const unsigned n_dof_removed =
+        kernels::sum_array<unsigned>(dof_removed_mask.data, vertex_count);
+    // One-time visibility (silent in a scene with no pins at all).
+    static bool dof_reported = false;
+    if (!dof_reported && (n_dof_removed > 0 || disable_dof_removal)) {
+        dof_reported = true;
+        ::logging::info(
+            "dof-removal: %u pinned vertices eliminated as Dirichlet BCs (%s)",
+            n_dof_removed,
+            disable_dof_removal ? "DISABLED via env" : "enabled");
+    }
 
     // Experimental CG warm-start (PPF_CG_WARMSTART=1): seed the first Newton
     // solve of each frame with the previous frame's converged search direction
@@ -550,6 +659,29 @@ StepResult advance() {
     }
 
     while (true) {
+        // The Newton loop is otherwise unbounded, and its only escape is a
+        // collapsed time of impact (`toi <= FLT_EPSILON`, below). That escape
+        // does NOT cover an over-constrained configuration: when a prescribed
+        // vertex is driven into geometry that cannot yield, the line search
+        // clamps the SHARED toi to just above zero to stop the penetration, and
+        // that same clamp throttles every other vertex, so the next iteration
+        // re-assembles a bit-identical system and the loop spins forever with
+        // toi still above FLT_EPSILON. Bound it, and report the stall instead of
+        // hanging. (A bound, not a heuristic: no progress window, no tuned
+        // epsilon. 0 disables it.)
+        if (!final_step && prm.max_newton_steps > 0 &&
+            step >= prm.max_newton_steps) {
+            logging.message(
+                "### newton stalled: no acceptable step after %u iterations "
+                "(last toi: %.2e, toi_advanced: %.2e)",
+                step, last_toi, toi_advanced);
+            logging.message("### an over-constrained configuration cannot be "
+                            "advanced: a prescribed pin driven into geometry "
+                            "that cannot yield has no way to resolve. Re-author "
+                            "the pin's path, or make it a soft pull pin.");
+            result.newton_progress = false;
+            return result;
+        }
         if (final_step) {
             logging.message("------ error reduction step ------");
         } else {
@@ -583,6 +715,11 @@ StepResult advance() {
         }
 
         if (final_step) {
+            // The step only got `toi_advanced` of the way through its span, so
+            // shrink it to what was actually integrated and bring the kinematic
+            // fix pins back in step with it before the targets are rebuilt off
+            // them.
+            rewind_kinematic_fix(toi_advanced);
             dt *= toi_advanced;
             compute_target(dt);
         }
@@ -693,11 +830,21 @@ StepResult advance() {
         // Name: Max Non-Zero Entries Per Contact Matrix Row
         // Format: list[(time, count)]
         // Description:
-        // Largest number of non-zero block entries found in any single row
-        // of the dynamic contact Hessian for this Newton iteration. Rows
-        // grow wider when a vertex is in contact with many primitives at
-        // once. Useful as a diagnostic for crowded contact regions and
-        // for sizing the per-row capacity of the dynamic CSR buffer.
+        // Widest single row of the dynamic contact Hessian reserved for this
+        // Newton iteration: the columns that row carried over from the
+        // previous iteration, plus one slot for every block the counting pass
+        // did not find among them. Rows grow wider when a vertex is in
+        // contact with many primitives at once, and widest of all where a
+        // coarse collider meets a finely sampled deformable, since each
+        // collider vertex then couples to a large number of fine ones.
+        //
+        // This is a reservation, so it is an upper bound on the row's final
+        // non-zero count rather than that count itself: two contacts that
+        // contribute the same new column are counted separately here, and
+        // fold together only when the row is compressed at the end of
+        // assembly. That makes it the right number for sizing
+        // csrmat-max-nnz, which is what the same reservation is charged
+        // against (see "dyn_consumed" above).
         logging.mark("max_nnz_row", max_nnz_row);
 
         num_contact += contact::embed_constraint_force_hessian(
@@ -733,6 +880,151 @@ StepResult advance() {
                                               sand_spin_couple);
         }
 
+        // Dirichlet DOF removal for every masked (fix-pinned) vertex. After the
+        // whole Newton system is assembled (this is the last writer, before the
+        // solve), turn each such vertex into an exact boundary condition rather
+        // than the barrier penalty it used to be. Writing the
+        // system as M dx = f with M = A + B + C, and prescribing dx_i = p_i =
+        // eval_x[i] - target[i] on the removed vertices, the exact reduction of
+        // a FREE row j is
+        //
+        //     sum_{k free} M_jk dx_k  =  f_j  -  sum_{k removed} M_jk p_k
+        //                                        ^^^^^^^^^^^^^^^^^^^^^^^^
+        //                                        the Dirichlet LIFTING term
+        //
+        // so the pass is:
+        //   (1) LIFT: before dropping any coupling block M_jk to a removed
+        //       vertex k, move its known contribution to the right-hand side of
+        //       the free row j. This is what tells a free vertex that the
+        //       obstacle is advancing INTO it: the contact Hessian block times
+        //       the prescribed vertex's increment is precisely the "get out of
+        //       the way by p_k" forcing. Omitting it leaves the cloth with only
+        //       the barrier gradient, whose Newton step is bounded by
+        //       grad/curv = ghat/2 regardless of stiffness, so the cloth can
+        //       never keep pace with a prescribed vertex that moves further than
+        //       that in one step: the gap closes monotonically onto the ACCD parking
+        //       distance, the line search then clamps toi to ~0 to stop the
+        //       penetration, and that same toi also throttles the cloth's escape,
+        //       so both sides freeze. (A STATIONARY pin has p_k = 0, which
+        //       is why it never showed the bug.)
+        //   (2) zero every stored (upper-triangle) block of both Hessians whose
+        //       row OR column is a removed vertex. Each stored value aliases the
+        //       canonical buffer slot the transpose mirror reads, so one write
+        //       clears both SpMV scatter directions -> row i AND column i.
+        //   (3) set the removed vertex's diagonal C[i] = I and its RHS
+        //       force[i] = p_i, the same increment the dx seed wrote at the top
+        //       of the loop.
+        // Both matrices store only the upper triangle, so a coupling appears
+        // once, in the row with the smaller index; whichever of the two rows
+        // owns it lifts the OTHER one, hence the two symmetric branches (the
+        // stored block M_ij lifts row j via its transpose). The lift scatters
+        // across rows, so it accumulates atomically.
+        // The block-Jacobi / Schwarz preconditioner is rebuilt from
+        // A(i,i)+B(i,i)+C[i] inside solver::solve, so P[i] = invert(I) = I falls
+        // out automatically and no PCG kernel or CUDA-graph edit is needed. With
+        // seed dx[i] = force[i] the initial residual r[i] = 0, and the zeroed
+        // column keeps (A p)[i] = 0 every iteration, so dx[i] is held exactly
+        // regardless of cloth forces or the shared PCG scalars. A prescribed vertex
+        // still reaches its keyframe through the ordinary line-search CCD path
+        // (dx[i] = p_i is a genuine swept direction), so a fast prescribed vertex
+        // cannot tunnel free geometry. Skipped when nothing is masked.
+        if (n_dof_removed > 0) {
+            logging.push("asm dirichlet");
+            const unsigned *dof_mask = dof_removed_mask.data;
+            Row *elim_rows = dyn_hess.rows.data;
+            const unsigned *elim_fx_off = fixed_hess.index.offset;
+            const unsigned *elim_fx_col = fixed_hess.index.data;
+            Mat3x3f *elim_fx_val = fixed_hess.value.data;
+            Mat3x3f *elim_diag = diag_hess.as_vec().data;
+            float *elim_force = force.as_vec().data;
+            const Vec3f *elim_eval_x = eval_x.as_vec().data;
+            const Vec3f *elim_target = target.as_vec().data;
+            DISPATCH_START(vertex_count)
+            [dof_mask, elim_rows, elim_fx_off, elim_fx_col, elim_fx_val,
+             elim_diag, elim_force, elim_eval_x,
+             elim_target] __device__(unsigned i) mutable {
+                const bool mask_i = dof_mask[i] != 0u;
+                // Prescribed increment of a removed vertex (zero for a free one,
+                // so the lift below vanishes on free-free couplings).
+                auto prescribed = [&](unsigned v) -> Vec3f {
+                    return (elim_eval_x[v] - elim_target[v]).cast<float>();
+                };
+                // f_row -= blk * p   (row is free), scattered atomically because
+                // the lift for a free row can come from several removed columns
+                // AND from removed rows lifting it by transpose.
+                auto lift_sub = [&](unsigned row_v, const Mat3x3f &blk,
+                                    const Vec3f &p, bool transposed) {
+                    Vec3f c;
+                    if (transposed) {
+                        // blk^T * p, written out (device matvec on the in-house
+                        // Mat3x3f is column-major; spell it to stay explicit).
+                        c[0] = blk(0, 0) * p[0] + blk(1, 0) * p[1] +
+                               blk(2, 0) * p[2];
+                        c[1] = blk(0, 1) * p[0] + blk(1, 1) * p[1] +
+                               blk(2, 1) * p[2];
+                        c[2] = blk(0, 2) * p[0] + blk(1, 2) * p[1] +
+                               blk(2, 2) * p[2];
+                    } else {
+                        c[0] = blk(0, 0) * p[0] + blk(0, 1) * p[1] +
+                               blk(0, 2) * p[2];
+                        c[1] = blk(1, 0) * p[0] + blk(1, 1) * p[1] +
+                               blk(1, 2) * p[2];
+                        c[2] = blk(2, 0) * p[0] + blk(2, 1) * p[1] +
+                               blk(2, 2) * p[2];
+                    }
+                    atomicAdd(elim_force + 3 * row_v + 0, -c[0]);
+                    atomicAdd(elim_force + 3 * row_v + 1, -c[1]);
+                    atomicAdd(elim_force + 3 * row_v + 2, -c[2]);
+                };
+                // (1a)+(2a) dynamic (contact) matrix row i.
+                Row &row = elim_rows[i];
+                for (unsigned k = 0; k < row.head; ++k) {
+                    const unsigned j = row.index[k];
+                    const bool mask_j = dof_mask[j] != 0u;
+                    if (mask_i != mask_j) {
+                        // Exactly one side is prescribed: lift the free row.
+                        if (mask_j) {
+                            lift_sub(i, row.value[k], prescribed(j), false);
+                        } else {
+                            lift_sub(j, row.value[k], prescribed(i), true);
+                        }
+                    }
+                    if (mask_i || mask_j) {
+                        row.value[k] = Mat3x3f::Zero();
+                    }
+                }
+                // (1b)+(2b) fixed (elastic/stitch/strain-limit/fix-pin) row i.
+                const unsigned b0 = elim_fx_off[i], b1 = elim_fx_off[i + 1];
+                for (unsigned k = b0; k < b1; ++k) {
+                    const unsigned j = elim_fx_col[k];
+                    const bool mask_j = dof_mask[j] != 0u;
+                    if (mask_i != mask_j) {
+                        if (mask_j) {
+                            lift_sub(i, elim_fx_val[k], prescribed(j), false);
+                        } else {
+                            lift_sub(j, elim_fx_val[k], prescribed(i), true);
+                        }
+                    }
+                    if (mask_i || mask_j) {
+                        elim_fx_val[k] = Mat3x3f::Zero();
+                    }
+                }
+            } DISPATCH_END;
+            // (3) The removed rows become the identity with the prescribed RHS.
+            // Done in a second pass so it cannot race the atomic lifts above
+            // (a removed row's force must NOT accumulate any lift).
+            DISPATCH_START(vertex_count)
+            [dof_mask, elim_diag, elim_force, elim_eval_x,
+             elim_target] __device__(unsigned i) mutable {
+                if (dof_mask[i] != 0u) {
+                    elim_diag[i] = Mat3x3f::Identity();
+                    Map<Vec3f>(elim_force + 3 * i) =
+                        (elim_eval_x[i] - elim_target[i]).cast<float>();
+                }
+            } DISPATCH_END;
+            logging.pop();
+        }
+
         unsigned iter;
         float reresid;
         unsigned schwarz_fallback = 0;
@@ -750,6 +1042,13 @@ StepResult advance() {
         Vec<Vec3f> eval_x_positions = eval_x.as_vec();
         Vec<float> pdrd_dtheta_vec =
             rigid_pdrd ? pdrd_dtheta.as_vec() : Vec<float>{};
+        // Env-gated (PPF_DUMP_LINSYS=<k>) one-shot dump of the assembled Newton
+        // system for offline analysis. No-op unless the env var is set. Placed
+        // after assembly, before the solve.
+        if (!rigid_pdrd) {
+            dump_linsys::maybe_dump(dyn_hess, fixed_hess, diag_hess, force);
+        }
+
         bool success =
             solver::solve(dyn_hess, fixed_hess, diag_hess, force, prm.cg_tol,
                           prm.cg_max_iter, dx, eval_x_positions, prm, iter,
@@ -781,18 +1080,23 @@ StepResult advance() {
         // Final relative residual reached by the PCG linear solve for this
         // Newton iteration. When this stays well below the configured
         // tolerance, the solve converged cleanly, values close to the
-        // tolerance indicate the iteration cap was hit.
+        // tolerance indicate the iteration cap was hit. In a scene with rigid
+        // (PDRD) bodies the reduced solve measures each degree-of-freedom group
+        // against its own initial residual, and this reports the worst group,
+        // so a body and the cloth cannot mask each other.
         logging.mark("reresid", reresid);
 
         // Name: Schwarz Block-Jacobi Fallback
         // Format: list[(time, count)]
         // Description:
-        // 1 if the Schwarz preconditioner produced a non-SPD residual (rz <= 0)
-        // during this Newton iteration's PCG solve and the solver latched the
-        // SPD-safe block-Jacobi fallback for the rest of the solve, else 0.
-        // Always 0 under the block-jacobi preconditioner; a nonzero entry flags a
-        // Schwarz SPD breakdown worth reviewing. Recorded every iteration but only
-        // printed when nonzero so the common 0 case does not clutter the log.
+        // 1 if the solver fell back from the Schwarz preconditioner to the
+        // SPD-safe block-Jacobi base for this Newton iteration's PCG solve, else
+        // 0. Two causes both latch it: a non-SPD Schwarz residual (rz <= 0), or
+        // the memory guard degrading to block-Jacobi because the Schwarz build
+        // would not fit PPF_SCHWARZ_MEM_FRAC of free VRAM. Always 0 under the
+        // block-jacobi preconditioner; a nonzero entry is worth reviewing.
+        // Recorded every iteration but only printed when nonzero so the common 0
+        // case does not clutter the log.
         logging.mark("schwarz_fallback", schwarz_fallback, schwarz_fallback != 0);
 
         if (!success) {
@@ -862,9 +1166,15 @@ StepResult advance() {
         if (param->fix_xz) {
             {
                 Vec<Vec3f> eval_x_vec = eval_x.as_vec();
+                const unsigned *dof_mask = dof_removed_mask.data;
                 DISPATCH_START(vertex_count)
-                [eval_x_vec, vertex_prev,
+                [eval_x_vec, vertex_prev, dof_mask,
                  fix_xz_val] __device__(unsigned i) mutable {
+                    // A DOF-removed vertex is prescribed exactly; the
+                    // fix_xz drag must not nudge its x/z off the keyframe.
+                    if (dof_mask[i] != 0u) {
+                        return;
+                    }
                     if (eval_x_vec[i][1] > float(fix_xz_val)) {
                         float y = fminf(1.0f, eval_x_vec[i][1] -
                                                       float(fix_xz_val));
@@ -906,7 +1216,69 @@ StepResult advance() {
         logging.push("line search");
         float SL_toi = 1.0f;
         float toi = 1.0f;
-        toi = fminf(toi, contact::line_search(data, target, eval_x, prm));
+        // A prescribed (fix-pinned) vertex cannot yield to an analytic collider:
+        // it has no DOF to give. The line search flags the smallest such vertex
+        // index here rather than clamping the shared toi (which would only stall
+        // the solve without preventing anything). UINT_MAX means "feasible".
+        auto pin_infeasible = pool.get<unsigned>(1u);
+        pin_infeasible.clear(0xFFFFFFFFu);
+        toi = fminf(toi, contact::line_search(data, target, eval_x, prm,
+                                              pin_infeasible.data));
+        {
+            unsigned bad_vert = 0xFFFFFFFFu;
+            CUDA_HANDLE_ERROR(cudaMemcpy(&bad_vert, pin_infeasible.data,
+                                         sizeof(unsigned),
+                                         cudaMemcpyDeviceToHost));
+            if (bad_vert != 0xFFFFFFFFu) {
+                logging.message(
+                    "### infeasible pin: prescribed vertex %u is driven through "
+                    "an analytic collider (floor/sphere) it cannot yield to",
+                    bad_vert);
+                logging.message("### re-author the pin's path so it stays "
+                                "outside the collider, or make it a soft pull "
+                                "pin so it can yield.");
+                // Balance the "line search" scope pushed above before this
+                // early return, or ~SimpleLog trips check_empty (a host abort)
+                // and the clean crash record is never written.
+                logging.pop();
+                result.pin_feasible = false;
+                return result;
+            }
+        }
+        if (contact::ccd_overlap_detected()) {
+            unsigned ov0 = 0xFFFFFFFFu, ov1 = 0xFFFFFFFFu, okind = 0xFFFFFFFFu;
+            float od2 = -1.0f, ooffset = -1.0f;
+            contact::ccd_overlap_info(ov0, ov1, okind, od2, ooffset);
+            const char *okind_str =
+                okind == 0u   ? "vertex-face"
+                : okind == 1u ? "edge-edge"
+                : okind == 2u ? "point-point"
+                : okind == 3u ? "vertex-face (collision mesh)"
+                : okind == 4u ? "face-vertex (collision mesh)"
+                : okind == 5u ? "edge-edge (collision mesh)"
+                              : "unknown";
+            logging.message(
+                "### contact starts overlapping: two surfaces begin the step "
+                "already touching or overlapping (a contact pair is inside the "
+                "contact offset at the start of the step). offending %s pair: "
+                "vertices %u and %u (squared start distance %.6e, offset "
+                "%.6e, solver units).",
+                okind_str, ov0, ov1, od2, ooffset);
+            if (okind >= 3u && okind <= 5u) {
+                logging.message(
+                    "### the second index is in the static collision-mesh "
+                    "vertex space; the first is a dynamic vertex.");
+            }
+            logging.message("### give the initial geometry a small clearance so "
+                            "nothing starts in contact, or check whether a "
+                            "stitch or pin is pulling elements together faster "
+                            "than contact can resolve.");
+            // Balance the "line search" scope (see the pin path above) before
+            // returning, so ~SimpleLog's check_empty does not abort the run.
+            logging.pop();
+            result.contact_separated = false;
+            return result;
+        }
         if (shell_face_count > 0) {
             auto tmp_scalar = pool.get<float>(shell_face_count);
             SL_toi = strainlimiting::line_search(data, eval_x, target,
@@ -941,6 +1313,7 @@ StepResult advance() {
         // strain-limit TOI. A value of 1.0 means the full Newton step was
         // accepted, smaller values mean the line search cut it short.
         logging.mark("toi", toi);
+        last_toi = toi;
         if (toi <= std::numeric_limits<float>::epsilon()) {
             logging.message("### ccd failed (toi: %.2e)", toi);
             if (SL_toi < 1.0f) {
@@ -1014,9 +1387,44 @@ StepResult advance() {
                     host_data.surface_vert_count, data.prop.vertex,
                     data.param_arrays.vertex);
                 invalidate_inactive_aabbs();
+                // Same infeasibility flag as the Newton line search above: a
+                // prescribed vertex swept through an analytic collider cannot
+                // yield, here either. It was consumed (and cleared) above, so
+                // re-clear before reusing it.
+                pin_infeasible.clear(0xFFFFFFFFu);
                 toi_rig = contact::line_search(data, eval_x_vec, rigid_tgt_vec,
-                                               prm);
+                                               prm, pin_infeasible.data);
+                unsigned bad_rig = 0xFFFFFFFFu;
+                CUDA_HANDLE_ERROR(cudaMemcpy(&bad_rig, pin_infeasible.data,
+                                             sizeof(unsigned),
+                                             cudaMemcpyDeviceToHost));
                 logging.pop();
+                if (bad_rig != 0xFFFFFFFFu) {
+                    logging.message(
+                        "### infeasible pin: prescribed vertex %u is driven "
+                        "through an analytic collider during the rigidify "
+                        "commit",
+                        bad_rig);
+                    result.pin_feasible = false;
+                    return result;
+                }
+                if (contact::ccd_overlap_detected()) {
+                    unsigned ov0 = 0xFFFFFFFFu, ov1 = 0xFFFFFFFFu,
+                             okind = 0xFFFFFFFFu;
+                    float od2 = -1.0f, ooffset = -1.0f;
+                    contact::ccd_overlap_info(ov0, ov1, okind, od2, ooffset);
+                    logging.message(
+                        "### contact starts overlapping during the rigidify "
+                        "commit: two surfaces begin the step already touching "
+                        "or overlapping (kind %u, vertices %u and %u, squared "
+                        "start distance %.6e, offset %.6e). Give the "
+                        "initial geometry a small clearance, or check a "
+                        "stitch/pin pulling elements together faster than "
+                        "contact can resolve.",
+                        okind, ov0, ov1, od2, ooffset);
+                    result.contact_separated = false;
+                    return result;
+                }
             }
             logging.mark("rigidify_toi", toi_rig);
             {
@@ -1326,6 +1734,18 @@ DataSet malloc_dataset(DataSet dataset, ParamSet param) {
     Vec<Mat3x3f> dev_grain_A = mem::malloc_device(dataset.grain_A);
     Vec<Mat3x3f> dev_grain_B = mem::malloc_device(dataset.grain_B);
     Vec<Vec3f> dev_grain_grot = mem::malloc_device(dataset.grain_grot);
+    Vec<unsigned> dev_tet_hess_slots =
+        mem::malloc_device(dataset.tet_hess_slots);
+    Vec<unsigned> dev_face_hess_slots =
+        mem::malloc_device(dataset.face_hess_slots);
+    Vec<unsigned> dev_edge_hess_slots =
+        mem::malloc_device(dataset.edge_hess_slots);
+    Vec<unsigned> dev_hinge_hess_slots =
+        mem::malloc_device(dataset.hinge_hess_slots);
+    Vec<unsigned> dev_rod_bend_hess_slots =
+        mem::malloc_device(dataset.rod_bend_hess_slots);
+    Vec<unsigned> dev_stitch_hess_slots =
+        mem::malloc_device(dataset.stitch_hess_slots);
 
     DataSet dev_dataset = {dev_vertex,
                            dev_mesh_info,
@@ -1350,7 +1770,13 @@ DataSet malloc_dataset(DataSet dataset, ParamSet param) {
                            dev_grain_omega_prev,
                            dev_grain_A,
                            dev_grain_B,
-                           dev_grain_grot};
+                           dev_grain_grot,
+                           dev_tet_hess_slots,
+                           dev_face_hess_slots,
+                           dev_edge_hess_slots,
+                           dev_hinge_hess_slots,
+                           dev_rod_bend_hess_slots,
+                           dev_stitch_hess_slots};
 
     return dev_dataset;
 }

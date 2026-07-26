@@ -84,8 +84,14 @@ void embed_strainlimiting_force_hessian(const DataSet &data,
                 dedx = utility::convert_force(dedF, data.inv_rest2x2[i]);
                 d2edx2 = utility::convert_hessian(d2edF2, data.inv_rest2x2[i]);
                 utility::atomic_embed_force<3>(face, stiffness * dedx, force);
-                utility::atomic_embed_hessian<3>(face, stiffness * d2edx2,
-                                                 fixed_hess_out);
+                if (data.face_hess_slots.size) {
+                    utility::atomic_embed_hessian_at<3>(
+                        data.face_hess_slots.data + 9 * i, stiffness * d2edx2,
+                        fixed_hess_out);
+                } else {
+                    utility::atomic_embed_hessian<3>(face, stiffness * d2edx2,
+                                                     fixed_hess_out);
+                }
             }
         }
     } DISPATCH_END;
@@ -172,7 +178,12 @@ void embed_rod_strainlimiting_force_hessian(const DataSet &data,
                 Fmat.col(1) = Fvec.tail<3>();
 
                 utility::atomic_embed_force<2>(edge, Fmat, force);
-                utility::atomic_embed_hessian<2>(edge, H, fixed_hess_out);
+                if (data.edge_hess_slots.size) {
+                    utility::atomic_embed_hessian_at<2>(
+                        data.edge_hess_slots.data + 4 * i, H, fixed_hess_out);
+                } else {
+                    utility::atomic_embed_hessian<2>(edge, H, fixed_hess_out);
+                }
             }
         }
     } DISPATCH_END;

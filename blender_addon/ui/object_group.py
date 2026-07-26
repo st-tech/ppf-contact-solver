@@ -9,7 +9,6 @@ import bpy  # pyright: ignore
 from bpy.props import (  # pyright: ignore
     BoolProperty,
     CollectionProperty,
-    EnumProperty,
     FloatProperty,
     FloatVectorProperty,
     IntProperty,
@@ -18,19 +17,9 @@ from bpy.props import (  # pyright: ignore
 from bpy.types import PropertyGroup  # pyright: ignore
 from bpy.app.translations import pgettext_iface as iface_, pgettext_tip as tip_  # pyright: ignore
 
+from ..models.enum_props import EnumProperty, dynamic_enum_items
 from ..models.groups import OBJECT_GROUP_DEFAULTS, get_object_type, get_vertex_group_items
 from .state_types import AssignedObject, PinVertexGroupItem
-
-# Blender requires Python to keep a reference to EnumProperty `items` strings
-# returned by a callable; otherwise the C side reads freed memory and the
-# dropdown shows random characters. Module-level caches below hold the latest
-# items list per callback so the strings outlive the callback return.
-_velocity_items_ref: list = []
-_collision_window_items_ref: list = []
-_tet_items_ref: list = []
-_pdrd_hinge_items_ref: list = []
-_bend_ref_items_ref: list = []
-_material_preset_items_ref: list = []
 
 
 def _build_assigned_object_enum_items(group) -> list:
@@ -38,9 +27,9 @@ def _build_assigned_object_enum_items(group) -> list:
 
     Returns a list of ``(uuid, label, "")`` tuples (label is the live object
     name when resolvable, else the stored name or a uuid prefix), with a single
-    ``NONE`` fallback when no objects are assigned. The three object-selection
-    callbacks share this body; each keeps its own module-level ref cache so the
-    returned strings outlive the callback return (see the note above).
+    ``NONE`` fallback when no objects are assigned. The object-selection
+    callbacks share this body; each is wrapped with @dynamic_enum_items so the
+    returned strings outlive the callback return.
     """
     from ..core.uuid_registry import get_object_by_uuid
 
@@ -65,6 +54,7 @@ def _invalidate_overlay_from_group(self=None, ctx=None):
     invalidate_overlays()
 
 
+@dynamic_enum_items
 def _get_material_profile_items(self, context):
     """Dynamic callback for material_profile_selection EnumProperty."""
     from ..core.profile import get_profile_names
@@ -72,9 +62,7 @@ def _get_material_profile_items(self, context):
     path = self.material_profile_path
     if not path:
         return [("NONE", iface_("(No Profile)"), "")]
-
-    abs_path = bpy.path.abspath(path)
-    names = get_profile_names(abs_path)
+    names = get_profile_names(bpy.path.abspath(path))
     if not names:
         return [("NONE", iface_("(No Profile)"), "")]
     return [(n, n, tip_("Material profile: {name}").format(name=n)) for n in names]
@@ -99,21 +87,18 @@ def _on_material_profile_selected(self, context):
     redraw_all_areas(context)
 
 
+@dynamic_enum_items
 def _get_material_preset_items(self, context):
     """Dynamic callback for the material_preset_selection EnumProperty.
 
     Lists only presets whose ``object_type`` matches the group's current Type,
     so a SHELL group sees only fabric presets and a SOLID group only soft-solid
     presets; a PDRD group has no presets, so its list is just the NONE entry
-    (decision D2). The returned list is stashed in a module-level
-    ref so Blender does not free the strings before reading them (see the note
-    by the ref caches above).
+    (decision D2).
     """
-    global _material_preset_items_ref
     from ..core.material_presets import get_preset_items
 
-    _material_preset_items_ref = get_preset_items(self.object_type)
-    return _material_preset_items_ref
+    return get_preset_items(self.object_type)
 
 
 def _on_material_preset_selected(self, context):
@@ -136,6 +121,7 @@ def _on_material_preset_selected(self, context):
     redraw_all_areas(context)
 
 
+@dynamic_enum_items
 def _get_pin_profile_items(self, context):
     """Dynamic callback for pin_profile_selection EnumProperty."""
     from ..core.profile import get_profile_names
@@ -143,9 +129,7 @@ def _get_pin_profile_items(self, context):
     path = self.pin_profile_path
     if not path:
         return [("NONE", iface_("(No Profile)"), "")]
-
-    abs_path = bpy.path.abspath(path)
-    names = get_profile_names(abs_path)
+    names = get_profile_names(bpy.path.abspath(path))
     if not names:
         return [("NONE", iface_("(No Profile)"), "")]
     return [(n, n, tip_("Pin profile: {name}").format(name=n)) for n in names]
@@ -221,10 +205,9 @@ class ObjectGroup(PropertyGroup):
     pin_vertex_groups: CollectionProperty(type=PinVertexGroupItem)  # pyright: ignore
     pin_vertex_groups_index: IntProperty(default=-1)  # pyright: ignore
 
+    @dynamic_enum_items
     def _get_velocity_object_items(self, context):
-        global _velocity_items_ref
-        _velocity_items_ref = _build_assigned_object_enum_items(self)
-        return _velocity_items_ref
+        return _build_assigned_object_enum_items(self)
 
     velocity_object_selection: EnumProperty(
         name="Object",
@@ -244,10 +227,9 @@ class ObjectGroup(PropertyGroup):
         default=False,
         description="Restrict collision detection to specific time windows per object",
     )  # pyright: ignore
+    @dynamic_enum_items
     def _get_collision_window_object_items(self, context):
-        global _collision_window_items_ref
-        _collision_window_items_ref = _build_assigned_object_enum_items(self)
-        return _collision_window_items_ref
+        return _build_assigned_object_enum_items(self)
 
     collision_window_object_selection: EnumProperty(
         name="Object",
@@ -256,10 +238,9 @@ class ObjectGroup(PropertyGroup):
         options={"SKIP_SAVE"},
     )  # pyright: ignore
 
+    @dynamic_enum_items
     def _get_tet_object_items(self, context):
-        global _tet_items_ref
-        _tet_items_ref = _build_assigned_object_enum_items(self)
-        return _tet_items_ref
+        return _build_assigned_object_enum_items(self)
 
     tet_object_selection: EnumProperty(
         name="Object",
@@ -430,10 +411,9 @@ class ObjectGroup(PropertyGroup):
         description="Inter-grain friction coefficient of the granular (sand) body",
     )  # pyright: ignore
 
+    @dynamic_enum_items
     def _get_pdrd_hinge_object_items(self, context):
-        global _pdrd_hinge_items_ref
-        _pdrd_hinge_items_ref = _build_assigned_object_enum_items(self)
-        return _pdrd_hinge_items_ref
+        return _build_assigned_object_enum_items(self)
 
     pdrd_hinge_object_selection: EnumProperty(
         name="Object",
@@ -448,10 +428,9 @@ class ObjectGroup(PropertyGroup):
         update=_invalidate_overlay_from_group,
     )  # pyright: ignore
 
+    @dynamic_enum_items
     def _get_bend_ref_object_items(self, context):
-        global _bend_ref_items_ref
-        _bend_ref_items_ref = _build_assigned_object_enum_items(self)
-        return _bend_ref_items_ref
+        return _build_assigned_object_enum_items(self)
 
     bend_ref_object_selection: EnumProperty(
         name="Object",

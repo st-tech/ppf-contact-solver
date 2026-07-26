@@ -33,6 +33,7 @@ from .pc2 import (
     get_static_deform_cache,
     load_curve_cache,
     mark_real_frame,
+    needs_cache_visibility_keys,
     object_pc2_key,
     object_pc2_key_readonly,
     overwrite_pc2_frame,
@@ -48,21 +49,21 @@ from .status import (
 from .transform import inv_world_matrix
 
 
-# Per-target apply state. ``needs_per_frame`` is True for STATIC meshes
-# whose matrix_world can vary across frames (fcurves, NLA, drivers,
-# parent chain, constraints). For those, ``constant_inv`` is None and
-# the apply loop refreshes the inverse from a per-tick ``scene.frame_set``
-# before each write. For everyone else ``constant_inv`` carries a
-# pre-snapshotted ``inv_world_matrix(obj)`` numpy (4,4) and the loop
-# skips the per-frame depsgraph eval.
+# Per-target apply state. ``needs_per_frame`` is True for meshes of any
+# object type whose matrix_world can vary across frames (fcurves, NLA,
+# drivers, parent chain, constraints). For those, ``constant_inv`` is
+# None and the apply loop refreshes the inverse from a per-tick
+# ``scene.frame_set`` before each write. For everyone else
+# ``constant_inv`` carries a pre-snapshotted ``inv_world_matrix(obj)``
+# numpy (4,4) and the loop skips the per-frame depsgraph eval.
 _ApplyTarget = collections.namedtuple(
     "_ApplyTarget",
     ["uuid", "obj", "map", "object_type", "needs_per_frame", "constant_inv"],
 )
 
 
-def _static_needs_per_frame_matrix(obj):
-    """True if a STATIC obj's matrix_world can vary across frames.
+def _needs_per_frame_matrix(obj):
+    """True if an object's matrix_world can vary across frames.
 
     Conservative: any frame-dependent source of motion makes us pay the
     extra per-frame ``scene.frame_set`` cost. We use Blender's own
@@ -256,18 +257,26 @@ def _gap_fill_poses(obj, n_verts):
     """Compute the per-frame poses used to fill frames before the first
     real simulation frame arrives.
 
-    Returns ``(rest_co, sd_cache_local)``:
+    Returns ``(rest_co, sd_cache_world)``:
 
-    - ``rest_co``: ``(n_verts, 3)`` fallback pose. The object's rest cage,
-      replaced by the deform-evaluated pose (Geometry Nodes, Armature, ...)
-      when the stack deforms vertices, and by the curve rest CVs for a
-      CURVE. The MESH_CACHE modifier is excluded from the eval so we don't
-      read prior solver output back in.
-    - ``sd_cache_local``: ``(n_frames, n_verts, 3)`` in object-local space
-      for a Case-3 STATIC collider that carries a captured-deformation
-      cache, else ``None``. When present, gap frame ``i`` should use
-      ``sd_cache_local[i]`` (depsgraph-baked pose) in preference to
-      ``rest_co``.
+    - ``rest_co``: ``(n_verts, 3)`` fallback pose, in object-LOCAL space. The
+      object's rest cage, replaced by the deform-evaluated pose (Geometry
+      Nodes, Armature, ...) at the CURRENT frame when the stack deforms
+      vertices, and by the curve rest CVs for a CURVE. The MESH_CACHE
+      modifier is excluded from the eval so we don't read prior solver
+      output back in. The caller re-evaluates the deformed pose at each gap
+      frame's own frame; this snapshot is only its last-resort fallback.
+    - ``sd_cache_world``: ``(n_frames, n_verts, 3)`` for a Case-3 STATIC
+      collider that carries a captured-deformation cache, else ``None``. When
+      present, gap frame ``i`` should use ``sd_cache_world[i]`` (the
+      depsgraph-baked pose) in preference to ``rest_co``.
+
+    The cache is returned in WORLD space, deliberately un-projected. MESH_CACHE
+    reads object-LOCAL positions and Blender re-applies the object's own
+    animated transform on top, so each gap frame has to be divided by the
+    matrix_world of ITS OWN frame. Projecting the whole cache here with a single
+    matrix would silently bake in whichever frame the scene happened to be
+    parked on; the caller does the per-frame projection.
     """
     if obj.type == "CURVE":
         from .curve_rod import get_curve_rest_cvs
@@ -295,36 +304,100 @@ def _gap_fill_poses(obj, n_verts):
     # Case 3 STATIC: gap-fill from the captured-deformation cache instead
     # of the undeformed rest mesh, so frames before the first sim arrival
     # still show the depsgraph-baked pose at each gap frame.
-    sd_cache_local = None
+    sd_cache_world = None
     if has_static_deform_animation(obj):
         sd_cache = get_static_deform_cache(obj)
         if sd_cache is not None and sd_cache.shape[1] == n_verts:
-            inv = numpy.array(inv_world_matrix(obj), dtype=numpy.float64)
-            sd_world = sd_cache.astype(numpy.float64)
-            sd_cache_local = sd_world @ inv[:3, :3].T + inv[:3, 3]
-    return rest_co, sd_cache_local
+            sd_cache_world = sd_cache.astype(numpy.float64)
+    return rest_co, sd_cache_world
 
 
-def _append_leading_gap_frames(pc2_path, frame_idx, n_verts, obj):
+def _append_leading_gap_frames(pc2_path, frame_idx, n_verts, obj, start_frame):
     """Append gap frames covering PC2 indices ``[0, frame_idx)`` so the
     next appended real frame lands at PC2 index ``frame_idx``.
 
     Uses the Case-3 captured-deformation pose per frame when available,
-    falling back to the (deform-evaluated) rest pose. Shared by the
-    file-create path and the recovery path that finds an existing but
-    0-frame (header-only) PC2 file on disk.
+    falling back to the deform-evaluated pose re-read at each gap frame.
+    Shared by the file-create path and the recovery path that finds an
+    existing but 0-frame (header-only) PC2 file on disk.
+
+    Every gap frame must be built AT ITS OWN FRAME (PC2 index ``i`` is
+    Blender frame ``i + start_frame``), the same way the real-frame path
+    does, in both branches:
+
+    - The captured cache is in world space, so each gap frame is divided
+      by the matrix_world of its own frame. Using one matrix for every gap
+      frame instead offsets the frame by exactly how far the object travels
+      between the frame the scene is parked on and the gap frame, which
+      surfaced as a moving STATIC being visibly out of place on the first
+      frame while every later frame landed on its captured pose exactly.
+    - The fallback pose is object-LOCAL, so no matrix is involved, but the
+      evaluated pose itself (armature, shape keys, Geometry Nodes, ...) is
+      frame-dependent and must be re-read with the scene set to each gap
+      frame. A single snapshot bakes in the parked frame's pose: fetch
+      never downloads solver frame 0 (the initial state), so PC2 index 0
+      always comes from this gap-fill, and an armature-driven SOLID
+      collider showed the parked frame's pose on Blender frame 1 while
+      every later frame was correct.
     """
     if frame_idx <= 0:
         return
-    rest_co, sd_cache_local = _gap_fill_poses(obj, n_verts)
-    for gap_i in range(frame_idx):
-        if sd_cache_local is not None and gap_i < sd_cache_local.shape[0]:
-            append_pc2_frame(pc2_path, sd_cache_local[gap_i], n_verts)
-        else:
-            append_pc2_frame(pc2_path, rest_co, n_verts)
+    rest_co, sd_cache_world = _gap_fill_poses(obj, n_verts)
+    if sd_cache_world is None:
+        if obj.type != "MESH":
+            # CURVE gap frames use the rest CVs; rod playback has no
+            # depsgraph-evaluated per-frame local pose to draw from.
+            for _ in range(frame_idx):
+                append_pc2_frame(pc2_path, rest_co, n_verts)
+            return
+        from .pc2 import MODIFIER_NAME
+        from .utils import eval_deform_local_positions
+        scene = bpy.context.scene
+        saved_frame = scene.frame_current
+        try:
+            for gap_i in range(frame_idx):
+                scene.frame_set(gap_i + start_frame)
+                co = eval_deform_local_positions(
+                    obj, exclude_modifier_name=MODIFIER_NAME,
+                )
+                if co is None or len(co) != n_verts:
+                    co = rest_co
+                append_pc2_frame(
+                    pc2_path, numpy.asarray(co, dtype=numpy.float64), n_verts,
+                )
+        finally:
+            if scene.frame_current != saved_frame:
+                scene.frame_set(saved_frame)
+        return
+
+    # A collider whose matrix_world is the same on every frame (no animation,
+    # parent, constraint or driver) needs the matrix read only once.
+    per_frame = _needs_per_frame_matrix(obj)
+    scene = bpy.context.scene
+    saved_frame = scene.frame_current
+    constant_inv = (
+        None if per_frame
+        else numpy.array(inv_world_matrix(obj), dtype=numpy.float64)
+    )
+    try:
+        for gap_i in range(frame_idx):
+            if gap_i >= sd_cache_world.shape[0]:
+                append_pc2_frame(pc2_path, rest_co, n_verts)
+                continue
+            if per_frame:
+                scene.frame_set(gap_i + start_frame)
+                inv = numpy.array(inv_world_matrix(obj), dtype=numpy.float64)
+            else:
+                inv = constant_inv
+            local = sd_cache_world[gap_i] @ inv[:3, :3].T + inv[:3, 3]
+            append_pc2_frame(pc2_path, local, n_verts)
+    finally:
+        if per_frame and scene.frame_current != saved_frame:
+            scene.frame_set(saved_frame)
 
 
-def _write_mesh_frame_to_pc2(obj, map_vert, blender_frame, n_verts_override=None,
+def _write_mesh_frame_to_pc2(obj, map_vert, blender_frame, start_frame,
+                              n_verts_override=None,
                               place_after_deformers=False):
     """Write a single frame to the object's PC2 file.
 
@@ -345,7 +418,10 @@ def _write_mesh_frame_to_pc2(obj, map_vert, blender_frame, n_verts_override=None
     n_verts = n_verts_override if n_verts_override is not None else len(obj.data.vertices)
     key = object_pc2_key(obj)
     pc2_path = get_pc2_path(key)
-    frame_idx = blender_frame - 1  # PC2 is 0-indexed, Blender is 1-indexed
+    # PC2 index 0 is the solve's first frame, which plays back at Blender frame
+    # ``start_frame``; the MESH_CACHE modifier carries the same offset so the
+    # index and the timeline stay in step.
+    frame_idx = blender_frame - start_frame
 
     # If the cache on disk was recorded with a different vertex count
     # (e.g. the user edited the mesh and re-transferred), discard it and
@@ -382,7 +458,7 @@ def _write_mesh_frame_to_pc2(obj, map_vert, blender_frame, n_verts_override=None
         os.makedirs(os.path.dirname(pc2_path), exist_ok=True)
         create_pc2_file(pc2_path, n_verts, start=0.0, sampling=1.0)
         # Fill gap frames [0, frame_idx).
-        _append_leading_gap_frames(pc2_path, frame_idx, n_verts, obj)
+        _append_leading_gap_frames(pc2_path, frame_idx, n_verts, obj, start_frame)
         # Write the actual simulation frame
         append_pc2_frame(pc2_path, map_vert, n_verts)
         mark_real_frame(key, frame_idx)
@@ -395,7 +471,7 @@ def _write_mesh_frame_to_pc2(obj, map_vert, blender_frame, n_verts_override=None
             # the next PPF_OT_FramePump tick heals the modifier.
             try:
                 setup_mesh_cache_modifier(
-                    obj, pc2_path, frame_start=1.0,
+                    obj, pc2_path, frame_start=float(start_frame),
                     place_after_deformers=place_after_deformers,
                 )
             except Exception:
@@ -443,15 +519,15 @@ def _get_curve_cv_count(obj):
 
 
 def _apply_single_frame(context, n, vert, map_by_uuid, surface_map_by_uuid,
-                        target_objects, world_inv_by_uuid,
+                        target_objects, world_inv_by_uuid, start_frame,
                         curve_fit_cache=None):
     """Process one simulation frame: write vertex/CV data to PC2 files.
 
     Both mesh and curve objects are written to PC2 without calling
     frame_set() here — the caller has already done so for frame N when
     any target needs a per-frame matrix. World-to-local conversion picks
-    the per-frame inverse from ``world_inv_by_uuid`` for animated STATIC
-    targets, falling back to the target's pre-snapshotted
+    the per-frame inverse from ``world_inv_by_uuid`` for targets with an
+    animated matrix_world, falling back to the target's pre-snapshotted
     ``constant_inv`` for everyone else.
 
     ``curve_fit_cache`` is an optional ``{uuid: (cache_list, params_data)}``
@@ -461,7 +537,9 @@ def _apply_single_frame(context, n, vert, map_by_uuid, surface_map_by_uuid,
     (segment indices, ``t``, weights, cyclic flag), which is frame-
     invariant.
     """
-    blender_frame = n + 1
+    # Solver frame 0 is the pose at the starting frame, so solver frame n
+    # displays on Blender frame n + start_frame.
+    blender_frame = n + start_frame
 
     from .curve_rod import apply_fit_cached, build_fit_cache
 
@@ -572,10 +650,10 @@ def _apply_single_frame(context, n, vert, map_by_uuid, surface_map_by_uuid,
                 curve_cvs = numpy.concatenate(all_cvs, axis=0)
                 n_cvs = _get_curve_cv_count(obj)
                 _write_mesh_frame_to_pc2(obj, curve_cvs[:n_cvs], blender_frame,
-                                         n_verts_override=n_cvs)
+                                         start_frame, n_verts_override=n_cvs)
         else:
             map_vert = _apply_matrix_np(mat, rec["world"])
-            _write_mesh_frame_to_pc2(obj, map_vert, blender_frame,
+            _write_mesh_frame_to_pc2(obj, map_vert, blender_frame, start_frame,
                                      place_after_deformers=rec["after"])
 
     return blender_frame
@@ -605,6 +683,12 @@ def heal_mesh_caches_if_stale():
             return
         from .uuid_registry import resolve_assigned
         from ..models.groups import iterate_active_object_groups
+        from .encoder import resolve_start_frame_or_default
+        # Hoisted: this timer fires every 0.1s, so resolve the offset once
+        # per tick rather than once per object. Defaulted rather than raised:
+        # the timer can tick during addon register, and a bare raise here
+        # would be swallowed by the outer except and silently stop healing.
+        heal_frame_start = float(resolve_start_frame_or_default(scene))
         for g in iterate_active_object_groups(scene):
             for assigned in g.assigned_objects:
                 if not assigned.included:
@@ -633,6 +717,20 @@ def heal_mesh_caches_if_stale():
                     mod is None
                     or mod.cache_format != "PC2"
                     or not mod.filepath
+                    # Starting Frame changed since this cache was bound. The
+                    # PC2 contents are offset-independent (index i is always
+                    # solver frame i), so the modifier's frame_start is the
+                    # only thing that has to move, and rebinding is what makes
+                    # an already-fetched animation follow the setting instead
+                    # of waiting for a re-fetch. Cheap float compare; the
+                    # header read below still only runs on a real rebind, and
+                    # setup stamps frame_start so this settles in one tick.
+                    or mod.frame_start != heal_frame_start
+                    # A cache bound before the visibility keying existed, or
+                    # whose keys the user deleted. Gated on a late start inside
+                    # the helper, so the common frame-1 scene never pays the
+                    # fcurve walk.
+                    or needs_cache_visibility_keys(obj, heal_frame_start)
                 )
                 if not needs_setup:
                     continue
@@ -653,7 +751,7 @@ def heal_mesh_caches_if_stale():
                     continue
                 try:
                     setup_mesh_cache_modifier(
-                        obj, pc2, frame_start=1.0,
+                        obj, pc2, frame_start=heal_frame_start,
                         place_after_deformers=_needs_after_deformers(
                             g.object_type, obj
                         ),
@@ -689,6 +787,13 @@ def apply_animation():
     context = bpy.context
     com = communicator
     state = get_addon_data(context.scene).state
+    # Resolved once for the whole batch so every frame in it lands on a
+    # consistent offset. PC2 index is ``blender_frame - start_frame`` and
+    # ``blender_frame`` is ``n + start_frame``, so the offset cancels in the
+    # file itself: a mid-fetch change to the field moves only where the
+    # MESH_CACHE modifier displays the cache, never what is stored in it.
+    from .encoder import resolve_start_frame
+    start_frame = resolve_start_frame(state)
     # Snapshotted so a mid-fetch error can return the user to their
     # original frame instead of stranding the playhead wherever the
     # exception landed. Success leaves frame_current at the latest
@@ -755,10 +860,20 @@ def apply_animation():
                                 for m in obj.modifiers:
                                     if m.type == "WIREFRAME" and m.use_even_offset:
                                         m.use_even_offset = False
+                            # Any mesh whose matrix_world varies across
+                            # frames needs the per-frame inverse, whatever
+                            # its object type. MESH_CACHE re-applies the
+                            # object's animated transform at display time,
+                            # so localizing frame N with any other frame's
+                            # matrix displaces the displayed mesh by the
+                            # object's travel between the two frames. A
+                            # fully pinned SOLID collider parented to an
+                            # animated armature shipped this bug: the cloth
+                            # appeared to penetrate it by exactly one frame
+                            # of root motion during live fetch.
                             needs_per_frame = (
-                                group.object_type == "STATIC"
-                                and obj.type == "MESH"
-                                and _static_needs_per_frame_matrix(obj)
+                                obj.type == "MESH"
+                                and _needs_per_frame_matrix(obj)
                             )
                             constant_inv = (
                                 None if needs_per_frame
@@ -776,16 +891,15 @@ def apply_animation():
                             ))
                 any_per_frame = any(t.needs_per_frame for t in target_objects)
 
-            # For STATIC targets whose matrix_world varies per frame, we
-            # must evaluate Blender's depsgraph at frame N to read the
-            # true playback matrix_world before computing PC2_local. This
-            # is the cost of letting PC2 + MESH_CACHE display the
-            # simulator's soft-projected static collider positions
-            # against the user's preserved fcurves/parents/constraints
-            # without drift.
+            # For targets whose matrix_world varies per frame, we must
+            # evaluate Blender's depsgraph at frame N to read the true
+            # playback matrix_world before computing PC2_local. This is
+            # the cost of letting PC2 + MESH_CACHE display the solver's
+            # world-space output against the user's preserved
+            # fcurves/parents/constraints without drift.
             world_inv_by_uuid = {}
             if any_per_frame:
-                context.scene.frame_set(n + 1)
+                context.scene.frame_set(n + start_frame)
                 for t in target_objects:
                     if t.needs_per_frame:
                         world_inv_by_uuid[t.uuid] = numpy.array(
@@ -794,7 +908,7 @@ def apply_animation():
 
             bf = _apply_single_frame(
                 context, n, vert, map_by_uuid, surface_map_by_uuid,
-                target_objects, world_inv_by_uuid,
+                target_objects, world_inv_by_uuid, start_frame,
                 curve_fit_cache=curve_fit_cache,
             )
             max_blender_frame = max(max_blender_frame, bf)
@@ -807,7 +921,7 @@ def apply_animation():
                 break
 
         if max_blender_frame > 0:
-            context.scene.frame_start = 1
+            context.scene.frame_start = start_frame
             # Track the latest fetched frame; first apply in a run
             # overwrites Blender's 250 default, later calls clamp
             # non-decreasing so async out-of-order chunks can't
