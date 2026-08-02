@@ -69,10 +69,18 @@ class _ParamProxy:
       ``plasticity_threshold``
     - **Bend plasticity**: ``enable_bend_plasticity``, ``bend_plasticity``,
       ``bend_plasticity_threshold``, ``bend_rest_angle_source``
-    - **Shell-specific**: ``bend``, ``shrink``, ``shrink_x``, ``shrink_y``,
-      ``stitch_stiffness``
+    - **Bend stiffness**: ``bend``, drawn on Shell and Rod groups
+    - **Rest-shape scale**: ``shrink_x`` / ``shrink_y`` (Shell, per axis),
+      ``shrink`` (Solid, uniform), ``length_factor`` (Rod, labeled
+      **Shrink** in the panel; it scales the rod's rest edge length)
+    - **Stitch**: ``stitch_stiffness`` (Solid, Shell and Rod)
     - **PDRD-specific**: ``pdrd_density`` (kg/m^3, volumetric). The PDRD hinge
       joint is per-object, set via :meth:`set_hinge` (not a group material).
+    - **Sand-specific**: ``sand_grain_radius`` (meters), ``sand_particle_mass``
+      (grams; the encoder sends kilograms), ``sand_friction``.  Once
+      :meth:`Solver.convert_to_particle_mesh` has run, the radius it seeded
+      is stamped on the object and the encoder reads that in preference to
+      ``sand_grain_radius``.
 
     Example::
 
@@ -120,12 +128,21 @@ class _ParamProxy:
         group.param.bend_plasticity_threshold = 0.1
         group.param.bend_rest_angle_source = "REST"
 
-        # Shell-specific
+        # Bending (Shell and Rod), and the Shell per-axis rest-shape scale
         group.param.bend = 1.0e-4
-        group.param.shrink = 0.98
         group.param.shrink_x = 0.99
         group.param.shrink_y = 0.97
+
+        # Solid uniform rest-shape scale, and the Rod rest-length scale
+        group.param.shrink = 0.98
+        group.param.length_factor = 0.97
+
+        # Stitch (Solid, Shell and Rod)
         group.param.stitch_stiffness = 5.0e4
+
+        # Sand-specific (particle mass in grams)
+        group.param.sand_particle_mass = 10.0
+        group.param.sand_friction = 0.4
     """
 
     def __init__(self, group_proxy: "_Group"):
@@ -191,6 +208,55 @@ class _Group:
                     g.delete()
         """
         return self._get_group().name
+
+    @property
+    @blender_api
+    def slot(self) -> int:
+        """The ``object_group_N`` slot index this group occupies.
+
+        This is the index every group operator addresses, resolved
+        through ``object_group_{index}``.  It is not
+        ``ObjectGroup.index``, which numbers the active groups
+        consecutively for display: the two agree only while every slot
+        below this one is active, so a scene that has ever deleted a
+        group can have them disagree.
+
+        Raises:
+            ValueError: If no slot holds this group's UUID.
+
+        Example::
+
+            group = solver.create_group("Shirt", type="SHELL")
+            print(f"stored in object_group_{group.slot}")
+        """
+        from ...models.groups import get_group_slot_index
+
+        # Resolve the group first, so this property accepts exactly the
+        # handles every other accessor on the proxy accepts:
+        # get_group_slot_index answers for any slot carrying the UUID,
+        # without consulting the slot's own state.
+        self._get_group()
+        slot = get_group_slot_index(bpy.context.scene, self._uuid)
+        if slot is None:
+            raise ValueError(f"Group '{self._uuid}' not found")
+        return slot
+
+    @property
+    @blender_api
+    def type(self) -> str:
+        """Dynamics type of this group.
+
+        One of ``"SOLID"``, ``"SHELL"``, ``"ROD"``, ``"STATIC"``,
+        ``"PDRD"``, ``"SAND"``.  Set at creation through
+        :meth:`Solver.create_group`.
+
+        Example::
+
+            for g in solver.get_groups():
+                if g.type == "ROD":
+                    g.param.length_factor = 0.97
+        """
+        return self._get_group().object_type
 
     @property
     @blender_api

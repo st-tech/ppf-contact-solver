@@ -19,6 +19,25 @@ from ._utils_ import Utils
 from ._render_ import Rasterizer
 
 
+def _renumber(index_array: np.ndarray, renumber: np.ndarray) -> np.ndarray:
+    """Rewrite an element index array into a compacted vertex numbering.
+
+    ``renumber`` maps every original vertex row to its row in the compacted
+    buffer, or to -1 for a vertex that was dropped. An element that survived
+    the caller's filtering can only reference kept vertices, so a -1 here is a
+    caller bug (a dropped vertex still being drawn) and trips rather than
+    rendering against a wrapped-around index.
+    """
+    if len(index_array) == 0:
+        return index_array
+    out = renumber[np.asarray(index_array, dtype=np.int64)]
+    assert out.min() >= 0, (
+        "an element references a vertex that draw_index drops; "
+        "filter the elements before compacting the vertices"
+    )
+    return out
+
+
 class PlotManager:
     """Factory for creating :class:`Plot` instances with shared parameters.
 
@@ -93,6 +112,7 @@ class Plot:
 
         self._vert = np.zeros(0)
         self._color = np.zeros(0)
+        self._draw_index: Optional[np.ndarray] = None
         self.param = param
 
     def is_jupyter_notebook(self) -> bool:
@@ -115,6 +135,7 @@ class Plot:
         seg: np.ndarray = np.zeros(0),
         pts: np.ndarray = np.zeros(0),
         param_override: Optional[dict] = None,
+        draw_index: Optional[np.ndarray] = None,
     ) -> "Plot":
         """Plot a mesh with optional triangles, edges, and points.
 
@@ -127,6 +148,13 @@ class Plot:
             seg (np.ndarray): The edge elements (Ex2) of the mesh.
             pts (np.ndarray): The point element indices (Px1) of the mesh.
             param_override (Optional[dict]): Fields to override on a copy of the plot parameters.
+            draw_index (Optional[np.ndarray]): Rows of ``vert`` to hand to the
+                render engine, with ``tri`` / ``seg`` / ``pts`` renumbered to
+                match. ``None`` draws every vertex. The cached buffer keeps its
+                full width either way, so a caller that hides geometry can go
+                on addressing :meth:`update` in the original index space (a
+                live session pushes solver frames indexed that way), and the
+                dropped vertices stay out of the engine's auto-framing.
 
         Returns:
             Plot: ``self`` for method chaining.
@@ -145,8 +173,32 @@ class Plot:
                 setattr(param, key, value)
             self._vert = vert.copy()
             self._color = color.copy()
-            self._engine.plot(self._vert, self._color, tri, seg, pts, param)
+            self._draw_index = draw_index
+            if draw_index is None:
+                self._engine.plot(self._vert, self._color, tri, seg, pts, param)
+            else:
+                renumber = np.full(len(self._vert), -1, dtype=np.int64)
+                renumber[draw_index] = np.arange(len(draw_index), dtype=np.int64)
+                self._engine.plot(
+                    self._drawn(self._vert),
+                    self._drawn(self._color),
+                    _renumber(tri, renumber),
+                    _renumber(seg, renumber),
+                    _renumber(pts, renumber),
+                    param,
+                )
         return self
+
+    def _drawn(self, buffer: np.ndarray) -> np.ndarray:
+        """Restrict a per-vertex buffer to the rows the engine draws.
+
+        Passes the buffer straight through when no ``draw_index`` is in
+        effect, and when it is not per-vertex at all (:meth:`plot` accepts an
+        empty ``color`` and substitutes the default color engine-side).
+        """
+        if self._draw_index is None or len(buffer) != len(self._vert):
+            return buffer
+        return buffer[self._draw_index]
 
     def update(
         self,
@@ -182,13 +234,13 @@ class Plot:
                 self._vert = vert.copy()
             else:
                 self._vert[0 : len(vert)] = vert
-            vert = self._vert
+            vert = self._drawn(self._vert)
         if color is not None:
             if self._color is None or len(self._color) < len(color):
                 self._color = color.copy()
             else:
                 self._color[0 : len(color)] = color
-            color = self._color
+            color = self._drawn(self._color)
         self._engine.update(vert, color, recompute_normals)
 
     def tri(

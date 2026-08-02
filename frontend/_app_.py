@@ -546,13 +546,17 @@ class App:
 
         Inspectable metadata (project name, on-disk root) lives at the
         top of the map; ``pickle_blob`` carries the manager graph for
-        rehydration in :meth:`__init__`.
+        rehydration in :meth:`__init__`, chunked so that reading a large
+        app state back does not run into the quadratic decode described
+        at ``_cbor_bridge_.PICKLE_CHUNK_BYTES``.
         """
+        from . import _cbor_bridge_ as _cbor
+
         return _rust.app_to_cbor_dict(
             self._name,
             self._root,
             list(self._asset.list()),
-            pickle_blob,
+            _cbor.chunk_pickle_blob(pickle_blob),
         )
 
     def clear_cache(self) -> "App":

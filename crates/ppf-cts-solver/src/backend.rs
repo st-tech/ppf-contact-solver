@@ -8,6 +8,7 @@ use super::data::{
     Constraint, IntersectionRecord, Mat2x2f, Mat3x3f, RestShapeUpdate, StepResult, Vec3f,
     MAX_INTERSECTION_RECORDS,
 };
+use super::plastic_state::{PlasticKinds, PlasticState};
 use super::{mesh::Mesh, DataSet, ParamSet, ProgramArgs, Scene, SimArgs};
 use ppf_cts_formats::status::{crash_kind_from_step, Outcome, Phase};
 use chrono::Local;
@@ -228,7 +229,7 @@ impl Backend {
 
     pub fn load_state(frame: i32, dirpath: &str) -> Self {
         let (mesh, state) = {
-            let path_mesh = format!("{dirpath}/meshset.bin.gz");
+            let path_mesh = format!("{dirpath}/{}", ppf_cts_formats::files::MESHSET);
             let path_state = format!("{dirpath}/{}", ppf_cts_formats::files::state_filename(frame));
             let mesh = super::read(&super::read_gz(path_mesh.as_str()));
             let state = super::read(&super::read_gz(path_state.as_str()));
@@ -481,36 +482,53 @@ impl Backend {
         sim_args: &SimArgs,
         dataset: &DataSet,
     ) {
-        let path_mesh = format!("{}/meshset.bin.gz", program_args.output);
-        let path_dataset = format!("{}/dataset.bin.gz", program_args.output);
+        use ppf_cts_formats::files;
+        let path_mesh = format!("{}/{}", program_args.output, files::MESHSET);
+        let path_dataset = format!("{}/{}", program_args.output, files::DATASET);
         info!(">>> saving state started...");
-        // Pull the evolving plastic rest state (inv_rest matrices and the
-        // hinge/vertex rest angles) DtoH right before serialization so the
-        // dataset carries the current rest pose. The top-of-loop save_and_quit
-        // and finished sites run with no advance since the last fetch_state, so
-        // the device rest state matches the host buffers; the auto-save site
-        // does one extra identical copy after fetch_state, which is harmless.
-        unsafe {
-            fetch_inv_rest();
-            fetch_rest_angles();
+        // The dataset and the meshset are both build-time products that the
+        // simulation does not change, so each is written once and skipped on
+        // every later checkpoint. The single exception is the rest shape: the
+        // dataset's `inv_rest*` matrices and rest angles are build-time values
+        // like everything else here, but plasticity creeps them on the device
+        // as the run proceeds. That is why they are ALSO written per frame,
+        // and only for the kernels the scene enables. See `plastic_state`.
+        if !std::path::Path::new(&path_dataset).exists() {
+            info!("saving dataset to {path_dataset}");
+            super::save(dataset, path_dataset.as_str());
         }
-        info!("saving dataset to {path_dataset}");
-        super::save(dataset, path_dataset.as_str());
         if !std::path::Path::new(&path_mesh).exists() {
             info!("saving meshset to {path_mesh}");
             super::save(&self.mesh, path_mesh.as_str());
         }
+        // Record which layout produced these checkpoints, so the resume path
+        // knows whether the dataset's rest shape is the build-time one (this
+        // layout, marker present) or the last frame's (a layout that rewrites
+        // the dataset every save, marker absent). It must not be inferred from
+        // the per-frame files themselves: they are pruned, so their absence
+        // cannot distinguish "never written" from "deleted".
+        let path_layout = format!("{}/{}", program_args.output, files::CHECKPOINT_LAYOUT);
+        if !std::path::Path::new(&path_layout).exists() {
+            std::fs::write(&path_layout, files::CHECKPOINT_LAYOUT_NOTE)
+                .unwrap_or_else(|err| panic!("failed to write {path_layout}: {err}"));
+        }
+        // Before the state, deliberately. A checkpoint is resumable once its
+        // `state_<N>.bin.gz` exists, so writing the rest shape first means a
+        // crash between the two leaves a rest shape with no state, which is an
+        // inert orphan, rather than a state with no rest shape, which is the
+        // one combination that cannot be resumed.
+        self.save_plastic_state(program_args, sim_args, dataset);
         let path_state = format!(
             "{}/{}",
             program_args.output,
-            ppf_cts_formats::files::state_filename(self.state.curr_frame)
+            files::state_filename(self.state.curr_frame)
         );
         info!("saving state to {path_state}...");
         super::save(&self.state, path_state.as_str());
         super::remove_old_files(
             &program_args.output,
-            ppf_cts_formats::files::STATE_PREFIX,
-            ppf_cts_formats::files::STATE_SUFFIX,
+            files::STATE_PREFIX,
+            files::STATE_SUFFIX,
             sim_args.keep_states,
             self.state.curr_frame,
         );
@@ -518,6 +536,55 @@ impl Backend {
         // status record's `resumable` flag.
         crate::status_writer::note_saved();
         info!("<<< save state done.");
+    }
+
+    /// Write `plastic_<frame>.bin.gz`, this frame's rest shape, for a scene
+    /// where plasticity creeps it away from the build-time values the dataset
+    /// holds.
+    ///
+    /// Only the enabled kernels' arrays are pulled back from the device and
+    /// only those are stored, so a scene with no plastic material does no DtoH
+    /// copy and writes no file. Retention matches the state checkpoints, so a
+    /// `state_<N>.bin.gz` that survives pruning still has its rest shape beside
+    /// it.
+    fn save_plastic_state(
+        &self,
+        program_args: &ProgramArgs,
+        sim_args: &SimArgs,
+        dataset: &DataSet,
+    ) {
+        use ppf_cts_formats::files;
+        let kinds = PlasticKinds::of(dataset);
+        if !kinds.any() {
+            return;
+        }
+        // Refresh the host arrays from the device right before serializing.
+        // The top-of-loop save_and_quit and finished sites run with no advance
+        // since the last fetch_state, so the device rest shape already matches
+        // the host buffers; the auto-save site does one extra identical copy
+        // after fetch_state, which is harmless.
+        unsafe {
+            if kinds.needs_inv_rest() {
+                fetch_inv_rest();
+            }
+            if kinds.needs_rest_angles() {
+                fetch_rest_angles();
+            }
+        }
+        let path = format!(
+            "{}/{}",
+            program_args.output,
+            files::plastic_filename(self.state.curr_frame)
+        );
+        info!("saving plastic rest shape to {path}");
+        super::save(&PlasticState::extract(dataset, kinds), path.as_str());
+        super::remove_old_files(
+            &program_args.output,
+            files::PLASTIC_PREFIX,
+            files::PLASTIC_SUFFIX,
+            sim_args.keep_states,
+            self.state.curr_frame,
+        );
     }
 
     pub fn run(

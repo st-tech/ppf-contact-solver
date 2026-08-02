@@ -89,8 +89,9 @@ try:
     rig.rotation_euler = (0.0, 0.0, -1.5707963)  # -90 deg Z, not captured by mpi
     bpy.context.view_layer.update()
 
-    # World bbox must stay inside the fixed-point domain (~+/-16) or the solver
-    # rejects it for a reason unrelated to this test.
+    # Log the world bbox so a failure can be attributed to the transform
+    # round-trip rather than to the scene sitting at a coordinate magnitude
+    # where the positions themselves lose resolution.
     import numpy as _np
     _mw = _np.array(plane.matrix_world)
     _co = _np.empty(len(plane.data.vertices) * 3)

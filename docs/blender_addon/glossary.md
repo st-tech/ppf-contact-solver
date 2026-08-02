@@ -40,7 +40,8 @@ documentation, grouped by subject and alphabetized within each group.
 
 **Object group**
 : One of up to 32 slots on a scene that holds a type (**Solid** / **Shell**
-  / **Rod** / **Static**), material parameters, assigned meshes, and pins.
+  / **Rod** / **PDRD** / **Sand** / **Static**), material parameters,
+  assigned meshes, and pins.
   See [Object Groups](workflow/scene/object_groups.md); Static groups are
   covered separately in [Static Objects](workflow/scene/static_objects.md).
 
@@ -117,6 +118,13 @@ documentation, grouped by subject and alphabetized within each group.
   keyframes on curves. The baked result renders without the add-on
   installed. See [Baking Animation](workflow/sim/baking.md).
 
+**Bend stiffness**
+: Per-group resistance to bending, carried by **Shell** and **Rod** groups
+  as a single `bend` value that each type scales on its own terms. On a rod
+  it is measured against a one-centimeter reference segment, so a strand
+  bends the same way however many segments it is drawn with. See
+  [Bend Stiffness on a Rod](workflow/params/material.md#bend-stiffness-on-a-rod).
+
 **Checkpoint**
 : A saved, resumable solver state captured at a chosen frame. Add frames
   to the **Save Checkpoints** list to have the solver write a checkpoint
@@ -192,6 +200,14 @@ documentation, grouped by subject and alphabetized within each group.
   properties, solver tolerances) applied globally rather than per group.
   See [Scene Parameters](workflow/params/scene.md).
 
+**Shrink**
+: Rest-shape scale carried in a group's material parameters: anisotropic
+  **Shrink X** / **Shrink Y** on **Shell**, a single uniform **Shrink** on
+  **Solid**, and a per-segment rest-length scale on **Rod**. Below 1.0 the
+  rest shape is smaller than the drawn geometry, so the body pulls itself
+  taut; above 1.0 it is larger, so the body slackens. See
+  [Material Parameters](workflow/params/material.md).
+
 **Solver state**
 : The status surfaced by the Solver panel: Disconnected, Ready to Run,
   Simulation Running..., Resumable, Fetching Animation..., or Simulation
@@ -251,14 +267,18 @@ documentation, grouped by subject and alphabetized within each group.
   dispatched with `tools/call`. Goes through the same validation layer as
   the sidebar buttons.
 
-**Protocol 0.10**
-: The current wire protocol version between the add-on and the
-  `ppf-cts-server` binary. TCMD requests carry a 4-byte big-endian length
-  prefix between the `b"TCMD"` header and the payload, and the server
-  supports heartbeat recovery on long-running operations. CBOR envelope
-  payloads on this connection use the schema from the `ppf-cts-formats`
-  crate. The server advertises its version on connect; mismatches surface
-  as a protocol-version-mismatch status and refuse to proceed.
+**Protocol version**
+: The wire protocol version between the add-on and the `ppf-cts-server`
+  binary. Both halves take it from the same shipped file, so the pair
+  that ships together always agrees and there is no number for you to
+  set. TCMD requests carry a 4-byte big-endian length prefix between the
+  `b"TCMD"` header and the payload, and the server supports heartbeat
+  recovery on long-running operations. CBOR envelope payloads on this
+  connection use the schema from the `ppf-cts-formats` crate. The server
+  advertises its version on connect; a mismatch means one of the two
+  binaries is stale, surfaces as a protocol-version-mismatch status, and
+  refuses to proceed. See
+  [Protocol version mismatch](troubleshooting.md#status-protocol-version-mismatch).
 
 **Python API (add-on)**
 : The add-on's Python API, exposed under

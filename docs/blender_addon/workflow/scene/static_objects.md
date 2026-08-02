@@ -223,6 +223,33 @@ animation, for instance when you turn the object back into a rigid
 collider, or when you have edited the mesh in a way that changed
 its vertex count and need to start over.
 
+## Re-capturing Every Deformation at Once
+
+Capturing object by object gets tedious once a scene holds several
+animated colliders, and a missed one stops the next **Transfer**. The
+**Deformations** box on the Solver panel carries two buttons that work
+across the whole scene.
+
+**Re-capture All Deformations** records every deforming Static collider
+and every animated pin in one pass. It runs the collider captures first
+and the pin captures after, because the two read the same evaluated
+scene and cannot run together. A progress readout and an **Abort**
+button appear below the box while it runs.
+
+**Clear All Deformations** deletes every recording in the scene: all
+Static-collider caches, all animated-pin captures, and any cache left
+behind by an object that was deleted or taken out of its group. The
+objects keep their armatures, lattices and shape keys, so
+**Re-capture All Deformations** rebuilds what it removed.
+
+Reach for the per-object buttons above when one object's animation has
+changed, and for these two after a change that touches many objects at
+once, or when you are not sure which recordings are still current.
+
+Both buttons are disabled while a capture or a bake is already running,
+and **Clear All Deformations** is also disabled when the scene holds no
+recording to clear.
+
 ## Contact Parameters
 
 Static groups expose only the contact-relevant subset of material

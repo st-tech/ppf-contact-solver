@@ -62,33 +62,22 @@ pub struct RuntimeUsage {
 /// with a stuck driver, `run_with_timeout` kills the child after
 /// PROBE_TIMEOUT.
 pub fn runtime_usage() -> RuntimeUsage {
-    let mut out = RuntimeUsage::default();
-
-    if let Some(s) = run_with_timeout(
-        Command::new("nvidia-smi").args([
-            "--query-gpu=utilization.gpu,memory.used,memory.total",
-            "--format=csv,noheader,nounits",
-        ]),
+    let mut out = run_with_timeout(
+        Command::new("nvidia-smi")
+            .args([
+                "--query-gpu=index,uuid,utilization.gpu,memory.used,memory.total,name",
+                "--format=csv,noheader,nounits",
+            ])
+            .env_remove("CUDA_VISIBLE_DEVICES"),
         PROBE_TIMEOUT,
-    ) {
-        if let Some(line) = s.lines().next() {
-            let parts: Vec<&str> = line.split(',').map(str::trim).collect();
-            if parts.len() == 3 {
-                out.gpu_util = Some(format!("{}%", parts[0]));
-                if let (Ok(used), Ok(total)) =
-                    (parts[1].parse::<u64>(), parts[2].parse::<u64>())
-                {
-                    let pct = if total > 0 {
-                        (100.0 * used as f64 / total as f64).round() as u64
-                    } else {
-                        0
-                    };
-                    out.vram_usage =
-                        Some(fmt_usage(pct, mib_to_gib(used), mib_to_gib(total)));
-                }
-            }
-        }
-    }
+    )
+    .map(|s| {
+        parse_runtime_gpu_usage(
+            &s,
+            std::env::var("CUDA_VISIBLE_DEVICES").ok().as_deref(),
+        )
+    })
+    .unwrap_or_default();
 
     // `cpu_usage()` reports the delta between successive refreshes,
     // so we hold one `System` across calls and refresh once per
@@ -116,6 +105,32 @@ pub fn runtime_usage() -> RuntimeUsage {
     out
 }
 
+fn parse_runtime_gpu_usage(stdout: &str, visible: Option<&str>) -> RuntimeUsage {
+    let mut out = RuntimeUsage::default();
+    let rows = ppf_cts_core::utils::parse_gpu_rows(stdout, 3);
+    let pairs: Vec<(u32, &str)> = rows
+        .iter()
+        .map(|row| (row.index, row.uuid.as_str()))
+        .collect();
+    let Some(position) = ppf_cts_core::utils::visible_device_position(&pairs, visible) else {
+        return out;
+    };
+    let selected = &rows[position];
+    out.gpu_util = Some(format!("{}%", selected.fields[0]));
+    if let (Ok(used), Ok(total)) = (
+        selected.fields[1].parse::<u64>(),
+        selected.fields[2].parse::<u64>(),
+    ) {
+        let pct = if total > 0 {
+            (100.0 * used as f64 / total as f64).round() as u64
+        } else {
+            0
+        };
+        out.vram_usage = Some(fmt_usage(pct, mib_to_gib(used), mib_to_gib(total)));
+    }
+    out
+}
+
 static SYSINFO: std::sync::OnceLock<std::sync::Mutex<sysinfo::System>> =
     std::sync::OnceLock::new();
 
@@ -137,27 +152,47 @@ pub fn probe() -> HardwareInfo {
     hw
 }
 
-/// `nvidia-smi --query-gpu=name,memory.total,compute_cap` parses the
-/// CSV row for GPU/VRAM/SM, then a plain `nvidia-smi` for the CUDA
+/// `nvidia-smi --query-gpu=index,uuid,memory.total,compute_cap,name` parses the
+/// CSV rows for GPU/VRAM/SM, then a plain `nvidia-smi` for the CUDA
 /// driver line. Both calls run under a `run_with_timeout` capped at
 /// PROBE_TIMEOUT so a stuck driver can't block startup.
+///
+/// The row reported is the one `CUDA_VISIBLE_DEVICES` selects, so what the
+/// add-on's Remote Hardware block shows is the device the solver runs on,
+/// named by index as well as model. It is the only place that names it, so a
+/// machine holding two cards of the same model has to be readable here.
 fn probe_gpu(hw: &mut HardwareInfo) {
+    // Enumerate every device, then apply CUDA_VISIBLE_DEVICES in code.
+    // Measured on a four-GPU Windows host, nvidia-smi ignores that variable
+    // and lists every device anyway, but stripping it states the requirement
+    // rather than resting on a driver behavior: a build that did filter would
+    // renumber the surviving row and the selection would resolve to nothing.
     if let Some(out) = run_with_timeout(
-        Command::new("nvidia-smi").args([
-            "--query-gpu=name,memory.total,compute_cap",
-            "--format=csv,noheader,nounits",
-        ]),
+        Command::new("nvidia-smi")
+            .args([
+                "--query-gpu=index,uuid,memory.total,compute_cap,name",
+                "--format=csv,noheader,nounits",
+            ])
+            .env_remove("CUDA_VISIBLE_DEVICES"),
         PROBE_TIMEOUT,
     ) {
-        if let Some(line) = out.lines().next() {
-            let parts: Vec<&str> = line.split(',').map(str::trim).collect();
-            if parts.len() == 3 {
-                hw.gpu = parts[0].to_string();
-                if let Ok(mb) = parts[1].parse::<u64>() {
+        let rows = ppf_cts_core::utils::parse_gpu_rows(&out, 2);
+        match ppf_cts_core::utils::selected_gpu_row(&rows) {
+            Ok(selected) => {
+                hw.gpu_index = selected.index as i64;
+                // Index first, always: this row is the one place that names
+                // the device the solver is on, and two cards of the same model
+                // are told apart by nothing else.
+                hw.gpu = format!("{}: {}", selected.index, selected.name);
+                if let Ok(mb) = selected.fields[0].parse::<u64>() {
                     hw.vram = format!("{:.1} GB", mib_to_gib(mb));
                 }
-                hw.sm = format!("sm_{}", parts[2].replace('.', ""));
+                hw.sm = format!("sm_{}", selected.fields[1].replace('.', ""));
             }
+            // A selection that names no device leaves CUDA with nothing to run
+            // on. Report why in the field the add-on shows, rather than leaving
+            // the default there for the user to interpret.
+            Err(err) => hw.gpu = err.to_string(),
         }
     }
 
@@ -275,5 +310,28 @@ fn run_with_timeout(cmd: &mut Command, timeout: Duration) -> Option<String> {
                 std::thread::sleep(Duration::from_millis(50));
             }
         }
+
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_runtime_gpu_usage;
+
+    const TWO_GPUS: &str = "0, GPU-aaaa, 11, 1024, 4096, NVIDIA L40S\n\
+1, GPU-bbbb, 73, 8192, 16384, NVIDIA RTX A4000, Inc.\n";
+
+    #[test]
+    fn runtime_usage_selects_the_visible_device() {
+        let usage = parse_runtime_gpu_usage(TWO_GPUS, Some("GPU-bbbb"));
+        assert_eq!(usage.gpu_util.as_deref(), Some("73%"));
+        assert_eq!(usage.vram_usage.as_deref(), Some("50% (8.0/16.0 GB)"));
+    }
+
+    #[test]
+    fn runtime_usage_honors_an_empty_mask() {
+        let usage = parse_runtime_gpu_usage(TWO_GPUS, Some(""));
+        assert!(usage.gpu_util.is_none());
+        assert!(usage.vram_usage.is_none());
     }
 }

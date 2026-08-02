@@ -13,6 +13,7 @@
 #define PDRD_POLAR_HPP
 
 #include <cmath>
+#include "../../float_math.hpp"
 
 // Host/device portability: nvcc compiles these for both host and device; a plain
 // host compiler (the unit test) sees no annotation.
@@ -133,8 +134,9 @@ PDRD_POLAR_HD inline void rigid_polar_quat(const float M[9], float Rout[9]) {
         float w0 = on0 / denom, w1 = on1 / denom, w2 = on2 / denom;
         float ang = std::sqrt(w0 * w0 + w1 * w1 + w2 * w2);
         if (ang < 1e-9f) break;
-        float s = std::sin(0.5f * ang) / ang;
-        float dq[4] = {s * w0, s * w1, s * w2, std::cos(0.5f * ang)};
+        // A polar-decomposition increment, so `ang` is small and bounded.
+        float s = fmath::sin_bounded(0.5f * ang) / ang;
+        float dq[4] = {s * w0, s * w1, s * w2, fmath::cos_bounded(0.5f * ang)};
         // q <- dq * q  (quaternion product), then renormalize.
         float nx = dq[3] * q[0] + dq[0] * q[3] + dq[1] * q[2] - dq[2] * q[1];
         float ny = dq[3] * q[1] - dq[0] * q[2] + dq[1] * q[3] + dq[2] * q[0];

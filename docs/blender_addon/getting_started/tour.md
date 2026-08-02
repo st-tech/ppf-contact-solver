@@ -27,9 +27,19 @@ the transport to the solver) highlighted.
 
 The buttons that drive a simulation: **Transfer**, **Update Params on
 Remote**, **Run**, **Resume**, **Fetch All Animation**, **Delete Remote
-Data**, **Clear Local Animation**, plus Bake buttons. The **JupyterLab**
-and **MCP Server** collapsible sections live inside this panel; see
-[JupyterLab](../workflow/sim/jupyterlab.md) and [MCP](../integrations/mcp.md).
+Data**, **Clear Local Animation**, plus Bake buttons. Below them sit two
+always-visible boxes. **Deformations** holds **Re-capture All
+Deformations**, which re-records every deforming Static collider and
+every animated pin in the scene in one pass, and **Clear All
+Deformations**, which deletes every one of those recordings, including
+any left behind by an object that was deleted or taken out of its group.
+**Export** holds **Export USD** and **Export Alembic (ABC)**, which write
+the simulated result as a point cache another application can read, once
+every frame has been fetched; see
+[Exporting USD and Alembic Caches](../workflow/sim/exporting.md). The
+**JupyterLab** and **MCP Server** collapsible sections live inside this
+panel; see [JupyterLab](../workflow/sim/jupyterlab.md) and
+[MCP](../integrations/mcp.md).
 
 ```{figure} ../images/tour/solver.png
 :alt: Solver panel, Transfer button highlighted
@@ -72,6 +82,14 @@ The Dynamics Groups panel in its empty state, with **Create Group**
 group appears as its own box below.
 ```
 
+A **Sand** group simulates a cloud of grain centers rather than a
+surface, so its box carries an extra **Convert To Solid Particle Mesh**
+button above **Delete Group**. It fills the active solid mesh with grains
+at the **Grain Radius** you type into the dialog and discards the
+original faces, which is what a Sand group takes as input. The radius is
+fixed at that moment (the grain spacing is derived from it) and reads
+back as a grayed-out field on the group afterward.
+
 ## Snap and Merge
 
 Snap vertex positions between two objects and register merge pairs so the
@@ -86,6 +104,21 @@ snap that pulls Object A's vertices onto Object B's closest vertices)
 highlighted. The panel is collapsed by default; click the header to
 expand.
 ```
+
+## Utility Tools
+
+Mesh preparation that belongs to no single group. **Mesh Cleaning**
+scans the selected mesh objects for geometry the solver rejects and
+offers a targeted fix under each finding: **Merge by Distance**,
+**Remove Loose Vertices**, **Dissolve Degenerate**, **Delete Duplicate
+Faces**, **Triangulate**, and **Recalculate Outside**. The first three
+change the vertex count, so they ask for confirmation first and offer to
+clear the caches that count invalidates (the display cache and any
+captured deformation). **Symmetric Triangulate**, in its own box below,
+pokes each face into a center fan so a symmetric mesh folds
+symmetrically; that adds one vertex per face and it does not ask first.
+The panel is collapsed by default; click the header to expand. See
+[Mesh Cleaning](../workflow/scene/mesh_cleaning.md).
 
 ## Visualization
 

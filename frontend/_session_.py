@@ -1582,8 +1582,11 @@ def fixed_session_to_cbor_dict(
     sits at the top level so a generic CBOR reader can identify a
     saved session without unpickling. ``pickle_blob`` carries the
     full ``Session`` / ``ParamHolder`` / ``FixedScene`` graph for
-    rehydration in :meth:`App.recover`.
+    rehydration in :meth:`App.recover`, chunked so that reading a
+    large session back does not run into the quadratic decode
+    described at ``_cbor_bridge_.PICKLE_CHUNK_BYTES``.
     """
+    from . import _cbor_bridge_ as _cbor
     params: dict[str, Any] = {}
     try:
         for key, val in fixed_session.session.param.items():
@@ -1610,6 +1613,6 @@ def fixed_session_to_cbor_dict(
         "output_path": output_path,
         "cmd_path": getattr(fixed_session, "_cmd_path", "") or "",
         "params": params,
-        "pickle_blob": pickle_blob,
+        "pickle_blob": _cbor.chunk_pickle_blob(pickle_blob),
     }
 

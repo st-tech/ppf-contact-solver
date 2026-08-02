@@ -84,6 +84,15 @@ impl<T> CVec<T> {
         }
     }
 
+    /// Borrow the contents as a mutable slice. Empty when null or zero-length.
+    pub fn as_mut_slice(&mut self) -> &mut [T] {
+        if self.data.is_null() || self.size == 0 {
+            &mut []
+        } else {
+            unsafe { std::slice::from_raw_parts_mut(self.data, self.size as usize) }
+        }
+    }
+
     pub fn iter(&self) -> CVecIter<'_, T> {
         CVecIter {
             ptr: self.data,

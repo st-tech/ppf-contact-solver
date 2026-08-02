@@ -46,10 +46,11 @@ __device__ static Mat3x4f face_dihedral_angle_grad(const Vec3f &v2,
 // Float-position variant of face_dihedral_angle_grad (identical math on plain
 // float positions). Used by the element-local finite difference of the angle
 // gradient that builds the exact bending Hessian term (theta - theta0)
-// d2theta/dx2 in face_compute_force_hessian. Positions are local floats (exact
-// differences of the fixed-point positions), so the FD step is independent of
-// the global position lattice. Degenerate configurations return zero instead
-// of asserting, since the FD probes can brush against them.
+// d2theta/dx2 in face_compute_force_hessian. Positions arrive as differences
+// taken within the element, so the FD step is sized against the element and is
+// independent of where that element sits in the domain. Degenerate
+// configurations return zero instead of asserting, since the FD probes can
+// brush against them.
 __device__ static Mat3x4f face_dihedral_angle_grad_f(const Vec3f &v2,
                                                      const Vec3f &v0,
                                                      const Vec3f &v1,

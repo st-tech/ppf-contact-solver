@@ -88,14 +88,14 @@ Integrations. Load this when:
 - You want the glossary entry for a term before diving deeper.
 - You need the maintainer / contact / contribution pointers.
 
-### `LLM/blender_addon/getting_started.md` (~140 lines)
+### `LLM/blender_addon/getting_started.md` (~145 lines)
 
 Install, UI tour, and the first end-to-end simulation. Load when:
 
 - User is brand new and asking "how do I even start".
 - You need the panel-by-panel layout of the sidebar: Backend
   Communicator, Solver, Scene Configuration, Dynamics Groups, Snap
-  and Merge, Visualization.
+  and Merge, Utility Tools, Visualization.
 - You need the exact click sequence for a first sim: create a group,
   assign a mesh, Transfer → Run → Fetch.
 - You need prerequisites (Blender 5.0+, NVIDIA GPU + CUDA, Python /
@@ -121,15 +121,16 @@ profiles. Load when:
 - Connection profile TOML format and how it maps across backend
   types.
 
-### `LLM/blender_addon/scene.md` (~350 lines)
+### `LLM/blender_addon/scene.md` (~360 lines)
 
 Object groups and how you tell the solver which Blender objects
 matter. Load when:
 
 - User asks about the six group types (Shell / Solid / Rod / PDRD /
-  Static / Sand) and what each accepts (meshes only; Rod also accepts
+  Sand / Static) and what each accepts (meshes only; Rod also accepts
   Bezier curves; PDRD is an exactly-rigid body, no tetrahedralization;
-  Static is collision-only; Sand is a granular body of loose grains).
+  Sand takes a mesh converted to a grain cloud; Static is
+  collision-only).
 - Questions about the 32-slot group model and why it survives file
   save/load.
 - How to assign an object to a group, remove it, toggle Include,
@@ -147,7 +148,7 @@ matter. Load when:
   changes. Exposed as MCP tools `capture_static_deformation`,
   `clear_static_deformation`, and `get_static_deformation_status`.
 - Overlay colors per group type (Solid red, Shell green, Rod yellow,
-  PDRD magenta, Static blue, Sand tan).
+  PDRD magenta, Sand tan, Static blue).
 - **Modifier behavior**: the solver reads `obj.data.vertices`, so
   Subdivision Surface / Bevel / Remesh / Solidify modifiers are
   ignored at transfer time (apply them first if you want the
@@ -176,7 +177,7 @@ group. Load when:
 - **Snap & merge**: making two meshes meet cleanly at a seam; merge
   pairs with and without snapping; cross-stitch anchor data.
 
-### `LLM/blender_addon/parameters.md` (~760 lines)
+### `LLM/blender_addon/parameters.md` (~875 lines)
 
 Three parameter surfaces: scene (whole-sim), material (per group),
 dynamic (keyframed). Load when:
@@ -186,11 +187,13 @@ dynamic (keyframed). Load when:
   auto-save interval, line-search bounds, contact NNZ, inactive
   momentum frames (defaults, ranges, UI labels, Python / TOML keys).
 - **Material parameters**: per-type tables for Shell / Solid / Rod /
-  Static. Density units (kg/m² / kg/m³ / kg/m), Young's modulus
-  (normalized by density, see the "non-conventional" note),
+  PDRD / Sand / Static. Density units (kg/m² / kg/m³ / kg/m), Young's
+  modulus (normalized by density, see the "non-conventional" note),
   Poisson, bend, anisotropic Shrink X/Y (Shell) vs uniform Shrink
-  (Solid), Strain Limit, Inflate, Stitch Stiffness, Plasticity + Bend
-  Plasticity (theta + threshold), Velocity Overwrite keyframes.
+  (Solid) vs the rod rest-length Shrink (`length_factor`), Strain
+  Limit, Inflate, Stitch Stiffness, Plasticity + Bend Plasticity
+  (theta + threshold), Velocity Overwrite keyframes, and the Sand
+  grain radius / particle mass / friction set.
 - **Model selectors**: `shell_model` (Baraff-Witkin default), `solid_model` (ARAP default), `rod_model` (ARAP only). Valid
   values per type.
 - **Contact Gap vs Contact Offset**: physical meaning (gap = barrier
@@ -210,7 +213,7 @@ dynamic (keyframed). Load when:
 - Scene and material profile TOML files (always written by the Save
   icon, not by hand; schema shown for inspection).
 
-### `LLM/blender_addon/simulation.md` (~630 lines)
+### `LLM/blender_addon/simulation.md` (~685 lines)
 
 The Transfer → Run → Fetch day-to-day loop, caching, baking, and
 JupyterLab integration. Load when:
@@ -234,6 +237,13 @@ JupyterLab integration. Load when:
   directly without a modifier.
 - **Baking**: converts PC2 + cache modifier into shape keys + fcurves
   (destructive for the cache); per-group or per-scene.
+- **Exporting a cache**: **Export USD** / **Export Alembic (ABC)** in
+  the Solver panel's Export box, the non-destructive alternative to
+  baking (bake-vs-export table, the four preflight refusals, and the
+  fact that rods and curves are not carried).
+- **Re-capturing every deformation at once**: the Solver panel's
+  Deformations box (**Re-capture All Deformations** /
+  **Clear All Deformations**).
 - **JupyterLab**: running the solver from a notebook on the same
   host, and mixing notebook + Blender sessions.
 
@@ -247,11 +257,12 @@ scripting). Load when:
 - You need the **tool surface scope** up-front: which tasks have
   dedicated MCP tools (connection, groups, pins, simulation control,
   scene/material/dynamic params, invisible colliders, snap/merge,
-  solver reset, and curve construction for ROD scenes) and which only
-  work through `run_python_script` (general Blender primitives, mesh
-  edits, object transforms, modifiers, shaders, cameras, and other
-  pure `bpy.*` scripting). `run_python_script` is the escape hatch,
-  not the default. Read this *before* writing `bpy.*` code.
+  mesh scanning and repair, cache export, solver reset, and curve
+  construction for ROD scenes) and which only work through
+  `run_python_script` (general Blender primitives, mesh modeling,
+  object transforms, modifiers, shaders, cameras, and other pure
+  `bpy.*` scripting). `run_python_script` is the escape hatch, not
+  the default. Read this *before* writing `bpy.*` code.
 - Questions about the MCP server: how to start it (the panel, or
   `python blender_addon/debug/main.py start-mcp`), security
   (localhost-only), the Streamable HTTP endpoint (`POST /mcp` +
@@ -287,11 +298,12 @@ Developer tooling (not end-user workflows). Load when:
   `--no-overlay`).
 - Related ports: 8765 (reload server), 9633 (MCP).
 
-### `LLM/blender_addon/mcp_tools_reference.md` (~1065 lines)
+### `LLM/blender_addon/mcp_tools_reference.md` (~1235 lines)
 
-Every MCP tool exposed by the add-on (120 tools in 10 categories:
-Connection, Group, Object operations, Simulation, Scene, Dynamic
-parameters, Remote, Console, Debug, Blender). Each entry has the full
+Every MCP tool exposed by the add-on (135 tools in 11 categories:
+Connection, Group, Object operations, Mesh cleaning, Simulation,
+Scene, Dynamic parameters, Remote, Console, Debug, Blender). Each
+entry has the full
 typed signature, parameter list with descriptions, and return notes.
 The top of the file shows three equivalent ways to invoke every tool:
 MCP Streamable HTTP `POST /mcp` (JSON-RPC `tools/call`, after an
@@ -312,7 +324,7 @@ Load when:
 Bundled MCP reference for the live handler surface in
 `blender_addon/mcp/handlers/*.py` and `blender_addon/mcp/blender_handlers.py`.
 
-### `LLM/blender_addon/python_api_reference.md` (~880 lines)
+### `LLM/blender_addon/python_api_reference.md` (~1175 lines)
 
 Every class, method, and attribute on the `solver` singleton you get
 from `from bl_ext.user_default.ppf_contact_solver.ops.api import solver`. Classes: `Solver`,
@@ -336,12 +348,13 @@ Load when:
 Bundled Python API reference for the current package surface exported
 from `blender_addon/ops/api/__init__.py` and its submodules.
 
-### `LLM/blender_addon/troubleshooting.md` (~430 lines)
+### `LLM/blender_addon/troubleshooting.md` (~470 lines)
 
 Failure modes grouped by subject (installation, each connection type,
-connection profiles, server startup, scene setup, transfer, simulation,
-fetch / playback, bake, MCP server, debug CLI, hot reload), with each
-entry in a You see / Why / Fix shape for fast lookup. Load when:
+connection profiles, server startup, scene setup, transfer including
+the mesh-scan-to-repair map, simulation, fetch / playback, bake, MCP
+server, debug CLI, hot reload), with each entry in a You see / Why /
+Fix shape for fast lookup. Load when:
 
 - User reports a specific error message or symptom.
 - Quick triage before diving into the relevant long doc.
@@ -365,10 +378,12 @@ primary home and the secondary homes so you don't miss anything.
 | Invisible colliders                       | constraints.md        | parameters.md (referenced from scene profiles section), integrations.md (Python API) |
 | Snap & merge                              | constraints.md        | scene.md (briefly, in Static Objects), integrations.md |
 | Active collision windows                  | scene.md              | parameters.md (the toggle lives in Material Params) |
-| Object group types (SHELL/SOLID/ROD/PDRD/STATIC/SAND) | scene.md  | parameters.md (per-type param tables), constraints.md (curve pins live on ROD only) |
+| Object group types (SHELL/SOLID/ROD/PDRD/SAND/STATIC) | scene.md  | parameters.md (per-type param tables), constraints.md (curve pins live on ROD only) |
 | Static group Transform ops                | scene.md              | constraints.md (Move By / Spin / Scale share the operation semantics with pin ops) |
 | Armature / Lattice / Shape Key driven Static colliders (Capture Deformation) | scene.md | mcp_tools_reference.md (`capture_static_deformation`, `clear_static_deformation`, `get_static_deformation_status`) |
 | Modifier stack behavior                   | scene.md              | simulation.md (the cache modifier is installed post-Fetch) |
+| Mesh cleaning (scan + the seven repairs)  | troubleshooting.md (scan error to repair map) | mcp_tools_reference.md (the eight tools), python_api_reference.md (`solver.scan_meshes` and the repairs), getting_started.md (Utility Tools panel) |
+| USD / Alembic cache export                | simulation.md         | mcp_tools_reference.md (`export_usd`, `export_alembic`), python_api_reference.md |
 | SSH + port forwarding                     | connections.md        | troubleshooting.md (auth errors)             |
 | MCP server & tools (narrative)            | integrations.md       | debug.md (CLI starts / reaches it)           |
 | **MCP tool invocation** (per-tool signatures) | mcp_tools_reference.md | integrations.md (narrative overview)     |
@@ -393,6 +408,8 @@ Fast lookup for common question shapes.
 | "Should I press Transfer or Update Params?"                     | simulation.md              |
 | "Simulation crashed / Blender closed, can I recover?"           | simulation.md (Recovery scenarios section) |
 | "How do I bake my simulation into keyframes?"                   | simulation.md (Baking)     |
+| "How do I export the result to USD / Alembic?"                  | simulation.md (Exporting a cache instead of baking) |
+| "Transfer rejects my mesh / how do I clean it?"                 | troubleshooting.md (Mesh will not build), then mcp_tools_reference.md (Mesh cleaning) |
 | "Drive the add-on from Python / LLM" (narrative)                | integrations.md            |
 | "What's the signature of `<Python method>`?"                    | python_api_reference.md    |
 | "What's the signature of `<MCP tool>`? How do I call it?"       | mcp_tools_reference.md     |

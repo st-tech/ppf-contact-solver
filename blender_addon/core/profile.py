@@ -31,6 +31,8 @@ _SSH_STATE_FIELDS = {
     "docker_path": "docker_path",
     "local_path": "local_path",
     "win_native_path": "win_native_path",
+    "solver_gpu": "solver_gpu_index",
+    "solver_gpu_uuid": "solver_gpu_uuid",
     "docker_port": "docker_port",
 }
 
@@ -75,6 +77,9 @@ def apply_profile(profile: dict, ssh_state) -> bool:
     if server_type is None:
         return False
     ssh_state.server_type = server_type
+
+    if "solver_gpu" in profile and "solver_gpu_uuid" not in profile:
+        ssh_state.solver_gpu_uuid = ""
 
     # Set SSHState fields
     for toml_key, prop_name in _SSH_STATE_FIELDS.items():

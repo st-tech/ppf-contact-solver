@@ -150,12 +150,13 @@ try:
         "og.ObjectGroup._get_bend_ref_object_items": OG._get_bend_ref_object_items,
         "state._get_profile_items": state_mod._get_profile_items,
         "state._get_scene_profile_items": state_mod._get_scene_profile_items,
+        "state._get_solver_gpu_items": state_mod._get_solver_gpu_items,
         "state.get_snap_objects": state_mod.get_snap_objects,
     }
     unretained = [name for name, fn in dynamic_callbacks.items()
                   if not getattr(fn, MARK, False)]
     record("D_all_dynamic_callbacks_retained",
-           not unretained and len(dynamic_callbacks) == 12,
+           not unretained and len(dynamic_callbacks) == 13,
            {"checked": len(dynamic_callbacks), "unretained": unretained})
 
     log("checks=" + str(len(result["checks"])) + " done")

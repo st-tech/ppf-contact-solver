@@ -4,11 +4,11 @@ import bpy  # pyright: ignore
 
 from ...models.collection_utils import safe_update_index
 from ...models.groups import (
-    N_MAX_GROUPS,
     assign_display_indices,
     decode_vertex_group_identifier,
     get_active_group_by_uuid,
     get_addon_data,
+    get_group_slot_index,
     iterate_active_object_groups,
     iterate_object_groups,
 )
@@ -31,14 +31,20 @@ def get_active_group_by_uuid_helper(group_uuid: str):
 
 
 def get_group_index_by_uuid(group_uuid: str):
-    """Helper function to get group slot index by UUID for UI operators that require index."""
-    scene = bpy.context.scene
-    for i in range(N_MAX_GROUPS):
-        group = getattr(get_addon_data(scene), f"object_group_{i}", None)
-        if group and group.active and group.uuid == group_uuid:
-            return i
+    """Return the ``object_group_N`` slot of an active group, or raise.
 
-    raise ValidationError(f"Active group with UUID {group_uuid} not found")
+    The UI operators take that slot as their ``group_index`` property. It is
+    not ``ObjectGroup.index``, which numbers only the active groups for
+    display and so disagrees with the slot once any group has been deleted,
+    so the slot comes from ``models.groups.get_group_slot_index``, the one
+    resolver for it. Used by the object_ops handlers; the handlers in this
+    module resolve the slot at their call sites.
+    """
+    scene = bpy.context.scene
+    slot = get_group_slot_index(scene, group_uuid)
+    if slot is None or not get_active_group_by_uuid(scene, group_uuid):
+        raise ValidationError(f"Active group with UUID {group_uuid} not found")
+    return slot
 
 
 def resolve_assigned_with_index(group_uuid: str, object_name: str):
@@ -161,22 +167,21 @@ def create_group(name: str = "", type: str = "SOLID"):
     # Assign display indices to ensure consistency
     assign_display_indices(scene)
 
-    # Find the most recently created group (should be the last one created)
-    newest_group = None
-    for group in iterate_object_groups(scene):
-        if group.active:
-            newest_group = group
+    # The operator publishes the group it allocated. Read that rather than
+    # scanning for the highest active slot: the allocated slot is the lowest
+    # free one, so after any deletion the two are different groups and the
+    # scan would rename and retype a bystander.
+    group_uuid = get_addon_data(scene).state.current_group_uuid
+    created = get_active_group_by_uuid(scene, group_uuid) if group_uuid else None
 
-    if newest_group:
-        group_uuid = newest_group.uuid  # already set by the operator
-        get_addon_data(scene).state.current_group_uuid = group_uuid
+    if created:
         if name:
-            newest_group.name = name
+            created.name = name
         if type != "SOLID":
-            newest_group.object_type = type
+            created.object_type = type
         return {
-            "message": f"Created group: {newest_group.name}",
-            "group": _serialize_group(newest_group),
+            "message": f"Created group: {created.name}",
+            "group": _serialize_group(created),
             "group_uuid": group_uuid,
         }
 
@@ -198,8 +203,14 @@ def delete_group(group_uuid: str):
     # Set the group UUID in scene state for the operator
     get_addon_data(scene).state.current_group_uuid = group_uuid
 
-    # Use UI operator for group deletion
-    bpy.ops.object.delete_group(group_uuid=group_uuid)
+    # Use UI operator for group deletion. It addresses a group by its
+    # object_group_N slot, so resolve the slot rather than passing the UUID
+    # (which it has no property for) or ObjectGroup.index (which counts only
+    # active groups and so drifts from the slot once one has been deleted).
+    slot = get_group_slot_index(scene, group_uuid)
+    if slot is None:
+        raise MCPError(f"Group with UUID {group_uuid} has no slot")
+    bpy.ops.object.delete_group(group_index=slot)
 
     return {
         "message": f"Deleted group with UUID {group_uuid}",
@@ -233,7 +244,9 @@ def duplicate_group(group_uuid: str):
     scene = bpy.context.scene
     src = get_active_group_by_uuid_helper(group_uuid)
     src_name = src.name
-    src_index = get_group_index_by_uuid(group_uuid)
+    src_index = get_group_slot_index(scene, group_uuid)
+    if src_index is None:
+        raise MCPError(f"Group with UUID {group_uuid} has no slot")
 
     before_uuids = {
         g.uuid for g in iterate_active_object_groups(scene) if g.uuid
@@ -287,7 +300,9 @@ def bake_group_animation(group_uuid: str, object_name: str):
     group, _, idx, obj_uuid = resolve_assigned_with_index(group_uuid, object_name)
     group.assigned_objects_index = idx
 
-    group_index = get_group_index_by_uuid(group_uuid)
+    group_index = get_group_slot_index(bpy.context.scene, group_uuid)
+    if group_index is None:
+        raise MCPError(f"Group with UUID {group_uuid} has no slot")
     bpy.ops.object.bake_animation("EXEC_DEFAULT", group_index=group_index)
     return {
         "message": f"Baked animation for '{object_name}'",
@@ -308,7 +323,9 @@ def bake_group_single_frame(group_uuid: str, object_name: str):
     group, _, idx, obj_uuid = resolve_assigned_with_index(group_uuid, object_name)
     group.assigned_objects_index = idx
 
-    group_index = get_group_index_by_uuid(group_uuid)
+    group_index = get_group_slot_index(bpy.context.scene, group_uuid)
+    if group_index is None:
+        raise MCPError(f"Group with UUID {group_uuid} has no slot")
     bpy.ops.object.bake_single_frame("EXEC_DEFAULT", group_index=group_index)
     return {
         "message": f"Baked single frame for '{object_name}'",
@@ -442,8 +459,10 @@ def add_objects_to_group(group_uuid: str, object_names: list[str]):
         valid_objects.append({"name": obj.name, "uuid": obj_uuid})
 
     if valid_objects:
-        # Resolve UUID to slot index for the operator
-        group_index = get_group_index_by_uuid(group_uuid)
+        # Resolve UUID to the object_group_N slot the operator addresses
+        group_index = get_group_slot_index(scene, group_uuid)
+        if group_index is None:
+            raise MCPError(f"Group with UUID {group_uuid} has no slot")
 
         # Use UI operator to add selected objects to group
         bpy.ops.object.add_objects_to_group(group_index=group_index)
@@ -492,9 +511,18 @@ def remove_object_from_group(group_uuid: str, object_name: str):
 
     # Direct manipulation instead of using UI operator to avoid poll issues
     # Clean up pin vertex groups for this object first
-    from ...ui.dynamics.utils import cleanup_pin_vertex_groups_for_object
+    from ...ui.dynamics.utils import (
+        cleanup_pin_vertex_groups_for_object,
+        reset_object_display,
+    )
 
     cleanup_pin_vertex_groups_for_object(group, obj_uuid)
+
+    # Clear the display state the add-on put on this object while it is
+    # still a member. Once the assignment is gone the object is the
+    # user's again and nothing may write to it, so this is the last
+    # point at which the tint and wireframe can be taken back.
+    reset_object_display(obj)
 
     # Remove the object from the group
     group.assigned_objects.remove(object_index)
@@ -550,6 +578,17 @@ def remove_all_objects_from_group(group_uuid: str):
 
     # Store count before removal
     object_count = len(group.assigned_objects)
+
+    # Clear the add-on's display state on every member while they are
+    # still members; after the clear below they are the user's objects
+    # and nothing may write to them.
+    from ...core.uuid_registry import resolve_assigned
+    from ...ui.dynamics.utils import reset_object_display
+
+    for assigned in group.assigned_objects:
+        member = resolve_assigned(assigned)
+        if member is not None:
+            reset_object_display(member)
 
     # Direct manipulation - clear all objects and related data
     group.pin_vertex_groups.clear()
@@ -779,7 +818,7 @@ def set_group_material_properties(group_uuid: str, properties: dict):
 
     - SHELL: enable_strain_limit, strain_limit_percent, shell_density, shell_young_modulus, shell_poisson_ratio, shell_model, bend, shrink_x, shrink_y, deformation_damping, bending_damping, young_mod_density_normalized, friction, enable_inflate, inflate_pressure, stitch_stiffness
     - SOLID: solid_density, solid_young_modulus, solid_poisson_ratio, solid_model, shrink, deformation_damping, young_mod_density_normalized, friction, stitch_stiffness
-    - ROD: rod_density, rod_young_modulus, rod_model, deformation_damping, bending_damping, young_mod_density_normalized, friction, bend, enable_strain_limit, strain_limit_percent, stitch_stiffness
+    - ROD: rod_density, rod_young_modulus, rod_model, deformation_damping, bending_damping, young_mod_density_normalized, friction, bend, length_factor, enable_strain_limit, strain_limit_percent, stitch_stiffness
     - PDRD: pdrd_density, friction, stitch_stiffness (the hinge joint is per-object; use the set_pdrd_hinge tool)
     - SAND: sand_grain_radius, sand_particle_mass, sand_friction (faceless granular body of loose grain-center vertices)
     - STATIC: friction (limited set; a moving collider tracks its animation exactly)
@@ -789,6 +828,13 @@ def set_group_material_properties(group_uuid: str, properties: dict):
     as true pascals when False) are per-group. Solid has no bending term, so
     bending_damping is rejected for Solid. PDRD groups carry only density,
     friction, contact, and stitch settings.
+
+    length_factor (Rod only) multiplies every rod edge's rest length, so below
+    1.0 it tensions a pinned rod and above 1.0 it slackens it; mass is taken
+    from the drawn length and does not move with it. Rod bending stiffness is
+    normalized against that same rest length and varies as its inverse square,
+    so halving length_factor also makes the rod about four times stiffer in
+    bending.
 
     Contact properties (mutually exclusive modes):
 
@@ -882,6 +928,7 @@ def set_group_material_properties(group_uuid: str, properties: dict):
                 "young_mod_density_normalized",
                 "friction",
                 "bend",
+                "length_factor",
                 "enable_strain_limit",
                 "strain_limit_percent",
                 "stitch_stiffness",

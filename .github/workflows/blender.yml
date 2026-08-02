@@ -171,7 +171,7 @@ jobs:
             numpy scipy numba plyfile requests trimesh pywavefront \
             matplotlib tqdm pythreejs ipywidgets fast-simplification \
             tabulate triangle psutil tomli ipython pillow pytetwild \
-            tetgen pyvista cbor2
+            tetgen pyvista "$(python blender_addon/wheels/fetch.py --pin)"
 
       - name: Verify Rust extension importable
         shell: bash
@@ -279,7 +279,7 @@ jobs:
             numpy scipy numba plyfile requests trimesh pywavefront \
             matplotlib tqdm pythreejs ipywidgets fast-simplification \
             tabulate triangle psutil tomli ipython pillow pytetwild \
-            tetgen pyvista cbor2
+            tetgen pyvista "$(python blender_addon/wheels/fetch.py --pin)"
 
       - name: Verify Rust extension importable
         shell: bash
@@ -574,7 +574,7 @@ jobs:
             numpy scipy numba plyfile requests trimesh pywavefront \
             matplotlib tqdm pythreejs ipywidgets fast-simplification \
             tabulate triangle psutil tomli ipython pillow pytetwild \
-            tetgen pyvista cbor2
+            tetgen pyvista "$(python blender_addon/wheels/fetch.py --pin)"
 
       - name: Verify Rust extension importable
         shell: bash

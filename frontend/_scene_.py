@@ -32,7 +32,7 @@ from . import _rust  # type: ignore[attr-defined]
 
 from ._asset_ import AssetManager
 from ._param_ import ParamHolder
-from ._plot_ import Plot, PlotManager
+from ._plot_ import Plot, PlotManager, _renumber
 from ._render_ import MitsubaRenderer, Rasterizer
 from ._scene_collider_ import Sphere, Wall
 from ._scene_pin_ import (
@@ -54,6 +54,26 @@ from ._scene_transform_ import (
     _quat_to_mat3,
 )
 from ._utils_ import Utils
+
+
+def _visible_rows(
+    elements: np.ndarray, invisible: Optional[np.ndarray]
+) -> Optional[np.ndarray]:
+    """Which rows of an element array are drawn, or None when all of them are.
+
+    ``elements`` holds vertex indices (one row per triangle, rod segment, or
+    stitch); ``invisible`` flags the vertices of objects hidden with
+    :meth:`Object.invisible`. A row is dropped as soon as one of its vertices
+    is hidden. An element never spans two objects, so this is per-object
+    filtering expressed on the concatenated buffers.
+
+    Returning None rather than an all-true mask lets a caller with nothing
+    hidden skip the filtering and keep its own arrays.
+    """
+    if invisible is None or len(elements) == 0 or not invisible.any():
+        return None
+    index = np.asarray(elements, dtype=np.int64).reshape(len(elements), -1)
+    return ~invisible[index].any(axis=1)
 
 
 class ValidationError(ValueError):
@@ -86,6 +106,14 @@ class FixedScene:
             fixed.preview()
             session = app.session.create(fixed).build()
     """
+
+    # Draw-time visibility, one flag per row of the vertex buffer each masks
+    # (`_vert` and `_static_vert`), from `Object.invisible`. None means every
+    # vertex is drawn. Declared at class scope so a FixedScene unpickled from
+    # a session saved before per-object visibility existed still answers the
+    # attribute instead of raising at preview time.
+    _invisible_vert: Optional[np.ndarray] = None
+    _invisible_static_vert: Optional[np.ndarray] = None
 
     def __init__(
         self,
@@ -128,6 +156,7 @@ class FixedScene:
         pdrd_vert_list: Optional[list[int]] = None,
         pdrd_rest_centered: Optional[np.ndarray] = None,
         sand_param: Optional[dict[str, list[Any]]] = None,
+        invisible_vert: Optional[np.ndarray] = None,
         quiet: bool = False,
     ):
         """Initialize the fixed scene.
@@ -167,6 +196,7 @@ class FixedScene:
             rest_vert_times (Optional[np.ndarray]): Keyframe times in seconds, length ``n_frames``, aligned to ``rest_vert_anim``.
             bend_rest_vert (Optional[np.ndarray]): Concatenated reference vertices for the bending rest angle, one row per global vertex (unmasked rows equal the initial vert). The solver computes hinge rest angles from these positions for masked objects.
             bend_rest_vert_mask (Optional[np.ndarray]): Per-vertex uint8 mask marking rows of ``bend_rest_vert`` that belong to an object with an enabled reference rest angle.
+            invisible_vert (Optional[np.ndarray]): Per-vertex bool mask marking dynamic vertices that belong to an object hidden with :meth:`Object.invisible`. Drawing only; the solver never sees it. None when every object is drawn.
             quiet (bool): When True, suppress the scene-check summary prints. Defaults to False, preserving the interactive diagnostic output.
         """
 
@@ -228,6 +258,14 @@ class FixedScene:
         self._has_contact_offset_violation = False
         self._has_wall_violation = False
         self._has_sphere_violation = False
+
+        if invisible_vert is not None:
+            invisible_vert = np.ascontiguousarray(invisible_vert, dtype=bool)
+            assert len(invisible_vert) == len(self._vert[1]), (
+                f"invisible_vert has {len(invisible_vert)} entries, "
+                f"but the scene has {len(self._vert[1])} dynamic vertices"
+            )
+            self._invisible_vert = invisible_vert
 
         assert len(self._vert[0]) == len(self._color)
         assert len(self._vert[1]) == len(self._color)
@@ -586,11 +624,14 @@ class FixedScene:
             os.makedirs(os.path.dirname(path))
 
         seg, tri = self._rod, None
+        n_dynamic_vert = len(vert)
+        n_static_vert = 0
         if not os.path.exists(path) or not os.path.exists(image_path):
             if include_static and len(self._static_vert[1]) and len(self._static_tri):
                 static_vert = (
                     self._static_vert[1] + self._displacement[self._static_vert[0]]
                 )
+                n_static_vert = len(static_vert)
                 tri = np.concatenate([self._tri, self._static_tri + len(vert)])
                 vert = np.concatenate([vert, static_vert], axis=0)
                 color = np.concatenate([color, self._static_color], axis=0)
@@ -628,7 +669,14 @@ class FixedScene:
 
             assert tri is not None
             assert color is not None
-            renderer.render(vert, color, seg, tri, image_path)
+            # The mesh file above carries the whole scene; the picture drops
+            # whatever Object.invisible hid. Compacting rather than masking
+            # here also keeps the hidden geometry out of the renderer's
+            # auto-framing, which fits the mesh to the vertices it is given.
+            shown_vert, shown_color, shown_seg, shown_tri = self._picture_arrays(
+                vert, color, seg, tri, n_dynamic_vert, n_static_vert
+            )
+            renderer.render(shown_vert, shown_color, shown_seg, shown_tri, image_path)
 
         return self
 
@@ -1172,6 +1220,7 @@ class FixedScene:
         color: np.ndarray,
         param: dict[str, list[Any]],
         transform_animations: Optional[list[tuple[int, TransformAnimation]]] = None,
+        invisible: Optional[np.ndarray] = None,
     ):
         """Set the static mesh data.
 
@@ -1181,6 +1230,7 @@ class FixedScene:
             color (np.ndarray): The colors of the static mesh.
             param (dict[str, list[Any]]): Parameters for the static mesh elements.
             transform_animations: Optional list of ``(vert_offset, TransformAnimation)`` for animated static objects.
+            invisible (Optional[np.ndarray]): Per-vertex bool mask marking static vertices that belong to an object hidden with :meth:`Object.invisible`. Drawing only. None when every static object is drawn.
 
         Example:
             Typically invoked internally by :meth:`Scene.build`, but can be
@@ -1195,6 +1245,13 @@ class FixedScene:
         self._static_param = param
         if transform_animations:
             self._static_transform_animations = transform_animations
+        if invisible is not None:
+            invisible = np.ascontiguousarray(invisible, dtype=bool)
+            assert len(invisible) == len(vert[1]), (
+                f"invisible has {len(invisible)} entries, "
+                f"but the static mesh has {len(vert[1])} vertices"
+            )
+            self._invisible_static_vert = invisible
 
     def set_stitch(
         self, ind: np.ndarray, w: np.ndarray, stiffness: Optional[np.ndarray] = None
@@ -1277,6 +1334,91 @@ class FixedScene:
             result[vert_offset:vert_offset + n] = anim.evaluate(time)
         return result
 
+    def _hidden_buffer_mask(
+        self, n_total_vert: int, n_dynamic_vert: int, n_static_vert: int
+    ) -> Optional[np.ndarray]:
+        """Per-row hidden flags over an assembled draw buffer.
+
+        The buffer runs ``[dynamic | static | stitch lines]``; only the first
+        two blocks belong to objects that can be hidden, and stitch lines that
+        survived the element filtering are drawn by definition. Returns None
+        when nothing is hidden, so a scene with every object visible draws its
+        whole buffer and skips the compaction entirely.
+        """
+        dyn_hidden = self._invisible_vert is not None and self._invisible_vert.any()
+        static_hidden = (
+            n_static_vert > 0
+            and self._invisible_static_vert is not None
+            and self._invisible_static_vert.any()
+        )
+        if not dyn_hidden and not static_hidden:
+            return None
+        hidden = np.zeros(n_total_vert, dtype=bool)
+        if dyn_hidden:
+            assert self._invisible_vert is not None
+            assert len(self._invisible_vert) == n_dynamic_vert, (
+                f"visibility mask covers {len(self._invisible_vert)} vertices, "
+                f"but the drawn buffer carries {n_dynamic_vert} dynamic ones"
+            )
+            hidden[:n_dynamic_vert] = self._invisible_vert
+        if static_hidden:
+            assert self._invisible_static_vert is not None
+            hidden[n_dynamic_vert : n_dynamic_vert + n_static_vert] = (
+                self._invisible_static_vert
+            )
+        if hidden.all():
+            raise ValueError(
+                "every object in this scene is invisible, so there is nothing "
+                "to draw; call Object.invisible(False) on at least one of them"
+            )
+        return hidden
+
+    def _draw_index(
+        self, n_total_vert: int, n_dynamic_vert: int, n_static_vert: int
+    ) -> Optional[np.ndarray]:
+        """Rows of an assembled draw buffer that belong to a drawn object.
+
+        None when nothing is hidden. Handed to :meth:`Plot.plot`, which keeps
+        the full-width buffer for later frame updates and uploads only these
+        rows.
+        """
+        hidden = self._hidden_buffer_mask(n_total_vert, n_dynamic_vert, n_static_vert)
+        return None if hidden is None else np.flatnonzero(~hidden)
+
+    def _picture_arrays(
+        self,
+        vert: np.ndarray,
+        color: np.ndarray,
+        seg: np.ndarray,
+        tri: np.ndarray,
+        n_dynamic_vert: int,
+        n_static_vert: int,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Drop hidden objects from the arrays a renderer draws.
+
+        Returns ``(vert, color, seg, tri)`` in the argument order
+        :meth:`Rasterizer.render` takes them, unchanged when nothing is
+        hidden. Unlike the preview path there is no later frame update to
+        stay index-aligned with, so the hidden vertices are removed outright
+        and the surviving elements renumbered onto the compacted buffer.
+        """
+        hidden = self._hidden_buffer_mask(len(vert), n_dynamic_vert, n_static_vert)
+        if hidden is None:
+            return vert, color, seg, tri
+        tri_keep = _visible_rows(tri, hidden)
+        seg_keep = _visible_rows(seg, hidden)
+        tri = tri if tri_keep is None else tri[tri_keep]
+        seg = seg if seg_keep is None else seg[seg_keep]
+        index = np.flatnonzero(~hidden)
+        renumber = np.full(len(vert), -1, dtype=np.int64)
+        renumber[index] = np.arange(len(index), dtype=np.int64)
+        return (
+            vert[index],
+            color[index],
+            _renumber(seg, renumber),
+            _renumber(tri, renumber),
+        )
+
     def preview(
         self,
         vert: Optional[np.ndarray] = None,
@@ -1320,21 +1462,35 @@ class FixedScene:
             assert vert is not None
             color = self.color(vert, options)
             assert len(color) == len(vert)
-            tri = self._tri.copy()
-            edge = self._rod.copy()
+            # Hidden objects (Object.invisible) lose their elements here and
+            # their vertices at upload time, below. The vertices stay in this
+            # buffer so a live session's frames, which are indexed over every
+            # dynamic vertex, keep landing on the rows they belong to.
+            tri_keep = _visible_rows(self._tri, self._invisible_vert)
+            edge_keep = _visible_rows(self._rod, self._invisible_vert)
+            tri = self._tri.copy() if tri_keep is None else self._tri[tri_keep]
+            edge = self._rod.copy() if edge_keep is None else self._rod[edge_keep]
             pts = np.zeros(0)
             plotter = self._plot.create(engine)
 
             n_dynamic_vert = len(vert)
             has_static = len(self._static_vert[1]) > 0 or self._static_transform_animations
+            n_static_vert = len(self._static_vert[1])
             if has_static:
                 static_vert = self.static_time(0.0)
                 static_color = np.zeros_like(static_vert)
                 static_color[:, :] = self._static_color
+                static_keep = _visible_rows(
+                    self._static_tri, self._invisible_static_vert
+                )
+                static_tri = (
+                    self._static_tri if static_keep is None
+                    else self._static_tri[static_keep]
+                )
                 if len(tri):
-                    tri = np.vstack([tri, self._static_tri + len(vert)])
+                    tri = np.vstack([tri, static_tri + len(vert)])
                 else:
-                    tri = self._static_tri + len(vert)
+                    tri = static_tri + len(vert)
                 vert = np.vstack([vert, static_vert])
                 color = np.vstack([color, static_color])
             assert vert is not None and color is not None
@@ -1345,15 +1501,26 @@ class FixedScene:
                 # w=[ws0, ws1, ws2, wt0, wt1, wt2]. Rust kernel returns
                 # absolute edge indices (n_vert + 2*i, n_vert + 2*i + 1) so
                 # the appended edge buffer is ready.
-                stitch_vert, stitch_edge = _rust.scene_stitch_preview_lines(
-                    np.ascontiguousarray(vert, dtype=np.float64),
-                    np.ascontiguousarray(self._stitch_ind, dtype=np.int64).reshape(-1, 6),
-                    np.ascontiguousarray(self._stitch_w, dtype=np.float64).reshape(-1, 6),
-                )
-                stitch_color = np.tile(np.array([1.0, 1.0, 1.0]), (len(stitch_vert), 1))
-                vert = np.vstack([vert, stitch_vert])
-                edge = np.vstack([edge, stitch_edge]) if len(edge) else stitch_edge
-                color = np.vstack([color, stitch_color])
+                stitch_ind = np.asarray(self._stitch_ind).reshape(-1, 6)
+                stitch_w = np.asarray(self._stitch_w).reshape(-1, 6)
+                stitch_keep = _visible_rows(stitch_ind, self._invisible_vert)
+                if stitch_keep is not None:
+                    stitch_ind = stitch_ind[stitch_keep]
+                    stitch_w = stitch_w[stitch_keep]
+                if len(stitch_ind):
+                    stitch_vert, stitch_edge = _rust.scene_stitch_preview_lines(
+                        np.ascontiguousarray(vert, dtype=np.float64),
+                        np.ascontiguousarray(stitch_ind, dtype=np.int64),
+                        np.ascontiguousarray(stitch_w, dtype=np.float64),
+                    )
+                    stitch_color = np.tile(
+                        np.array([1.0, 1.0, 1.0]), (len(stitch_vert), 1)
+                    )
+                    vert = np.vstack([vert, stitch_vert])
+                    edge = (
+                        np.vstack([edge, stitch_edge]) if len(edge) else stitch_edge
+                    )
+                    color = np.vstack([color, stitch_color])
 
             if options["pin"] and self._pin:
                 # Triangle area is the natural marker scale for surface
@@ -1375,8 +1542,13 @@ class FixedScene:
                     [bool(pin.hide_in_preview) for pin in self._pin],
                     [list(pin.index) for pin in self._pin],
                 )
+                if self._invisible_vert is not None and len(pts):
+                    pts = pts[~self._invisible_vert[np.asarray(pts, dtype=np.int64)]]
 
-            plotter.plot(vert, color, tri, edge, pts, options)
+            draw_index = self._draw_index(
+                len(vert), n_dynamic_vert, n_static_vert
+            )
+            plotter.plot(vert, color, tri, edge, pts, options, draw_index)
 
             has_vel = np.linalg.norm(self._vel) > 0
             has_static_anim = bool(self._static_transform_animations)
@@ -1946,6 +2118,16 @@ class Scene:
         concat_count = int(result["concat_count"])
         rod_vert_start, rod_vert_end = result["rod_vert_range"]
         shell_vert_start, shell_vert_end = result["shell_vert_range"]
+
+        # Draw-time visibility (Object.invisible), resolved onto the
+        # concatenated dynamic vertex buffer. Nothing downstream of the
+        # viewer reads it: a hidden object is assembled, validated, and
+        # handed to the solver exactly as a drawn one.
+        invisible_vert = np.zeros(concat_count, dtype=bool)
+        for name, obj in dyn_objects:
+            if not obj.visible:
+                invisible_vert[np.asarray(map_by_name[name], dtype=np.int64)] = True
+
         pbar.update(3)
         advance("Building scene: indexing rod topology...")
         advance("Building scene: indexing shell topology...")
@@ -2639,6 +2821,21 @@ class Scene:
             and obj._transform_animation is not None
         ]
 
+        # Static-side half of the draw-time visibility mask. The assembler
+        # appends each static object's vertices as one run starting at the
+        # offset it reports, so an object owns [offset, offset + its own
+        # vertex count).
+        invisible_static_vert = np.zeros(len(static_vert), dtype=bool)
+        for name, obj in self._object.items():
+            if obj.static and not obj.visible:
+                entry = static_per_object.get(name)
+                if entry is None:
+                    continue
+                offset = int(entry["offset"])
+                obj_vert = obj.get("V")
+                assert obj_vert is not None
+                invisible_static_vert[offset : offset + len(obj_vert)] = True
+
         # Re-key velocity schedules / collision windows by displacement idx
         # now that the dmap ordering is fixed.
         velocity_schedules_by_dmap = {
@@ -2764,6 +2961,7 @@ class Scene:
             pdrd_vert_list=pdrd_vert_list if next_body_id > 0 else None,
             pdrd_rest_centered=pdrd_rest_centered if next_body_id > 0 else None,
             sand_param=concat_sand_param if concat_sand_param else None,
+            invisible_vert=invisible_vert if invisible_vert.any() else None,
             quiet=quiet,
         )
 
@@ -2790,6 +2988,7 @@ class Scene:
                 static_color,
                 concat_static_param,
                 concat_static_transform_anims if concat_static_transform_anims else None,
+                invisible_static_vert if invisible_static_vert.any() else None,
             )
 
         if concat_stitch_ind_arr.shape[0] and concat_stitch_w_arr.shape[0]:

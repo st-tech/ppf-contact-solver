@@ -38,6 +38,7 @@ from .connection_ops import (
     REMOTE_OT_Connect,
     REMOTE_OT_Disconnect,
     REMOTE_OT_OpenProfile,
+    REMOTE_OT_RefreshGpuDevices,
     REMOTE_OT_StartServer,
     REMOTE_OT_StopServer,
     classes as connection_classes,
@@ -94,6 +95,14 @@ from .geometry_cleanup_ops import (
 # entry instead of accumulating a dict key per distinct port hit.
 _PROBE_TTL_S = 1.5
 _probe_cache: tuple[int, float, bool] | None = None
+
+
+# Hardware keys the panel reads but does not list. "GPU Index" is the
+# machine-readable half of the "GPU" row, which already leads with the same
+# number, so listing it would print that number twice; it stays on the wire
+# because the GPU-selection check compares against it rather than parsing a
+# display string.
+_UNDISPLAYED_HARDWARE_KEYS = frozenset({"GPU Index"})
 
 
 # The server reports frame indices 0-based; Blender's timeline is 1-based.
@@ -171,6 +180,97 @@ def _draw_win_native_status(layout, win_path) -> None:
     layout.label(text="Solver path valid", icon="CHECKMARK")
     if os.path.normpath(resolved) != os.path.normpath(win_path):
         layout.label(text=iface_("Using solver root: {path}").format(path=resolved))
+
+
+def _draw_gpu_section(layout, props) -> None:
+    """Draw the GPU picker and its outcome line, or nothing when disconnected.
+
+    This is the one row in the Connection box that its precondition HIDES
+    rather than disables. The device list is read from the solver host over the
+    connection, so with no connection there is nothing to offer, and a dropdown
+    holding only Automatic would say nothing the Connect button directly above
+    it does not already say.
+
+    Disabled while the server is up, because the choice is applied at Start
+    Server: Stop Server, pick, Start Server is how a running solver is moved.
+    """
+    if not com.is_connected():
+        return
+    col = layout.column()
+    col.enabled = not com.is_server_running() and not com.is_server_launching()
+    _draw_gpu_picker(col, props)
+    _draw_gpu_confirmation(layout, props)
+
+
+def _draw_gpu_picker(layout, props) -> None:
+    """Draw the GPU dropdown and its refresh button, and nothing else.
+
+    The selected entry already names the device, and a selection the host
+    cannot satisfy already reads ``<index>: not detected`` with an error icon,
+    so restating either underneath would only repeat the row above. The one
+    thing the dropdown cannot express is that enumeration failed outright,
+    since that leaves it holding just Automatic, so that gets a line.
+    """
+    from ..core.gpu_devices import gpu_probe_error
+
+    row = layout.row(align=True)
+    row.prop(props, "solver_gpu")
+    row.operator(REMOTE_OT_RefreshGpuDevices.bl_idname, text="", icon="FILE_REFRESH")
+
+    probe_error = gpu_probe_error()
+    if probe_error:
+        layout.label(text=probe_error, icon="ERROR")
+
+
+def _draw_gpu_confirmation(layout, props) -> None:
+    """Say so when the server is not on the GPU that was picked, and nothing
+    otherwise.
+
+    The GPU the server is actually on is named by the Remote Hardware block, so
+    this row exists only for the cases that block cannot express: the two
+    disagreeing, which happens when Start Server attached to a server it did
+    not launch, and a server too old to report its device at all, where the
+    comparison cannot run and silence would read as agreement.
+    """
+    from ..core.gpu_devices import AUTOMATIC
+
+    hardware = com.response.get("hardware") or {}
+    if not hardware:
+        return
+    reported = hardware.get("GPU Index")
+    if reported is None:
+        layout.label(text="Server does not report which GPU it is on", icon="QUESTION")
+        return
+    reported = int(reported)
+    name = str(hardware.get("GPU", ""))
+    if reported < 0:
+        alert = layout.column(align=True)
+        alert.alert = True
+        alert.label(text=name or "Server resolved no CUDA device", icon="ERROR")
+        return
+    selected = props.solver_gpu_index
+    selected_uuid = props.solver_gpu_uuid
+    from ..core.gpu_devices import find_device_by_uuid
+    selected_device = find_device_by_uuid(selected_uuid)
+    if selected_device is not None:
+        selected = selected_device.index
+    if selected in (AUTOMATIC, reported):
+        # Agreement needs no line of its own: the Remote Hardware GPU row names
+        # the device the server is on, index included, and repeating it here
+        # would say the same thing twice.
+        return
+    # Reached when the add-on attached to a server it did not launch. Stop
+    # Server then Start Server relaunches it on the selection, which the
+    # backend still holds.
+    alert = layout.column(align=True)
+    alert.alert = True
+    alert.label(
+        text=iface_("Solver is on GPU {actual}, not the selected GPU {wanted}").format(
+            actual=reported, wanted=selected
+        ),
+        icon="ERROR",
+    )
+    alert.label(text="Press Stop Server, then Start Server, to move it")
 
 
 def _draw_long_path_warning(layout, path, project_name) -> bool:
@@ -363,6 +463,12 @@ class MAIN_PT_RemotePanel(Panel):
                 col.prop(props, "docker_path")
                 _draw_path_warning(col, props.docker_path)
 
+            # Drawn on the box rather than inside col, which is disabled while
+            # connected: the picker is reachable exactly then, since the GPU is
+            # applied at Start Server, and the confirmation line reports the
+            # running server.
+            _draw_gpu_section(box, props)
+
             row = box.row(align=True)
             row.enabled = not com.is_server_running() and not com.is_server_launching()
             row.prop(state, "project_name", text="Project Name")
@@ -494,6 +600,8 @@ class MAIN_PT_RemotePanel(Panel):
             if state.show_hardware:
                 col = hw_box.column(align=True)
                 for key, value in hardware.items():
+                    if key in _UNDISPLAYED_HARDWARE_KEYS:
+                        continue
                     row = col.row(align=True)
                     row.label(text=key)
                     row.label(text=str(value))

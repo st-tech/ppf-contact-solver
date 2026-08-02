@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -34,7 +35,10 @@ if str(REPO_ROOT) not in sys.path:
 
 try:
     from frontend import _rust  # noqa: F401  (PinHolder builds a Rust mirror)
-    from frontend._decoder_ import ParamDecoder
+    from frontend._decoder_ import (
+        ParamDecoder,
+        _independent_surface_pin_mask,
+    )
     from frontend._scene_pin_ import PinHolder
 except Exception as exc:  # pragma: no cover - environment-dependent
     pytest.skip(
@@ -82,8 +86,13 @@ def _make_original(dyn, full_w, driven_full, bl_indices, n_surf=None):
     h._data._tet_V = None
     h._data._blender_vert = None
     h._data._solid_pin_weights = full_w[keep].astype(np.float32)
-    h._data._solid_pin = {"S_t": np.zeros((2, 3)), "M": None,
-                          "keep": keep, "n_input": 3}
+    h._data._solid_pin = {
+        "surface_map": None,
+        "interior_map": None,
+        "motion_cache": {},
+        "keep": keep,
+        "n_input": 3,
+    }
     h._data._solid_full_w = full_w
     h._data._solid_driven_full = list(driven_full)
     h._data._solid_surf_mask = np.arange(len(driven_full)) < n_surf
@@ -190,6 +199,35 @@ def test_torque_op_is_noop():
     assert len(dyn.pin_list) == 1
 
 
+def test_apply_pin_config_cleans_sparse_state_and_is_idempotent():
+    dyn = _FakeDyn()
+    holder = dyn.pin([10])
+    holder._data._harmonic = (1, object())
+    decoder = ParamDecoder()
+    decoder._pin_config = {
+        "t": {
+            10: {
+                "operations": [
+                    {
+                        "type": "move_by",
+                        "delta": [1.0, 0.0, 0.0],
+                        "t_start": 0.0,
+                        "t_end": 1.0,
+                    }
+                ]
+            }
+        }
+    }
+    scene = SimpleNamespace(object_dict={"t": dyn})
+
+    decoder.apply_pin_config(scene)
+    assert len(holder.operations) == 1
+    assert not hasattr(holder._data, "_harmonic")
+
+    decoder.apply_pin_config(scene)
+    assert len(holder.operations) == 1
+
+
 def test_interior_high_weight_stays_soft():
     # DF=[10,11,12,13], n_surf=2 -> 10,11 surface; 12,13 interior. All
     # weights high, but interior verts must NOT become FixPairs (the solver
@@ -201,6 +239,111 @@ def test_interior_high_weight_stays_soft():
     assert sorted(soft[0].index) == [12, 13]    # interior -> soft
     np.testing.assert_allclose(
         sorted(soft[0]._data.pull_weights), sorted([0.9, 0.9]), rtol=1e-5)
+
+
+def test_diffused_weight_without_complete_local_pin_support_stays_soft():
+    dyn = _FakeDyn()
+    holder = _make_original(
+        dyn,
+        [0.9, 0.9, 0.8, 0.7],
+        DF,
+        BL,
+        n_surf=2,
+    )
+    holder._data._sim_blender_weights = [[(0, 1.0)], [(0, 0.9)]]
+    holder._data._solid_frame_map = {
+        "triangles": np.array([[0, 1, 0], [0, 1, 2]], dtype=np.int64),
+        "coefs": np.zeros((2, 3), dtype=np.float64),
+    }
+    track = {"time": [0.0, 1.0], "position": np.zeros((2, 3))}
+    obj_cfg = {
+        b: {
+            "fix_weight_threshold": 0.5,
+            "embedded_move_index": 0,
+            "pin_anim": {b: track},
+        }
+        for b in BL
+    }
+
+    ParamDecoder()._split_solid_holder_by_threshold(
+        dyn, obj_cfg, verbose=False
+    )
+    hard, soft = _classify(dyn)
+
+    assert sorted(hard[0].index) == [10]
+    assert sorted(soft[0].index) == [11, 12, 13]
+
+
+def test_adjacent_exact_surface_candidates_are_demoted_to_soft():
+    dyn = _FakeDyn()
+    holder = _make_original(
+        dyn,
+        [0.9, 0.8, 0.3, 0.2],
+        DF,
+        BL,
+        n_surf=2,
+    )
+    holder._data._solid_surface_tri = np.array(
+        [[10, 11, 99]], dtype=np.int64
+    )
+
+    ParamDecoder()._split_solid_holder_by_threshold(
+        dyn, {b: _thr(0.5) for b in BL}, verbose=False
+    )
+    hard, soft = _classify(dyn)
+
+    assert sorted(hard[0].index) == [10]
+    assert sorted(soft[0].index) == [11, 12, 13]
+
+
+def test_exact_pin_mask_keeps_one_vertex_per_face():
+    selected = _independent_surface_pin_mask(
+        np.array([10, 11, 12]),
+        np.array([True, True, True]),
+        np.array([[10, 11, 12]]),
+        np.array([0.7, 0.9, 0.8]),
+    )
+
+    np.testing.assert_array_equal(selected, [False, True, False])
+
+
+def test_exact_pin_mask_applies_static_priority_across_intents():
+    selected = _independent_surface_pin_mask(
+        np.array([10, 11]),
+        np.array([True, True]),
+        np.array([[10, 11, 99]]),
+        np.array([2.1, 0.9]),
+    )
+
+    np.testing.assert_array_equal(selected, [True, False])
+
+
+def test_explicit_operation_pin_does_not_require_captured_tracks():
+    dyn = _FakeDyn()
+    holder = _make_original(
+        dyn,
+        [0.9, 0.3, 0.2, 0.1],
+        DF,
+        BL,
+        n_surf=2,
+    )
+    holder._data._solid_frame_map = {
+        "triangles": np.array([[0, 1, 2], [0, 1, 2]], dtype=np.int64),
+        "coefs": np.zeros((2, 3), dtype=np.float64),
+    }
+    cfg = {
+        "fix_weight_threshold": 0.5,
+        "operations": [{"type": "move_by", "delta": [1.0, 0.0, 0.0]}],
+    }
+
+    ParamDecoder()._split_solid_holder_by_threshold(
+        dyn, {b: cfg for b in BL}, verbose=False
+    )
+    hard, _soft = _classify(dyn)
+
+    assert sorted(hard[0].index) == [10]
+    assert hasattr(hard[0]._data, "_solid_pin")
+    assert not hasattr(hard[0]._data, "_solid_frame_map")
 
 
 def test_threshold_zero_with_interior_keeps_interior_soft():

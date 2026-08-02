@@ -66,7 +66,8 @@ colliders).
 Below the profile row, the panel lays out the basic parameters one per
 line: **FPS** (inside a small box, with a checkbox to drive it from
 Blender's render FPS instead), **Frame Count**, **Step Size**,
-**Min Newton Steps**, **Air Density**, **Air Friction**, **Gravity**
+**Min Newton Steps**, **Air Density**, **Air Friction**,
+**World Scaling**, **Gravity**
 (a 3-component vector), a **Preview Direction** toggle (viewport arrow),
 and an **Inactive Momentum Frames** row that is grayed-out unless the
 scene contains at least one **Shell** group.
@@ -123,6 +124,7 @@ triangle on any of them to expand.
 | **Min Newton Steps**         | `min_newton_steps`         | 1             | Minimum Newton iterations per step. 1 – 64.                         |
 | **Air Density (kg/m³)**      | `air_density`              | 0.001         | Air density, kg/m³. Range 0 – 0.01.                                 |
 | **Air Friction**             | `air_friction`             | 0.2           | Tangential-to-normal air drag ratio, 0 – 1 (see below).             |
+| **World Scaling**            | `world_scaling`            | 1.0           | Uniform scale applied to all geometry before simulating; the result is scaled back, so the scene keeps its authored size. Range 0.001 – 1000 (see below). |
 | **Gravity (m/s²)**           | `gravity_3d`               | (0, 0, -9.8)  | Gravity vector, m/s² (Z-up Blender frame).                          |
 | **Preview Direction** (gravity) | `preview_gravity_direction` | `False`    | Draw the gravity-direction arrow overlay in the viewport. Overlay-only. |
 | **Inactive Momentum Frames** | `inactive_momentum_frames` | 0             | Frames over which shell momentum is ignored at startup (0 – 600).   |
@@ -165,6 +167,28 @@ reach.
 
 Both **Air Friction** and **Vertex Air Damping** are keyframeable;
 see [Dynamic Parameters](dynamic.md).
+
+### World Scaling
+
+**World Scaling** multiplies all geometry by this factor on the way into
+the solver and divides the simulated result back out on the way home, so
+the scene keeps the size you authored it at. Use it when a scene is
+modeled at a size it does not represent: at `0.1` a 15 m mesh is
+simulated as if it were 1.5 m.
+
+Everything with units of length scales with the geometry: initial
+velocities, keyframed translations, invisible-sphere radii, and each
+group's **Contact Gap** and **Contact Offset**. So a contact that just
+touches at `1.0` still just touches at any other setting. Gravity and the
+scene-level **Constraint Gap** are absolute and are left alone, which is
+what the control is for: holding gravity fixed while the geometry moves
+to another scale is what makes the scene behave as the size it
+represents.
+
+A **Rod** group's **Bend Stiffness** is measured against a 1 cm reference
+segment in solver units, that is, after **World Scaling** has been
+applied. At the default `1.0` the reference is simply the segment length
+as drawn in Blender. See [Material Parameters](material.md).
 
 ## Wind
 
@@ -425,12 +449,15 @@ solver.update_params()
 :::{admonition} Under the hood
 :class: toggle
 
-**Hidden `use_frame_rate_in_output`**
+**FPS from the Blender scene**
 
-`use_frame_rate_in_output` is a hidden boolean. When true, Blender's
-render FPS is used in place of `frame_rate` when converting frames to
-seconds at encode time. Leave it off unless you want the output time
-base tied to the render FPS.
+The checkbox in the **FPS** box (`use_scene_fps`, labeled **Take FPS
+from Scene**) runs the simulation at Blender's own frame rate instead of
+the **FPS** field. While it is on, the panel replaces the field with an
+**FPS (from Scene)** readout, because `frame_rate` keeps whatever value
+it last held: the rate the solver runs at is the one on that readout,
+not the one in the field. Over MCP the same number comes back as
+`effective_fps`.
 
 **Scene profile shape**
 

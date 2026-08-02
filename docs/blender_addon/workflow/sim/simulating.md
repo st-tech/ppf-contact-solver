@@ -9,9 +9,9 @@ with **Resume**, **UpdateParams**, and **ClearAnimation** for iteration.
 Open the sidebar (`N`) in the 3D viewport and switch to the add-on tab.
 The **Solver** panel is the second panel in the tab, directly below
 **Backend Communicator** and above **Scene Configuration**, **Dynamics
-Groups**, **Snap and Merge**, and **Visualization**. It is always visible
-(never collapsed by default) because it is the primary control surface
-during simulation work.
+Groups**, **Snap and Merge**, **Utility Tools**, and **Visualization**.
+It is always visible (never collapsed by default) because it is the
+primary control surface during simulation work.
 
 ```{figure} ../../images/simulating/solver_connected.png
 :alt: Solver panel immediately after connecting and starting the server
@@ -59,6 +59,22 @@ indicators, and controls:
    progress bar appears inline within the panel, showing download
    progress as a percentage alongside bandwidth statistics.
 
+6. **Deformations box.** Below the main block is a box labeled
+   **Deformations** holding two scene-wide buttons.
+   **Re-capture All Deformations** re-records every deforming **Static**
+   collider and every animated pin in one pass, so a change to an action
+   or a modifier stack does not mean walking the groups by hand before
+   **Transfer**. **Clear All Deformations** deletes every captured
+   recording in the scene, including any left behind by an object that
+   was deleted or taken out of its group. See
+   [Static Objects](../scene/static_objects.md).
+
+7. **Export box.** Below that, an **Export** box holds **Export USD**
+   and **Export Alembic (ABC)**, which write the fetched deformation out
+   as a point cache for another application instead of baking it into
+   Blender keyframes. See
+   [Exporting USD and Alembic Caches](exporting.md).
+
 Buttons that are not applicable to the current state are grayed out. For
 example, **Run** is grayed out until a successful **Transfer** has
 completed, and **Resume** is grayed out unless the server still holds at
@@ -78,6 +94,10 @@ least one saved state to continue from.
 | **Terminate**             | Hard-stops the current simulation on the server.                     |
 | **Save & Quit**           | Graceful shutdown: flushes state to disk, then exits the server.     |
 | **Abort**                 | Interrupts the *current* transfer or fetch. Does not touch running sim. |
+| **Re-capture All Deformations** | Re-records every deforming **Static** collider and every animated pin in the scene, colliders first, with a progress readout and an **Abort** button while it runs. |
+| **Clear All Deformations** | Deletes every captured deformation in the scene, including recordings orphaned by a deleted or un-grouped object. |
+| **Export USD**            | Writes the fetched deformation to a USD point cache (`.usdc` by default). Non-destructive; every frame must be fetched first. See [Exporting USD and Alembic Caches](exporting.md). |
+| **Export Alembic (ABC)**  | The same result as an Alembic `.abc` cache. Neither format carries rod / curve objects. |
 
 `Terminate` and `Save & Quit` target the server itself; **Terminate** is
 the hard equivalent of pulling the plug, while **Save & Quit** lets the
@@ -92,7 +112,12 @@ left-to-right along the blue arrows; the purple dashed arrows cover the
 loops (**Update Params**), recovery transitions (**Clear Local
 Animation**, **Resume**), and early exits (**Terminate**, **Save &
 Quit**). If a button is grayed out, find the current state on the
-diagram; the enabled list inside that box is the full answer.
+diagram; the enabled list inside that box is the full answer. The
+diagram covers the main block only. The **Deformations** and **Export**
+boxes below it are gated by what the scene holds rather than by solver
+state: **Export USD** and **Export Alembic (ABC)** need at least one
+simulated mesh in the view layer, and the two **Deformations** buttons
+need something to capture or something captured.
 ```
 
 ```{figure} ../../images/simulating/solver_ready.png

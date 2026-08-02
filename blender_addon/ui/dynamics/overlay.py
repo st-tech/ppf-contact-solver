@@ -648,12 +648,15 @@ def apply_object_overlays():
     from that group's ``show_overlay_color`` + the assignment's
     ``included`` flag + the global ``hide_overlay_colors`` toggle.
 
-    Cleanup for objects that were removed from a group is handled by
-    explicit operator paths (``OBJECT_OT_RemoveObjectFromGroup`` calls
-    ``reset_object_display``, and ``group_ops._apply_cleanup`` runs on
-    depsgraph updates for deleted objects). Those paths know which
-    UUIDs to reset; ``apply_object_overlays`` does not, so it stays
-    out of that business.
+    Clearing the color of an object that has LEFT a group is done at the
+    point membership ends, by whichever path ends it: the Remove /
+    Delete Group / Delete All Groups operators, the MCP group handlers,
+    and the ``solver.clear()`` scripting entry point all call
+    ``reset_object_display`` on the object while it is still a member.
+    That is the last moment the object is the add-on's to write. Nothing
+    scans the scene afterwards looking for a stray color, because a
+    non-member that the add-on tinted and one the user colored are
+    indistinguishable once the assignment is gone.
     """
     from ...models.groups import invalidate_overlays
     from ...core.uuid_registry import get_object_uuid

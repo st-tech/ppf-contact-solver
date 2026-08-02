@@ -4,6 +4,7 @@
 // License: Apache v2.0
 
 #include "../eigenanalysis/eigenanalysis.hpp"
+#include "../float_math.hpp"
 #include "../utility/dispatcher.hpp"
 #include "../utility/utility.hpp"
 #include "model/pdrd_rigid.hpp"
@@ -45,8 +46,8 @@ __device__ void eigen_sym3x3(
                     + b02 * (b01 * b12 - b11 * b02);
         float r = fminf(1.0f, fmaxf(-1.0f, det_b * 0.5f));
         float phi = acosf(r) / 3.0f;
-        lam0 = q + 2.0f * p * cosf(phi);
-        lam2 = q + 2.0f * p * cosf(phi + 2.0943951f); // 2π/3
+        lam0 = q + 2.0f * p * fmath::cos_bounded(phi);
+        lam2 = q + 2.0f * p * fmath::cos_bounded(phi + 2.0943951f); // 2π/3
         lam1 = 3.0f * q - lam0 - lam2;
     }
 
@@ -552,7 +553,33 @@ embed_rod_bend_force_hessian(const DataSet &data, const Vec<Vec3f> &eval_x,
         float bend_damping =
             0.5f * (edge_param_0.bend_damping + edge_param_1.bend_damping);
         float mass = data.prop.vertex[i].mass;
-        float stiff_k = bend * mass;
+        // Resolution-independent discrete-rod bending coefficient. The convergent
+        // per-vertex stiffness is k = B / l, where l is the Voronoi length (half
+        // the two incident rest lengths): the continuum energy int 0.5*B*kappa^2 ds
+        // discretizes at an interior vertex as 0.5*B*(phi/l)^2*l = 0.5*(B/l)*phi^2,
+        // with phi the turning angle this energy measures. B = bend * linear_density
+        // is the density-normalized flexural rigidity, so that `bend` alone sets the
+        // bent shape and density stays a free knob, which is the same normalization
+        // the shell hinge above applies through areal density.
+        //
+        // The 1/l^2 is what makes the shape mesh-independent, and both powers are
+        // load-bearing. Linear density is mass/l, so B/l expands to bend*mass/l^2;
+        // and the lumped vertex mass is itself proportional to l, since builder.rs
+        // sums half of each incident rod edge's mass. A coefficient of bend*mass
+        // alone therefore scales as l where the discretization needs 1/l, leaving a
+        // rod four times floppier for every halving of its segment length, so two
+        // resolutions of one physical rod would not describe the same rod.
+        //
+        // REF_LENGTH sets only the numeric range of the user `bend` parameter, as
+        // BEND_SCALE does for the shell; it does not affect mesh-independence. It is
+        // anchored at 1 cm, which is the segment length the rod scenes in examples/
+        // sit nearest, so established `bend` values keep their meaning there.
+        const float REF_LENGTH = 1e-2f;
+        float voronoi = 0.5f * (data.prop.edge[edge_idx_0].length +
+                                data.prop.edge[edge_idx_1].length);
+        float stiff_k = voronoi > 0.0f ? bend * mass * (REF_LENGTH * REF_LENGTH) /
+                                             (voronoi * voronoi)
+                                       : 0.0f;
         if (mass > 0.0f && stiff_k > 0.0f) {
             Vec2u edge_0 = data.mesh.mesh.edge[edge_idx_0];
             Vec2u edge_1 = data.mesh.mesh.edge[edge_idx_1];

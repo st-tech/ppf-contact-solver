@@ -442,8 +442,7 @@ struct ParamSet {
     unsigned cg_max_iter;
     float cg_tol;
     float line_search_max_t;
-    float ccd_reduction;
-    unsigned ccd_max_iter;
+    float ccd_eps;
     float max_dx;
     float eiganalysis_eps;
     float friction_eps;
@@ -553,11 +552,12 @@ struct DataSet {
     // converged torque consumed once by the post-solve integrate. Transient
     // working buffer, zero for non-grain vertices.
     Vec<Vec3f> grain_torque;
-    // Per-grain angular friction stiffness K = sum lambda*radius^2 (lambda the
-    // friction stiffness), accumulated alongside grain_torque. The integrate
-    // uses it for a semi-implicit omega step omega += dt*Iinv*tau/(1 +
-    // dt^2*Iinv*K), which damps the friction's own omega-dependence so omega
-    // converges to the rolling rate instead of overshooting. Transient.
+    // Per-grain angular friction scale K = sum lambda*radius^2, accumulated
+    // alongside grain_torque. Lambda is the scalar force regularization scale;
+    // using it here keeps the staggered spin update conservatively damped when
+    // the kinetic translational Hessian has zero curvature along slip. The
+    // integrate uses K for omega += dt*Iinv*tau/(1 + dt^2*Iinv*K), which
+    // prevents overshoot past the rolling rate. Transient.
     Vec<float> grain_ang_stiff;
     // Per-grain SUM of the unit contact normals over ALL of the grain's contacts
     // this step (zero if airborne). Written by the contact embed and consumed by

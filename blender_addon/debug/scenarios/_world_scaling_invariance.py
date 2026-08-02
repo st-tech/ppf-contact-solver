@@ -112,7 +112,7 @@ def ws_run_cycle(dh, tracked_name, *, project_name, frame_count, gravity,
         time.sleep(0.2)
     s = dh.facade.engine.state
     if s.solver.name == "FAILED":
-        raise RuntimeError(f"build failed: {s.error!r}")
+        raise RuntimeError(build_failure_message(dh.facade, dh.com))
     if s.server_data_hash != data_hash:
         raise RuntimeError(
             f"server never echoed new data hash (ws={world_scaling}); "

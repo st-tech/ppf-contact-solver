@@ -1257,13 +1257,28 @@ StepResult advance() {
                 : okind == 4u ? "face-vertex (collision mesh)"
                 : okind == 5u ? "edge-edge (collision mesh)"
                               : "unknown";
-            logging.message(
-                "### contact starts overlapping: two surfaces begin the step "
-                "already touching or overlapping (a contact pair is inside the "
-                "contact offset at the start of the step). offending %s pair: "
-                "vertices %u and %u (squared start distance %.6e, offset "
-                "%.6e, solver units).",
-                okind_str, ov0, ov1, od2, ooffset);
+            // A negative offset is the unset value: the flag came from a
+            // collapsed sweep frame, which has no scale to report lengths in.
+            // The distance and offset belong to a flagged pair, which need not
+            // be the named one, since the indices are first-writer-wins and
+            // these two are last-writer.
+            if (ooffset < 0.0f) {
+                logging.message(
+                    "### contact starts overlapping: the sweep frame of a %s "
+                    "pair collapsed, so two primitives are coincident to the "
+                    "resolution of the coordinates. offending pair: vertices "
+                    "%u and %u.",
+                    okind_str, ov0, ov1);
+            } else {
+                logging.message(
+                    "### contact starts overlapping: two surfaces begin the "
+                    "step already touching or overlapping (a contact pair is "
+                    "inside the contact offset at the start of the step). "
+                    "offending %s pair: vertices %u and %u. A flagged pair "
+                    "has squared start distance %.6e against offset %.6e, in "
+                    "the CCD's rescaled units.",
+                    okind_str, ov0, ov1, od2, ooffset);
+            }
             if (okind >= 3u && okind <= 5u) {
                 logging.message(
                     "### the second index is in the static collision-mesh "

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import socket
 import subprocess
 import uuid
@@ -34,6 +35,7 @@ from .protocol import (
     socket_data_receive,
     socket_upload_atomic,
 )
+from .gpu_devices import AUTOMATIC
 from .status import BytesPerSecondCalculator
 from ..models.defaults import DEFAULT_SERVER_PORT, DEFAULT_SSH_KEEPALIVE_INTERVAL
 
@@ -132,7 +134,12 @@ class ConnectionBackend(Protocol):
         ...
 
     def exec_command(
-        self, command: str, *, shell: bool = False, cwd: str | None = None
+        self,
+        command: str,
+        *,
+        shell: bool = False,
+        cwd: str | None = None,
+        timeout: float | None = None,
     ) -> dict:
         """Execute a command on the remote.
 
@@ -596,16 +603,24 @@ class SSHBackend:
             src_addr=("localhost", 0),
         )
 
-    def exec_command(self, command: str, *, shell: bool = False, cwd: str | None = None) -> dict:
+    def exec_command(
+        self, command: str, *, shell: bool = False, cwd: str | None = None,
+        timeout: float | None = None,
+    ) -> dict:
         cwd = cwd or self._directory
         if shell:
-            command = f"/bin/sh -c '{command}'"
+            command = f"/bin/sh -c {shlex.quote(command)}"
+        if timeout is not None:
+            command = f"timeout --signal=KILL {timeout:g}s {command}"
         if self._container and not command.startswith("docker"):
             command = f"docker exec -w {cwd} {self._container} {command}"
         elif not self._container:
             command = f"cd {cwd} && {command}"
         try:
-            _stdin, stdout, stderr = self._instance.exec_command(command)
+            _stdin, stdout, stderr = self._instance.exec_command(
+                command,
+                timeout=None if timeout is None else timeout + 1.0,
+            )
             exit_code = stdout.channel.recv_exit_status()
             output = stdout.read().decode().strip()
             error_output = stderr.read().decode().strip()
@@ -689,10 +704,15 @@ class DockerBackend:
         s.connect(("localhost", self._port))
         return s
 
-    def exec_command(self, command: str, *, shell: bool = False, cwd: str | None = None) -> dict:
+    def exec_command(
+        self, command: str, *, shell: bool = False, cwd: str | None = None,
+        timeout: float | None = None,
+    ) -> dict:
         cwd = cwd or self._directory
         if shell:
-            command = f"/bin/sh -c '{command}'"
+            command = f"/bin/sh -c {shlex.quote(command)}"
+        if timeout is not None:
+            command = f"timeout --signal=KILL {timeout:g}s {command}"
         try:
             exit_code, stdout = self._instance.exec_run(command, workdir=cwd)
             output = stdout.decode().strip() if exit_code == 0 else ""
@@ -769,14 +789,26 @@ class LocalBackend:
         s.connect(("localhost", self._port))
         return s
 
-    def exec_command(self, command: str, *, shell: bool = False, cwd: str | None = None) -> dict:
+    def exec_command(
+        self, command: str, *, shell: bool = False, cwd: str | None = None,
+        timeout: float | None = None,
+    ) -> dict:
         cwd = cwd or self._directory
         try:
             process = subprocess.Popen(
                 command, shell=shell, cwd=cwd,
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             )
-            stdout, stderr = process.communicate()
+            try:
+                stdout, stderr = process.communicate(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                stdout, stderr = process.communicate()
+                return {
+                    "exit_code": 124,
+                    "stdout": stdout.decode().strip().splitlines(),
+                    "stderr": ["command timed out"],
+                }
             return {
                 "exit_code": process.returncode,
                 "stdout": stdout.decode().strip().splitlines(),
@@ -900,14 +932,26 @@ class WinNativeBackend:
         s.connect(("localhost", self._port))
         return s
 
-    def exec_command(self, command: str, *, shell: bool = False, cwd: str | None = None) -> dict:
+    def exec_command(
+        self, command: str, *, shell: bool = False, cwd: str | None = None,
+        timeout: float | None = None,
+    ) -> dict:
         cwd = cwd or self._directory
         try:
             process = subprocess.Popen(
                 command, shell=shell, cwd=cwd,
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             )
-            stdout, stderr = process.communicate()
+            try:
+                stdout, stderr = process.communicate(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                stdout, stderr = process.communicate()
+                return {
+                    "exit_code": 124,
+                    "stdout": stdout.decode().strip().splitlines(),
+                    "stderr": ["command timed out"],
+                }
             return {
                 "exit_code": process.returncode,
                 "stdout": stdout.decode().strip().splitlines(),
@@ -978,16 +1022,26 @@ class WinNativeBackend:
             )
         self._process = None
 
-    def start_server(self) -> None:
-        """Re-launch ``ppf-cts-server.exe`` after a Stop. No-op if the
-        process is already alive (Start clicked twice) or in test mode
-        where an external orchestrator owns the server. ``spawn_win_native_server``
-        also returns None when a ppf-cts-server is already on the port
-        (attach mode), so ``_process`` legitimately stays None there."""
+    def start_server(
+        self, cuda_device: int = AUTOMATIC, cuda_device_uuid: str = ""
+    ) -> bool:
+        """Launch ``ppf-cts-server.exe`` on CUDA device *cuda_device*.
+
+        No-op if the process is already alive (Start clicked twice) or in test
+        mode where an external orchestrator owns the server.
+        ``spawn_win_native_server`` also returns None when a ppf-cts-server is
+        already on the port (attach mode), so ``_process`` legitimately stays
+        None there.
+
+        Returns True when a server was actually spawned, so the caller can say
+        whether the device selection reached anything."""
         if self.is_alive():
-            return
+            return False
         from .connection import spawn_win_native_server
-        self._process = spawn_win_native_server(self._directory, self._port)
+        self._process = spawn_win_native_server(
+            self._directory, self._port, cuda_device, cuda_device_uuid
+        )
+        return self._process is not None
 
     def disconnect(self) -> None:
         """Sever the addon's reference to the server without stopping it.
@@ -1113,7 +1167,10 @@ def create_backend(backend_type: str, config: dict) -> ConnectionBackend:
 
     elif backend_type == "win_native":
         from .connection import connect_win_native
-        info, process = connect_win_native(config["path"], config.get("server_port", DEFAULT_SERVER_PORT))
+        info, process = connect_win_native(
+            config["path"],
+            config.get("server_port", DEFAULT_SERVER_PORT),
+        )
         return WinNativeBackend(
             directory=info.current_directory,
             port=info.server_port,

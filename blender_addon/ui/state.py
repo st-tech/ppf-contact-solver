@@ -66,6 +66,102 @@ def _get_profile_items(self, context):
     return [(n, n, tip_("Profile: {name}").format(name=n)) for n in names]
 
 
+@dynamic_enum_items
+def _get_solver_gpu_items(self, context):
+    """Dynamic callback for the ``solver_gpu`` dropdown.
+
+    Each item's numeric ID is its CUDA index plus one, with 0 reserved for
+    Automatic, so the number an item carries is fixed by the device it names
+    rather than by where it sits in the list. A selection the solver host
+    cannot satisfy gets its own entry so it stays visible and named instead of
+    resolving to a different GPU.
+
+    The devices offered are those of the machine that will run the server,
+    which is not always the one Blender runs on.
+    """
+    from ..core.gpu_devices import (
+        AUTOMATIC,
+        STALE_SELECTION_ID,
+        cached_gpu_devices,
+    )
+
+    items = [(
+        "AUTO",
+        iface_("Automatic"),
+        tip_("Set no CUDA_VISIBLE_DEVICES, so the solver host's own choice stands"),
+        "NONE",
+        0,
+    )]
+    present = set()
+    present_uuids = set()
+    for device in cached_gpu_devices():
+        present.add(device.index)
+        present_uuids.add(device.uuid)
+        items.append((
+            str(device.index),
+            f"{device.index}: {device.name}",
+            tip_("Run the solver on GPU {index} ({name})").format(
+                index=device.index, name=device.name
+            ),
+            "NONE",
+            device.index + 1,
+        ))
+    stored = self.solver_gpu_index
+    stored_uuid = self.solver_gpu_uuid
+    missing = (
+        (stored != AUTOMATIC or bool(stored_uuid))
+        and (
+            (bool(stored_uuid) and stored_uuid not in present_uuids)
+            or (not stored_uuid and stored not in present)
+        )
+    )
+    if missing:
+        missing_name = stored_uuid or str(stored)
+        items.append((
+            "MISSING",
+            iface_("{index}: not detected").format(index=missing_name),
+            tip_("The solver host reports no GPU {index}").format(
+                index=missing_name
+            ),
+            "ERROR",
+            STALE_SELECTION_ID,
+        ))
+    return items
+
+
+def _get_solver_gpu(self):
+    """Map the saved GPU identity onto the dropdown's numeric ID."""
+    from ..core.gpu_devices import (
+        AUTOMATIC,
+        STALE_SELECTION_ID,
+        find_device,
+        find_device_by_uuid,
+        has_probed,
+    )
+
+    device = find_device_by_uuid(self.solver_gpu_uuid)
+    if self.solver_gpu_uuid and device is None:
+        return STALE_SELECTION_ID
+    index = device.index if device is not None else self.solver_gpu_index
+    if index == AUTOMATIC:
+        return 0
+    if not self.solver_gpu_uuid and has_probed() and find_device(index) is None:
+        return STALE_SELECTION_ID
+    return index + 1
+
+
+def _set_solver_gpu(self, value):
+    """Store the picked device's display index and stable UUID."""
+    from ..core.gpu_devices import AUTOMATIC, STALE_SELECTION_ID, find_device
+
+    if value == STALE_SELECTION_ID:
+        return
+    index = AUTOMATIC if value == 0 else value - 1
+    device = find_device(index)
+    self.solver_gpu_index = index
+    self.solver_gpu_uuid = "" if device is None else device.uuid
+
+
 def _on_profile_selected(self, context):
     """Update callback when user picks a profile from the dropdown."""
     from ..core.profile import apply_profile, load_profiles
@@ -143,6 +239,27 @@ class SSHState(PropertyGroup):
         subtype="DIR_PATH",
         default="",
         description="Root directory where ppf-cts-server.exe is located",
+    )  # pyright: ignore
+    # The index is retained for display and backward compatibility. UUID is
+    # the stable saved identity used for launch; ``solver_gpu`` is only the
+    # dropdown view and carries no saved value of its own.
+    solver_gpu_index: IntProperty(
+        name="GPU Index",
+        default=-1,
+        min=-1,
+        description="CUDA device index for the solver server, or -1 to set no CUDA_VISIBLE_DEVICES",
+    )  # pyright: ignore
+    solver_gpu_uuid: StringProperty(
+        name="GPU UUID",
+        default="",
+        description="Stable UUID of the selected solver GPU",
+    )  # pyright: ignore
+    solver_gpu: EnumProperty(
+        name="GPU",
+        items=_get_solver_gpu_items,
+        get=_get_solver_gpu,
+        set=_set_solver_gpu,
+        description="Which CUDA device on the solver host the server runs the solver on",
     )  # pyright: ignore
     docker_port: IntProperty(
         name="Docker Port",

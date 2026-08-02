@@ -28,6 +28,7 @@ import numpy
 from ..models.console import console
 from .backends import ConnectionBackend, create_backend
 from .derived import is_sim_running_from_response
+from .gpu_devices import describe_launch, shell_prefix
 from .effects import (
     DoClearAnimation,
     DoClearInterrupt,
@@ -254,8 +255,11 @@ class EffectRunner:
                     self._submit_cmd(self._do_validate_path)
 
             # -- Server lifecycle (commands) --
-            case DoLaunchServer():
-                self._submit_cmd(self._do_launch_server)
+            case DoLaunchServer(
+                cuda_device=device,
+                cuda_device_uuid=device_uuid,
+            ):
+                self._submit_cmd(self._do_launch_server, device, device_uuid)
 
             case DoStopServer():
                 self._submit_cmd(self._do_stop_server)
@@ -492,13 +496,69 @@ class EffectRunner:
                 self._backend = None
             self._engine.dispatch(ConnectionFailed(error=str(e)))
             return
+        self._probe_solver_host_gpus(backend)
         self._engine.dispatch(Connected(
             remote_root=remote_root,
             session_id=session_id,
             saved_session_id=saved_session_id,
         ))
 
+    def probe_solver_host_gpus(self) -> None:
+        """Re-enumerate the connected solver host's GPUs on the worker thread.
+
+        The Refresh button calls this. It goes straight to the command queue
+        rather than through an event, because it changes no application state:
+        it refills a cache the panel reads.
+        """
+        backend = self._backend
+        if backend is not None:
+            self._submit_cmd(self._probe_solver_host_gpus, backend)
+
+    def _probe_solver_host_gpus(self, backend) -> None:
+        """Enumerate the GPUs of the machine *backend* will run the server on.
+
+        One path for every backend: ``exec_command`` reaches the solver host
+        whether that is this machine, another one over SSH, or a container, so
+        nothing here has to know which. It runs on the worker thread that owns
+        the connection, because a panel draw must never issue a backend
+        command. The result only fills a cache, so a failure is recorded for
+        the panel to show rather than raised: it costs the dropdown its device
+        names, not the connection.
+        """
+        from . import gpu_devices
+
+        gpu_devices.forget_devices()
+        direct = backend.backend_type in ("local", "win_native")
+        command = (
+            gpu_devices.NVIDIA_SMI_ARGS
+            if direct
+            else gpu_devices.NVIDIA_SMI_COMMAND
+        )
+        try:
+            result = backend.exec_command(
+                command,
+                shell=not direct,
+                timeout=gpu_devices.PROBE_TIMEOUT_SECONDS,
+            )
+        except Exception as e:  # noqa: BLE001 - recorded, not swallowed
+            gpu_devices.record_probe_failure(
+                f"Could not run nvidia-smi on the solver host: {e}"
+            )
+            return
+        if result.get("exit_code") != 0:
+            detail = " ".join(result.get("stderr") or []).strip() or "no output"
+            gpu_devices.record_probe_failure(
+                f"nvidia-smi failed on the solver host: {detail}"
+            )
+            return
+        gpu_devices.load_devices("\n".join(result.get("stdout") or []))
+
     def _do_disconnect(self) -> None:
+        from . import gpu_devices
+
+        # The next connection may reach a different machine, where a list left
+        # over from this one would name GPUs that are not there.
+        gpu_devices.forget_devices()
         if self._backend:
             self._backend.disconnect()
             self._backend = None
@@ -583,26 +643,41 @@ class EffectRunner:
             # yet doesn't trip a spurious server-lost reset.
             self._engine.dispatch(ServerLost())
 
-    def _do_launch_server(self) -> None:
+    def _do_launch_server(
+        self, cuda_device: int = -1, cuda_device_uuid: str = ""
+    ) -> None:
         if not self._backend:
             return
 
-        # Win_native: connect spawns the initial ppf-cts-server.exe, then
-        # Stop/Start cycles re-spawn it here. Without this re-spawn, ServerStopped
-        # leaves _process=None and the next ServerLaunched dispatch is a
-        # lie — _do_query silently fails (channel refuses), no ServerPolled
-        # follows, solver stays NO_DATA, and the UI shows "Waiting for
-        # Data" with stale Scene Info because the response cache was last
-        # written before the stop.
+        # Win_native spawns a child process instead of writing a launch
+        # script, because there is no shell on the other side of it. The GPU
+        # selection reaches it as an environment variable rather than a command
+        # prefix; everything around that is the same.
         if self._backend.backend_type == "win_native":
+            launched = False
             try:
-                self._backend.start_server()
+                launched = self._backend.start_server(
+                    cuda_device, cuda_device_uuid
+                )
+                self._wait_for_win_native_server()
             except Exception as e:
+                cleanup_error = None
+                if launched:
+                    try:
+                        self._backend.stop_server()
+                    except Exception as stop_error:
+                        cleanup_error = stop_error
+                detail = str(e)
+                if cleanup_error is not None:
+                    detail += f" Cleanup also failed: {cleanup_error}"
                 self._engine.dispatch(ErrorOccurred(
-                    error=f"Failed to start server: {e}",
+                    error=f"Failed to start server: {detail}",
                     source="launch_server",
                 ))
                 return
+            console.write(describe_launch(
+                cuda_device, launched, cuda_device_uuid
+            ))
             self._engine.dispatch(ServerLaunched())
             return
 
@@ -656,8 +731,15 @@ class EffectRunner:
         # (SERVER_STARTING / SERVER_READY) and serves the same wire
         # protocol the addon speaks; build it with
         # ``cargo build --release -p ppf-cts-server``.
+        # An environment assignment in front of the binary is how the GPU
+        # choice is delivered to a server started through a shell. It is
+        # applied on the solver host, so the index is that host's, which is
+        # also where the panel's device list was enumerated.
         rust_bin = posixpath.join(directory, "target", "release", "ppf-cts-server")
-        server_cmd = f"{rust_bin} {host_flag}--port {port}"
+        server_cmd = (
+            f"{shell_prefix(cuda_device, cuda_device_uuid)}"
+            f"{rust_bin} {host_flag}--port {port}"
+        )
 
         # Activate the project venv so the build worker subprocess
         # (spawned by ppf-cts-server) resolves `python3` to one with the
@@ -682,6 +764,7 @@ class EffectRunner:
         result = self._backend.exec_command(script_path, shell=True)
         if result["exit_code"] != 0:
             raise FileNotFoundError("Failed to launch server")
+        console.write(describe_launch(cuda_device, True, cuda_device_uuid))
 
         # Monitor startup. We keep looping until the client can actually
         # reach the server through whatever transport the backend uses
@@ -760,6 +843,33 @@ class EffectRunner:
             time.sleep(1)
 
         self._engine.dispatch(ServerLaunched())
+
+    def _wait_for_win_native_server(self, timeout: float = 16.0) -> None:
+        """Wait until a Windows Native child answers the solver protocol."""
+        from .connection import _probe_ppf_cts_server
+
+        deadline = time.monotonic() + timeout
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            if _probe_ppf_cts_server(
+                self._backend.server_port, timeout=min(0.5, remaining)
+            ):
+                return
+            process = getattr(self._backend, "_process", None)
+            if process is not None:
+                returncode = process.poll()
+                if returncode is not None:
+                    raise RuntimeError(
+                        "Windows Native server exited with code "
+                        f"{returncode} before becoming ready. Check server.log."
+                    )
+            time.sleep(min(0.1, max(0.0, deadline - time.monotonic())))
+        raise TimeoutError(
+            f"Windows Native server did not become ready within {timeout:g} seconds. "
+            "Check server.log."
+        )
 
     def _do_stop_server(self) -> None:
         if not self._backend:

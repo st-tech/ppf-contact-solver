@@ -163,8 +163,29 @@ and confirm `python3` resolves via the venv or `$PATH`.
 
 ### Status: "Protocol version mismatch"
 
-The server's wire version does not match the add-on (`0.10`). Rebuild
-the solver from a matching revision, or update the add-on.
+The solver binary and the add-on were built from revisions that speak
+different wire protocols. The add-on stops the server on this status, so
+a restart picks up the on-disk binary; if the status comes back after
+that, the two halves are genuinely out of step. Rebuild the solver from a
+matching revision, or update the add-on. The add-on's log names both
+sides ("server reports X, addon expects Y"), which tells you which one is
+older.
+
+The add-on and the solver each take this number from the same shipped
+file, so there is nothing to configure and nothing to match up by hand: a
+mismatch always means one of the two binaries is stale.
+
+:::{admonition} Under the hood
+:class: toggle
+
+The version is single-sourced in `blender_addon/protocol_version.toml`.
+The add-on reads that file when it starts, and the server binary carries
+the value that was compiled into it, so an add-on and a server built from
+one revision always hold the same number. That file also carries the
+changelog for every bump, which is the fastest way to tell whether a
+stale server would merely behave differently or would reject the payload
+outright.
+:::
 
 ## Object groups and pins
 
@@ -215,10 +236,60 @@ group's object list.
 
 A Static collider mesh has stray points that belong to no face, common in
 imported models. Click **Remove Isolated Vertices** under the error to delete
-them, then **Transfer** again. By hand: in Edit Mode run **Select > All by
-Trait > Loose Geometry**, then **Mesh > Delete > Loose**. Over MCP, call
-`remove_isolated_static_vertices` (preview with
-`detect_isolated_static_vertices`).
+them, then **Transfer** again. That button and the matching MCP pair
+`remove_isolated_static_vertices` / `detect_isolated_static_vertices` work on
+active Static colliders only, which is what this error names.
+
+For the same points on any mesh, select the objects and run
+**Scan Selected Meshes** in the **Utility Tools > Mesh Cleaning** panel,
+then **Remove Loose Vertices** from the report. That route works on the
+whole selection whatever the group type, keeps pinned vertices, skips a
+Sand particle mesh (whose grain centers are legitimately in no face), and
+names the caches the vertex-count change invalidates instead of leaving
+them stale. See [Mesh Cleaning](workflow/scene/mesh_cleaning.md).
+
+### Transfer or build rejects the mesh
+
+Any rejection that is shaped like "this geometry is wrong" is worth
+scanning before you debug it. **Scan Selected Meshes** in the
+**Utility Tools > Mesh Cleaning** panel covers every geometry check
+**Transfer** performs and adds several that nothing else performs, so
+anything **Transfer** would reject on geometry grounds shows up in the
+scan first, with its fix button attached:
+
+| Scan reports                              | Fix                                                                             |
+| ----------------------------------------- | ------------------------------------------------------------------------------- |
+| Near-coincident vertex pairs              | **Merge by Distance**                                                            |
+| Isolated vertices, hanging seam vertices  | **Remove Loose Vertices**                                                        |
+| Degenerate (zero-area) faces              | **Dissolve Degenerate**                                                          |
+| Duplicate faces                           | **Delete Duplicate Faces**                                                       |
+| Inconsistently wound edges                | **Recalculate Outside**                                                          |
+| Linked duplicate of another object        | `Object > Relations > Make Single User > Object & Data` (no button; Transfer refuses a shared mesh datablock) |
+
+The first three change the vertex count and ask for confirmation first.
+
+It does not work the other way around: a clean scan is not a promise that
+**Transfer** will pass. **Transfer** also checks things that are not
+geometry, such as an object assigned to two active groups at once, an
+assigned object that no longer resolves, a **Reference Rest Angle**
+object that has gone missing, and a captured deformation whose vertex
+count no longer matches its mesh. The solver then runs its own
+intersection test when it builds the scene. None of those are visible to
+the scan, and each is reported by name in the panel's error line.
+
+The scan is also stricter than **Transfer** on two rows, on purpose.
+Isolated vertices stop a **Transfer** only on a **Static** collider, and
+hanging seam vertices only on a **Shell** or **Solid**, while the scan
+reports both on any mesh you select. Where **Transfer** tolerates them
+they are still worth removing: a point that belongs to no face has no
+surface area and no mass, so it does nothing in the solve.
+
+Boundary edges, non-manifold edges, and faces with more than three corners
+are reported as notes rather than errors: an open, quad-built cloth mesh is
+normal, and only a **Solid** group needs a closed surface. The
+**Triangulate** button under the quad note leaves an explicit triangle
+with no diagonal left for Blender to re-pick as the mesh deforms, which
+is what keeps the displayed surface on the simulated one.
 
 ### Run button is disabled
 

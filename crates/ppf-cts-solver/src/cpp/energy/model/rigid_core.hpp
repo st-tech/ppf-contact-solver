@@ -16,6 +16,7 @@
 
 #include "../../data.hpp"
 #include <cmath>
+#include "../../float_math.hpp"
 
 namespace RigidCore {
 
@@ -46,8 +47,10 @@ __device__ __host__ inline Mat3x3f rigid_exp_so3(const Vec3f &theta) {
         s = 1.0f - a2 / 6.0f;          // sin(a)/a
         c = 0.5f - a2 / 24.0f;         // (1 - cos a)/a^2
     } else {
-        s = std::sin(a) / a;
-        c = (1.0f - std::cos(a)) / a2;
+        // A rotation increment of one Newton iteration, so `a` is small and
+        // bounded; the rigid fit re-orthogonalizes on the next iteration.
+        s = fmath::sin_bounded(a) / a;
+        c = (1.0f - fmath::cos_bounded(a)) / a2;
     }
     return I + s * K + c * (K * K);
 }

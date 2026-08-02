@@ -8,6 +8,14 @@ them from files.pythonhosted.org and verify each against the SHA-256
 digest published on PyPI.
 
 Idempotent: skips files already present whose hash matches.
+
+``--pin`` prints the pip requirement (``cbor2==<version>``) instead of
+fetching, so the installers that build a cbor2 into a venv rather than
+into the shipped addon derive the version from :data:`CBOR2_VERSION`
+below instead of repeating it. Those callers are ``warmup.py`` (the
+server venv, on every host and in the Docker image) and the three
+``Create venv + install Python deps`` steps in
+``.github/workflows/blender.yml``.
 """
 from __future__ import annotations
 
@@ -85,6 +93,9 @@ def fetch_one(filename: str, prefix: str, sha: str) -> None:
 
 
 def main() -> None:
+    if "--pin" in sys.argv[1:]:
+        print(f"cbor2=={CBOR2_VERSION}")
+        return
     DEST.mkdir(parents=True, exist_ok=True)
     for spec in WHEELS:
         fetch_one(*spec)

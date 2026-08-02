@@ -12,6 +12,7 @@ from .decorators import get_handler_registry
 _LLM_REFS_BY_MODULE: dict[str, tuple[str, ...]] = {
     "connection": ("connections",),
     "group": ("scene",),
+    "mesh_cleaning": ("scene",),
     "object_ops": ("constraints", "scene"),
     "simulation": ("simulation",),
     "scene": ("constraints",),

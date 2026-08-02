@@ -126,6 +126,122 @@ pub enum GpuError {
     },
     #[error("No NVIDIA GPU detected. An NVIDIA GPU is required to run the solver.")]
     NoGpuDetected,
+    #[error(
+        "CUDA_VISIBLE_DEVICES is set to '{spec}', which selects no GPU this machine has, so \
+         CUDA sees no device at all. Detected: {detected}."
+    )]
+    VisibleDevicesUnsatisfied { spec: String, detected: String },
+    #[error(
+        "CUDA device 0 cannot be identified from CUDA_VISIBLE_DEVICES='{spec}' on this \
+         multi-GPU machine. Select a GPU by UUID. Detected: {detected}."
+    )]
+    VisibleDeviceAmbiguous { spec: String, detected: String },
+}
+
+/// Position in `rows` of the device CUDA exposes as its own device 0.
+///
+/// `rows` is `(index, uuid)` per device in the order `nvidia-smi` reported
+/// them, and `visible` is the value of `CUDA_VISIBLE_DEVICES`, or `None` when
+/// it is not set. Applying that variable is the caller's job: `nvidia-smi`
+/// lists every device on the machine whatever the variable says (measured on a
+/// four-GPU Windows host, where setting it to `2` still prints rows 0 through
+/// 3), so a caller that reads the first row instead describes and validates a
+/// GPU the solver may never touch.
+///
+/// The variable is a comma-separated list and CUDA's device 0 is its first
+/// entry, named either by index or by UUID, for which a unique prefix is
+/// enough. A value that is empty or all whitespace exposes no device, while
+/// `None` leaves visibility unrestricted.
+///
+/// `None` means the value is absent, ambiguous, or names no detected device.
+pub fn visible_device_position(rows: &[(u32, &str)], visible: Option<&str>) -> Option<usize> {
+    let Some(spec) = visible else {
+        return (rows.len() == 1).then_some(0);
+    };
+    let selector = spec
+        .split(',')
+        .next()
+        .map(str::trim)
+        .filter(|token| !token.is_empty());
+    let Some(token) = selector else {
+        return None;
+    };
+    if let Ok(index) = token.parse::<u32>() {
+        if rows.len() != 1 {
+            return None;
+        }
+        return rows.iter().position(|&(i, _)| i == index);
+    }
+    let mut matches = rows
+        .iter()
+        .enumerate()
+        .filter(|(_, (_, uuid))| uuid.starts_with(token));
+    let (position, _) = matches.next()?;
+    matches.next().is_none().then_some(position)
+}
+
+/// One device as `--query-gpu=index,uuid,<fields>,name` reported it.
+///
+/// Both callers query the identity columns first and `name` last, so a comma
+/// inside a marketing name cannot shift the columns that are read by position.
+pub struct GpuRow {
+    pub index: u32,
+    pub uuid: String,
+    pub fields: Vec<String>,
+    pub name: String,
+}
+
+/// Parse `--query-gpu=index,uuid,<field_count fields>,name --format=csv,noheader`.
+///
+/// A row whose index does not parse, or that is missing columns, is dropped:
+/// it carries no device this function can name.
+pub fn parse_gpu_rows(stdout: &str, field_count: usize) -> Vec<GpuRow> {
+    let mut rows = Vec::new();
+    for line in stdout.lines().filter(|l| !l.trim().is_empty()) {
+        let parts: Vec<&str> = line.splitn(field_count + 3, ',').collect();
+        if parts.len() != field_count + 3 {
+            continue;
+        }
+        let Ok(index) = parts[0].trim().parse::<u32>() else {
+            continue;
+        };
+        rows.push(GpuRow {
+            index,
+            uuid: parts[1].trim().to_string(),
+            fields: parts[2..2 + field_count]
+                .iter()
+                .map(|f| f.trim().to_string())
+                .collect(),
+            name: parts[field_count + 2].trim().to_string(),
+        });
+    }
+    rows
+}
+
+/// The row of `rows` the solver will run on, honoring `CUDA_VISIBLE_DEVICES`.
+pub fn selected_gpu_row(rows: &[GpuRow]) -> Result<&GpuRow, GpuError> {
+    if rows.is_empty() {
+        return Err(GpuError::NoGpuDetected);
+    }
+    let visible = std::env::var("CUDA_VISIBLE_DEVICES").ok();
+    let pairs: Vec<(u32, &str)> = rows.iter().map(|r| (r.index, r.uuid.as_str())).collect();
+    match visible_device_position(&pairs, visible.as_deref()) {
+        Some(pos) => Ok(&rows[pos]),
+        None => {
+            let spec = visible.unwrap_or_default();
+            let detected = rows
+                .iter()
+                .map(|r| format!("{} ({})", r.index, r.name))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let selector = spec.split(',').next().map(str::trim).unwrap_or("");
+            if rows.len() > 1 && (selector.is_empty() || selector.parse::<u32>().is_ok()) {
+                Err(GpuError::VisibleDeviceAmbiguous { spec, detected })
+            } else {
+                Err(GpuError::VisibleDevicesUnsatisfied { spec, detected })
+            }
+        }
+    }
 }
 
 /// Check that an NVIDIA GPU with sufficient compute capability is
@@ -133,9 +249,13 @@ pub enum GpuError {
 pub fn check_gpu() -> Result<(), GpuError> {
     let output = match Command::new("nvidia-smi")
         .args([
-            "--query-gpu=name,compute_cap",
+            "--query-gpu=index,uuid,compute_cap,name",
             "--format=csv,noheader,nounits",
         ])
+        // Enumerate every device and apply CUDA_VISIBLE_DEVICES in code; see
+        // `visible_device_position` for why nvidia-smi's own handling of it is
+        // not relied on.
+        .env_remove("CUDA_VISIBLE_DEVICES")
         .output()
     {
         Ok(o) => o,
@@ -150,27 +270,24 @@ pub fn check_gpu() -> Result<(), GpuError> {
         return Err(GpuError::NvidiaSmiFailed);
     }
     let stdout = String::from_utf8_lossy(&output.stdout);
-    for line in stdout.lines().filter(|l| !l.trim().is_empty()) {
-        let parts: Vec<&str> = line.split(',').map(|s| s.trim()).collect();
-        if parts.len() != 2 {
-            continue;
-        }
-        let gpu_name = parts[0];
-        let sm_str = parts[1].replace('.', "");
-        let sm_ver = match sm_str.parse::<u32>() {
-            Ok(v) => v,
-            Err(_) => continue,
-        };
-        if !sm_is_supported(sm_ver) {
-            return Err(GpuError::SmUnsupported {
-                name: gpu_name.to_string(),
-                actual: sm_ver,
-                supported: supported_sm_list(),
-            });
-        }
-        return Ok(()); // first GPU has a runnable cubin.
+    let rows = parse_gpu_rows(&stdout, 1);
+    // Validate the GPU the solver will actually launch on, which is the one
+    // CUDA_VISIBLE_DEVICES selects, not the first row nvidia-smi prints. On a
+    // machine whose first GPU is a display adapter below SUPPORTED_SM, reading
+    // row 0 rejects a run that the selected compute card could serve.
+    let selected = selected_gpu_row(&rows)?;
+    let sm_ver = match selected.fields[0].replace('.', "").parse::<u32>() {
+        Ok(v) => v,
+        Err(_) => return Err(GpuError::NvidiaSmiFailed),
+    };
+    if !sm_is_supported(sm_ver) {
+        return Err(GpuError::SmUnsupported {
+            name: selected.name.clone(),
+            actual: sm_ver,
+            supported: supported_sm_list(),
+        });
     }
-    Err(GpuError::NoGpuDetected)
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -572,6 +689,81 @@ mod tests {
         // Either Ok(()) (CI Linux runner with NVIDIA GPU) or a
         // typed error.
         let _ = check_gpu();
+    }
+
+    #[test]
+    fn visible_device_position_defaults_only_on_a_single_gpu() {
+        let one = [(0u32, "GPU-aaaa")];
+        let two = [(0u32, "GPU-aaaa"), (1, "GPU-bbbb")];
+        assert_eq!(visible_device_position(&one, None), Some(0));
+        assert_eq!(visible_device_position(&two, None), None);
+        assert_eq!(visible_device_position(&[], None), None);
+    }
+
+    #[test]
+    fn visible_device_position_honors_an_empty_mask() {
+        let rows = [(0u32, "GPU-aaaa"), (1, "GPU-bbbb")];
+        assert_eq!(visible_device_position(&rows, Some("")), None);
+        assert_eq!(visible_device_position(&rows, Some("  ")), None);
+    }
+
+    #[test]
+    fn visible_device_position_reads_the_first_entry() {
+        let rows = [(0u32, "GPU-aaaa"), (1, "GPU-bbbb"), (2, "GPU-cccc")];
+        assert_eq!(visible_device_position(&rows, Some("2")), None);
+        assert_eq!(visible_device_position(&rows, Some("2,0")), None);
+        assert_eq!(visible_device_position(&rows, Some(" 1 , 2 ")), None);
+        assert_eq!(
+            visible_device_position(&rows, Some("GPU-cccc")),
+            Some(2)
+        );
+    }
+
+    #[test]
+    fn visible_device_position_accepts_a_uuid_prefix() {
+        let rows = [(0u32, "GPU-aaaa1111"), (1, "GPU-bbbb2222")];
+        assert_eq!(
+            visible_device_position(&rows, Some("GPU-bbbb2222")),
+            Some(1)
+        );
+        assert_eq!(visible_device_position(&rows, Some("GPU-bbbb")), Some(1));
+    }
+
+    #[test]
+    fn visible_device_position_rejects_an_ambiguous_uuid_prefix() {
+        let rows = [(0u32, "GPU-aaaa1111"), (1, "GPU-aaaa2222")];
+        assert_eq!(visible_device_position(&rows, Some("GPU-aaaa")), None);
+    }
+
+    #[test]
+    fn visible_device_position_rejects_an_absent_device() {
+        let rows = [(0u32, "GPU-aaaa"), (1, "GPU-bbbb")];
+        assert_eq!(visible_device_position(&rows, Some("7")), None);
+        assert_eq!(visible_device_position(&rows, Some("GPU-zzzz")), None);
+    }
+
+    #[test]
+    fn parse_gpu_rows_keeps_a_comma_in_the_name() {
+        let out = "0, GPU-aaaa, 46068, 8.9, NVIDIA L40S\n\
+                   1, GPU-bbbb, 16376, 8.9, NVIDIA RTX A4000, Inc.\n";
+        let rows = parse_gpu_rows(out, 2);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].index, 0);
+        assert_eq!(rows[0].uuid, "GPU-aaaa");
+        assert_eq!(rows[0].fields, vec!["46068", "8.9"]);
+        assert_eq!(rows[0].name, "NVIDIA L40S");
+        assert_eq!(rows[1].name, "NVIDIA RTX A4000, Inc.");
+    }
+
+    #[test]
+    fn parse_gpu_rows_drops_an_unreadable_row() {
+        let out = "\n\
+                   not-a-row\n\
+                   x, GPU-aaaa, 8.9, NVIDIA L40S\n\
+                   0, GPU-bbbb, 8.9, NVIDIA L40S\n";
+        let rows = parse_gpu_rows(out, 1);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].uuid, "GPU-bbbb");
     }
 
     #[test]

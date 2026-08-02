@@ -7,6 +7,7 @@
 #define LOGARITHM_HPP
 
 #include "../data.hpp"
+#include "../float_math.hpp"
 
 namespace logarithm {
 
@@ -17,7 +18,7 @@ __device__ static float energy(float g, float ghat, float offset) {
     } else if (g >= ghat) {
         return 0.0f;
     }
-    return -(g - ghat) * (g - ghat) * logf(g / ghat);
+    return -(g - ghat) * (g - ghat) * fmath::log(g / ghat);
 }
 
 __device__ static float gradient(float g, float ghat, float offset) {
@@ -27,7 +28,7 @@ __device__ static float gradient(float g, float ghat, float offset) {
     } else if (g >= ghat) {
         return 0.0f;
     }
-    return (ghat - g) * (2.0f * g * logf(g / ghat) + g - ghat) / g;
+    return (ghat - g) * (2.0f * g * fmath::log(g / ghat) + g - ghat) / g;
 }
 
 __device__ static float curvature(float g, float ghat, float offset) {
@@ -37,7 +38,7 @@ __device__ static float curvature(float g, float ghat, float offset) {
     } else if (g >= ghat) {
         return 0.0f;
     }
-    return -2.0f * logf(g / ghat) + ghat * (ghat + 2.0f * g) / (g * g) - 3.0f;
+    return -2.0f * fmath::log(g / ghat) + ghat * (ghat + 2.0f * g) / (g * g) - 3.0f;
 }
 
 } // namespace logarithm

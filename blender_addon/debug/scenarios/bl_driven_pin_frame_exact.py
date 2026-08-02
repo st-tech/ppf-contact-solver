@@ -43,9 +43,9 @@ from . import _pin_fidelity_common as _common
 
 NEEDS_BLENDER = True
 
-# Extremely tight: the fixed output equals the analytic pose to within
-# fixed-point quantization (Q = 2^27), the fp32 output cast, and the
-# solver->Blender axis remap. Measured residual is ~6e-8 (the fp32 floor);
+# Extremely tight: the fixed output equals the analytic pose to within the
+# fp32 output cast and the solver->Blender axis remap. Measured residual is
+# ~6e-8 (the fp32 floor);
 # this bound sits just above it. A regression (chord interpolation) misses
 # by ~1e-3, three orders of magnitude above this bound.
 _TOLERANCE = 1e-6

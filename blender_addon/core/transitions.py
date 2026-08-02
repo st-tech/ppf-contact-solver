@@ -191,11 +191,14 @@ def transition(state: AppState, event: Event) -> tuple[AppState, list[Effect]]:
             )
 
         # ── Server lifecycle ───────────────────────────────
-        case StartServerRequested() \
+        case StartServerRequested(cuda_device=device, cuda_device_uuid=device_uuid) \
                 if state.phase == Phase.ONLINE and not state.busy:
             return (
                 replace(state, server=Server.LAUNCHING),
-                [DoLaunchServer()],
+                [DoLaunchServer(
+                    cuda_device=device,
+                    cuda_device_uuid=device_uuid,
+                )],
             )
 
         case ServerLaunched():

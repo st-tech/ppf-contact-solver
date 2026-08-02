@@ -6,7 +6,7 @@ Running the solve and getting the result back onto your Blender meshes, whether 
 
 Once you have a running solver and a live connection (see Connections if you haven't set that up yet), the day-to-day loop is:
 
-1. **Organize your scene** into object groups: **Solid**, **Shell**, **Rod**, or **Static**.
+1. **Organize your scene** into object groups: **Solid**, **Shell**, **Rod**, **PDRD**, **Sand**, or **Static**.
 2. **Assign material parameters** per group (density, Young's modulus, Poisson ratio, friction, bend, shrink, strain limit, and so on).
 3. **Set scene parameters**: gravity, wind, time step, frame count, air density, air friction.
 4. **Add pins** and attach operations: **Move By**, **Spin**, **Scale**, **Torque**, or keyframed **Embedded Move**.
@@ -16,7 +16,7 @@ Once you have a running solver and a live connection (see Connections if you hav
 8. **Run** the simulation and **Fetch** frames back as PC2 animation on your Blender objects.
 9. *(Optional)* **Bake** the fetched animation onto the objects as standard Blender keyframes, dropping the add-on's cache modifier.
 
-Nine numbered step boxes across two rows. Row one covers scene-setup steps 1 through 5: object groups (Solid/Shell/Rod/Static), material parameters (density, Young's, Poisson, bend, shrink, strain limit), scene parameters (gravity, wind, time step, frame count, air density), pins and operations (Move By/Spin/Scale/Torque/Embedded Move), and the optional invisible colliders (walls, spheres, bowls). Row two covers steps 6 through 9: the optional Snap and Merge that stitches overlapping meshes across group boundaries, Transfer and Build which encodes the scene for the solver, Run and Fetch which solves on the GPU and downloads per-frame PC2 vertex data onto each Blender mesh, and the optional Bake step that converts the PC2 cache into standard Blender shape keys and fcurves and removes the ContactSolverCache modifier. Scene-setup boxes are blue, solver boxes are orange, and the bake box is green. Optional steps have dashed borders. Steps 1 through 6 are scene setup in Blender, 7 and 8 are the solve on the GPU, and 9 hands the result off as self-contained Blender animation. In practice you bounce between Run and the material / scene parameters many times before baking.
+Nine numbered step boxes across two rows. Row one covers scene-setup steps 1 through 5: object groups (Solid/Shell/Rod/PDRD/Sand/Static), material parameters (density, Young's, Poisson, bend, shrink, strain limit), scene parameters (gravity, wind, time step, frame count, air density), pins and operations (Move By/Spin/Scale/Torque/Embedded Move), and the optional invisible colliders (walls, spheres, bowls). Row two covers steps 6 through 9: the optional Snap and Merge that stitches overlapping meshes across group boundaries, Transfer and Build which encodes the scene for the solver, Run and Fetch which solves on the GPU and downloads per-frame PC2 vertex data onto each Blender mesh, and the optional Bake step that converts the PC2 cache into standard Blender shape keys and fcurves and removes the ContactSolverCache modifier. Scene-setup boxes are blue, solver boxes are orange, and the bake box is green. Optional steps have dashed borders. Steps 1 through 6 are scene setup in Blender, 7 and 8 are the solve on the GPU, and 9 hands the result off as self-contained Blender animation. In practice you bounce between Run and the material / scene parameters many times before baking.
 
 Step 8 can also happen entirely from JupyterLab, including with Blender closed. See JupyterLab for the full export -> simulate -> relaunch Blender -> fetch loop.
 
@@ -75,7 +75,7 @@ Once the scene is organized into groups, parameters are set, and pins / collider
 
 ### The Solver panel
 
-Open the sidebar (`N`) in the 3D viewport and switch to the add-on tab. The **Solver** panel is the second panel in the tab, directly below **Backend Communicator** and above **Scene Configuration**, **Dynamics Groups**, **Snap and Merge**, and **Visualization**. It is always visible (never collapsed by default) because it is the primary control surface during simulation work.
+Open the sidebar (`N`) in the 3D viewport and switch to the add-on tab. The **Solver** panel is the second panel in the tab, directly below **Backend Communicator** and above **Scene Configuration**, **Dynamics Groups**, **Snap and Merge**, **Utility Tools**, and **Visualization**. It is always visible (never collapsed by default) because it is the primary control surface during simulation work.
 
 The Solver panel right after the server comes up. Only Transfer is enabled; everything downstream of it is grayed out until the remote has the scene. The info line at the bottom (*Click "Transfer" to upload data*) reinforces which step is next.
 
@@ -102,6 +102,10 @@ The panel is laid out as a single vertical column of buttons, status indicators,
 
 5. **Progress bar.** During **Fetch All Animation**, a horizontal progress bar appears inline within the panel, showing download progress as a percentage alongside bandwidth statistics.
 
+6. **Deformations box.** Below the main action box, an always-expanded box holding **Re-capture All Deformations** and **Clear All Deformations**. These are the scene-wide equivalents of the per-object Capture Deformation button, covering every deforming Static collider and every animated pin in one pass (see Re-capturing every deformation at once below).
+
+7. **Export box.** Below the Deformations box, **Export USD** and **Export Alembic (ABC)** side by side. They write the simulated mesh sequence to a portable point cache without touching the scene (see Exporting a cache below).
+
 Buttons that are not applicable to the current state are grayed out. For example, **Run** is grayed out until a successful **Transfer** has completed, and **Resume** is grayed out unless the run is **Resumable** (or failed) and the server still holds at least one saved checkpoint to continue from.
 
 ### The buttons
@@ -118,6 +122,10 @@ Buttons that are not applicable to the current state are grayed out. For example
 | **Terminate**             | Hard-stops the current simulation on the server.                     |
 | **Save & Quit**           | Graceful shutdown: flushes state to disk, then exits the server.     |
 | **Abort**                 | Interrupts the *current* transfer or fetch. Does not touch running sim. |
+| **Re-capture All Deformations** | Re-captures every deforming Static collider and every animated pin, statics first then pins. Modal, with a progress readout and an Abort button. |
+| **Clear All Deformations** | Deletes every captured deformation cache in the scene, including caches orphaned by a deleted or ungrouped object. |
+| **Export USD**            | Writes the fetched mesh sequence to a `.usdc` / `.usda` / `.usd` / `.usdz` point cache. Leaves the scene untouched. |
+| **Export Alembic (ABC)**  | Writes the fetched mesh sequence to an `.abc` point cache. Leaves the scene untouched. |
 
 `Terminate` and `Save & Quit` target the server itself; **Terminate** is the hard equivalent of pulling the plug, while **Save & Quit** lets the solver flush its state first so a later reconnect can pick up from there.
 
@@ -284,6 +292,19 @@ If **Fetch** finds a **session ID mismatch** at reconnect, the remote project on
 
 > N frames unfetched. Press "Fetch All Animation".
 
+### Re-capturing every deformation at once
+
+Two things in a scene need a **captured deformation** before Transfer: a Static collider whose shape is driven by a modifier stack (armature, lattice, shape keys, geometry nodes), and a pin whose vertices are animated by keyframes. Each has its own per-object Capture Deformation button, and each capture has to be retaken whenever the animation that drives it changes.
+
+The **Deformations** box on the Solver panel does the whole scene in one pass:
+
+- **Re-capture All Deformations** collects every capturable Static object and every capturable animated pin and re-takes all of them. The statics run first and the pins after, because the two share Blender's depsgraph and cannot be sampled at the same time. It runs as a modal job: a progress readout and an **Abort** button appear below while it works, and it reports how many objects and how many pins it captured when it finishes.
+- **Clear All Deformations** deletes every captured cache in the scene. Besides the Static and pin captures on the active groups, it also removes caches orphaned by an object that was deleted or taken out of its group, which nothing else in the UI reaches. The objects keep their deformers, so **Re-capture All Deformations** rebuilds what this removes.
+
+Both buttons gray out while a capture or a bake is already running, and gray out when there is nothing to capture or nothing to clear, so an enabled button always means there is work for it.
+
+From Python: `solver.recapture_all_deformations()` and `solver.clear_all_deformations()`. The captures advance on Blender's event loop, so a script has to hand control back (a `bpy.app.timers` callback, not a `while` loop) and poll `solver.is_capture_running()` before relying on the caches. Under `--background` no ticks run, so nothing is captured.
+
 ### Blender Python API
 
 The same workflow is available from Python:
@@ -440,6 +461,38 @@ Pressing **Abort** reverts every partial change: shape keys inserted so far are 
 
 Groups that hold curves alongside meshes bake both: meshes emit shape keys, curves emit per-CV keyframes, and both end up on standard Blender timelines.
 
+### Exporting a cache instead of baking
+
+**Export USD** and **Export Alembic (ABC)**, in the **Export** box on the Solver panel, are the other way to get a finished result out. They and baking answer different questions:
+
+| | Bake Animation | Export USD / Alembic |
+| --- | --- | --- |
+| Result | Blender data on the objects themselves: one shape key per frame (meshes), per-CV keyframes (curves) | A `.usdc` / `.usda` / `.usd` / `.usdz` or `.abc` file on disk |
+| The scene after | Modified: the cache modifier is dropped, the PC2 file is deleted, the object leaves its group and loses its pins | Untouched: selection, visibility, frame range, and current frame are all restored when the export returns |
+| Reversible | No | Yes; delete the file |
+| Plays back in | Blender, with or without the add-on | Blender and any other DCC tool that reads the format |
+| Rods and curves | Carried, as per-CV keyframes | **Not carried** |
+
+So: bake when the deliverable is a self-contained `.blend`, export when the deliverable is a cache another application will read, and bake for rods either way.
+
+Both exporters refuse rather than write a partial file. The reasons, exactly as they appear in the error line:
+
+- *Unfetched animation frames exist. Fetch all animation frames first.* The export samples the fetched cache, so a partly-fetched run would write a truncated one.
+- *Another solver activity is in progress.* A run, a bake, or a deformation capture is in flight.
+- *Exit Edit/Sculpt mode before exporting.*
+- *No simulated mesh sequence to export.* Nothing in the view layer carries a solver cache with frames in it.
+
+WARNING: rod and curve objects are not carried. A rod deforms through a frame-change handler rather than through the cache modifier the exporters sample, so a simulated curve cannot be written to either format. The export completes and names every excluded curve in a warning; use **Bake Animation** for those objects. From Python, `solver.get_unexportable_curves()` returns the same list before the export runs.
+
+Other behavior worth knowing:
+
+- **Frame range**: the scene's simulation start frame through that frame plus the longest cache, minus one. When caches differ in length, the shorter ones hold their final pose past their own end, and the report says so.
+- **Materials are not written.** The files carry deformed geometry only.
+- **A mesh hidden by its collection is skipped.** Object-level hide flags are forced off for the duration and restored afterward, but a collection-level "Disable in Viewports" cannot be overridden from the object, so any target still invisible is left out and named in a warning.
+- **The suffix picks the format.** In the file browser, `.usdc` (crate, the default), `.usda` (ASCII), `.usd`, and `.usdz` (package) are all kept as typed and anything else is replaced with `.usdc`; Alembic writes `.abc`. A scripted call hands the path to the exporter as given, so spell the suffix you want.
+
+From Python: `solver.export_usd(filepath)` and `solver.export_alembic(filepath)`, both of which raise `ValueError` carrying the refusal reason above rather than failing silently.
+
 ### Blender Python API
 
 Baking is exposed through the add-on's registered operators:
@@ -591,7 +644,7 @@ TIP: If the reopened `.blend` warns about a session mismatch, it means the solve
 
 ### Inspecting the codebase from a notebook
 
-The same notebook is a very natural place to explore what the solver understands about a project. Useful idioms:
+The same notebook is a very natural place to inspect what the solver holds for a project. Useful idioms:
 
 ```python
 app.scene.report()                       # group summary, counts, flags

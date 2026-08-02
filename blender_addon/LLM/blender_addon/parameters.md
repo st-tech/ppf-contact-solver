@@ -244,7 +244,7 @@ UNDER THE HOOD:
 
 `use_scene_fps` selects where the simulation's frame rate comes from. When true it is the Blender scene's frame rate, so simulated time tracks the scene timeline; when false it is the `frame_rate` field, which lets the simulation run on a different time base than playback. Either way exactly one rate reaches the solver: `resolve_fps()` in `core/encoder/__init__.py`. Note that `frame_rate` keeps its last value while `use_scene_fps` is on, so read `effective_fps` from `get_scene_parameters()`, never `frame_rate`, to learn what the solver will use.
 
-This was named `use_frame_rate_in_output` before, which read as the opposite of what it does. Opening an older .blend or scene profile carries the old value over automatically (`core/migrate_renames.py`).
+A `.blend` or a scene profile TOML that carries the legacy key `use_frame_rate_in_output` is migrated onto `use_scene_fps` when it loads (`core/migrate_renames.py`, `core/profile.py`), so an older file keeps the frame-rate source it was saved with.
 
 **Scene profile shape**
 
@@ -269,13 +269,14 @@ Every object group carries its own copy of the full material-parameter set, but 
 
 - **Shell**: density, stiffness (Young's modulus, Poisson ratio, bend), shrink, strain limit, inflate, stitch, Rayleigh damping (deformation + bending), and contact settings.
 - **Solid**: density, stiffness, a single shrink factor, deformation Rayleigh damping, and contact settings.
-- **Rod**: density, stiffness, bend, strain limit, Rayleigh damping (deformation + bending), and contact settings.
+- **Rod**: density, stiffness, bend, a rest-length scale (the **Shrink** row, `length_factor`), strain limit, Rayleigh damping (deformation + bending), and contact settings.
 - **PDRD**: an exactly-rigid body type. Only density, friction, contact settings, and an optional hinge joint (no Young's modulus, Poisson ratio, bend, shrink, strain limit, inflate, or Rayleigh damping). The surface mesh is not tetrahedralized.
+- **Sand**: a granular body of loose grain-center vertices. Only grain radius (locked at conversion), particle mass, an inter-grain friction, and a contact gap. See Sand-specific below, including how a mesh becomes a Sand body.
 - **Static**: only friction and contact settings (static objects have no deformation to tune). See Static Objects for the full treatment of Static groups, including how to animate them.
 
 Rows that don't apply to the current type are hidden in the UI.
 
-The five options in the group-type dropdown on each group's header row. Picking one changes the Material Params box to match: Solid shows density, stiffness, and a single shrink factor; Shell shows the full cloth stack including anisotropic shrink, strain limit, inflate, and stitch; Rod shows density, stiffness, bend, and strain limit; PDRD shows its rigid-body density, an optional hinge joint, plus shared contact rows; Static collapses to just Friction and the contact rows.
+The six options in the group-type dropdown on each group's header row. Picking one changes the Material Params box to match: Solid shows density, stiffness, and a single shrink factor; Shell shows the full cloth stack including anisotropic shrink, strain limit, inflate, and stitch; Rod shows density, stiffness, a Shrink rest-length scale, bend, and strain limit; PDRD shows its rigid-body density, an optional hinge joint, plus shared contact rows; Sand shows a read-only grain radius, particle mass, friction, and a contact gap; Static collapses to just Friction and the contact rows.
 
 ### The Material Params box
 
@@ -283,19 +284,19 @@ At the bottom of each group card in the **Dynamics Groups** panel is a collapsib
 
 The rows you see inside **Material Params**, top to bottom:
 
-1. **Model** (when applicable): dropdown to pick the material model. **Shell** groups can choose Baraff-Witkin, Stable NeoHookean, or ARAP; **Solid** groups pick between Stable NeoHookean and ARAP; **Rod** groups are locked to ARAP; **Static** groups have no model row.
-2. **Density**: the material's density in type-appropriate units (kg/m² for **Shell**, kg/m³ for **Solid**, kg/m for **Rod**).
+1. **Model** (when applicable): dropdown to pick the material model. **Shell** groups can choose Baraff-Witkin, Stable NeoHookean, or ARAP; **Solid** groups pick between Stable NeoHookean and ARAP; **Rod** groups are locked to ARAP and draw no model row, and neither do **PDRD**, **Sand**, or **Static** groups.
+2. **Density**: the material's density in type-appropriate units (kg/m² for **Shell**, kg/m³ for **Solid** and **PDRD**, kg/m for **Rod**). **Sand** has no density; it carries a per-grain mass in grams instead.
 3. **Young's Modulus**: stiffness. See the note below for how the solver interprets it.
 4. **Poisson Ratio**: for **Shell** and **Solid** only.
 5. **Friction**: Coulomb friction coefficient at contacts.
-6. **Bend stiffness** and **Shrink**. **Shell** shows Bend, Shrink X/Y, a **Strain Limit** toggle, an **Inflate** toggle, and a **Stitch Stiffness** field. **Solid** collapses down to a single Shrink slider. **Rod** reuses the **Shell** Bend row.
-7. **Deformation Damping** and **Bending Damping**: stiffness-proportional Rayleigh damping (in seconds). **Deformation Damping** shows on **Solid**, **Shell**, and **Rod**; **Bending Damping** shows on **Shell** and **Rod** only (Solid has no bending term). Both default to `0.0` (off). **PDRD** groups are not Rayleigh-damped. Covered in Rayleigh damping below.
-8. **Contact Gap**: a toggle picks between an absolute distance and a fraction of the group's bounding-box diagonal; the relevant pair of fields shows up below the toggle. Both modes are multiplied by **World Scaling** before use, so the absolute fields are unitless numbers (not Blender meters).
-9. **Collision Active Duration Windows**: optional per-object frame ranges that restrict when contact is active. Off by default for **Solid**, **Shell**, and **Rod** groups; unavailable for **Static**. Covered in Active collision windows.
+6. **Bend stiffness** and **Shrink**. **Shell** shows Bend, Shrink X/Y, a **Strain Limit** toggle, an **Inflate** toggle, and a **Stitch Stiffness** field. **Solid** collapses down to a single Shrink slider. **Rod** shows a **Shrink** row between Friction and the contact rows, and its own **Bend** box below the contact rows. Shell and Rod write the same `bend` property on the group, but the stiffness each type derives from that number is scaled differently (see Bend Stiffness on a Rod under Rod-specific). The bundled material presets are filtered by group type and the shipped set holds Shell and Solid entries only, so no preset writes a rod's `bend`.
+7. **Deformation Damping** and **Bending Damping**: stiffness-proportional Rayleigh damping (in seconds). **Deformation Damping** shows on **Solid**, **Shell**, and **Rod**; **Bending Damping** shows on **Shell** and **Rod** only (Solid has no bending term). Both default to `0.0` (off). **PDRD** and **Sand** groups are not Rayleigh-damped. Covered in Rayleigh damping below.
+8. **Contact Gap**: a toggle picks between an absolute distance and a fraction of the group's bounding-box diagonal; the relevant pair of fields shows up below the toggle. Both modes are multiplied by **World Scaling** before use, so the absolute fields are unitless numbers (not Blender meters). **Sand** has no toggle: its gap is always the absolute field, and its offset is the locked grain radius.
+9. **Collision Active Duration Windows**: optional per-object frame ranges that restrict when contact is active. Off by default for **Solid**, **Shell**, **Rod**, and **PDRD** groups; the control is not drawn for **Sand** or **Static**. Covered in Active collision windows.
 10. **Plasticity**: optional non-linear permanent deformation. Covered in its own subsection below.
 11. **Velocity Overwrite**: optional keyframed velocity targets for one of the assigned objects. Covered separately below.
 
-The Material Params box expanded on a Shell group. The exact row set changes with the group's type: Solid collapses Shrink X/Y into a single Shrink, Rod drops Poisson ratio, and Static hides everything except Friction and the contact rows.
+The Material Params box expanded on a Shell group. The exact row set changes with the group's type: Solid collapses Shrink X/Y into a single Shrink, Rod drops Poisson ratio and turns Shrink into a single rest-length scale, Sand shows only a locked grain radius plus particle mass, friction and a contact gap, and Static hides everything except Friction and the contact rows.
 
 #### Material presets
 
@@ -325,7 +326,7 @@ Before a profile is loaded, the row collapses to a single **Open Profile** butto
 
 IMPORTANT: Material-profile TOML files are created by the Save icon, not by hand. Tune the group's material parameters in the panel, click the Save icon, name the entry, and the add-on writes (or overwrites) it in the `.toml` for you. The TOML structure documented below is shown for inspection and sharing only; the supported edit path is always UI → Save.
 
-The per-group Save icon (floppy disk) at the top-right of the Material Params profile row. Click it to write the group's current material-parameter values to a `.toml` file, creating the file on first save and overwriting the currently selected entry afterwards.
+The per-group Save icon (floppy disk) at the top-right of the Material Params profile row. Click it to write the group's current material-parameter values to a `.toml` file, creating the file on first save and overwriting the currently selected entry afterward.
 
 Before loading a profile: the row shows a full-width Open Profile button on the left and the save icon on the right. The Copy / Paste clipboard icons sit at the top-right of the Material Params header for moving parameters between groups in the same session.
 
@@ -373,7 +374,7 @@ Loose edges (edges not belonging to any face) are automatically treated as stitc
 
 NOTE: Shell **Bend Stiffness** is density-normalized, the same way Young's modulus is. The solver scales the shell bending stiffness by the fabric's areal density, so the bent / draped shape is invariant to **Density**: changing a shell's density alone leaves its drape unchanged (it only changes inertia and contact response). This matches the membrane and the rod bend, and it lets a very light fabric be mixed with much denser bodies without the mass-ratio conditioning trouble a tiny areal density would otherwise cause, so density is a free knob you can raise for stability. The drape calibration in `calibration/cusick_drape/` confirms the drape coefficient is constant across a wide density range at fixed `bend`.
 
-Shell **Bend Stiffness** is also **resolution-independent**: the solver uses the convergent Discrete Shells per-hinge stiffness (which scales as edge-length squared over triangle area), so the same `bend` value produces the same drape and bending whether the mesh is coarse or fine. You can re-mesh a cloth at a different density without re-tuning `bend`, and the calibrated preset values hold across resolutions. (An earlier formulation scaled only with edge length, so finer meshes drooped more; this is fixed.)
+Shell **Bend Stiffness** is also **resolution-independent**: the solver uses the convergent Discrete Shells per-hinge stiffness (which scales as edge-length squared over triangle area), so the same `bend` value produces the same drape and bending whether the mesh is coarse or fine. You can re-mesh a cloth at a different density without re-tuning `bend`, and the calibrated preset values hold across resolutions.
 
 #### Shrink X / Shrink Y
 
@@ -557,10 +558,41 @@ From scripting / MCP, set the per-object hinge with `Group.set_hinge(object_name
 | **Model**                  | `rod_model`         | `ARAP`    | Material model. `ARAP` is the only option.        |
 | **Density (kg/m)**         | `rod_density`       | 1.0       | Line density, kg/m.                               |
 | **Young's Modulus (Pa/ρ)** | `rod_young_modulus` | 10000.0   | Young's modulus (see note below).                 |
+| **Shrink**                 | `length_factor`     | 1.0       | Rest-length scale for every rod segment (min 0.1). < 1 tensions the rod, > 1 slackens it. |
+| **Bend Stiffness**         | `bend`              | 1.0       | Bending stiffness at each interior vertex, 0 – 100. Density-normalized and resolution-independent (see below). |
 
-**Rod** groups expose the same **Bend Stiffness** field as **Shell**; it writes into the single `bend` property on the group, so both types read and serialize it identically. The **Rest Angle** dropdown and the **From Reference Geometry** per-object reference rest angle (see Reference rest angle (per object) under Shell-specific) also apply to rods: a reference sets the rod's interior-vertex rest bend angles. For a mesh rod the reference is a modifier-evaluated mesh copy (matching vertex count + edges); for a curve rod it is a curve with the same spline structure, sampled at the control-point level.
+**Rod** groups show the **Bend Stiffness** field that **Shell** groups show, and both write the same `bend` property on the group. The stiffness each type derives from that number is scaled differently: a shell scales per hinge by edge length squared over triangle area, a rod scales per interior vertex by the inverse square of its rest segment length, so one number does not carry the same meaning from a shell to a rod. The **Rest Angle** dropdown and the **From Reference Geometry** per-object reference rest angle (see Reference rest angle (per object) under Shell-specific) also apply to rods: a reference sets the rod's interior-vertex rest bend angles. For a mesh rod the reference is a modifier-evaluated mesh copy (matching vertex count + edges); for a curve rod it is a curve with the same spline structure, sampled at the control-point level.
 
 NOTE: Young's modulus behaves non-conventionally. The solver divides the entered Young's modulus by density internally. The practical effect is that animated behavior is invariant to density alone: doubling density without touching Young's modulus produces the same motion (the mass doubles, but the effective stiffness scales with it). This decouples "how heavy the material is" from "how stiff it looks", so you can tune stiffness and mass independently. The bundled material presets (`Cotton`, `Silk`, `Rubber`, ...) are set to physically meaningful values with that normalization in mind (see Material presets above).
+
+#### Bend Stiffness on a Rod
+
+What it does: sets how hard the rod resists turning at each interior vertex. The coefficient the solver applies there is `bend` times the vertex's lumped mass times the square of a 1 cm reference segment, divided by the square of the Voronoi rest length (the mean of the two rest segments meeting at that vertex).
+
+The property to reason from: **rod bending is resolution-independent**. A vertex's lumped mass is half of each incident segment's mass, and that mass is read off the geometry as drawn, so it is proportional to the **drawn** segment length. The rest length the coefficient divides by is that same drawn length times **Shrink**. At a fixed **Shrink** the two move together, leaving a per-vertex coefficient that varies as one over the segment length, which is what a continuum rod converges to. So the same `bend` gives the same curl whether a strand is drawn with a few long segments or many short ones, and adding control points for silhouette or for contact resolution needs no re-tuning of the material. **Shrink** moves only the divisor, which is why it acts on bending as its inverse square (see Shrink (rod rest length) below).
+
+The 1 cm reference sets only the numeric range of the `bend` field, exactly as the shell's internal bend scale does; it does not enter the resolution independence above. The length it is compared against is the rest segment length the solver receives: the Blender segment length times **World Scaling** (`1.0` by default) times **Shrink** (`1.0` by default), so usually just the Blender length.
+
+Example values from the bundled rod scenes: `examples/blender/yarn.py` sets `bend = 0.0` (a yarn with no bending resistance at all, held in shape only by tension and contact), `examples/blender/woven.py` sets `1e-3`, and `examples/blender/noodle.py` sets `1.5`. Switching a group's type to **Rod** sets `bend` to the rod-tuned `1.0`; the `10.0` carried by the underlying property is the value a **Shell** group keeps.
+
+Re-drawing a strand at a different spacing needs no compensation, which is the point of the normalization above. Changing **Shrink** does, because it enters only the divisor: to hold the same bending resistance across a **Shrink** change, multiply the field by the square of the ratio, `bend_new = bend * (shrink_new / shrink_old)**2`.
+
+UPGRADE NOTE: a `bend` value picked against a particular segment length carries that length with it. Opening a saved `.blend`, a rod whose rest segments are not near 1 cm bends differently from the shape it was authored with. Recover that shape by multiplying `bend` by the square of the rod's rest segment length in centimeters: 5 cm segments need it multiplied by 25, 2 cm by 4, 1 cm is unchanged, 5 mm by 0.25, 1 mm by 0.01. **Shell** groups are unaffected.
+
+#### Shrink (rod rest length)
+
+What it does: `length_factor` multiplies every rod segment's rest length. Below 1.0 the solver's relaxed rod is shorter than the one drawn in Blender, so a rod pinned at both ends pulls taut; above 1.0 it is longer, so the same rod hangs slack. Mass is taken from the drawn geometry before this scale is applied, so changing **Shrink** does not change the rod's weight.
+
+Because bending is measured against that same rest length, **Shrink** moves bending stiffness as its inverse square: halving it makes the rod roughly four times stiffer in bending, so a heavily tensioned rod usually needs a lower `bend` to compensate (multiply by the square of the **Shrink** ratio, as in Bend Stiffness on a Rod above).
+
+When to use it: tensioning a pinned strand (a guitar string, a taut cable, a warp yarn on a loom) without moving its endpoints, and pre-slackening a rope that should sag more than its drawn shape.
+
+Example values:
+- `1.0`: default; the drawn shape is the rest shape.
+- `0.97`: about 3% tension, enough to pull a pinned strand straight.
+- `1.05`: 5% slack, a visibly sagging rope between two fixed points.
+
+NOTE: a rod driven through a periodic prescribed motion should take its `length_factor` from the shortest path in the cycle, not from the pose it happens to be drawn in. Drawing at the extreme of the motion sets the rest length there, and every excursion back toward the middle leaves the rod slack by that ratio, which a pinned rod resolves by buckling sideways.
 
 #### Density-normalized vs true pascals
 
@@ -572,6 +604,39 @@ NOTE: Young's modulus behaves non-conventionally. The solver divides the entered
 
 - `True` (default): the entered value is a **density-normalized** modulus in `Pa/ρ`, the solver's native convention. It is sent unchanged, so changing a body's density alone leaves its motion unchanged. Keep it on to match existing scenes. The field reads `Young's Modulus (Pa/ρ)`.
 - `False`: the entered value is a **true Young's modulus in pascals** (for example a value from a material reference table). The add-on divides it by this group's density before sending, so a denser body of the same material is correspondingly stiffer to move. The field label flips to plain `Young's Modulus (Pa)`.
+
+### Sand-specific
+
+A **Sand** group holds a granular body: a faceless mesh whose vertices are grain centers, each simulated as a sphere of one shared radius. It has no elasticity, so there is no material model, no Young's modulus, no Poisson ratio, and no bend or shrink.
+
+| UI label               | Python / TOML key    | Default | Description                                                                 |
+| ---------------------- | -------------------- | ------- | --------------------------------------------------------------------------- |
+| **Grain Radius (m)**   | `sand_grain_radius`  | 0.02    | Per-grain radius. Read-only in the panel once an object is converted (see below). |
+| **Particle Mass (g)**  | `sand_particle_mass` | 1.0     | Mass of one grain, in grams. Sent to the solver in kilograms.               |
+| **Friction**           | `sand_friction`      | 0.0     | Inter-grain Coulomb friction coefficient.                                    |
+| **Contact Gap**        | `contact_gap`        | 0.001   | Barrier activation distance on top of the grain's skin, an absolute length.  |
+
+Two things about that row set are worth stating explicitly, because they differ from every other type.
+
+**The grain radius is locked at conversion.** The Convert op stamps the chosen radius onto the object as `ppf_grain_radius` and seeds the grain centers on a spacing derived from it, so the two agree by construction: no two grains start inside each other's contact skin. The panel therefore draws the radius as a disabled field showing the stamped value, with a "Grain radius is locked at convert" note under it. The group's own `sand_grain_radius` is only the fallback the panel and the encoder read while no included object carries a stamped radius. To change the radius, convert again from an unconverted copy of the source mesh.
+
+**The grain radius is also the contact offset.** A grain's physical skin is its radius, so the encoder ships the locked radius as the group's contact offset; there is no separate Contact Offset row, and the bounding-box-diagonal ratio toggle does not apply. **Contact Gap** is an absolute distance and is the only contact number left to tune: it is the extra distance beyond the skin at which the barrier starts pushing.
+
+#### Creating a Sand Body
+
+A Sand group's input is not modeled by hand. Take an ordinary closed solid mesh whose volume is the shape you want filled, assign it to a Sand group, select it, and press **Convert To Solid Particle Mesh** in the group box (it sits directly above **Delete Group**, so it is reachable without expanding Material Params). The button is grayed out unless the active object is a selected mesh that has faces and is not already a particle mesh, with a note naming which of those it fails.
+
+The dialog has three fields:
+
+- **Grain Radius**: the physical radius, which is also the contact skin, and is locked afterward.
+- **Extra Spacing**: gap added between grains beyond touching. `0.0` packs them as densely as non-overlap allows; larger values give a looser, sparser cloud.
+- **Random Seed**: seeds the Poisson-disk placement, so the same three fields reproduce the same cloud.
+
+The grain count is not one of the fields: it is whatever fills the volume at that radius plus spacing, and it is reported when the operation finishes. If no grain fits, the operator refuses and asks for a smaller radius or spacing.
+
+WARNING: **Convert To Solid Particle Mesh** is destructive. The original faces are discarded and the object becomes a loose-vertex cloud carrying a render-only Particle Mesh modifier for display. Keep an unconverted copy of the source mesh if you may want to re-seed at a different radius.
+
+From scripting, `solver.convert_to_particle_mesh(object_name, grain_radius, extra_spacing=0.0, rng_seed=0)` performs the same conversion and returns the grain count; over MCP the tool of the same name does. Use `block-jacobi` as the linear-solver preconditioner for sand scenes: a structureless point cloud has no connectivity for the Schwarz aggregates to work with.
 
 ### Contact gap and contact offset
 
@@ -597,18 +662,21 @@ Both pairs (**Contact Gap** / **Contact Gap Ratio** and **Contact Offset** / **C
 
 ### Material profiles
 
-A **material profile** is a named set of material parameters saved to a TOML file. The add-on ships an example material profile with the following presets:
+A **material profile** is a named set of material parameters saved to a TOML file. The add-on ships the following presets, which the **Material Params** box offers filtered by the group's current type:
 
 | Preset   | Type       | Notes                                                               |
 | -------- | ---------- | ------------------------------------------------------------------- |
-| `Flag`   | **Shell**  | Light, stiff. Young = 100, density = 0.1 kg/m², strain limited.     |
-| `Cotton` | **Shell**  | Young = 50, density = 0.5 kg/m², bend = 0.5.                        |
-| `Silk`   | **Shell**  | Soft, low-density, bend = 0.2, friction = 0.15.                     |
-| `Denim`  | **Shell**  | Heavier, stiffer; full block of shell/solid/rod fields for hybrids. |
-| `Rubber` | **Solid**  | Stable NeoHookean, density = 1100 kg/m³, friction = 0.8.            |
-| `Steel`  | **Solid**  | Stable NeoHookean, Young = 200 000, density = 7800 kg/m³.           |
-| `Rope`   | **Rod**    | Young = 10 000, density = 1.0 kg/m, bend = 1.0.                     |
-| `Static` | **Static** | Just a friction value, used for colliders.                          |
+| `Silk` | **Shell** | Light, fluid silk: very drapey, smooth, low friction. Young = 500, bend = 1.42, friction = 0.25. |
+| `Flag` | **Shell** | Lightweight synthetic banner cloth: light, limp, low friction. Young = 1000, bend = 0.83, friction = 0.3. |
+| `Cotton` | **Shell** | Plain woven cotton: medium stiffness and drape. Young = 5500, bend = 4.3, friction = 0.35. |
+| `Wool` | **Shell** | Woven wool suiting: soft membrane, lofty (higher bend). Young = 2000, bend = 3.67, friction = 0.4. |
+| `Denim` | **Shell** | Heavy cotton twill: stiff, barely stretches. Young = 10000, bend = 10, friction = 0.5. |
+| `Leather` | **Shell** | Garment leather: heavy, high bending rigidity, low stretch. Young = 13000, bend = 1.8, friction = 0.5. |
+| `Rubber` | **Solid** | Vulcanized rubber (~3 MPa): soft, near-incompressible, grippy. Young = 2727.3, friction = 0.85. |
+| `Silicone` | **Solid** | Silicone elastomer / PDMS (~2 MPa): very soft, near-incompressible. Young = 1941.7, friction = 0.45. |
+| `Foam` | **Solid** | Flexible polyurethane foam (~50 kPa): light, springy. Young = 1111.1, friction = 0.5. |
+| `Sponge` | **Solid** | Dry cellulose sponge (~0.3 MPa): soft, porous. Young = 3000, friction = 0.5. |
+| `Jelly` | **Solid** | Gelatin / ballistic gel (~150 kPa): very soft, wobbly, slippery. Young = 144.2, friction = 0.1. |
 
 NOTE: Material profiles do not carry any object assignments, pin vertex groups, or per-object velocity overrides. They describe a material, not a scene.
 
@@ -616,7 +684,7 @@ NOTE: Material profiles do not carry any object assignments, pin vertex groups, 
 
 The block below shows what the add-on writes out when you click Save. It is **not** a template to fill in by hand. Adjust a group's Material Params in the panel and click the **Save** icon to produce (or update) a file like this.
 
-The per-group Save icon (floppy disk) on the Material Params row. Clicking it writes the group's current material-parameter values to a `.toml` file, creating the file on the first save and overwriting the currently selected entry afterwards.
+The per-group Save icon (floppy disk) on the Material Params row. Clicking it writes the group's current material-parameter values to a `.toml` file, creating the file on the first save and overwriting the currently selected entry afterward.
 
 ```toml
 [Cotton]
@@ -785,7 +853,7 @@ solver.param.dyn("gravity").time(60).hold().time(61).change((0, 0, 9.8))
 #                          ^^^^^^^ frame number
 ```
 
-This is intentional: the Blender UI thinks in frames, and so does this API. The frontend solver API `session.param.dyn()` (the one called from inside the decoder on the solver side) uses **seconds**. You normally never see the seconds form unless you're driving the solver directly from a Python notebook.
+This is intentional: the Blender UI is expressed in frames, and so is this API. The frontend solver API `session.param.dyn()` (the one called from inside the decoder on the solver side) uses **seconds**. You normally never see the seconds form unless you're driving the solver directly from a Python notebook.
 
 UNDER THE HOOD:
 

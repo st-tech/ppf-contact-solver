@@ -106,7 +106,7 @@ try:
         time.sleep(0.2)
     s = dh.facade.engine.state
     if s.solver.name == "FAILED":
-        raise RuntimeError("build failed: " + repr(s.error))
+        raise RuntimeError(build_failure_message(dh.facade, dh.com))
 
     # The addon wrote the pickles straight to its canonical root.
     root = s.remote_root

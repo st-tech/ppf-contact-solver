@@ -52,6 +52,11 @@ class Object:
             sheet.pin(sheet.grab([-1, 0, -1]) + sheet.grab([1, 0, -1]))
     """
 
+    # Declared at class scope as well as in `clear` so an Object unpickled
+    # from an app saved before per-object visibility existed still answers
+    # the attribute instead of raising the first time a scene is built.
+    _visible: bool = True
+
     def __init__(self, asset: AssetManager, name: str):
         self._asset = asset
         self._name = name
@@ -101,6 +106,22 @@ class Object:
                 assert obj.pdrd
         """
         return self._is_pdrd
+
+    @property
+    def visible(self) -> bool:
+        """Get whether the object is drawn.
+
+        False only when :meth:`invisible` was called. Visibility never
+        reaches the solver: an invisible object still simulates and
+        collides.
+
+        Example:
+            Read back the flag set by :meth:`invisible`::
+
+                obj = scene.add("container").invisible()
+                assert not obj.visible
+        """
+        return self._visible
 
     @property
     def param(self) -> ParamHolder:
@@ -279,6 +300,10 @@ class Object:
         # PinData.hide_in_preview so the JupyterLab viewer doesn't draw
         # the all-vertex pin as user-facing pin markers.
         self._is_static_moving = False
+        # Draw-time only. An invisible object is built, simulated, and
+        # collided against exactly as a visible one; it is skipped by every
+        # viewer and rendered image. Set via :meth:`invisible`.
+        self._visible = True
 
     def as_pdrd(self) -> "Object":
         """Switch the object to Painless Differentiable Rotation Dynamics.
@@ -930,6 +955,39 @@ class Object:
             raise Exception("invalid color type")
         self._dyn_color = EnumColor.AREA
         self._dyn_intensity = intensity
+        return self
+
+    def invisible(self, hidden: bool = True) -> "Object":
+        """Take the object out of the picture without taking it out of the scene.
+
+        The object keeps its full role in the simulation: it is built,
+        assembled, collided against, and written to the solver just like a
+        drawn one. Only the drawing changes. Its triangles, rod segments, pin
+        markers, and stitch lines are dropped from the JupyterLab preview
+        (:meth:`FixedScene.preview`, ``session.preview()``,
+        ``session.animate()``) and from the images ``session.export`` renders
+        into ``frame.mp4``, and its vertices are left out of the auto-framed
+        camera's fit. Exported ``.ply`` / ``.obj`` meshes still carry the full
+        geometry.
+
+        Use it for an obstacle or container that would otherwise sit between
+        the camera and what you want to watch.
+
+        Args:
+            hidden (bool, optional): True to hide the object, False to draw it
+                again. Defaults to True.
+
+        Returns:
+            Object: The object, for chaining.
+
+        Example:
+            Drop grains into a box and watch them through its walls::
+
+                scene.add("box").pin().invisible()
+                scene.add("grains").at(0, 1, 0)
+                scene.build().preview()
+        """
+        self._visible = not hidden
         return self
 
     def velocity(self, u: float, v: float, w: float, t: float = 0.0) -> "Object":

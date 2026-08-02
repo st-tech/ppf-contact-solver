@@ -9,6 +9,10 @@ Usage in Blender scripts::
     solver.param.gravity = (0, 0, -9.8)
     solver.param.project_name = "my_project"
 
+    # Mesh preparation: the scan returns its report, the repairs chain
+    if solver.scan_meshes("Plane")["Plane"]["n_errors"]:
+        solver.merge_by_distance("Plane").delete_duplicate_faces("Plane")
+
     # Group creation returns a Group proxy
     shell = solver.create_group("Cloth", type="SHELL")
     shell.add("Plane")

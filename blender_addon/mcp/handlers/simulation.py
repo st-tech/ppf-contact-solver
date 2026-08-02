@@ -238,3 +238,94 @@ def resume_simulation_from(frame: int):
         "message": f"Resuming simulation from checkpoint frame {target}",
         "current_status": com.info.status.value,
     }
+
+
+def _export_sim_cache(op, filepath: str, kind: str) -> dict:
+    """Shared body for the two cache exporters.
+
+    The preconditions are checked here rather than left to the operator
+    because bpy.ops returns only a status set: a CANCELLED export would
+    otherwise reach the caller with no reason attached, and the reasons
+    (a run still in flight, unfetched frames, nothing simulated yet) each
+    call for a different next step.
+    """
+    import os
+
+    from ...ui.dynamics.export_ops import _excluded_sim_curves, preflight_error
+
+    context = bpy.context
+    error = preflight_error(context)
+    if error:
+        raise MCPError(f"Cannot export {kind}: {error}")
+
+    if not filepath:
+        raise MCPError("filepath is required")
+    resolved = bpy.path.abspath(filepath)
+    parent = os.path.dirname(resolved) or "."
+    if not os.path.isdir(parent):
+        raise MCPError(f"Destination directory does not exist: {parent}")
+
+    excluded_curves = _excluded_sim_curves(context)
+    try:
+        status = op("EXEC_DEFAULT", filepath=resolved)
+    except RuntimeError as exc:
+        # The operator reports an ERROR before returning CANCELLED, and
+        # bpy.ops raises an operator's ERROR report as this RuntimeError, so
+        # the reason arrives here and not in the status set below. Restating
+        # it as an MCPError keeps the failure inside this module's error type
+        # (ValueError through the Python API) instead of a bare RuntimeError.
+        raise MCPError(f"{kind} export failed: {exc}") from exc
+    if "FINISHED" not in status:
+        raise MCPError(
+            f"{kind} export did not complete ({', '.join(sorted(status))}). "
+            f"Check the Blender console via get_console_lines."
+        )
+
+    result = {
+        "message": f"Exported the simulated mesh sequence to {resolved}",
+        "filepath": resolved,
+        "format": kind,
+    }
+    if excluded_curves:
+        result["excluded_curves"] = excluded_curves
+        result["message"] += (
+            f". {len(excluded_curves)} rod/curve object(s) were not exported, "
+            "which this cache format does not carry"
+        )
+    return result
+
+
+@mcp_handler
+def export_usd(filepath: str):
+    """Export the simulated mesh sequence as a USD cache.
+
+    A lighter alternative to baking shape keys: the deformation is sampled per
+    frame from the solver cache into a file other DCC tools can play back.
+    Requires every frame to be fetched first; call fetch_animation and wait for
+    it to finish. Rod and curve objects are not carried by this format.
+
+    Args:
+        filepath: Destination path, used as given once a leading "//"
+            blend-relative prefix is resolved. The suffix is what picks the
+            USD flavor and it is never rewritten, so pass one of .usdc
+            (crate), .usda (ASCII), .usd or .usdz (package). The parent
+            directory must already exist.
+    """
+    return _export_sim_cache(bpy.ops.solver.export_usd, filepath, "USD")
+
+
+@mcp_handler
+def export_alembic(filepath: str):
+    """Export the simulated mesh sequence as an Alembic (ABC) cache.
+
+    A lighter alternative to baking shape keys: the deformation is sampled per
+    frame from the solver cache into a file other DCC tools can play back.
+    Requires every frame to be fetched first; call fetch_animation and wait for
+    it to finish. Rod and curve objects are not carried by this format.
+
+    Args:
+        filepath: Destination .abc path, used as given once a leading "//"
+            blend-relative prefix is resolved. The parent directory must
+            already exist.
+    """
+    return _export_sim_cache(bpy.ops.solver.export_alembic, filepath, "Alembic")

@@ -240,10 +240,8 @@ pub fn app_param() -> ParamHolder {
         "PCG solver is regarded as diverged if this is exceeded."));
     m.insert("cg-tol".into(), entry(1e-3f64, "Relative Tolerance for PCG",
         "Relative tolerance for PCG solver termination."));
-    m.insert("ccd-reduction".into(), entry(0.01f64, "CCD Reduction Factor",
-        "Factor multiplied to the initial gap to set the CCD threshold."));
-    m.insert("ccd-max-iter".into(), entry(4096i64, "Maximum CCD Iterations",
-        "Maximum number of iterations for ACCD."));
+    m.insert("ccd-eps".into(), entry(1e-7f64, "ACCD Epsilon",
+        "Small thickness tolerance for ACCD gap distance checks."));
     m.insert("max-dx".into(), entry(1.0f64, "Maximum Search Direction",
         "Maximum allowable search direction magnitude during optimization."));
     m.insert("eiganalysis-eps".into(), entry(1e-2f64, "Epsilon for Eigenvalue Analysis",

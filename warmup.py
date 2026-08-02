@@ -5,6 +5,7 @@
 
 import os
 import platform
+import runpy
 import shutil
 import subprocess
 import sys
@@ -155,6 +156,37 @@ def list_packages():
     return packages
 
 
+def cbor2_requirement():
+    """Return the pinned cbor2 pip requirement, e.g. ``cbor2==6.0.1``.
+
+    cbor2 is the only package here that is pinned, because it is the only
+    one whose version is part of a contract: it is the codec on both sides
+    of the addon-to-server wire, and the shipped addon bundles a fixed set
+    of wheels. Floating it puts the server on whatever release PyPI serves
+    the day an image is built, which is how a fresh build landed on 6.1.3
+    while the addon shipped 6.0.1. Their decode costs differ (see
+    ``PICKLE_CHUNK_BYTES`` in ``frontend/_cbor_bridge_.py``), so that skew
+    is observable, not cosmetic.
+
+    The version is declared once, in ``blender_addon/wheels/fetch.py``,
+    which also names the wheels the addon bundles; a bump is one edit
+    there. Missing file or constant raises rather than falling back to an
+    unpinned install, which would restore the drift silently.
+    """
+    fetch = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        "blender_addon",
+        "wheels",
+        "fetch.py",
+    )
+    if not os.path.isfile(fetch):
+        raise FileNotFoundError(f"cannot pin cbor2: {fetch} does not exist")
+    version = runpy.run_path(fetch).get("CBOR2_VERSION")
+    if not version:
+        raise RuntimeError(f"cannot pin cbor2: no CBOR2_VERSION in {fetch}")
+    return f"cbor2=={version}"
+
+
 def python_packages():
     return [
         "numpy",
@@ -179,14 +211,15 @@ def python_packages():
         "python-lsp-ruff",
         "jupyterlab-code-formatter",
         "nbconvert",  # Required for fast_check to convert notebooks to Python scripts
-        # The `_ppf_cts_py` cdylib is built by `cargo build --release`
-        # (no maturin), so maturin is no longer a dependency here.
+        # The `_ppf_cts_py` cdylib is built by `cargo build --release`,
+        # so this list carries no Python build backend.
         # frontend/_cbor_bridge_.py imports cbor2 at top level (the CBOR
         # envelope codec the addon uses), and ppf-cts-server's
         # build_worker subprocess pulls psutil for runtime metrics.
         # Without these, the very first `from frontend import ...`
-        # raises ModuleNotFoundError.
-        "cbor2",
+        # raises ModuleNotFoundError. cbor2 carries a version pin; see
+        # cbor2_requirement() for why it is the one entry that does.
+        cbor2_requirement(),
         "psutil",
     ]
 

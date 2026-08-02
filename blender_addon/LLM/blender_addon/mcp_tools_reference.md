@@ -36,8 +36,9 @@ python blender_addon/debug/main.py call <tool> '{"arg":"value"}'
 
 - Connection (12)
 - Group (20)
-- Object operations (28)
-- Simulation (11)
+- Object operations (31)
+- Mesh cleaning (8)
+- Simulation (13)
 - Scene (13)
 - Dynamic parameters (9)
 - Remote (8)
@@ -127,7 +128,7 @@ Create a new dynamics group.
 **Parameters:**
 
 - **name**: Display name for the new group (optional)
-- **type**: Group type (SOLID, SHELL, ROD, STATIC, PDRD). PDRD is an exactly-rigid body type whose surface mesh moves as a single best-fit rigid transform (no tetrahedralization, no Young's/Poisson/bend/shrink/strain/inflate).
+- **type**: Group type (SOLID, SHELL, ROD, STATIC, PDRD, SAND). PDRD is an exactly-rigid body type whose surface mesh moves as a single best-fit rigid transform (no tetrahedralization, no Young's/Poisson/bend/shrink/strain/inflate). SAND is a granular body of loose grain-center vertices; feed it with `convert_to_particle_mesh`, which turns a closed mesh into the grain cloud it simulates.
 
 ### delete_group(group_uuid: str)
 
@@ -241,7 +242,7 @@ Set the type of a dynamics group.
 **Parameters:**
 
 - **group_uuid**: UUID of group
-- **type**: Group type (SOLID, SHELL, ROD, STATIC, PDRD)
+- **type**: Group type (SOLID, SHELL, ROD, STATIC, PDRD, SAND). Retyping to SAND does not convert the assigned geometry: a SAND group simulates loose grain-center vertices, so run `convert_to_particle_mesh` on each assigned mesh as well.
 
 ### add_pin_vertex_group(group_uuid: str, vertex_group_identifier: str, indices: Optional[list[int]]=None)
 
@@ -295,8 +296,9 @@ Supported properties by group type:
 
 - SHELL: enable_strain_limit, strain_limit_percent, shell_density, shell_young_modulus, shell_poisson_ratio, shell_model, bend, shrink_x, shrink_y, deformation_damping, bending_damping, young_mod_density_normalized, friction, enable_inflate, inflate_pressure, stitch_stiffness, bend_rest_angle_source, bend_rest_from_reference
 - SOLID: solid_density, solid_young_modulus, solid_poisson_ratio, solid_model, shrink, deformation_damping, young_mod_density_normalized, friction, stitch_stiffness
-- ROD: rod_density, rod_young_modulus, rod_model, deformation_damping, bending_damping, young_mod_density_normalized, friction, bend, enable_strain_limit, strain_limit_percent, stitch_stiffness, bend_rest_angle_source, bend_rest_from_reference
+- ROD: rod_density, rod_young_modulus, rod_model, deformation_damping, bending_damping, young_mod_density_normalized, friction, bend, length_factor, enable_strain_limit, strain_limit_percent, stitch_stiffness, bend_rest_angle_source, bend_rest_from_reference
 - PDRD: pdrd_density, friction, stitch_stiffness (the hinge joint is per-object; use the `set_pdrd_hinge` tool)
+- SAND: sand_grain_radius, sand_particle_mass, sand_friction (faceless granular body of loose grain-center vertices)
 - STATIC: friction (limited set)
 
 Per-type property notes:
@@ -306,8 +308,12 @@ Per-type property notes:
 - bend_rest_from_reference (SHELL, ROD): group-level master toggle for per-object reference rest angles. Settable via this tool, but the per-object reference itself (which object opts in, and which object is its reference) is not exposed over MCP: it is picked in the add-on UI (the eyedropper that runs `object.pick_bend_reference`). When enabled with a valid reference, that object's bending rest angle (shell hinge dihedral, or rod interior-vertex bend angle) is computed from the reference geometry, overriding `bend_rest_angle_source` for that object. Mesh references are modifier-evaluated (vertex count + connectivity must match); curve-rod references are sampled at the control-point level.
 - deformation_damping: stiffness-proportional Rayleigh damping (seconds) for stretch/membrane/solid deformation; default 0.0, min 0.0. Applies to SOLID, SHELL, ROD. 0 disables it. PDRD groups are not Rayleigh-damped.
 - bending_damping: stiffness-proportional Rayleigh damping (seconds) for bending; default 0.0, min 0.0. SHELL and ROD only (SOLID/tet has no bending term; rejected for SOLID and PDRD). 0 disables it.
+- length_factor (ROD, UI label Shrink): multiplies every rod edge's rest length, so below 1.0 it tensions a pinned rod and above 1.0 it slackens it. Mass is taken from the drawn length and does not move with it. Rod bending stiffness is normalized against that same rest length and varies as its inverse square, so halving length_factor also makes the rod about four times stiffer in bending.
+- sand_grain_radius (SAND): the group-level fallback only. `convert_to_particle_mesh` stamps the radius it seeded with onto the object as `ppf_grain_radius`, and both the panel and the encoder prefer that stamped value over this one, so setting it here changes nothing once an included object has been converted. The panel draws the radius read-only either way. To change the radius, convert again from an unconverted copy of the source mesh.
+- sand_particle_mass (SAND): mass of one grain in GRAMS, default 1.0, min 1e-6. The add-on multiplies by 1e-3 and ships kilograms to the solver, so a value chosen as if it were SI is off by a thousand.
+- SAND contact keys: the locked grain radius is sent as the group's contact OFFSET, because a grain's skin is its radius. `contact_gap` is the extra barrier distance on top of that skin and is always the absolute field: `contact_offset`, `contact_gap_rat`, `contact_offset_rat` and `use_group_bounding_box_diagonal` are accepted by the validator but the encoder ignores them for SAND.
 - young_mod_density_normalized: SOLID/SHELL/ROD only. True (default) interprets the Young's modulus field as a density-normalized value (Pa/rho), the solver's native convention. False interprets it as a true Young's modulus in pascals, which the addon divides by this group's density before sending it.
-- stitch_stiffness: per-object soft cross-stitch force stiffness, default 1.0. Cross-stitch is a soft 6-slot barycentric force (it replaced the old DOF-fold/exact-weld). Supported pairs: Shell-Shell, Shell-Solid, Rod-Shell, Rod-Solid, Rod-Rod, Solid-Solid, and any dynamic group stitched to a STATIC collider.
+- stitch_stiffness: per-object soft cross-stitch force stiffness, default 1.0. Cross-stitch is a soft 6-slot barycentric force, not a topological weld: the two sides keep their own vertices and are pulled together by a spring. Supported pairs: Shell-Shell, Shell-Solid, Rod-Shell, Rod-Solid, Rod-Rod, Solid-Solid, and any dynamic group stitched to a STATIC collider.
 
 Contact properties (mutually exclusive modes):
 
@@ -615,6 +621,131 @@ Set the per-object tetrahedralizer backend and overrides. SOLID meshes are tetra
 - **tetgen_min_ratio**: TetGen minimum radius-edge ratio
 - **tetgen_max_volume**: TetGen maximum tet volume (0 = uncapped)
 
+### convert_to_particle_mesh(object_name: str, grain_radius: float, extra_spacing: float=0.0, rng_seed: int=0)
+
+Replace a solid mesh with a cloud of grain centers for a SAND group. Destructive: the faces are discarded and the object becomes a faceless mesh of loose vertices, plus a Particle Mesh geometry-nodes modifier that draws each grain at the given radius. The grain count is not chosen, it is whatever fills the volume at the given separation, and it comes back in the result. `grain_radius` is locked after conversion, since the non-overlapping spacing is derived from it, so pick it before converting rather than adjusting it afterward. Refused when the object is missing, is not a MESH, carries no faces, is already a particle mesh, when `grain_radius` is not positive, or when no grain fits inside the mesh.
+
+**Parameters:**
+
+- **object_name**: Solid mesh object with faces, not already a particle mesh
+- **grain_radius**: Physical grain radius, which is also the contact skin
+- **extra_spacing**: Gap added between grains beyond touching. 0 packs them as densely as non-overlap allows
+- **rng_seed**: Seed for the Poisson-disk seeding, for a repeatable cloud
+
+**Returns:** Dict with `grain_count` plus the `grain_radius` / `extra_spacing` / `rng_seed` the cloud was seeded with
+
+### recapture_all_deformations()
+
+Re-capture every deforming STATIC collider and every animated pin. One pass over the whole scene, instead of calling `capture_static_deformation` and `capture_pin_deformation` per object. The statics are captured first and the pins after, since the two share the depsgraph and cannot run at once. The captures run in the background after this returns; poll `get_static_deformation_status` and `get_pin_deformation_status` until they report the frame counts you expect. Refused when there is nothing to re-capture, or when a capture or bake is already running.
+
+### clear_all_deformations()
+
+Delete every captured deformation cache in the scene. Covers all STATIC-collider deform caches and all animated-pin captures across the active groups, plus any cache orphaned by an object that was deleted or taken out of its group. The objects keep their deformers, so `recapture_all_deformations` rebuilds what this removes. Refused when there is no captured cache to clear, or when a capture or bake is already running.
+
+## Mesh cleaning
+
+Wrappers over the Utility Tools panel's Mesh Cleaning operators, for the geometry the solver rejects: near-coincident vertices, faceless vertices, zero-area faces, duplicate faces, n-gons, and inconsistent face winding.
+
+Every tool takes an explicit `object_names` list and does not read the viewport selection. Each name must resolve to a MESH object in the active view layer, and the whole list is resolved before anything runs, so a typo in the third name cannot leave the first two already repaired. A named object that cannot be selected (hidden in the viewport, hidden by its collection, or carrying Disable Selection) is refused by name rather than skipped: these tools drive operators that read the selection, so a skipped object would be missing from a result that otherwise reads as a success. Make it visible and selectable, then call again. Blender is switched to Object Mode for the call (the operators' poll requires it) and the previous selection is restored afterward. Objects sharing one mesh datablock are repaired once, not once per user.
+
+`scan_meshes` is read-only. The other seven modify meshes. `merge_by_distance`, `remove_loose_vertices` and `dissolve_degenerate_faces` change the vertex count and refuse until `acknowledge=true`, mirroring the panel's confirmation dialog; their refusal message names what the change would invalidate. `symmetric_triangulate` also changes the vertex count, but takes no acknowledgement and deletes nothing it invalidates.
+
+Every repair returns `changed` (one entry per object whose measured quantities moved, each carrying a `<name>_before` / `<name>_after` pair), `changed_count`, and `operator_status` (the operator's own return set, reported under this name so it cannot be mistaken for the MCP envelope's `status`). The three count-changing repairs also return `cleared_caches`, the caches that were actually deleted. A repair that finds nothing returns `changed_count: 0` and a "Nothing to repair" message.
+
+A vertex-count change invalidates a captured deformation and the display cache, and can shift which vertices a pin group holds. Run `scan_meshes` first: its `dependents` field reports exactly what each object would lose. After any repair, run Transfer again before the next simulation.
+
+### scan_meshes(object_names: list[str], merge_threshold: float=1e-4, area_eps: float=0.0)
+
+Scan meshes for geometry the solver rejects, without modifying anything.
+
+Reports per object, split into errors (near-coincident vertices, isolated and hanging vertices, duplicate and degenerate faces, linked duplicates, inconsistent winding) and notes (boundary edges, non-manifold edges, re-splittable quads). Notes are normal for cloth: an open quad panel is not a defect.
+
+**Parameters:**
+
+- **object_names**: Mesh objects to scan
+- **merge_threshold**: Vertices closer than this (local units) count as near-coincident. Matches Blender's Merge by Distance default
+- **area_eps**: Faces at or below this area (local units squared) count as degenerate. Zero reports only exactly zero-area faces
+
+**Returns:** Dict with `reports` (one per object: `object`, `n_verts`, `n_polys`, `defects`, `n_errors`, `n_notes`, `total`, and `dependents`), `objects_needing_attention`, `total_errors`, `total_notes`. The full per-vertex index lists are stripped from `defects`; every defect keeps its `count`, and the vertex-level ones keep a `preview` of up to eight indices.
+
+### merge_by_distance(object_names: list[str], merge_threshold: float=1e-4, acknowledge: bool=False, clear_stale_caches: bool=True)
+
+Weld near-coincident vertices. Changes the vertex count.
+
+A pair of vertices separated by a tiny gap drives the contact barrier's mass/gap^2 stiffness through the conditioning of the solver's fp32 Newton matrix, so welding them is what makes such a mesh simulable.
+
+**Parameters:**
+
+- **object_names**: Mesh objects to repair
+- **merge_threshold**: Weld vertices closer together than this, local units
+- **acknowledge**: Must be true. Confirms the vertex-count change and the caches it invalidates, which scan_meshes reports as dependents
+- **clear_stale_caches**: Delete the capture and display caches the change invalidates, which the result reports as cleared_caches. True by default, the same value the panel's dialog opens with. Pass false to keep them, and expect the viewport overlay to read data sized for the old vertex count until Transfer rewrites it
+
+### remove_loose_vertices(object_names: list[str], acknowledge: bool=False, clear_stale_caches: bool=True)
+
+Delete vertices that belong to no face, together with their loose edges. Changes the vertex count.
+
+A faceless vertex carries no elastic energy, and the solver averages a vertex's contact parameters over its incident faces, so the build aborts when a vertex has none. Pinned vertices are exempt and are never removed. A SAND particle mesh is skipped whole, since every grain center is legitimately faceless.
+
+**Parameters:**
+
+- **object_names**: Mesh objects to repair
+- **acknowledge**: Must be true. Confirms the vertex-count change and the caches it invalidates, which scan_meshes reports as dependents
+- **clear_stale_caches**: Delete the capture and display caches the change invalidates, which the result reports as cleared_caches. True by default, the same value the panel's dialog opens with. Pass false to keep them, and expect the viewport overlay to read data sized for the old vertex count until Transfer rewrites it
+
+### dissolve_degenerate_faces(object_names: list[str], merge_threshold: float=1e-4, acknowledge: bool=False, clear_stale_caches: bool=True)
+
+Collapse zero-area and slivered faces. Changes the vertex count.
+
+A face with no area has no well-defined normal, which is what the contact and bending terms are built on.
+
+**Parameters:**
+
+- **object_names**: Mesh objects to repair
+- **merge_threshold**: Edges shorter than this (local units) are collapsed
+- **acknowledge**: Must be true. Confirms the vertex-count change and the caches it invalidates, which scan_meshes reports as dependents
+- **clear_stale_caches**: Delete the capture and display caches the change invalidates, which the result reports as cleared_caches. True by default, the same value the panel's dialog opens with. Pass false to keep them, and expect the viewport overlay to read data sized for the old vertex count until Transfer rewrites it
+
+### delete_duplicate_faces(object_names: list[str])
+
+Delete faces that repeat an existing face's vertex set.
+
+Two faces on the same vertices contribute their contact and elastic terms twice. The vertex count is unchanged, so no cache is invalidated and no acknowledgement is needed.
+
+**Parameters:**
+
+- **object_names**: Mesh objects to repair
+
+### triangulate_for_solver(object_names: list[str])
+
+Triangulate n-gons and quads with a single diagonal per face.
+
+The vertex count is unchanged, so no cache is invalidated. Transfer triangulates on its own at encode time; use this when the triangulation has to be visible and stable in the viewport. For a mesh whose symmetry matters under bending, prefer `symmetric_triangulate`.
+
+**Parameters:**
+
+- **object_names**: Mesh objects to triangulate
+
+### recalculate_normals_outside(object_names: list[str])
+
+Make face winding consistent and outward.
+
+Inconsistent winding flips the normal a face contributes, which the contact and inflate terms read. The vertex count is unchanged, so no cache is invalidated, and the repair is reported as the `bad_winding_before` / `bad_winding_after` edge counts rather than as an element delta.
+
+**Parameters:**
+
+- **object_names**: Mesh objects to repair
+
+### symmetric_triangulate(object_names: list[str])
+
+Triangulate by poking each face, keeping the mesh mirror-symmetric.
+
+A single-diagonal triangulation breaks a symmetric mesh's symmetry, which shows up as a lopsided drape under bending. Poking inserts a center vertex and fans the face into triangles instead, so it adds one vertex per face and therefore invalidates a captured deformation and the display cache, exactly as the count-changing repairs do. It is a Utility Tools operation rather than a repair, so it takes no acknowledgement and deletes nothing it invalidates: the vertex deltas come back in the result, and Transfer and Capture Deformation are what re-take the stale caches.
+
+**Parameters:**
+
+- **object_names**: Mesh objects to triangulate
+
 ## Simulation
 
 ### transfer_data()
@@ -662,6 +793,30 @@ List resumable checkpoint frames (Blender 1-based) saved on the server, read fro
 Resume the simulation from a specific saved checkpoint frame without re-uploading or rebuilding (frames before the checkpoint are kept, the rest overwritten). Refuses on geometry drift (transfer_data + run_simulation instead) or parameter drift (update_params first). `resume_simulation` continues from the latest checkpoint.
 
 - **frame**: Saved checkpoint frame to resume from (Blender 1-based)
+
+### export_usd(filepath: str)
+
+Export the simulated mesh sequence as a USD cache.
+
+A lighter alternative to baking shape keys: the deformation is sampled per frame from the solver cache into a file other DCC tools can play back, and the scene itself is left untouched. Every frame must be fetched first; call `fetch_animation` and wait for it to finish. The call is also refused while another solver activity is in progress, outside Object Mode, and when no simulated mesh sequence exists. Rod and curve objects are not carried by this format; their names come back in `excluded_curves`, and Bake Animation is the route for them.
+
+**Parameters:**
+
+- **filepath**: Destination path. A leading `//` is resolved against the .blend, and the parent directory must already exist. The suffix picks the USD flavor: `.usdc` (crate, the suffix the panel's file browser offers), `.usda` (ASCII), `.usd`, or `.usdz` (package)
+
+**Returns:** Dict with the resolved `filepath`, the `format`, and `excluded_curves` when any simulated curve was skipped
+
+### export_alembic(filepath: str)
+
+Export the simulated mesh sequence as an Alembic (ABC) cache.
+
+Same preconditions and exclusions as `export_usd`: every frame fetched, no other solver activity in progress, Object Mode, at least one simulated mesh sequence, and rods and curves are not carried.
+
+**Parameters:**
+
+- **filepath**: Destination `.abc` path. A leading `//` is resolved against the .blend, and the parent directory must already exist
+
+**Returns:** Dict with the resolved `filepath`, the `format`, and `excluded_curves` when any simulated curve was skipped
 
 ## Scene
 

@@ -56,6 +56,7 @@ CATEGORIES: tuple[tuple[str, str], ...] = (
     ("connection", "Connection"),
     ("group", "Group"),
     ("object_ops", "Object operations"),
+    ("mesh_cleaning", "Mesh cleaning"),
     ("simulation", "Simulation"),
     ("scene", "Scene"),
     ("dyn_params", "Dynamic parameters"),

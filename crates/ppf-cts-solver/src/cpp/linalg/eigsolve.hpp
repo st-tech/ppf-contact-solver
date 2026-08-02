@@ -16,6 +16,7 @@
 #define PPF_LINALG_EIGSOLVE_HPP
 
 #include "smat.hpp"
+#include "../float_math.hpp"
 
 #ifndef __host__
 #define __host__
@@ -110,8 +111,8 @@ static LA_HD V3 eigvalues3(const M3 &A) {
     else if (r > 1.0f)
         r = 1.0f;
     float phi = acosf(r) / 3.0f;
-    float eig1 = q + 2.0f * p * cosf(phi);                    // largest
-    float eig3 = q + 2.0f * p * cosf(phi + 2.0f * kPi / 3.0f); // smallest
+    float eig1 = q + 2.0f * p * fmath::cos_bounded(phi);                    // largest
+    float eig3 = q + 2.0f * p * fmath::cos_bounded(phi + 2.0f * kPi / 3.0f); // smallest
     float eig2 = 3.0f * q - eig1 - eig3;
     return V3(eig1, eig2, eig3); // descending: eig1 >= eig2 >= eig3
 }

@@ -148,6 +148,28 @@ def _excluded_sim_curves(context):
 # ---------------------------------------------------------------------------
 
 
+def preflight_error(context):
+    """Return a user-facing error string when export can't proceed, else None.
+
+    Mirrors the Bake operators' guards so a truncated or malformed cache is
+    never written with a success toast. Module level rather than a method
+    because the MCP export tools run the same checks before dispatching, and
+    bpy.ops hands a caller only a CANCELLED status, never the reason.
+    """
+    if _busy(context):
+        return iface_("Another solver activity is in progress")
+    if context.mode != "OBJECT":
+        return iface_("Exit Edit/Sculpt mode before exporting")
+    if _has_unfetched_frames(context.scene):
+        return iface_(
+            "Unfetched animation frames exist. "
+            "Fetch all animation frames first."
+        )
+    if not _exportable_meshes(context):
+        return iface_("No simulated mesh sequence to export")
+    return None
+
+
 class _ExportSimCacheBase(ExportHelper):
     """Select / frame-range / visibility save-restore shared by both exporters.
 
@@ -162,21 +184,7 @@ class _ExportSimCacheBase(ExportHelper):
         return _has_exportable_mesh(context)
 
     def _preflight(self, context):
-        """Return a user-facing error string when export can't proceed, else
-        None. Mirrors the Bake operators' guards so a truncated or malformed
-        cache is never written with a success toast."""
-        if _busy(context):
-            return iface_("Another solver activity is in progress")
-        if context.mode != "OBJECT":
-            return iface_("Exit Edit/Sculpt mode before exporting")
-        if _has_unfetched_frames(context.scene):
-            return iface_(
-                "Unfetched animation frames exist. "
-                "Fetch all animation frames first."
-            )
-        if not _exportable_meshes(context):
-            return iface_("No simulated mesh sequence to export")
-        return None
+        return preflight_error(context)
 
     def invoke(self, context, event):
         # Fail fast before opening the file browser so the user does not pick a

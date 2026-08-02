@@ -100,6 +100,12 @@ fn main() {
         dir.push(out_dir);
         dir.push("lib");
 
+        if !emulated {
+            // The device image just produced must run entirely in single
+            // precision. Read that off the compiled SASS, not the source.
+            fp64_guard::check(&dir.join(format!("lib{lib_name}.so")));
+        }
+
         println!("cargo:rustc-link-search=native={}", dir.display());
         if emulated {
             // Static archive: the C++ TU is small enough that linking
@@ -141,5 +147,134 @@ fn main() {
             println!("cargo:rustc-link-search=native={cuda_lib_path}");
             println!("cargo:rustc-link-lib=dylib=cudart");
         }
+    }
+}
+
+// Guard against double precision reaching the GPU.
+//
+// The solver is single precision on the device, and that is a correctness
+// property rather than a preference: the barrier stiffness, the conservative
+// advance and the CSR assembly are all reasoned about in float. Source review
+// cannot enforce it, because a double can arrive without the word appearing
+// anywhere in the source. The library trig and exponential functions are the
+// standing example: their slow-path argument reduction is double precision, so
+// a kernel that merely calls sinf emits I2F.F64 and DMUL.
+//
+// So the check reads the SASS of the device image that was just built, which is
+// what actually runs. It reports per kernel, and fails on any kernel not on the
+// list of sites that already contain FP64. That list is the point: it does not
+// bless those sites, it pins them, so the count cannot quietly grow and each
+// entry stays visible until it is dealt with.
+mod fp64_guard {
+    use std::path::Path;
+    use std::process::Command;
+
+    // SASS mnemonics that execute in double precision, including the
+    // conversions, which is how an integer widened to float arrives here.
+    const FP64_OPS: [&str; 10] = [
+        "DADD", "DMUL", "DFMA", "DSETP", "DMNMX", "DDIV", "F2F.F64", "I2F.F64",
+        "F2I.F64", "MUFU.RCP64H",
+    ];
+
+    // No kernel may contain FP64. The list is empty and is meant to stay that
+    // way: the device runs single precision, and the transcendentals that used
+    // to break that are replaced in float_math.hpp. It exists as a list rather
+    // than as a bare zero so that a site which genuinely cannot avoid double
+    // has somewhere to be recorded and argued about, not so that one can be
+    // added to quiet a failure.
+    const KNOWN: [&str; 0] = [];
+
+    // Whether `line` contains `op` as a whole mnemonic rather than as part of a
+    // longer one. Without this, DMNMX matches inside VIADDMNMX.U32, a 32-bit
+    // integer add-min-max, and the guard reports double precision that is not
+    // there. A mnemonic carries dot-separated modifiers, so a dot after the
+    // match is allowed, while an alphanumeric on either side means the match
+    // landed inside a different instruction.
+    fn contains_mnemonic(line: &str, op: &str) -> bool {
+        let b = line.as_bytes();
+        let mut from = 0;
+        while let Some(rel) = line[from..].find(op) {
+            let s = from + rel;
+            let e = s + op.len();
+            let before_ok = s == 0
+                || !(b[s - 1].is_ascii_alphanumeric() || b[s - 1] == b'_'
+                     || b[s - 1] == b'.');
+            let after_ok =
+                e >= b.len() || !(b[e].is_ascii_alphanumeric() || b[e] == b'_');
+            if before_ok && after_ok {
+                return true;
+            }
+            from = s + 1;
+        }
+        false
+    }
+
+    pub fn check(image: &Path) {
+        if std::env::var("PPF_ALLOW_FP64").is_ok() {
+            println!("cargo:warning=PPF_ALLOW_FP64 set: skipping the device \
+                      single-precision check");
+            return;
+        }
+        if !image.exists() {
+            return;
+        }
+        let Ok(out) = Command::new("cuobjdump").arg("--dump-sass").arg(image).output() else {
+            // A CUDA install without cuobjdump cannot answer the question. Say
+            // so, rather than passing silently on no evidence.
+            println!("cargo:warning=cuobjdump not found: the device \
+                      single-precision check did not run");
+            return;
+        };
+        let sass = String::from_utf8_lossy(&out.stdout);
+
+        // An empty or unparsable dump means the check learned nothing. Treating
+        // that as a pass is the trap this exists to avoid, so it is reported.
+        let instr = sass.lines().filter(|l| l.trim_start().starts_with("/*")).count();
+        if instr == 0 {
+            println!("cargo:warning=the device image produced no readable SASS: \
+                      the single-precision check did not run");
+            return;
+        }
+
+        // Report what was actually read, so a disagreement between this and a
+        // manual inspection names the image rather than needing to be guessed
+        // at. An instruction count is the evidence that the dump parsed.
+        println!(
+            "cargo:warning=device single-precision check: {} instruction(s) in {}",
+            instr,
+            image.display()
+        );
+
+        let mut current = String::new();
+        let mut offenders: Vec<(String, usize)> = Vec::new();
+        for line in sass.lines() {
+            if let Some(i) = line.find("Function : ") {
+                current = line[i + "Function : ".len()..].trim().to_string();
+            } else if FP64_OPS.iter().any(|op| contains_mnemonic(line, op)) {
+                if KNOWN.iter().any(|k| current.contains(k)) {
+                    continue;
+                }
+                match offenders.iter_mut().find(|(f, _)| *f == current) {
+                    Some((_, n)) => *n += 1,
+                    None => offenders.push((current.clone(), 1)),
+                }
+            }
+        }
+        if offenders.is_empty() {
+            return;
+        }
+        for (f, n) in &offenders {
+            println!("cargo:warning=FP64 in device code: {n} instruction(s) in {f}");
+        }
+        panic!(
+            "double precision reached the GPU in {} kernel(s) not previously \
+             carrying it. The solver runs single precision on the device. A \
+             common cause is a library call whose argument reduction is double \
+             (sinf, cosf, expf, logf): use the float-only intrinsic, or reduce \
+             the argument in float first. Another is an integer widened to \
+             float, which CUDA routes through double; narrow it first. Set \
+             PPF_ALLOW_FP64=1 to build anyway while investigating.",
+            offenders.len()
+        );
     }
 }

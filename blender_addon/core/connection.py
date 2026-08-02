@@ -8,6 +8,7 @@
 import os
 import subprocess
 
+from .gpu_devices import AUTOMATIC, apply_selection
 from .status import ConnectionInfo
 
 
@@ -164,13 +165,21 @@ def resolve_win_native_root(selected):
     return None
 
 
-def spawn_win_native_server(root, port):
+def spawn_win_native_server(
+    root, port, cuda_device=AUTOMATIC, cuda_device_uuid=""
+):
     """Spawn a fresh win_native ``ppf-cts-server.exe`` subprocess and return the Popen.
 
     Used by both initial connect and the Stop/Start cycle on the win_native
     backend. ``connect_win_native`` is the one-shot init path; this helper
     is what ``WinNativeBackend.start_server`` calls to relaunch after a
     user-issued Stop.
+
+    Args:
+        root: Project root the server runs from.
+        port: TCP port the server listens on.
+        cuda_device: Saved GPU display index, or ``gpu_devices.AUTOMATIC``.
+        cuda_device_uuid: Stable GPU identity for ``CUDA_VISIBLE_DEVICES``.
 
     Returns:
         A ``subprocess.Popen`` for the freshly-launched server, ``None``
@@ -193,13 +202,14 @@ def spawn_win_native_server(root, port):
 
     # If a ppf-cts-server is already running on the port (Blender was
     # restarted while the previous session's server kept going), attach
-    # to it instead of erroring out. The user's Linux/macOS workflow
-    # does this implicitly because the server is started outside the
-    # addon; on Windows the addon owns the spawn, so we have to
-    # recognize the attach case explicitly. The probe sends a real
-    # TCMD ping and checks the JSON response, so a foreign squatter
-    # (e.g. some other tool parked on 9090) still surfaces as
-    # PortInUseByForeignProcess below.
+    # to it instead of erroring out. The probe sends a real TCMD ping and
+    # checks the JSON response, so a foreign squatter (e.g. some other tool
+    # parked on 9090) still surfaces as PortInUseByForeignProcess below.
+    #
+    # Attaching means no launch happens, so *cuda_device* reaches nothing: the
+    # server keeps whatever GPU it was started on. The panel reports that
+    # disagreement from the GPU index the server itself reports, which is the
+    # only thing that can be right about a server the add-on did not start.
     if _port_is_in_use(port):
         if _probe_ppf_cts_server(port):
             return None
@@ -245,6 +255,12 @@ def spawn_win_native_server(root, port):
     env["PYTHONPATH"] = root + ";" + env.get("PYTHONPATH", "")
     if cuda_path and os.path.exists(cuda_path):
         env["CUDA_PATH"] = cuda_path
+    # The solver never calls cudaSetDevice, so it runs on device 0 of whatever
+    # CUDA can see. Restricting the visible set here is what makes the panel's
+    # GPU choice reach it, and the server's own hardware probe reads the same
+    # variable, so what the Remote Hardware block reports is the device the
+    # solver is on.
+    apply_selection(env, cuda_device, cuda_device_uuid)
 
     creation_flags = subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0
 
@@ -276,41 +292,33 @@ def connect_win_native(root, port):
     """Connect using Windows native build.
 
     The *root* path must be the project root directory where
-    ``ppf-cts-server.exe`` is located. The function auto-detects the
-    Python/CUDA environment from either ``build-win-native/`` (dev layout)
-    or bundled ``python/`` + ``bin/`` (dist layout).
+    ``ppf-cts-server.exe`` is located.
+
+    Connecting does not start the server. Start Server does, on this backend
+    as on every other, which is what lets a GPU be picked from the panel in
+    between: the choice has to be made against a device list, and that list is
+    read over the connection.
 
     Args:
         root: Project root directory (where ppf-cts-server.exe lives).
         port: Port for the solver server.
 
     Returns:
-        A tuple of (ConnectionInfo, subprocess.Popen).
+        A tuple of (ConnectionInfo, None). The second element is the server
+        subprocess, which this step does not create.
 
     Raises:
-        FileNotFoundError: if ``ppf-cts-server.exe`` is not at *root* or the
-            embedded Python is missing.
-        PortInUseByForeignProcess: if *port* is bound by a process that
-            isn't an addon-spawned ``ppf-cts-server.exe``. Stop that process
-            before retrying; the addon refuses to terminate unrelated
-            third-party listeners.
+        FileNotFoundError: if ``ppf-cts-server.exe`` is not at *root*.
     """
-    # Test/CI mode: when ``PPF_WIN_NATIVE_NO_SPAWN`` is set, an external
-    # process (typically the debug rig's orchestrator) has already
-    # started ppf-cts-server.exe on ``port``. Skip the embedded-Python
-    # detection and the Popen, and return ConnectionInfo with
-    # ``process=None`` so WinNativeBackend treats the connection as
-    # metadata-only, the same shape connect_local has on Linux.
     # Community users often point the addon at a subdirectory of the real
     # solver root (target/release, bin, or the embedded python/ folder). Walk
     # up to the actual bundle / repo root so those selections just work; fall
-    # back to the raw path when nothing qualifies so spawn's FileNotFoundError
-    # still names the path the user chose. Resolving here (not just inside
-    # spawn) keeps current_directory / remote_root pointed at the real root,
-    # which the backend uses as the transfer cwd and PYTHONPATH base and which
-    # start_server re-spawns from after a Stop.
+    # back to the raw path when nothing qualifies so the launch's
+    # FileNotFoundError still names the path the user chose. Resolving here
+    # keeps current_directory / remote_root pointed at the real root, which the
+    # backend uses as the transfer cwd and PYTHONPATH base and which
+    # start_server spawns from.
     root = resolve_win_native_root(root) or root.rstrip("/\\")
-    process = spawn_win_native_server(root, port)
     root = root.rstrip("/\\")
 
     connection_info = ConnectionInfo()
@@ -318,7 +326,7 @@ def connect_win_native(root, port):
     connection_info.current_directory = root
     connection_info.remote_root = root
     connection_info.instance = "win_native"
-    connection_info.server_running = True
+    connection_info.server_running = False
     connection_info.container = ""
     connection_info.server_port = port
-    return connection_info, process
+    return connection_info, None

@@ -54,10 +54,15 @@ import os
 import subprocess
 import sys
 
+from . import _driver_lib as dl
 from . import _runner as r
 from . import REPO_ROOT_POSIX
 
 
+# This template drives the pipeline directly rather than through
+# ``DriverHelpers``, so ``build_driver`` prepends
+# ``_driver_lib.BUILD_FAILURE_LIB`` (not the whole DRIVER_LIB) to put
+# ``build_failure_message`` in the exec globals for the FAILED branch.
 _DRIVER_TEMPLATE = """
 import bpy, time, traceback, json, os
 result.setdefault("phases", [])
@@ -222,7 +227,7 @@ try:
             break
         time.sleep(0.5)
     if facade.engine.state.solver.name == "FAILED":
-        raise RuntimeError(f"build failed: {facade.engine.state.error!r}")
+        raise RuntimeError(build_failure_message(facade, com))
     log("built")
 
     com.run()
@@ -535,7 +540,8 @@ def _read_payload(resp: dict) -> dict | None:
 def build_driver(case: dict, ctx: r.ScenarioContext) -> str:
     repo_root = REPO_ROOT_POSIX
     return (
-        _DRIVER_TEMPLATE
+        dl.BUILD_FAILURE_LIB
+        + _DRIVER_TEMPLATE
         .replace("<<CASE_JSON>>", json.dumps(case))
         .replace("<<LOCAL_PATH>>", repo_root)
         .replace("<<SERVER_PORT>>", str(ctx.server_port))

@@ -29,7 +29,43 @@ Starting a solver session is two button presses:
 
 The panel stays responsive while this happens, the actual work runs on a background thread and the UI polls it several times a second.
 
-Windows Native is slightly different: it launches the server directly as part of the Connect step, so **Start Server** is a no-op while the server is already running and only does something after **Stop Server**.
+Every backend works this way, Windows Native included: **Connect** opens the transport and does not start anything, and **Start Server** starts the solver server. If a `ppf-cts-server` from a previous session is still on the port, **Start Server** attaches to it instead of launching a second one.
+
+### Choosing a GPU
+
+On a solver host with more than one NVIDIA card, the **GPU** dropdown in the
+Backend Communicator picks the one the solver runs on. It lists the cards by
+name with the index the driver gives them, and two cards of the same model are
+told apart by that index.
+
+One mechanism serves every backend. **Connect** enumerates the solver host by
+running `nvidia-smi` through the connection, so the list belongs to the machine
+that will run the server rather than to the workstation. The row appears only
+once connected, since before that there is no list to offer. The refresh button
+beside it re-reads it. **Start Server** applies the choice.
+
+The row stays editable while connected as long as the server is stopped, so
+**Stop Server**, pick another card, **Start Server** moves a solver without
+reconnecting. The dropdown carries no status text of its own: the selected
+entry already names the card, and a card the host does not have reads
+`<index>: not detected`. Only a failed enumeration gets a line, since that
+leaves the dropdown holding nothing but `Automatic`.
+
+The card the solver is on is named by the **GPU** row of the Remote Hardware
+block, as `<index>: <model>`, which is the server's own answer. A line appears
+under the dropdown only when that answer and the selection disagree, which
+happens when Start Server attached to a server it did not launch, or when the
+server is too old to report its device at all. Every start is also written to
+the add-on console, so a session can be traced back to a device later.
+
+`Automatic` leaves `CUDA_VISIBLE_DEVICES` unchanged. On a multi-GPU host that
+variable must identify the chosen card by UUID; an unset or numeric value is
+ambiguous because CUDA and nvidia-smi need not use the same numeric ordering.
+Picking a card in the panel writes its UUID automatically.
+
+A choice the solver host cannot satisfy is refused by **Start Server**, naming
+the cards that are present, and the dropdown keeps it visible as
+`<index>: not detected` rather than resolving it to a different card.
 
 TIP: **Save the connection once it works.** As soon as you have a successful **Connect**, click the **Save** icon on the profile row to write the current fields to a `.toml` file. Next session, **Open** the file, pick the entry, and every field auto-fills, with no retyping host, key path, container, or port. See Connection Profiles for the full workflow.
 
@@ -64,9 +100,11 @@ nohup bash -c '[ -f $HOME/.local/share/ppf-cts/venv/bin/activate ] && source $HO
 
 Inside a Docker container the server is launched with `--host 0.0.0.0` so the published port mapping reaches it; on Local and SSH it binds to `127.0.0.1`.
 
+When a GPU is picked, its enumerated UUID is assigned to `CUDA_VISIBLE_DEVICES` in front of that server command. Using the UUID avoids any difference between nvidia-smi's numeric ordering and CUDA's. Windows Native sets the same variable in the process environment it spawns the server with. The solver never calls `cudaSetDevice`, so it runs on device 0 of whatever CUDA can see, which is what makes restricting the visible set the whole mechanism.
+
 The server writes `SERVER_STARTING` and `SERVER_READY` markers to `progress.log` in the working directory. The UI tails that file and waits up to **16 seconds** for `SERVER_READY`. If a line containing `ERROR` or `FAILED` appears first, the wait aborts with that message; on plain timeout, the panel prints the last 20 lines of `server.log`.
 
-Windows Native launches the server directly during the Connect step. See Windows - Under the hood.
+Windows Native spawns `ppf-cts-server.exe` as a child process instead of writing a launch script, since there is no shell on the other side of it. See Windows - Under the hood.
 
 **Docker port pre-launch check**
 
@@ -103,6 +141,7 @@ TIP: If you ran the solver's installer, it may have created a Python virtual env
 | Field | Description |
 | ----- | ----------- |
 | Local Path | Filesystem path to the solver checkout, for example `~/ppf-contact-solver`. Empty until you fill it in. |
+| GPU | Which CUDA device the solver runs on. See Choosing a GPU. |
 | Server Port | TCP port for `ppf-cts-server`. Default `9090`; range 1024-65535. |
 
 ### Dependencies
@@ -160,6 +199,7 @@ Figure: Backend Communicator with **Server Type** set to `SSH`. **Host**, **Port
 | Username | `""` | Remote user. Leave empty to use SSH config's `User`. |
 | Key Path | `~/.ssh/id_ed25519` or `~/.ssh/id_rsa` | Private key file. |
 | Remote Path | `""` | Remote solver directory, e.g. `/root/ppf-contact-solver` (must contain the built `ppf-cts-server` binary). |
+| GPU | `Automatic` | Which CUDA device on the REMOTE host the solver runs on. The list is read from that host, so it is offered once connected. See Choosing a GPU. |
 | Server Port | `9090` | Port on the remote host where `ppf-cts-server` listens. |
 
 Aliases from your `~/.ssh/config` are resolved automatically, including entries pulled in via `Include` directives. If the alias's config supplies a hostname, port, user, or identity file, you can leave those fields blank in the panel and they will be filled in at connect time.
@@ -302,6 +342,7 @@ Figure: Backend Communicator with **Server Type** set to `Docker`. **Container**
 | ----- | ----------- |
 | Container | Docker container name. Must already exist. |
 | Container Path | Working directory inside the container (contains the built `ppf-cts-server` binary). |
+| GPU | Which CUDA device the solver runs on, as the CONTAINER sees them. A container started without `--gpus all` sees a subset of its host's cards, and the list is read inside it. See Choosing a GPU. |
 | Server Port | Port inside the container where `ppf-cts-server` listens. |
 
 ### Setup - Docker over SSH
@@ -384,6 +425,7 @@ Figure: Backend Communicator with **Server Type** set to `Windows Native`. Only 
 
 | Field | Description |
 | ----- | ----------- |
+| GPU | Which CUDA device the solver runs on. See Choosing a GPU. |
 | Win Native Path | Root directory containing `ppf-cts-server.exe` (under `target\release\` for dev builds, under `bin\` for bundles) plus either `python\` (bundle) or `build-win-native\python\` (dev) for the build worker. |
 | Server Port | TCP port for `ppf-cts-server.exe`. Default `9090`. |
 
@@ -494,6 +536,8 @@ Each profile is a top-level table. The table name is free-form (quote it if it c
 | `docker_path` | Solver directory inside a Docker container. |
 | `local_path` | Local solver directory. |
 | `win_native_path` | Windows solver root. |
+| `solver_gpu` | CUDA device index for the solver server, or `-1` to set no `CUDA_VISIBLE_DEVICES`. |
+| `solver_gpu_uuid` | Stable UUID of the selected GPU. Written with `solver_gpu`; preferred when the host reorders indices. |
 | `docker_port` | Server TCP port (1024-65535). |
 
 Unknown keys are silently ignored, so it is safe to sprinkle comments or future additions in the file.

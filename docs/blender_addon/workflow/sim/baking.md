@@ -22,6 +22,12 @@ There are two flavors:
   step into the rest pose of the next simulation, or to freeze a pin
   operation's final shape.
 
+Baking is not the only way to get a result out of the add-on. When the
+destination is another application, or when you want to keep iterating on
+this scene, [export a USD or Alembic cache](exporting.md) instead: it
+writes the deformation to a file and leaves every object, modifier, and
+group exactly where it is.
+
 ```{figure} ../../images/baking/before_after_bake.svg
 :alt: Two-panel before-and-after diagram. Before (left): the mesh carries a ContactSolverCache MESH_CACHE modifier with Format PC2 pointing at a per-object PC2 file under the blend's data folder, has pin vertex groups (ShoulderPins, CollarPins), and is assigned to a Dynamics Group (Cloth, Shell); it has no shape keys and no value fcurves. A central red arrow labeled Bake Animation (destructive, irreversible) points from the before panel to the after panel. After (right): the same mesh with the ContactSolverCache modifier removed (slot freed), the PC2 file on disk deleted, the pin vertex groups removed, the Dynamics Group assignment cleared, and the animation now stored as one shape key per fetched frame (ContactSolverBake_00001, _00002, and so on) with value fcurves using CONSTANT interpolation that drive each shape key 0 to 1 to 0 across its active frame. A footer explains that rods bake to per-control-point keyframes on co / handle_left / handle_right instead of shape keys, and that Abort during a modal bake restores the full pre-bake state.
 :width: 900px
@@ -53,6 +59,20 @@ object the add-on:
   disk, and
 - removes the object from its dynamics group, together with any pin
   vertex groups attached to it.
+
+:::{note}
+**A captured deformation is not part of that cleanup.** If the object
+carried a **Capture Deformation** recording, as a deforming Static
+collider or as an animated pin does, that recording stays on disk, and the
+per-object **Clear Deformation Cache** button cannot reach it, because the
+bake has taken the object out of its group. **Clear All Deformations**,
+in the **Deformations** box on the Solver panel, deletes every captured
+recording in the scene, including the ones left behind this way. Its
+neighbor **Re-capture All Deformations** re-records every deforming Static
+collider and every animated pin in one pass, which is the quick way to
+bring a scene up to date before the next **Transfer**. See
+[Static Objects](../scene/static_objects.md).
+:::
 
 **Recommended workflow**: always bake in a *copy* of your `.blend`, so
 the pre-bake scene (with its PC2 files, modifiers, and group setup)

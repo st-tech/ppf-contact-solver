@@ -1390,3 +1390,138 @@ def remove_isolated_static_vertices():
         "removed_total": total,
         "objects": results,
     }
+
+
+@mcp_handler
+def convert_to_particle_mesh(
+    object_name: str,
+    grain_radius: float,
+    extra_spacing: float = 0.0,
+    rng_seed: int = 0,
+):
+    """Replace a solid mesh with a cloud of grain centers for a Sand group.
+
+    Destructive: the faces are discarded and the object becomes a faceless
+    mesh of loose vertices carrying a render-only Particle Mesh modifier. The
+    grain count is not chosen, it is whatever fills the volume at the given
+    separation, and it comes back in the result.
+
+    grain_radius is locked after conversion, since the non-overlapping spacing
+    is derived from it, so pick it before converting rather than adjusting it
+    afterward. A radius or spacing that fits no grain at all is refused with
+    the object untouched.
+
+    Args:
+        object_name: Solid mesh object with faces, not already a particle mesh
+        grain_radius: Physical grain radius, which is also the contact skin
+        extra_spacing: Gap added between grains beyond touching. 0 packs them
+            as densely as non-overlap allows
+        rng_seed: Seed for the Poisson-disk seeding, for a repeatable cloud
+    """
+    from ...ui.dynamics.sand_ops import (
+        build_and_commit_particle_mesh,
+        seed_inside_eroded,
+    )
+
+    obj = bpy.data.objects.get(object_name)
+    if obj is None:
+        raise ValidationError(f"No such object: {object_name}")
+    if obj.type != "MESH" or obj.data is None:
+        raise ValidationError(f"Object '{object_name}' is {obj.type}, not a MESH")
+    if not len(obj.data.polygons):
+        raise ValidationError(
+            f"Object '{object_name}' has no faces. Conversion seeds grains "
+            "inside a closed solid mesh."
+        )
+    if obj.get("ppf_particle_mesh"):
+        raise ValidationError(f"Object '{object_name}' is already a particle mesh")
+    if grain_radius <= 0.0:
+        raise ValidationError("grain_radius must be positive")
+
+    # Seed here first, while the mesh is still intact, so a radius that fits
+    # no grain is refused with nothing consumed and the caller can retry at a
+    # smaller one. The commit replaces obj.data and removes the original
+    # datablock once nothing else uses it, so a count read after it names a
+    # remedy the caller no longer has the mesh to apply. seed_inside_eroded
+    # writes nothing (it reads the evaluated mesh through a BVH and returns
+    # arrays) and draws every random number from
+    # np.random.default_rng(rng_seed), so it reaches the same count the
+    # commit's own seeding pass will. The price is that a conversion which
+    # succeeds seeds twice.
+    cloud, _stats = seed_inside_eroded(obj, grain_radius, extra_spacing, rng_seed)
+    if len(cloud) < 1:
+        raise MCPError(
+            f"No grains of radius {grain_radius} fit inside '{object_name}'. "
+            "The object is unchanged. Reduce grain_radius or extra_spacing, "
+            "or use a larger mesh."
+        )
+
+    n = build_and_commit_particle_mesh(
+        obj, grain_radius, extra_spacing, rng_seed=rng_seed
+    )
+    if n < 1:
+        raise MCPError(
+            f"Converting '{object_name}' placed no grain, although the check "
+            f"before it placed {len(cloud)}. The object is now an empty "
+            "particle mesh and its original mesh is gone; rebuild the mesh "
+            "before converting again."
+        )
+    return {
+        "message": f"Converted '{object_name}' to {n} grain(s)",
+        "object_name": object_name,
+        "grain_count": n,
+        "grain_radius": grain_radius,
+        "extra_spacing": extra_spacing,
+        "rng_seed": rng_seed,
+    }
+
+
+@mcp_handler
+def recapture_all_deformations():
+    """Re-capture every deforming STATIC collider and every animated pin.
+
+    One pass over the whole scene, instead of calling
+    capture_static_deformation and capture_pin_deformation per object. The
+    statics are captured first and the pins after, since the two share the
+    depsgraph and cannot run at once.
+
+    The captures run in the background after this returns; poll
+    get_static_deformation_status and get_pin_deformation_status until they
+    report the frame counts you expect.
+    """
+    from ...ui.solver import SOLVER_OT_RecaptureAllDeformations
+
+    if not SOLVER_OT_RecaptureAllDeformations.poll(bpy.context):
+        raise MCPError(
+            "Nothing to re-capture, or a capture or bake is already running. "
+            "Re-capture applies to deforming STATIC colliders and animated "
+            "pins in active groups."
+        )
+    bpy.ops.solver.recapture_all_deformations()
+    return {
+        "message": (
+            "Started Re-capture All Deformations. The captures run in the "
+            "background; poll get_static_deformation_status and "
+            "get_pin_deformation_status until they report a frame count."
+        ),
+    }
+
+
+@mcp_handler
+def clear_all_deformations():
+    """Delete every captured deformation cache in the scene.
+
+    Covers all STATIC-collider deform caches and all animated-pin captures
+    across the active groups, plus any cache orphaned by an object that was
+    deleted or taken out of its group. The objects keep their deformers, so
+    recapture_all_deformations rebuilds what this removes.
+    """
+    from ...ui.solver import SOLVER_OT_ClearAllDeformations
+
+    if not SOLVER_OT_ClearAllDeformations.poll(bpy.context):
+        raise MCPError(
+            "No captured deformation cache to clear, or a capture or bake is "
+            "already running."
+        )
+    bpy.ops.solver.clear_all_deformations()
+    return {"message": "Cleared every captured deformation cache in the scene"}

@@ -15,6 +15,13 @@ use serde::{Deserialize, Serialize};
 pub struct HardwareInfo {
     #[serde(rename = "GPU")]
     pub gpu: String,
+    /// CUDA index of the device the solver will run on, or -1 when no device
+    /// could be resolved. The add-on compares it against the GPU it picked, so
+    /// what it shows is the server's own answer rather than its own intent,
+    /// which is the only thing that holds when the add-on attached to a server
+    /// it did not launch.
+    #[serde(rename = "GPU Index", default = "unknown_gpu_index")]
+    pub gpu_index: i64,
     #[serde(rename = "VRAM")]
     pub vram: String,
     #[serde(rename = "CUDA")]
@@ -33,10 +40,17 @@ pub struct HardwareInfo {
     pub emulated: bool,
 }
 
+/// Sentinel for "no CUDA device resolved", shared by the serde default and
+/// [`HardwareInfo::default`].
+fn unknown_gpu_index() -> i64 {
+    -1
+}
+
 impl Default for HardwareInfo {
     fn default() -> Self {
         Self {
             gpu: "Unknown".into(),
+            gpu_index: unknown_gpu_index(),
             vram: "Unknown".into(),
             cuda: "Unknown".into(),
             sm: "Unknown".into(),

@@ -47,9 +47,9 @@ bool ccd_overlap_detected();
 // 4 = face-vertex, 5 = edge-edge against the static collision mesh, where v0
 // is a dynamic vertex and v1 a collision-mesh vertex); UINT_MAX if none was
 // recorded. d2 and offset are a flagged pair's squared start distance and
-// contact offset in solver coordinate units (-1 if unset); their ratio tells
-// how deep the overlap was, and d2 near 0 means the two surfaces evaluate as
-// touching.
+// contact offset in the CCD's internally rescaled units (-1 if unset); their
+// ratio tells how deep the overlap was, and d2 == 0.0 exactly means the pair
+// evaluates as touching at the resolution of that frame.
 void ccd_overlap_info(unsigned &v0, unsigned &v1, unsigned &kind, float &d2,
                       float &offset);
 

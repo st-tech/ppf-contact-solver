@@ -41,6 +41,12 @@ class OBJECT_OT_CreateGroup(Operator):
         group.ensure_uuid()
         # Don't set name - leave it empty so UI shows "Group N" dynamically
 
+        # Publish which group this call created. Callers cannot recover it by
+        # scanning: the slot allocated is the lowest free one, so once any
+        # group has been deleted it is no longer the highest active slot, and
+        # a scan would hand back some other group to be renamed and configured.
+        get_addon_data(scene).state.current_group_uuid = group.uuid
+
         assign_display_indices(scene)
 
         # Update overlays when creating a new group
@@ -173,7 +179,7 @@ class OBJECT_OT_DeleteAllGroups(Operator):
 
                 group.reset_to_defaults()
 
-        get_addon_data(scene).current_group_uuid = ""
+        get_addon_data(scene).state.current_group_uuid = ""
         apply_object_overlays()
 
         return {"FINISHED"}
@@ -395,7 +401,6 @@ def _apply_cleanup():
         return None
     changed = False
 
-    assigned_names = set()
     assigned_uuids = set()
     for group in iterate_active_object_groups(scene):
         indices_to_remove = []
@@ -411,7 +416,6 @@ def _apply_cleanup():
                 # keyframes) is kept coherent through the single
                 # reconciler in core/uuid_registry. Do NOT write
                 # assigned.name directly here — it would skip siblings.
-                assigned_names.add(obj.name)
                 if assigned.uuid:
                     assigned_uuids.add(assigned.uuid)
         for i in reversed(indices_to_remove):
@@ -424,16 +428,22 @@ def _apply_cleanup():
                 group.assigned_objects_index, len(group.assigned_objects)
             )
 
-    from ...core.uuid_registry import get_object_uuid
-    for obj in bpy.data.objects:
-        if obj.type in ("MESH", "CURVE"):
-            uid = get_object_uuid(obj)
-            if uid and uid in assigned_uuids:
-                continue
-            r, g, b, a = obj.color
-            if abs(r - 1.0) > 0.01 or abs(g - 1.0) > 0.01 or abs(b - 1.0) > 0.01:
-                obj.color = (1.0, 1.0, 1.0, 1.0)
-                changed = True
+    # ``obj.color`` is NOT touched here. The add-on writes a display color
+    # only on an object that is in a group, and clears it while that object
+    # is still a member, at the point membership ends: every operator that
+    # disowns an object calls ``reset_object_display`` before dropping the
+    # assignment. An object that is not in a group is the user's, so a
+    # scene-wide pass has nothing it is allowed to write. Scanning for a
+    # stray tint instead of clearing it at the source is what made the
+    # Object Properties color field unsettable on every mesh in the file,
+    # since a non-member and a never-tinted object are indistinguishable
+    # from here.
+    #
+    # A copy made with Duplicate is the one case left uncovered: it
+    # inherits the color of the member it was copied from and belongs to no
+    # group, so it keeps that color until the user changes it. That is a
+    # stale color on an object the add-on does not own, which is the side
+    # to err on.
 
     state = get_addon_data(scene).state
     for i in range(len(state.merge_pairs) - 1, -1, -1):

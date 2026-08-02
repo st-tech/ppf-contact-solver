@@ -4,6 +4,7 @@
 // License: Apache v2.0
 
 #include "../kernels/reduce.hpp"
+#include "../float_math.hpp"
 #include "../linalg/eigsolve.hpp"
 #include "dispatcher.hpp"
 #include "utility.hpp"
@@ -317,7 +318,7 @@ void compute_svd(DataSet data, Vec<Vec3f> curr, Vec<Svd3x2> svd,
 __device__ float get_wind_weight(float time) {
     float angle = 30.0f * time;
     float t = 0.25f;
-    return t * (0.5f * (1.0f + sinf(angle))) + (1.0f - t);
+    return t * (0.5f * (1.0f + fmath::sin_periodic(angle))) + (1.0f - t);
 }
 
 } // namespace utility

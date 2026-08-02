@@ -2,6 +2,7 @@
 // License: Apache v2.0
 
 #include "../energy/model/dihedral_angle.hpp"
+#include "../float_math.hpp"
 #include "../utility/dispatcher.hpp"
 #include "../utility/utility.hpp"
 #include "plasticity.hpp"
@@ -37,7 +38,7 @@ void update_face_plasticity(DataSet &data, const ParamSet &param) {
             return;
         }
         float threshold = fparam.plasticity_threshold;
-        float alpha = 1.0f - expf(-plasticity * dt);
+        float alpha = 1.0f - fmath::exp(-plasticity * dt);
 
         const Vec3u &face = face_arr[i];
         const Vec3f &x0 = vertex_curr[face[0]];
@@ -104,7 +105,7 @@ void update_tet_plasticity(DataSet &data, const ParamSet &param) {
             return;
         }
         float threshold = tparam.plasticity_threshold;
-        float alpha = 1.0f - expf(-plasticity * dt);
+        float alpha = 1.0f - fmath::exp(-plasticity * dt);
 
         const Vec4u &tet = tet_arr[i];
         const Vec3f &x0 = vertex_curr[tet[0]];
@@ -168,7 +169,7 @@ void update_hinge_plasticity(DataSet &data, const ParamSet &param) {
             return;
         }
         float threshold = hparam.plasticity_threshold;
-        float alpha = 1.0f - expf(-plasticity * dt);
+        float alpha = 1.0f - fmath::exp(-plasticity * dt);
 
         Vec4u hinge = hinge_arr[i];
         Vec4u remapped = dihedral_angle::remap(hinge);
@@ -218,7 +219,7 @@ void update_rod_bend_plasticity(DataSet &data, const ParamSet &param) {
         }
         float threshold =
             0.5f * (ep0.plasticity_threshold + ep1.plasticity_threshold);
-        float alpha = 1.0f - expf(-plasticity * dt);
+        float alpha = 1.0f - fmath::exp(-plasticity * dt);
 
         Vec2u edge_0 = edge_arr[edge_idx_0];
         Vec2u edge_1 = edge_arr[edge_idx_1];

@@ -92,7 +92,7 @@ inline void launch_integrate_grains(const DataSet &data, float dt, float c_roll,
         Vec3f tau = data.grain_torque[i];
         float kang = data.grain_ang_stiff[i];
         // Semi-implicit: damp the friction torque's own omega-dependence
-        // (stiffness kang = sum lambda*radius^2, with the dt^2 factor from
+        // (kang = sum lambda*radius^2, with the dt^2 factor from
         // d tau / d omega) so omega converges to the rolling rate instead of
         // overshooting; c_roll adds optional linear rolling resistance.
         float scale =
@@ -149,11 +149,11 @@ inline void launch_integrate_grains(const DataSet &data, float dt, float c_roll,
 // A grain has translation DOF (the global Newton variable) and a local angular
 // increment dtheta (omega = dtheta/dt). The contact-point slip is
 //   u_c = P(dx - r (dtheta x n)) = P dx + r P [n]x dtheta,
-// so the per-contact friction energy 1/2 lambda |u_c|^2 couples them. The
-// contact.cu floor/sphere sites assemble, per grain, the angular block
-//   A   = sum_c lambda_c r^2 (P_c [n_c]x)^T (P_c [n_c]x)      (grain_A; SPD part)
-//   B   = sum_c lambda_c r   P_c [n_c]x                       (grain_B; coupling)
-//   grad_rot = sum_c B_c^T (P_c dx)                           (grain_grot)
+// so each contact's friction gradient g_c and Hessian Lambda_c couple them.
+// The contact.cu floor/sphere sites assemble, per grain, the angular block
+//   A   = sum_c r^2 [n_c]x^T Lambda_c [n_c]x       (grain_A; SPD part)
+//   B   = sum_c r Lambda_c [n_c]x                   (grain_B; coupling)
+//   grad_rot = sum_c r [n_c]x^T g_c                 (grain_grot)
 // Here we add the rotational inertia, condense dtheta out of the per-grain 6x6,
 // and land the result on the grain's translation block:
 //   A_full   = (I_center/dt^2) I3 + A          (SPD for any contact count)

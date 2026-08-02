@@ -44,4 +44,5 @@ at four `t` values because NURBS CPs are off-curve.
 
 object_groups
 static_objects
+mesh_cleaning
 ```

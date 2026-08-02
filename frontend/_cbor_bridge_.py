@@ -54,6 +54,31 @@ KIND_FIXED_SESSION = "FixedSession"
 # so it keeps its own literal ``2`` that must be bumped in lockstep.
 SURFACE_MAP_VERSION = 2
 
+# The pickle blob is stored as a list of chunks this size, never as one
+# byte string, because cbor2 6.0.1 decodes a single string or bytes item in
+# time QUADRATIC in its length. Measured on 6.0.1's Rust decoder: 64 MB
+# takes 21 s, 128 MB 81 s, 256 MB 339 s, so a session whose graph pickles
+# to 1.7 GB (a 3.2M-vertex scene) needs hours to read back and reads as a
+# hang. The same 64 MB split into 64 KB chunks decodes in 0.03 s.
+#
+# cbor2 6.1.3 fixed that quadratic (upstream #316), so from 6.1.3 on both
+# shapes decode linearly and the chunking buys nothing. Keep it:
+# `blender_addon/wheels/fetch.py` names the one version everything installs
+# (6.0.1 today, both for the addon's shipped wheels and for the venvs
+# `warmup.py` builds), while an already-provisioned venv holds whatever it
+# was built with, so a given machine may sit on either side of that
+# boundary. Both shapes read back correctly at every version (see
+# `loads_pickle_blob`), so the chunk size is a decode-cost choice alone.
+#
+# Encoding is linear either way, so this only ever mattered on load. The
+# constant is not delicately tuned: on a 537 MB payload, 64 KB, 256 KB,
+# 1 MB and 4 MB chunks all decode in 0.2-0.5 s, while 16 MB jumps to 8 s
+# as the quadratic starts to show. 1 MiB sits in the middle of the flat
+# region and keeps the item count modest (about 1,600 for that 1.7 GB
+# session). Chunks must be `bytes`: cbor2 encodes a `memoryview` as an
+# ARRAY OF INTEGERS, which is both enormous and reads back as a list.
+PICKLE_CHUNK_BYTES = 1 << 20
+
 
 class CborSchemaError(RuntimeError):
     """Raised when a CBOR payload doesn't match the expected envelope."""
@@ -333,18 +358,49 @@ def loads_pickled_envelope(blob: bytes, expected_kind: str) -> bytes:
     return bytes(payload)
 
 
+def chunk_pickle_blob(pickled: bytes) -> list[bytes]:
+    """Split a pickle blob into the chunk list an envelope payload stores.
+
+    See :data:`PICKLE_CHUNK_BYTES` for why the blob is never stored as one
+    byte string. Every producer of a ``"pickle_blob"`` field goes through
+    this, so the chunk size lives in exactly one place.
+    """
+    return [
+        pickled[i : i + PICKLE_CHUNK_BYTES]
+        for i in range(0, len(pickled), PICKLE_CHUNK_BYTES)
+    ]
+
+
+def _join_pickle_chunks(chunks: list, expected_kind: str) -> bytes:
+    """Concatenate a chunked ``pickle_blob`` back into one buffer."""
+    for i, chunk in enumerate(chunks):
+        if not isinstance(chunk, (bytes, bytearray)):
+            raise CborSchemaError(
+                f"{expected_kind} 'pickle_blob' chunk {i} is "
+                f"{type(chunk).__name__}, expected bytes"
+            )
+    return b"".join(bytes(c) for c in chunks)
+
+
 def loads_pickle_blob(blob: bytes, expected_kind: str) -> bytes:
     """Extract pickle bytes from an ``AppState`` / ``FixedSession`` envelope.
 
     Dispatches on payload shape so that one consumer call site handles
-    both wire formats:
+    every wire format written so far:
 
-    * Native CBOR map payloads (current producer) carry the pickle
-      bytes under the ``"pickle_blob"`` key alongside structured
-      metadata fields. Returns those bytes.
+    * Native CBOR map payloads carry the pickle under the
+      ``"pickle_blob"`` key alongside structured metadata fields, either
+      as the chunk list current producers write (see
+      :data:`PICKLE_CHUNK_BYTES`) or, on a file saved before chunking, as
+      a single byte string.
     * Raw CBOR ``bytes`` payloads (older :func:`dumps_pickled_envelope`
       writer, still on disk for saves predating the structured-map
       producer) are returned as-is.
+
+    Both single-byte-string paths stay correct at any size, but a
+    gigabyte-scale one takes hours to decode for the reason
+    :data:`PICKLE_CHUNK_BYTES` describes. Rebuilding the session rewrites
+    its file in the chunked shape; there is no in-place migration.
 
     The bytes path is the original behavior and stays correct forever:
     it is not a fallback, it's the read path for files written before
@@ -356,11 +412,13 @@ def loads_pickle_blob(blob: bytes, expected_kind: str) -> bytes:
         return bytes(payload)
     if isinstance(payload, dict):
         pickled = payload.get("pickle_blob")
-        if not isinstance(pickled, (bytes, bytearray)):
-            raise CborSchemaError(
-                f"{expected_kind} map payload missing 'pickle_blob' bytes"
-            )
-        return bytes(pickled)
+        if isinstance(pickled, list):
+            return _join_pickle_chunks(pickled, expected_kind)
+        if isinstance(pickled, (bytes, bytearray)):
+            return bytes(pickled)
+        raise CborSchemaError(
+            f"{expected_kind} map payload missing 'pickle_blob' bytes or chunks"
+        )
     raise CborSchemaError(
         f"{expected_kind} payload must be bytes or map, got {type(payload).__name__}"
     )

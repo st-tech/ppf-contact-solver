@@ -229,19 +229,18 @@ __device__ inline Vec3f grain_clamp_spin(const Vec3f &spin, const Vec3f &dx,
 
 // SAND implicit (Schur-condensed) rolling: accumulate one analytic contact's
 // Schur blocks for a grain.
-// fric_hess is the friction stiffness Lambda (lambda*P, see
-// Friction::hessian); dx the
-// grain's center slip; n the OUTWARD contact normal; r the grain radius. With
-// the contact-point displacement dx_c = dx + r [n]x dtheta and the friction
-// model 1/2 dx_c^T Lambda dx_c (Lambda already carries the tangential
-// projection), S = [n]x gives:
+// fric_hess is the branch-consistent friction stiffness Lambda and fric_grad
+// the matching translational gradient (see Friction); n is the OUTWARD contact
+// normal and r the grain radius. With contact-point displacement
+// dx_c = dx + r [n]x dtheta, the current linearization gives, for S = [n]x:
 //   A_c = r^2 S^T Lambda S       (angular; symmetric PSD since Lambda is)
 //   B_c = r   Lambda S           (translation<->rotation coupling)
-//   grot_c = r S^T Lambda dx     (rotational gradient at dtheta = 0)
-// For Lambda = lambda*P these reduce exactly to the previous closed forms
+//   grot_c = r S^T fric_grad     (rotational gradient at dtheta = 0)
+// For the static branch Lambda = lambda*P, these reduce to
 // lambda r^2 (P S)^T (P S), lambda r P S, and B_c^T (P dx).
 __device__ inline void accumulate_grain_schur(const Mat3x3f &fric_hess,
-                                              const Vec3f &dx, const Vec3f &n,
+                                              const Vec3f &fric_grad,
+                                              const Vec3f &n,
                                               float r, Mat3x3f &A_loc,
                                               Mat3x3f &B_loc, Vec3f &grot_loc) {
     float trace = fric_hess(0, 0) + fric_hess(1, 1) + fric_hess(2, 2);
@@ -252,11 +251,12 @@ __device__ inline void accumulate_grain_schur(const Mat3x3f &fric_hess,
     Mat3x3f StL = S.transpose() * fric_hess;
     A_loc += (r * r) * (StL * S);
     B_loc += r * (fric_hess * S);
-    // Row-dot form instead of a Mat3x3f * Vec3f product: device Eigen
+    // Column-dot form instead of a Mat3x3f * Vec3f product: device Eigen
     // matrix-vector expressions can evaluate incorrectly, dot products are
     // safe.
-    grot_loc += r * Vec3f(StL.row(0).dot(dx), StL.row(1).dot(dx),
-                          StL.row(2).dot(dx));
+    grot_loc += r * Vec3f(S.col(0).dot(fric_grad),
+                          S.col(1).dot(fric_grad),
+                          S.col(2).dot(fric_grad));
 }
 
 template <unsigned N>
@@ -987,7 +987,7 @@ struct CollisionMeshEdgeEdgeContactForceHessEmbed {
             Vec3f b0 = vertex[mesh_edge[0]];
             Vec3f b1 = vertex[mesh_edge[1]];
             Vec4f c =
-                distance::edge_edge_distance_coeff_unclassified<float, float>(
+                distance::edge_edge_distance_coeff<float, float>(
                     p0, p1, q0, q1);
             Vec3f x = c[0] * p0 + c[1] * p1;
             Vec3f y = c[2] * q0 + c[3] * q1;
@@ -1203,9 +1203,9 @@ __device__ unsigned embed_vertex_constraint_force_hessian(
                     f += fric_grad;
                     H += fric_hess;
                     if (grain) {
-                        accumulate_grain_schur(fric_hess, dx, normal, grain_radius,
-                                               grain_A_loc, grain_B_loc,
-                                               grain_grot_loc);
+                        accumulate_grain_schur(
+                            fric_hess, fric_grad, normal, grain_radius,
+                            grain_A_loc, grain_B_loc, grain_grot_loc);
                     }
                 }
             }
@@ -1250,9 +1250,9 @@ __device__ unsigned embed_vertex_constraint_force_hessian(
                 f += fric_grad;
                 H += fric_hess;
                 if (grain) {
-                    accumulate_grain_schur(fric_hess, dx, up, grain_radius,
-                                           grain_A_loc, grain_B_loc,
-                                           grain_grot_loc);
+                    accumulate_grain_schur(
+                        fric_hess, fric_grad, up, grain_radius, grain_A_loc,
+                        grain_B_loc, grain_grot_loc);
                 }
             }
         }
@@ -1868,8 +1868,9 @@ struct CollisionMeshPointFaceCCD_M2C {
         const FaceParam &static_fparam =
             static_face_params[static_face_prop[index].param_index];
         float offset = dyn_vparam.offset + static_fparam.offset;
+        float ghat = 0.5f * (dyn_vparam.ghat + static_fparam.ghat);
         float result = accd::point_triangle_ccd(p0, p1, t0, t1, t2, t0, t1, t2,
-                                                offset, param);
+                                                offset, ghat, param);
         if (result < param.line_search_max_t) {
             toi = fminf(toi, result);
             if (result == 0.0f)
@@ -1912,8 +1913,9 @@ struct CollisionMeshPointFaceCCD_C2M {
             const VertexParam &static_vparam =
                 static_vert_params[static_vert_prop[vertex_index].param_index];
             float offset = dyn_fparam.offset + static_vparam.offset;
-            float result = accd::point_triangle_ccd(p, p, t00, t01, t02, t10,
-                                                    t11, t12, offset, param);
+            float ghat = 0.5f * (dyn_fparam.ghat + static_vparam.ghat);
+            float result = accd::point_triangle_ccd(
+                p, p, t00, t01, t02, t10, t11, t12, offset, ghat, param);
             if (result < param.line_search_max_t) {
                 toi = fminf(toi, result);
                 if (result == 0.0f)
@@ -1958,8 +1960,9 @@ struct CollisionMeshEdgeEdgeCCD {
             const EdgeParam &static_eparam =
                 static_edge_params[static_edge_prop[index].param_index];
             float offset = dyn_eparam.offset + static_eparam.offset;
+            float ghat = 0.5f * (dyn_eparam.ghat + static_eparam.ghat);
             float result = accd::edge_edge_ccd(p00, p01, q0, q1, p10, p11, q0,
-                                               q1, offset, param);
+                                               q1, offset, ghat, param);
             if (result < param.line_search_max_t) {
                 toi = fminf(toi, result);
                 if (result == 0.0f)
@@ -2009,6 +2012,7 @@ struct PointFaceCCD {
                 const FaceParam &fparam =
                     face_params[face_prop[index].param_index];
                 float offset = vparam.offset + fparam.offset;
+                float ghat = 0.5f * (vparam.ghat + fparam.ghat);
                 const Vec3f &p0 = x0[vertex_index];
                 const Vec3f &p1 = x1[vertex_index];
                 const Vec3f &t00 = x0[f[0]];
@@ -2017,12 +2021,13 @@ struct PointFaceCCD {
                 const Vec3f &t10 = x1[f[0]];
                 const Vec3f &t11 = x1[f[1]];
                 const Vec3f &t12 = x1[f[2]];
-                result = accd::point_triangle_ccd(p0, p1, t00, t01, t02, t10,
-                                                  t11, t12, offset, param);
+                result = accd::point_triangle_ccd(
+                    p0, p1, t00, t01, t02, t10, t11, t12, offset, ghat, param);
             } else {
                 const VertexParam &vparam =
                     vertex_params[vertex_prop[vertex_index].param_index];
                 float offset = 2.0f * vparam.offset;
+                float ghat = vparam.ghat;
                 unsigned i = dup_i;
                 unsigned j = (i + 1) % 3;
                 unsigned k = (i + 2) % 3;
@@ -2033,7 +2038,7 @@ struct PointFaceCCD {
                 const Vec3f &q01 = x0[f[k]];
                 const Vec3f &q11 = x1[f[k]];
                 result = accd::point_edge_ccd(p0, p1, q00, q01, q10, q11,
-                                              offset, param);
+                                              offset, ghat, param);
             }
             if (result < param.line_search_max_t) {
                 toi = fminf(toi, result);
@@ -2076,6 +2081,7 @@ struct EdgeEdgeCCD {
             const EdgeParam &eparam_index =
                 edge_params[edge_prop[index].param_index];
             float offset = eparam_edge.offset + eparam_index.offset;
+            float ghat = 0.5f * (eparam_edge.ghat + eparam_index.ghat);
             if (!edge_has_shared_vert(e0, e1)) {
                 const Vec3f &p00 = x0[e0[0]];
                 const Vec3f &p01 = x0[e0[1]];
@@ -2086,7 +2092,7 @@ struct EdgeEdgeCCD {
                 const Vec3f &q10 = x1[e1[0]];
                 const Vec3f &q11 = x1[e1[1]];
                 result = accd::edge_edge_ccd(p00, p01, q00, q01, p10, p11, q10,
-                                             q11, offset, param);
+                                             q11, offset, ghat, param);
             } else {
                 const Vec2u ij[] = {Vec2u(0, 0), Vec2u(0, 1), Vec2u(1, 0),
                                     Vec2u(1, 1)};
@@ -2104,9 +2110,9 @@ struct EdgeEdgeCCD {
                         const Vec3f &q02 = x0[idx2];
                         const Vec3f &q12 = x1[idx2];
                         float toi_0 = accd::point_edge_ccd(
-                            q01, q11, q00, q02, q10, q12, offset, param);
+                            q01, q11, q00, q02, q10, q12, offset, ghat, param);
                         float toi_1 = accd::point_edge_ccd(
-                            q02, q12, q00, q01, q10, q11, offset, param);
+                            q02, q12, q00, q01, q10, q11, offset, ghat, param);
                         result = fminf(toi_0, toi_1);
                         break;
                     }
@@ -2155,8 +2161,10 @@ struct PointPointCCD {
             const VertexParam &vparam_b =
                 vertex_params[vertex_prop[index].param_index];
             float offset = vparam_a.offset + vparam_b.offset;
-            float result = accd::point_point_ccd(x0[vertex_index], x1[vertex_index],
-                                                 x0[index], x1[index], offset, param);
+            float ghat = 0.5f * (vparam_a.ghat + vparam_b.ghat);
+            float result =
+                accd::point_point_ccd(x0[vertex_index], x1[vertex_index],
+                                      x0[index], x1[index], offset, ghat, param);
             if (result < param.line_search_max_t) {
                 toi = fminf(toi, result);
                 if (result == 0.0f)
@@ -2667,7 +2675,7 @@ class EdgeEdgeIntersectTester {
                     Vec3f p1 = vertex[e0[1]];
                     Vec3f q0 = vertex[e1[0]];
                     Vec3f q1 = vertex[e1[1]];
-                    Vec4f c = distance::edge_edge_distance_coeff_unclassified<
+                    Vec4f c = distance::edge_edge_distance_coeff<
                                    float, float>(p0, p1, q0, q1)
                                    ;
                     Vec3f x0 = c[0] * p0 + c[1] * p1;

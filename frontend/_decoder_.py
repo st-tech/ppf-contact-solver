@@ -710,49 +710,65 @@ class ParamDecoder:
                 decoder.apply_to_objects(scene)
                 decoder.apply_pin_config(scene, verbose=True)
         """
-        if not self._pin_config:
+        if getattr(scene, "_pin_config_applied", False):
             return
-        if verbose:
+        if verbose and self._pin_config:
             print("=== Pin Config ===")
-        for dyn_name, dyn_obj in scene.object_dict.items():
-            # pin_config keyed by UUID; objects are registered by UUID
-            obj_cfg = self._pin_config.get(dyn_name, {})
-            if not obj_cfg:
-                continue
-            # Collapse the single all-vertex holder (built by
-            # _apply_pin_mapping) into one holder per pin_group_id, so a
-            # group's ops/animation apply once to the whole group. Without
-            # this a keyframed N-vertex pin became N one-vertex holders,
-            # each carrying every keyframe op -> N*M solver pin files.
-            self._regroup_pin_holders(dyn_obj, obj_cfg)
-            self._split_solid_holder_by_threshold(dyn_obj, obj_cfg, verbose)
-            for pin_holder in dyn_obj.pin_list:
-                # For solid objects, use stored Blender indices for config lookup
-                lookup_indices = getattr(pin_holder._data, '_blender_pin_indices', None) or pin_holder.index
-                # Resolve ONE cfg for this holder. Prefer a cfg that carries a
-                # captured deformation (``embedded_move_index`` / its
-                # ``rest_shape_track`` flag) over a plain anchor cfg: a SOLID
-                # holder can span both a captured pin and a non-captured anchor
-                # (e.g. a fixed pin-root) in one merged surface mapping, and the
-                # first stored vert is often the anchor. Taking it would drop
-                # the embedded ops AND the rest-shape track for the whole
-                # holder. Falls back to the first non-None cfg when none is
-                # captured (unchanged for pure-anchor / single-intent holders).
-                chosen_vi = None
-                chosen_cfg = None
-                for vi in lookup_indices:
-                    cfg = obj_cfg.get(vi)
-                    if cfg is None:
-                        continue
-                    if chosen_cfg is None:
-                        chosen_vi, chosen_cfg = vi, cfg
-                    if "embedded_move_index" in cfg or cfg.get("rest_shape_track"):
-                        chosen_vi, chosen_cfg = vi, cfg
-                        break
-                if chosen_cfg is not None:
-                    self._apply_pin_cfg_entry(
-                        pin_holder, dyn_name, chosen_vi, chosen_cfg, obj_cfg, verbose,
-                    )
+        try:
+            for dyn_name, dyn_obj in scene.object_dict.items():
+                # pin_config keyed by UUID; objects are registered by UUID
+                obj_cfg = self._pin_config.get(dyn_name, {})
+                if not obj_cfg:
+                    continue
+                # Collapse the single all-vertex holder (built by
+                # _apply_pin_mapping) into one holder per pin_group_id, so a
+                # group's ops/animation apply once to the whole group. Without
+                # this a keyframed N-vertex pin became N one-vertex holders,
+                # each carrying every keyframe op -> N*M solver pin files.
+                self._regroup_pin_holders(dyn_obj, obj_cfg)
+                self._split_solid_holder_by_threshold(dyn_obj, obj_cfg, verbose)
+                for pin_holder in dyn_obj.pin_list:
+                    # For solid objects, use stored Blender indices for config lookup
+                    lookup_indices = getattr(pin_holder._data, '_blender_pin_indices', None) or pin_holder.index
+                    # Resolve ONE cfg for this holder. Prefer a cfg that carries a
+                    # captured deformation (``embedded_move_index`` / its
+                    # ``rest_shape_track`` flag) over a plain anchor cfg: a SOLID
+                    # holder can span both a captured pin and a non-captured anchor
+                    # (e.g. a fixed pin-root) in one merged surface mapping, and the
+                    # first stored vert is often the anchor. Taking it would drop
+                    # the embedded ops AND the rest-shape track for the whole
+                    # holder. Falls back to the first non-None cfg when none is
+                    # captured (unchanged for pure-anchor / single-intent holders).
+                    chosen_vi = None
+                    chosen_cfg = None
+                    for vi in lookup_indices:
+                        cfg = obj_cfg.get(vi)
+                        if cfg is None:
+                            continue
+                        if chosen_cfg is None:
+                            chosen_vi, chosen_cfg = vi, cfg
+                        if "embedded_move_index" in cfg or cfg.get("rest_shape_track"):
+                            chosen_vi, chosen_cfg = vi, cfg
+                            break
+                    if chosen_cfg is not None:
+                        self._apply_pin_cfg_entry(
+                            pin_holder, dyn_name, chosen_vi, chosen_cfg, obj_cfg, verbose,
+                        )
+        finally:
+            # Sparse LU objects are build-time accelerators and are not
+            # picklable. Captured motion has been materialized into operations
+            # above, so no frozen scene or app-state snapshot needs them.
+            for dyn_obj in scene.object_dict.values():
+                for pin_holder in dyn_obj.pin_list:
+                    for attr in (
+                        "_solid_pin",
+                        "_solid_frame_map",
+                        "_solid_surface_tri",
+                        "_harmonic",
+                    ):
+                        if hasattr(pin_holder._data, attr):
+                            delattr(pin_holder._data, attr)
+        scene._pin_config_applied = True
 
     @staticmethod
     def _regroup_pin_holders(dyn_obj, obj_cfg):
@@ -815,8 +831,8 @@ class ParamDecoder:
         silently stiffen every saved partial-pin SOLID scene, so it is a
         separate, separately announced change.
 
-        Each sub-holder reuses the shared full ``S_t`` / ``M`` operators with
-        its own full-axis ``keep`` mask; the move-op builder slices
+        Each sub-holder reuses the shared sparse solve maps with its own
+        full-axis ``keep`` mask; the move-op builder slices
         ``positions[:, keep, :]`` so the masks must live on that full axis.
 
         The helper owns the pull calls because a hard-intent cfg carries no
@@ -947,13 +963,14 @@ class ParamDecoder:
             # Classify each driven surface vert by its stored Blender corners
             # (mirrors the full-pin harmonic mixed-intent path above).
             simw = getattr(d, "_sim_blender_weights", None)
+            frame_map = getattr(d, "_solid_frame_map", None)
             n_surf_driven = int(surf_mask.sum())
             # Three-way intent classification of each driven SURFACE vert by
             # its stored Blender corners:
             #   * static anchor (pin-root): corners carry NEITHER pull_strength
             #     NOR a captured track -> a stationary FixPair held at rest,
-            #     NEVER driven by the captured diffusion. (Otherwise S_t's
-            #     least-squares extrapolates the moving pin's motion onto the
+            #     NEVER driven by the captured diffusion. (Otherwise the
+            #     least-squares map extrapolates the moving pin's motion onto the
             #     anchor region and it drifts.)
             #   * pull follow: pull-strength corners dominate -> soft PullPair
             #     toward the captured target;
@@ -965,6 +982,36 @@ class ParamDecoder:
             # anchor followed the pin.
             pull_surf = np.zeros(len(df_arr), dtype=bool)
             static_surf = np.zeros(len(df_arr), dtype=bool)
+            # A Poisson weight can diffuse beyond the painted source region.
+            # Exact motion needs all three source-triangle tracks so its full
+            # local frame, including normal offset, is reconstructible.
+            local_surf = np.ones(len(df_arr), dtype=bool)
+            has_captured_tracks = any(
+                bool(c.get("pin_anim")) for c in obj_cfg.values()
+            )
+            if frame_map is not None and has_captured_tracks:
+                local_surf[:] = False
+                frame_tri = np.asarray(frame_map["triangles"], dtype=np.int64)
+                for j in range(min(n_surf_driven, len(frame_tri))):
+                    tracks = [
+                        obj_cfg.get(int(b), {})
+                        .get("pin_anim", {})
+                        .get(int(b))
+                        for b in frame_tri[j]
+                    ]
+                    if any(track is None for track in tracks):
+                        continue
+                    times = [list(track["time"]) for track in tracks]
+                    local_surf[j] = (
+                        len(times[0]) >= 2
+                        and times[1] == times[0]
+                        and times[2] == times[0]
+                        and all(
+                            np.asarray(track["position"]).shape
+                            == (len(times[0]), 3)
+                            for track in tracks
+                        )
+                    )
             if simw is not None:
                 for j in range(min(n_surf_driven, len(simw))):
                     corners = simw[j] or []
@@ -986,10 +1033,26 @@ class ParamDecoder:
             # nan; pin-root is painted on the surface anyway).
             static_keep = keep & surf_mask & static_surf
             hard_keep = (keep & (full_w >= thr) & surf_mask
-                         & ~pull_surf & ~static_surf)
+                         & local_surf & ~pull_surf & ~static_surf)
+            surface_tri = getattr(d, "_solid_surface_tri", None)
+            exact_candidates = static_keep | hard_keep
+            exact_keep = _independent_surface_pin_mask(
+                df_arr,
+                exact_candidates,
+                surface_tri,
+                full_w + 2.0 * static_keep,
+            )
+            static_soft_keep = static_keep & ~exact_keep
+            static_keep &= exact_keep
+            hard_keep &= exact_keep
             soft_keep = keep & ~hard_keep & ~static_keep
+            soft_keep &= ~static_soft_keep
             static_index = [int(df_arr[k]) for k in range(len(df_arr))
                             if static_keep[k]]
+            static_soft_index = [
+                int(df_arr[k]) for k in range(len(df_arr))
+                if static_soft_keep[k]
+            ]
             hard_index = [int(df_arr[k]) for k in range(len(df_arr))
                           if hard_keep[k]]
             soft_index = [int(df_arr[k]) for k in range(len(df_arr))
@@ -1042,21 +1105,52 @@ class ParamDecoder:
                 # No _solid_pin => no captured ops; the pin-root cfg carries no
                 # embedded move, so this stays a stationary FixPair at rest.
                 fa.pull(0.0)
+            if static_soft_index:
+                sa = dyn_obj.pin(static_soft_index)
+                _carry(sa, d)
+                if static_blender:
+                    sa._data._blender_pin_indices = static_blender
+                sa_w = full_w[static_soft_keep].astype(np.float32)
+                sa.pull(1.0)
+                sa.pull_per_vertex(sa_w)
             if hard_index:
                 h = dyn_obj.pin(hard_index)
                 _carry(h, d)
-                h._data._solid_pin = {"S_t": sp["S_t"], "M": sp["M"],
-                                      "keep": hard_keep, "n_input": sp["n_input"],
-                                      "rest_full": sp.get("rest_full")}
+                if frame_map is not None and has_captured_tracks:
+                    frame_tri = np.asarray(
+                        frame_map["triangles"], dtype=np.int64
+                    )
+                    frame_coef = np.asarray(
+                        frame_map["coefs"], dtype=np.float64
+                    )
+                    hard_surface = hard_keep[:n_surf_driven]
+                    h._data._solid_frame_map = {
+                        "triangles": frame_tri[hard_surface],
+                        "coefs": frame_coef[hard_surface],
+                    }
+                else:
+                    h._data._solid_pin = {
+                        "surface_map": sp["surface_map"],
+                        "interior_map": sp["interior_map"],
+                        "motion_cache": sp["motion_cache"],
+                        "keep": hard_keep,
+                        "n_input": sp["n_input"],
+                        "rest_full": sp.get("rest_full"),
+                    }
                 if hard_blender:
                     h._data._blender_pin_indices = hard_blender
                 h.pull(0.0)  # FixPair (exact Dirichlet fix); captured ops make it kinematic
             if soft_index:
                 s = dyn_obj.pin(soft_index)
                 _carry(s, d)
-                s._data._solid_pin = {"S_t": sp["S_t"], "M": sp["M"],
-                                      "keep": soft_keep, "n_input": sp["n_input"],
-                                      "rest_full": sp.get("rest_full")}
+                s._data._solid_pin = {
+                    "surface_map": sp["surface_map"],
+                    "interior_map": sp["interior_map"],
+                    "motion_cache": sp["motion_cache"],
+                    "keep": soft_keep,
+                    "n_input": sp["n_input"],
+                    "rest_full": sp.get("rest_full"),
+                }
                 s_w = full_w[soft_keep].astype(np.float32)
                 # Compacted per-vertex weight for the cfg pass's pull scaling.
                 s._data._solid_pin_weights = s_w
@@ -1066,8 +1160,10 @@ class ParamDecoder:
                 s.pull_per_vertex(s_w)
             if verbose:
                 print(f"  solid split (capture-aware) @ thr={thr:.3f}: "
-                      f"{len(static_index)} static-rest / {len(hard_index)} "
-                      f"hard-follow / {len(soft_index)} soft-follow")
+                      f"{len(static_index)} static-rest / "
+                      f"{len(static_soft_index)} static-soft / "
+                      f"{len(hard_index)} hard-follow / "
+                      f"{len(soft_index)} soft-follow")
 
     def _apply_pin_cfg_entry(self, pin_holder, dyn_name, vi, cfg, obj_cfg,
                              verbose):
@@ -1177,6 +1273,14 @@ class ParamDecoder:
         if solid_pin is not None:
             return ParamDecoder._build_solid_poisson_move_ops(solid_pin, obj_cfg)
 
+        solid_frame_map = getattr(
+            pin_holder._data, "_solid_frame_map", None
+        )
+        if solid_frame_map is not None:
+            return ParamDecoder._build_solid_frame_move_ops(
+                solid_frame_map, obj_cfg
+            )
+
         sim_weights = getattr(pin_holder._data, "_sim_blender_weights", None)
         if sim_weights is not None:
             harmonic = getattr(pin_holder._data, "_harmonic", None)
@@ -1222,6 +1326,64 @@ class ParamDecoder:
         return embedded_ops
 
     @staticmethod
+    def _build_solid_frame_move_ops(frame_map, obj_cfg):
+        """Reconstruct hard SOLID pin motion in each source triangle frame."""
+        import numpy as np
+
+        triangles = np.asarray(frame_map["triangles"], dtype=np.int64)
+        coefs = np.asarray(frame_map["coefs"], dtype=np.float64)
+        if triangles.shape != (len(coefs), 3) or coefs.shape[1:] != (3,):
+            raise ValueError(
+                "SOLID pin frame map must contain aligned (N,3) arrays"
+            )
+
+        tracks = {}
+        times = None
+        for vertex in np.unique(triangles):
+            cfg = obj_cfg.get(int(vertex), {})
+            track = cfg.get("pin_anim", {}).get(int(vertex))
+            if track is None:
+                raise ValueError(
+                    f"SOLID hard pin source vertex {int(vertex)} has no captured track"
+                )
+            track_times = list(track["time"])
+            positions = np.asarray(track["position"], dtype=np.float64)
+            if positions.shape != (len(track_times), 3):
+                raise ValueError(
+                    f"SOLID hard pin source vertex {int(vertex)} has "
+                    f"track shape {positions.shape}, expected ({len(track_times)}, 3)"
+                )
+            if times is None:
+                times = track_times
+            elif track_times != times:
+                raise ValueError("SOLID hard pin source tracks use different times")
+            tracks[int(vertex)] = positions
+        if times is None or len(times) < 2:
+            return []
+
+        tri_positions = np.stack(
+            [tracks[int(vertex)] for vertex in triangles.reshape(-1)],
+            axis=0,
+        ).reshape(len(triangles), 3, len(times), 3).transpose(2, 0, 1, 3)
+        x0 = tri_positions[:, :, 0]
+        b1 = tri_positions[:, :, 1] - x0
+        b2 = tri_positions[:, :, 2] - x0
+        normal = np.cross(b1, b2)
+        normal_sq = np.einsum("fnc,fnc->fn", normal, normal)
+        valid_normal = normal_sq >= 1e-20
+        unit_normal = np.zeros_like(normal)
+        unit_normal[valid_normal] = (
+            normal[valid_normal] / np.sqrt(normal_sq[valid_normal])[:, None]
+        )
+        positions = (
+            x0
+            + coefs[None, :, 0, None] * b1
+            + coefs[None, :, 1, None] * b2
+            + coefs[None, :, 2, None] * unit_normal
+        )
+        return ParamDecoder._positions_to_move_ops(positions, times)
+
+    @staticmethod
     def _build_solid_embedded_move_ops(sim_weights, obj_cfg, harmonic=None):
         """Build SOLID capture-deformation MoveBy segments.
 
@@ -1230,15 +1392,13 @@ class ParamDecoder:
         the Blender pins that embed onto it; each surface vertex follows the
         weight-averaged displacement of those pins.
 
-        ``harmonic`` (``(n_surface, M)`` or ``None``) drives the tet
-        INTERIOR when the whole surface is pinned: ``M`` is the harmonic
-        operator (Laplace solve with the surface as Dirichlet boundary), so
-        interior positions are ``M @ surface_positions``. Consecutive deltas
-        then move each interior vertex by the harmonic extension of the
-        surface displacement, from its own rest position (the constant
-        ``M @ surface_rest`` offset cancels in the differences). With both
-        surface and interior prescribed the SOLID is fully kinematic, so its
-        free elastic interior can no longer buckle into self-intersection.
+        ``harmonic`` (``(n_surface, sparse_map)`` or ``None``) drives the tet
+        interior when the whole surface is pinned. The sparse map solves the
+        Laplace equation with the surface as its Dirichlet boundary.
+        Consecutive deltas move each interior vertex by the harmonic extension
+        of the surface displacement. With both surface and interior
+        prescribed the SOLID is fully kinematic, so its elastic interior
+        cannot buckle into self-intersection.
         ``holder.index`` is ordered ``surface_ids + interior_ids`` to match.
         """
         import numpy as np
@@ -1282,9 +1442,9 @@ class ParamDecoder:
 
         if harmonic is not None:
             _, M = harmonic
-            M = np.asarray(M, dtype=np.float64)
-            # Interior = harmonic extension of the surface positions.
-            interior_pos = np.einsum("is,fsc->fic", M, surf_pos)
+            # Interior = harmonic extension of the surface positions. The
+            # sparse map solves only these frame-coordinate right-hand sides.
+            interior_pos = _apply_sparse_frame_map(M, surf_pos)
             positions = np.concatenate([surf_pos, interior_pos], axis=1)
         else:
             positions = surf_pos
@@ -1327,13 +1487,13 @@ class ParamDecoder:
         """Build MoveBy segments for a partially-pinned SOLID via the
         two-stage Poisson operators.
 
-        ``solid_pin`` carries ``S_t`` (surface least-squares operator,
-        n_surf x n_input), ``M`` (interior harmonic operator or None), and a
+        ``solid_pin`` carries matrix-free sparse maps for the surface
+        least-squares solve and optional interior harmonic solve, plus a
         ``keep`` mask selecting the driven tet verts (holder.index order =
-        surface + interior). Only PINNED input verts have captured tracks; the
-        others sit at 0 and are zeroed by ``S_t``'s ``W = diag(pinned)``.
+        surface + interior). Only pinned input verts have captured tracks; the
+        others sit at zero and are removed by the surface map's weighted RHS.
 
-        Rigid-aware diffusion. ``S_t`` / ``M`` are linear, so diffusing the
+        Rigid-aware diffusion. Both sparse maps are linear, so diffusing the
         absolute captured positions directly does NOT reproduce a rigid input
         motion: a least-squares fit of a rotation over a partial pin set has no
         partition-of-unity / affine precision, so it extrapolates non-rigidly
@@ -1343,16 +1503,23 @@ class ParamDecoder:
         out of the pinned inputs, diffuse only the residual, and recombine
         ``rigid(rest) + diffuse(residual)``. A rigid capture has zero residual,
         so every driven tet vert lands exactly on ``R_g rest + t_g``. When
-        ``S_t`` does reproduce rigids this is identical to the old direct
+        the surface map does reproduce rigids this is identical to direct
         diffusion, so only the spurious component changes.
         """
         import numpy as np
-        from ._scene_pin_ import MoveByOperation
 
-        S_t = np.asarray(solid_pin["S_t"], dtype=np.float64)
-        M = solid_pin["M"]
+        surface_map = solid_pin["surface_map"]
+        interior_map = solid_pin["interior_map"]
         keep = np.asarray(solid_pin["keep"])
         n_input = int(solid_pin["n_input"])
+        motion_cache = solid_pin["motion_cache"]
+
+        cached = motion_cache.get("value")
+        if cached is not None:
+            positions, times = cached
+            return ParamDecoder._positions_to_move_ops(
+                positions[:, keep, :], times,
+            )
 
         # Gather captured per-Blender-vertex tracks (input space).
         tracks: dict = {}
@@ -1371,48 +1538,59 @@ class ParamDecoder:
         for b, pos in tracks.items():
             if 0 <= b < n_input and pos.shape == (n_frames, 3):
                 d_frame[:, b, :] = pos
-        if M is not None:
-            M = np.asarray(M, dtype=np.float64)
 
-        def diffuse(vec_in):
-            # vec_in: (n_input,3) -> (n_surf[+n_int],3) via S_t then M.
-            surf = np.einsum("si,ic->sc", S_t, vec_in)
-            if M is None:
+        def diffuse_frames(vec_in):
+            # vec_in: (frames,n_input,3) -> (frames,n_surf[+n_int],3).
+            surf = _apply_sparse_frame_map(surface_map, vec_in)
+            if interior_map is None:
                 return surf
-            return np.concatenate([surf, np.einsum("is,sc->ic", M, surf)], axis=0)
+            interior = _apply_sparse_frame_map(interior_map, surf)
+            return np.concatenate([surf, interior], axis=1)
 
         # Rigid reference = the solver's TRUE tet rest on the driven_full axis.
         # The MoveBy deltas accumulate onto rest0[holder.index] downstream (the
         # pull target and the captured rest shape), so the rigid part must carry
-        # that exact rest. Falling back to the S_t-diffused rest (older payloads
-        # without ``rest_full``) leaves a small rest/LS-fit mismatch that the
+        # that exact rest. Falling back to the diffused rest for payloads
+        # without ``rest_full`` leaves a small rest/LS-fit mismatch that the
         # rotation scales back into a bend, so prefer the true rest.
         pinned = sorted(b for b in tracks if 0 <= b < n_input)
         rest_in = d_frame[0]
         rest_full = solid_pin.get("rest_full")
         rest_full = (
             np.asarray(rest_full, dtype=np.float64)
-            if rest_full is not None else diffuse(rest_in)
+            if rest_full is not None else diffuse_frames(rest_in[None, :, :])[0]
         )
         P0 = rest_in[pinned]
 
-        positions = np.empty((n_frames, rest_full.shape[0], 3), dtype=np.float64)
+        residual = np.zeros_like(d_frame)
+        rigid_positions = np.empty(
+            (n_frames, rest_full.shape[0], 3), dtype=np.float64
+        )
         for f in range(n_frames):
             Rg, tg = ParamDecoder._rigid_fit(P0, d_frame[f, pinned])
-            res = np.zeros_like(rest_in)
-            res[pinned] = d_frame[f, pinned] - (P0 @ Rg.T + tg)
-            positions[f] = rest_full @ Rg.T + tg + diffuse(res)
-        positions = positions[:, keep, :]  # align to holder.index
+            residual[f, pinned] = d_frame[f, pinned] - (P0 @ Rg.T + tg)
+            rigid_positions[f] = rest_full @ Rg.T + tg
+        positions = rigid_positions + diffuse_frames(residual)
+        motion_cache["value"] = (positions, times)
+        return ParamDecoder._positions_to_move_ops(
+            positions[:, keep, :], times,
+        )
 
-        embedded_ops: list = []
-        for k in range(n_frames - 1):
-            embedded_ops.append(MoveByOperation(
+    @staticmethod
+    def _positions_to_move_ops(positions, times):
+        """Convert absolute per-frame positions into linear MoveBy segments."""
+        import numpy as np
+        from ._scene_pin_ import MoveByOperation
+
+        return [
+            MoveByOperation(
                 delta=np.ascontiguousarray(positions[k + 1] - positions[k]),
                 t_start=times[k],
                 t_end=times[k + 1],
                 transition="linear",
-            ))
-        return embedded_ops
+            )
+            for k in range(len(times) - 1)
+        ]
 
     def _dispatch_pin_op(self, pin_holder, op):
         """Dispatch a single explicit pin op to its per-type handler."""
@@ -1566,19 +1744,109 @@ def _graph_laplacian_from_edges(e0, e1, n):
     return (sp.diags(deg) - adj).tocsr()
 
 
+def _independent_surface_pin_mask(
+    driven_full, candidates, surface_tri, priority,
+):
+    """Select exact pins with no surface edge joining two selected vertices."""
+    import numpy as np
+
+    candidates = np.asarray(candidates, dtype=bool)
+    selected = np.zeros_like(candidates)
+    if not candidates.any():
+        return selected
+    if surface_tri is None:
+        return candidates.copy()
+
+    driven = np.asarray(driven_full, dtype=np.int64)
+    priority = np.asarray(priority, dtype=np.float64)
+    candidate_axes = np.flatnonzero(candidates)
+    axis_by_vertex = {
+        int(driven[axis]): int(axis) for axis in candidate_axes
+    }
+    neighbors = {vertex: set() for vertex in axis_by_vertex}
+    for face in np.asarray(surface_tri, dtype=np.int64).reshape(-1, 3):
+        present = [int(v) for v in face if int(v) in axis_by_vertex]
+        for i, vertex in enumerate(present):
+            neighbors[vertex].update(present[:i])
+            neighbors[vertex].update(present[i + 1:])
+
+    blocked = set()
+    order = sorted(
+        candidate_axes,
+        key=lambda axis: (-priority[axis], int(driven[axis])),
+    )
+    for axis in order:
+        vertex = int(driven[axis])
+        if vertex in blocked:
+            continue
+        selected[axis] = True
+        blocked.add(vertex)
+        blocked.update(neighbors[vertex])
+    return selected
+
+
+class _SparseLinearMap:
+    """Matrix-free ``A^-1 B`` backed by one sparse LU factorization."""
+
+    def __init__(self, matrix, rhs_map):
+        self._matrix = matrix.tocsc()
+        self._rhs_map = rhs_map.tocsr()
+        self._factor = None
+        self._factorize()
+
+    def _factorize(self):
+        import scipy.sparse.linalg as spla
+
+        self._factor = spla.splu(self._matrix)
+
+    def apply(self, values):
+        import numpy as np
+
+        if self._factor is None:
+            self._factorize()
+        rhs = np.asarray(self._rhs_map @ values, dtype=np.float64)
+        result = np.asarray(self._factor.solve(rhs), dtype=np.float64)
+        if not np.all(np.isfinite(result)):
+            raise ValueError("sparse pin diffusion produced non-finite values")
+        return result
+
+    def __getstate__(self):
+        # SuperLU itself cannot be pickled. Keeping the sparse system makes a
+        # scene serializable even during the short populate-to-configure
+        # window; apply_pin_config normally removes the map before snapshots.
+        return {"matrix": self._matrix, "rhs_map": self._rhs_map}
+
+    def __setstate__(self, state):
+        self._matrix = state["matrix"]
+        self._rhs_map = state["rhs_map"]
+        self._factor = None
+
+
+def _apply_sparse_frame_map(linear_map, values):
+    """Apply a sparse map to ``(frames, input, xyz)`` values in one solve."""
+    import numpy as np
+
+    values = np.asarray(values, dtype=np.float64)
+    if values.ndim != 3 or values.shape[2] != 3:
+        raise ValueError(
+            f"expected frame values with shape (frames, vertices, 3), got {values.shape}"
+        )
+    n_frames, n_input, _ = values.shape
+    rhs = values.transpose(1, 0, 2).reshape(n_input, n_frames * 3)
+    mapped = linear_map.apply(rhs)
+    return mapped.reshape(mapped.shape[0], n_frames, 3).transpose(1, 0, 2)
+
+
 def _build_harmonic_interior_operator(n_verts, tets, surf_ids, interior_ids):
-    """Operator mapping surface displacements to interior displacements via
-    a graph-Laplace harmonic extension over a tet mesh.
+    """Sparse map from surface values to a tet mesh's interior values.
 
     Solves the discrete Laplace equation with the surface vertices held as
     Dirichlet boundary conditions: partition the graph Laplacian
     ``L = D - A`` (``A`` = tet-edge adjacency) into interior (``I``) and
-    surface (``S``) blocks and solve ``L_II u_I = -L_IS u_S``. Returns the
-    dense ``(n_interior, n_surface)`` operator ``M = -L_II^{-1} L_IS`` so the
-    caller applies ``u_I = M u_S`` per frame, or ``None`` when SciPy is
-    unavailable or the solve fails (the caller then falls back to
-    surface-only pinning). ``M`` rows sum to 1 (harmonic functions reproduce
-    constants), so it transfers a displacement field without scaling it.
+    surface (``S``) blocks and solve ``L_II u_I = -L_IS u_S``. The returned
+    map factors ``L_II`` once and applies only the right-hand sides the
+    captured animation needs. It never materializes the dense
+    ``-L_II^-1 L_IS`` operator.
     """
     try:
         import warnings
@@ -1602,20 +1870,12 @@ def _build_harmonic_interior_operator(n_verts, tets, surf_ids, interior_ids):
         L = _graph_laplacian_from_edges(e0, e1, n_verts)
         L_II = L[inter][:, inter].tocsc()
         L_IS = L[inter][:, surf].tocsc()
-        # A singular L_II (an interior component with no path to the pinned
-        # surface, e.g. an enclosed void) makes spsolve emit a
-        # MatrixRankWarning and return NaN rather than raise. The finite
-        # check below turns that into a clean None (surface-only fallback);
-        # silence the warning so the intentional fallback is not alarming.
+        # A singular L_II means an interior component has no path to the
+        # surface, for example an enclosed void. SuperLU raises during
+        # factorization and the caller takes the surface-only path.
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", spla.MatrixRankWarning)
-            M = spla.spsolve(L_II, -L_IS.toarray())
-        M = np.asarray(M, dtype=np.float64)
-        if M.ndim == 1:
-            M = M.reshape(inter.size, surf.size)
-        if M.shape != (inter.size, surf.size) or not np.all(np.isfinite(M)):
-            return None
-        return M
+            return _SparseLinearMap(L_II, -L_IS)
     except Exception:
         return None
 
@@ -1632,7 +1892,9 @@ def _surface_graph_laplacian(tris, n_surf):
     return _graph_laplacian_from_edges(e0, e1, n_surf)
 
 
-def _build_solid_pin_fields(tet_mesh, F_arr, pin_index, alpha_rel=0.1):
+def _build_solid_pin_fields(
+    tet_mesh, F_arr, pin_index, alpha_rel=0.1, progress_callback=None,
+):
     """Two-stage diffusion for a PARTIALLY-pinned SOLID. Returns a dict with
     a per-tet-vertex pull WEIGHT and a per-frame TARGET operator, or ``None``
     on failure (caller falls back to surface-only).
@@ -1642,8 +1904,8 @@ def _build_solid_pin_fields(tet_mesh, F_arr, pin_index, alpha_rel=0.1):
     ``(B^T W B + alpha L_s) u = B^T W d`` on the tet surface. The WEIGHT
     field uses ``d = 1`` on pinned input / 0 elsewhere with ``W = I``; the
     TARGET field uses ``d = captured target`` with ``W = diag(pinned)`` so
-    only pinned input constrains it. The constant operator
-    ``S_t = A_t^{-1} B^T W`` is applied per frame.
+    only pinned input constrains it. The target matrix is factorized once
+    and applied only to captured frame data.
 
     Stage 2 (interior): graph-Laplace harmonic extension of the surface
     field into the tet interior (reuses :func:`_build_harmonic_interior_operator`).
@@ -1663,7 +1925,6 @@ def _build_solid_pin_fields(tet_mesh, F_arr, pin_index, alpha_rel=0.1):
         if bl is None:
             return None
         bl_verts = np.ascontiguousarray(np.asarray(bl[0], dtype=np.float64))
-        bl_tris = np.ascontiguousarray(np.asarray(bl[1], dtype=np.int64))
         V_local = np.ascontiguousarray(np.asarray(tet_mesh[0], dtype=np.float64))
         n_tet = V_local.shape[0]
         sim_surf_ids = np.unique(F_arr.reshape(-1))
@@ -1708,6 +1969,8 @@ def _build_solid_pin_fields(tet_mesh, F_arr, pin_index, alpha_rel=0.1):
         pinned = np.asarray(sorted({int(i) for i in pin_index}), dtype=np.int64)
         pin_mask[pinned[(pinned >= 0) & (pinned < n_input)]] = 1.0
 
+        if progress_callback is not None:
+            progress_callback("Building partial SOLID surface pin map...")
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", spla.MatrixRankWarning)
             # Weight field (W = I): diffuse the binary pinned mask.
@@ -1719,33 +1982,40 @@ def _build_solid_pin_fields(tet_mesh, F_arr, pin_index, alpha_rel=0.1):
             Wd = sp.diags(pin_mask)
             BtW = (B.T @ Wd).tocsr()
             A_t = (BtW @ B + alpha * L_s + 1e-8 * sp.eye(n_surf)).tocsc()
-            S_t = spla.splu(A_t).solve(np.asarray(BtW.todense()))
+            surface_map = _SparseLinearMap(A_t, BtW)
         w_surf = np.clip(np.asarray(w_surf, dtype=np.float64), 0.0, 1.0)
-        S_t = np.asarray(S_t, dtype=np.float64)
-        if w_surf.shape[0] != n_surf or S_t.shape != (n_surf, n_input):
+        if w_surf.shape[0] != n_surf:
             return None
-        if not (np.all(np.isfinite(w_surf)) and np.all(np.isfinite(S_t))):
+        if not np.all(np.isfinite(w_surf)):
             return None
 
         # Stage 2: interior harmonic extension of weight + (per-frame) target.
         surf_ids = [int(s) for s in sim_surf_ids]
         surf_set = set(surf_ids)
         interior_ids = [v for v in range(n_tet) if v not in surf_set]
-        M = None
+        interior_map = None
         interior_w = None
         if interior_ids:
-            M = _build_harmonic_interior_operator(
+            if progress_callback is not None:
+                progress_callback("Building partial SOLID interior pin map...")
+            interior_map = _build_harmonic_interior_operator(
                 n_tet, tet_mesh[2], surf_ids, interior_ids,
             )
-            if M is not None:
-                interior_w = np.clip(M @ w_surf, 0.0, 1.0)
+            if interior_map is not None:
+                try:
+                    interior_w = np.clip(
+                        interior_map.apply(w_surf), 0.0, 1.0
+                    )
+                except ValueError:
+                    interior_map = None
         return {
             "surf_ids": surf_ids,
-            "interior_ids": interior_ids if M is not None else [],
+            "interior_ids": interior_ids if interior_map is not None else [],
             "w_surf": w_surf,
             "interior_w": interior_w,
-            "S_t": S_t,
-            "M": M,
+            "surface_map": surface_map,
+            "interior_map": interior_map,
+            "motion_cache": {},
             "n_input": n_input,
         }
     except Exception:
@@ -1956,6 +2226,7 @@ class SceneDecoder:
 
                 self._apply_pin_mapping(
                     obj, _obj, group_type, vert, V, F, tet_mesh, verbose,
+                    progress_callback=report,
                 )
                 self._apply_stitch(obj, _obj, name, verbose)
                 progress["completed"] += entry["base_weight"]
@@ -2563,7 +2834,10 @@ class SceneDecoder:
         self._object_info[obj_uuid] = ObjectInfo(type="SAND", vert=vert)
         return _obj
 
-    def _apply_pin_mapping(self, obj, _obj, group_type, vert, V, F, tet_mesh, verbose):
+    def _apply_pin_mapping(
+        self, obj, _obj, group_type, vert, V, F, tet_mesh, verbose,
+        progress_callback=None,
+    ):
         """Pin-mapping pass: register pins on ``_obj`` from ``obj['pin']``,
         building the Blender-to-sim surface transfer for SOLID groups
         with a surface mapping and falling back to direct per-index pins
@@ -2607,7 +2881,12 @@ class SceneDecoder:
             full_pin = bl is not None and n_blender > 0 and len(pinned) == n_blender
             handled = False
             if not full_pin and bl is not None:
-                fields = _build_solid_pin_fields(tet_mesh, F_arr, pin_index)
+                fields = _build_solid_pin_fields(
+                    tet_mesh,
+                    F_arr,
+                    pin_index,
+                    progress_callback=progress_callback,
+                )
                 if fields is not None:
                     w_surf = fields["w_surf"]
                     interior_w = fields["interior_w"]
@@ -2633,8 +2912,9 @@ class SceneDecoder:
                             full_w[keep].astype(np.float32)
                         )
                         holder._data._solid_pin = {
-                            "S_t": fields["S_t"],
-                            "M": fields["M"],
+                            "surface_map": fields["surface_map"],
+                            "interior_map": fields["interior_map"],
+                            "motion_cache": fields["motion_cache"],
                             "keep": keep,
                             "n_input": fields["n_input"],
                             # True tet rest positions on the driven_full axis
@@ -2672,6 +2952,7 @@ class SceneDecoder:
                         holder._data._solid_surf_mask = (
                             np.arange(len(driven_full)) < len(surf_ids)
                         )
+                        holder._data._solid_surface_tri = F_arr
                         # Per-surface-vertex Blender corners (inverse map),
                         # aligned to surf_ids / the leading driven_full axis.
                         # The fix_weight_threshold split uses this to tell
@@ -2682,9 +2963,14 @@ class SceneDecoder:
                         # geometry and drop the captured target. Mirrors the
                         # full-pin harmonic mixed-intent path.
                         try:
-                            _blv, _blt = bl[0], bl[1]
+                            _blv = np.ascontiguousarray(
+                                np.asarray(vert, dtype=np.float64)
+                            )
+                            _blt = np.ascontiguousarray(
+                                np.asarray(bl[1], dtype=np.int64)
+                            )
                             _Vloc = np.ascontiguousarray(
-                                np.asarray(tet_mesh[0], dtype=np.float64)
+                                np.asarray(V, dtype=np.float64)
                             )
                             _itri, _icoef = frame_mapping(
                                 _Vloc[sim_surf_ids], _blv, _blt
@@ -2701,8 +2987,13 @@ class SceneDecoder:
                                     and int(_tri[_j]) in pinned
                                 ])
                             holder._data._sim_blender_weights = _sbw
+                            holder._data._solid_frame_map = {
+                                "triangles": _blt[_itri],
+                                "coefs": _icoef,
+                            }
                         except Exception:
                             holder._data._sim_blender_weights = None
+                            holder._data._solid_frame_map = None
                         handled = True
                         if verbose:
                             kw = full_w[keep]
@@ -2776,6 +3067,10 @@ class SceneDecoder:
                     interior_ids = [
                         v for v in range(n_tet_verts) if v not in surf_set
                     ]
+                    if progress_callback is not None:
+                        progress_callback(
+                            "Building fully pinned SOLID interior map..."
+                        )
                     harmonic_M = _build_harmonic_interior_operator(
                         n_tet_verts, tet_mesh[2], surf_ids, interior_ids,
                     )

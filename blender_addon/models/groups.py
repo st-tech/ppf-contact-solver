@@ -330,6 +330,21 @@ def get_active_group_by_uuid(scene, group_uuid: str):
 
 
 
+def get_group_slot_index(scene, group_uuid: str):
+    """Return the ``object_group_N`` slot index holding *group_uuid*, else None.
+
+    This is the index ``object.delete_group`` and the group panels address,
+    resolved through ``object_group_{index}``. It is not ``ObjectGroup.index``,
+    which numbers the active groups consecutively for display: the two agree
+    only while every slot below the group is active, so a scene that has ever
+    deleted a group can have them disagree.
+    """
+    for slot, group in enumerate(iterate_object_groups(scene)):
+        if group.uuid == group_uuid:
+            return slot
+    return None
+
+
 def find_available_group_slot(scene):
     """Find the first available object_group_N slot."""
     for i in range(N_MAX_GROUPS):

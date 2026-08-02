@@ -18,24 +18,25 @@ The MCP server sits beside two sibling entry points: the Blender sidebar and the
 
 ### What the tool surface covers, and what it does not
 
-Before reaching for `run_python_script`, check whether a dedicated tool already exists. The MCP server exposes more than one hundred tools across ten categories; `run_python_script` is the escape hatch for the gaps, not the default. The authoritative list is `llm://mcp_tools_reference`; the short version:
+Before reaching for `run_python_script`, check whether a dedicated tool already exists. The MCP server exposes tools in eleven categories: connection, group, object operations, mesh cleaning, simulation, scene, dynamic parameters, remote, console, debug, and general Blender. `run_python_script` is the escape hatch for the gaps, not the default. The authoritative list is `llm://mcp_tools_reference`; the short version:
 
 | Task                                                                                                                               | Where it lives                                                                                           |
 | ---------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
 | Connect / disconnect / start / stop the remote solver                                                                              | Connection tools (`connect_ssh`, `connect_docker`, `connect_local`, `connect_win_native`, `disconnect`, `connect`, `start_remote_server`, `stop_remote_server`, ...) |
 | Create / delete / type / rename / duplicate groups; assign and unassign objects; bake a group                                      | Group tools (`create_group`, `delete_group`, `set_group_type`, `add_objects_to_group`, `bake_group_animation`, ...) |
-| Pins (settings + operations), collision windows, velocity keyframes, static object ops, deformation capture for Armature / Lattice / Shape Key driven STATIC colliders | Object-operations tools (`add_pin_vertex_group`, `set_pin_settings`, `add_pin_operation`, `add_static_op`, `add_velocity_keyframe`, `add_collision_window`, `capture_static_deformation`, `clear_static_deformation`, `get_static_deformation_status`, ...) |
-| Transfer, run, resume, terminate, save-and-quit, update params, delete remote data, fetch animation, clear local animation        | Simulation tools (`transfer_data`, `run_simulation`, `resume_simulation`, `terminate_simulation`, `update_params`, `fetch_animation`, ...) |
+| Pins (settings + operations), collision windows, velocity keyframes, static object ops, deformation capture for Armature / Lattice / Shape Key driven STATIC colliders; re-capture or clear every deformation cache at once; turn a solid mesh into a SAND grain cloud | Object-operations tools (`add_pin_vertex_group`, `set_pin_settings`, `add_pin_operation`, `add_static_op`, `add_velocity_keyframe`, `add_collision_window`, `capture_static_deformation`, `clear_static_deformation`, `get_static_deformation_status`, `recapture_all_deformations`, `clear_all_deformations`, `convert_to_particle_mesh`, ...) |
+| Scan a mesh for solver-rejecting geometry; weld near-coincident vertices, delete loose vertices, dissolve degenerate faces, delete duplicate faces, triangulate, fix face winding | Mesh-cleaning tools (`scan_meshes`, `merge_by_distance`, `remove_loose_vertices`, `dissolve_degenerate_faces`, `delete_duplicate_faces`, `triangulate_for_solver`, `recalculate_normals_outside`, `symmetric_triangulate`) |
+| Transfer, run, resume, terminate, save-and-quit, update params, delete remote data, fetch animation, clear local animation, export the result as a USD or Alembic point cache | Simulation tools (`transfer_data`, `run_simulation`, `resume_simulation`, `terminate_simulation`, `update_params`, `fetch_animation`, `export_usd`, `export_alembic`, ...) |
 | Invisible walls and spheres, merge pairs, snap, bake-all, full solver reset                                                        | Scene tools (`add_invisible_wall`, `add_invisible_sphere`, `add_merge_pair`, `snap_to_vertices`, `bake_all_animation`, `clear_solver`, ...) |
 | Keyframed gravity / wind / air, collider keyframes, scene-wide step/gravity/frame/contact parameters                               | Dynamic-parameters tools (`add_dynamic_param`, `add_dynamic_param_keyframe`, `add_collider_keyframe`, `set_scene_parameters`, ...) |
 | Abort long-running operations, install paramiko or docker, run server-side commands, git pull remote, compile project             | Remote tools (`abort_operation`, `install_paramiko`, `install_docker`, `execute_server_command`, `git_pull_remote`, `compile_project`, ...) |
 | Build Bezier curves for ROD scenes, read Blender's console, grab the latest error, measure a mesh, viewport screenshot, query UI state | Console / Blender tools (`create_curve`, `add_curve_spline`, `set_curve_material`, `finalize_curve`, `get_console_lines`, `get_average_edge_length`, `capture_viewport_image`, `get_ui_element_status`, ...) |
-| **Anything touching general Blender primitives, mesh edits, object transforms, modifiers, shaders, cameras, or pure `bpy.*` scripting** | **`run_python_script` (no dedicated tool exists)**                                                   |
+| **Anything touching general Blender primitives, mesh modeling, object transforms, modifiers, shaders, cameras, or pure `bpy.*` scripting** | **`run_python_script` (no dedicated tool exists)**                                                   |
 
 Concrete examples of things that **need** `run_python_script`:
 
 - Adding primitives: `bpy.ops.mesh.primitive_cube_add`, `primitive_uv_sphere_add`, `primitive_ico_sphere_add`, `primitive_plane_add`, `primitive_cylinder_add`, etc.
-- Mesh editing: entering Edit Mode, selecting vertices/edges/faces, `bpy.ops.mesh.subdivide`, `bpy.ops.mesh.extrude_region_move`, `bpy.ops.mesh.loop_cut`, ...
+- Mesh modeling: entering Edit Mode, selecting vertices/edges/faces, `bpy.ops.mesh.subdivide`, `bpy.ops.mesh.extrude_region_move`, `bpy.ops.mesh.loop_cut`, ... Repairing a mesh so the solver accepts it is the exception, and it has its own tools: `merge_by_distance`, `remove_loose_vertices`, `dissolve_degenerate_faces`, `delete_duplicate_faces`, `triangulate_for_solver`, `recalculate_normals_outside` and `symmetric_triangulate`. Welding with raw `bmesh` instead skips the acknowledgement a vertex-count change requires and leaves the invalidated capture and display caches behind.
 - Object transforms: setting `obj.location`, `obj.rotation_euler`, `obj.scale`, parenting, `bpy.ops.object.transform_apply`.
 - Modifiers: adding Subsurf / Mirror / Array / Solidify, applying them, tweaking levels.
 - Materials, UVs, shaders, lights, cameras, scene collections.
@@ -43,9 +44,11 @@ Concrete examples of things that **need** `run_python_script`:
 
 Concrete examples of things that should **not** use `run_python_script`:
 
-- Driving the solver (transfer / run / resume / terminate / update_params / fetch).
+- Driving the solver (transfer / run / resume / terminate / update_params / fetch), and exporting the result as a USD or Alembic cache.
 - Creating, typing, or populating groups.
 - Editing pins, collision windows, velocity keyframes, or static ops.
+- Scanning or repairing mesh geometry the solver rejects: near-coincident vertices, faceless vertices, degenerate faces, duplicate faces, n-gons, inconsistent winding.
+- Re-capturing or clearing captured deformations, and converting a solid mesh into a SAND grain cloud.
 - Setting scene or material parameters.
 - Adding invisible walls / spheres / merges / snap.
 - Installing paramiko or docker, or triggering a remote build.
@@ -272,6 +275,7 @@ The add-on ships a `run_python_script` tool that evaluates arbitrary Python insi
 - Assigning objects to a group: `add_objects_to_group`.
 - Setting material parameters: `set_group_material_properties`.
 - Scene-level parameters: `set_scene_parameters`.
+- Checking a mesh before assigning it, and fixing what the scan reports: `scan_meshes`, then the matching repair (`merge_by_distance`, `remove_loose_vertices`, `dissolve_degenerate_faces`, `delete_duplicate_faces`, `triangulate_for_solver`, `recalculate_normals_outside`, `symmetric_triangulate`).
 - Pins, colliders, merges: the dedicated handlers in the reference (see `llm://mcp_tools_reference`).
 
 The dedicated handlers all go through the same validation layer the UI uses, so a misbehaving agent gets the same errors a user would. `run_python_script` bypasses that layer entirely.

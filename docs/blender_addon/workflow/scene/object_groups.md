@@ -89,7 +89,7 @@ NURBS curves are sampled per arc at four `t` values because NURBS
 CPs are off-curve.
 
 ```{figure} ../../images/object_groups/group_type_matrix.svg
-:alt: Reference matrix with five type columns. Shell (green swatch), Solid (red), Rod (yellow), PDRD (magenta), Static (blue). Rows: accepted object types (Shell/Solid/PDRD/Static: mesh; Rod: mesh + Bezier curves); default material model (Baraff-Witkin for Shell, ARAP for Solid and Rod, none for PDRD and Static); available material models (Shell offers Baraff-Witkin and ARAP; Solid offers Stable NeoHookean and ARAP; Rod offers ARAP only; PDRD and Static offer none); density unit (kg/m² for Shell, kg/m³ for Solid and PDRD, kg/m for Rod; n/a for Static); Young's Modulus (Shell/Solid/Rod, not PDRD or Static); Poisson's Ratio (Shell and Solid); Bend Stiffness (Shell, with Rod inheriting it; not PDRD); Shrink (Shell anisotropic X/Y, Solid uniform, Rod/PDRD/Static none); Strain Limit (Shell and Rod, not PDRD); Inflate (Shell only, not PDRD); Friction and Contact Gap (all five); PDRD exposes only Density (no Young's, Poisson, Bend, Shrink, Strain, or Inflate, and no stiffness control because it is exactly rigid); pin storage (Blender vertex groups for Shell/Solid/PDRD, internal _pin_name custom property on curves for Rod, none for Static which uses a Transform sub-box instead); default overlay color (green, red, yellow, magenta, blue).
+:alt: Reference matrix with five type columns: Shell (green swatch), Solid (red), Rod (yellow), PDRD (magenta), Static (blue). Sand is not one of the columns. Rows: accepted object types (Shell/Solid/PDRD/Static take a mesh; Rod takes a mesh or a Bezier curve); default material model (Baraff-Witkin for Shell, ARAP for Solid and Rod, n/a for PDRD and Static); available material models (Shell offers Baraff-Witkin and ARAP; Solid offers Stable NeoHookean and ARAP; Rod offers ARAP as the only option; n/a for PDRD and Static); density (shell_density in kg/m² areal, solid_density in kg/m³ volumetric, rod_density in kg/m line, pdrd_density in kg/m³ volumetric, n/a for Static); Young's Modulus in Pa per density (check for Shell, Solid and Rod, n/a for PDRD and Static); Poisson's Ratio (check for Shell and Solid, n/a for the rest); Bend Stiffness (check for Shell and Rod, annotated "shared bend property", n/a for Solid, PDRD and Static); Shrink (check for Shell reading "Shrink X / Y (anisotropic)" and for Solid reading "Shrink (uniform)", with the Rod, PDRD and Static cells marked n/a); Strain Limit (check for Shell and Rod, n/a for the rest); Inflate face pressure (check for Shell only); Friction, annotated "shared contact param", and Contact Gap / Offset, annotated "absolute or ratio", both checked in all five columns; pin vertex storage (a Blender vertex group for Shell, Solid and PDRD; a custom property named _pin_ followed by the pin name for Rod, because curves have no vertex groups; n/a for Static, which uses a Transform sub-box instead); default overlay color, given as RGB triples (0, 0.75, 0) green, (0.75, 0, 0) red, (0.75, 0.75, 0) yellow, (0.75, 0, 0.75) magenta, (0, 0, 0.75) blue.
 :width: 960px
 
 What each type accepts, models, and exposes. Green check marks mark
@@ -104,6 +104,19 @@ the solver only uses it for collision: no material model and no
 parameters beyond **Friction** and **Contact Gap**. The **Material
 Params** box in the sidebar reshapes itself automatically to match
 the column you are in.
+
+Two things the matrix does not show. A **Rod** group has a **Shrink**
+row of its own (`length_factor`, drawn just under **Friction**), which
+scales the rest length of every segment of the strand; the matrix marks
+that cell "n/a". And **Rod** and **Shell** write the same `bend`
+property but scale it on their own terms, so the number is shared and
+the stiffness it produces is not: a rod draws the field in a separate
+**Bend** box and starts at `1.0` where a shell starts at `10.0`. Both
+are covered in [Material Parameters](../params/material.md).
+
+**Sand** is the sixth type and has no column in the matrix. It exposes
+grain radius, particle mass, friction, and the contact rows; see
+[Sand-Specific](../params/material.md#sand-specific).
 ```
 
 :::{warning}
@@ -265,6 +278,7 @@ Each group gets a default overlay color based on its type:
 | **Shell**  | green `(0, 0.75, 0)`  |
 | **Rod**    | yellow `(0.75, 0.75, 0)` |
 | **PDRD**   | magenta `(0.75, 0, 0.75)` |
+| **Sand**   | tan `(0.75, 0.375, 0)` |
 | **Static** | blue `(0, 0, 0.75)`   |
 
 ## Duplicating a Group

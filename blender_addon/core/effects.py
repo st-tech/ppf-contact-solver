@@ -51,7 +51,14 @@ class DoValidateRemotePath(Effect):
 
 @dataclass(frozen=True)
 class DoLaunchServer(Effect):
-    """Start the remote solver server process."""
+    """Start the remote solver server process.
+
+    ``cuda_device`` is the display index and ``cuda_device_uuid`` the stable
+    launch identity. Automatic uses -1 and an empty UUID.
+    """
+
+    cuda_device: int = -1
+    cuda_device_uuid: str = ""
 
 
 @dataclass(frozen=True)

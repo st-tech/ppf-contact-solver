@@ -9,6 +9,7 @@ from . import _asset_ as asset_tests
 from . import _bvh_ as bvh_tests
 from . import _cbor_bridge_ as cbor_bridge_tests
 from . import _invisible_collider_ as invisible_collider_tests
+from . import _object_visibility_ as object_visibility_tests
 from . import _proximity_ as proximity_tests
 from . import _rasterizer_ as rasterizer_tests
 from . import _sdf_ as sdf_tests
@@ -66,6 +67,11 @@ def run_all_tests() -> bool:
 
     # Run rasterizer tests
     if not rasterizer_tests.run_tests():
+        all_passed = False
+    print()
+
+    # Run object visibility tests
+    if not object_visibility_tests.run_tests():
         all_passed = False
     print()
 

@@ -192,9 +192,7 @@ try:
             break
         time.sleep(0.3)
     if dh.facade.engine.state.solver.name == "FAILED":
-        raise RuntimeError(
-            f"build failed: {dh.facade.engine.state.error!r}"
-        )
+        raise RuntimeError(build_failure_message(dh.facade, dh.com))
     dh.log(f"built solver={dh.facade.engine.state.solver.name}")
 
     dh.run_and_wait(timeout=120.0)

@@ -12,6 +12,10 @@ from bl_ext.user_default.ppf_contact_solver.ops.api import solver
 # Scene parameters
 solver.param.gravity = (0, 0, -9.8)
 
+# Mesh preparation: the scan returns its report, the repairs chain
+if solver.scan_meshes("Plane")["Plane"]["n_errors"]:
+    solver.merge_by_distance("Plane").delete_duplicate_faces("Plane")
+
 # Create a group and assign an object
 group = solver.create_group("Cloth", type="SHELL")
 group.add("Plane")
@@ -146,6 +150,187 @@ Translate *object_a* so its nearest vertex lands on *object_b*.
 solver.snap("Shirt", "Mannequin")
 ```
 
+### scan_meshes(*object_names: str, merge_threshold: float=1e-4, area_eps: float=0.0) -> dict[str, dict]
+
+Report the geometry the solver rejects, modifying nothing.
+
+**Parameters:**
+
+- **\*object_names**: One or more mesh object names.
+- **merge_threshold**: Vertices closer together than this, in local units, count as near-coincident. Matches Blender's Merge by Distance default.
+- **area_eps**: Faces at or below this area, in local units squared, count as degenerate. `0.0` reports only exactly zero-area faces.
+
+**Returns:** `{object_name: report}`. Each report carries `n_verts`, `n_polys`, the two thresholds it was scanned at, `n_errors`, `n_notes`, a `defects` dict keyed by defect name, and `dependents`, what a vertex-count change on that object would affect. Every defect entry carries a `count`. Three of them, `near_duplicates`, `degenerate_faces` and `resplittable`, short-circuit to a bare `{"count": 0}` and carry nothing else at zero; the other five carry their extra fields unconditionally, empty when the count is zero. Guarding on `count` before reading an extra field is correct either way. A note is not a defect: an open quad panel is an ordinary cloth mesh.
+
+**Raises:** `ValueError` if a name is missing, is not a mesh, or an object produced no report, which is how an object the active view layer cannot select surfaces here.
+
+```python
+report = solver.scan_meshes("Shirt")["Shirt"]
+if report["defects"]["near_duplicates"]["count"]:
+    solver.merge_by_distance("Shirt")
+```
+
+The `defects` keys, what each carries beyond `count`, and whether those fields survive a zero count:
+
+| Key                | Extra fields                                              | At count 0 |
+| ------------------ | --------------------------------------------------------- | ---------- |
+| `near_duplicates`  | `min_dist` (local), `min_dist_world`, `preview` (up to 8 index pairs), `verts` | absent |
+| `isolated_verts`   | `preview` (up to 8 indices), `verts`                      | present, empty |
+| `hanging_verts`    | `preview` (up to 8 indices), `verts`                      | present, empty |
+| `degenerate_faces` | `preview` (up to 8 face indices)                          | absent |
+| `duplicate_faces`  | none                                                       | n/a |
+| `surface`          | `boundary`, `non_manifold`, `bad_winding`                 | present, zeroed |
+| `resplittable`     | `max_fold_deg`, `past_flip`                               | absent |
+| `linked_duplicate` | `siblings` (names of the objects sharing the datablock)   | present, empty |
+
+`n_errors` sums the near-coincident pairs, isolated and hanging vertices, duplicate and degenerate faces, linked duplicates, and inconsistently wound edges: what stops a run. `n_notes` sums boundary edges, non-manifold edges, and faces with more than three corners, all of which are normal on cloth.
+
+The seven repairs below each take the same `*object_names` and each returns `self`, so a preparation pass chains. None of them takes an `acknowledge` flag: the explicit method call is the confirmation the panel's dialog asks for, exactly as `solver.clear()` needs no prompt.
+
+### merge_by_distance(*object_names: str, merge_threshold: float=1e-4, clear_stale_caches: bool=True) -> Solver
+
+Weld near-coincident vertices. **Changes the vertex count.**
+
+A surviving pair sits far inside the contact gap, where the cubic barrier's dynamic stiffness contributes Hessian entries many orders of magnitude larger than the rest of the row, so the fp32 Newton matrix loses rank and the run stops on the solver's SPD guard naming no geometry. Welding is what makes such a mesh simulable.
+
+**Parameters:**
+
+- **\*object_names**: One or more mesh object names.
+- **merge_threshold**: Weld vertices closer together than this, in local units.
+- **clear_stale_caches**: Delete the display and capture caches the count change invalidates, which is what the panel's confirmation does. Pass `False` to keep them, and expect the viewport overlay to read data sized for the old vertex count until the next Transfer rewrites it.
+
+**Returns:** `self` for chaining.
+
+**Raises:** `ValueError` if a name is missing, is not a mesh, or the object is outside the active view layer.
+
+```python
+solver.merge_by_distance("Shirt", merge_threshold=1e-4)
+```
+
+### remove_loose_vertices(*object_names: str, clear_stale_caches: bool=True) -> Solver
+
+Delete vertices that belong to no face. **Changes the vertex count.**
+
+The solver averages a vertex's contact parameters over its incident faces and aborts when it has none. Loose edges go with the vertices they connect. Pinned vertices are exempt, since a pin holds them regardless, and a SAND particle mesh is skipped outright: every grain center is legitimately faceless.
+
+**Parameters:**
+
+- **\*object_names**: One or more mesh object names.
+- **clear_stale_caches**: As for `merge_by_distance`.
+
+**Returns:** `self` for chaining.
+
+**Raises:** `ValueError` if a name is missing, is not a mesh, or the object is outside the active view layer.
+
+```python
+solver.remove_loose_vertices("Shirt")
+```
+
+### dissolve_degenerate_faces(*object_names: str, merge_threshold: float=1e-4, clear_stale_caches: bool=True) -> Solver
+
+Collapse zero-area faces and zero-length edges. **Changes the vertex count.**
+
+A face with no area has no defined normal, so the contact normal and the bending hinge built on it are both undefined.
+
+**Parameters:**
+
+- **\*object_names**: One or more mesh object names.
+- **merge_threshold**: Edges shorter than this, in local units, are collapsed.
+- **clear_stale_caches**: As for `merge_by_distance`.
+
+**Returns:** `self` for chaining.
+
+**Raises:** `ValueError` if a name is missing, is not a mesh, or the object is outside the active view layer.
+
+```python
+solver.dissolve_degenerate_faces("Shirt")
+```
+
+### delete_duplicate_faces(*object_names: str) -> Solver
+
+Delete faces that repeat an existing face's vertex set.
+
+Two faces on the same vertices contribute their contact and elastic terms twice. The vertex count is unchanged, so no cache is invalidated. Run Transfer again afterward.
+
+**Parameters:**
+
+- **\*object_names**: One or more mesh object names.
+
+**Returns:** `self` for chaining.
+
+**Raises:** `ValueError` if a name is missing, is not a mesh, or the object is outside the active view layer.
+
+### triangulate_for_solver(*object_names: str) -> Solver
+
+Triangulate every face with more than three corners.
+
+Transfer triangulates on its own at encode time, so this is for when the triangulation has to be visible and stable in the viewport: with the diagonals fixed in the mesh, Blender has none left to re-pick from the deformed shape, and the displayed surface stops drifting from the simulated one. The vertex count is unchanged, so no cache is invalidated. For a mesh whose symmetry matters under bending, use `symmetric_triangulate` instead.
+
+**Parameters:**
+
+- **\*object_names**: One or more mesh object names.
+
+**Returns:** `self` for chaining.
+
+**Raises:** `ValueError` if a name is missing, is not a mesh, or the object is outside the active view layer.
+
+### recalculate_normals_outside(*object_names: str) -> Solver
+
+Make face winding consistent and outward.
+
+Inconsistent winding flips the normal a face contributes, which the contact and inflate terms read. The vertex count is unchanged, so no cache is invalidated, but the encoder captures winding at Transfer time, so run Transfer again afterward.
+
+**Parameters:**
+
+- **\*object_names**: One or more mesh object names.
+
+**Returns:** `self` for chaining.
+
+**Raises:** `ValueError` if a name is missing, is not a mesh, or the object is outside the active view layer.
+
+### symmetric_triangulate(*object_names: str) -> Solver
+
+Triangulate by poking each face, keeping the mesh symmetric. **Adds one vertex per face.**
+
+A single-diagonal triangulation breaks a mirror-symmetric mesh's symmetry, which shows up as a lopsided drape under bending. Poking inserts a center vertex and fans the face into triangles around it instead.
+
+The added vertices invalidate the PC2 display cache and any captured deformation on the object exactly as the count-changing repairs above do, and this method deletes neither: run Transfer to rewrite the display cache, and Capture Deformation (or `recapture_all_deformations`) to re-take the captures.
+
+**Parameters:**
+
+- **\*object_names**: One or more mesh object names.
+
+**Returns:** `self` for chaining.
+
+**Raises:** `ValueError` if a name is missing, is not a mesh, or the object is outside the active view layer.
+
+### convert_to_particle_mesh(object_name: str, grain_radius: float, extra_spacing: float=0.0, rng_seed: int=0) -> int
+
+Replace a solid mesh with the grain cloud a SAND group simulates.
+
+Destructive: the faces are discarded and the object becomes a faceless mesh of loose vertices carrying a render-only Particle Mesh modifier. The grain count is not chosen, it is whatever fills the volume at the given separation, which is why it is the return value.
+
+`grain_radius` is stamped onto the object and is what the encoder reads, in preference to the group's `sand_grain_radius`. The non-overlapping seed spacing derives from it and it is also the contact skin, so it is locked once the object is converted and the panel shows it read-only. Pick it before converting.
+
+**Parameters:**
+
+- **object_name**: Name of a mesh object that has faces and is not already a particle mesh.
+- **grain_radius**: Physical grain radius, which is also the contact skin.
+- **extra_spacing**: Gap added between grains beyond touching. `0.0` packs them as densely as non-overlap allows.
+- **rng_seed**: Seed for the Poisson-disk seeding, for a repeatable cloud.
+
+**Returns:** The number of grains seeded.
+
+**Raises:** `ValueError` if the object is missing, is not a mesh, has no faces, is already a particle mesh, `grain_radius` is not positive, or no grain fits inside the mesh.
+
+```python
+n_grains = solver.convert_to_particle_mesh("Pile", grain_radius=0.01)
+sand = solver.create_group("Sand", type="SAND")
+sand.add("Pile")
+# Grams per grain, not kilograms: a 1 cm-radius grain of sand is a few grams.
+sand.param.sand_particle_mass = 5.0
+```
+
 ### add_merge_pair(object_a: str, object_b: str) -> Solver
 
 Mark two objects to be merged at their shared contact.
@@ -225,6 +410,94 @@ Return every invisible collider as a list of `(type, name)` tuples.
 Remove every invisible collider.
 
 **Returns:** `self` for chaining.
+
+### recapture_all_deformations() -> Solver
+
+Re-capture every deforming STATIC collider and every animated pin.
+
+One pass over the whole scene instead of one Capture Deformation per object. The statics are captured first and the pins after, since the two share the depsgraph and cannot run at once.
+
+**Returns:** `self` for chaining.
+
+**Raises:** `ValueError` if there is nothing to re-capture, or a capture or bake is already running.
+
+NOTE: the captures advance on Blender's event loop. This returns once the first one has started, and the rest complete over later ticks. A script that keeps running on the same tick holds the loop and blocks them, so schedule whatever depends on the caches and gate it on `is_capture_running`. A Blender started with `--background` runs no ticks and captures nothing.
+
+```python
+import bpy
+
+def transfer_when_captured():
+    if solver.is_capture_running():
+        return 0.1  # come back in 100 ms
+    solver.transfer_data()
+    return None
+
+solver.recapture_all_deformations()
+bpy.app.timers.register(transfer_when_captured)
+```
+
+### clear_all_deformations() -> Solver
+
+Delete every captured deformation cache in the scene.
+
+Covers the STATIC-collider deform caches and the animated-pin captures across the active groups, plus any cache orphaned by an object that was deleted or taken out of its group, which nothing else reaches. The objects keep their deformers, so `recapture_all_deformations` rebuilds what this removes.
+
+**Returns:** `self` for chaining.
+
+**Raises:** `ValueError` if there is no captured cache to clear, or a capture or bake is already running.
+
+### is_capture_running() -> bool
+
+`True` while a deformation capture is in flight.
+
+Covers both phases of `recapture_all_deformations`, the STATIC-collider captures and the pin captures, so a script waits on the whole pass with one predicate. Read it from a timer or a handler: a capture advances only when the script has handed control back to Blender's event loop.
+
+### export_usd(filepath: str) -> Solver
+
+Export the simulated mesh sequence as a USD cache.
+
+A lighter result than baking shape keys: the deformation is sampled per frame straight from the solver cache into a file other DCC tools play back, and the scene itself is left untouched.
+
+Every frame must be fetched before the export runs, and the export refuses while a run, bake or capture is in flight, and outside Object Mode. Rod and curve objects are not carried by this format; `get_unexportable_curves` names the ones that will be left out.
+
+**Parameters:**
+
+- **filepath**: Destination path, taken as written once a `//` blend-relative prefix is resolved. The suffix is what picks the USD flavor, so give one of `.usdc` (crate), `.usda` (ASCII), `.usd`, or `.usdz` (package). The parent directory must exist.
+
+**Returns:** `self` for chaining.
+
+**Raises:** `ValueError` if frames are unfetched, another solver activity is in progress, the scene is in Edit or Sculpt mode, there is no simulated mesh sequence, the destination directory does not exist, or the export did not complete.
+
+```python
+solver.export_usd("/tmp/drape.usdc")
+```
+
+### export_alembic(filepath: str) -> Solver
+
+Export the simulated mesh sequence as an Alembic (ABC) cache.
+
+Same preconditions and same curve exclusion as `export_usd`.
+
+**Parameters:**
+
+- **filepath**: Destination `.abc` path, taken as written once a `//` blend-relative prefix is resolved. The parent directory must exist.
+
+**Returns:** `self` for chaining.
+
+**Raises:** `ValueError` if frames are unfetched, another solver activity is in progress, the scene is in Edit or Sculpt mode, there is no simulated mesh sequence, the destination directory does not exist, or the export did not complete.
+
+### get_unexportable_curves() -> list[str]
+
+Names of the simulated curves a cache export leaves out.
+
+A rod deforms through a frame-change handler rather than through the cache modifier the exporters sample, so a CURVE object carrying a solver cache cannot be written to USD or Alembic. Bake Animation is the route that carries one.
+
+```python
+missing = solver.get_unexportable_curves()
+if missing:
+    print("not exported:", ", ".join(missing))
+solver.export_usd("/tmp/drape.usdc")
+```
 
 ## Class: SceneParam
 
@@ -333,6 +606,33 @@ The UUID of this group. Stable across renames.
 Type: `str`
 
 Display name of this group.
+
+### slot
+
+Type: `int`
+
+The `object_group_N` slot index this group occupies. This is the index every group operator addresses, resolved through `object_group_{index}`.
+
+It is **not** `ObjectGroup.index`, which numbers the active groups consecutively for display: the two agree only while every slot below this one is active, so a scene that has ever deleted a group can have them disagree.
+
+**Raises:** `ValueError` if no slot holds this group's UUID.
+
+```python
+group = solver.create_group("Shirt", type="SHELL")
+print(f"stored in object_group_{group.slot}")
+```
+
+### type
+
+Type: `str`
+
+Dynamics type of this group: one of `"SOLID"`, `"SHELL"`, `"ROD"`, `"STATIC"`, `"PDRD"`, `"SAND"`. Set at creation through `Solver.create_group`.
+
+```python
+for g in solver.get_groups():
+    if g.type == "ROD":
+        g.param.length_factor = 0.97
+```
 
 ### param
 
@@ -482,9 +782,9 @@ Whitelisted attributes:
 - **Plasticity**: `enable_plasticity`, `plasticity`, `plasticity_threshold`
 - **Bend plasticity**: `enable_bend_plasticity`, `bend_plasticity`, `bend_plasticity_threshold`, `bend_rest_angle_source`
 - **Reference rest angle (SHELL / ROD)**: `bend_rest_from_reference` (group master toggle). The per-object reference itself (which object, and its picked reference object) is **not** a group material: it lives on the assigned object (`bend_ref_enable`, `bend_ref_uuid`) and is set from the UI eyedropper (`object.pick_bend_reference` / `object.clear_bend_reference`), not via the group param API. When enabled with a valid reference, that object's bending rest angle (shell hinge dihedral, or rod interior-vertex bend angle) is computed from the reference geometry, overriding `bend_rest_angle_source` for that object. Mesh references are modifier-evaluated; curve-rod references are sampled at the control-point level.
-- **Shell / solid / rod shape controls**: `bend`, `shrink`, `shrink_x`, `shrink_y`, `length_factor`, `stitch_stiffness`
+- **Shell / solid / rod shape controls**: `bend`, `shrink`, `shrink_x`, `shrink_y`, `length_factor`, `stitch_stiffness`. `shrink_x` / `shrink_y` are the Shell pair, `shrink` is the single Solid factor, and `length_factor` is the Rod rest-length scale (the panel labels it Shrink). `bend` is read by both Shell and Rod; each type derives its own scaling from it, and a rod's is normalized against a 1 cm reference segment so it does not vary with segment count. Because `length_factor` scales the rest length that normalization divides by, halving it makes a rod about four times stiffer in bending.
 - **PDRD-specific**: `pdrd_density` (kg/m^3, volumetric). The PDRD hinge joint is per-object, set via `set_hinge` (not a group material).
-- **SAND-specific**: `sand_grain_radius`, `sand_particle_mass`, `sand_friction` (used only when the group's object_type is `"SAND"`).
+- **SAND-specific**: `sand_grain_radius`, `sand_particle_mass` (grams), `sand_friction`. Write `sand_grain_radius` only before the group's objects are converted: `convert_to_particle_mesh` stamps the radius it seeded onto each object, and that stamped value is what the panel shows and the encoder ships.
 
 ```python
 group.param.friction = 0.5
@@ -502,6 +802,13 @@ pin = group.create_pin("Cloth", "hem")
 pin.move_by(delta=(0, 0, 1.0), frame_start=1, frame_end=60)
 pin.unpin(frame=120)
 ```
+
+A pin is one of exactly two kinds, and there is nothing in between and no stiffness scalar to tune:
+
+- **Exact hold** (the default, and what a freshly created pin is). The solver removes the pinned vertices' degrees of freedom from its Newton system and prescribes their positions, so they track their target to round-off and never yield to contact or elasticity. `move_by`, `spin` and `scale` script that prescribed motion; `unpin` ends it at a chosen frame.
+- **Soft spring** (`pull(strength)`). The vertices carry a restoring force toward their target and are free to be pushed off it by contact and elasticity. This is the only compliant hold, so it is what to reach for when a pin should give.
+
+`torque` is a force rather than a prescribed motion, so it cannot share a pin with `move_by` / `spin` / `scale`; transfer raises `ValueError` on a pin that carries both.
 
 ### object_name
 
@@ -529,22 +836,6 @@ Pull allows the vertices to move but applies a restoring force toward their targ
 
 ```python
 group.create_pin("Cloth", "shoulder").pull(strength=2.5)
-```
-
-### stiffness(value: float=1.0) -> Pin
-
-Scale this pin's moving (kinematic) constraint force.
-
-Only affects an animated pin (one with operations or a captured deformation); 1.0 leaves the force unchanged. Raise it if a moving pin lags or wobbles off its target.
-
-**Parameters:**
-
-- **value**: Stiffness scale (default 1.0).
-
-**Returns:** `self` for chaining.
-
-```python
-group.create_pin("Cloth", "edge").stiffness(value=4.0)
 ```
 
 ### spin(axis: tuple[float, float, float]=(1, 0, 0), angular_velocity: float=360.0, flip: bool=False, center: tuple[float, float, float] | None=None, center_mode: str | None=None, center_direction: tuple[float, float, float] | None=None, center_vertex: int | None=None, frame_start: int=1, frame_end: int=60, transition: str='LINEAR') -> Pin
@@ -641,7 +932,7 @@ pin.move_by(delta=(0, 0, 1.0),
 
 Mark this pin to be released at the given frame.
 
-Sets the duration on the underlying pin item so the encoder knows when to stop enforcing the pin constraint.
+Sets the duration on the underlying pin item, which is what the encoder ships as the frame the pin constraint stops being enforced.
 
 **Parameters:**
 

@@ -10,4 +10,5 @@ baked down to plain keyframes.
 simulating
 jupyterlab
 baking
+exporting
 ```

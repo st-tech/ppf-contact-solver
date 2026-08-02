@@ -16,6 +16,7 @@ from typing import Any
 from ..models.defaults import DEFAULT_SERVER_PORT, DEFAULT_SSH_KEEPALIVE_INTERVAL
 from .effect_runner import EffectRunner
 from .engine import Engine
+from .gpu_devices import AUTOMATIC
 from .events import (
     AbortRequested,
     BuildRequested,
@@ -161,8 +162,20 @@ class CommunicatorFacade:
 
     # -- server lifecycle --
 
-    def start_server(self):
-        self._dispatch_and_tick(StartServerRequested())
+    def start_server(self, cuda_device=AUTOMATIC, cuda_device_uuid=""):
+        self._dispatch_and_tick(StartServerRequested(
+            cuda_device=cuda_device,
+            cuda_device_uuid=cuda_device_uuid,
+        ))
+
+    def refresh_solver_host_gpus(self):
+        """Re-enumerate the connected solver host's GPUs.
+
+        Not an event: it changes no application state, it refills the cache the
+        GPU dropdown reads, and it has to run on the worker thread that owns
+        the connection rather than in the operator that asked for it.
+        """
+        self._runner.probe_solver_host_gpus()
 
     def stop_server(self):
         self._dispatch_and_tick(StopServerRequested())

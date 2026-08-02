@@ -155,7 +155,7 @@ Note: **Save** overwrites the currently selected entry and rewrites the whole fi
 ### Status: "Protocol version mismatch"
 
 - You see: this exact status.
-- Why: the server reports a wire version other than `0.10`.
+- Why: the server reports a wire version other than the one the add-on carries (`blender_addon/protocol_version.toml`, the single source both halves read).
 - Fix: rebuild the solver from a revision that matches the add-on, or update the add-on.
 
 ### "Remote path not found (.../ppf-cts-server)."
@@ -259,7 +259,37 @@ Note: **Save** overwrites the currently selected entry and rewrites the whole fi
 
 - You see: transfer aborts with this ValueError naming the object, the count, and up to eight vertex indices.
 - Why: a Static collider mesh has vertices that belong to no triangle (no face). The solver averages each collider vertex's contact parameters over its incident faces and aborts when a vertex has none. Common in imported models with stray points.
-- Fix: click **Remove Isolated Vertices** under the error (operator `ssh.remove_isolated_vertices`), or over MCP call `remove_isolated_static_vertices` (preview first with `detect_isolated_static_vertices`); or in Edit Mode run Select > All by Trait > Loose Geometry, then Mesh > Delete > Loose. Transfer again.
+- Fix: click **Remove Isolated Vertices** under the error (operator `ssh.remove_isolated_vertices`). When the error names a Static collider, the MCP pair `detect_isolated_static_vertices` (preview) and `remove_isolated_static_vertices` (fix) targets exactly that case. Across a mixed selection, scan in **Sidebar -> Utility Tools -> Mesh Cleaning** and press the **Remove Loose Vertices** button the report offers (MCP `remove_loose_vertices`, Python `solver.remove_loose_vertices`). It acts on every selected mesh at once, keeps pinned vertices, takes the loose edges with them, skips Sand particle meshes, and clears the caches the vertex-count change invalidates. Transfer again either way.
+
+### Mesh will not build (scan it before Transfer)
+
+- You see: Transfer or the remote build aborts on geometry, or a run stops on the solver's SPD guard without naming any geometry.
+- Why: the encoder and the solver reject several classes of input geometry, and most of them are invisible in the viewport.
+- Fix: select the meshes and press **Scan Selected Meshes** in **Sidebar -> Utility Tools -> Mesh Cleaning** (MCP `scan_meshes`, Python `solver.scan_meshes`). The report lists each class with a one-click repair beside it. This is cheaper than diagnosing a rejected build, so run it on any generated or imported mesh before the first Transfer.
+
+The lines the scan reports as errors, and the repair for each:
+
+| Scan line                                | Repair button          | MCP / Python name              | Vertex count |
+| ---------------------------------------- | ---------------------- | ------------------------------ | ------------ |
+| `Linked Duplicate of <name>`             | none (see below)       | none                           | unchanged    |
+| `N near-coincident vertex pair(s)`       | Merge by Distance      | `merge_by_distance`            | **changes**  |
+| `N isolated vertex(es), in no face`      | Remove Loose Vertices  | `remove_loose_vertices`        | **changes**  |
+| `N hanging seam vertex(es)`              | Remove Loose Vertices  | `remove_loose_vertices`        | **changes**  |
+| `N duplicate face(s)`                    | Delete Duplicate Faces | `delete_duplicate_faces`       | unchanged    |
+| `N degenerate (zero-area) face(s)`       | Dissolve Degenerate    | `dissolve_degenerate_faces`    | **changes**  |
+| `N inconsistently wound edge(s)`         | Recalculate Outside    | `recalculate_normals_outside`  | unchanged    |
+
+A linked duplicate has no repair button because it is not a defect in the mesh: two objects share one mesh datablock, which Transfer refuses because it routes per object. Fix it with **Object > Relations > Make Single User > Object & Data**. The scan itself, and every repair, treats a shared datablock once rather than once per user.
+
+The three remaining lines are **notes, not errors**, and are normal on cloth:
+
+- `N boundary edge(s), surface is open`: fine for a Shell; a Solid needs a closed surface for tetrahedralization. Closing a boundary is modeling, so nothing repairs it automatically.
+- `N non-manifold edge(s)`: same, reported for the same reason.
+- `N face(s) with more than 3 corners`: quads and N-gons are accepted, and Transfer triangulates them itself. Press **Triangulate** (`triangulate_for_solver`) only when the viewport's own choice of diagonal drifts from the simulated one, or **Symmetric Triangulate** (`symmetric_triangulate`) when the mesh's mirror symmetry has to survive.
+
+The three repairs marked **changes** invalidate the object's PC2 display cache and any captured deformation, and can shift which vertices a pin vertex group holds. The panel names exactly what is affected before it runs and asks for confirmation; the MCP tools require `acknowledge=true` and clear those caches by default (`clear_stale_caches`, which matches the pre-ticked checkbox in the panel's dialog). **Symmetric Triangulate** adds one vertex per face, so it has the same consequence, but it neither asks for confirmation nor clears anything: re-run Transfer for the display cache and Capture Deformation for the captures.
+
+Run Transfer again after any repair, including the ones that leave the count alone: the encoder captures winding and topology at Transfer time.
 
 ### "Objects missing UUID" / "Stale UUID references"
 

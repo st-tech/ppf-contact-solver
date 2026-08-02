@@ -27,7 +27,7 @@ The add-on is packaged as a Blender 5.x extension (`blender_manifest.toml`, sche
 
 1. In Blender, open **Edit → Preferences → Get Extensions** (or **Install from Disk…** in the drop-down).
 2. Point the dialog at the `blender_addon/` directory (or a zip of it) and confirm. Blender copies it into your user extensions folder and enables it.
-3. Alternatively, drag-and-drop the `blender_addon/` folder onto an open Blender window. Blender 5.x recognises the extension manifest and offers the same install dialog.
+3. Alternatively, drag-and-drop the `blender_addon/` folder onto an open Blender window. Blender 5.x recognizes the extension manifest and offers the same install dialog.
 4. Verify by opening the 3D viewport sidebar (`N`). A new tab labeled **ZOZO's Contact Solver** should appear with the panels described below.
 
 TIP: If the sidebar tab is missing after install, the add-on probably crashed while enabling. Open **Window → Toggle System Console** and re-enable the extension from Preferences to see the traceback.
@@ -44,7 +44,7 @@ Figure: the Backend Communicator panel with **Connect** (the button that opens t
 
 ### Solver
 
-The buttons that drive a simulation: **Transfer**, **Update Params on Remote**, **Run**, **Resume**, **Fetch All Animation**, **Delete Remote Data**, **Clear Local Animation**, plus Bake buttons. The **JupyterLab** and **MCP Server** collapsible sections live inside this panel.
+The buttons that drive a simulation: **Transfer**, **Update Params on Remote**, **Run**, **Resume**, **Fetch All Animation**, **Delete Remote Data**, **Clear Local Animation**, plus Bake buttons. Below that main block sit two more boxes: **Deformations** (**Re-capture All Deformations** and **Clear All Deformations**, the scene-wide equivalents of the per-object Capture Deformation button) and **Export** (**Export USD** and **Export Alembic (ABC)**, which write the fetched mesh sequence to a point cache without touching the scene). The **JupyterLab** and **MCP Server** collapsible sections live inside this panel too.
 
 Figure: the Solver panel with **Transfer** (the button that uploads geometry and parameters to the solver) highlighted.
 
@@ -65,6 +65,10 @@ Figure: the Dynamics Groups panel in its empty state with **Create Group** (the 
 Snap vertex positions between two objects and register merge pairs so the solver stitches them at build time.
 
 Figure: the Snap and Merge panel with **Snap A to B** (the KDTree-based vertex snap that pulls Object A's vertices onto Object B's closest vertices) highlighted. The panel is collapsed by default; click the header to expand.
+
+### Utility Tools
+
+Collapsed by default, and holding two boxes that both operate on the current mesh selection in Object Mode. **Mesh Cleaning** holds **Scan Selected Meshes**, which reports the geometry the solver rejects or chokes on (near-coincident vertices, isolated and hanging vertices, duplicate and degenerate faces, inconsistent winding, linked duplicates) and draws a fix button beside each finding: **Merge by Distance**, **Remove Loose Vertices**, **Dissolve Degenerate**, **Delete Duplicate Faces**, **Triangulate**, **Recalculate Outside**. The first three change the vertex count, so each opens a confirmation dialog that names what the change invalidates and refuses to apply until **I understand, apply anyway** is ticked; when there is something to invalidate the dialog also offers **Clear invalidated caches**, ticked by default, covering the display PC2 cache and any captured deformation. The second box, **Symmetric Triangulate**, pokes each quad into a mirror-symmetric four-triangle fan, which adds one vertex per face and clears nothing.
 
 ### Visualization
 

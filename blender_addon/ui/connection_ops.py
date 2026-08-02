@@ -288,7 +288,24 @@ class REMOTE_OT_StartServer(AsyncOperator):
         )
 
     def execute(self, context):
-        com.start_server()
+        from ..core.gpu_devices import selected_device, validate_selection
+
+        props = get_addon_data(context.scene).ssh_state
+        selected = props.solver_gpu_index
+        device = selected_device(selected, props.solver_gpu_uuid)
+        if device is not None:
+            selected = device.index
+            props.solver_gpu_index = selected
+            props.solver_gpu_uuid = device.uuid
+        # Refuse a GPU the solver host does not have rather than starting a
+        # server against an empty CUDA device set, which surfaces much later as
+        # a solver error that names no GPU.
+        try:
+            validate_selection(selected, props.solver_gpu_uuid)
+        except ValueError as exc:
+            self.report({"ERROR"}, str(exc))
+            return {"CANCELLED"}
+        com.start_server(selected, props.solver_gpu_uuid)
         self.setup_modal(context)
         return {"RUNNING_MODAL"}
 
@@ -412,6 +429,26 @@ class REMOTE_OT_ReloadProfile(Operator):
         return {"FINISHED"}
 
 
+class REMOTE_OT_RefreshGpuDevices(Operator):
+    """Re-run nvidia-smi and rebuild the GPU list."""
+
+    bl_idname = "ssh.refresh_gpu_devices"
+    bl_label = "Refresh GPU List"
+
+    def execute(self, context):
+        # The solver host is reachable only through the connection, whichever
+        # backend it is, and that command belongs on the worker thread that
+        # owns it. The list lands in the cache and the panel redraws with it.
+        if not com.is_connected():
+            self.report(
+                {"ERROR"},
+                iface_("Connect first: the GPU list is read from the solver host"),
+            )
+            return {"CANCELLED"}
+        com.refresh_solver_host_gpus()
+        return {"FINISHED"}
+
+
 class REMOTE_OT_SaveProfile(Operator):
     """Save current connection settings to a profile."""
 
@@ -462,5 +499,6 @@ classes = [
     REMOTE_OT_OpenProfile,
     REMOTE_OT_ClearProfile,
     REMOTE_OT_ReloadProfile,
+    REMOTE_OT_RefreshGpuDevices,
     REMOTE_OT_SaveProfile,
 ]

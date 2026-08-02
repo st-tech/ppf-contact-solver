@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 
 use pyo3::exceptions::PyOSError;
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyDict, PyList};
+use pyo3::types::{PyDict, PyList};
 
 use ppf_cts_core::datamodel::app as core_app;
 
@@ -90,8 +90,10 @@ pub fn clear_cache_dir(cache_dir: &str) -> PyResult<()> {
 /// Build the native CBOR map payload that `App.save` writes.
 /// Mirrors `App._to_cbor_dict`: top-level inspectable metadata
 /// (`name`, `root`, `asset_names`) plus the opaque `pickle_blob`.
-/// Pickle bytes are produced by the Python caller and forwarded
-/// here without copy.
+/// The blob arrives as the list of byte-string chunks that
+/// `_cbor_bridge_.chunk_pickle_blob` produced (one item would decode
+/// quadratically, see `PICKLE_CHUNK_BYTES`), and is forwarded here
+/// without copy.
 #[pyfunction]
 #[pyo3(signature = (name, root, asset_names, pickle_blob))]
 pub fn app_to_cbor_dict<'py>(
@@ -99,7 +101,7 @@ pub fn app_to_cbor_dict<'py>(
     name: &str,
     root: &str,
     asset_names: &Bound<'_, PyList>,
-    pickle_blob: &Bound<'_, PyBytes>,
+    pickle_blob: &Bound<'_, PyList>,
 ) -> PyResult<Bound<'py, PyDict>> {
     let d = PyDict::new(py);
     d.set_item("name", name)?;

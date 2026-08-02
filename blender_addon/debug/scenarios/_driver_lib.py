@@ -16,6 +16,13 @@
 # defines a ``DriverHelpers`` class; scenarios instantiate it and
 # call ``dh.connect_local(...)`` etc.
 #
+# :data:`BUILD_FAILURE_LIB` is the leading slice of that fragment and
+# is also prependable on its own. It defines ``build_failure_message``
+# as a plain function of ``(facade, com)``, so a driver that raises on
+# solver=FAILED names the same cause whether or not it carries the rest
+# of the library (``_pin_fidelity_common`` drives the pipeline directly
+# and has no ``DriverHelpers`` instance to reach a method through).
+#
 # We deliberately do NOT bundle this as a real importable module
 # inside Blender. Drivers run with ``exec_globals`` that already
 # carry ``bpy``, ``pkg``, and ``result``; injecting helpers via
@@ -31,7 +38,233 @@
 from __future__ import annotations
 
 
-DRIVER_LIB = r"""
+BUILD_FAILURE_LIB = r"""
+import os
+
+
+def clip_log_line(line, limit):
+    # One log line, bounded, saying so when it is cut. A build worker can
+    # emit a single enormous line (a repr of a whole scene, a traceback
+    # whose newlines arrived as \r), and a message built from these lines
+    # lands in result["errors"][0] of the scenario report, so the bound
+    # belongs on every line rather than on the byte window alone.
+    if len(line) <= limit:
+        return line
+    return line[:limit] + f" ...<{len(line) - limit} chars elided>"
+
+
+def server_log_tail(*, lines=15, tail_bytes=65536, max_line_chars=300,
+                    max_total_chars=4000):
+    # Tail of the rig server's own log, as (lines, directory, saw_build).
+    # Each worker owns <workspace>/{server,project,probe} and the
+    # orchestrator runs ppf-cts-server with CWD=<workspace>/server,
+    # capturing its log4rs console output as stdout.log there. That is
+    # where a build worker's failure is legible: executor/build.rs
+    # drains the worker's stderr into the server log tagged
+    # [BUILD stderr], and its spawn line names the interpreter it ran,
+    # which is the whole answer when a dependency is missing. Prefer
+    # those lines, fall back to the raw tail when none are present, and
+    # report which of the two through ``saw_build`` plus a per-file
+    # heading, so no line of the report claims to be build worker output
+    # when it is not.
+    probe_dir = (os.environ.get("PPF_DEBUG_PROBE_DIR", "")
+                 or globals().get("PROBE_DIR", ""))
+    if not probe_dir:
+        return [], "", False
+    server_dir = os.path.join(os.path.dirname(probe_dir), "server")
+    sections = []
+    saw_build = False
+    for name in ("stdout.log", "stderr.log"):
+        path = os.path.join(server_dir, name)
+        try:
+            size = os.path.getsize(path)
+            with open(path, "rb") as f:
+                if size > tail_bytes:
+                    f.seek(size - tail_bytes)
+                blob = f.read()
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            # Say the log could not be read; do not let that stand in
+            # for the build failure being reported.
+            sections.append(
+                (f"{name}: <unreadable: {clip_log_line(str(exc), 200)}>",
+                 [], 0))
+            continue
+        text = blob.decode("utf-8", "replace")
+        window = ""
+        if size > tail_bytes:
+            # The read window itself drops everything older, and the
+            # heading says so: a count of elided lines can only speak for
+            # lines this function has seen.
+            window = f", last {tail_bytes}B of the file"
+            # The seek lands mid-line, so the first line is a fragment.
+            # Drop it only when something survives: a window holding one
+            # long line plus the file's trailing newline partitions into
+            # that line and "", and taking the remainder there would
+            # report an empty tail for a log that is not empty.
+            _, sep, rest = text.partition("\n")
+            if sep and rest.strip():
+                text = rest
+        got = [clip_log_line(ln.rstrip(), max_line_chars)
+               for ln in text.splitlines() if ln.strip()]
+        build = [ln for ln in got if "[BUILD" in ln]
+        # Each section carries the count it had BEFORE the ``lines``
+        # slice, so the elision marker below can name every line the
+        # report is missing rather than only the ones the char budget cut.
+        if build:
+            saw_build = True
+            sections.append((f"{name} ([BUILD] lines{window}):",
+                             build[-lines:], len(build)))
+        elif got:
+            sections.append((f"{name} (tail{window}, no [BUILD] lines):",
+                             got[-lines:], len(got)))
+    if not sections:
+        return [], server_dir, False
+
+    # Spend the total budget on the NEWEST lines of each section: they
+    # sit nearest the failure. Every section keeps at least its last
+    # line, so a budget smaller than one line still reports something.
+    budget = max_total_chars // len(sections)
+    out = []
+    for heading, picked, available in sections:
+        kept = []
+        used = 0
+        for line in reversed(picked):
+            if kept and used + len(line) > budget:
+                break
+            kept.append(line)
+            used += len(line)
+        kept.reverse()
+        if len(kept) < available:
+            kept.insert(
+                0, f"<{available - len(kept)} earlier line(s) elided>")
+        out.append(heading)
+        out.extend(kept)
+    return out, server_dir, saw_build
+
+
+def build_failure_message(facade, com, *, prefix="build failed",
+                          max_cause_chars=600, max_extra_chars=300,
+                          max_message_chars=8000):
+    # A build failure must name a cause. The scenario name alone does not
+    # tell a build worker whose Python lacks scipy / pyvista / tetgen
+    # apart from a malformed scene, and both arrive here as solver=FAILED.
+    #
+    # Four places can hold that cause, and they are filled by four
+    # different writers, so one of them being set says nothing about
+    # whether the others are redundant:
+    #
+    #   - ``state.server_error`` is where ``ServerPolled``
+    #     (core/transitions.py) files the server's own text, on every
+    #     branch it takes.
+    #   - ``state.error`` is client-side. The same transition's ordinary
+    #     branch rebuilds the state with ``error=""``, so it is empty
+    #     exactly when the server reported the failure; its build-desync
+    #     branch sets it to a fixed addon sentence about the desync WHILE
+    #     also filing the server's text, and ``ErrorOccurred`` /
+    #     ``FetchFailed`` set it from a client-side transport failure that
+    #     says nothing about the build. On none of those branches does it
+    #     duplicate what the server reported.
+    #   - the raw response is the fallback for a message the reducer
+    #     dropped.
+    #   - the rig server's log is where the build worker's OWN stderr
+    #     arrives (tagged [BUILD stderr]); no addon field ever holds it,
+    #     so it adds information whenever it has any.
+    #
+    # So the head names the first carrier holding text, every other
+    # carrier holding DIFFERENT text follows it, and the log is attached
+    # unconditionally. The head order puts the client-side field first to
+    # match the addon's own top-of-panel ERROR label; nothing is lost by
+    # that choice because the rest is reported directly below.
+    s = facade.engine.state
+    notes = []
+    try:
+        response = dict(com.info.response)
+    except Exception as exc:
+        # A broken response cache is reported beside the build
+        # failure, never in place of it.
+        response = {}
+        notes.append("response unavailable ({}: {})".format(
+            type(exc).__name__, clip_log_line(str(exc), 200)))
+    carriers = [
+        ("state.error", (s.error or "").strip()),
+        ("state.server_error", (s.server_error or "").strip()),
+        ("server response", str(response.get("error", "") or "").strip()),
+    ]
+    reported = [(label, text) for label, text in carriers if text]
+
+    # Gather the detail before the context line below, which reports the
+    # notes that gathering can add.
+    detail = []
+    if reported:
+        head_label, head_text = reported[0]
+        head = (f"{prefix}: {clip_log_line(head_text, max_cause_chars)} "
+                f"[{head_label}]")
+        # Two carriers holding the same string relay one fact, so the
+        # copy is dropped; two holding different strings are two facts,
+        # and which of them names the real cause is not decidable here.
+        shown = {head_text}
+        for label, text in reported[1:]:
+            if text in shown:
+                continue
+            shown.add(text)
+            detail.append(
+                f"  also {label}: {clip_log_line(text, max_extra_chars)}")
+    else:
+        head = (f"{prefix}: no cause reported (state.error, "
+                "state.server_error and the server's last response "
+                "are all empty)")
+
+    try:
+        tail, server_dir, saw_build = server_log_tail()
+    except Exception as exc:
+        # Same rule as the response cache above: a failure while
+        # gathering detail is reported beside the build failure.
+        tail, server_dir, saw_build = [], "", False
+        notes.append("server log unreadable ({}: {})".format(
+            type(exc).__name__, clip_log_line(str(exc), 200)))
+    if tail:
+        detail.append(f"  server log in {clip_log_line(server_dir, 200)}:")
+        detail.extend("    " + line for line in tail)
+        if not saw_build:
+            detail.append(
+                "  (that log carries no [BUILD] line; the build "
+                "worker's stderr reaches it tagged [BUILD stderr])")
+    elif server_dir:
+        detail.append(
+            "  no build worker output under "
+            f"{clip_log_line(server_dir, 200)}; the worker's stderr "
+            "reaches the server log tagged [BUILD stderr]")
+    else:
+        detail.append(
+            "  build worker output not reachable "
+            "(PPF_DEBUG_PROBE_DIR unset, so the rig worker "
+            "directory is unknown); the worker's stderr reaches "
+            "the server log tagged [BUILD stderr]")
+
+    context = [f"solver={s.solver.name}", f"activity={s.activity.name}"]
+    if s.violations:
+        context.append(f"violations={len(s.violations)}")
+    message = "\n".join(
+        [head, "  (" + ", ".join(context + notes) + ")"] + detail)
+    # Backstop. Every part above carries its own bound: the cause and the
+    # extra carriers by their clip limits, the log by ``max_total_chars``
+    # over at most two sections of at most ``lines`` lines each. Feeding
+    # megabyte-sized carriers and log lines swept across every length that
+    # packs a section's budget tops out under 6000 characters, so a message
+    # that reaches this cap means one of those bounds is wrong. Cut the
+    # end, which holds the OLDEST log line, and keep the head, which names
+    # the cause.
+    if len(message) > max_message_chars:
+        message = (message[:max_message_chars]
+                   + f"\n<message capped, "
+                     f"{len(message) - max_message_chars} chars elided>")
+    return message
+"""
+
+
+DRIVER_LIB = BUILD_FAILURE_LIB + r"""
 import bpy, os, struct, time
 import numpy as np
 
@@ -270,7 +503,7 @@ class DriverHelpers:
             time.sleep(0.3)
         s = self.facade.engine.state
         if s.solver.name == "FAILED":
-            raise RuntimeError(f"build failed: {s.error!r}")
+            raise RuntimeError(build_failure_message(self.facade, self.com))
 
     def run_and_wait(self, *, timeout=90.0):
         self.com.run()

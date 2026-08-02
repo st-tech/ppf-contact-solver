@@ -10,6 +10,7 @@ mod cvec;
 mod cvecvec;
 mod data;
 mod mesh;
+mod plastic_state;
 mod raw_vec;
 mod scene;
 mod status_writer;
@@ -120,7 +121,51 @@ fn main() {
     if program_args.load > 0 {
         let mut param = builder::make_param(&sim_args);
         info!("Loading dataset...");
-        let mut dataset = read(&read_gz(&format!("{}/dataset.bin.gz", program_args.output)));
+        let mut dataset: DataSet = read(&read_gz(&format!(
+            "{}/{}",
+            program_args.output,
+            ppf_cts_formats::files::DATASET
+        )));
+        // The dataset's rest shape (the `inv_rest*` matrices and rest angles)
+        // is the build-time one, because the dataset is written once. A scene
+        // whose rest shape creeps also writes it per frame, so overwrite those
+        // fields with the frame being resumed (see `plastic_state`).
+        let split_layout = std::path::Path::new(&format!(
+            "{}/{}",
+            program_args.output,
+            ppf_cts_formats::files::CHECKPOINT_LAYOUT
+        ))
+        .exists();
+        let path_plastic = format!(
+            "{}/{}",
+            program_args.output,
+            ppf_cts_formats::files::plastic_filename(program_args.load)
+        );
+        if std::path::Path::new(&path_plastic).exists() {
+            info!("Loading plastic rest shape from {path_plastic}...");
+            let plastic: plastic_state::PlasticState = read(&read_gz(&path_plastic));
+            plastic.apply(&mut dataset);
+        } else if split_layout && plastic_state::PlasticKinds::of(&dataset).any() {
+            // This directory carries the layout marker, so the dataset's rest
+            // shape is the build-time one, which belongs to no checkpoint, and
+            // every checkpoint of a creeping scene was written with its own
+            // per-frame copy. This frame's is not on disk, so its rest shape
+            // exists nowhere and resuming would silently run on a shape from
+            // the wrong time.
+            panic!(
+                "checkpoint {} has no matching {}: the rest shape for this \
+                 frame is not on disk, so it cannot be resumed",
+                ppf_cts_formats::files::state_filename(program_args.load),
+                ppf_cts_formats::files::plastic_filename(program_args.load)
+            );
+        }
+        // Reaching here means either the scene never creeps, so the build-time
+        // rest shape in the dataset is still correct, or the directory carries
+        // no layout marker, where the dataset holds the shape last written into
+        // it. Both want it left as loaded. The two are told apart by that
+        // marker rather than by looking for per-frame files, whose absence is
+        // ambiguous: they are pruned along with their checkpoints, so "none
+        // present" cannot distinguish "never written" from "deleted".
         info!("Loading backend state...");
         let mut backend = backend::Backend::load_state(program_args.load, &program_args.output);
         info!("Data loaded successfully");
@@ -407,15 +452,24 @@ fn setup(program_args: &ProgramArgs) {
         // then resolve to and jump past the frame the user branched
         // from. Enumerate the actual on-disk set and drop every index
         // newer than the resume frame instead of assuming contiguity.
+        //
+        // The per-frame rest shape is dropped in lockstep with the checkpoint it
+        // belongs to. Both sets are written at the same frames and pruned to
+        // the same `keep_states` count, so letting one outlive the other would
+        // desync the two budgets: an orphaned `plastic_<n>` above the resume
+        // point pushes the retention pass into deleting the OLDEST plastic
+        // file, whose `state_<n>` is still on disk, and resuming from that
+        // frame would then fail on a rest shape that no longer exists.
         let output_dir = std::path::Path::new(&program_args.output);
         for n in ppf_cts_core::datamodel::list_saved_states(output_dir) {
             if (n as i32) > program_args.load {
-                let path = format!(
-                    "{}/{}",
-                    program_args.output,
-                    ppf_cts_formats::files::state_filename(n as i32)
-                );
-                std::fs::remove_file(path).unwrap_or(());
+                for name in [
+                    ppf_cts_formats::files::state_filename(n as i32),
+                    ppf_cts_formats::files::plastic_filename(n as i32),
+                ] {
+                    let path = format!("{}/{name}", program_args.output);
+                    std::fs::remove_file(path).unwrap_or(());
+                }
             }
         }
         // The .out streams in output/data are append-only, so the resume

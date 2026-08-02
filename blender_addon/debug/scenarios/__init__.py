@@ -28,6 +28,7 @@ from . import bl_connect_local
 from . import bl_connect_win_native
 from . import bl_connection_path_validation
 from . import bl_win_native_root_resolve
+from . import bl_solver_gpu_select
 from . import bl_direct_disk_transfer
 from . import bl_rust_binary_protocol
 
@@ -70,6 +71,7 @@ from . import bl_pin_create_clears_stale_membership
 from . import bl_overlay_invalidation
 from . import bl_overlay_respects_shading
 from . import bl_overlay_respects_user_obj_color
+from . import bl_cleanup_respects_user_obj_color
 from . import bl_race_state_machine
 from . import bl_fetch_clear_refetch
 from . import bl_geometry_hash
@@ -126,6 +128,7 @@ from . import bl_time_scale_encoding
 from . import bl_time_scale_kinematic_invariance
 from . import bl_frame_start
 from . import bl_frame_start_leadin
+from . import bl_group_slot_reuse
 from . import bl_multi_group
 from . import bl_collider_keyframes
 from . import bl_stitch_merge
@@ -172,6 +175,7 @@ from . import bl_pdrd_driven_rotate_vertex
 from . import bl_pdrd_panel_draws
 from . import bl_bake_animation
 from . import bl_export_cache
+from . import bl_mcp_mesh_cleaning
 from . import bl_mcp_roundtrip
 from . import bl_addon_reload_handoff
 from . import bl_ftetwild_overrides
@@ -239,6 +243,7 @@ REGISTRY = {
     "bl_connect_win_native": bl_connect_win_native,
     "bl_connection_path_validation": bl_connection_path_validation,
     "bl_win_native_root_resolve": bl_win_native_root_resolve,
+    "bl_solver_gpu_select": bl_solver_gpu_select,
     "bl_direct_disk_transfer": bl_direct_disk_transfer,
     "bl_rust_binary_protocol": bl_rust_binary_protocol,
 
@@ -283,6 +288,7 @@ REGISTRY = {
     "bl_overlay_invalidation": bl_overlay_invalidation,
     "bl_overlay_respects_shading": bl_overlay_respects_shading,
     "bl_overlay_respects_user_obj_color": bl_overlay_respects_user_obj_color,
+    "bl_cleanup_respects_user_obj_color": bl_cleanup_respects_user_obj_color,
     "bl_race_state_machine": bl_race_state_machine,
     "bl_fetch_clear_refetch": bl_fetch_clear_refetch,
     "bl_geometry_hash": bl_geometry_hash,
@@ -347,6 +353,7 @@ REGISTRY = {
     "bl_time_scale_kinematic_invariance": bl_time_scale_kinematic_invariance,
     "bl_frame_start": bl_frame_start,
     "bl_frame_start_leadin": bl_frame_start_leadin,
+    "bl_group_slot_reuse": bl_group_slot_reuse,
     "bl_multi_group": bl_multi_group,
     "bl_collider_keyframes": bl_collider_keyframes,
     "bl_stitch_merge": bl_stitch_merge,
@@ -391,6 +398,7 @@ REGISTRY = {
     # Tier 3: nice-to-have coverage that needed extra rig plumbing
     # (MCP HTTP, addon reload handoff, fTetWild overrides, project
     # rename resync).
+    "bl_mcp_mesh_cleaning": bl_mcp_mesh_cleaning,
     "bl_mcp_roundtrip": bl_mcp_roundtrip,
     "bl_addon_reload_handoff": bl_addon_reload_handoff,
     "bl_ftetwild_overrides": bl_ftetwild_overrides,

@@ -7,7 +7,8 @@ but which fields are relevant depends on the group's type:
   shrink, strain limit, inflate, stitch, and contact settings.
 - **Solid**: density, stiffness, a single shrink factor, and contact
   settings.
-- **Rod**: density, stiffness, bend, strain limit, and contact settings.
+- **Rod**: density, stiffness, bend, shrink, strain limit, and contact
+  settings.
 - **PDRD**: density, friction, and contact settings only. PDRD is an
   exactly-rigid body type with no Young's modulus, Poisson ratio, bend,
   shrink, strain limit, or inflate.
@@ -27,8 +28,8 @@ The six options in the group-type dropdown on each group's header row.
 Picking one changes the **Material Params** box to match: **Solid**
 shows density, stiffness, and a single shrink factor; **Shell** shows
 the full cloth stack including anisotropic shrink, strain limit,
-inflate, and stitch; **Rod** shows density, stiffness, bend, and
-strain limit; **Static** collapses to just **Friction** and the
+inflate, and stitch; **Rod** shows density, stiffness, shrink, bend,
+and strain limit; **Static** collapses to just **Friction** and the
 contact rows; and **Sand** shows grain radius, particle mass, friction,
 and the contact rows.
 ```
@@ -63,7 +64,9 @@ The rows you see inside **Material Params**, top to bottom:
 6. **Bend stiffness** and **Shrink**. **Shell** shows Bend, Shrink X/Y,
    a **Strain Limit** toggle, an **Inflate** toggle, and a **Stitch
    Stiffness** field. **Solid** collapses down to a single Shrink
-   slider. **Rod** reuses the **Shell** Bend row.
+   slider. **Rod** draws its **Shrink** row just under **Friction** and
+   its **Bend Stiffness** field in a separate **Bend** box below the
+   contact rows.
 7. **Contact Gap**: a toggle picks between absolute distance (in Blender
    units) and a fraction of the group's bounding-box diagonal; the
    relevant pair of fields shows up below the toggle.
@@ -234,7 +237,7 @@ since a tet has no bending energy.
 | **Density (kg/m²)**      | `shell_density`        | 1.0              | Areal density, kg/m².                                          |
 | **Young's Modulus (Pa/ρ)** | `shell_young_modulus`  | 1000.0         | Young's modulus (see note below). Accepted range 0 – 10 M.     |
 | **Poisson's Ratio**      | `shell_poisson_ratio`  | 0.35             | Poisson ratio, 0 – 0.4999.                                     |
-| **Bend Stiffness**       | `bend`                 | 10.0             | Bending stiffness. Min 0, soft max 100.                        |
+| **Bend Stiffness**       | `bend`                 | 10.0             | Hinge bending stiffness between neighboring faces. Min 0, soft max 100. **Rod** groups write the same property on their own scale; see [Bend Stiffness on a Rod](#bend-stiffness-on-a-rod). |
 | **Shrink X**             | `shrink_x`             | 1.0              | Anisotropic warp scale (min 0.1). < 1 shrinks, > 1 extends.    |
 | **Shrink Y**             | `shrink_y`             | 1.0              | Anisotropic weft scale (min 0.1). < 1 shrinks, > 1 extends.    |
 | **Enable Strain Limit**  | `enable_strain_limit`  | `False`          | Turns on non-physical strain clamp (good for stiff cloth).     |
@@ -499,17 +502,211 @@ is on, and the rest of the time TetGen runs at its own defaults.
 | **Model**                  | `rod_model`         | `ARAP`    | Material model. `ARAP` is the only option.        |
 | **Density (kg/m)**         | `rod_density`       | 1.0       | Line density, kg/m.                               |
 | **Young's Modulus (Pa/ρ)** | `rod_young_modulus` | 10000.0   | Young's modulus (see note below).                 |
+| **Shrink**                 | `length_factor`     | 1.0       | Rest-length scale for every segment of the strand (min 0.1). Below 1 pulls the strand taut, above 1 leaves it slack. |
+| **Bend Stiffness**         | `bend`              | 1.0       | How strongly the strand resists being curved. Min 0, soft max 100. |
 
-**Rod** groups expose the same **Bend Stiffness** field as **Shell**;
-it writes into the single `bend` property on the group, so both types
-read and serialize it identically. Switching a group's type to **Rod**
-resets `bend` to `1.0` (the rod-tuned default); switching back to or
-creating a **Shell** group leaves the global default of `10.0`.
+**Bend Stiffness** writes the same `bend` property a **Shell** group
+writes, so a material profile carries one value for both types. Each
+type scales that value on its own terms, so a number tuned on cloth is
+not a number tuned on a strand: switching a group's type to **Rod** sets
+`bend` to `1.0`, the rod-tuned default, while a **Shell** group keeps the
+global default of `10.0`.
 
-**Rest Angle** is exposed under **Bend Plasticity** for rods as well as
-shells: pick **Flat / Straight** to keep the analytic rest angle (shell
-hinge θ₀ = 0, rod θ₀ = π), or **From Initial Geometry** to take the
-rest angle from the input pose.
+**Rest Angle** sits in that same **Bend** box on a rod. A **Shell** group
+draws it instead as the first row of the unlabeled box that also carries
+**Bend Plasticity**, so look above the **Bend Plasticity** checkbox, not
+below it. Either way, pick **Flat / Straight** to keep the analytic rest
+angle (rod θ₀ = π, shell hinge θ₀ = 0), or **From Initial Geometry** to
+take the rest angle from the input pose.
+
+### Bend Stiffness on a Rod
+
+What it does: sets how strongly the strand resists being curved. At `0`
+the rod is a limp thread that resists only stretching; raise it and the
+strand holds a curve the way a wire, a cable, or a bristle does.
+
+**A rod bends the same way no matter how many segments it is drawn
+with.** The stiffness is measured against a reference segment of one
+centimeter and rescaled to whatever segment length the strand actually
+has, so adding control points for a smoother silhouette or for finer
+contact resolution leaves the drape unchanged, and the same strand drawn
+coarse and drawn fine is the same rod. Tune the value on a draft mesh and
+keep it when you refine the geometry.
+
+The reference segment also fixes what the numbers mean, which is why a
+rod starts at `1.0` where a shell starts at `10.0`: the same figure on the
+two types is not the same stiffness.
+
+When to change it: raise it for wire, cable, tubing, or hair that should
+keep the shape it was drawn with; lower it toward `0` for thread, string,
+and yarn that should fall limp and take its shape from gravity and
+contact alone.
+
+:::{important}
+**Opening a saved rod scene.** A **Bend Stiffness** value picked against a
+particular segment length carries that length with it, so a saved rod whose
+segments are not about one centimeter long opens looking different from the
+shape it was authored with: at 1 mm segments it reads much stiffer, at 10 cm
+segments much softer. To restore the look, multiply the
+group's **Bend Stiffness** by the square of its segment length in
+centimeters.
+
+| Segment length | Multiply **Bend Stiffness** by |
+| -------------- | ------------------------------ |
+| 5 cm           | 25                             |
+| 2 cm           | 4                              |
+| 1 cm           | 1 (unchanged)                  |
+| 5 mm           | 0.25                           |
+| 1 mm           | 0.01                           |
+
+Measure the segment length on the rest pose: it is the spacing between
+two neighboring points of the strand, times **Shrink** when that is not
+`1.0`. **Shell** groups are unaffected; the reference segment applies to
+rods only.
+:::
+
+### Shrink on a Rod
+
+What it does: scales the rest length of every segment in the strand.
+Below `1.0` the rest length is shorter than the drawn geometry, so a
+strand pinned at both ends pulls itself taut; above `1.0` the rest length
+is longer, so the strand sags or buckles between its pins. It is the rod
+counterpart of **Shell**'s **Shrink X** / **Shrink Y** and **Solid**'s
+**Shrink**, and like them it moves the rest shape rather than the drawn
+geometry, so nothing changes until the simulation starts.
+
+When to enable: stringing a warp or a guy line that should be under
+tension from frame one, taking the slack out of a rope that was modeled
+loose, or deliberately adding slack so a cable drapes.
+
+Mass is unchanged: a strand's mass comes from its density and its drawn
+length, so tensioning a rod with **Shrink** does not make it lighter.
+
+Bending changes with it. **Bend Stiffness** is measured against the rest
+length, which is what **Shrink** scales, so **Shrink** also moves how
+stiff the strand is in bending by the inverse square: **Shrink** = `0.5`
+leaves the rod about four times stiffer in bending and **Shrink** = `2.0`
+about four times floppier. When you want the tension without the change
+in stiffness, multiply **Bend Stiffness** by the square of the **Shrink**
+value.
+
+Example values:
+- **Shrink** = 1.0: default; the drawn geometry is the rest shape.
+- **Shrink** = 0.97: mild pre-tension; a strand pulled straight between
+  its pins.
+- **Shrink** = 1.05: slack; the strand bows out between its pins.
+
+:::{admonition} Under the hood
+:class: toggle
+
+Each interior point of a strand carries the bending energy
+`0.5 * k * (θ - θ₀)²`, where `θ` is the angle between the two segments
+meeting at that point and `θ₀` the rest angle chosen by **Rest Angle**
+(`π` for a straight rod). The coefficient is
+
+```text
+k = bend * m * (L_ref / l)²        L_ref = 1 cm
+```
+
+with `m` the lumped mass at that point and `l` its Voronoi rest length
+(half the sum of the two segment rest lengths meeting there, so it carries
+the **Shrink** factor).
+
+The two are not the same length. `m` is half of each incident segment's
+mass, and a segment's mass is its line density times its **drawn** length,
+taken from the geometry before **Shrink** scales the rest length. So with
+`d` the drawn spacing at that point, `m = density × d` while
+`l = d ×` **Shrink**, and the coefficient expands to
+
+```text
+k = bend × density × L_ref² / (d × Shrink²)
+```
+
+which reads two ways. Hold **Shrink** fixed and `k` falls as `1/d`: that
+is `k = B / l` with `B` the flexural rigidity `bend × linear density ×
+L_ref²`, which is what the continuum bending energy `0.5 * B * κ²`
+integrated along the strand discretizes to at an interior point. Linear
+density is `m / l`, so `B` works out to
+`bend × density × L_ref² /` **Shrink** and carries no `d` at all, which
+is why the bent shape does not depend on how finely the strand is drawn.
+Hold the geometry fixed instead and `k` goes as `1 / Shrink²`, the
+inverse square described above. Taking `B` per unit density is a separate
+normalization, and it is what keeps the shape independent of the density
+you set, the same one the shell hinge applies through areal density.
+`L_ref` only places the numeric range of the **Bend Stiffness** field.
+
+Rest lengths are measured in solver space, after **World Scaling** has
+been applied to the geometry, so at the default **World Scaling** of `1.0`
+a segment's rest length is its length in Blender units.
+:::
+
+## Sand-Specific
+
+A **Sand** group is a granular body: a cloud of grain centers, each grain
+a sphere of one shared radius. Its geometry is that cloud rather than a
+surface, so a mesh has to be converted first (see
+[Creating a Sand Body](#creating-a-sand-body) below). The **Material
+Params** box for a Sand group is short because most of the cloth and
+solid stack has nothing to act on.
+
+| UI label                | Python / TOML key     | Default | Description                                                                      |
+| ----------------------- | --------------------- | ------- | ---------------------------------------------------------------------------------- |
+| **Grain Radius (m)**    | `sand_grain_radius`   | 0.02    | Radius of one grain, in meters. Chosen when the mesh is converted and drawn read-only after that. Min 0.0001. |
+| **Particle Mass (g)**   | `sand_particle_mass`  | 1.0     | Mass of a single grain, in grams (the solver receives it in kilograms). Range 0.000001 – 1000000. |
+| **Friction**            | `sand_friction`       | 0.0     | Coulomb friction coefficient between grains. Min 0. Raise it to make a pile hold a steeper slope. |
+| **Contact Gap**         | `contact_gap`         | 0.001   | Barrier activation distance on top of the grain radius, in Blender units.        |
+
+**Friction** on a Sand group is its own field (`sand_friction`), not the
+shared **Friction** row, which the box does not draw for this type.
+
+**Grain Radius** is fixed at conversion and drawn grayed out afterward,
+with a *Grain radius is locked at convert* note under it. The
+non-overlapping spacing of the grains is derived from the radius when the
+cloud is seeded, so the two have to agree: a larger radius on the same
+cloud would put grains inside each other's contact skin, and the solver
+refuses an overlapping cloud at startup. To work at a different radius,
+convert the source mesh again.
+
+The grain radius is also the **contact offset**: the sphere it describes
+is the grain's physical skin, so there is no separate **Contact Offset**
+row and **Contact Gap** is the only extra barrier distance you set. The
+box says so with a *Grain radius is the contact offset* note.
+
+### Creating a Sand Body
+
+**Convert To Solid Particle Mesh** sits on the group's box just above
+**Delete Group**, so you can reach it without expanding **Material
+Params**. It is enabled when the active object is a selected mesh that has
+faces and is not already a particle mesh; otherwise the button is grayed
+out and a line underneath says which of those three is missing.
+
+The dialog has three fields:
+
+- **Grain Radius**: the physical radius of one grain, and the value that
+  gets locked onto the object.
+- **Extra Spacing**: how much room to leave between grains beyond
+  touching. `0` packs them as densely as the non-overlap rule allows;
+  larger values give a looser, sparser cloud.
+- **Random Seed**: picks a different arrangement at the same radius and
+  spacing.
+
+The grain count is not something you set. Grains fill the volume at the
+radius and spacing you chose, and the count is whatever that comes to; the
+report line after the conversion tells you the number.
+
+:::{warning}
+**The conversion is destructive.** The object's faces are discarded and
+replaced by a cloud of loose vertices plus a render-only **Particle Mesh**
+modifier that draws each vertex as a sphere. Keep a copy of the source
+mesh if you may want to re-convert at a different radius.
+:::
+
+:::{note}
+Leave **Preconditioner** on **Block Jacobi** for a scene with a Sand
+group. A grain cloud has no faces and no edges, so it carries none of the
+connectivity the **Schwarz** preconditioner builds its aggregates from.
+See [Preconditioner](scene.md#preconditioner).
+:::
 
 ## PDRD-Specific
 

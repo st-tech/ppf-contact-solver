@@ -136,6 +136,48 @@ pub const STATE_PREFIX: &str = "state_";
 /// Trailing fragment of a per-frame state checkpoint name.
 pub const STATE_SUFFIX: &str = ".bin.gz";
 
+/// Leading fragment of a per-frame rest-shape name (`plastic_<N>.bin.gz`).
+pub const PLASTIC_PREFIX: &str = "plastic_";
+
+/// Trailing fragment of a per-frame rest-shape name.
+pub const PLASTIC_SUFFIX: &str = ".bin.gz";
+
+/// The scene's build-time solver payload (mesh topology, per-element
+/// properties and parameters, constraints). Written once per run, since
+/// nothing in it changes as the simulation advances; the one part that does,
+/// the rest shape that plasticity creeps, is also written per frame as
+/// `plastic_<N>.bin.gz`.
+pub const DATASET: &str = "dataset.bin.gz";
+
+/// The collision/render mesh the solver was built from. Written once per run.
+pub const MESHSET: &str = "meshset.bin.gz";
+
+/// Marks an output directory as using the split checkpoint layout, where
+/// `dataset.bin.gz` is written once and the rest shape a plastic scene creeps
+/// (the `inv_rest*` matrices and rest angles) is also written per frame as
+/// `plastic_<N>.bin.gz`. Written once, beside the dataset, and never pruned,
+/// so its presence is an exact witness of which scheme produced the
+/// checkpoints. Without it, a missing per-frame file is ambiguous: the dataset
+/// always holds SOME rest shape, so the question is which frame's it is, and a
+/// directory whose dataset is rewritten every save wants the opposite handling
+/// from one where this checkpoint's shape was deleted.
+pub const CHECKPOINT_LAYOUT: &str = "checkpoint_layout.txt";
+
+/// Contents of `CHECKPOINT_LAYOUT`. Only the file's existence is load-bearing;
+/// the text is here so someone who finds it in an output directory can tell
+/// what it asserts.
+pub const CHECKPOINT_LAYOUT_NOTE: &str = concat!(
+    "This directory uses the split checkpoint layout.\n",
+    "  dataset.bin.gz    build-time solver payload, written once\n",
+    "  meshset.bin.gz    build-time mesh, written once\n",
+    "  state_<N>.bin.gz  per-frame positions\n",
+    "  plastic_<N>.bin.gz  per-frame rest shape (inverse rest matrices and\n",
+    "                      rest bend angles), which plasticity creeps away\n",
+    "                      from the build-time values held in the dataset.\n",
+    "                      Paired 1:1 with state_<N>.bin.gz whenever some\n",
+    "                      material has plasticity enabled.\n",
+);
+
 /// Per-frame vertex bin written by the solver as `vert_<N>.bin`.
 /// Defined in terms of `VERT_PREFIX`/`VERT_SUFFIX` so the fragment and
 /// full-name forms cannot drift.
@@ -148,4 +190,13 @@ pub fn vert_filename(frame: i32) -> String {
 /// full-name forms cannot drift.
 pub fn state_filename(frame: i32) -> String {
     format!("{STATE_PREFIX}{frame}{STATE_SUFFIX}")
+}
+
+/// Per-frame rest shape written by the solver as
+/// `plastic_<N>.bin.gz`, alongside the `state_<N>.bin.gz` it belongs to.
+/// Present only for a scene that has plasticity enabled on some material.
+/// Defined in terms of `PLASTIC_PREFIX`/`PLASTIC_SUFFIX` so the fragment and
+/// full-name forms cannot drift.
+pub fn plastic_filename(frame: i32) -> String {
+    format!("{PLASTIC_PREFIX}{frame}{PLASTIC_SUFFIX}")
 }

@@ -173,6 +173,56 @@ jobs:
           ssh-keygen -t rsa -f /tmp/ec2key -N "" -q
           echo "SSH key generated"
 
+      - name: Create EC2 Instance Connect tunnel helper
+        run: |
+          cat > /tmp/open-eice-tunnel << 'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+
+          INSTANCE_ID=$1
+          LOCAL_PORT=$2
+          MAX_ATTEMPTS=5
+          LOG_FILE="/tmp/eice-tunnel-$LOCAL_PORT.log"
+
+          for attempt in $(seq 1 "$MAX_ATTEMPTS"); do
+            : > "$LOG_FILE"
+            aws ec2-instance-connect open-tunnel \\
+              --instance-id "$INSTANCE_ID" \\
+              --remote-port 22 \\
+              --local-port "$LOCAL_PORT" \\
+              --region "$AWS_REGION" > "$LOG_FILE" 2>&1 &
+            TUNNEL_PID=$!
+
+            for readiness_check in $(seq 1 12); do
+              if ! kill -0 "$TUNNEL_PID" 2>/dev/null; then
+                break
+              fi
+
+              if ssh -i /tmp/ec2key -p "$LOCAL_PORT" \\
+                -o BatchMode=yes \\
+                -o StrictHostKeyChecking=no \\
+                -o UserKnownHostsFile=/dev/null \\
+                -o ConnectTimeout=5 \\
+                ubuntu@localhost true >/dev/null 2>&1; then
+                echo "$TUNNEL_PID"
+                exit 0
+              fi
+
+              sleep 1
+            done
+
+            kill "$TUNNEL_PID" 2>/dev/null || true
+            wait "$TUNNEL_PID" 2>/dev/null || true
+            echo "EC2 Instance Connect tunnel attempt $attempt failed:" >&2
+            cat "$LOG_FILE" >&2
+            sleep 2
+          done
+
+          echo "ERROR: EC2 Instance Connect tunnel was not ready after $MAX_ATTEMPTS attempts" >&2
+          exit 1
+          EOF
+          chmod +x /tmp/open-eice-tunnel
+
       - name: Create user data script
         run: |
           SSH_PUBKEY=$(cat /tmp/ec2key.pub)
@@ -302,9 +352,8 @@ jobs:
           echo "Transferring repository to instance..."
           INSTANCE_ID=$(cat /tmp/instance_id.txt)
 
-          aws ec2-instance-connect open-tunnel --instance-id "$INSTANCE_ID" --local-port 2222 &
-          TUNNEL_PID=$!
-          sleep 5
+          TUNNEL_PID=$(/tmp/open-eice-tunnel "$INSTANCE_ID" 2222)
+          trap 'kill "$TUNNEL_PID" 2>/dev/null || true' EXIT
 
           rsync -avz -e "ssh -i /tmp/ec2key -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" \\
             /tmp/repo.tar.gz ubuntu@localhost:${{{{env.WORKDIR}}}}/
@@ -315,16 +364,13 @@ jobs:
             ubuntu@localhost \\
             "cd ${{{{env.WORKDIR}}}} && tar -xzf repo.tar.gz && rm repo.tar.gz"
 
-          kill $TUNNEL_PID 2>/dev/null || true
-
       - name: Setup Python environment and run warmup
         run: |
           echo "Setting up Python environment and running warmup.py..."
           INSTANCE_ID=$(cat /tmp/instance_id.txt)
 
-          aws ec2-instance-connect open-tunnel --instance-id "$INSTANCE_ID" --local-port 2222 &
-          TUNNEL_PID=$!
-          sleep 5
+          TUNNEL_PID=$(/tmp/open-eice-tunnel "$INSTANCE_ID" 2222)
+          trap 'kill "$TUNNEL_PID" 2>/dev/null || true' EXIT
 
           ssh -i /tmp/ec2key -p 2222 \\
             -o StrictHostKeyChecking=no \\
@@ -342,16 +388,13 @@ jobs:
           echo "Warmup completed"
           ENDSSH
 
-          kill $TUNNEL_PID 2>/dev/null || true
-
       - name: Build Rust project
         run: |
           echo "Building Rust project with cargo..."
           INSTANCE_ID=$(cat /tmp/instance_id.txt)
 
-          aws ec2-instance-connect open-tunnel --instance-id "$INSTANCE_ID" --local-port 2222 &
-          TUNNEL_PID=$!
-          sleep 5
+          TUNNEL_PID=$(/tmp/open-eice-tunnel "$INSTANCE_ID" 2222)
+          trap 'kill "$TUNNEL_PID" 2>/dev/null || true' EXIT
 
           ssh -i /tmp/ec2key -p 2222 \\
             -o StrictHostKeyChecking=no \\
@@ -388,8 +431,6 @@ jobs:
           echo "Cargo build completed"
           ENDSSH
 
-          kill $TUNNEL_PID 2>/dev/null || true
-
       - name: Verify ppf-cts-py importable via frontend
         # `cargo build --release` above builds the PyO3 cdylib into
         # target/release/. frontend/__init__.py loads that cdylib by
@@ -400,9 +441,8 @@ jobs:
           echo "Verifying ppf-cts-py importable via frontend on remote..."
           INSTANCE_ID=$(cat /tmp/instance_id.txt)
 
-          aws ec2-instance-connect open-tunnel --instance-id "$INSTANCE_ID" --local-port 2222 &
-          TUNNEL_PID=$!
-          sleep 5
+          TUNNEL_PID=$(/tmp/open-eice-tunnel "$INSTANCE_ID" 2222)
+          trap 'kill "$TUNNEL_PID" 2>/dev/null || true' EXIT
 
           ssh -i /tmp/ec2key -p 2222 \\
             -o StrictHostKeyChecking=no \\
@@ -417,19 +457,15 @@ jobs:
           echo "ppf-cts-py verified"
           ENDSSH
 
-          kill $TUNNEL_PID 2>/dev/null || true
-
       - name: Setup CI directory
         run: |
           INSTANCE_ID=$(cat /tmp/instance_id.txt)
-          aws ec2-instance-connect open-tunnel --instance-id "$INSTANCE_ID" --local-port 2222 &
-          TUNNEL_PID=$!
-          sleep 5
+          TUNNEL_PID=$(/tmp/open-eice-tunnel "$INSTANCE_ID" 2222)
+          trap 'kill "$TUNNEL_PID" 2>/dev/null || true' EXIT
           ssh -i /tmp/ec2key -p 2222 \\
             -o StrictHostKeyChecking=no \\
             -o UserKnownHostsFile=/dev/null \\
             ubuntu@localhost "mkdir -p /tmp/ci"
-          kill $TUNNEL_PID 2>/dev/null || true
 
 """
 
@@ -440,9 +476,8 @@ jobs:
           echo "Running {example}..."
           INSTANCE_ID=$(cat /tmp/instance_id.txt)
 
-          aws ec2-instance-connect open-tunnel --instance-id "$INSTANCE_ID" --local-port 2222 &
-          TUNNEL_PID=$!
-          sleep 5
+          TUNNEL_PID=$(/tmp/open-eice-tunnel "$INSTANCE_ID" 2222)
+          trap 'kill "$TUNNEL_PID" 2>/dev/null || true' EXIT
 
           ssh -i /tmp/ec2key -p 2222 \\
             -o StrictHostKeyChecking=no \\
@@ -473,8 +508,6 @@ jobs:
           python3 /tmp/{example}.py 2>&1 | tee /tmp/ci/{example}/{example}.log
           ENDSSH
 
-          kill $TUNNEL_PID 2>/dev/null || true
-
 """
 
         workflow += f"""
@@ -487,11 +520,8 @@ jobs:
           INSTANCE_ID=$(cat /tmp/instance_id.txt)
 
           # Open tunnel for this step
-          aws ec2-instance-connect open-tunnel \\
-            --instance-id "$INSTANCE_ID" \\
-            --local-port 2222 &
-          TUNNEL_PID=$!
-          sleep 5
+          TUNNEL_PID=$(/tmp/open-eice-tunnel "$INSTANCE_ID" 2222)
+          trap 'kill "$TUNNEL_PID" 2>/dev/null || true' EXIT
 
           # Delete large binary files on remote before copying to save bandwidth
           ssh -i /tmp/ec2key -p 2222 \\
@@ -511,9 +541,6 @@ jobs:
           echo "## Collected Files:"
           ls -laR ci/ | head -100
 
-          # Close tunnel
-          kill $TUNNEL_PID 2>/dev/null || true
-
       - name: Upload artifact
         if: success() || failure()
         uses: actions/upload-artifact@v6
@@ -529,19 +556,13 @@ jobs:
           INSTANCE_ID=$(cat /tmp/instance_id.txt)
 
           # Open tunnel for this step
-          aws ec2-instance-connect open-tunnel \\
-            --instance-id "$INSTANCE_ID" \\
-            --local-port 2222 &
-          TUNNEL_PID=$!
-          sleep 5
+          TUNNEL_PID=$(/tmp/open-eice-tunnel "$INSTANCE_ID" 2222)
+          trap 'kill "$TUNNEL_PID" 2>/dev/null || true' EXIT
 
           ssh -i /tmp/ec2key -p 2222 \\
             -o StrictHostKeyChecking=no \\
             -o UserKnownHostsFile=/dev/null \\
             ubuntu@localhost "nvidia-smi" || echo "Failed to get GPU info"
-
-          # Close tunnel
-          kill $TUNNEL_PID 2>/dev/null || true
 
       - name: Re-authenticate for cleanup
         if: always()

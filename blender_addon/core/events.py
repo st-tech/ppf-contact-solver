@@ -73,7 +73,16 @@ class ConnectionLost(Event):
 
 @dataclass(frozen=True)
 class StartServerRequested(Event):
-    """User requested remote server start."""
+    """User requested remote server start.
+
+    ``cuda_device`` is the display index and ``cuda_device_uuid`` the stable
+    launch identity, or ``gpu_devices.AUTOMATIC`` plus an empty UUID to set
+    nothing. They ride the event rather than being stored at connect because
+    the panel lets the selection change between Stop and the next Start.
+    """
+
+    cuda_device: int = -1
+    cuda_device_uuid: str = ""
 
 
 @dataclass(frozen=True)

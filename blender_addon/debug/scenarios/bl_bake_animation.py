@@ -153,9 +153,8 @@ try:
             break
         time.sleep(0.3)
     if dh.facade.engine.state.solver.name == "FAILED":
-        raise RuntimeError(
-            f"mesh build failed: {dh.facade.engine.state.error!r}"
-        )
+        raise RuntimeError(build_failure_message(
+            dh.facade, dh.com, prefix="mesh build failed"))
 
     dh.run_and_wait(timeout=90.0)
     dh.force_frame_query(expected_frames=1, timeout=10.0)
@@ -324,9 +323,8 @@ try:
             break
         time.sleep(0.3)
     if dh.facade.engine.state.solver.name == "FAILED":
-        raise RuntimeError(
-            f"curve build failed: {dh.facade.engine.state.error!r}"
-        )
+        raise RuntimeError(build_failure_message(
+            dh.facade, dh.com, prefix="curve build failed"))
 
     dh.run_and_wait(timeout=120.0)
     dh.force_frame_query(expected_frames=1, timeout=15.0)
