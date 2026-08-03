@@ -880,4 +880,5 @@ If you used this project in a public piece of work, whether a paper, a productio
 
 The author thanks [ZOZO, Inc.](https://corp.zozo.com/en/) for permitting the release of the code and the team members for assisting with the internal paperwork for this project.
 The author expresses gratitude to GitHub community users for their feedback in [Issues](https://github.com/st-tech/ppf-contact-solver/issues) and [Discussions](https://github.com/st-tech/ppf-contact-solver/discussions), which has greatly helped track down and fix bugs, and for proposing feature requests that have strengthened this solver.
+The author also thanks everyone who has shared videos featuring this solver on YouTube, helping introduce it to a wider audience.
 This repository is owned by [ZOZO, Inc.](https://corp.zozo.com/en/)
