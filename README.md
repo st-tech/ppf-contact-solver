@@ -745,6 +745,7 @@ Below, we describe how to deploy our solver on major cloud services. These instr
 ### 📦 Deploying on [vast.ai](https://vast.ai)
 
 - Select our template [(Link)](https://cloud.vast.ai?ref_id=85288&template_id=29158e5c91e1b4b9543b6a027a837979).
+- For a step-by-step video tutorial, see ["Setting Up vast.ai"](https://st-tech.github.io/ppf-contact-solver/blender_addon/tutorial.html).
 - Create an instance and connect via SSH with port forwarding, e.g. `ssh -L 8080:localhost:8080 root@<host> -p <port>`, then open `http://localhost:8080` in your browser.
 
 ### 📦 Deploying on [Scaleway](https://www.scaleway.com/en/)
@@ -878,4 +879,5 @@ If you used this project in a public piece of work, whether a paper, a productio
 ## 🙏 Acknowledgements
 
 The author thanks [ZOZO, Inc.](https://corp.zozo.com/en/) for permitting the release of the code and the team members for assisting with the internal paperwork for this project.
+The author expresses gratitude to GitHub community users for their feedback in [Issues](https://github.com/st-tech/ppf-contact-solver/issues) and [Discussions](https://github.com/st-tech/ppf-contact-solver/discussions), which has greatly helped track down and fix bugs, and for proposing feature requests that have strengthened this solver.
 This repository is owned by [ZOZO, Inc.](https://corp.zozo.com/en/)
