@@ -10,6 +10,8 @@ body:
         Pull requests are not accepted. See https://github.com/st-tech/ppf-contact-solver/blob/main/CONTRIBUTING.md for details.
 
         **How issues are handled:** This project has a single maintainer who cannot work on it full time, so issues are triaged with labels: `queued` once the author has seen it, `in-progress` once work begins, and `worked` after it has been answered at least once. Issues are handled in batches, so please be patient if a response takes a while.
+
+        **Reproduction file:** If possible, attach a `.blend` file that reproduces the issue. Remove any copyrightable materials from the scene or replace them with openly licensed alternatives. GitHub does not support direct `.blend` uploads, so compress the file into a ZIP archive (for example, `scene.blend.zip`) before attaching it.
   - type: textarea
     id: summary
     attributes:
@@ -21,7 +23,7 @@ body:
     id: reproduction
     attributes:
       label: Steps to Reproduce
-      description: Minimal steps, scene, or command needed to reproduce the issue.
+      description: Minimal steps, scene, or command needed to reproduce the issue. If possible, attach a ZIP archive containing a reproducible `.blend` file.
       placeholder: |
         1. ...
         2. ...
