@@ -37,6 +37,7 @@ involving 👚 shells, 🪵 solids, 🪢 rods, 🧱 rigid bodies and ⏳ sand. S
 - **📐 Finite Element Method**: We use FEM for deformables and symbolic force jacobians.
 - **📊 Parameters Calibrated**: Fabric presets match real measurements [(Report)](https://st-tech.github.io/ppf-contact-solver/fabric-report/index.html).
 - **⚔️ Highly Stressed**: We run GitHub Actions to run stress tests [10 times in a row](#️-ten-consecutive-runs).
+- **🐛 Community Tested**: Users report bugs and we fix them [(Issues)](https://github.com/st-tech/ppf-contact-solver/issues).
 - **🚀 Massively Parallel**: Both contact and elasticity solvers are run on the GPU.
 - **🪟 Windows Executable**: No installation wizard shown. Just unzip and run [(Video)](https://zozo.box.com/s/9rthkw122fyss5qxuf5mie9xywg7jzdz).
 - **🐳 Docker Sealed**: All can be deployed fast. The image is ~1GB.
