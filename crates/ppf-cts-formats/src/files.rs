@@ -108,6 +108,14 @@ pub const SAVE_AND_QUIT: &str = "save_and_quit";
 /// scraping and the overlapping `finished.txt`/`crashed.txt` markers.
 pub const STATUS_RECORD: &str = "status.cbor";
 
+/// One-line ASCII sidecar naming the fatal signal that killed the solver,
+/// written ONLY from inside a signal handler and therefore with a single
+/// `write(2)` of a pre-formatted `"<SIGNAME> <launch_id>\n"`. It exists
+/// because a signal death is the one exit that cannot reach the terminal
+/// status record: the handler must stay async-signal-safe, so it cannot
+/// serialize CBOR. Absent for `SIGKILL`, which cannot be caught at all.
+pub const CRASH_SIGNAL: &str = "crash_signal";
+
 /// Liveness lock the solver host advisory-locks for its whole lifetime.
 /// The OS releases it on ANY process death (including SIGKILL), so a
 /// free lock plus a dead owning PID plus no terminal outcome is a crash
@@ -128,6 +136,21 @@ pub const VERT_PREFIX: &str = "vert_";
 
 /// Trailing fragment of a per-frame vertex bin name.
 pub const VERT_SUFFIX: &str = ".bin";
+
+/// Solver-written statistics manifest for one run. It fixes object UUIDs,
+/// ordering, dynamics types, and supported scalar channels.
+pub const STATISTICS_MANIFEST: &str = "statistics_manifest.cbor";
+
+/// Solver input describing stable object identity and exact global topology
+/// ranges for per-object statistics analysis.
+pub const STATISTICS_INPUT: &str = "statistics_input.cbor";
+
+/// Leading fragment of a per-frame statistics record
+/// (`statistics_<N>.cbor`).
+pub const STATISTICS_PREFIX: &str = "statistics_";
+
+/// Trailing fragment of a per-frame statistics record.
+pub const STATISTICS_SUFFIX: &str = ".cbor";
 
 /// Leading fragment of a per-frame state checkpoint name
 /// (`state_<N>.bin.gz`).
@@ -183,6 +206,11 @@ pub const CHECKPOINT_LAYOUT_NOTE: &str = concat!(
 /// full-name forms cannot drift.
 pub fn vert_filename(frame: i32) -> String {
     format!("{VERT_PREFIX}{frame}{VERT_SUFFIX}")
+}
+
+/// Per-frame solver statistics written as `statistics_<N>.cbor`.
+pub fn statistics_filename(frame: i32) -> String {
+    format!("{STATISTICS_PREFIX}{frame}{STATISTICS_SUFFIX}")
 }
 
 /// Per-frame state checkpoint written by the solver as `state_<N>.bin.gz`.

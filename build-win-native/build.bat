@@ -177,7 +177,14 @@ set CPP_SRCS=%CPP_DIR%\simplelog\SimpleLog.cpp %CPP_DIR%\stub.cpp
 REM Keep this list in sync with BASE_DIRS in crates/ppf-cts-solver/src/cpp/Makefile
 REM (the Linux/macOS build). schwarz/schwarz.cu defines schwarz::build/apply that
 REM solver.cu references; omitting it here fails the link with unresolved externals.
-set CU_SRCS=%CPP_DIR%\buffer\buffer.cu %CPP_DIR%\main\main.cu %CPP_DIR%\utility\utility.cu %CPP_DIR%\utility\dispatcher.cu %CPP_DIR%\csrmat\csrmat.cu %CPP_DIR%\contact\contact.cu %CPP_DIR%\energy\energy.cu %CPP_DIR%\eigenanalysis\eigenanalysis.cu %CPP_DIR%\barrier\barrier.cu %CPP_DIR%\strainlimiting\strainlimiting.cu %CPP_DIR%\solver\solver.cu %CPP_DIR%\schwarz\schwarz.cu %CPP_DIR%\kernels\reduce.cu %CPP_DIR%\kernels\exclusive_scan.cu %CPP_DIR%\kernels\vec_ops.cu %CPP_DIR%\kernels\radix_sort.cu %CPP_DIR%\lbvh\lbvh.cu %CPP_DIR%\plasticity\plasticity.cu
+REM utility\dispatcher.cu is deliberately absent: it is an include, not a TU.
+REM dispatcher.hpp ends with `#include "dispatcher.cu"` and 11 TUs pull it in
+REM that way, so the Makefile's mechanical list never names it and compiling it
+REM standalone here only produced a dead object. Measured on Windows: it
+REM costs 4.0 s in the serial loop below, and the device link with its object
+REM dropped succeeds and yields SASS identical to the link that included it
+REM (925,904 instructions either way), so it carries no device code.
+set CU_SRCS=%CPP_DIR%\buffer\buffer.cu %CPP_DIR%\main\main.cu %CPP_DIR%\utility\utility.cu %CPP_DIR%\csrmat\csrmat.cu %CPP_DIR%\contact\contact.cu %CPP_DIR%\energy\energy.cu %CPP_DIR%\eigenanalysis\eigenanalysis.cu %CPP_DIR%\barrier\barrier.cu %CPP_DIR%\strainlimiting\strainlimiting.cu %CPP_DIR%\solver\solver.cu %CPP_DIR%\schwarz\schwarz.cu %CPP_DIR%\kernels\reduce.cu %CPP_DIR%\kernels\exclusive_scan.cu %CPP_DIR%\kernels\vec_ops.cu %CPP_DIR%\kernels\radix_sort.cu %CPP_DIR%\lbvh\lbvh.cu %CPP_DIR%\plasticity\plasticity.cu
 
 REM Compiler flags. Device link-time optimization (LTO), matching the Linux
 REM Makefile: compile each TU to an LTO intermediate (code=lto_86), then device-
@@ -218,7 +225,32 @@ REM SASS is forward-compatible within a major version: sm_86 covers sm_87 (Orin)
 REM and sm_89 (Ada: RTX 40, L40S); sm_90 Hopper; sm_100 Blackwell DC (B200);
 REM sm_120 Blackwell consumer (RTX 50-series). Add a cubin + rebuild for new archs.
 REM Keep in sync with SUPPORTED_SM in crates\ppf-cts-core\src\utils.rs (launch gate).
-%NVCC% -shared -dlto -gencode arch=compute_86,code=sm_86 -gencode arch=compute_86,code=sm_89 -gencode arch=compute_86,code=sm_90 -gencode arch=compute_86,code=sm_100 -gencode arch=compute_86,code=sm_120 -Xcompiler "/MD" !OBJS! -lcudart -o "%LIB_DIR%\libsimbackend_cuda.dll"
+REM
+REM -t runs the per-arch optimizations concurrently (0 = one thread per CPU),
+REM matching the Linux Makefile. Each -gencode is an independent whole-program
+REM optimization of the same LTO IR, and nvcc runs them one after another
+REM without this, so the link costs the arch count times a single arch: measured
+REM here 180.0 s for the five against 56.3 s with -t 0.
+REM
+REM It is a scheduling flag only, selecting no optimization level and changing no
+REM codegen decision. Do NOT try to confirm that by hashing the DLL: a PE carries
+REM a timestamp, so two SERIAL links of the same objects already differ, and the
+REM hash says nothing either way (the Linux .so, which has no such field, does
+REM come out byte-identical). Compare SASS, which is identical across serial,
+REM serial-repeated and -t 0 at 925,904 instructions. Getting at it needs
+REM cuobjdump and nvdisasm, neither of which warmup.bat installs. Extract them
+REM from the CUDA installer warmup already downloaded, which leaves the
+REM toolchain untouched:
+REM   7zip\7z.exe x downloads\cuda_<ver>_windows.exe -oC:\tmp\cuobj ^
+REM       "cuda_cuobjdump\*" "cuda_nvdisasm\*" -r -y
+REM then put the nvdisasm bin directory on PATH, or cuobjdump reports
+REM "Could not find executable file 'nvdisasm'". Note that a dump which fails
+REM this way exits 0 and prints nothing, so check the instruction count before
+REM trusting any comparison drawn from it.
+REM
+REM Do NOT substitute --split-compile, which parallelizes by narrowing the
+REM optimizer's scope and emitted 1.6%% more SASS in the hottest device code.
+%NVCC% -shared -dlto -t 0 -gencode arch=compute_86,code=sm_86 -gencode arch=compute_86,code=sm_89 -gencode arch=compute_86,code=sm_90 -gencode arch=compute_86,code=sm_100 -gencode arch=compute_86,code=sm_120 -Xcompiler "/MD" !OBJS! -lcudart -o "%LIB_DIR%\libsimbackend_cuda.dll"
 if errorlevel 1 (
     echo ERROR: nvcc device-link failed
     exit /b 1

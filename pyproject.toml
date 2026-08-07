@@ -1,5 +1,14 @@
 [tool.pytest.ini_options]
-testpaths = ["frontend/tests", "crates/ppf-cts-py/tests"]
+testpaths = [
+    "frontend/tests",
+    "crates/ppf-cts-py/tests",
+    # Add-on tests that run on a plain interpreter. They sit outside
+    # blender_addon/ because pytest imports the __init__.py of every
+    # package on the path to a test file, and blender_addon/__init__.py
+    # imports bpy at its first line. blender_addon/tests stays where it is
+    # and is run by Blender.
+    "addon_host_tests",
+]
 python_files = ["_*_.py", "test_*.py"]
 
 [tool.ruff]

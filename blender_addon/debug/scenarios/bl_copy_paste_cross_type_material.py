@@ -8,7 +8,8 @@
 # The Material Params clipboard skips two classes of fields:
 #
 #   1. Identity / per-object-bound entries (uuid, name, index, the
-#      assigned-object selectors, profile bindings, UI toggles). These
+#      assigned-object selectors, profile bindings, UI toggles, and the
+#      overlay color the group derives from its ``object_type``). These
 #      are listed in ``MATERIAL_CLIPBOARD_EXCLUDE`` and never go on or
 #      come off the clipboard, so a paste leaves them at whatever the
 #      destination already had.
@@ -34,6 +35,10 @@
 #     rejected them because the source is SHELL, not SAND).
 #   - All MATERIAL_CLIPBOARD_EXCLUDE fields on B retained their pre-
 #     paste values (identity, profile bindings, UI toggles).
+#   - B keeps the SOLID entry of the type-color legend, both on the
+#     group and on the assigned object that ``apply_object_overlays``
+#     writes ``obj.color`` through to. Copying the color would repaint
+#     a user-owned object with the source group's type.
 
 from __future__ import annotations
 
@@ -126,6 +131,8 @@ try:
     introspect = __import__(pkg + ".core.param_introspect",
                             fromlist=["MATERIAL_CLIPBOARD_EXCLUDE",
                                       "list_copyable_params"])
+    groups_mod = __import__(pkg + ".models.groups",
+                            fromlist=["get_object_type"])
 
     dh = DriverHelpers(pkg, result)
     dh.log("setup_start")
@@ -194,6 +201,13 @@ try:
     # excluded identity / UI fields that must be preserved).
     b_before = {n: _read(b, n, rna.properties[n]) for n in all_scalar}
     a_after_perturb = {n: _read(a, n, rna.properties[n]) for n in copyable}
+
+    # The overlay color is the group type's legend entry, and writing it
+    # runs ``apply_object_overlays`` over every assigned object, so the
+    # paste reaches user-owned ``obj.color``. Capture both levels.
+    shell_tint = tuple(groups_mod.get_object_type("SHELL"))
+    solid_tint = tuple(groups_mod.get_object_type("SOLID"))
+    obj_b_color_before = tuple(plane_b.color)
 
     # Copy A, paste into B.
     bpy.ops.object.copy_material_params(group_index=0)
@@ -303,6 +317,33 @@ try:
         not excluded_clobbered,
         {"preserved_count": len(excluded_preserved),
          "clobbered": excluded_clobbered[:8]},
+    )
+
+    # The type-color legend survives a cross-type paste, at both the
+    # group level and on the object the overlay writes through to.
+    # Premise guard: SHELL and SOLID must actually be drawn in
+    # different colors, and B must start on the SOLID one, or a
+    # "still SOLID" verdict would prove nothing.
+    b_color_after = tuple(b.color)
+    obj_b_color_after = tuple(plane_b.color)
+    premise = (
+        not _values_close(shell_tint, solid_tint)
+        and _values_close(tuple(a.color), shell_tint)
+        and _values_close(tuple(b_before["color"]), solid_tint)
+        and _values_close(obj_b_color_before, solid_tint)
+    )
+    dh.record(
+        "type_color_not_repainted_on_B",
+        premise
+        and _values_close(b_color_after, solid_tint)
+        and _values_close(obj_b_color_after, solid_tint),
+        {"premise_ok": premise,
+         "shell_tint": shell_tint, "solid_tint": solid_tint,
+         "a_color": tuple(a.color),
+         "b_group_color_before": tuple(b_before["color"]),
+         "b_group_color_after": b_color_after,
+         "b_object_color_before": obj_b_color_before,
+         "b_object_color_after": obj_b_color_after},
     )
 
     # B's per-assigned-object collection survived: paste must not have

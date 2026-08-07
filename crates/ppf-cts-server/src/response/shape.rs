@@ -13,7 +13,7 @@ use crate::PROTOCOL_VERSION;
 use ppf_cts_core::state::{Build, ServerState, Solver};
 
 /// Build the always-present base fields: status, data, frame,
-/// initialized, error, violations, root, upload_id, hashes,
+/// initialized, error, crash_kind, violations, root, upload_id, hashes,
 /// protocol_version, hardware, git_branch.
 pub fn base_map(state: &ServerState, config: &EngineConfig) -> Map<String, Value> {
     let mut m: Map<String, Value> = Map::new();
@@ -22,6 +22,10 @@ pub fn base_map(state: &ServerState, config: &EngineConfig) -> Map<String, Value
     m.insert("frame".into(), json!(state.frame));
     m.insert("initialized".into(), json!(state.initialized));
     m.insert("error".into(), Value::String(state.error.clone()));
+    // Stable snake_case name of the crash cause behind `error`, empty when
+    // `error` is not a solver crash. The addon localizes the tag into a
+    // one-line headline; `error` stays the full report.
+    m.insert("crash_kind".into(), Value::String(state.crash_kind.clone()));
     m.insert(
         "violations".into(),
         Value::Array(violations_to_json(&state.violations)),

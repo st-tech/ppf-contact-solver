@@ -92,10 +92,22 @@ try:
 
     # Viewport timeline deliberately short; the simulation runs longer.
     # The geonode capture range must follow frame_count, not frame_end.
+    #
+    # ``_short_timeline()`` re-authors that short timeline after every
+    # write to ``frame_count``, because assigning it expands a shorter
+    # ``scene.frame_end`` up to the last simulated frame. Without the
+    # re-author the two quantities coincide and the checks below stop
+    # discriminating between them. The expansion itself is the subject
+    # of ``bl_frame_start``, not of this scenario.
+    SHORT_END = 12
+
+    def _short_timeline():
+        scene.frame_end = SHORT_END
+
     scene.frame_start = 1
-    scene.frame_end = 12
     state = groups.get_addon_data(scene).state
     state.frame_count = 50
+    _short_timeline()
 
     bpy.ops.mesh.primitive_plane_add(size=2.0, location=(0.0, 0.0, 0.0))
     plane = ctx.active_object
@@ -124,11 +136,15 @@ try:
 
     # ---- B: upper bound tracks frame_count (rules out coincidence) ----
     state.frame_count = 30
+    _short_timeline()
     fs2, fe2, src2 = sd._effective_frame_range(scene, plane)
     record(
         "B_geonode_range_tracks_frame_count",
-        fs2 == 1 and fe2 == 30 and "simulation frame count (30)" in src2,
+        fs2 == 1 and fe2 == 30
+        and fe2 != scene.frame_end
+        and "simulation frame count (30)" in src2,
         {"frame_start": fs2, "frame_end": fe2, "range_source": src2,
+         "scene_frame_end": scene.frame_end,
          "state_frame_count": state.frame_count},
     )
 

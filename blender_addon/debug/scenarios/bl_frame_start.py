@@ -48,6 +48,11 @@
 #         authored BEFORE the start frame is the velocity the object enters
 #         the solve with, so it clamps onto t=0 rather than being dropped from
 #         both the initial value and the schedule.
+#   I. panel_updates_expand_timeline: changing Starting Frame or Frame Count
+#         through their scene properties expands a short Blender timeline to
+#         include every configured simulation frame.
+#   J. mcp_updates_expand_timeline: set_scene_parameters applies the same
+#         timeline synchronization as the Scene panel properties.
 
 from __future__ import annotations
 
@@ -130,6 +135,39 @@ try:
          "use_scene_frame_start": bool(state.use_scene_frame_start)},
     )
 
+    # ---- I/J: configured output range expands a short timeline -------
+    # Playback maps solver indices 0..N-1 to Blender frames
+    # start..start+N-1. A shorter scene range truncates Fetch/PC2 even
+    # though the UI still reports all N configured frames.
+    bpy.context.scene.frame_end = 22
+    state.frame_start = 7
+    state.frame_count = 250
+    panel_expected_end = 7 + 250 - 1
+    panel_actual_end = int(bpy.context.scene.frame_end)
+    dh.record(
+        "I_panel_updates_expand_timeline",
+        panel_actual_end >= panel_expected_end,
+        {"frame_end": panel_actual_end, "expected_at_least": panel_expected_end,
+         "frame_start": int(state.frame_start),
+         "frame_count": int(state.frame_count)},
+    )
+
+    bpy.context.scene.frame_end = 22
+    remote = __import__(pkg + ".mcp.handlers.remote",
+                        fromlist=["set_scene_parameters"])
+    remote.set_scene_parameters({"frame_start": 13, "frame_count": 40})
+    mcp_expected_end = 13 + 40 - 1
+    mcp_actual_end = int(bpy.context.scene.frame_end)
+    dh.record(
+        "J_mcp_updates_expand_timeline",
+        mcp_actual_end >= mcp_expected_end,
+        {"frame_end": mcp_actual_end, "expected_at_least": mcp_expected_end,
+         "frame_start": int(state.frame_start),
+         "frame_count": int(state.frame_count)},
+    )
+
+    state.frame_count = FRAME_COUNT
+    bpy.context.scene.frame_end = SCENE_START + FRAME_COUNT - 1
     state.frame_start = FIELD_START
 
     # ---- A: override off -> the field is the source ------------------

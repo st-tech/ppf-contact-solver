@@ -13,6 +13,20 @@
 //   2. Build task callbacks (progress, completion, failure).
 //   3. Solver monitor task (frame ticks, exit detection, crash).
 
+/// A crash reconstructed from disk when the server has no in-memory record
+/// of it, which is every reconnect after a restart.
+///
+/// It carries the same two values a live crash carries, produced by the same
+/// renderer, so a reconnected report reads identically to the one the user
+/// saw when the run failed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReconciledCrash {
+    /// Stable snake_case cause name (`CrashKind::tag`).
+    pub kind_tag: String,
+    /// The full rendered report, including the log tails.
+    pub rendered: String,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Event {
     // ---- Client request events ----
@@ -29,12 +43,14 @@ pub enum Event {
         has_param: bool,
         has_app: bool,
         is_resumable: bool,
-        /// The solver-authored `status.cbor` records a crash (a terminal
-        /// Crashed outcome, or a non-terminal record whose owning process
-        /// is gone) not yet superseded by a launch or rebuild. Lets a
-        /// reconnect (which has no in-memory `Solver::Failed`) reconstruct
-        /// the failed state so the status still reads "Failed (Resumable)".
-        has_crashed: bool,
+        /// The crash the solver-authored `status.cbor` records (a terminal
+        /// Crashed outcome, or a non-terminal record whose owning process is
+        /// gone), not yet superseded by a launch or rebuild. `None` when the
+        /// project did not fail. Lets a reconnect (which has no in-memory
+        /// `Solver::Failed`) reconstruct the failed state AND its reason, so
+        /// the status still reads "Failed (Resumable)" and the panel still
+        /// names the cause.
+        crash: Option<ReconciledCrash>,
         upload_id: String,
         data_hash: String,
         param_hash: String,
@@ -126,9 +142,14 @@ pub enum Event {
     /// Monitor detected the solver subprocess exited cleanly.
     SolverFinished { resumable: bool },
 
-    /// Monitor detected solver crash via stderr / log analysis.
+    /// Monitor determined that the solver run failed. `error` is the full
+    /// rendered report; `kind_tag` is the stable snake_case name of the
+    /// cause (`ppf_cts_formats::status::CrashKind::tag`), which the addon
+    /// maps to a localized one-line headline. A `String` rather than the
+    /// enum because this crate does not depend on `ppf-cts-formats`.
     SolverCrashed {
         error: String,
+        kind_tag: String,
         violations: Vec<String>,
     },
 

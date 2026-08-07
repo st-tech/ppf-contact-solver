@@ -36,6 +36,12 @@ class ScenarioContext:
     timeout: float = 30.0
     log_path: str = ""
     artifacts: dict[str, Any] = field(default_factory=dict)
+    # Solver backend the run targets ("emulated" or "real"), as selected
+    # by ``runtests --backend``. A scenario registered for both reads this
+    # to assert the behavior its backend actually promises: the emulated
+    # stub skips contact assembly, so channels that only the real solver
+    # produces are absent there and present here.
+    backend: str = "emulated"
     # Knobs propagated to the spawned server. The scenario can read these
     # to gate behavior (e.g. solver_crash needs PPF_FAKE_SOLVER_CRASH_FRAME)
     # without trying to introspect a foreign process's environment.

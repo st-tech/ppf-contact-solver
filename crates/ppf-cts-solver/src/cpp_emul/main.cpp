@@ -39,8 +39,11 @@
 
 #include <atomic>
 #include <chrono>
+#include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 #include <thread>
 #include <vector>
 
@@ -104,6 +107,134 @@ unsigned long long parse_step_ms() {
 // backend.rs reads: itype, elem0, elem1, num_verts0, num_verts1, then
 // 5 packed vec3 positions.
 std::vector<IntersectionRecord> g_synthetic_records;
+
+constexpr unsigned TRANSLATION_LOCK_UNSET = 0xffffffffu;
+
+bool lock_axis_enabled(const Vec3f &axis) {
+    return axis[0] != 0.0f || axis[1] != 0.0f || axis[2] != 0.0f;
+}
+
+Vec3f lock_perpendicular(const Vec3f &value, const Vec3f &axis) {
+    const float along =
+        value[0] * axis[0] + value[1] * axis[1] + value[2] * axis[2];
+    return Vec3f(value[0] - along * axis[0], value[1] - along * axis[1],
+                 value[2] - along * axis[2]);
+}
+
+void validate_translation_locks(const DataSet &data) {
+    if (data.translation_lock.size == 0) {
+        return;
+    }
+    if (data.translation_lock_index.size != data.vertex.curr.size ||
+        data.translation_lock_initial.size != data.vertex.curr.size) {
+        ppf_fatal(PPF_FATAL_SOLVER_INVARIANT,
+                  "PPF FATAL: translation-lock dataset arrays do not match the "
+                  "vertex count.\n");
+    }
+    for (unsigned li = 0; li < data.translation_lock.size; ++li) {
+        const TranslationLock &lock = data.translation_lock.data[li];
+        const auto valid_axis = [](const Vec3f &axis) {
+            const float n2 = axis[0] * axis[0] + axis[1] * axis[1] +
+                             axis[2] * axis[2];
+            if (!std::isfinite(n2)) {
+                return false;
+            }
+            if (n2 == 0.0f) {
+                return true;
+            }
+            const float norm = std::sqrt(n2);
+            return std::isfinite(norm) &&
+                   std::abs(norm - 1.0f) <=
+                       64.0f * std::numeric_limits<float>::epsilon();
+        };
+        const bool translation_enabled =
+            lock.axis[0] != 0.0f || lock.axis[1] != 0.0f ||
+            lock.axis[2] != 0.0f;
+        const bool rotation_enabled =
+            lock.rotation_axis[0] != 0.0f ||
+            lock.rotation_axis[1] != 0.0f ||
+            lock.rotation_axis[2] != 0.0f;
+        if ((!translation_enabled && !rotation_enabled) ||
+            !valid_axis(lock.axis) || !valid_axis(lock.rotation_axis) ||
+            (lock.rotation_mode != ROTATION_LOCK_ALLOW_ONLY &&
+             lock.rotation_mode != ROTATION_LOCK_PROHIBIT_AXIS) ||
+            !std::isfinite(lock.total_mass) || lock.total_mass <= 0.0f) {
+            ppf_fatal(PPF_FATAL_SOLVER_INVARIANT,
+                      "PPF FATAL: aggregate lock %u has invalid axis or "
+                      "physical mass.\n",
+                      lock.dmap_index);
+        }
+    }
+    for (unsigned v = 0; v < data.translation_lock_index.size; ++v) {
+        const unsigned li = data.translation_lock_index.data[v];
+        if (li != TRANSLATION_LOCK_UNSET && li >= data.translation_lock.size) {
+            ppf_fatal(PPF_FATAL_SOLVER_INVARIANT,
+                      "PPF FATAL: translation-lock vertex map contains invalid "
+                      "lock index %u at vertex %u.\n",
+                      li, v);
+        }
+    }
+}
+
+// Fallback for emulated movers without a linear solve, currently SAND. The
+// optional ARAP path enforces Lock Translation inside its global solve and
+// never takes this post-step path.
+void project_translation_locks(DataSet &data) {
+    const unsigned nl = data.translation_lock.size;
+    if (nl == 0) {
+        return;
+    }
+    std::vector<Vec3f> drift(nl, Vec3f::Zero());
+    std::vector<float> free_mass(nl, 0.0f);
+    const unsigned n = data.vertex.curr.size;
+    for (unsigned v = 0; v < n; ++v) {
+        const unsigned li = data.translation_lock_index.data[v];
+        if (li == TRANSLATION_LOCK_UNSET) {
+            continue;
+        }
+        const TranslationLock &lock = data.translation_lock.data[li];
+        if (!lock_axis_enabled(lock.axis)) {
+            continue;
+        }
+        const float mass = data.prop.vertex.data[v].mass;
+        const Vec3f delta =
+            (data.vertex.curr.data[v] - data.translation_lock_initial.data[v])
+                .cast<float>();
+        const Vec3f d = lock_perpendicular(delta, lock.axis);
+        drift[li] += mass * d;
+        const bool is_fixed = data.prop.vertex.data[v].fix_index > 0 &&
+                              data.prop.vertex.data[v].pdrd_body_index == 0;
+        if (!is_fixed) {
+            free_mass[li] += mass;
+        }
+    }
+    for (unsigned li = 0; li < nl; ++li) {
+        if (!lock_axis_enabled(data.translation_lock.data[li].axis)) {
+            continue;
+        }
+        const Vec3f required = drift[li];
+        const float magnitude = required.norm();
+        if (!(free_mass[li] > 0.0f)) {
+            if (magnitude > 256.0f * std::numeric_limits<float>::epsilon()) {
+                ppf_fatal(PPF_FATAL_SOLVER_INVARIANT,
+                          "PPF FATAL: translation lock group %u is infeasible "
+                          "because fixed vertices leave no free mass for its "
+                          "perpendicular COM correction.\n",
+                          data.translation_lock.data[li].dmap_index);
+            }
+            continue;
+        }
+        const Vec3f correction = required / free_mass[li];
+        for (unsigned v = 0; v < n; ++v) {
+            if (data.translation_lock_index.data[v] != li ||
+                (data.prop.vertex.data[v].fix_index > 0 &&
+                 data.prop.vertex.data[v].pdrd_body_index == 0)) {
+                continue;
+            }
+            data.vertex.curr.data[v] -= correction;
+        }
+    }
+}
 
 void seed_synthetic_records() {
     if (!g_synthetic_records.empty()) {
@@ -177,6 +308,11 @@ DataSet build_dev_mirror(const DataSet &host) {
     dev.grain_A = mem::malloc_device(host.grain_A);
     dev.grain_B = mem::malloc_device(host.grain_B);
     dev.grain_grot = mem::malloc_device(host.grain_grot);
+    dev.translation_lock = mem::malloc_device(host.translation_lock);
+    dev.translation_lock_index =
+        mem::malloc_device(host.translation_lock_index);
+    dev.translation_lock_initial =
+        mem::malloc_device(host.translation_lock_initial);
 
     dev.inv_rest2x2 = mem::malloc_device(host.inv_rest2x2);
     dev.inv_rest3x3 = mem::malloc_device(host.inv_rest3x3);
@@ -205,14 +341,23 @@ extern "C" DLL_EXPORT void set_log_path(const char * /*data_dir*/) {
     // No-op in the emulator. SimpleLog isn't compiled in.
 }
 
-// The emulator has no CUDA error / exit(1) fatal paths, so it always
-// reports "no fatal exit". Present so the host's FFI symbol resolves on
-// the emulated link, matching cpp/main/main.cu.
+// Fatal-exit reason and one-line detail, declared in cpp/main/fatal.hpp and
+// read by the host's atexit hook. The emulator has no CUDA error paths, but it
+// does run the same scene-validation invariants, so `ppf_fatal` sets these here
+// exactly as it does in the CUDA backend.
+extern "C" unsigned char g_ppf_fatal_code = 0;
+extern "C" char g_ppf_fatal_detail[512] = {0};
+
 extern "C" DLL_EXPORT unsigned char ppf_fatal_code() {
-    return 0;
+    return g_ppf_fatal_code;
+}
+
+extern "C" DLL_EXPORT const char *ppf_fatal_detail() {
+    return g_ppf_fatal_detail;
 }
 
 extern "C" DLL_EXPORT bool initialize(DataSet *dataset, ParamSet *param) {
+    validate_translation_locks(*dataset);
     g_host_dataset = *dataset;
     g_dev_dataset = build_dev_mirror(*dataset);
     g_param = param;
@@ -244,15 +389,21 @@ extern "C" DLL_EXPORT void advance(StepResult *result) {
     // Default-off preserves the historical kinematic-only emulator: free
     // vertices move only when this solver runs; pins are already written
     // into vertex.curr by update_constraint() and act as Dirichlet targets.
+    bool elastic_advanced = false;
     if (g_param && pd_arap::enabled()) {
-        pd_arap::step(g_dev_dataset, *g_param);
+        elastic_advanced = pd_arap::step(g_dev_dataset, *g_param);
     }
 
     // Phony granular mover. Auto-runs for a faceless/edgeless point cloud
     // (sand::step self-gates via sand::is_point_cloud) and is a no-op for any
     // scene with elements, so no opt-in flag is needed.
+    bool sand_advanced = false;
     if (g_param) {
-        sand::step(g_dev_dataset, *g_param);
+        sand_advanced = sand::step(g_dev_dataset, *g_param);
+    }
+
+    if (!elastic_advanced && !sand_advanced) {
+        project_translation_locks(g_dev_dataset);
     }
 
     if (g_param) {

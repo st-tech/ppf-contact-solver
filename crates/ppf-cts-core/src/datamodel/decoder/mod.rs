@@ -68,12 +68,6 @@ pub fn blender_app_paths(
     }
 }
 
-/// Filename used for the cached tetrahedralization result:
-/// `f"{hash}_tetrahedralize_.npz"`.
-pub fn tetra_cache_filename(tri_mesh_hash: &str) -> String {
-    format!("{tri_mesh_hash}_tetrahedralize_.npz")
-}
-
 /// Directory layout the `BlenderApp._persist_app_state` write uses:
 /// the `app_state.pickle` final path plus the `.tmp` sibling we write
 /// to first, then `os.replace` over.
@@ -99,14 +93,6 @@ pub fn app_state_persist_paths(root: &Path) -> AppStatePersistPaths {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn tetra_cache_filename_format() {
-        assert_eq!(
-            tetra_cache_filename("deadbeef"),
-            "deadbeef_tetrahedralize_.npz"
-        );
-    }
 
     #[test]
     fn app_state_persist_paths_appends_tmp() {

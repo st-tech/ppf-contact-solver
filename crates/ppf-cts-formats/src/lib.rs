@@ -28,8 +28,13 @@
 pub mod envelope;
 pub mod files;
 pub mod kinds;
+pub mod statistics;
 pub mod status;
 
 pub use envelope::{Envelope, FormatError, SCHEMA_VERSION};
 pub use kinds::{ParamPayload, ScenePayload};
+pub use statistics::{
+    ObjectStatistics, StatisticChannel, StatisticsFrame, StatisticsInput, StatisticsInputObject,
+    StatisticsManifest, StatisticsObject, StatisticsValidationError, STATISTICS_VERSION,
+};
 pub use status::{RunStatus, STATUS_VERSION};

@@ -115,6 +115,12 @@ class AppState:
     server_param_hash: str = ""
     error: str = ""
     server_error: str = ""
+    # Stable snake_case name of the crash cause behind ``server_error`` (the
+    # server's ``crash_kind`` field), or "" when the error is not a solver
+    # crash. The panel maps it to a localized one-line headline and leaves the
+    # full multi-line report to the Console. Always set from the same response
+    # that sets ``server_error``, so the two cannot disagree.
+    crash_kind: str = ""
     violations: list = field(default_factory=list)
     message: str = ""
     progress: float = 0.0

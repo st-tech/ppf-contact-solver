@@ -254,10 +254,9 @@ fn compute_hinge(face: &Matrix3xX<usize>) -> (Matrix4xX<usize>, Vec<Vec<usize>>)
              or delete the duplicate faces) before running the solver."
         );
     }
-    let mut hash = HashMap::<
-        (usize, usize),
-        (usize, usize, usize, Option<usize>, usize, Option<usize>),
-    >::new();
+    let mut hash =
+        HashMap::<(usize, usize), (usize, usize, usize, Option<usize>, usize, Option<usize>)>::new(
+        );
     let mut excludes = Vec::new();
     for (i, f) in face.column_iter().enumerate() {
         for j in 0..3 {

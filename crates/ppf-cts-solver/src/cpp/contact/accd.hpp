@@ -8,6 +8,7 @@
 
 #include "distance.hpp"
 #include <cassert>
+#include <cfloat>
 
 namespace accd {
 
@@ -118,19 +119,25 @@ __device__ float rescale(SMat<T, R, C> &x, SMat<T, R, C> &dx, float max_t) {
     return scaled;
 }
 
-// Lipschitz bound on the rate at which the distance between the two primitives
-// can shrink, used by ccd_helper to size each conservative advance step. The
-// closest point on each primitive is a convex combination of that primitive's
-// vertices, so the relative velocity of the closest-point pair is a convex
-// combination of the INTER-primitive column-velocity differences (columns
-// [0, SPLIT) belong to primitive A, [SPLIT, C) to primitive B). Its norm is
-// therefore bounded by the max over inter-primitive pairs alone; intra-primitive
-// pairs (both columns on the same primitive) cannot increase the closest-point
-// relative velocity and only inflate the bound, wasting advance-loop iterations.
-// Restricting the max to inter-primitive pairs is strictly <= the all-pairs
-// bound and remains a valid Lipschitz constant, so the recovered toi is
-// unchanged (bisection converges to the same root) while penetration-free
-// conservativeness is preserved.
+// Direction-agnostic Lipschitz bound on the rate at which the distance between
+// the two primitives can shrink, used by ccd_helper as the floor under every
+// conservative advance step. The closest point on each primitive is a convex
+// combination of that primitive's vertices, so the relative velocity of the
+// closest-point pair is a convex combination of the INTER-primitive
+// column-velocity differences (columns [0, SPLIT) belong to primitive A,
+// [SPLIT, C) to primitive B). Its norm is therefore bounded by the max over
+// inter-primitive pairs alone; intra-primitive pairs (both columns on the same
+// primitive) cannot increase the closest-point relative velocity and only
+// inflate the bound, wasting advance-loop iterations.
+//
+// That restriction is not merely tighter than the all-pairs max, it is the end
+// of this family: the norm is convex on the product of the two barycentric
+// simplices, so it attains its maximum at a vertex of that polytope, and the
+// vertices are exactly the inter-primitive corner pairs. No bound reading the
+// velocities ALONE can be smaller, and the value is attained (place the closest
+// pair on the maximizing corner with its relative velocity along the normal).
+// Narrowing further requires reading the POSITIONS as well, which is what
+// directional_advance below does.
 template <class T, unsigned R, unsigned C, unsigned SPLIT>
 __device__ float max_relative_u(const SMat<T, R, C> &u) {
     float max_u = 0.0f;
@@ -143,6 +150,136 @@ __device__ float max_relative_u(const SMat<T, R, C> &u) {
     return sqrtf(max_u);
 }
 
+// Largest advance certified by a single direction, and the exact quantity the
+// bound above can only approximate.
+//
+// Fix a direction. Both primitives are convex hulls of their own columns, and a
+// linear objective over a hull is attained at a column, so the separation the
+// two vertex SETS present along that direction is a lower bound on the distance:
+//
+//   d(t) >= g(t) := min_j <n, x_j(t)> - max_i <n, x_i(t)>
+//                 = min over inter-primitive pairs of <n, x_j(t) - x_i(t)>
+//
+// Every column moves at a constant velocity over the sweep, so g is not merely
+// bounded but is EXACTLY a minimum of affine functions of the advance s:
+//
+//   g(t + s) = min over pairs of ( <n, x_j - x_i> - s * <n, u_i - u_j> )
+//
+// and the largest s that keeps g at or above a level is available in closed
+// form: the crossing time of each pair whose projected separation is closing,
+// minimized over pairs. Nothing is relaxed and no Lipschitz constant is taken,
+// so within the chosen direction this is the exact answer rather than a bound.
+//
+// That is precisely where max_relative_u is loose. It answers "how fast could
+// the distance shrink under the WORST direction", which for a contact sliding
+// tangentially is the entire sliding speed while the two surfaces are barely
+// approaching at all. The projected rate <n, u_i - u_j> is the component that
+// actually closes the gap, so a tangential pair certifies a step limited only by
+// its normal closing rate, and a pair with no closing corner certifies the whole
+// remaining sweep in one probe. The gain is the ratio of the two rates: 1 for a
+// head-on approach, 1/sin(angle) for a glancing one, unbounded for a pair that
+// is sliding or separating.
+//
+// The certificate holds for ANY direction, which is what makes it safe to build
+// one from the closest-point difference the distance functor already computed.
+// An inexact closest point yields a valid direction, only a less useful one (g
+// then sits strictly below d and the step is shorter), so unlike the parking and
+// advance arithmetic around it this routine does not rest on distance.hpp being
+// exact. With the true closest direction the supporting-hyperplane property of
+// two convex sets gives <n, x_j - x_i> >= d for every pair while every projected
+// rate is at most u_max, so the certified step is never shorter than the
+// direction-agnostic one; the caller takes the larger of the two regardless, so
+// float round-off cannot turn this into a regression.
+//
+// The direction arrives UNNORMALIZED as w, with w_norm an upper bound on its
+// length. Dividing both projections by |w| scales numerator and denominator
+// alike, so the length survives only in the level term, and the routine needs no
+// reciprocal square root and no argument that its direction is exactly unit.
+//
+// err is the round-off allowance, and it has to be evaluated on the operands
+// actually used rather than fixed once for the frame. A frame-wide constant
+// sized to the worst case exceeds the parking clearance of a coarse collider
+// (a contact against a ground plane built from two huge triangles parks at a
+// clearance of order 1e-6 in this frame), which would switch the certificate off
+// in exactly the geometry where the advance loop is slowest. Each term is a
+// standard bound on the operation that produced it: 4u covers the difference of
+// two columns plus a three-term dot product, the velocity term enters scaled by
+// max_t because the certificate is only ever consumed for s <= max_t, and the
+// last term is the absolute round-off that evaluating the sweep leaves in each
+// coordinate. That last term is itself frame-wide, and at 6.2e-7 it is already a
+// sizeable fraction of the coarse-collider clearance just quoted, so on the
+// coarsest geometry the certificate can decline (projected - dip_w <= 0) and the
+// caller falls back to the direction-agnostic step. That forfeits the speedup on
+// exactly those pairs and nothing else: the fallback is the step this routine was
+// added to improve on, and the caller takes the larger of the two either way.
+// Charging the velocity error to the numerator instead of inflating
+// the rate keeps a barely-positive rate from turning into an enormous quotient.
+// Two levels are in play, and the split is what keeps the certificate both
+// useful and behaviorally neutral.
+//
+// `dip` decides whether this direction resolves the pair AT ALL. It is the same
+// floor the direction-agnostic step certifies, so asking for anything stricter
+// here would void the certificate for a contact settled a hair above its parking
+// distance, which is exactly the configuration it is worth the most (a settled
+// contact slides, so its projected closing rate is what the direction-agnostic
+// bound overstates worst).
+//
+// `park` decides where a BOUNDED step stops. Solving the crossing one level
+// higher makes a finite step land with the pair still outside its parking
+// distance, so it never ends the advance loop and the bisection bracket stays as
+// narrow as the direction-agnostic loop would have made it. That matters because
+// bisection only converges to SOME crossing inside its bracket, and a bracket
+// widened by a long step can straddle a dip below the park and back out, landing
+// the recovered toi on a different crossing than the one this pair actually
+// reaches first. Nothing about penetration turns on which it picks (every state
+// in the bracket is certified at `dip`), but the accepted step is the solver's
+// time-advance rate, and it should not move for a reason unrelated to physics.
+//
+// A step that is UNBOUNDED needs neither: with no corner closing along the
+// direction the projected gap cannot decrease, so it stays at its current value
+// for the rest of the sweep, and that value is already above the park.
+template <class T, unsigned R, unsigned C, unsigned SPLIT>
+__device__ float directional_advance(const SMat<T, R, C> &x,
+                                     const SMat<T, R, C> &dx,
+                                     const SVec<float, R> &w, float w_norm,
+                                     float dip, float park, float max_t) {
+    // 4u, u = 2^-24 being the float32 unit round-off.
+    const float round_slack = 2.0f * FLT_EPSILON;
+    // 2 * sqrt(3) * 3u. rescale() leaves every coordinate of the sweep below
+    // one and every displacement below two, so evaluating x0 + t * dx rounds a
+    // coordinate by at most 3u in ABSOLUTE terms, and the certificate compares
+    // two such evaluations, one at each end of the step it grants, over the
+    // three coordinates.
+    const float coord_slack = 6.2e-7f;
+    SVec<float, R> w_abs = w.cwiseAbs();
+    float dip_w = dip * w_norm;
+    float park_w = park * w_norm;
+    float step = std::numeric_limits<float>::max();
+    for (int i = 0; i < SPLIT; i++) {
+        for (int j = SPLIT; j < C; j++) {
+            SVec<float, R> gap = (x.col(j) - x.col(i)).template cast<float>();
+            SVec<float, R> rel = (dx.col(i) - dx.col(j)).template cast<float>();
+            float err = round_slack * (w_abs.dot(gap.cwiseAbs()) +
+                                       max_t * w_abs.dot(rel.cwiseAbs()) +
+                                       park_w) +
+                        coord_slack * w_norm;
+            float projected = w.dot(gap) - err;
+            if (!(projected - dip_w > 0.0f)) {
+                // This direction cannot certify even the floor the caller
+                // already holds, which happens when the closest-point difference
+                // is a poor direction or the pair sits inside the round-off
+                // allowance. Grant nothing and let the caller fall back.
+                return 0.0f;
+            }
+            float rate = w.dot(rel);
+            if (rate > 0.0f) {
+                step = fminf(step, fmaxf(0.0f, projected - park_w) / rate);
+            }
+        }
+    }
+    return step;
+}
+
 // Floor on the gap at which the CCD parks a pair, as a fraction of that pair's
 // contact gap. Expressed against ghat because the quantity it protects is the
 // fp32 dynamic contact stiffness mass/gap^2, whose conditioning depends on the
@@ -151,15 +288,16 @@ __device__ float max_relative_u(const SMat<T, R, C> &u) {
 // eps. See the parking-clearance derivation in ccd_helper.
 __device__ float park_floor(float ghat) { return 1e-2f * ghat; }
 
-template <typename F, typename T, unsigned R, unsigned C>
+template <typename F, typename T, unsigned R, unsigned C, unsigned SPLIT>
 __device__ float ccd_helper(const SMat<T, R, C> &x0, const SMat<T, R, C> &dx,
                             float u_max, F square_dist_func, float offset,
                             float eps, float floor_gap, const ParamSet &param) {
-    SMat<T, R, C> x;
+    SMat<T, R, C> x = x0;
+    SVec<float, R> w;
     float lower_t = 0.0f;
     float toi = 0.0f;
     float max_t = param.line_search_max_t;
-    float d2 = square_dist_func(x0);
+    float d2 = square_dist_func(x0, w);
     float target_squared = offset * offset;
     // The CCD advances from a SEPARATED start: `offset` here is the RAW
     // contact offset (the callers do not inflate it), so this entry check
@@ -242,6 +380,12 @@ __device__ float ccd_helper(const SMat<T, R, C> &x0, const SMat<T, R, C> &dx,
     float park = offset + fminf(floor_clear,
                                 fmaxf(clearance - 0.5f * eps, 0.5f * clearance));
     float overshoot = fmaxf(0.0f, (park - offset) - 0.5f * floor_clear);
+    // The worst state the sweep may reach between two probes, named once so
+    // both certificates below are stated against the same level: the
+    // direction-agnostic step and the directional one then guarantee exactly
+    // the clearance this comment block argues for, and taking the larger of
+    // the two leaves that guarantee unchanged.
+    float dip = park - overshoot;
     // The park sits below the pair's start distance by construction, but for
     // an in-band pair the margin is only eps/2, which can fall below the
     // spacing of representable values near park^2 once eps is small relative
@@ -261,21 +405,39 @@ __device__ float ccd_helper(const SMat<T, R, C> &x0, const SMat<T, R, C> &dx,
     // conservative.
     const unsigned max_probes = 4096u;
     unsigned probes = 0;
+    // The loop steps first and probes afterwards, because the evaluation above
+    // IS the probe at toi = 0: T(0) * dx is exactly zero, so re-entering the
+    // body there would recompute a bit-identical d2 and w. That first probe can
+    // also never end the loop, since park_squared is clamped strictly below the
+    // entry d2 just above.
     while (true) {
+        if (!(d2 > park_squared)) {
+            break;
+        }
+        lower_t = toi;
+        float dist = sqrtf(d2);
+        float step = (dist - dip) * inv_u_max;
+        // Refine only while there is sweep left to certify. Once the
+        // direction-agnostic step already covers the rest of it the directional
+        // certificate cannot add anything, and this is the common case: a
+        // broad-phase candidate that is nowhere near contact clears the whole
+        // sweep on its first probe and pays nothing for what follows.
+        if (toi + step <= max_t) {
+            // sqrtf(fl(w.w)) underestimates |w| by at most 2.5 units of
+            // round-off; inflating shrinks the certified step, so it is the
+            // conservative direction to err in.
+            step = fmaxf(step, directional_advance<T, R, C, SPLIT>(
+                                   x, dx, w, dist * (1.0f + 2.0f * FLT_EPSILON),
+                                   dip, park, max_t));
+        }
+        toi += step;
         if (toi > max_t) {
             return max_t;
         } else if (++probes > max_probes) {
             return lower_t;
-        } else {
-            x = x0 + T(toi) * dx;
-            d2 = square_dist_func(x);
-            if (d2 > park_squared) {
-                lower_t = toi;
-                toi += (sqrtf(d2) - park + overshoot) * inv_u_max;
-            } else {
-                break;
-            }
         }
+        x = x0 + T(toi) * dx;
+        d2 = square_dist_func(x, w);
     }
 
     float upper_t = toi;
@@ -315,8 +477,21 @@ __device__ float ccd_helper(const SMat<T, R, C> &x0, const SMat<T, R, C> &dx,
 // accumulation type Y of the result: it reduces the two closest points to a
 // DIFFERENCE in T and squares only that difference, so the squared distance is
 // never assembled as a difference of two large squares.
+//
+// Each also hands that difference back through `dir`, which costs nothing since
+// it is already in a register, and orients it the SAME way in all four: from the
+// closest point on primitive A (columns [0, SPLIT)) toward the one on primitive
+// B (columns [SPLIT, C)). ccd_helper's directional certificate reads the
+// projected gap as <dir, x_j - x_i> with i in A and j in B, so a functor that
+// handed back the opposite sign would report every gap negated and certify
+// nothing. The one-argument form exists for the entry check and the bisection,
+// which need only the distance.
 template <typename T, typename Y> struct EdgeEdgeSquaredDist {
     __device__ float operator()(const Mat3x4<T> &x) {
+        Vec3<Y> dir;
+        return (*this)(x, dir);
+    }
+    __device__ float operator()(const Mat3x4<T> &x, Vec3<Y> &dir) {
         const Vec3<T> &p0 = x.col(0);
         const Vec3<T> &p1 = x.col(1);
         const Vec3<T> &q0 = x.col(2);
@@ -326,13 +501,17 @@ template <typename T, typename Y> struct EdgeEdgeSquaredDist {
                         .template cast<T>();
         Vec3<T> x0 = c[0] * p0 + c[1] * p1;
         Vec3<T> x1 = c[2] * q0 + c[3] * q1;
-        Vec3<Y> d = (x1 - x0).template cast<Y>();
-        return d.dot(d);
+        dir = (x1 - x0).template cast<Y>();
+        return dir.dot(dir);
     }
 };
 
 template <typename T, typename Y> struct PointEdgeSquaredDist {
     __device__ float operator()(const Mat3x3<T> &x) {
+        Vec3<Y> dir;
+        return (*this)(x, dir);
+    }
+    __device__ float operator()(const Mat3x3<T> &x, Vec3<Y> &dir) {
         const Vec3<T> &p = x.col(0);
         const Vec3<T> &q0 = x.col(1);
         const Vec3<T> &q1 = x.col(2);
@@ -340,22 +519,32 @@ template <typename T, typename Y> struct PointEdgeSquaredDist {
             distance::point_edge_distance_coeff_unclassified<T, Y>(p, q0, q1)
                 .template cast<T>();
         Vec3<T> q = c[0] * q0 + c[1] * q1;
-        Vec3<Y> d = (p - q).template cast<Y>();
-        return d.dot(d);
+        // The edge is primitive B, so the difference runs toward it. Negating a
+        // float is exact, so d2 is unchanged by the orientation.
+        dir = (q - p).template cast<Y>();
+        return dir.dot(dir);
     }
 };
 
 template <typename T, typename Y> struct PointPointSquaredDist {
     __device__ float operator()(const Mat3x2<T> &x) {
+        Vec3<Y> dir;
+        return (*this)(x, dir);
+    }
+    __device__ float operator()(const Mat3x2<T> &x, Vec3<Y> &dir) {
         const Vec3<T> &p = x.col(0);
         const Vec3<T> &q = x.col(1);
-        Vec3<Y> d = (p - q).template cast<Y>();
-        return d.dot(d);
+        dir = (q - p).template cast<Y>();
+        return dir.dot(dir);
     }
 };
 
 template <typename T, typename Y> struct PointTriangleSquaredDist {
     __device__ float operator()(const Mat3x4<T> &x) {
+        Vec3<Y> dir;
+        return (*this)(x, dir);
+    }
+    __device__ float operator()(const Mat3x4<T> &x, Vec3<Y> &dir) {
         const Vec3<T> &p = x.col(0);
         const Vec3<T> &t0 = x.col(1);
         const Vec3<T> &t1 = x.col(2);
@@ -364,10 +553,12 @@ template <typename T, typename Y> struct PointTriangleSquaredDist {
                         p, t0, t1, t2)
                         .template cast<T>();
         // A weighted sum of endpoint differences from p, so the result depends
-        // only on the triangle's shape relative to p.
+        // only on the triangle's shape relative to p. The weights sum to one,
+        // so this is (closest point on the triangle) minus p, already running
+        // from the point toward the triangle.
         auto y = c(0) * (t0 - p) + c(1) * (t1 - p) + c(2) * (t2 - p);
-        Vec3<Y> yf = y.template cast<Y>();
-        return yf.dot(yf);
+        dir = y.template cast<Y>();
+        return dir.dot(dir);
     }
 };
 
@@ -398,9 +589,9 @@ __device__ float point_triangle_ccd(const Vec3f &p0, const Vec3f &p1,
     if (u_max) {
         PointTriangleSquaredDist<_coord_, float> dist_func;
         return ccd_helper<PointTriangleSquaredDist<_coord_, float>, _coord_, 3,
-                          4>(x0, dx, u_max, dist_func, scale * offset,
-                             scale * param.ccd_eps, scale * park_floor(ghat),
-                             param);
+                          4, 1>(x0, dx, u_max, dist_func, scale * offset,
+                                scale * param.ccd_eps,
+                                scale * park_floor(ghat), param);
     } else {
         return param.line_search_max_t;
     }
@@ -430,9 +621,10 @@ __device__ float point_edge_ccd(const Vec3f &p0, const Vec3f &p1,
     float u_max = max_relative_u<float, 3, 3, 1>(dx);
     if (u_max) {
         PointEdgeSquaredDist<_coord_, float> dist_func;
-        return ccd_helper<PointEdgeSquaredDist<_coord_, float>, _coord_, 3, 3>(
-            x0, dx, u_max, dist_func, scale * offset, scale * param.ccd_eps,
-            scale * park_floor(ghat), param);
+        return ccd_helper<PointEdgeSquaredDist<_coord_, float>, _coord_, 3, 3,
+                          1>(x0, dx, u_max, dist_func, scale * offset,
+                             scale * param.ccd_eps, scale * park_floor(ghat),
+                             param);
     } else {
         return param.line_search_max_t;
     }
@@ -459,9 +651,10 @@ __device__ float point_point_ccd(const Vec3f &p0, const Vec3f &p1,
     float u_max = max_relative_u<float, 3, 2, 1>(dx);
     if (u_max) {
         PointPointSquaredDist<_coord_, float> dist_func;
-        return ccd_helper<PointPointSquaredDist<_coord_, float>, _coord_, 3, 2>(
-            x0, dx, u_max, dist_func, scale * offset, scale * param.ccd_eps,
-            scale * park_floor(ghat), param);
+        return ccd_helper<PointPointSquaredDist<_coord_, float>, _coord_, 3, 2,
+                          1>(x0, dx, u_max, dist_func, scale * offset,
+                             scale * param.ccd_eps, scale * park_floor(ghat),
+                             param);
     } else {
         return param.line_search_max_t;
     }
@@ -493,9 +686,10 @@ __device__ float edge_edge_ccd(const Vec3f &ea00, const Vec3f &ea01,
     float u_max = max_relative_u<float, 3, 4, 2>(dx);
     if (u_max) {
         EdgeEdgeSquaredDist<_coord_, float> dist_func;
-        return ccd_helper<EdgeEdgeSquaredDist<_coord_, float>, _coord_, 3, 4>(
-            x0, dx, u_max, dist_func, scale * offset, scale * param.ccd_eps,
-            scale * park_floor(ghat), param);
+        return ccd_helper<EdgeEdgeSquaredDist<_coord_, float>, _coord_, 3, 4,
+                          2>(x0, dx, u_max, dist_func, scale * offset,
+                             scale * param.ccd_eps, scale * park_floor(ghat),
+                             param);
     } else {
         return param.line_search_max_t;
     }

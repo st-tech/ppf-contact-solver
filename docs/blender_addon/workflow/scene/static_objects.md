@@ -265,6 +265,16 @@ velocity overwrite) is hidden.
 | **Use Group Bounding Box Diagonal**  | `use_group_bounding_box_diagonal` | `True`  | When true, contact distances are ratios of the group's bbox diagonal. |
 | **Contact Gap Ratio**                | `contact_gap_rat`                 | 0.001   | Contact gap as a fraction of the group's bounding-box diagonal.       |
 | **Contact Offset Ratio**             | `contact_offset_rat`              | 0.0     | Contact offset as a fraction of the group's bounding-box diagonal.    |
+| **Apply Soft Constraints**           | `enable_soft_constraint`          | `False` | Hold the collider with springs instead of locking it to its animation. |
+| **Stiffness**                        | `soft_constraint_stiffness`       | 10.0    | How firmly those springs hold. Shown only when the box above is ticked. |
+
+**Apply Soft Constraints** matters most for the armature-driven colliders
+above. A body rig folds against itself as it moves, and where it closes onto
+a garment, an exactly-followed collider leaves the cloth nowhere to go and
+the simulation stops. Springs let the collider give way at that pinch and
+return afterwards. See
+[Apply Soft Constraints](../params/material.md#apply-soft-constraints) for
+how to choose the stiffness.
 
 See [Material Parameters](../params/material.md#contact-gap-absolute-vs-ratio)
 for the full story on absolute vs ratio contact gap, and the

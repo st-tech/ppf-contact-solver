@@ -307,7 +307,9 @@ void DynCSRMat::finalize() {
     // ever built with NDEBUG, and an incomplete Hessian must never reach the
     // solve. check() has already printed what went wrong.
     if (!check()) {
-        std::abort();
+        ppf_fatal(PPF_FATAL_SOLVER_INVARIANT,
+                  "PPF FATAL: dynamic CSR pattern check failed; see the "
+                  "report above.\n");
     }
     const double ms_check = asm_profile::ms_since(t_phase);
 

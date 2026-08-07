@@ -816,12 +816,12 @@ def set_group_material_properties(group_uuid: str, properties: dict):
 
     Supported properties by group type:
 
-    - SHELL: enable_strain_limit, strain_limit_percent, shell_density, shell_young_modulus, shell_poisson_ratio, shell_model, bend, shrink_x, shrink_y, deformation_damping, bending_damping, young_mod_density_normalized, friction, enable_inflate, inflate_pressure, stitch_stiffness
+    - SHELL: enable_strain_limit, strain_limit_percent, shell_density, shell_young_modulus, shell_poisson_ratio, shell_model, bend, bend_warp, bend_weft, shrink_x, shrink_y, deformation_damping, bending_damping, young_mod_density_normalized, friction, enable_inflate, inflate_pressure, stitch_stiffness
     - SOLID: solid_density, solid_young_modulus, solid_poisson_ratio, solid_model, shrink, deformation_damping, young_mod_density_normalized, friction, stitch_stiffness
     - ROD: rod_density, rod_young_modulus, rod_model, deformation_damping, bending_damping, young_mod_density_normalized, friction, bend, length_factor, enable_strain_limit, strain_limit_percent, stitch_stiffness
     - PDRD: pdrd_density, friction, stitch_stiffness (the hinge joint is per-object; use the set_pdrd_hinge tool)
     - SAND: sand_grain_radius, sand_particle_mass, sand_friction (faceless granular body of loose grain-center vertices)
-    - STATIC: friction (limited set; a moving collider tracks its animation exactly)
+    - STATIC: friction, enable_soft_constraint, soft_constraint_stiffness (a collider tracks its animation exactly unless soft constraints are on, which holds it with springs of that stiffness so contact can push it off its path)
 
     Rayleigh damping (deformation_damping on Solid/Shell/Rod, bending_damping on
     Shell/Rod only) and young_mod_density_normalized (interpret Young's modulus
@@ -877,6 +877,8 @@ def set_group_material_properties(group_uuid: str, properties: dict):
                 "shell_poisson_ratio",
                 "shell_model",
                 "bend",
+                "bend_warp",
+                "bend_weft",
                 "shrink_x",
                 "shrink_y",
                 "deformation_damping",
@@ -945,6 +947,8 @@ def set_group_material_properties(group_uuid: str, properties: dict):
             },
             "STATIC": {
                 "friction",
+                "enable_soft_constraint",
+                "soft_constraint_stiffness",
                 "contact_gap",
                 "contact_offset",
                 "contact_gap_rat",

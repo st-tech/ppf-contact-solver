@@ -499,15 +499,25 @@ pub fn mesh_format_triangulate_args(area: f64, min_angle: f64) -> String {
     mesh_core::format_triangulate_args(area, min_angle)
 }
 
-/// Build the `tetrahedralize` cache filename component from string-
-/// stringified positional + keyword args.
+/// Compose the `tetrahedralize` cache key for `hash` under stringified
+/// positional + keyword args.
+///
+/// Returns `(filename, cache_key)`: the filename component the build
+/// planner probes and the mesh writer creates, and the canonical
+/// argument string that names the settings the file holds. Both come out
+/// of one call so the name and the key stored inside the file always
+/// describe the same argument set.
 #[pyfunction]
-#[pyo3(signature = (args, kwargs))]
-pub fn mesh_tetrahedralize_arg_str(
+#[pyo3(signature = (hash, args, kwargs))]
+pub fn mesh_tetra_cache_key(
+    hash: &str,
     args: Vec<String>,
     kwargs: Vec<(String, String)>,
-) -> String {
-    mesh_core::tetrahedralize_arg_str(&args, &kwargs)
+) -> (String, String) {
+    (
+        mesh_core::tetra_cache_name(hash, &args, &kwargs),
+        mesh_core::tetra_cache_canonical_args(&args, &kwargs),
+    )
 }
 
 /// Filter & default fTetWild kwargs. Input is a list of
@@ -544,7 +554,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(mesh_preset_lookup, m)?)?;
     m.add_function(wrap_pyfunction!(mesh_cache_path, m)?)?;
     m.add_function(wrap_pyfunction!(mesh_format_triangulate_args, m)?)?;
-    m.add_function(wrap_pyfunction!(mesh_tetrahedralize_arg_str, m)?)?;
+    m.add_function(wrap_pyfunction!(mesh_tetra_cache_key, m)?)?;
     m.add_function(wrap_pyfunction!(mesh_ftetwild_kwargs, m)?)?;
     Ok(())
 }

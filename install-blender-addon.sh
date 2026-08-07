@@ -12,6 +12,9 @@
 # Usage:
 #   Install:   ./install-blender-addon.sh
 #   Uninstall: ./install-blender-addon.sh --uninstall
+#                 prompts (interactively, default No) to also wipe
+#                 third-party deps the addon pip-installed into
+#                 Blender's user `scripts/addons/modules/` dir.
 #
 # Cold-start (e.g. fresh CI runner where Blender hasn't booted yet):
 #   PPF_BLENDER_BIN=/opt/blender/blender ./install-blender-addon.sh
@@ -62,8 +65,9 @@ detect_version_from_existing() {
 detect_version_from_binary() {
   local bin="$1"
   [ -x "$bin" ] || return 1
-  # `blender --version` prints lines like "Blender 5.1.1\n  build date: ...".
-  # We want just "5.1" (major.minor); that's the user-prefs dirname.
+  # `blender --version` prints lines like "Blender 5.2.0 LTS\n  build date: ".
+  # We want just "5.2" (major.minor); that's the user-prefs dirname. An LTS
+  # build carries that suffix, so the pattern must not anchor at end of line.
   "$bin" --version 2>/dev/null \
     | head -n1 \
     | sed -nE 's/^Blender ([0-9]+)\.([0-9]+).*/\1.\2/p'
@@ -132,6 +136,34 @@ if [ "$UNINSTALL" = true ]; then
   done
   if [ "$removed" = false ]; then
     echo "Addon not installed: $EXT_LINK"
+  fi
+
+  # Offer to wipe third-party Python deps that the addon's Install
+  # operators (paramiko, docker) and the test rig's orchestrator
+  # (cbor2) pip-install into Blender's user modules dir. The dir is
+  # `bpy.utils.user_resource('SCRIPTS', path='addons/modules')`; see
+  # blender_addon/core/module.py:get_install_target. Default is No;
+  # non-tty stdin (CI) skips the prompt and leaves them in place.
+  MODULES_DIR="$BLENDER_BASE/$BLENDER_VERSION/scripts/addons/modules"
+  if [ -d "$MODULES_DIR" ] && [ -n "$(ls -A "$MODULES_DIR" 2>/dev/null)" ]; then
+    echo
+    echo "Third-party packages in $MODULES_DIR:"
+    ls -1A "$MODULES_DIR" | sed 's/^/  /'
+    if [ -t 0 ]; then
+      printf "Also remove these? [y/N] "
+      read -r answer
+      case "$answer" in
+        y | Y | yes | YES)
+          rm -rf "$MODULES_DIR"
+          echo "Removed: $MODULES_DIR"
+          ;;
+        *)
+          echo "Kept: $MODULES_DIR"
+          ;;
+      esac
+    else
+      echo "(non-interactive stdin; left in place)"
+    fi
   fi
   exit 0
 fi

@@ -299,7 +299,7 @@ Supported properties by group type:
 - ROD: rod_density, rod_young_modulus, rod_model, deformation_damping, bending_damping, young_mod_density_normalized, friction, bend, length_factor, enable_strain_limit, strain_limit_percent, stitch_stiffness, bend_rest_angle_source, bend_rest_from_reference
 - PDRD: pdrd_density, friction, stitch_stiffness (the hinge joint is per-object; use the `set_pdrd_hinge` tool)
 - SAND: sand_grain_radius, sand_particle_mass, sand_friction (faceless granular body of loose grain-center vertices)
-- STATIC: friction (limited set)
+- STATIC: friction, enable_soft_constraint, soft_constraint_stiffness (a collider tracks its animation exactly unless soft constraints are on, which holds it with springs of that stiffness so contact can push it off its path)
 
 Per-type property notes:
 

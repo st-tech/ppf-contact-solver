@@ -163,8 +163,8 @@ One-line definitions for the terms that appear across the rest of the documentat
 **MCP tool**
 : A JSON-RPC method exposed by the MCP server and dispatched with `tools/call`. Goes through the same validation layer as the sidebar buttons.
 
-**Protocol 0.10**
-: The current wire protocol version between the add-on and the `ppf-cts-server` binary. CBOR envelopes follow the schema defined in the `ppf-cts-formats` crate (`envelope.rs` + `kinds/`), shared by both ends. The server advertises its version on connect; mismatches surface as a protocol-version-mismatch status and refuse to proceed.
+**Protocol version**
+: The wire protocol version between the add-on and the `ppf-cts-server` binary, single-sourced in `blender_addon/protocol_version.toml`: the add-on reads it at run time and the server bakes it in at build time, so the two separately shipped halves cannot name different versions. CBOR envelopes follow the schema defined in the `ppf-cts-formats` crate (`envelope.rs` + `kinds/`), shared by both ends. The server advertises its version on connect; mismatches surface as a protocol-version-mismatch status and refuse to proceed.
 
 **Python API (add-on)**
 : The addon's Python API exposed as `bl_ext.user_default.ppf_contact_solver.ops.api`, imported from Blender's text editor or a notebook. Covers the same validation layer as the sidebar and the MCP server.

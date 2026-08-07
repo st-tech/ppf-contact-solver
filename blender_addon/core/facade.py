@@ -383,6 +383,16 @@ class CommunicatorFacade:
         return self._engine.state.server_error
 
     @property
+    def crash_kind(self) -> str:
+        """Stable snake_case name of the cause behind ``server_error``.
+
+        Empty when the error is not a solver crash, or when the connected
+        server predates the field. The panel uses it to pick a localized
+        one-line headline; the full report stays in ``server_error``.
+        """
+        return self._engine.state.crash_kind
+
+    @property
     def session_id(self) -> str:
         """Identifier stamped on artifacts produced by this connected run.
 

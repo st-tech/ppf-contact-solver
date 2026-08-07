@@ -55,6 +55,9 @@ chrono = "0.4"
 [build-dependencies]
 num_cpus = "1.16.0"
 
+[dev-dependencies]
+tempfile = "3"
+
 [features]
 default = []
 # CUDA-free build path used by the debug test rig. Skips the C++/CUDA

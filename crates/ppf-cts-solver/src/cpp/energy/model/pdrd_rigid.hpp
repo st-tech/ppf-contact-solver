@@ -57,8 +57,10 @@
 #include "../../main/cuda_utils.hpp"
 #include "../../utility/dispatcher.hpp"
 #include "../../utility/utility.hpp"
+#include "pdrd_lock_projector.hpp"
 #include "pdrd_polar.hpp" // rigid_quat_to_mat / rigid_mat_to_quat / rigid_polar_quat
 #include "rigid_core.hpp" // rigid_skew / rigid_skew_inv / rigid_exp_so3 (shared with SAND)
+#include <cassert>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -67,10 +69,6 @@
 namespace PDRD {
 
 constexpr unsigned RIGID_THREADS_PER_BODY = 64;
-
-// PDRD joint / DOF-filtering modes (mirror PdrdBodyProp::joint_mode).
-constexpr unsigned PDRD_JOINT_FREE = 0u;   // full 6-DOF rigid body
-constexpr unsigned PDRD_JOINT_HINGE = 1u;  // translation locked, spin about axle
 
 // SO(3) rotation math (skew, inverse-skew, exponential map) is shared with SAND
 // grain spin and lives in rigid_core.hpp. These using-declarations keep the
@@ -367,8 +365,6 @@ inline void launch_rigidify_from_rot(const DataSet &data,
 // inertia + contact and the projection is exact.
 // ===========================================================================
 
-constexpr unsigned RIGID_UNSET = 0xffffffffu;
-
 struct RigidMap {
     unsigned nrow{0};
     unsigned n_bodies{0};
@@ -381,6 +377,13 @@ struct RigidMap {
     Vec<Vec3f> prot;        // [nrow] rotated rest vector p_k = R_b ybar_k (PDRD)
     Vec<unsigned> jmode;    // [n_bodies] joint mode per body
     Vec<Vec3f> jaxis;       // [n_bodies] world rotation axle per body (hinge)
+    Vec<unsigned> tlock;    // compact translation-lock index, or RIGID_UNSET
+    Vec<Vec3f> tlock_axis;  // world-space lock axis per body
+    Vec<unsigned> rlock;    // compact rotation-lock index, or RIGID_UNSET
+    Vec<Vec3f> rlock_axis;  // world-space rotation-lock axis per body
+    Vec<unsigned> rlock_mode; // allow-only or prohibit-axis mode per body
+    bool any_translation_lock{false};
+    bool any_rotation_lock{false};
     bool built{false};      // topology (vbody/cloth_off/jmode/jaxis) is populated
     void free_all() {
         vbody.free();
@@ -388,44 +391,32 @@ struct RigidMap {
         prot.free();
         jmode.free();
         jaxis.free();
+        tlock.free();
+        tlock_axis.free();
+        rlock.free();
+        rlock_axis.free();
+        rlock_mode.free();
         nrow = n_bodies = n_cloth = dim = body_base = 0;
         any_joint = false;
+        any_translation_lock = false;
+        any_rotation_lock = false;
         built = false;
     }
 };
 
-// Apply the per-body joint projector Pi to the reduced DOF vector `u` (body
-// blocks only; cloth is untouched). For a hinge Pi = blockdiag(0, a a^T): zero
-// the translation and keep only the spin component about the axle `a`. This
-// restricts the reduced search direction (and rhs / preconditioned residual) to
-// joint-admissible rigid motions, so the linear solve never moves a hinged body
-// off its axle. One thread per body.
-static __global__ void project_body_dofs_kernel(unsigned nb, unsigned body_base,
-                                                Vec<unsigned> jmode,
-                                                Vec<Vec3f> jaxis, Vec<float> u) {
-    unsigned b = blockIdx.x * blockDim.x + threadIdx.x;
-    if (b >= nb) return;
-    unsigned mode = jmode.data[b];
-    if (mode == PDRD_JOINT_FREE) return;
-    float *q = u.data + body_base + 6u * b;
-    if (mode == PDRD_JOINT_HINGE) {
-        q[0] = 0.0f;
-        q[1] = 0.0f;
-        q[2] = 0.0f;
-        Vec3f a = jaxis.data[b];
-        float dth = q[3] * a[0] + q[4] * a[1] + q[5] * a[2];
-        q[3] = dth * a[0];
-        q[4] = dth * a[1];
-        q[5] = dth * a[2];
-    }
-}
-
 inline void launch_project_bodies(const RigidMap &rm, Vec<float> &u) {
-    if (rm.n_bodies == 0 || !rm.any_joint) return;
+    if (rm.n_bodies == 0 ||
+        (!rm.any_joint && !rm.any_translation_lock && !rm.any_rotation_lock))
+        return;
     unsigned tpb = 64;
     project_body_dofs_kernel<<<(rm.n_bodies + tpb - 1) / tpb, tpb>>>(
         rm.n_bodies, rm.body_base, const_cast<Vec<unsigned> &>(rm.jmode),
-        const_cast<Vec<Vec3f> &>(rm.jaxis), u);
+        const_cast<Vec<Vec3f> &>(rm.jaxis),
+        const_cast<Vec<unsigned> &>(rm.tlock),
+        const_cast<Vec<Vec3f> &>(rm.tlock_axis),
+        const_cast<Vec<unsigned> &>(rm.rlock),
+        const_cast<Vec<Vec3f> &>(rm.rlock_axis),
+        const_cast<Vec<unsigned> &>(rm.rlock_mode), u);
     CUDA_HANDLE_ERROR(cudaGetLastError());
 }
 
@@ -518,8 +509,18 @@ inline void build_rigid_map(RigidMap &rm, const DataSet &data,
     if (nb > 0 && rm.jmode.size < nb) {
         rm.jmode.free();
         rm.jaxis.free();
+        rm.tlock.free();
+        rm.tlock_axis.free();
+        rm.rlock.free();
+        rm.rlock_axis.free();
+        rm.rlock_mode.free();
         rm.jmode = Vec<unsigned>::alloc(nb);
         rm.jaxis = Vec<Vec3f>::alloc(nb);
+        rm.tlock = Vec<unsigned>::alloc(nb);
+        rm.tlock_axis = Vec<Vec3f>::alloc(nb);
+        rm.rlock = Vec<unsigned>::alloc(nb);
+        rm.rlock_axis = Vec<Vec3f>::alloc(nb);
+        rm.rlock_mode = Vec<unsigned>::alloc(nb);
         topology_valid = false;
     }
     // The DOF partition (vbody / cloth_off / dim / jmode / jaxis) is a pure
@@ -557,6 +558,8 @@ inline void build_rigid_map(RigidMap &rm, const DataSet &data,
                                      nrow * sizeof(unsigned),
                                      cudaMemcpyHostToDevice));
         rm.any_joint = false;
+        rm.any_translation_lock = false;
+        rm.any_rotation_lock = false;
         if (nb > 0) {
             // Pull per-body joint mode + axle to the host once so the DOF
             // projector can skip entirely when no joints are present.
@@ -566,16 +569,72 @@ inline void build_rigid_map(RigidMap &rm, const DataSet &data,
                                          cudaMemcpyDeviceToHost));
             std::vector<unsigned> hjmode(nb);
             std::vector<Vec3f> hjaxis(nb);
+            std::vector<unsigned> htlock(nb, RIGID_UNSET);
+            std::vector<Vec3f> htlock_axis(nb, Vec3f::Zero());
+            std::vector<unsigned> hrlock(nb, RIGID_UNSET);
+            std::vector<Vec3f> hrlock_axis(nb, Vec3f::Zero());
+            std::vector<unsigned> hrlock_mode(nb,
+                                               ROTATION_LOCK_ALLOW_ONLY);
             for (unsigned b = 0; b < nb; ++b) {
                 hjmode[b] = bp[b].joint_mode;
                 hjaxis[b] = bp[b].joint_axis;
                 if (bp[b].joint_mode != PDRD_JOINT_FREE) rm.any_joint = true;
+            }
+            if (data.translation_lock.size) {
+                std::vector<::TranslationLock> locks(
+                    data.translation_lock.size);
+                CUDA_HANDLE_ERROR(cudaMemcpy(
+                    locks.data(), data.translation_lock.data,
+                    locks.size() * sizeof(::TranslationLock),
+                    cudaMemcpyDeviceToHost));
+                for (unsigned li = 0; li < locks.size(); ++li) {
+                    const ::TranslationLock &lock = locks[li];
+                    if (lock.pdrd_body_index == 0) {
+                        continue;
+                    }
+                    const unsigned body = lock.pdrd_body_index - 1u;
+                    assert(body < nb);
+                    if (lock.axis.squaredNorm() > 0.0f) {
+                        assert(htlock[body] == RIGID_UNSET);
+                        htlock[body] = li;
+                        htlock_axis[body] = lock.axis;
+                        rm.any_translation_lock = true;
+                    }
+                    if (lock.rotation_axis.squaredNorm() > 0.0f) {
+                        assert(hrlock[body] == RIGID_UNSET);
+                        assert(lock.rotation_mode == ROTATION_LOCK_ALLOW_ONLY ||
+                               lock.rotation_mode ==
+                                   ROTATION_LOCK_PROHIBIT_AXIS);
+                        hrlock[body] = li;
+                        hrlock_axis[body] = lock.rotation_axis;
+                        hrlock_mode[body] = lock.rotation_mode;
+                        rm.any_rotation_lock = true;
+                    }
+                }
             }
             CUDA_HANDLE_ERROR(cudaMemcpy(rm.jmode.data, hjmode.data(),
                                          nb * sizeof(unsigned),
                                          cudaMemcpyHostToDevice));
             CUDA_HANDLE_ERROR(cudaMemcpy(rm.jaxis.data, hjaxis.data(),
                                          nb * sizeof(Vec3f),
+                                         cudaMemcpyHostToDevice));
+            CUDA_HANDLE_ERROR(cudaMemcpy(rm.tlock.data, htlock.data(),
+                                         nb * sizeof(unsigned),
+                                         cudaMemcpyHostToDevice));
+            CUDA_HANDLE_ERROR(cudaMemcpy(rm.tlock_axis.data,
+                                         htlock_axis.data(),
+                                         nb * sizeof(Vec3f),
+                                         cudaMemcpyHostToDevice));
+            CUDA_HANDLE_ERROR(cudaMemcpy(rm.rlock.data, hrlock.data(),
+                                         nb * sizeof(unsigned),
+                                         cudaMemcpyHostToDevice));
+            CUDA_HANDLE_ERROR(cudaMemcpy(rm.rlock_axis.data,
+                                         hrlock_axis.data(),
+                                         nb * sizeof(Vec3f),
+                                         cudaMemcpyHostToDevice));
+            CUDA_HANDLE_ERROR(cudaMemcpy(rm.rlock_mode.data,
+                                         hrlock_mode.data(),
+                                         nb * sizeof(unsigned),
                                          cudaMemcpyHostToDevice));
         }
         rm.built = true;
@@ -635,6 +694,61 @@ inline void launch_seed_restrict(const RigidMap &rm, const Vec<float> &x,
     unsigned tpb = 128;
     seed_restrict_rigid_kernel<<<(rm.nrow + tpb - 1) / tpb, tpb>>>(
         rm, const_cast<Vec<float> &>(x), u);
+    CUDA_HANDLE_ERROR(cudaGetLastError());
+}
+
+// Copy only the cloth coordinates from a full-space vector back into a reduced
+// vector. This is the coordinate image of the deformable lock projector:
+// cloth rows are identity-mapped by P, while PDRD body coordinates must remain
+// in their 6-DOF representation and are handled by launch_project_bodies.
+static __global__ void copy_projected_cloth_kernel(RigidMap rm,
+                                                    Vec<float> full,
+                                                    Vec<float> reduced) {
+    const unsigned v = blockIdx.x * blockDim.x + threadIdx.x;
+    if (v >= rm.nrow || rm.vbody.data[v] != RIGID_UNSET) return;
+    const unsigned o = rm.cloth_off.data[v];
+    reduced.data[o + 0] = full.data[3 * v + 0];
+    reduced.data[o + 1] = full.data[3 * v + 1];
+    reduced.data[o + 2] = full.data[3 * v + 2];
+}
+
+inline void launch_copy_projected_cloth(const RigidMap &rm,
+                                        const Vec<float> &full,
+                                        Vec<float> &reduced) {
+    const unsigned tpb = 128;
+    copy_projected_cloth_kernel<<<(rm.nrow + tpb - 1) / tpb, tpb>>>(
+        rm, const_cast<Vec<float> &>(full), reduced);
+    CUDA_HANDLE_ERROR(cudaGetLastError());
+}
+
+// Add the affine particular correction for a locked free PDRD body. `drift`
+// contains sum(m * B * (x - x_initial)), so dividing by total mass gives the
+// translation that the Newton correction must remove. A hinge already removes
+// every translation DOF; its compatibility is checked on the host before this
+// kernel is used, and this kernel leaves its zero translation untouched.
+static __global__ void translation_lock_particular_kernel(
+    RigidMap rm, DataSet data, Vec<Vec3f> drift, Vec<float> u) {
+    const unsigned b = blockIdx.x * blockDim.x + threadIdx.x;
+    if (b >= rm.n_bodies) return;
+    const unsigned li = rm.tlock.data[b];
+    if (li == RIGID_UNSET || rm.jmode.data[b] == PDRD_JOINT_HINGE) return;
+    const ::TranslationLock &lock = data.translation_lock.data[li];
+    const float inv_mass = 1.0f / lock.total_mass;
+    float *q = u.data + rm.body_base + 6u * b;
+    q[0] = drift.data[li][0] * inv_mass;
+    q[1] = drift.data[li][1] * inv_mass;
+    q[2] = drift.data[li][2] * inv_mass;
+}
+
+inline void launch_translation_lock_particular(const RigidMap &rm,
+                                               const DataSet &data,
+                                               const Vec<Vec3f> &drift,
+                                               Vec<float> &u) {
+    if (!rm.any_translation_lock) return;
+    const unsigned tpb = 64;
+    translation_lock_particular_kernel<<<
+        (rm.n_bodies + tpb - 1) / tpb, tpb>>>(
+        rm, const_cast<DataSet &>(data), const_cast<Vec<Vec3f> &>(drift), u);
     CUDA_HANDLE_ERROR(cudaGetLastError());
 }
 

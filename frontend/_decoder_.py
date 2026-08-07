@@ -11,7 +11,7 @@ from typing import Any, Optional
 from . import _rust  # type: ignore[attr-defined]
 
 from ._asset_ import AssetManager
-from ._mesh_ import MeshManager
+from ._mesh_ import CachePathUnusableError, MeshManager, _cache_probe
 from ._plot_ import PlotManager
 from ._scene_ import FixedScene, Scene
 from ._session_ import FixedSession, Session
@@ -253,6 +253,7 @@ class BlenderApp:
         # can pick its own backend (fTetWild or TetGen) and per-field
         # overrides.
         ftetwild_by_uuid: dict = {}
+        soft_constraint_by_uuid: dict = {}
         solver_fps = None
         time_scale = None
         param_path = os.path.join(self._root, "param.pickle")
@@ -283,6 +284,16 @@ class BlenderApp:
                     for _uuid, _kw in _ftw.items():
                         if isinstance(_kw, dict) and _kw:
                             ftetwild_by_uuid[_uuid] = _kw
+                # A STATIC group's pin spring stiffness. Peeked here for the
+                # same reason as ftetwild: it is consumed while the object's
+                # pins are being built, which is earlier than apply_to_object.
+                _soft = (
+                    _params.get("soft-constraint")
+                    if isinstance(_params, dict) else None
+                )
+                if isinstance(_soft, dict):
+                    for _uuid, _k in _soft.items():
+                        soft_constraint_by_uuid[_uuid] = float(_k)
         # A STATIC collider that participates in a cross-stitch must be
         # reachable by the stitch index space, which addresses only the
         # dynamic vertex namespace (map_by_name -> concat_vert -> eval_x). A
@@ -315,6 +326,7 @@ class BlenderApp:
                 info,
             ),
             ftetwild_by_uuid=ftetwild_by_uuid,
+            soft_constraint_by_uuid=soft_constraint_by_uuid,
             stitch_endpoint_uuids=stitch_endpoint_uuids,
             solver_fps=solver_fps,
             time_scale=time_scale,
@@ -626,11 +638,63 @@ class ParamDecoder:
                                 obj.hinge(int(h))
                         elif val is not None:
                             obj.hinge(int(val))
-                    elif key == "ftetwild":
+                    elif key == "lock-translation":
+                        # Lock Translation: normalized world-space axis
+                        # (already swapped to solver space) restricting this
+                        # object's COM to the line through its initial
+                        # position (see Object.lock_translation). Per-UUID
+                        # dict like velocity/hinge; absent means unlocked.
+                        if isinstance(val, dict):
+                            a = val.get(obj_uuid)
+                            if a is not None:
+                                obj.lock_translation(*a)
+                        elif val is not None:
+                            obj.lock_translation(*val)
+                    elif key == "lock-rotation":
+                        # Lock Rotation: normalized world-space axis (already
+                        # swapped to solver space) restricting this object's
+                        # best-fit rigid rotation to rotation about that
+                        # axis only (see Object.lock_rotation). Independent
+                        # of "lock-translation" above. Per-UUID dict like
+                        # velocity/hinge; absent means unlocked.
+                        if isinstance(val, dict):
+                            a = val.get(obj_uuid)
+                            if a is not None:
+                                obj.lock_rotation(*a)
+                        elif val is not None:
+                            obj.lock_rotation(*val)
+                    elif key == "lock-rotation-prohibit-axis":
+                        # Lock Rotation mode: True flips the axis set by
+                        # "lock-rotation" above from a whitelist (rotation
+                        # about it is the only freedom) to a blacklist
+                        # (rotation about it is forbidden, the perpendicular
+                        # plane stays free instead). Only present for UUIDs
+                        # that also appear in "lock-rotation". Resolve the
+                        # paired axis explicitly rather than relying on map
+                        # iteration order.
+                        if isinstance(val, dict):
+                            m = val.get(obj_uuid)
+                            if m is not None:
+                                if getattr(obj, "_rotation_lock", None) is None:
+                                    axes = params.get("lock-rotation", {})
+                                    a = axes.get(obj_uuid) if isinstance(axes, dict) else axes
+                                    if a is None:
+                                        raise ValueError(
+                                            f"lock-rotation-prohibit-axis for {obj_uuid!r} "
+                                            "has no matching lock-rotation axis"
+                                        )
+                                    obj.lock_rotation(*a)
+                                obj.lock_rotation_prohibit_axis(bool(m))
+                        elif val is not None:
+                            obj.lock_rotation_prohibit_axis(bool(val))
+                    elif key in ("ftetwild", "soft-constraint"):
                         # Consumed at populate-time via the param.pickle peek;
                         # no per-object ParamHolder slot by design (would
                         # break concat_tet_param / concat_tri_param key-set
-                        # equality in _scene_.extend_param).
+                        # equality in _scene_.extend_param). "soft-constraint"
+                        # additionally has no solver param to set: it selects
+                        # the KIND of pin the collider gets, which is decided
+                        # while the pins are built.
                         pass
                     else:
                         obj.param.set(key, val)
@@ -2056,8 +2120,21 @@ class SceneDecoder:
         self._mesh = mesh_manager
         self._object_info: dict[str, ObjectInfo] = {}  # uuid -> ObjectInfo for stitch generation
 
-    def _tetra_cache_path(self, tri_mesh) -> str:
-        return tri_mesh.cache_path(_rust.tetra_cache_filename(tri_mesh.hash))
+    @staticmethod
+    def _tetra_cache_name(tri_mesh, ftw_kwargs) -> str:
+        """Cache filename component naming the tetrahedralization of
+        *tri_mesh* under *ftw_kwargs*.
+
+        Composed by the same Rust helper ``TriMesh.tetrahedralize`` calls,
+        so the plan reports on the file the build reads and writes. The
+        kwargs are stringified the way ``tetrahedralize`` stringifies its
+        own, since both sides receive the same decoded values. The decoder
+        drives ``tetrahedralize`` with keyword arguments only, so there are
+        no positional arguments to carry.
+        """
+        pairs = [(str(k), str(v)) for k, v in (ftw_kwargs or {}).items()]
+        name, _cache_key = _rust.mesh_tetra_cache_key(tri_mesh.hash, [], pairs)
+        return name
 
     def _summarize_tetra_jobs(self, tetra_jobs: list[dict]) -> str:
         return _rust.summarize_tetra_jobs(tetra_jobs)
@@ -2106,7 +2183,7 @@ class SceneDecoder:
                 f"  * name: {name}, vert: {vert.shape}, face: {face.shape if face is not None else 'None'}, uv: {len(uv) if uv is not None else 'None'}"
             )
 
-    def populate_objects(self, scene: Scene, verbose: bool = False, progress_callback=None, ftetwild_by_uuid: dict | None = None, stitch_endpoint_uuids: set | None = None, solver_fps: float | None = None, time_scale: float | None = None) -> Scene:
+    def populate_objects(self, scene: Scene, verbose: bool = False, progress_callback=None, ftetwild_by_uuid: dict | None = None, soft_constraint_by_uuid: dict | None = None, stitch_endpoint_uuids: set | None = None, solver_fps: float | None = None, time_scale: float | None = None) -> Scene:
         """Populate ``scene`` with objects from the decoder's pickle data.
 
         Handles STATIC, SOLID, SHELL, ROD, PDRD, and SAND groups, including canonical
@@ -2119,6 +2196,7 @@ class SceneDecoder:
             verbose (bool): Enable verbose logging.
             progress_callback: Optional callable ``fn(progress: float, info: str)`` invoked during loading. ``progress`` is in ``[0.0, 1.0]``.
             ftetwild_by_uuid (dict | None): Optional mapping of object UUID to fTetWild keyword arguments used during tetrahedralization.
+            soft_constraint_by_uuid (dict | None): Optional mapping of STATIC object UUID to the spring stiffness holding its vertices to their animated positions. A UUID absent from the mapping keeps exact (Dirichlet) pins.
 
         Returns:
             Scene: The populated scene.
@@ -2136,7 +2214,7 @@ class SceneDecoder:
                 decoder.populate_objects(scene, verbose=True)
                 fixed_scene = scene.build()
         """
-        plan = self._plan_build(progress_callback)
+        plan = self._plan_build(progress_callback, ftetwild_by_uuid)
         object_entries = plan["object_entries"]
         canonical_meshes = plan["canonical_meshes"]
         canonical_asset_name = plan["canonical_asset_name"]
@@ -2178,6 +2256,9 @@ class SceneDecoder:
                         is_stitch_endpoint=bool(
                             stitch_endpoint_uuids and obj_uuid in stitch_endpoint_uuids
                         ),
+                        soft_stiffness=(
+                            (soft_constraint_by_uuid or {}).get(obj_uuid)
+                        ),
                         verbose=verbose,
                         solver_fps=solver_fps,
                         time_scale=time_scale,
@@ -2209,6 +2290,11 @@ class SceneDecoder:
                     _rust.validate_group_type(group_type)
                     _obj = None
 
+                if _obj is not None:
+                    _obj._statistics_uuid = obj_uuid
+                    _obj._statistics_name = name
+                    _obj._statistics_type = group_type
+
                 # Per-object bending reference rest angle (SHELL): the scene
                 # object carries a `bend_rest_vert` local buffer aligned 1:1
                 # with its own vertices. Transform it to world space (matching
@@ -2234,12 +2320,19 @@ class SceneDecoder:
 
         return scene
 
-    def _plan_build(self, progress_callback):
+    def _plan_build(self, progress_callback, ftetwild_by_uuid=None):
         """First pass: build canonical mesh table, resolve mesh refs, and
         size the tetra-job list. Returns a dict with ``object_entries``,
         ``canonical_meshes``, ``canonical_asset_name``, ``tetra_jobs``,
         and a ``progress`` sub-dict carrying mutable counters plus the
         ``report`` callable used by the second pass.
+
+        ``ftetwild_by_uuid`` carries the same per-object tetrahedralizer
+        settings the second pass hands to ``tetrahedralize``. The plan
+        needs them because they are part of the cache key: an object's
+        cache file is named for its mesh and its settings together, so
+        both the "cached / new" label and the dedup decision are wrong
+        without them.
         """
         planning_steps = sum(len(group.get("object", [])) for group in self._data)
         planning_weight = max(1.0, 0.35 * planning_steps)
@@ -2300,6 +2393,7 @@ class SceneDecoder:
             group_type = group.get("type")
             for obj in objects:
                 name = obj.get("name")
+                obj_uuid = obj.get("uuid", "")
                 report(
                     f"Scanning build plan: {name}...",
                     planning_weight,
@@ -2350,6 +2444,7 @@ class SceneDecoder:
                     "tetra_weight": 0.0,
                     "tetra_index": None,
                     "tetra_cached": False,
+                    "tetra_cache_name": None,
                     "tri_mesh": None,
                 }
                 if group_type == "SOLID":
@@ -2368,9 +2463,25 @@ class SceneDecoder:
                         tet_vert = obj["_resolved_vert"]  # Legacy: world-space
                         tet_face = obj["_resolved_face"]
                     tri_mesh = self._mesh.create.tri(tet_vert, tet_face)
-                    cached = os.path.exists(self._tetra_cache_path(tri_mesh))
+                    tetra_cache_name = self._tetra_cache_name(
+                        tri_mesh, (ftetwild_by_uuid or {}).get(obj_uuid)
+                    )
+                    try:
+                        cached = _cache_probe(tri_mesh.cache_path(tetra_cache_name))
+                    except CachePathUnusableError as exc:
+                        # The plan's only products are a progress weight and
+                        # a label, so an unreadable cache location is
+                        # reported and the object is planned as uncached.
+                        # The build reaches the same path moments later
+                        # through ``tetrahedralize``, which raises there.
+                        report(
+                            f"Cannot read the tetra cache for {name}: {exc}",
+                            planning_weight,
+                        )
+                        cached = False
                     entry["tri_mesh"] = tri_mesh
                     entry["tetra_cached"] = cached
+                    entry["tetra_cache_name"] = tetra_cache_name
                     tetra_idx_first_pass += 1
                     entry["tetra_index"] = tetra_idx_first_pass
                     entry["tetra_weight"] = 3.0 if cached else 8.0
@@ -2381,12 +2492,12 @@ class SceneDecoder:
                 progress["completed"] += planning_increment
 
         progress["total"] = planning_weight + 0.5 + object_work
-        # Dedup-by-tri_mesh-hash + tetra_jobs rebuild + per-entry
-        # tetra_index reassignment all run in a single Rust pass, so
-        # the per-entry ``tet_hash_seen`` dict and the per-entry
-        # ``tetra_jobs.append`` Python loops are eliminated. The Rust
-        # call returns the rebuilt jobs list and the work_delta that
-        # gets folded into ``object_work``.
+        # Dedup-by-cache-key + tetra_jobs rebuild + per-entry tetra_index
+        # reassignment all run in a single Rust pass. Two SOLIDs share a
+        # tetrahedralization exactly when they address the same cache
+        # file, so the key is each entry's ``tetra_cache_name``. The Rust
+        # call returns the rebuilt jobs list and the work_delta that gets
+        # folded into ``object_work``.
         tetra_jobs, _work_delta = _rust.dedup_and_rebuild_tetra_jobs(object_entries)
         object_work += _work_delta
 
@@ -2399,7 +2510,7 @@ class SceneDecoder:
             "progress": progress,
         }
 
-    def _populate_static(self, scene, obj, name, obj_uuid, local_vert, face, transform, vert, is_stitch_endpoint=False, verbose=False, solver_fps=None, time_scale=None):
+    def _populate_static(self, scene, obj, name, obj_uuid, local_vert, face, transform, vert, is_stitch_endpoint=False, soft_stiffness=None, verbose=False, solver_fps=None, time_scale=None):
         """STATIC group dispatcher: rest-pose mesh, transform-keyframe
         animation, UI-assigned static ops, or per-vertex deformation
         cache. Returns the Scene Object for downstream pin / stitch
@@ -2483,8 +2594,28 @@ class SceneDecoder:
             prescribed by the user's animation, and an ordinary (non-pull) pin is
             now an exact Dirichlet boundary condition, so no marking is needed:
             the solver eliminates these DOF and the collider tracks its keyframes
-            exactly instead of being pushed off them by contact."""
-            return _o.pin()
+            exactly instead of being pushed off them by contact.
+
+            With soft constraints the same vertices are held by Hookean springs
+            instead: the DOF stay in the system and the pin contributes
+            ``force = k * (target - x)`` with Hessian ``k * I``, so contact can
+            push the collider off its animated path where it pushes harder than
+            ``k``. That is what a group asks for when its geometry closes onto
+            cloth harder than the cloth can escape.
+            """
+            _p = _o.pin()
+            if soft_stiffness is not None:
+                _k = float(soft_stiffness)
+                if not _k > 0.0:
+                    # `pull_w == 0` is the solver's fix/pull discriminator, so
+                    # this would hand back an exact pin under a soft label.
+                    raise ValueError(
+                        f"STATIC '{name}' soft-constraint stiffness {_k} must "
+                        "be strictly positive; zero is how the solver spells "
+                        "an exact pin."
+                    )
+                _p.pull(_k)
+            return _p
 
         if transform_anim is not None:
             # Case 1: Blender keyframes drive the pose. The simulator
@@ -2604,7 +2735,13 @@ class SceneDecoder:
                 )
             return _obj
         # Case 4: rest-pose static (never moves).
-        if is_stitch_endpoint:
+        if is_stitch_endpoint or soft_stiffness is not None:
+            # A soft constraint promotes for the same structural reason a
+            # cross-stitch endpoint does: the thing being softened is the pin,
+            # and a non-promoted rest-pose static has none (it is a disjoint
+            # contact-only collision mesh, never solved). Leaving it in that
+            # pool would make the checkbox a silent no-op. Promotion costs a
+            # solved body, which is the price of a collider that can yield.
             # Promote into the dynamic all-pinned namespace so the cross-stitch
             # index can address this collider's surface. It is built as the
             # same zero-stiffness pin-shell the animated cases use, with EVERY
@@ -2620,8 +2757,9 @@ class SceneDecoder:
             # defaults at make() time (the STATIC encoder prunes those keys).
             _obj, _ = _setup_pin_shell()
             # Carries no operations, so its pins never move: every vertex is
-            # held by an exact fixed (Dirichlet) pin and stays frozen at rest.
-            _obj.pin()
+            # held at its rest pose, exactly when the pin is a fix and by a
+            # spring of the group's stiffness when soft constraints are on.
+            _driven_pin(_obj)
             _obj._force_dynamic = True
             # A promoted STATIC is a cross-stitch TARGET (a collider), never a
             # CIPC stitch SOURCE. The encoder auto-detects intra-mesh
@@ -2640,6 +2778,9 @@ class SceneDecoder:
         # mesh (cheap, never solved). No ObjectInfo / promotion needed.
         self._asset.add.tri(name, local_vert, face)
         _static_obj = scene.add(name, obj_uuid)
+        _static_obj._statistics_uuid = obj_uuid
+        _static_obj._statistics_name = name
+        _static_obj._statistics_type = "STATIC"
         if transform is not None:
             _static_obj.mat4x4(transform)
         _static_obj.pin()

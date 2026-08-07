@@ -12,24 +12,58 @@
 # run-blender-rig) can read it without re-deriving the folder name.
 #
 # Usage (over SSH):
-#   powershell -ExecutionPolicy Bypass -File C:/download_blender.ps1 -Version 5.1.1
+#   powershell -ExecutionPolicy Bypass -File C:/download_blender.ps1 -Version 5.2.0
 
 param(
-    [string]$Version = "5.1.1"
+    [string]$Version = "5.2.0"
 )
 
 $ErrorActionPreference = "Stop"
-[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-# Minor series dir on the mirror, e.g. 5.1.1 -> Blender5.1
+# Minor series dir on the mirror, e.g. 5.2.0 -> Blender5.2
 $minor = ($Version -split '\.')[0..1] -join '.'
 $url = "https://download.blender.org/release/Blender$minor/blender-$Version-windows-x64.zip"
 $zip = "C:\blender.zip"
 $dest = "C:\blender"
 
 Write-Host "Downloading Blender $Version from $url ..."
-$wc = New-Object System.Net.WebClient
-$wc.DownloadFile($url, $zip)
+
+# curl rather than WebClient, for two reasons that both cost a CI run when
+# they are missing. It retries a dropped transfer itself, which a 400 MB
+# one-shot download from a single origin needs; and its exit code names the
+# cause, distinguishing a dead pointer (22, an HTTP 4xx) from a transport
+# failure (28 timeout, 56 recv error). A WebClient exception surfaces only
+# "An exception occurred during a WebClient request", which says nothing
+# about which of those happened. curl.exe is in System32 on Windows Server
+# and is what warmup.bat already downloads with. TLS needs no arranging
+# here: curl negotiates it through Schannel.
+#
+# Do NOT add --retry-all-errors. Plain --retry already covers the transient
+# class (timeouts, 5xx, dropped connections) and deliberately leaves 4xx
+# alone, so a stale version pointer still fails on its first attempt instead
+# of being retried into a slow abort; with --retry-all-errors a 404 is
+# reported six times over half a minute. This matches the retry policy
+# scripts\check-downloads.bat settled on for the same reason.
+if (Test-Path $zip) { Remove-Item -Force $zip }
+
+# PowerShell converts a native command's stderr into error records, and with
+# ErrorActionPreference=Stop that aborts on curl's own output before
+# $LASTEXITCODE can be read. Let the exit code be what decides.
+$prevEAP = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
+$curlOut = & curl.exe --silent --show-error --fail --location `
+    --retry 5 --retry-delay 5 --retry-connrefused `
+    --connect-timeout 20 `
+    --output $zip $url 2>&1
+$curlRc = $LASTEXITCODE
+$ErrorActionPreference = $prevEAP
+
+if ($curlRc -ne 0) {
+    Write-Host "curl exit code: $curlRc"
+    if ($curlOut) { Write-Host "curl: $curlOut" }
+    Write-Error "Failed to download Blender from $url (curl exit $curlRc)"
+    exit 1
+}
 
 # The Windows Blender zip is ~350 MB; a truncated CDN response would
 # unzip to a broken tree and only fail minutes later at launch. Reject

@@ -52,6 +52,13 @@ from .state_types import (
 from .object_group import ObjectGroup
 
 
+def _sync_scene_timeline_to_sim(self, context):
+    from ..core.animation import sync_scene_timeline_to_sim
+
+    scene = context.scene if context is not None else bpy.context.scene
+    sync_scene_timeline_to_sim(scene, self)
+
+
 @dynamic_enum_items
 def _get_profile_items(self, context):
     """Dynamic callback for profile_selection EnumProperty."""
@@ -563,6 +570,7 @@ class State(PropertyGroup):
         name="Starting Frame",
         default=1,
         min=0,
+        update=_sync_scene_timeline_to_sim,
         description=(
             "Blender frame the simulation's first output frame lands on, so a "
             "solve can be placed after a hand-animated lead-in. Simulated time "
@@ -573,6 +581,7 @@ class State(PropertyGroup):
     use_scene_frame_start: BoolProperty(  # pyright: ignore
         name="Take Starting Frame from Scene",
         default=False,
+        update=_sync_scene_timeline_to_sim,
         description=(
             "Start the simulation at the Blender scene's start frame instead of "
             "the Starting Frame field, so the solve tracks the scene timeline"
@@ -582,6 +591,7 @@ class State(PropertyGroup):
         name="Frame Count",
         default=180,
         min=10,
+        update=_sync_scene_timeline_to_sim,
         description="Number of frames for simulation",
     )  # pyright: ignore
     frame_rate: IntProperty(
@@ -951,8 +961,12 @@ class State(PropertyGroup):
         description="Hide pin operation overlays (spin circles, move/scale trajectories, torque arcs)",
         update=_on_direction_preview_changed,
     )  # pyright: ignore
-
-
+    statistics_object_uuid: StringProperty(
+        name="Statistics Object",
+        default="",
+        description="UUID of the object selected in the Statistics panel",
+        options={"HIDDEN"},
+    )  # pyright: ignore
     overlay_version: IntProperty(default=0, options={"HIDDEN"})  # pyright: ignore
 
     # Last session id used by this .blend.  Written by the facade whenever

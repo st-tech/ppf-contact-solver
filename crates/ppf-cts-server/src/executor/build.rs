@@ -8,8 +8,11 @@
 // spawns the worker, parses line-oriented progress + error markers
 // from its stdout, and forwards a SIGTERM on cooperative cancel.
 
+use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
@@ -19,6 +22,49 @@ use ppf_cts_core::events::Event;
 
 use super::dispatch_re_entrant;
 use crate::engine::ServerEngine;
+
+/// Worker stderr lines retained for the failure message. Only used when
+/// the worker produced no `ERROR` line of its own (a native crash, where
+/// `faulthandler`'s dump on stderr is the whole diagnostic).
+const STDERR_TAIL_LINES: usize = 32;
+
+/// Lines retained from a native-crash dump, counted from its banner. A
+/// fixed-size tail is the wrong shape for this payload: the dump carries
+/// one section per thread, so a worker with a thread pool overruns
+/// `STDERR_TAIL_LINES` and the banner and first frames, the part that
+/// names the fault, are exactly what gets evicted. Latching at the banner
+/// keeps the head of the dump however it ends, including when it ends
+/// mid-line because the interpreter faulted again on its way out.
+const CRASH_DUMP_MAX_LINES: usize = 256;
+
+/// Banners a hosted interpreter writes when it dies without raising:
+/// `faulthandler` emits the first on POSIX and the second on Windows.
+const CRASH_BANNERS: [&str; 2] = ["Fatal Python error", "Windows fatal exception"];
+
+/// How long the stderr drain is joined for once the worker has exited.
+/// The join orders the drain's last lines before the tail is read; the
+/// bound covers a descendant that inherited the pipe and outlives the
+/// worker, which leaves the drain with no EOF to wait for.
+const STDERR_DRAIN_JOIN_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// How often the stdout drain checks whether the worker has exited.
+const WORKER_EXIT_POLL_INTERVAL: Duration = Duration::from_millis(50);
+
+/// How long the stdout drain keeps reading after the worker has exited
+/// and the stream has gone quiet.
+///
+/// Everything the worker wrote is in the pipe by the time it exits, so
+/// this bounds how long a descendant holding the same write end can keep
+/// the drain waiting. It is measured from the last byte read, not from
+/// the exit, so a worker still flushing is never cut off mid-report.
+const POST_EXIT_DRAIN_GRACE: Duration = Duration::from_millis(500);
+
+/// Cap on the `ERRORDETAIL` traceback appended to a failure reason. The
+/// reason is re-serialized into every status response, so the server
+/// bounds it in bytes; the worker separately bounds it in lines for
+/// legibility. Different quantities, so neither constant crosses the
+/// language boundary.
+pub(super) const MAX_ERROR_DETAIL_BYTES: usize = 8192;
 
 /// Spawn the build task and install a cancel handle on the engine.
 /// The body runs the build in a Python subprocess
@@ -262,7 +308,15 @@ pub(super) async fn drive_build_worker(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         // Line-buffer Python so PROGRESS lines arrive promptly.
-        .env("PYTHONUNBUFFERED", "1");
+        .env("PYTHONUNBUFFERED", "1")
+        // Pin the worker's stdio to UTF-8. The worker reconfigures its
+        // streams at import as well; this applies before the interpreter
+        // starts, so it also covers an import-time failure that raises
+        // before that runs. Without it, Windows follows the console code
+        // page and a non-ASCII object name or path makes the report raise
+        // `UnicodeEncodeError` inside its own handler, costing us the
+        // whole error line.
+        .env("PYTHONIOENCODING", "utf-8");
     // Append `--preserve-output` after the positional `<name> <root>`
     // so it lands at worker argv[3] (parsed from argv[3:]) without
     // shifting the name/root positions the worker reads as argv[1]/[2].
@@ -324,20 +378,91 @@ pub(super) async fn drive_build_worker(
 
     // Drain stderr in a side task so a chatty worker can't deadlock
     // by filling the kernel pipe buffer. We forward each line to the
-    // server log under [BUILD] so operators can correlate failures.
-    if let Some(err) = stderr {
+    // server log under [BUILD] so operators can correlate failures, and
+    // keep the last `STDERR_TAIL_LINES` for a failure that reaches us
+    // with no `ERROR` line to explain it.
+    let stderr_tail = Arc::new(Mutex::new(VecDeque::<String>::new()));
+    // Separate from the tail on purpose: the tail answers "what was the
+    // worker saying when it died", the dump answers "where did it die",
+    // and only the second survives being truncated from the front.
+    let crash_dump = Arc::new(Mutex::new(Vec::<String>::new()));
+    let stderr_task = stderr.map(|err| {
         let name = name.to_string();
+        let tail = stderr_tail.clone();
+        let dump = crash_dump.clone();
         tokio::spawn(async move {
-            let mut lines = BufReader::new(err).lines();
-            while let Ok(Some(line)) = lines.next_line().await {
+            let mut reader = BufReader::new(err);
+            let mut buf: Vec<u8> = Vec::new();
+            loop {
+                buf.clear();
+                // `read_until` rather than `lines()`: `lines()` yields an
+                // error on the first non-UTF-8 byte and the drain would
+                // end there, dropping every later line including the
+                // faulthandler dump a native crash writes on its way out.
+                match reader.read_until(b'\n', &mut buf).await {
+                    Ok(0) => break,
+                    Ok(_) => {}
+                    Err(e) => {
+                        log::warn!(
+                            target: "ppf::build",
+                            "[BUILD] {name}: stderr read error: {e}",
+                        );
+                        break;
+                    }
+                }
+                let line = String::from_utf8_lossy(&buf)
+                    .trim_end_matches('\n')
+                    .trim_end_matches('\r')
+                    .to_string();
                 log::warn!(target: "ppf::build", "[BUILD stderr] {name}: {line}");
+                {
+                    let mut held = dump.lock().unwrap_or_else(|e| e.into_inner());
+                    if held.is_empty() {
+                        if CRASH_BANNERS.iter().any(|b| line.contains(b)) {
+                            held.push(line.clone());
+                        }
+                    } else if held.len() < CRASH_DUMP_MAX_LINES {
+                        held.push(line.clone());
+                    }
+                }
+                let mut kept = tail.lock().unwrap_or_else(|e| e.into_inner());
+                if kept.len() == STDERR_TAIL_LINES {
+                    kept.pop_front();
+                }
+                kept.push_back(line);
             }
-        });
-    }
+        })
+    });
 
-    let mut reader = BufReader::new(stdout).lines();
+    let mut reader = BufReader::new(stdout);
+    // `read_until` rather than `lines()`, for the same reason the stderr
+    // drain gives, and the stakes are higher on this stream: `lines()`
+    // yields an error on the first non-UTF-8 byte and the drain ends
+    // there, so a library writing straight to fd 1 in the console code
+    // page (cp932 on a Japanese Windows install) costs the worker its
+    // whole report and not just the bytes it wrote. `from_utf8_lossy`
+    // spends one garbled line instead.
+    //
+    // The buffer outlives an iteration on purpose: the cancel branch can
+    // drop a half-finished `read_until`, which leaves the bytes it already
+    // took in the buffer, and the next call then appends the rest of that
+    // same line rather than losing its head.
+    let mut line_buf: Vec<u8> = Vec::new();
     let mut error_reason: Option<String> = None;
+    let mut error_detail: Vec<String> = Vec::new();
+    let mut error_detail_bytes: usize = 0;
+    let mut last_stage: Option<String> = None;
     let mut sigterm_sent = false;
+    // EOF on this pipe means every process holding its write end has
+    // closed it, which is not the same question as whether the worker
+    // has exited: a descendant that inherited stdout holds it open, and
+    // the drain then waits on a process nobody is supervising. So the
+    // worker's own exit is observed separately, and the read that
+    // follows it is bounded.
+    let mut worker_exit: Option<std::process::ExitStatus> = None;
+    let mut quiet_polls_after_exit: u32 = 0;
+    let post_exit_quiet_polls =
+        (POST_EXIT_DRAIN_GRACE.as_millis() / WORKER_EXIT_POLL_INTERVAL.as_millis()) as u32;
 
     loop {
         tokio::select! {
@@ -354,33 +479,94 @@ pub(super) async fn drive_build_worker(
                 // worker has a chance to flush a final ERROR line
                 // and exit code 130 cleanly.
             }
-            line = reader.next_line() => {
-                match line {
-                    Ok(Some(text)) => {
-                        if let Some((progress, info)) = parse_progress_line(&text) {
-                            dispatch_re_entrant(
-                                engine,
-                                Event::BuildProgress { progress, info },
-                            )
-                            .await;
-                        } else if let Some(total_frames) = parse_meta_frames_line(&text) {
-                            dispatch_re_entrant(
-                                engine,
-                                Event::BuildMetadata { total_frames },
-                            )
-                            .await;
-                        } else if let Some(msg) = parse_error_line(&text) {
-                            // Last ERROR wins; the worker may print
-                            // several before exiting. Real builds
-                            // print a single line then exit non-zero.
-                            error_reason = Some(msg);
-                        } else if !text.is_empty() {
-                            log::debug!(target: "ppf::build", "[BUILD stdout] {name}: {text}");
+            read = reader.read_until(b'\n', &mut line_buf) => {
+                if let Err(e) = read {
+                    log::warn!(target: "ppf::build", "[BUILD] {name}: stdout read error: {e}");
+                    break;
+                }
+                // `read_until` hands back whatever it holds when the stream
+                // ends without a delimiter, so an unterminated final line
+                // still arrives. An empty buffer is therefore EOF with
+                // nothing left to deliver, and the byte count is not the
+                // test: a call that reads zero bytes still owes us a line
+                // the cancel branch interrupted.
+                if line_buf.is_empty() {
+                    break; // every holder of the write end closed it
+                }
+                quiet_polls_after_exit = 0;
+                let text = String::from_utf8_lossy(&line_buf)
+                    .trim_end_matches('\n')
+                    .trim_end_matches('\r')
+                    .to_string();
+                line_buf.clear();
+                if let Some((progress, info)) = parse_progress_line(&text) {
+                    // Remember what the worker was doing, so an exit
+                    // that carries no ERROR line can still name the
+                    // stage it died in.
+                    if !info.is_empty() {
+                        last_stage = Some(info.clone());
+                    }
+                    dispatch_re_entrant(
+                        engine,
+                        Event::BuildProgress { progress, info },
+                    )
+                    .await;
+                } else if let Some(total_frames) = parse_meta_frames_line(&text) {
+                    dispatch_re_entrant(
+                        engine,
+                        Event::BuildMetadata { total_frames },
+                    )
+                    .await;
+                } else if let Some(msg) = parse_error_line(&text) {
+                    // Last ERROR wins; the worker may print
+                    // several before exiting. Real builds
+                    // print a single line then exit non-zero.
+                    // Detail lines follow their own headline, so a
+                    // new headline discards the previous one's.
+                    error_reason = Some(msg);
+                    error_detail.clear();
+                    error_detail_bytes = 0;
+                } else if let Some(detail) = parse_error_detail_line(&text) {
+                    if error_detail_bytes < MAX_ERROR_DETAIL_BYTES {
+                        error_detail_bytes += detail.len();
+                        error_detail.push(detail);
+                        if error_detail_bytes >= MAX_ERROR_DETAIL_BYTES {
+                            error_detail.push(format!(
+                                "<error detail truncated at \
+                                 {MAX_ERROR_DETAIL_BYTES} bytes; full \
+                                 traceback in server.log>"
+                            ));
                         }
                     }
-                    Ok(None) => break, // worker closed stdout
-                    Err(e) => {
-                        log::warn!(target: "ppf::build", "[BUILD] {name}: stdout read error: {e}");
+                } else if !text.is_empty() {
+                    log::debug!(target: "ppf::build", "[BUILD stdout] {name}: {text}");
+                }
+            }
+            _ = tokio::time::sleep(WORKER_EXIT_POLL_INTERVAL) => {
+                // Reached only while the stream is quiet, since the read
+                // arm above is polled first and this loop is biased.
+                if worker_exit.is_none() {
+                    match child.try_wait() {
+                        Ok(Some(status)) => worker_exit = Some(status),
+                        Ok(None) => {}
+                        Err(e) => {
+                            log::warn!(
+                                target: "ppf::build",
+                                "[BUILD] {name}: could not poll worker exit: {e}",
+                            );
+                            break;
+                        }
+                    }
+                } else {
+                    quiet_polls_after_exit += 1;
+                    if quiet_polls_after_exit >= post_exit_quiet_polls {
+                        log::warn!(
+                            target: "ppf::build",
+                            "[BUILD] {name}: worker exited but its stdout is still \
+                             held open after {}ms of silence, so a descendant \
+                             inherited it; ending the drain",
+                            POST_EXIT_DRAIN_GRACE.as_millis(),
+                        );
                         break;
                     }
                 }
@@ -388,13 +574,31 @@ pub(super) async fn drive_build_worker(
         }
     }
 
-    // Stdout has closed; the worker is exiting. Wait for the exit
+    // Wait for the exit
     // status so we can distinguish cancel (130) from crash (non-zero
     // without our SIGTERM) from clean completion (0).
-    let status = match child.wait().await {
-        Ok(s) => s,
-        Err(e) => return BuildOutcome::Failed(format!("worker wait failed: {e}")),
+    let status = match worker_exit {
+        Some(s) => s,
+        None => match child.wait().await {
+            Ok(s) => s,
+            Err(e) => return BuildOutcome::Failed(format!("worker wait failed: {e}")),
+        },
     };
+    // Join the drain so the tail read below cannot race the last lines
+    // the worker wrote on its way out. Bounded, because the write end of
+    // that pipe belongs to every process that inherited it and not to the
+    // worker alone: a descendant the worker leaves behind holds it open,
+    // the drain's `read_until` then has no EOF to reach, and an unbounded
+    // join would strand the build in BUILDING with the cancel select loop
+    // already exited, so cancel could not reach it either. Cancel on
+    // Windows terminates the worker alone, which is one way to be left
+    // with such a descendant. A timeout drops the handle, which detaches
+    // the drain rather than aborting it, so its lines still reach the
+    // server log; what the bound spends is their place in this failure's
+    // stderr tail.
+    if let Some(task) = stderr_task {
+        let _ = tokio::time::timeout(STDERR_DRAIN_JOIN_TIMEOUT, task).await;
+    }
 
     if sigterm_sent || cancel.is_cancelled() {
         return BuildOutcome::Cancelled;
@@ -402,10 +606,52 @@ pub(super) async fn drive_build_worker(
     if status.success() {
         return BuildOutcome::Completed;
     }
-    let reason = error_reason.unwrap_or_else(|| match status.code() {
-        Some(code) => format!("build worker exited with code {code}"),
-        None => "build worker terminated by signal".into(),
+    let had_error_line = error_reason.is_some();
+    let mut reason = error_reason.unwrap_or_else(|| {
+        let exit = match status.code() {
+            Some(code) => format!("build worker exited with code {code}"),
+            None => "build worker terminated by signal".to_string(),
+        };
+        match last_stage.as_deref().filter(|s| !s.is_empty()) {
+            Some(stage) => format!("{exit} (last stage: {stage})"),
+            None => exit,
+        }
     });
+    if !error_detail.is_empty() {
+        reason.push('\n');
+        reason.push_str(&error_detail.join("\n"));
+    } else if !had_error_line {
+        // No structured report at all, which is what a native crash looks
+        // like: the interpreter dies without raising, so `faulthandler`'s
+        // stderr dump is the only diagnostic. Gated on the no-ERROR case
+        // deliberately: the tetrahedralizer's C++ chatter reaches stderr
+        // unredirected on Windows, so an always-on tail would bury a real
+        // message under it.
+        // Prefer the latched dump when the worker left one: it starts at
+        // the banner, so it names the fault even when the tail has rolled
+        // past it. Fall back to the tail for a death that printed no
+        // banner at all (a signal from outside, an abort in a library
+        // that never reached the interpreter's handler).
+        let dump = {
+            let held = crash_dump.lock().unwrap_or_else(|e| e.into_inner());
+            held.join("\n")
+        };
+        if !dump.is_empty() {
+            reason.push_str(&format!(
+                "\n--- Build Worker native crash (from the {} banner, up to {CRASH_DUMP_MAX_LINES} lines) ---\n{dump}",
+                "faulthandler",
+            ));
+        }
+        let tail = {
+            let kept = stderr_tail.lock().unwrap_or_else(|e| e.into_inner());
+            kept.iter().cloned().collect::<Vec<_>>().join("\n")
+        };
+        if !tail.is_empty() {
+            reason.push_str(&format!(
+                "\n--- Build Worker stderr (last {STDERR_TAIL_LINES} lines) ---\n{tail}"
+            ));
+        }
+    }
     BuildOutcome::Failed(reason)
 }
 
@@ -430,6 +676,15 @@ fn parse_progress_line(line: &str) -> Option<(f64, String)> {
 
 fn parse_error_line(line: &str) -> Option<String> {
     line.strip_prefix("ERROR ").map(|m| m.trim().to_string())
+}
+
+/// Parse `ERRORDETAIL <text>`: one traceback line belonging to the most
+/// recent `ERROR`. Unlike `parse_error_line` this does NOT trim, because
+/// the leading indentation is what makes a traceback readable and the
+/// marker already delimits the payload. The two prefixes cannot collide:
+/// `"ERROR "` requires a space where `ERRORDETAIL` has a `D`.
+fn parse_error_detail_line(line: &str) -> Option<String> {
+    line.strip_prefix("ERRORDETAIL ").map(|m| m.to_string())
 }
 
 /// Parse `META frames=<int>`. Returns the parsed count or `None` for
@@ -518,23 +773,65 @@ fn is_missing_dependency_error(reason: &str) -> bool {
         || reason.contains("ImportError")
 }
 
+/// The part of a worker headline that identifies the failure: everything
+/// before the first ` | `.
+///
+/// `build_worker.py` writes its headline as `<Type>: <message>` followed
+/// by ` | `-separated context fields (`caused by ...`, the OS errno set,
+/// the frontend frame, the stage, the interpreter). Only that first
+/// segment names the exception the worker raised. `caused by` names a
+/// SECOND exception, the root of the cause chain, and a
+/// `ModuleNotFoundError` swallowed by an optional-dependency probe
+/// (`try: import scipy` / `except ImportError:`) lands there whenever the
+/// real failure is raised inside the handler.
+///
+/// A headline carrying no ` | ` comes from another producer (the usage
+/// line, a `SystemExit` payload, a reason this file synthesized) and
+/// identifies itself in full.
+fn failure_identity(headline: &str) -> &str {
+    match headline.split_once(" | ") {
+        Some((identity, _)) => identity,
+        None => headline,
+    }
+}
+
 /// Turn a cryptic `ModuleNotFoundError: No module named 'pythreejs'`
 /// into an actionable message that names the interpreter, how it was
 /// chosen, and how to point the build at the project venv. Non-import
 /// failures pass through unchanged.
+///
+/// Classification reads the first line's identity segment only
+/// (`failure_identity`), which is the exception the worker raised.
+/// Everything around it names some OTHER exception: the lines below the
+/// headline are the traceback, which routinely mentions an unrelated
+/// `ImportError` through the "During handling of the above exception"
+/// chain, and the fields after the first ` | ` carry the root of that
+/// chain by name. Matching over either would rewrite an unrelated failure
+/// into venv boilerplate and state a confidently wrong diagnosis. The
+/// whole headline and the traceback are both re-attached unchanged, so
+/// narrowing the match costs the reader no context.
 fn enrich_build_failure(reason: String, python: &Path, source: PythonSource) -> String {
-    if !is_missing_dependency_error(&reason) {
+    let (headline, detail) = match reason.split_once('\n') {
+        Some((head, rest)) => (head, rest),
+        None => (reason.as_str(), ""),
+    };
+    if !is_missing_dependency_error(failure_identity(headline)) {
         return reason;
     }
-    format!(
+    let mut enriched = format!(
         "build worker's Python ({}, resolved from {}) is missing a required frontend \
-         dependency: {reason}. The frontend deps (numpy, scipy, pythreejs, ...) live in the \
+         dependency: {headline}. The frontend deps (numpy, scipy, pythreejs, ...) live in the \
          ppf-cts venv. Point PPF_CTS_BUILD_PYTHON at that venv's interpreter (e.g. \
          <data-root>/venv/bin/python) or launch the server with the venv activated so \
          VIRTUAL_ENV is set, then rebuild.",
         python.display(),
         source.describe(),
-    )
+    );
+    if !detail.is_empty() {
+        enriched.push('\n');
+        enriched.push_str(detail);
+    }
+    enriched
 }
 
 /// Locate `frontend/build_worker.py`. Order:
@@ -590,8 +887,8 @@ fn locate_build_worker() -> Option<PathBuf> {
 /// requires from the caller's perspective. Operators on win_native
 /// should expect that a cancel mid-build leaves no half-written
 /// artifacts for the next launch to scrub. Manual smoke path: launch
-/// a build on a Windows host, click Cancel, verify the addon transitions
-/// out of Building (engine emits `BuildCancelledEvent`).
+/// a build on a Windows host, click Cancel, verify the addon
+/// transitions out of Building (engine emits `BuildCancelledEvent`).
 #[cfg(unix)]
 async fn send_cancel_signal(child: &mut Child) {
     // SAFETY: kill(2) with SIGTERM is harmless on a non-existent pid
@@ -702,6 +999,120 @@ mod tests {
     }
 
     #[test]
+    fn parse_error_detail_line_keeps_indentation() {
+        // Traceback indentation is the structure of the dump, so unlike
+        // the headline this payload must survive byte for byte.
+        assert_eq!(
+            parse_error_detail_line("ERRORDETAIL   File \"x.py\", line 3").unwrap(),
+            "  File \"x.py\", line 3"
+        );
+        assert_eq!(parse_error_detail_line("ERRORDETAIL ").unwrap(), "");
+        assert!(parse_error_detail_line("PROGRESS percent=1.0").is_none());
+    }
+
+    #[test]
+    fn error_and_error_detail_prefixes_are_disjoint() {
+        // Neither marker may consume the other: a detail line read as the
+        // headline would replace the verdict with a traceback fragment.
+        assert!(parse_error_line("ERRORDETAIL   File \"x.py\"").is_none());
+        assert!(parse_error_detail_line("ERROR boom").is_none());
+    }
+
+    #[test]
+    fn enrich_build_failure_classifies_on_headline_only() {
+        // A traceback that merely mentions ImportError must not turn an
+        // unrelated OSError into missing-dependency guidance.
+        let original = concat!(
+            "OSError: [Errno 22] Invalid argument | errno=22 winerror=None\n",
+            "Traceback (most recent call last):\n",
+            "  File \"frontend/_mesh_.py\", line 899, in _run_ftetwild_subprocess\n",
+            "During handling of the above exception, another exception occurred:\n",
+            "ImportError: cannot import name 'x'",
+        )
+        .to_string();
+        let msg = enrich_build_failure(
+            original.clone(),
+            Path::new("/x/venv/bin/python"),
+            PythonSource::Venv,
+        );
+        assert_eq!(msg, original);
+    }
+
+    #[test]
+    fn enrich_build_failure_classifies_on_identity_segment_only() {
+        // Verbatim worker headline for an `OSError` raised inside an
+        // `except ImportError:` handler, so the swallowed probe becomes the
+        // root of the cause chain and its type name lands in a context
+        // field. The failure has nothing to do with a missing dependency.
+        let original = concat!(
+            "OSError: [Errno 22] Invalid argument ",
+            "| caused by ModuleNotFoundError: No module named 'pytetwild' ",
+            "| errno=22 winerror=None strerror='Invalid argument' ",
+            "filename=None filename2=None ",
+            "| at frontend/_mesh_.py:899 in _run_ftetwild_subprocess ",
+            "| while: Tetrahedralizing Rock (1/1, new)... ",
+            "| python 3.11.9 win32 at C:\\dev\\python.exe",
+        )
+        .to_string();
+        let msg = enrich_build_failure(
+            original.clone(),
+            Path::new("/x/venv/bin/python"),
+            PythonSource::Venv,
+        );
+        assert_eq!(msg, original);
+    }
+
+    #[test]
+    fn enrich_build_failure_still_rewrites_a_headline_carrying_context() {
+        // The narrowing must not cost a genuine import failure its
+        // guidance: the identity segment still carries the type name when
+        // the context fields follow it.
+        let msg = enrich_build_failure(
+            concat!(
+                "ModuleNotFoundError: No module named 'pytetwild' ",
+                "| at frontend/_mesh_.py:820 in tetrahedralize ",
+                "| python 3.11.9 win32 at C:\\dev\\python.exe",
+            )
+            .to_string(),
+            Path::new("/usr/bin/python3"),
+            PythonSource::PathFallback,
+        );
+        assert!(msg.contains("pytetwild"), "lost the module: {msg:?}");
+        assert!(msg.contains("venv"), "lost the remedy: {msg:?}");
+        // The context fields survive; only the classifier ignores them.
+        assert!(
+            msg.contains("at frontend/_mesh_.py:820 in tetrahedralize"),
+            "lost the context fields: {msg:?}"
+        );
+    }
+
+    #[test]
+    fn enrich_build_failure_preserves_detail_block() {
+        let original = concat!(
+            "ModuleNotFoundError: No module named 'pytetwild'\n",
+            "Traceback (most recent call last):\n",
+            "  File \"frontend/_mesh_.py\", line 850, in _run_ftetwild_subprocess",
+        )
+        .to_string();
+        let msg = enrich_build_failure(
+            original,
+            Path::new("/usr/bin/python3"),
+            PythonSource::PathFallback,
+        );
+        let mut lines = msg.split('\n');
+        let head = lines.next().unwrap();
+        assert!(head.contains("pytetwild"), "head lost the module: {head:?}");
+        assert!(head.contains("venv"), "head lost the remedy: {head:?}");
+        assert_eq!(
+            lines.collect::<Vec<_>>(),
+            vec![
+                "Traceback (most recent call last):",
+                "  File \"frontend/_mesh_.py\", line 850, in _run_ftetwild_subprocess",
+            ],
+        );
+    }
+
+    #[test]
     fn read_build_violations_parses_sidecar_into_json_strings() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().to_string_lossy().into_owned();
@@ -762,6 +1173,61 @@ mod tests {
             None => std::env::remove_var("PPF_CTS_BUILD_WORKER"),
         }
         assert_eq!(found.as_deref(), Some(p.as_path()));
+    }
+
+    /// A descendant that inherited the worker's stderr holds the write
+    /// end of that pipe open after the worker itself exits, so the drain
+    /// never reaches EOF. The join over it is bounded, so the build still
+    /// reports its outcome; an unbounded one returns only when the
+    /// descendant does, and the engine sits in BUILDING until then with
+    /// the cancel select loop already exited.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn stderr_drain_join_survives_a_lingering_descendant() {
+        use crate::config::EngineConfig;
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("mock_lingering_child.sh");
+        // The descendant keeps stderr and gives up stdout, so the stdout
+        // loop still reaches EOF and the run gets as far as the join. It
+        // outlives the bound below by enough that the join cannot be the
+        // thing that ends it.
+        std::fs::write(
+            &script,
+            "#!/bin/sh\n\
+             sleep 20 >/dev/null &\n\
+             echo 'ERROR ValueError: Plane: no enclosed volume'\n\
+             exit 1\n",
+        )
+        .unwrap();
+        let mut perms = std::fs::metadata(&script).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&script, perms).unwrap();
+
+        let engine = ServerEngine::new(EngineConfig::default());
+        let cancel = engine.install_cancel_handle();
+        let outcome = tokio::time::timeout(
+            STDERR_DRAIN_JOIN_TIMEOUT * 3,
+            drive_build_worker(
+                &engine,
+                cancel,
+                Path::new("/bin/sh"),
+                &script,
+                "demo",
+                "/tmp/demo",
+                false,
+            ),
+        )
+        .await
+        .expect("drive_build_worker never returned: the stderr drain join is unbounded");
+        match outcome {
+            // The worker's own report survives the bounded join.
+            BuildOutcome::Failed(msg) => {
+                assert_eq!(msg, "ValueError: Plane: no enclosed volume");
+            }
+            _ => panic!("expected Failed"),
+        }
     }
 
     /// Windows-only smoke for the TerminateProcess path. Spawns a

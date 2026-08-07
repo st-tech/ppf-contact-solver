@@ -28,9 +28,18 @@
 #     the path is set. The warning is suppressed when long-path support is
 #     enabled system-wide (core.utils.windows_long_paths_enabled), since the
 #     limit no longer applies there.
+#   * the projection covers the LONGEST cache filename the server composes,
+#     not only the shortest. The addon cannot import the frontend, so
+#     core/utils.py mirrors that filename; the mirror is checked here against
+#     the Rust composer itself (datamodel/mesh.rs tetra_cache_name), so a
+#     change to the cache key surfaces as a failing check rather than as a
+#     Transfer that dies on a path the panel called acceptable.
 
 from __future__ import annotations
 
+import os
+import sys
+from pathlib import Path
 
 from . import _runner as r
 
@@ -38,6 +47,43 @@ from . import _runner as r
 NEEDS_BLENDER = True
 # Connection-path validation UI behavior; backend-agnostic.
 BACKENDS = ("emulated", "real")
+
+# Directory segments the server puts between the solver root and the
+# tetrahedralize cache file (``datamodel/app.rs`` ``compose_data_dir``). The
+# branch is ``unknown`` for a packaged Windows build, which is the case the
+# guard is for.
+_SERVER_CACHE_DIRS = ("local", "share", "ppf-cts", "git-unknown")
+
+# The widest per-object fTetWild override set the Blender encoder can emit,
+# with float values rendered the way a float32 property reaches str(). Used
+# to ask the composer for the longest filename a build can write.
+_WIDEST_TETRA_KWARGS = [
+    ("edge_length_fac", "0.05000000074505806"),
+    ("epsilon", "0.0010000000474974513"),
+    ("stop_energy", "10.0"),
+    ("num_opt_iter", "80"),
+    ("optimize", "True"),
+    ("simplify", "True"),
+    ("coarsen", "True"),
+]
+
+
+def _longest_tetra_cache_component() -> int:
+    """Length of the longest tetrahedralize cache filename the server writes.
+
+    Read from the Rust composer through the frontend, so this is the value
+    the addon's mirror has to match. A tree whose cdylib is not built cannot
+    answer the question, and this raises there rather than certifying the
+    mirror against nothing.
+    """
+    repo_root = str(Path(__file__).resolve().parents[3])
+    if repo_root not in sys.path:
+        sys.path.insert(0, repo_root)
+    from frontend import _rust  # type: ignore[attr-defined]
+
+    hash64 = "f" * 64
+    name, _key = _rust.mesh_tetra_cache_key(hash64, [], _WIDEST_TETRA_KWARGS)
+    return len(os.path.basename(_rust.mesh_cache_path("/c", hash64, name)))
 
 
 _DRIVER_BODY = r'''
@@ -161,12 +207,33 @@ try:
 
     # ---- Windows long-path projection + warning ----
     wptl = utils.windows_path_too_long
-    # The path from the original bug report: 64-char root + "violet" project
-    # projects to the 264-char tetra-cache path that failed.
+    pwcpl = utils.projected_windows_cache_path_len
+
+    def expected_projection(root, project):
+        """Longest path the server can write under *root* for *project*.
+
+        Assembled from the composer's own filename length (substituted in
+        by the scenario module) plus the server's directory layout, so the
+        addon's mirror of that filename is checked, not restated.
+        """
+        dirs = bs.join(list(SERVER_CACHE_DIRS) + [project, ".cash", ""])
+        return len(root) + 1 + len(dirs) + LONGEST_TETRA_CACHE_COMPONENT
+
+    probe_root = "C:" + bs + "probe"
+    record("projection_matches_the_server_composer",
+           pwcpl(probe_root, "violet") == expected_projection(probe_root, "violet"),
+           {"v": pwcpl(probe_root, "violet"),
+            "expected": expected_projection(probe_root, "violet"),
+            "component": LONGEST_TETRA_CACHE_COMPONENT})
+
+    # The root from the original bug report: 64 characters, which overflows
+    # the 260-character limit.
     long_root = ("C:" + bs + "Users" + bs + "alexa" + bs + "Desktop" + bs
                  + "ppf-contact-solver-2026-06-01-13-25-win64")
-    record("longpath_flags_reported_case", wptl(long_root, "violet") == 264,
-           {"v": wptl(long_root, "violet")})
+    record("longpath_flags_reported_case",
+           wptl(long_root, "violet") == expected_projection(long_root, "violet"),
+           {"v": wptl(long_root, "violet"),
+            "expected": expected_projection(long_root, "violet")})
     record("longpath_silent_on_short_root", wptl("C:" + bs + "dev", "violet") is None,
            {"v": wptl("C:" + bs + "dev", "violet")})
     record("longpath_silent_on_empty", wptl("", "violet") is None,
@@ -175,6 +242,12 @@ try:
     record("longpath_flags_long_project_name",
            wptl("C:" + bs + "dev", "x" * 120) is not None,
            {"v": wptl("C:" + bs + "dev", "x" * 120)})
+    # A 50-character root leaves too little for the longest cache path, so
+    # it must warn even though the shortest cache path would still fit.
+    root50 = "C:" + bs + "x" * 47
+    record("longpath_flags_fifty_char_root",
+           len(root50) == 50 and wptl(root50, "violet") is not None,
+           {"v": wptl(root50, "violet"), "len": len(root50)})
 
     # windows_long_paths_enabled() gates the warning; force both states so the
     # draw checks are independent of the host's actual registry setting.
@@ -236,11 +309,16 @@ except Exception as exc:
 def build_driver(ctx: r.ScenarioContext) -> str:
     """Return the Python source the bootstrap will exec inside Blender.
 
-    No substitutions are needed: the scenario neither connects to the
-    worker's server nor touches the filesystem, it only inspects the
-    validator, the draw helper, and the Connect operator's poll.
+    The only substitutions are the server-side cache-name facts. They are
+    resolved out here, in a process that can import the frontend, because
+    Blender's Python holds the addon alone and the addon deliberately does
+    not depend on the frontend.
     """
-    return _DRIVER_BODY
+    preamble = (
+        f"SERVER_CACHE_DIRS = {_SERVER_CACHE_DIRS!r}\n"
+        f"LONGEST_TETRA_CACHE_COMPONENT = {_longest_tetra_cache_component()}\n"
+    )
+    return preamble + _DRIVER_BODY
 
 
 def run(ctx: r.ScenarioContext) -> dict:

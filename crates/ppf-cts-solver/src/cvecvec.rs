@@ -205,11 +205,13 @@ mod tests {
         let v = CVecVec::from(&rows[..]);
         assert_eq!((v.size, v.nnz), (3, 5));
         assert_eq!((v.nnz_allocated, v.offset_allocated), (5, 4));
-        let offsets: Vec<u32> =
-            (0..=v.size as usize).map(|i| unsafe { *v.offset.add(i) }).collect();
+        let offsets: Vec<u32> = (0..=v.size as usize)
+            .map(|i| unsafe { *v.offset.add(i) })
+            .collect();
         assert_eq!(offsets, vec![0, 3, 3, 5]);
-        let data: Vec<u32> =
-            (0..v.nnz as usize).map(|i| unsafe { *v.data.add(i) }).collect();
+        let data: Vec<u32> = (0..v.nnz as usize)
+            .map(|i| unsafe { *v.data.add(i) })
+            .collect();
         assert_eq!(data, vec![1, 2, 3, 4, 5]);
         drop(v);
     }
@@ -223,11 +225,11 @@ mod tests {
         let bytes = bincode::serialize(&v).unwrap();
         let back: CVecVec<u32> = bincode::deserialize(&bytes).unwrap();
         assert_eq!((back.size, back.nnz), (2, 3));
-        let data: Vec<u32> =
-            (0..back.nnz as usize).map(|i| unsafe { *back.data.add(i) }).collect();
+        let data: Vec<u32> = (0..back.nnz as usize)
+            .map(|i| unsafe { *back.data.add(i) })
+            .collect();
         assert_eq!(data, vec![7, 8, 9]);
         drop(back);
         drop(v);
     }
 }
-

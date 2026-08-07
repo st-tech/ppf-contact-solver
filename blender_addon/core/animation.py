@@ -8,6 +8,14 @@ from .pc2 import cleanup_mesh_cache, has_mesh_cache
 from .utils import _get_fcurves
 
 
+def sync_scene_timeline_to_sim(scene, state) -> None:
+    """Expand the Blender timeline to contain every simulation frame."""
+    from .encoder import resolve_start_frame
+
+    required_end = resolve_start_frame(state) + int(state.frame_count) - 1
+    scene.frame_end = max(int(scene.frame_end), required_end)
+
+
 def clear_animation_data(context, move_to_frame: bool = True):
     if move_to_frame:
         from .encoder import resolve_start_frame
@@ -15,6 +23,8 @@ def clear_animation_data(context, move_to_frame: bool = True):
             resolve_start_frame(get_addon_data(context.scene).state)
         )
     get_addon_data(context.scene).state.clear_fetched_frames()
+    from .statistics_cache import clear_statistics_cache
+    clear_statistics_cache()
     for group in iterate_active_object_groups(context.scene):
         for assigned in group.assigned_objects:
             from .uuid_registry import resolve_assigned
@@ -184,5 +194,3 @@ def prepare_animation_targets(context, *, clear_existing: bool):
         if clear_existing or not _has_frame_one_geometry_keys(obj):
             _restore_object_geometry(obj, snapshot)
             _insert_frame_one_keys(obj, context)
-
-

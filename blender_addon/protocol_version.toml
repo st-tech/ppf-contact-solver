@@ -17,6 +17,46 @@
 # behavior fix must not be served by a stale binary.
 #
 # Changelog:
+#   0.18: structured crash reporting. The status response gains `crash_kind`, a
+#         stable snake_case tag naming the crash cause (the CrashKind the solver
+#         or the supervisor determined), alongside the existing free-form
+#         `error` string. The addon maps the tag to a localized one-line panel
+#         headline and keeps the full multi-line report, which now carries the
+#         solver's stderr tail as well as its stdout tail, in the Console. An
+#         empty tag means the error is not a solver crash. The server also
+#         reports a crash cause after a reconnect, where it previously reported
+#         a failure with no reason at all.
+#   0.17: solver-produced per-object timeline statistics. Scene build writes a
+#         versioned statistics_input.cbor object/range manifest; the solver
+#         writes statistics_manifest.cbor plus statistics_<frame>.cbor beside
+#         each vertex frame. The addon fetches these records into persistent
+#         UUID-backed .stats files and performs no geometry or physics analysis.
+#         Statistics include position, geometry measures, stretch, linear and
+#         angular motion, and normalized angular axis. Contact count is reserved
+#         for the exact production contact-attribution pass.
+#   0.16: Lock Rotation gains a per-object prohibit-axis mode switch. The
+#         parameter payload adds a boolean keyed by object UUID under
+#         "lock-rotation-prohibit-axis": false (default) keeps the axis an
+#         allow-only whitelist (only rotation about it is permitted, as in
+#         0.15); true flips it to a blacklist (rotation about the axis is
+#         forbidden, the perpendicular rotation plane stays free). The key is
+#         meaningless without a Lock Rotation axis and is only ever emitted
+#         for an object that also has "lock-rotation" set. Scene export adds
+#         the matching optional rotation_lock_mode.bin table, one uint32 per
+#         displacement group aligned with rotation_lock.bin (0 for a disabled
+#         or allow-only row, 1 for a prohibit-axis row); the file is omitted
+#         when no object has Lock Rotation enabled, same as rotation_lock.bin.
+#   0.15: per-object Lock Rotation. Coexists independently with Lock
+#         Translation (0.14): the parameter payload gains a second
+#         normalized world-space axis, keyed by object UUID under
+#         "lock-rotation", restricting the object's mass-weighted best-fit
+#         rigid rotation to rotation about that axis only (translation and
+#         deformation stay free). Scene export writes the matching
+#         per-displacement-group rotation_lock.bin table alongside
+#         translation_lock.bin. An object may set either, both, or neither.
+#   0.14: per-object Lock Translation. The parameter payload gains a normalized
+#         world-space axis keyed by object UUID, and scene export writes the
+#         matching per-displacement-group translation_lock.bin table.
 #   0.13: timing-free data payload (CBOR SCHEMA_VERSION 1 -> 2). Every DATA
 #         payload animation channel now ships frame-indexed timing instead of
 #         seconds: transform_animation carries frame_offset (was time),
@@ -84,4 +124,4 @@
 #         on shutdown(SHUT_WR) as the end-of-input signal. Windows tokio did not
 #         deliver that half-close to the server's AsyncRead, so the server hung
 #         in its read loop and connections piled up in FIN_WAIT_2.
-protocol = "0.13"
+protocol = "0.18"

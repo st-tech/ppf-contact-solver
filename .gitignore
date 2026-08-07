@@ -62,13 +62,20 @@ docs/logs.rst
 blender_addon/lib
 *.log
 report.json
-src/cpp/kernels/tests/test_exclusive_scan
-src/cpp/kernels/tests/test_reduce
 src/cpp/build
 # CUDA build artifacts under any crate. The legacy `src/cpp/build`
 # pattern above stays for older checkouts that still carry it; this
 # glob matches the `crates/<name>/src/cpp/build/` location used now.
 **/src/cpp/build
+# The C++/CUDA regression binaries and their objects. The test Makefiles write
+# them one level above the crate's src/, because two build scripts watch
+# `crates/ppf-cts-solver/src` recursively and anything landing inside it
+# invalidates both. This entry does NOT accomplish that: cargo's mtime walk
+# does not consult .gitignore, so the directory has to sit outside the watch on
+# its own merits and this line only keeps the results untracked. The two
+# root-anchored per-binary entries that used to sit above matched nothing once
+# the solver moved under crates/, which is how a 1.2 MB ELF came to be tracked.
+**/build-tests/
 build-win-native/python
 build-win-native/deps
 build-win-native/.*
@@ -103,3 +110,7 @@ build-win-native/python_full
 
 # Calibration sim cache (intermediate meshes; re-render report offline, do not commit)
 calibration/report_data/
+
+# fTetWild writes this into its working directory. The tet script removes
+# it after a run, so one that survives is from a run that ended early.
+__tracked_surface.stl

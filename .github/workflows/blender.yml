@@ -87,9 +87,13 @@ jobs:
     # macos-15 image (what the emulated toolchain + arm64 Blender build are
     # verified against) and migrate to macos-26 deliberately after testing.
     runs-on: macos-15
-    timeout-minutes: 90
+    # A healthy full suite measures about 61 min here, and it grows as
+    # scenarios land. Crossing the limit surfaces as a cancelled job, which
+    # reads as infrastructure noise rather than as a suite that outgrew its
+    # budget, so keep the headroom wide.
+    timeout-minutes: 120
     env:
-      BLENDER_VERSION: '5.1.1'
+      BLENDER_VERSION: '5.2.0'
       PPF_EMULATED_STEP_MS: '100'
       PYTHONUNBUFFERED: '1'
       # Bound + retry a stalled fTetWild tetrahedralization (SOLID tests): a
@@ -115,7 +119,12 @@ jobs:
 
       - name: Download Blender (macOS)
         run: |
-          url="https://download.blender.org/release/Blender5.1/blender-${BLENDER_VERSION}-macos-arm64.dmg"
+          # Derive the series directory from the version rather than
+          # spelling it out, so the two cannot disagree: a bump that
+          # edited only BLENDER_VERSION would otherwise build a URL for
+          # the new build under the old series and 404.
+          series="${BLENDER_VERSION%.*}"
+          url="https://download.blender.org/release/Blender${series}/blender-${BLENDER_VERSION}-macos-arm64.dmg"
           curl -fL -o /tmp/blender.dmg "$url"
           mount=$(hdiutil attach -nobrowse /tmp/blender.dmg | awk '/\/Volumes\// {print $NF; exit}')
           cp -R "$mount/Blender.app" /Applications/
@@ -196,8 +205,12 @@ jobs:
           path: report.json
           if-no-files-found: warn
 
-      - name: Upload worker artifacts on failure
-        if: failure()
+      # cancelled() as well as failure(): GitHub reports a timeout-minutes
+      # kill as cancelled, and failure() is false for it. A hang is exactly
+      # when the worker logs are worth having, so keying only on failure()
+      # discards the evidence in the one case that needs it.
+      - name: Upload worker artifacts on failure or timeout
+        if: failure() || cancelled()
         uses: actions/upload-artifact@v6
         with:
           name: ppf-debug-macos
@@ -212,7 +225,11 @@ jobs:
     name: Linux (emulated)
     if: ${{ inputs.platforms == 'all' || inputs.platforms == 'linux-emulated' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    # A healthy full suite measures about 57 min here, and it grows as
+    # scenarios land. Crossing the limit surfaces as a cancelled job, which
+    # reads as infrastructure noise rather than as a suite that outgrew its
+    # budget, so keep the headroom wide.
+    timeout-minutes: 120
     env:
       PPF_EMULATED_STEP_MS: '100'
       PYTHONUNBUFFERED: '1'
@@ -292,8 +309,17 @@ jobs:
       - name: Run all scenarios (emulated, full suite, under Xvfb)
         shell: bash
         run: |
-          # --env starts Xvfb on :99 and exports DISPLAY + PPF_BLENDER_BIN.
+          # --env exports PPF_BLENDER_BIN and starts an Xvfb on :99.
+          # ensure_display() in blender_harness.py can either use that
+          # server or bring up a private one from :100, and
+          # PPF_BLENDER_DISPLAY picks which. CI pins the ambient server:
+          # on a private one a long suite stops partway through, and every
+          # scenario after that point fails with its Blender never
+          # connecting to the X server. inherit also fails loudly if :99
+          # is missing or unreachable, so a broken display surfaces here
+          # rather than as a suite of timeouts.
           eval "$(./install-blender.sh --env)"
+          export PPF_BLENDER_DISPLAY=inherit
           echo "PPF_BLENDER_BIN=$PPF_BLENDER_BIN DISPLAY=$DISPLAY"
           .venv/bin/python blender_addon/debug/main.py runtests \
             --timeout 360 \
@@ -307,8 +333,12 @@ jobs:
           path: report.json
           if-no-files-found: warn
 
-      - name: Upload worker artifacts on failure
-        if: failure()
+      # cancelled() as well as failure(): GitHub reports a timeout-minutes
+      # kill as cancelled, and failure() is false for it. A hang is exactly
+      # when the worker logs are worth having, so keying only on failure()
+      # discards the evidence in the one case that needs it.
+      - name: Upload worker artifacts on failure or timeout
+        if: failure() || cancelled()
         uses: actions/upload-artifact@v6
         with:
           name: ppf-debug-linux-emulated
@@ -337,7 +367,7 @@ jobs:
       id-token: write
       contents: read
     env:
-      BLENDER_VERSION: '5.1.1'
+      BLENDER_VERSION: '5.2.0'
       PYTHONUNBUFFERED: '1'
       AWS_REGION: ${{ github.event.inputs.region }}
       INSTANCE_TYPE: ${{ github.event.inputs.instance_type }}
@@ -360,7 +390,12 @@ jobs:
       - name: Download Blender (macOS) + probe
         run: |
           set -euo pipefail
-          url="https://download.blender.org/release/Blender5.1/blender-${BLENDER_VERSION}-macos-arm64.dmg"
+          # Derive the series directory from the version rather than
+          # spelling it out, so the two cannot disagree: a bump that
+          # edited only BLENDER_VERSION would otherwise build a URL for
+          # the new build under the old series and 404.
+          series="${BLENDER_VERSION%.*}"
+          url="https://download.blender.org/release/Blender${series}/blender-${BLENDER_VERSION}-macos-arm64.dmg"
           curl -fL -o /tmp/blender.dmg "$url"
           mount=$(hdiutil attach -nobrowse /tmp/blender.dmg | awk '/\/Volumes\// {print $NF; exit}')
           cp -R "$mount/Blender.app" /Applications/
@@ -645,8 +680,12 @@ jobs:
           if-no-files-found: warn
           retention-days: 5
 
-      - name: Upload worker artifacts on failure
-        if: failure()
+      # cancelled() as well as failure(): GitHub reports a timeout-minutes
+      # kill as cancelled, and failure() is false for it. A hang is exactly
+      # when the worker logs are worth having, so keying only on failure()
+      # discards the evidence in the one case that needs it.
+      - name: Upload worker artifacts on failure or timeout
+        if: failure() || cancelled()
         uses: actions/upload-artifact@v6
         with:
           name: ppf-debug-macos-ssh
@@ -871,8 +910,16 @@ jobs:
           cd "$HOME"
           export PPF_DEBUG_ROOT=/home/ubuntu/ppf-debug
           export PYTHONUNBUFFERED=1
-          # Xvfb + DISPLAY + PPF_BLENDER_BIN from the install helper.
+          # PPF_BLENDER_BIN from the install helper, which also starts an
+          # Xvfb on :99. PPF_BLENDER_DISPLAY=inherit makes the rig use that
+          # server rather than a private one from :100 (ensure_display in
+          # blender_harness.py): a long suite on a private display stops
+          # partway through, with every later scenario failing without its
+          # Blender ever connecting to the X server. inherit fails loudly
+          # if :99 is missing, so a broken display surfaces as an error
+          # here rather than as a suite of timeouts.
           eval "$(./install-blender.sh --env)"
+          export PPF_BLENDER_DISPLAY=inherit
           VENV="$HOME/.local/share/ppf-cts/venv/bin/python"
           "$VENV" blender_addon/debug/main.py runtests \
             --backend real \
@@ -951,6 +998,7 @@ jobs:
       AWS_REGION: ${{ github.event.inputs.region }}
       INSTANCE_TYPE: ${{ github.event.inputs.instance_type }}
       BRANCH: ${{ github.ref_name }}
+      BLENDER_VERSION: '5.2.0'
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
@@ -1121,7 +1169,7 @@ jobs:
           scp -P 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i /tmp/ec2key.pem \
             .github/workflows/scripts/win/install-addon.ps1 Administrator@localhost:C:/install_addon.ps1
           ssh -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=60 -o ServerAliveCountMax=20 \
-            -i /tmp/ec2key.pem Administrator@localhost "powershell -ExecutionPolicy Bypass -File C:/download_blender.ps1 -Version 5.1.1"
+            -i /tmp/ec2key.pem Administrator@localhost "powershell -ExecutionPolicy Bypass -File C:/download_blender.ps1 -Version ${BLENDER_VERSION}"
           # Install the addon (cold-start: derive version from the binary,
           # fetch cbor2 wheels via the embedded Python). Run as a -File
           # script; an inline -Command with $env: would be double-evaluated

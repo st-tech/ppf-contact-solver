@@ -62,6 +62,34 @@ def _encode_obj_tet_kwargs(assigned) -> dict:
     return kwargs
 
 
+def _encode_soft_constraint(group) -> dict:
+    """Map each included object of a STATIC group to its pin spring stiffness.
+
+    Empty when the group holds its collider exactly, which is the default and
+    keeps the param hash of untouched scenes unchanged.
+    """
+    if not getattr(group, "enable_soft_constraint", False):
+        return {}
+    stiffness = float(group.soft_constraint_stiffness)
+    if not stiffness > 0.0:
+        # The solver reads a pull weight of zero as "this pin is a hard fix",
+        # so forwarding it would hand back the exact constraint the group asked
+        # to drop, with nothing in the UI or the log to say so. The UI minimum
+        # does not cover the MCP or material-profile paths that also write it.
+        raise ValueError(
+            f"STATIC group '{group.name}' has soft constraints enabled with "
+            f"stiffness {stiffness}, which must be strictly positive. Zero is "
+            "how the solver spells an exact pin, so it would silently keep the "
+            "collider rigid. Raise Stiffness, or uncheck Apply Soft "
+            "Constraints."
+        )
+    return {
+        assigned.uuid: stiffness
+        for assigned in group.assigned_objects
+        if assigned.included
+    }
+
+
 def _encode_scene_params(context, state, fps):
     """Build the scene-level parameter dict."""
     scene = context.scene
@@ -172,6 +200,68 @@ def _initial_translational_velocity(assigned, start_frame):
     return _swap_axes(_normalize_and_scale(chosen.direction, chosen.speed))
 
 
+def _encode_lock_translation_axis(assigned) -> list[float]:
+    """Solver-space, unit-length Lock Translation axis for one object.
+
+    A world-space direction only (no world scaling: a line direction has
+    no length to scale). Validated finite and non-zero BEFORE the axis
+    swap and normalize, so a degenerate axis fails loudly here rather
+    than reaching the solver as NaN or a silently-disabled zero vector.
+    Raises fail loud: an enabled Lock Translation with a zero or non-finite
+    axis is a scene-authoring error, not a "just disable it" case, since the
+    UI already warns and defaults to a non-zero axis.
+    """
+    axis = np.array(
+        [float(assigned.lock_translation_axis[i]) for i in range(3)],
+        dtype=np.float64,
+    )
+    if not np.all(np.isfinite(axis)):
+        raise ValueError(
+            f"Object '{assigned.name}': Lock Translation axis must be finite; "
+            f"got {tuple(assigned.lock_translation_axis)!r}"
+        )
+    norm = float(np.linalg.norm(axis))
+    if norm <= 0.0:
+        raise ValueError(
+            f"Object '{assigned.name}': Lock Translation is enabled with a "
+            "zero-length axis. Set a non-zero direction or disable Lock "
+            "Translation."
+        )
+    return _swap_axes((axis / norm).tolist())
+
+
+def _encode_lock_rotation_axis(assigned) -> list[float]:
+    """Solver-space, unit-length Lock Rotation axis for one object.
+
+    A world-space direction only (no world scaling: a rotation axis has
+    no length to scale). Validated finite and non-zero BEFORE the axis
+    swap and normalize, so a degenerate axis fails loudly here rather
+    than reaching the solver as NaN or a silently-disabled zero vector.
+    Raises fail loud: an enabled Lock Rotation with a zero or non-finite
+    axis is a scene-authoring error, not a "just disable it" case, since
+    the UI already warns and defaults to a non-zero axis. Mirrors
+    `_encode_lock_translation_axis` above; the two features are encoded
+    independently of each other.
+    """
+    axis = np.array(
+        [float(assigned.lock_rotation_axis[i]) for i in range(3)],
+        dtype=np.float64,
+    )
+    if not np.all(np.isfinite(axis)):
+        raise ValueError(
+            f"Object '{assigned.name}': Lock Rotation axis must be finite; "
+            f"got {tuple(assigned.lock_rotation_axis)!r}"
+        )
+    norm = float(np.linalg.norm(axis))
+    if norm <= 0.0:
+        raise ValueError(
+            f"Object '{assigned.name}': Lock Rotation is enabled with a "
+            "zero-length axis. Set a non-zero direction or disable Lock "
+            "Rotation."
+        )
+    return _swap_axes((axis / norm).tolist())
+
+
 def _encode_group_params(context, groups, state, fps, start_frame):
     """Encode per-group material parameters."""
     from ..uuid_registry import resolve_assigned
@@ -207,6 +297,9 @@ def _encode_group_params(context, groups, state, fps, start_frame):
                 "angular-velocity-world-schedule",
                 "collision-windows",
                 "ftetwild",
+                "lock-translation",
+                "lock-rotation",
+                "lock-rotation-prohibit-axis",
             ],
             "SHELL": [
                 "density",
@@ -220,6 +313,8 @@ def _encode_group_params(context, groups, state, fps, start_frame):
                 "contact-offset",
                 "strain-limit",
                 "bend",
+                "bend-warp",
+                "bend-weft",
                 "shrink-x",
                 "shrink-y",
                 "pressure",
@@ -234,6 +329,9 @@ def _encode_group_params(context, groups, state, fps, start_frame):
                 "angular-velocity-schedule",
                 "angular-velocity-world-schedule",
                 "collision-windows",
+                "lock-translation",
+                "lock-rotation",
+                "lock-rotation-prohibit-axis",
             ],
             "ROD": [
                 "density",
@@ -254,11 +352,15 @@ def _encode_group_params(context, groups, state, fps, start_frame):
                 "velocity",
                 "velocity-schedule",
                 "collision-windows",
+                "lock-translation",
+                "lock-rotation",
+                "lock-rotation-prohibit-axis",
             ],
             "STATIC": [
                 "contact-gap",
                 "contact-offset",
                 "friction",
+                "soft-constraint",
             ],
             "SAND": [
                 "sand-particle-mass",
@@ -270,6 +372,9 @@ def _encode_group_params(context, groups, state, fps, start_frame):
                 "velocity",
                 "velocity-schedule",
                 "collision-windows",
+                "lock-translation",
+                "lock-rotation",
+                "lock-rotation-prohibit-axis",
             ],
             "PDRD": [
                 "density",
@@ -283,6 +388,9 @@ def _encode_group_params(context, groups, state, fps, start_frame):
                 "angular-velocity-schedule",
                 "angular-velocity-world-schedule",
                 "collision-windows",
+                "lock-translation",
+                "lock-rotation",
+                "lock-rotation-prohibit-axis",
             ],
         }
         model_map = {
@@ -434,6 +542,11 @@ def _encode_group_params(context, groups, state, fps, start_frame):
             "contact-gap": np.float32(contact_gap_value),
             "contact-offset": np.float32(contact_offset_value),
             "bend": np.float32(group.bend),
+            # Directional bending stiffnesses added on top of `bend`. Both
+            # default to 0.0, which adds nothing, so a group that leaves them
+            # alone reaches the solver exactly as it did before.
+            "bend-warp": np.float32(group.bend_warp),
+            "bend-weft": np.float32(group.bend_weft),
             "shrink": np.float32(group.shrink),
             "shrink-x": np.float32(group.shrink_x),
             "shrink-y": np.float32(group.shrink_y),
@@ -524,6 +637,15 @@ def _encode_group_params(context, groups, state, fps, start_frame):
                 for assigned in group.assigned_objects
                 if assigned.included and (kw := _encode_obj_tet_kwargs(assigned))
             },
+            # Spring stiffness holding each collider vertex to its animated
+            # position, keyed by UUID (mirrors "ftetwild": the decoder peeks it
+            # at populate time, since a pin's pull weight is not an object
+            # param and cannot go through param.set). The group-level value is
+            # broadcast per object. Absent means exact pins, so an unchecked
+            # group sends nothing. Riding the PARAM payload rather than DATA is
+            # deliberate: retuning the stiffness then re-sends kilobytes of
+            # parameters instead of the whole mesh dataset.
+            "soft-constraint": _encode_soft_constraint(group),
             "collision-windows": {
                 assigned.uuid: [
                     (
@@ -547,6 +669,44 @@ def _encode_group_params(context, groups, state, fps, start_frame):
                 if assigned.included
                 and getattr(assigned, "pdrd_hinge_enable", False)
             } if group.object_type == "PDRD" else {},
+            # Lock Translation: per-UUID normalized world-space axis (solver
+            # space, direction only, no world scaling), set per assigned
+            # object. Only enabled objects appear; the decoder turns each
+            # entry into an Object.lock_translation(*axis) call. Empty =
+            # every object stays free.
+            "lock-translation": {
+                assigned.uuid: _encode_lock_translation_axis(assigned)
+                for assigned in group.assigned_objects
+                if assigned.included
+                and getattr(assigned, "lock_translation_enable", False)
+            },
+            # Lock Rotation: per-UUID normalized world-space axis (solver
+            # space, direction only, no world scaling), set per assigned
+            # object. Independent of "lock-translation" above: an object
+            # may appear in either dict, both, or neither. Only enabled
+            # objects appear; the decoder turns each entry into an
+            # Object.lock_rotation(*axis) call. Empty = every object
+            # stays rotationally free.
+            "lock-rotation": {
+                assigned.uuid: _encode_lock_rotation_axis(assigned)
+                for assigned in group.assigned_objects
+                if assigned.included
+                and getattr(assigned, "lock_rotation_enable", False)
+            },
+            # Lock Rotation mode: per-UUID bool, set only for the same
+            # lock-rotation-enabled objects above. False (default) keeps
+            # the axis a whitelist (only rotation about it is allowed);
+            # True flips it to a blacklist (rotation about it is
+            # forbidden, the perpendicular plane stays free instead).
+            # The decoder passes this to Object.lock_rotation alongside
+            # the axis from "lock-rotation". Empty = no rotation-locked
+            # objects, same emptiness condition as "lock-rotation".
+            "lock-rotation-prohibit-axis": {
+                assigned.uuid: bool(assigned.lock_rotation_prohibit_axis)
+                for assigned in group.assigned_objects
+                if assigned.included
+                and getattr(assigned, "lock_rotation_enable", False)
+            },
         }
         obj_type = group.object_type
         del_keys = []

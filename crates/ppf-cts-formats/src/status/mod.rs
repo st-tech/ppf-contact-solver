@@ -19,11 +19,17 @@
 //!
 //! # Writers and readers
 //!
-//! The solver's Rust host is the SOLE writer of the record and the
-//! holder of the lock. The server's monitor is the reader. The C++
-//! layer never touches the schema (it only widens `StepResult` so crash
-//! sub-kinds reach the host). The Blender addon learns outcomes over the
-//! socket, never by reading this file.
+//! The solver's Rust host is the sole writer of the record while its run
+//! is alive, and the holder of the lock. The server's monitor is the
+//! reader, and it writes exactly one thing: when a run dies without
+//! reaching a terminal [`Outcome`], the monitor seals its own verdict into
+//! the record after it has established that the owning process is gone
+//! (lock free AND pid dead). [`write_terminal`] is first-writer-wins, so a
+//! terminal outcome the solver did manage to write is never overwritten,
+//! and sealing is what lets a later reconnect read back the same cause the
+//! live report named. The C++ layer never touches the schema (it only
+//! widens `StepResult` so crash sub-kinds reach the host). The Blender
+//! addon learns outcomes over the socket, never by reading this file.
 //!
 //! # Versioning
 //!
@@ -125,12 +131,55 @@ pub enum CrashKind {
     Oom,
     /// CUDA runtime / driver abort, from the fatal-exit hook.
     CudaDriver,
+    /// `cudaErrorLaunchTimeout`: the operating system's kernel-execution
+    /// watchdog reset the device out from under a running kernel. The
+    /// runtime raises this only where such a timeout is configured, which
+    /// is any GPU that also drives a display (WDDM on Windows, an X server
+    /// on Linux). It names a property of the machine, not of the driver, so
+    /// it is separated from [`CrashKind::CudaDriver`]: the action is to run
+    /// on a GPU with no display attached (or raise the OS timeout), not to
+    /// reinstall a driver. The detail reports whether the watchdog was
+    /// actually armed on the device, as read from `cudaDeviceProp` before
+    /// the run started.
+    WatchdogTimeout,
     /// Rust host panic, from the panic hook.
     Panic,
+    /// A solver internal invariant failed and the run was stopped at the
+    /// detection site (a `PPF FATAL:` report). These are deliberate
+    /// unconditional checks over assembled state (a non-SPD Newton matrix,
+    /// an infeasible lock, a position off the representable domain), so
+    /// the detail carries the check's own report and the run cannot be
+    /// resumed past it without changing the scene or fixing the defect.
+    SolverInvariant,
+    /// A device-side `assert` trapped, surfacing as `cudaErrorAssert` on
+    /// the next checked CUDA call. The asserts are live in the release
+    /// build on purpose (the penetration-free family among them), so this
+    /// names a violated GPU invariant, not a build misconfiguration. The
+    /// device `printf` that would name the assert is lost on the trap, so
+    /// the stdout tail is the only place its neighborhood shows.
+    DeviceAssert,
+    /// The process was killed by a fatal signal (or, on Windows, a
+    /// structured exception) before it could write a terminal record. The
+    /// detail names the signal when it is known; a `SIGKILL` leaves no
+    /// signal record at all and is inferred from the launcher's exit
+    /// status.
+    KilledBySignal,
+    /// The dynamic loader could not resolve a library the solver needs, so
+    /// the image it was asked to start (or to extend, for a delay-loaded
+    /// module) never ran. Named separately from [`CrashKind::LaunchFailed`]
+    /// because it says WHICH part failed and what to check: the library
+    /// search path, not the run script or the scene.
+    LibraryLoadFailed,
+    /// The process exited before `status_writer::init` ran, so no record was
+    /// ever written. That is all the absence of a record establishes; what
+    /// stopped it is named from the launcher's exit status when that status
+    /// names anything, and left unnamed when it does not. The stderr tail is
+    /// the evidence either way.
+    LaunchFailed,
     /// Synthesized by the SERVER ONLY: lock free + owning PID dead + no
-    /// terminal outcome. Covers SIGKILL / OOM-kill and any fatal path
-    /// the host hook could not catch. Also the forward-compat catch-all
-    /// for a sub-kind an older build does not recognize.
+    /// terminal outcome, with no evidence that names a cause. Also the
+    /// forward-compat catch-all for a sub-kind an older build does not
+    /// recognize. Reported WITH the raw facts rather than a guess.
     #[serde(other)]
     UnknownAbrupt,
 }
@@ -152,12 +201,70 @@ impl CrashKind {
                 "Two surfaces start the step already touching or overlapping"
             }
             CrashKind::InitIntersection => "Intersection in the initial configuration",
-            CrashKind::Oom => "Out of GPU or host memory",
+            CrashKind::Oom => "Out of GPU memory",
             CrashKind::CudaDriver => "Unrecoverable CUDA runtime or driver error",
+            CrashKind::WatchdogTimeout => {
+                "A GPU kernel ran past the operating system's watchdog timeout"
+            }
             CrashKind::Panic => "Solver host panicked",
+            CrashKind::SolverInvariant => "Solver stopped on a failed internal check",
+            CrashKind::DeviceAssert => "A solver invariant failed on the GPU",
+            CrashKind::KilledBySignal => "The solver process was killed before it could report",
+            CrashKind::LibraryLoadFailed => "A required library could not be loaded",
+            CrashKind::LaunchFailed => "The solver exited before it started",
             CrashKind::UnknownAbrupt => "Solver exited abnormally without reporting a cause",
         }
     }
+
+    /// The exact `snake_case` spelling serde writes for this variant.
+    ///
+    /// One spelling with three consumers: the CBOR record's `sub_kind`, the
+    /// `crash_kind` field on the status response, and the addon's
+    /// translation-key selector. `crash_kind_tag_matches_serde` compares
+    /// this against what serde actually emits, so the three cannot drift.
+    pub fn tag(self) -> &'static str {
+        match self {
+            CrashKind::Intersection => "intersection",
+            CrashKind::Ccd => "ccd",
+            CrashKind::Cg => "cg",
+            CrashKind::NewtonStall => "newton_stall",
+            CrashKind::PinInfeasible => "pin_infeasible",
+            CrashKind::OverlappingStart => "overlapping_start",
+            CrashKind::InitIntersection => "init_intersection",
+            CrashKind::Oom => "oom",
+            CrashKind::CudaDriver => "cuda_driver",
+            CrashKind::WatchdogTimeout => "watchdog_timeout",
+            CrashKind::Panic => "panic",
+            CrashKind::SolverInvariant => "solver_invariant",
+            CrashKind::DeviceAssert => "device_assert",
+            CrashKind::KilledBySignal => "killed_by_signal",
+            CrashKind::LibraryLoadFailed => "library_load_failed",
+            CrashKind::LaunchFailed => "launch_failed",
+            CrashKind::UnknownAbrupt => "unknown_abrupt",
+        }
+    }
+
+    /// Every variant, in declaration order. Lets a test (and the addon's
+    /// i18n gate, through the rig) enumerate the tag set exhaustively.
+    pub const ALL: &'static [CrashKind] = &[
+        CrashKind::Intersection,
+        CrashKind::Ccd,
+        CrashKind::Cg,
+        CrashKind::NewtonStall,
+        CrashKind::PinInfeasible,
+        CrashKind::OverlappingStart,
+        CrashKind::InitIntersection,
+        CrashKind::Oom,
+        CrashKind::CudaDriver,
+        CrashKind::WatchdogTimeout,
+        CrashKind::Panic,
+        CrashKind::SolverInvariant,
+        CrashKind::DeviceAssert,
+        CrashKind::KilledBySignal,
+        CrashKind::LibraryLoadFailed,
+        CrashKind::LaunchFailed,
+        CrashKind::UnknownAbrupt,
+    ];
 }
 
 /// Map the `StepResult` success booleans to a [`CrashKind`]. The solver
@@ -199,9 +306,9 @@ pub fn crash_kind_from_step(
 
 /// Fatal error codes set on the non-`StepResult` paths (init failure and
 /// the C++ `exit(1)` fatal-exit hook), mapped to a [`CrashKind`]. The
-/// numeric values are the contract between the C++ fatal hook and the
-/// Rust host; keep them in sync with the C++ side when that lands
-/// (Phase B).
+/// numeric values are the contract between the C++ fatal hook
+/// (`cpp/main/fatal.hpp`, whose `PPF_FATAL_*` enumerators carry the same
+/// numbers) and the Rust host; the two must stay in sync.
 pub mod error_code {
     /// No fatal code set (the StepResult booleans are authoritative).
     pub const NONE: u8 = 0;
@@ -211,6 +318,12 @@ pub mod error_code {
     pub const OOM: u8 = 2;
     /// Any other `cudaError_t` from `CUDA_HANDLE_ERROR`.
     pub const CUDA_DRIVER: u8 = 3;
+    /// A `PPF FATAL:` invariant check stopped the run at its detection site.
+    pub const SOLVER_INVARIANT: u8 = 4;
+    /// `cudaErrorAssert`: a device-side `assert` trapped.
+    pub const DEVICE_ASSERT: u8 = 5;
+    /// `cudaErrorLaunchTimeout`: the OS kernel-execution watchdog fired.
+    pub const WATCHDOG_TIMEOUT: u8 = 6;
 }
 
 /// Map a fatal `error_code` (see [`error_code`]) to a [`CrashKind`].
@@ -221,7 +334,132 @@ pub fn crash_kind_from_error_code(code: u8) -> Option<CrashKind> {
         error_code::INIT_INTERSECTION => Some(CrashKind::InitIntersection),
         error_code::OOM => Some(CrashKind::Oom),
         error_code::CUDA_DRIVER => Some(CrashKind::CudaDriver),
+        error_code::SOLVER_INVARIANT => Some(CrashKind::SolverInvariant),
+        error_code::DEVICE_ASSERT => Some(CrashKind::DeviceAssert),
+        error_code::WATCHDOG_TIMEOUT => Some(CrashKind::WatchdogTimeout),
         _ => None,
+    }
+}
+
+/// The fatal signals the solver installs a handler for, as
+/// `(number, name)`. The solver writes the name into the
+/// [`signal_sidecar`] from inside the handler and re-raises under the
+/// previous disposition, so the process still dies with the right status.
+///
+/// `SIGKILL` is deliberately ABSENT: it cannot be caught, so no handler
+/// can record it. That asymmetry against [`signal_name`] is what makes the
+/// supervisor's fallback an elimination rather than a guess. When a
+/// launcher reports `128 + N` for a signal that IS in this table, the
+/// sidecar would have named it, so its absence means the handler never
+/// ran; when `N` is one of the uncatchable signals, no handler could have
+/// run at all. Either way the exit status is the only witness left, and
+/// the report says exactly that instead of naming a cause.
+///
+/// Every number comes from the TARGET's own `libc`, never from a literal.
+/// The six do not agree across platforms: `SIGBUS` is 7 on Linux and 10 on
+/// Darwin, and 10 on Linux is `SIGUSR1`, so a literal table written for
+/// either one installs the handler on one signal and labels it another on
+/// the other.
+#[cfg(unix)]
+pub const HANDLED_SIGNALS: &[(i32, &str)] = &[
+    (libc::SIGILL, "SIGILL"),
+    (libc::SIGABRT, "SIGABRT"),
+    (libc::SIGFPE, "SIGFPE"),
+    (libc::SIGBUS, "SIGBUS"),
+    (libc::SIGSEGV, "SIGSEGV"),
+    (libc::SIGTERM, "SIGTERM"),
+];
+
+/// Empty off unix: no handler is installed there and no sidecar is ever
+/// written, so there is no number to name.
+#[cfg(not(unix))]
+pub const HANDLED_SIGNALS: &[(i32, &str)] = &[];
+
+/// The names a sidecar can carry, independent of any platform's numbering.
+///
+/// A number means something only on the platform whose `libc` defines it,
+/// which is why [`HANDLED_SIGNALS`] is built from the target's own values
+/// and is empty off unix. A NAME is just the text the handler wrote, so
+/// recognizing one is not a per-platform question: the sidecar reader
+/// validates the string it read, and a reader that could not do that off
+/// unix would reject a record that is perfectly well formed.
+pub const HANDLED_SIGNAL_NAMES: &[&str] = &[
+    "SIGILL", "SIGABRT", "SIGFPE", "SIGBUS", "SIGSEGV", "SIGTERM",
+];
+
+/// The two tables name the same six signals. Checked here rather than
+/// trusted, so adding a signal to one and not the other does not compile.
+#[cfg(unix)]
+const _: () = {
+    assert!(HANDLED_SIGNALS.len() == HANDLED_SIGNAL_NAMES.len());
+};
+
+/// Name a fatal signal number, covering [`HANDLED_SIGNALS`] plus the
+/// uncatchable `SIGKILL`. Returns `None` for anything else, which the
+/// supervisor reports as unknown with the raw number rather than guessing.
+///
+/// The numbers are the target's own `libc` values, so a name is only ever
+/// returned for the signal that actually carries it on the platform this
+/// build runs on. Off unix the table is empty and this returns `None` for
+/// everything, which is what stops the supervisor's `128 + N` decode (a
+/// POSIX shell convention) from reading a Windows exit code as a signal.
+pub fn signal_name(n: i32) -> Option<&'static str> {
+    #[cfg(unix)]
+    if n == libc::SIGKILL {
+        return Some("SIGKILL");
+    }
+    HANDLED_SIGNALS
+        .iter()
+        .find(|(num, _)| *num == n)
+        .map(|(_, name)| *name)
+}
+
+/// The one-line signal sidecar (`<output>/crash_signal`).
+///
+/// A signal handler cannot serialize CBOR, allocate, or lock, so a signal
+/// death cannot write the terminal status record. It writes this instead:
+/// a single pre-formatted `"<SIGNAME> <launch_id>\n"` through one
+/// `write(2)`. The WRITER lives in the solver crate, beside the handler
+/// whose async-signal-safety audit constrains it; only the reader and the
+/// scrub live here, where the supervisor can reach them.
+pub mod signal_sidecar {
+    use std::path::Path;
+
+    use crate::files;
+
+    /// Read the recorded signal name, but only when the record belongs to
+    /// `launch_id`.
+    ///
+    /// The launch id is what makes the read safe. The file is also scrubbed
+    /// at `status_writer::init`, but a resume skips the output-directory
+    /// wipe, so a prior run's sidecar can outlive its run in the window
+    /// before the scrub; matching the id is the check that does not depend
+    /// on when the reader looks.
+    ///
+    /// Returns the name only when it is one of [`super::HANDLED_SIGNALS`],
+    /// so a corrupt or foreign file cannot inject arbitrary text into a
+    /// user-visible message.
+    pub fn read(output_dir: &Path, launch_id: &str) -> Option<&'static str> {
+        let body = std::fs::read_to_string(output_dir.join(files::CRASH_SIGNAL)).ok()?;
+        let mut parts = body.split_whitespace();
+        let name = parts.next()?;
+        if parts.next()? != launch_id {
+            return None;
+        }
+        // Validated against the NAMES rather than the number table: the
+        // sidecar carries text, and the number table is empty off unix,
+        // which would otherwise make every well-formed record unreadable
+        // there.
+        super::HANDLED_SIGNAL_NAMES
+            .iter()
+            .find(|known| **known == name)
+            .copied()
+    }
+
+    /// Remove a stale sidecar. Called once at solver startup, for the same
+    /// reason the status record is removed there.
+    pub fn scrub(output_dir: &Path) {
+        let _ = std::fs::remove_file(output_dir.join(files::CRASH_SIGNAL));
     }
 }
 
@@ -626,7 +864,121 @@ mod tests {
             crash_kind_from_error_code(error_code::CUDA_DRIVER),
             Some(CrashKind::CudaDriver)
         );
+        assert_eq!(
+            crash_kind_from_error_code(error_code::SOLVER_INVARIANT),
+            Some(CrashKind::SolverInvariant)
+        );
+        assert_eq!(
+            crash_kind_from_error_code(error_code::DEVICE_ASSERT),
+            Some(CrashKind::DeviceAssert)
+        );
+        assert_eq!(
+            crash_kind_from_error_code(error_code::WATCHDOG_TIMEOUT),
+            Some(CrashKind::WatchdogTimeout)
+        );
         assert_eq!(crash_kind_from_error_code(error_code::NONE), None);
         assert_eq!(crash_kind_from_error_code(200), None);
+    }
+
+    #[test]
+    fn new_crash_kinds_roundtrip() {
+        for kind in [
+            CrashKind::SolverInvariant,
+            CrashKind::DeviceAssert,
+            CrashKind::KilledBySignal,
+            CrashKind::LibraryLoadFailed,
+            CrashKind::LaunchFailed,
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let mut s = base();
+            s.phase = Phase::Ended;
+            s.outcome = Some(Outcome::Crashed {
+                sub_kind: kind,
+                detail: "detail".into(),
+            });
+            write_terminal(dir.path(), &s).unwrap();
+            let back = read(dir.path()).unwrap().unwrap();
+            assert_eq!(
+                back.outcome,
+                Some(Outcome::Crashed {
+                    sub_kind: kind,
+                    detail: "detail".into()
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn crash_kind_tag_matches_serde() {
+        // tag() is the wire spelling AND the addon's translation-key
+        // selector, so it must be exactly what serde writes. Compare
+        // against the serializer rather than a second hand-written list.
+        for kind in CrashKind::ALL {
+            let serialized = serde_json::to_value(kind).unwrap();
+            assert_eq!(serialized, serde_json::Value::String(kind.tag().into()));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn signal_table_excludes_sigkill() {
+        // The elimination argument the supervisor's fallback rests on: a
+        // handler exists for every signal it CAN catch, and SIGKILL is not
+        // one of them, so a bare `128 + 9` launcher code with no sidecar is
+        // an uncatchable kill rather than a missing handler.
+        assert_eq!(signal_name(libc::SIGKILL), Some("SIGKILL"));
+        assert!(!HANDLED_SIGNALS
+            .iter()
+            .any(|(n, _)| *n == libc::SIGKILL));
+        for (n, name) in HANDLED_SIGNALS {
+            assert_eq!(signal_name(*n), Some(*name));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn signal_numbers_are_the_target_libc_values() {
+        // Comparing names against `libc` is the only form of this check that
+        // cannot pass on one OS while lying on the other. A literal table is
+        // right for exactly one platform: `SIGBUS` is 7 on Linux and 10 on
+        // Darwin, and 10 on Linux is `SIGUSR1`, so a Darwin-shaped literal
+        // arms the handler on `SIGUSR1`, labels it `SIGBUS`, and leaves the
+        // real `SIGBUS` uncovered.
+        assert_eq!(signal_name(libc::SIGILL), Some("SIGILL"));
+        assert_eq!(signal_name(libc::SIGABRT), Some("SIGABRT"));
+        assert_eq!(signal_name(libc::SIGFPE), Some("SIGFPE"));
+        assert_eq!(signal_name(libc::SIGBUS), Some("SIGBUS"));
+        assert_eq!(signal_name(libc::SIGSEGV), Some("SIGSEGV"));
+        assert_eq!(signal_name(libc::SIGTERM), Some("SIGTERM"));
+        // Signals the solver never handles must stay unnamed, or the
+        // supervisor reports a hardware cause for a routine notification.
+        assert_eq!(signal_name(libc::SIGUSR1), None);
+        assert_eq!(signal_name(libc::SIGUSR2), None);
+        assert_eq!(signal_name(libc::SIGINT), None);
+    }
+
+    #[test]
+    fn sidecar_rejects_foreign_launch_id() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join(files::CRASH_SIGNAL),
+            "SIGSEGV a1b2c3d4e5f6\n",
+        )
+        .unwrap();
+        assert_eq!(
+            signal_sidecar::read(dir.path(), "a1b2c3d4e5f6"),
+            Some("SIGSEGV")
+        );
+        // A sidecar left by a different launch is not this run's evidence.
+        assert_eq!(signal_sidecar::read(dir.path(), "ffffffffffff"), None);
+        // An unrecognized name never reaches a user-visible message.
+        std::fs::write(
+            dir.path().join(files::CRASH_SIGNAL),
+            "NOT_A_SIGNAL a1b2c3d4e5f6\n",
+        )
+        .unwrap();
+        assert_eq!(signal_sidecar::read(dir.path(), "a1b2c3d4e5f6"), None);
+        signal_sidecar::scrub(dir.path());
+        assert_eq!(signal_sidecar::read(dir.path(), "a1b2c3d4e5f6"), None);
     }
 }

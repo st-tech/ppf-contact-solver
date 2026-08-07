@@ -53,6 +53,15 @@ pub struct Scene {
     dyn_args: DynParamTable,
     displacement: Matrix3xX<f32>,
     vert_dmap: Vec<u32>,
+    /// One solver-space center-of-mass lock axis per displacement group. An
+    /// exact zero vector disables the corresponding group.
+    translation_lock: Vec<Vec3f>,
+    /// One solver-space best-fit angular lock axis per displacement group. An
+    /// exact zero vector disables the corresponding group.
+    rotation_lock: Vec<Vec3f>,
+    /// One rotation-lock mode per displacement group. A disabled rotation axis
+    /// ignores its mode.
+    rotation_lock_mode: Vec<u32>,
     vert: Matrix3xX<f32>,
     vel: Matrix3xX<f32>,
     uv: Option<Vec<Matrix2x3<f32>>>,
@@ -79,6 +88,9 @@ pub struct Scene {
     /// Per-vertex mask marking which vertices belong to an object with a
     /// reference rest angle. Empty when `bend_rest_vert` is `None`.
     bend_rest_vert_mask: Vec<bool>,
+    /// Per-vertex mask marking vertices that belong to a STATIC collider.
+    /// Empty when the scene has no collider in the solved namespace.
+    collider_vert_mask: Vec<u8>,
     shell_count: usize,
     rod_param: Vec<(String, ParamValueList)>,
     tri_param: Vec<(String, ParamValueList)>,
@@ -129,6 +141,67 @@ fn as_model(value: &ParamValueList, i: usize, key: &str) -> Model {
         ParamValueList::Model(v) => v[i],
         _ => panic!("Expected parameter '{key}' to be a name list"),
     }
+}
+
+fn decode_optional_lock_axes(
+    values: Option<Vec<f32>>,
+    group_count: usize,
+    filename: &str,
+) -> Vec<Vec3f> {
+    let Some(values) = values else {
+        return vec![Vec3f::zeros(); group_count];
+    };
+    assert_eq!(
+        values.len(),
+        3 * group_count,
+        "{filename} must contain one f32 vec3 per displacement group"
+    );
+    values
+        .chunks_exact(3)
+        .enumerate()
+        .map(|(group, values)| {
+            let axis = Vec3f::new(values[0], values[1], values[2]);
+            assert!(
+                axis.iter().all(|value| value.is_finite()),
+                "{filename} group {group} contains a non-finite axis"
+            );
+            if axis == Vec3f::zeros() {
+                return axis;
+            }
+            let norm = axis.norm();
+            assert!(
+                norm.is_finite() && (norm - 1.0).abs() <= 64.0 * f32::EPSILON,
+                "{filename} group {group} must be a normalized nonzero solver-space direction (length {norm})"
+            );
+            axis / norm
+        })
+        .collect()
+}
+
+fn decode_optional_rotation_lock_modes(
+    values: Option<Vec<u32>>,
+    group_count: usize,
+    filename: &str,
+) -> Vec<u32> {
+    let Some(values) = values else {
+        return vec![ROTATION_LOCK_ALLOW_ONLY; group_count];
+    };
+    assert_eq!(
+        values.len(),
+        group_count,
+        "{filename} must contain one u32 mode per displacement group"
+    );
+    values
+        .into_iter()
+        .enumerate()
+        .map(|(group, mode)| {
+            assert!(
+                mode == ROTATION_LOCK_ALLOW_ONLY || mode == ROTATION_LOCK_PROHIBIT_AXIS,
+                "{filename} group {group} has invalid mode {mode}; expected 0 (allow-only) or 1 (prohibit-axis)"
+            );
+            mode
+        })
+        .collect()
 }
 
 // Apply per-vertex instancing displacement in place: each column of `base`
@@ -353,7 +426,10 @@ fn read_dyn_param(path: &str) -> io::Result<DynParamTable> {
                 let value = parse_f64("value", parts[1])?;
                 curr_entry.push((time, DynParamValue::Scalar(value)));
             } else {
-                warn!("{path}: skipping line with {} tokens: '{line}'", parts.len());
+                warn!(
+                    "{path}: skipping line with {} tokens: '{line}'",
+                    parts.len()
+                );
             }
         }
     }
@@ -456,10 +532,9 @@ impl Scene {
         // param.toml is tiny, so the extra parse is negligible).
         let ws = {
             let p = format!("{}/param.toml", args.path);
-            let c: Config = toml::from_str(
-                &fs::read_to_string(&p).expect("Failed to read param.toml"),
-            )
-            .expect("Failed to parse param.toml");
+            let c: Config =
+                toml::from_str(&fs::read_to_string(&p).expect("Failed to read param.toml"))
+                    .expect("Failed to parse param.toml");
             c.param.world_scaling as f64
         };
         // ws must be strictly positive: 0 collapses the scene to the origin and a
@@ -474,6 +549,62 @@ impl Scene {
             .map(|x| (x as f64 * ws) as f32);
         let vert_dmap_mat = read_vec::<u32>(&vert_dmap_path).expect("Failed to read vert_dmap");
         assert_eq!(vert_dmap_mat.len(), n_vert, "vert_dmap size mismatch");
+        for (vertex, &group) in vert_dmap_mat.iter().enumerate() {
+            assert!(
+                (group as usize) < displacement_mat.ncols(),
+                "vert_dmap[{vertex}] = {group} is outside displacement.bin's {} groups",
+                displacement_mat.ncols(),
+            );
+        }
+        // The frontend writes one f32 direction per displacement group. This
+        // is intentionally optional for older sessions. A zero vector means
+        // disabled; every other entry must already be normalized so malformed
+        // input is surfaced instead of being interpreted as a different axis.
+        // The stored value is normalized once more after validation so the
+        // device projector stays idempotent within float32 roundoff.
+        let translation_lock_path = format!("{}/bin/translation_lock.bin", args.path);
+        let translation_lock = decode_optional_lock_axes(
+            if std::path::Path::new(&translation_lock_path).exists() {
+                Some(
+                    read_vec::<f32>(&translation_lock_path)
+                        .expect("Failed to read translation_lock.bin"),
+                )
+            } else {
+                None
+            },
+            displacement_mat.ncols(),
+            "translation_lock.bin",
+        );
+        // Lock Rotation has the same displacement-group mapping and validation
+        // contract as Lock Translation. It remains optional so sessions built
+        // before the feature retain an all-disabled table.
+        let rotation_lock_path = format!("{}/bin/rotation_lock.bin", args.path);
+        let rotation_lock = decode_optional_lock_axes(
+            if std::path::Path::new(&rotation_lock_path).exists() {
+                Some(
+                    read_vec::<f32>(&rotation_lock_path).expect("Failed to read rotation_lock.bin"),
+                )
+            } else {
+                None
+            },
+            displacement_mat.ncols(),
+            "rotation_lock.bin",
+        );
+        // The mode table is optional for existing sessions. Its zero default
+        // preserves allow-only behavior whenever a rotation axis is enabled.
+        let rotation_lock_mode_path = format!("{}/bin/rotation_lock_mode.bin", args.path);
+        let rotation_lock_mode = decode_optional_rotation_lock_modes(
+            if std::path::Path::new(&rotation_lock_mode_path).exists() {
+                Some(
+                    read_vec::<u32>(&rotation_lock_mode_path)
+                        .expect("Failed to read rotation_lock_mode.bin"),
+                )
+            } else {
+                None
+            },
+            displacement_mat.ncols(),
+            "rotation_lock_mode.bin",
+        );
         let vert_mat = read_mat_from_file::<f64, 3>(&vert_path)
             .expect("Failed to read vert")
             .map(|x| (x as f64 * ws) as f32);
@@ -497,8 +628,8 @@ impl Scene {
         // it whenever either source is present.
         let rest_vert_mask = if has_rest_vert || has_rest_vert_anim {
             let rest_vert_mask_path = format!("{}/bin/rest_vert_mask.bin", args.path);
-            let mask_bytes = read_vec::<u8>(&rest_vert_mask_path)
-                .expect("Failed to read rest_vert_mask");
+            let mask_bytes =
+                read_vec::<u8>(&rest_vert_mask_path).expect("Failed to read rest_vert_mask");
             let mask: Vec<bool> = mask_bytes.iter().map(|&b| b != 0).collect();
             assert_eq!(mask.len(), n_vert, "rest_vert_mask size mismatch");
             mask
@@ -558,6 +689,17 @@ impl Scene {
         } else {
             (None, Vec::new())
         };
+        // Optional: absent for a scene with no STATIC collider in the solved
+        // namespace, and intentionally optional for older sessions. An empty
+        // mask reads as "no colliders".
+        let collider_vert_path = format!("{}/bin/collider_vert.bin", args.path);
+        let collider_vert_mask = if std::path::Path::new(&collider_vert_path).exists() {
+            let m = read_vec::<u8>(&collider_vert_path).expect("Failed to read collider_vert");
+            assert_eq!(m.len(), n_vert, "collider_vert size mismatch");
+            m
+        } else {
+            Vec::new()
+        };
         let uv_mat = if std::path::Path::new(&uv_path).exists() {
             let data = read_vec::<f32>(&uv_path).expect("Failed to read uv");
             assert_eq!(data.len(), shell_count * 6, "UV data length mismatch");
@@ -610,8 +752,7 @@ impl Scene {
                 read_mat_from_file::<f32, 6>(&stitch_w_path).expect("Failed to read stitch_w"),
                 // Per-stitch stiffness (M,). Legacy scenes built before
                 // per-object stitch stiffness lack this file; default to 1.0.
-                read_vec::<f32>(&stitch_stiffness_path)
-                    .unwrap_or_else(|_| vec![1.0f32; n_stitch]),
+                read_vec::<f32>(&stitch_stiffness_path).unwrap_or_else(|_| vec![1.0f32; n_stitch]),
             )
         } else {
             (
@@ -648,9 +789,12 @@ impl Scene {
             // existence so older payloads (scalar `pull` only) keep working.
             let pullw_path = format!("{}/bin/pin-pullw-{}.bin", args.path, i);
             let pull_weights = std::path::Path::new(&pullw_path).exists().then(|| {
-                let v = read_vec::<f32>(&pullw_path)
-                    .expect("Failed to read pin pull weights");
-                assert_eq!(v.len(), n_pin, "pin-pullw length must match pin index count");
+                let v = read_vec::<f32>(&pullw_path).expect("Failed to read pin pull weights");
+                assert_eq!(
+                    v.len(),
+                    n_pin,
+                    "pin-pullw length must match pin index count"
+                );
                 v
             });
 
@@ -787,10 +931,8 @@ impl Scene {
                         let s_flat = read_vec::<f64>(&format!("{base}-scale.bin"))
                             .expect("Failed to read keyframe scales");
                         assert_eq!(s_flat.len(), 3 * keyframe_count);
-                        let scales: Vec<[f64; 3]> = s_flat
-                            .chunks_exact(3)
-                            .map(|c| [c[0], c[1], c[2]])
-                            .collect();
+                        let scales: Vec<[f64; 3]> =
+                            s_flat.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect();
                         let interps = if keyframe_count > 1 {
                             let v = read_vec::<u8>(&format!("{base}-interp.bin"))
                                 .expect("Failed to read segment interp codes");
@@ -858,10 +1000,8 @@ impl Scene {
                         .expect("Failed to read wall timing");
                 let contact_gap = read_f32(count, "contact-gap");
                 let friction = read_f32(count, "friction");
-                let active_duration =
-                    read_optional_f32(count, "active-duration").unwrap_or(-1.0);
-                let thickness =
-                    read_optional_f32(count, "thickness").unwrap_or(1.0) * ws as f32;
+                let active_duration = read_optional_f32(count, "active-duration").unwrap_or(-1.0);
+                let thickness = read_optional_f32(count, "thickness").unwrap_or(1.0) * ws as f32;
                 assert_gt!(
                     thickness,
                     0.0,
@@ -912,10 +1052,8 @@ impl Scene {
                     .expect("Failed to read sphere timing");
                 let contact_gap = read_f32(count, "contact-gap");
                 let friction = read_f32(count, "friction");
-                let active_duration =
-                    read_optional_f32(count, "active-duration").unwrap_or(-1.0);
-                let thickness =
-                    read_optional_f32(count, "thickness").unwrap_or(1.0) * ws as f32;
+                let active_duration = read_optional_f32(count, "active-duration").unwrap_or(-1.0);
+                let thickness = read_optional_f32(count, "thickness").unwrap_or(1.0) * ws as f32;
                 assert_gt!(
                     thickness,
                     0.0,
@@ -1032,8 +1170,7 @@ impl Scene {
         // PDRD bodies in this scene" and the solver falls through.
         let pdrd_body_path = format!("{}/bin/pdrd_body.bin", args.path);
         let pdrd_body_rows = if std::path::Path::new(&pdrd_body_path).exists() {
-            let mut raw =
-                read_vec::<f32>(&pdrd_body_path).expect("Failed to read pdrd_body.bin");
+            let mut raw = read_vec::<f32>(&pdrd_body_path).expect("Failed to read pdrd_body.bin");
             // Row layout: PDRD_BODY_ROW_LEN floats per body (vertex_start,
             // vertex_count, volume, centroid[3], rest_gram_inv[9],
             // mass_per_vertex, joint_mode, joint_axis[3], joint_pin[3]).
@@ -1077,8 +1214,7 @@ impl Scene {
                 let inv_ws2 = 1.0 / (ws * ws);
                 let n_bodies = raw.len() / PDRD_BODY_ROW_LEN;
                 for b in 0..n_bodies {
-                    let row =
-                        &mut raw[PDRD_BODY_ROW_LEN * b..PDRD_BODY_ROW_LEN * (b + 1)];
+                    let row = &mut raw[PDRD_BODY_ROW_LEN * b..PDRD_BODY_ROW_LEN * (b + 1)];
                     row[2] = (row[2] as f64 * ws3) as f32; // volume (length^3)
                     for c in &mut row[3..6] {
                         *c = (*c as f64 * ws) as f32; // rest_centroid (length)
@@ -1098,8 +1234,8 @@ impl Scene {
         };
         let pdrd_vert_index_path = format!("{}/bin/pdrd_vert_index.bin", args.path);
         let pdrd_vert_index = if std::path::Path::new(&pdrd_vert_index_path).exists() {
-            let v = read_vec::<u32>(&pdrd_vert_index_path)
-                .expect("Failed to read pdrd_vert_index.bin");
+            let v =
+                read_vec::<u32>(&pdrd_vert_index_path).expect("Failed to read pdrd_vert_index.bin");
             assert_eq!(v.len(), n_vert, "pdrd_vert_index size mismatch");
             v
         } else {
@@ -1142,6 +1278,9 @@ impl Scene {
             dyn_args,
             displacement: displacement_mat,
             vert_dmap: vert_dmap_mat,
+            translation_lock,
+            rotation_lock,
+            rotation_lock_mode,
             vert: vert_mat,
             vel: vel_mat,
             uv: uv_mat,
@@ -1162,6 +1301,7 @@ impl Scene {
             rest_vert_schedule,
             bend_rest_vert,
             bend_rest_vert_mask,
+            collider_vert_mask,
             shell_count,
             rod_param,
             tri_param,
@@ -1308,11 +1448,7 @@ impl Scene {
         }
     }
 
-    fn write_param_stats(
-        &self,
-        content: &mut String,
-        params: &[(String, ParamValueList)],
-    ) {
+    fn write_param_stats(&self, content: &mut String, params: &[(String, ParamValueList)]) {
         for (name, values) in params {
             match values {
                 ParamValueList::Model(models) => {
@@ -1323,8 +1459,7 @@ impl Scene {
                     }
                     // Sort by name so the breakdown is stable across runs
                     // (std HashMap iteration order is randomized).
-                    let mut model_counts: Vec<(String, i32)> =
-                        model_counts.into_iter().collect();
+                    let mut model_counts: Vec<(String, i32)> = model_counts.into_iter().collect();
                     model_counts.sort_by(|a, b| a.0.cmp(&b.0));
 
                     content.push_str(&format!("{name}: ("));
@@ -1382,14 +1517,12 @@ impl Scene {
                 .find(|(name, _)| name.as_str() == key)
                 .map(|(_, value)| as_value(value, 0, key))
         };
-        let particle_mass = get("particle-mass")
-            .expect("SAND object missing 'sand-particle-mass' param");
-        let grain_radius = get("grain-radius")
-            .expect("SAND object missing 'sand-grain-radius' param");
-        let contact_gap = get("contact-gap")
-            .expect("SAND object missing 'sand-contact-gap' param");
-        let friction = get("friction")
-            .expect("SAND object missing 'sand-friction' param");
+        let particle_mass =
+            get("particle-mass").expect("SAND object missing 'sand-particle-mass' param");
+        let grain_radius =
+            get("grain-radius").expect("SAND object missing 'sand-grain-radius' param");
+        let contact_gap = get("contact-gap").expect("SAND object missing 'sand-contact-gap' param");
+        let friction = get("friction").expect("SAND object missing 'sand-friction' param");
         assert_gt!(particle_mass, 0.0, "Sand particle mass must be positive");
         assert_ge!(grain_radius, 0.0, "Sand grain radius must be non-negative");
         assert_gt!(contact_gap, 0.0, "Sand contact gap must be positive");
@@ -1472,7 +1605,11 @@ impl Scene {
                 let bend_rest_from_geometry = bend_rest_from_geometry.unwrap_or(false);
                 let deform_damping = deform_damping.unwrap_or(0.0);
                 let bend_damping = bend_damping.unwrap_or(0.0);
-                assert_ge!(deform_damping, 0.0, "Deformation damping must be non-negative");
+                assert_ge!(
+                    deform_damping,
+                    0.0,
+                    "Deformation damping must be non-negative"
+                );
                 assert_ge!(bend_damping, 0.0, "Bending damping must be non-negative");
                 assert_gt!(density, 0.0, "Density must be positive");
                 assert_gt!(stiffness, 0.0, "Stiffness must be positive");
@@ -1541,6 +1678,8 @@ impl Scene {
                 let mut bend_rest_from_geometry = None;
                 let mut deform_damping = None;
                 let mut bend_damping = None;
+                let mut bend_warp = None;
+                let mut bend_weft = None;
                 for (name, value) in &self.tri_param {
                     if name == "contact-gap" {
                         ghat = Some(as_value(value, i, name));
@@ -1580,6 +1719,10 @@ impl Scene {
                         deform_damping = Some(as_value(value, i, name));
                     } else if name == "bending-damping" {
                         bend_damping = Some(as_value(value, i, name));
+                    } else if name == "bend-warp" {
+                        bend_warp = Some(as_value(value, i, name));
+                    } else if name == "bend-weft" {
+                        bend_weft = Some(as_value(value, i, name));
                     } else {
                         panic!("Unknown face parameter: {name}");
                     }
@@ -1603,6 +1746,10 @@ impl Scene {
                 let bend_rest_from_geometry = bend_rest_from_geometry.unwrap_or(false);
                 let deform_damping = deform_damping.unwrap_or(0.0);
                 let bend_damping = bend_damping.unwrap_or(0.0);
+                // 0.0 adds nothing, so a scene predating these keys decodes
+                // to exactly today's isotropic behavior.
+                let bend_warp = bend_warp.unwrap_or(0.0);
+                let bend_weft = bend_weft.unwrap_or(0.0);
                 assert_ge!(deform_damping, 0.0, "Deformation damping must be non-negative");
                 assert_ge!(bend_damping, 0.0, "Bending damping must be non-negative");
                 assert_gt!(density, 0.0, "Density must be positive");
@@ -1619,21 +1766,15 @@ impl Scene {
                 if model != Model::Pdrd {
                     assert_gt!(young_mod, 0.0, "Young's modulus must be positive");
                     assert_ge!(bend, 0.0, "Bend modulus must be non-negative");
-                    assert_gt!(shrink_x, 0.0, "Shrink X factor must be positive");
-                    assert_gt!(shrink_y, 0.0, "Shrink Y factor must be positive");
-                    // Shrink/extend and strain-limit cannot be combined on the
-                    // same face: each rewrites the rest shape independently, so
-                    // the strain bound becomes ill-defined when both are active.
-                    // Share the predicate with ppf-cts-core so frontend preview,
-                    // PyO3, and the solver all gate on the same rule.
-                    assert!(
-                        !ppf_cts_core::kernels::scene_build::is_shell_shrink_strain_limit_conflict(
-                            shrink_x as f64,
-                            shrink_y as f64,
-                            strainlimit as f64
-                        ),
-                        "Face {i}: shrink (x={shrink_x}, y={shrink_y}) conflicts with non-zero strain-limit ({strainlimit})"
-                    );
+                    // The hinge stiffness is bend + warp*sin^2 + weft*cos^2
+                    // with sin^2 and cos^2 both non-negative, so keeping the
+                    // three terms non-negative is the whole condition: it
+                    // cannot go negative at any orientation, and the hinge
+                    // block stays PSD as SPD-by-assembly requires. A negative
+                    // input would flip the sign at some orientation and hand
+                    // the solver an indefinite block.
+                    assert_ge!(bend_warp, 0.0, "Warp bending stiffness must be non-negative");
+                    assert_ge!(bend_weft, 0.0, "Weft bending stiffness must be non-negative");
                     assert_gt!(poiss_rat, 0.0, "Poisson's ratio must be positive");
                     assert_lt!(poiss_rat, 0.5, "Poisson's ratio must be less than 0.5");
                 }
@@ -1677,6 +1818,8 @@ impl Scene {
                     bend_rest_from_geometry,
                     deform_damping,
                     bend_damping,
+                    bend_warp,
+                    bend_weft,
                 };
                 let param_idx = dedup_param(&mut face_param_map, &mut face_params, param);
 
@@ -1685,6 +1828,7 @@ impl Scene {
                     mass,
                     fixed: false,
                     rest_excluded: false,
+                    collider: false,
                     param_index: param_idx,
                 }
             })
@@ -1739,7 +1883,11 @@ impl Scene {
                 let plasticity = plasticity.unwrap_or(0.0);
                 let plasticity_threshold = plasticity_threshold.unwrap_or(0.0);
                 let deform_damping = deform_damping.unwrap_or(0.0);
-                assert_ge!(deform_damping, 0.0, "Deformation damping must be non-negative");
+                assert_ge!(
+                    deform_damping,
+                    0.0,
+                    "Deformation damping must be non-negative"
+                );
                 let volume = tet_volume[i];
                 assert_gt!(density, 0.0, "Density must be positive");
                 assert_gt!(young_mod, 0.0, "Young's modulus must be positive");
@@ -1842,6 +1990,10 @@ impl Scene {
                         bend_rest_from_geometry: false,
                         deform_damping: 0.0,
                         bend_damping: 0.0,
+                        // A static collider carries no bending energy at all
+                        // (bend is 0.0 above), so these add nothing.
+                        bend_warp: 0.0,
+                        bend_weft: 0.0,
                     };
                     let param_idx = dedup_param(&mut face_param_map, &mut face_params, param);
 
@@ -1850,6 +2002,7 @@ impl Scene {
                         mass: 0.0,
                         fixed: false,
                         rest_excluded: false,
+                        collider: false,
                         param_index: param_idx,
                     }
                 })
@@ -1908,7 +2061,10 @@ impl Scene {
             // If pin has ONLY torque operations, skip fix/pull; vertices are
             // free to move and receive force from the torque kernel instead.
             let torque_only = !pin.operations.is_empty()
-                && pin.operations.iter().all(|op| matches!(op, PinOperation::Torque { .. }));
+                && pin
+                    .operations
+                    .iter()
+                    .all(|op| matches!(op, PinOperation::Torque { .. }));
             if torque_only {
                 continue;
             }
@@ -1920,8 +2076,7 @@ impl Scene {
                 let mut position: Vector3<f32> = self.vert.column(ind).into();
 
                 for op in pin.operations.iter() {
-                    let (new_pos, did_move) =
-                        apply_pin_op(op, position, i, time);
+                    let (new_pos, did_move) = apply_pin_op(op, position, i, time);
                     position = new_pos;
                     kinematic = kinematic || did_move;
                 }
@@ -2009,7 +2164,8 @@ impl Scene {
                             existing
                         } else {
                             let new_id = group_verts.len() as u32;
-                            group_map.insert(key, (new_id, *axis_component, *magnitude, *hint_vertex));
+                            group_map
+                                .insert(key, (new_id, *axis_component, *magnitude, *hint_vertex));
                             group_verts.push(Vec::new());
                             new_id
                         };
@@ -2048,9 +2204,7 @@ impl Scene {
                     index: Vec6u::from_iterator(
                         self.stitch_ind.column(i).iter().map(|&x| x as u32),
                     ),
-                    weight: Vec6f::from_iterator(
-                        self.stitch_w.column(i).iter().copied(),
-                    ),
+                    weight: Vec6f::from_iterator(self.stitch_w.column(i).iter().copied()),
                     stiffness: self.stitch_stiffness[i],
                 });
             }
@@ -2132,10 +2286,14 @@ impl Scene {
                 }
                 ("air-density", DynParamValue::Scalar(v)) => param.air_density = v as f32,
                 ("air-friction", DynParamValue::Scalar(v)) => param.air_friction = v as f32,
-                ("isotropic-air-friction", DynParamValue::Scalar(v)) => param.isotropic_air_friction = v as f32,
+                ("isotropic-air-friction", DynParamValue::Scalar(v)) => {
+                    param.isotropic_air_friction = v as f32
+                }
                 ("dt", DynParamValue::Scalar(v)) => param.dt = v as f32,
                 ("playback", DynParamValue::Scalar(v)) => param.playback = v as f32,
-                ("inactive-momentum", DynParamValue::Scalar(v)) => param.inactive_momentum = v > 0.0,
+                ("inactive-momentum", DynParamValue::Scalar(v)) => {
+                    param.inactive_momentum = v > 0.0
+                }
                 _ => (),
             };
             // windows(2) yields no pairs for 0- or 1-element schedules, so
@@ -2325,7 +2483,8 @@ impl Scene {
                 Ok(v) => v,
                 Err(_) => continue,
             };
-            let all_wins: Vec<(f64, f64)> = entries.iter()
+            let all_wins: Vec<(f64, f64)> = entries
+                .iter()
                 .filter_map(|(t_start, v)| {
                     if let DynParamValue::Scalar(t_end) = v {
                         Some((*t_start, *t_end))
@@ -2338,9 +2497,13 @@ impl Scene {
                 // Loud: a FixedScene built outside the Python builder's
                 // ValueError guard reaches here, and silently dropping
                 // windows changes simulation results invisibly.
-                error!("collision_window:{} has {} windows, exceeding the cap of {}; \
+                error!(
+                    "collision_window:{} has {} windows, exceeding the cap of {}; \
                         extra windows are dropped",
-                       dmap_idx, all_wins.len(), MAX_WINDOWS);
+                    dmap_idx,
+                    all_wins.len(),
+                    MAX_WINDOWS
+                );
             }
             let wins: Vec<(f64, f64)> = all_wins.into_iter().take(MAX_WINDOWS).collect();
             if !wins.is_empty() {
@@ -2433,6 +2596,29 @@ impl Scene {
         &self.pdrd_rest_centered
     }
 
+    /// One normalized solver-space center-of-mass lock axis per displacement
+    /// group. The zero vector disables the group.
+    pub fn translation_locks(&self) -> &[Vec3f] {
+        &self.translation_lock
+    }
+
+    /// One normalized solver-space best-fit angular lock axis per displacement
+    /// group. The zero vector disables the group.
+    pub fn rotation_locks(&self) -> &[Vec3f] {
+        &self.rotation_lock
+    }
+
+    /// One rotation-lock mode per displacement group. `0` preserves only the
+    /// selected axis, while `1` prohibits only the selected axis.
+    pub fn rotation_lock_modes(&self) -> &[u32] {
+        &self.rotation_lock_mode
+    }
+
+    /// Per-vertex displacement-group membership, shared with aggregate locks.
+    pub fn vert_dmap(&self) -> &[u32] {
+        &self.vert_dmap
+    }
+
     pub fn make_mesh(&mut self) -> MeshSet {
         let vert = self.displaced_vert();
         // Capture the vertex count before `vert` is moved into the MeshSet so
@@ -2466,6 +2652,7 @@ impl Scene {
             rest_vertex,
             bend_rest_vertex,
             bend_rest_vertex_mask: self.bend_rest_vert_mask.clone(),
+            collider_vertex_mask: self.collider_vert_mask.clone(),
         }
     }
 
@@ -2509,7 +2696,10 @@ impl Scene {
                 }
             }
             let torque_only = !pin.operations.is_empty()
-                && pin.operations.iter().all(|op| matches!(op, PinOperation::Torque { .. }));
+                && pin
+                    .operations
+                    .iter()
+                    .all(|op| matches!(op, PinOperation::Torque { .. }));
             if torque_only {
                 continue;
             }
@@ -2577,7 +2767,11 @@ fn apply_pin_op(
                 pin_apply::progress_at(time, *t_start, *t_end, transition, *bezier_handles)
             };
             let d_col = delta.column(vert_idx);
-            let d = [f64::from(d_col[0]), f64::from(d_col[1]), f64::from(d_col[2])];
+            let d = [
+                f64::from(d_col[0]),
+                f64::from(d_col[1]),
+                f64::from(d_col[2]),
+            ];
             let r = pin_apply::move_by_step(to_arr(position), d, progress);
             (from_arr(r), true)
         }
@@ -2597,7 +2791,11 @@ fn apply_pin_op(
             let progress =
                 pin_apply::progress_at(time, *t_start, *t_end, transition, *bezier_handles);
             let t_col = target.column(vert_idx);
-            let t = [f64::from(t_col[0]), f64::from(t_col[1]), f64::from(t_col[2])];
+            let t = [
+                f64::from(t_col[0]),
+                f64::from(t_col[1]),
+                f64::from(t_col[2]),
+            ];
             let r = pin_apply::move_to_step(to_arr(position), t, progress);
             (from_arr(r), true)
         }
@@ -2608,8 +2806,7 @@ fn apply_pin_op(
             t_start,
             t_end,
         } => {
-            let angle =
-                pin_apply::spin_angle_rad(*angular_velocity as f64, *t_start, *t_end, time);
+            let angle = pin_apply::spin_angle_rad(*angular_velocity as f64, *t_start, *t_end, time);
             if angle <= 0.0 {
                 return (position, false);
             }
@@ -2676,5 +2873,67 @@ fn apply_pin_op(
             );
             (from_arr(out), true)
         }
+    }
+}
+
+#[cfg(test)]
+mod lock_axis_tests {
+    use super::*;
+
+    #[test]
+    fn optional_lock_axes_default_to_disabled() {
+        let axes = decode_optional_lock_axes(None, 2, "rotation_lock.bin");
+        assert_eq!(axes, vec![Vec3f::zeros(), Vec3f::zeros()]);
+    }
+
+    #[test]
+    fn lock_axes_keep_zero_and_normalize_unit_values() {
+        let axes = decode_optional_lock_axes(
+            Some(vec![0.0, 0.0, 0.0, 0.0, 0.6, 0.8]),
+            2,
+            "rotation_lock.bin",
+        );
+        assert_eq!(axes[0], Vec3f::zeros());
+        assert!((axes[1] - Vec3f::new(0.0, 0.6, 0.8)).norm() <= f32::EPSILON);
+    }
+
+    #[test]
+    fn lock_axes_reject_malformed_data() {
+        assert!(std::panic::catch_unwind(|| {
+            decode_optional_lock_axes(Some(vec![0.0, 0.0]), 1, "rotation_lock.bin")
+        })
+        .is_err());
+        assert!(std::panic::catch_unwind(|| {
+            decode_optional_lock_axes(Some(vec![2.0, 0.0, 0.0]), 1, "rotation_lock.bin")
+        })
+        .is_err());
+    }
+
+    #[test]
+    fn optional_rotation_lock_modes_default_to_allow_only() {
+        assert_eq!(
+            decode_optional_rotation_lock_modes(None, 2, "rotation_lock_mode.bin"),
+            vec![ROTATION_LOCK_ALLOW_ONLY, ROTATION_LOCK_ALLOW_ONLY]
+        );
+    }
+
+    #[test]
+    fn rotation_lock_modes_reject_malformed_data() {
+        assert_eq!(
+            decode_optional_rotation_lock_modes(
+                Some(vec![ROTATION_LOCK_ALLOW_ONLY, ROTATION_LOCK_PROHIBIT_AXIS]),
+                2,
+                "rotation_lock_mode.bin",
+            ),
+            vec![ROTATION_LOCK_ALLOW_ONLY, ROTATION_LOCK_PROHIBIT_AXIS]
+        );
+        assert!(std::panic::catch_unwind(|| {
+            decode_optional_rotation_lock_modes(Some(vec![2]), 1, "rotation_lock_mode.bin")
+        })
+        .is_err());
+        assert!(std::panic::catch_unwind(|| {
+            decode_optional_rotation_lock_modes(Some(vec![0]), 2, "rotation_lock_mode.bin")
+        })
+        .is_err());
     }
 }

@@ -13,6 +13,9 @@ mod mesh;
 mod plastic_state;
 mod raw_vec;
 mod scene;
+#[cfg(unix)]
+mod signal_sidecar;
+mod statistics;
 mod status_writer;
 mod triutils;
 
@@ -20,20 +23,20 @@ use args::{ProgramArgs, SimArgs};
 use backend::MeshSet;
 use clap::Parser;
 use data::{DataSet, EdgeParam, EdgeProp, ParamSet};
-use mesh::Mesh as SimMesh;
-use {builder::Props, cvec::CVec};
-use rayon::prelude::*;
-use std::collections::HashMap;
 use flate2::{read::GzDecoder, write::GzEncoder, Compression};
 use log::*;
 use log4rs::append::console::ConsoleAppender;
 use log4rs::config::{Appender, Config, Root};
 use log4rs::encode::pattern::PatternEncoder;
+use mesh::Mesh as SimMesh;
+use rayon::prelude::*;
 use scene::Scene;
+use std::collections::HashMap;
 use std::ffi::CString;
 use std::fs::OpenOptions;
 use std::io::{Read, Write};
 use std::os::raw::c_char;
+use {builder::Props, cvec::CVec};
 
 extern crate nalgebra as na;
 
@@ -98,10 +101,7 @@ fn main() {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos() as u64)
             .unwrap_or(0);
-        let mixed = pid
-            .wrapping_mul(0x9E37_79B9_7F4A_7C15)
-            .wrapping_add(nanos)
-            & 0xFFFF_FFFF_FFFF;
+        let mixed = pid.wrapping_mul(0x9E37_79B9_7F4A_7C15).wrapping_add(nanos) & 0xFFFF_FFFF_FFFF;
         format!("{mixed:012x}")
     };
     status_writer::init(&program_args.output, launch_id, program_args.load > 0);
@@ -276,6 +276,12 @@ fn main() {
             vert_list: scene.pdrd_vert_list(),
             rest_centered: scene.pdrd_rest_centered(),
         };
+        let lock_data = builder::LockSceneData {
+            translation_axes: scene.translation_locks(),
+            rotation_axes: scene.rotation_locks(),
+            rotation_modes: scene.rotation_lock_modes(),
+            vert_dmap: scene.vert_dmap(),
+        };
         let dataset = builder::build(
             &sim_args,
             mesh,
@@ -283,6 +289,7 @@ fn main() {
             &mut props,
             temp_constraint,
             pdrd_data,
+            lock_data,
         );
         info!("Dataset built successfully");
 
@@ -441,6 +448,12 @@ fn setup(program_args: &ProgramArgs) {
         remove_files_in_dir(&program_args.output).unwrap();
     } else {
         remove_files(&program_args.output, "vert", "bin", program_args.load);
+        remove_files(
+            &program_args.output,
+            "statistics",
+            "cbor",
+            program_args.load,
+        );
         // State checkpoints are sparse on disk: save_state writes
         // state_<N>.bin.gz only every auto_save frames, and
         // remove_old_files keeps just keep_states of them at the
@@ -559,7 +572,23 @@ fn read_gz(path: &str) -> Vec<u8> {
 }
 
 fn read<'de, T: serde::Deserialize<'de>>(data: &'de [u8]) -> T {
-    bincode::deserialize(data).unwrap()
+    // bincode is POSITIONAL: it records no field names and honors no
+    // `serde(default)`, so a checkpoint written by a build whose structs have
+    // since gained a field cannot be read back, and the failure arrives here
+    // as an opaque complaint about trailing bytes or an implausible length.
+    // Name the likely cause instead. The dataset is write-once per session
+    // (see the checkpoint layout notes), so there is no self-healing path and
+    // the answer is always to rebuild the scene rather than to retry.
+    let type_name = std::any::type_name::<T>();
+    bincode::deserialize(data).unwrap_or_else(|e| {
+        panic!(
+            "Failed to deserialize a checkpoint of type {type_name}: {e}.\n\
+             This usually means it was written by a build with a different \
+             in-memory layout for {type_name}, which bincode cannot migrate. \
+             Rebuild the scene to produce a fresh session directory; an \
+             existing dataset.bin.gz cannot be upgraded in place."
+        )
+    })
 }
 
 #[cfg(test)]
@@ -618,7 +647,10 @@ mod tests {
             let mut seen = HashSet::new();
             for line in contents.lines() {
                 let frame: i32 = line.split_whitespace().next().unwrap().parse().unwrap();
-                assert!(frame <= load, "{name}: frame {frame} > load {load} survived");
+                assert!(
+                    frame <= load,
+                    "{name}: frame {frame} > load {load} survived"
+                );
                 assert!(seen.insert(frame), "{name}: duplicate frame {frame}");
             }
             assert_eq!(seen.len(), (load + 1) as usize, "{name}: wrong row count");
@@ -630,7 +662,10 @@ mod tests {
             let mut seen: HashSet<u64> = HashSet::new();
             for line in contents.lines() {
                 let time: f64 = line.split_whitespace().next().unwrap().parse().unwrap();
-                assert!(time <= 0.12 + 1e-9, "{name}: time {time} > loaded time survived");
+                assert!(
+                    time <= 0.12 + 1e-9,
+                    "{name}: time {time} > loaded time survived"
+                );
                 assert!(seen.insert(time.to_bits()), "{name}: duplicate time {time}");
             }
         }

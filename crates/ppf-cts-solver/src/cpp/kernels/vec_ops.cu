@@ -203,8 +203,11 @@ template void set(Mat3x3f *array, unsigned n, Mat3x3f value,
                   cudaStream_t queue);
 template void copy(const Mat3x3f *src, Mat3x3f *dst, unsigned n,
                    cudaStream_t queue);
+template void set(Mat4x4f *array, unsigned n, Mat4x4f value,
+                  cudaStream_t queue);
 
 template void set(Vec3f *array, unsigned n, Vec3f value, cudaStream_t queue);
 template void copy(const Vec3f *src, Vec3f *dst, unsigned n, cudaStream_t queue);
+template void set(Vec4f *array, unsigned n, Vec4f value, cudaStream_t queue);
 
 } // namespace kernels

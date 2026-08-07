@@ -104,6 +104,32 @@ pub struct Object {
     pub velocity_schedule: Vec<(f64, Vec3)>,
     /// Collision-active windows: `(t_start, t_end)`.
     pub collision_windows: Vec<(f64, f64)>,
+    /// Lock Translation axis: `None` means free (unlocked); `Some(axis)`
+    /// is a unit-length world-space direction. The solver restricts this
+    /// object's mass-weighted center of mass to the line through its
+    /// initial position along `axis`; rotation and deformation stay
+    /// free. Mirrors `frontend/_scene_object_.py`'s
+    /// `Object._translation_lock` / `lock_translation()`.
+    pub translation_lock: Option<Vec3>,
+    /// Lock Rotation axis: `None` means free (unlocked); `Some(axis)`
+    /// is a unit-length world-space direction. The solver restricts
+    /// this object's mass-weighted best-fit rigid rotation to rotation
+    /// about `axis` only; translation and deformation stay free. It
+    /// coexists independently with `translation_lock`: either, both,
+    /// or neither may be set on the same object. Mirrors
+    /// `frontend/_scene_object_.py`'s `Object._rotation_lock` /
+    /// `lock_rotation()`.
+    pub rotation_lock: Option<Vec3>,
+    /// Lock Rotation mode: `false` (the default `lock_rotation()`
+    /// establishes) keeps `rotation_lock` a whitelist, allowing
+    /// rotation about the axis only; `true` flips it to a blacklist,
+    /// forbidding rotation about the axis and freeing the whole
+    /// perpendicular rotation plane instead. Meaningless while
+    /// `rotation_lock` is `None`. Mirrors
+    /// `frontend/_scene_object_.py`'s
+    /// `Object._rotation_lock_prohibit_axis` /
+    /// `lock_rotation_prohibit_axis()`.
+    pub rotation_lock_prohibit_axis: bool,
 
     // --- Topology overlays ---
     pub pins: Vec<PinData>,
@@ -155,6 +181,9 @@ impl Object {
             velocity: [0.0, 0.0, 0.0],
             velocity_schedule: vec![],
             collision_windows: vec![],
+            translation_lock: None,
+            rotation_lock: None,
+            rotation_lock_prohibit_axis: false,
             pins: vec![],
             stitch: None,
             uv: None,
@@ -198,6 +227,9 @@ impl Object {
         self.velocity = [0.0, 0.0, 0.0];
         self.velocity_schedule.clear();
         self.collision_windows.clear();
+        self.translation_lock = None;
+        self.rotation_lock = None;
+        self.rotation_lock_prohibit_axis = false;
         self.pins.clear();
         self.stitch = None;
         self.uv = None;
@@ -347,6 +379,93 @@ impl Object {
         self
     }
 
+    /// Constrain this object's mass-weighted center of mass to the
+    /// fixed world-space line through its initial position along
+    /// `(x, y, z)`; rotation and deformation stay free. Mirrors
+    /// `frontend/_scene_object_.py`'s `Object.lock_translation()`.
+    ///
+    /// The axis is normalized to unit length before being stored, so
+    /// only its direction matters, not its magnitude. Errors if the
+    /// object is flagged static (a static object has no free motion
+    /// to lock in the first place), if any component is non-finite,
+    /// or if the axis is the zero vector (there is no direction to
+    /// lock onto).
+    pub fn lock_translation(
+        &mut self,
+        x: f64,
+        y: f64,
+        z: f64,
+    ) -> Result<&mut Self, ObjectError> {
+        if self.is_static {
+            return Err(ObjectError::Static);
+        }
+        if !x.is_finite() || !y.is_finite() || !z.is_finite() {
+            return Err(ObjectError::LockTranslationNonFinite);
+        }
+        let norm = (x * x + y * y + z * z).sqrt();
+        if norm == 0.0 {
+            return Err(ObjectError::LockTranslationZeroAxis);
+        }
+        self.translation_lock = Some([x / norm, y / norm, z / norm]);
+        Ok(self)
+    }
+
+    /// Restrict this object's mass-weighted best-fit rigid rotation to
+    /// rotation about the fixed world-space axis `(x, y, z)`; the two
+    /// transverse rotational degrees of freedom are removed, while
+    /// translation and deformation stay free. Coexists independently
+    /// with `lock_translation`: enabling one has no effect on the
+    /// other. Mirrors `frontend/_scene_object_.py`'s
+    /// `Object.lock_rotation()`.
+    ///
+    /// The axis is normalized to unit length before being stored, so
+    /// only its direction matters, not its magnitude. Errors if the
+    /// object is flagged static (a static object has no free rotation
+    /// to lock in the first place), if any component is non-finite,
+    /// or if the axis is the zero vector (there is no direction to
+    /// lock onto).
+    pub fn lock_rotation(
+        &mut self,
+        x: f64,
+        y: f64,
+        z: f64,
+    ) -> Result<&mut Self, ObjectError> {
+        if self.is_static {
+            return Err(ObjectError::Static);
+        }
+        if !x.is_finite() || !y.is_finite() || !z.is_finite() {
+            return Err(ObjectError::LockRotationNonFinite);
+        }
+        let norm = (x * x + y * y + z * z).sqrt();
+        if norm == 0.0 {
+            return Err(ObjectError::LockRotationZeroAxis);
+        }
+        self.rotation_lock = Some([x / norm, y / norm, z / norm]);
+        Ok(self)
+    }
+
+    /// Flip Lock Rotation between an allow-only axis and a forbidden
+    /// one. With `prohibit = false` (the mode `lock_rotation()` itself
+    /// establishes), `rotation_lock`'s axis is a whitelist: rotation
+    /// about it is the object's only rotational freedom. With
+    /// `prohibit = true`, the axis becomes a blacklist: rotation about
+    /// it is forbidden instead, and the whole perpendicular rotation
+    /// plane stays free. Mirrors `frontend/_scene_object_.py`'s
+    /// `Object.lock_rotation_prohibit_axis()`.
+    ///
+    /// Errors if `lock_rotation` has not been called yet (`rotation_lock`
+    /// is still `None`), since there is no axis for the mode to modify.
+    pub fn lock_rotation_prohibit_axis(
+        &mut self,
+        prohibit: bool,
+    ) -> Result<&mut Self, ObjectError> {
+        if self.rotation_lock.is_none() {
+            return Err(ObjectError::LockRotationProhibitAxisRequiresLock);
+        }
+        self.rotation_lock_prohibit_axis = prohibit;
+        Ok(self)
+    }
+
     /// Mark the object excluded from output dumps.
     pub fn exclude_from_output(&mut self, excluded: bool) -> &mut Self {
         self.exclude_from_output = excluded;
@@ -371,6 +490,16 @@ pub enum ObjectError {
     PdrdRequiresTriAsset,
     #[error("PDRD cannot be applied to a static object")]
     PdrdConflictsStatic,
+    #[error("lock translation axis must be finite")]
+    LockTranslationNonFinite,
+    #[error("lock translation axis must be non-zero")]
+    LockTranslationZeroAxis,
+    #[error("lock rotation axis must be finite")]
+    LockRotationNonFinite,
+    #[error("lock rotation axis must be non-zero")]
+    LockRotationZeroAxis,
+    #[error("lock rotation prohibit-axis mode requires lock_rotation() to be called first")]
+    LockRotationProhibitAxisRequiresLock,
 }
 
 // ---------------------------------------------------------------------------
@@ -587,6 +716,165 @@ mod tests {
         let mut o = Object::new("x", AssetKind::Tri);
         o.set_collision_windows(vec![(0.2, 1.0), (2.0, 3.0)]);
         assert_eq!(o.collision_windows, vec![(0.2, 1.0), (2.0, 3.0)]);
+    }
+
+    #[test]
+    fn lock_translation_normalizes_axis() {
+        let mut o = Object::new("x", AssetKind::Tri);
+        o.lock_translation(2.0, 0.0, 0.0).unwrap();
+        assert_eq!(o.translation_lock, Some([1.0, 0.0, 0.0]));
+    }
+
+    #[test]
+    fn lock_translation_normalizes_non_axis_aligned() {
+        let mut o = Object::new("x", AssetKind::Tri);
+        o.lock_translation(1.0, 1.0, 0.0).unwrap();
+        let axis = o.translation_lock.unwrap();
+        let norm = (axis[0] * axis[0] + axis[1] * axis[1] + axis[2] * axis[2]).sqrt();
+        assert!((norm - 1.0).abs() < 1e-12);
+        assert!((axis[0] - axis[1]).abs() < 1e-12);
+    }
+
+    #[test]
+    fn lock_translation_defaults_to_unlocked() {
+        let o = Object::new("x", AssetKind::Tri);
+        assert_eq!(o.translation_lock, None);
+    }
+
+    #[test]
+    fn lock_translation_zero_axis_errors() {
+        let mut o = Object::new("x", AssetKind::Tri);
+        let err = o.lock_translation(0.0, 0.0, 0.0).unwrap_err();
+        assert!(matches!(err, ObjectError::LockTranslationZeroAxis));
+        assert_eq!(o.translation_lock, None);
+    }
+
+    #[test]
+    fn lock_translation_non_finite_errors() {
+        let mut o = Object::new("x", AssetKind::Tri);
+        let err = o.lock_translation(f64::NAN, 0.0, 0.0).unwrap_err();
+        assert!(matches!(err, ObjectError::LockTranslationNonFinite));
+        let err = o.lock_translation(f64::INFINITY, 0.0, 0.0).unwrap_err();
+        assert!(matches!(err, ObjectError::LockTranslationNonFinite));
+    }
+
+    #[test]
+    fn lock_translation_on_static_errors() {
+        let mut o = Object::new("x", AssetKind::Tri);
+        o.is_static = true;
+        let err = o.lock_translation(1.0, 0.0, 0.0).unwrap_err();
+        assert!(matches!(err, ObjectError::Static));
+    }
+
+    #[test]
+    fn clear_resets_lock_translation() {
+        let mut o = Object::new("x", AssetKind::Tri);
+        o.lock_translation(1.0, 0.0, 0.0).unwrap();
+        o.clear();
+        assert_eq!(o.translation_lock, None);
+    }
+
+    #[test]
+    fn lock_rotation_normalizes_axis() {
+        let mut o = Object::new("x", AssetKind::Tri);
+        o.lock_rotation(2.0, 0.0, 0.0).unwrap();
+        assert_eq!(o.rotation_lock, Some([1.0, 0.0, 0.0]));
+    }
+
+    #[test]
+    fn lock_rotation_normalizes_non_axis_aligned() {
+        let mut o = Object::new("x", AssetKind::Tri);
+        o.lock_rotation(1.0, 1.0, 0.0).unwrap();
+        let axis = o.rotation_lock.unwrap();
+        let norm = (axis[0] * axis[0] + axis[1] * axis[1] + axis[2] * axis[2]).sqrt();
+        assert!((norm - 1.0).abs() < 1e-12);
+        assert!((axis[0] - axis[1]).abs() < 1e-12);
+    }
+
+    #[test]
+    fn lock_rotation_defaults_to_unlocked() {
+        let o = Object::new("x", AssetKind::Tri);
+        assert_eq!(o.rotation_lock, None);
+    }
+
+    #[test]
+    fn lock_rotation_zero_axis_errors() {
+        let mut o = Object::new("x", AssetKind::Tri);
+        let err = o.lock_rotation(0.0, 0.0, 0.0).unwrap_err();
+        assert!(matches!(err, ObjectError::LockRotationZeroAxis));
+        assert_eq!(o.rotation_lock, None);
+    }
+
+    #[test]
+    fn lock_rotation_non_finite_errors() {
+        let mut o = Object::new("x", AssetKind::Tri);
+        let err = o.lock_rotation(f64::NAN, 0.0, 0.0).unwrap_err();
+        assert!(matches!(err, ObjectError::LockRotationNonFinite));
+        let err = o.lock_rotation(f64::INFINITY, 0.0, 0.0).unwrap_err();
+        assert!(matches!(err, ObjectError::LockRotationNonFinite));
+    }
+
+    #[test]
+    fn lock_rotation_on_static_errors() {
+        let mut o = Object::new("x", AssetKind::Tri);
+        o.is_static = true;
+        let err = o.lock_rotation(1.0, 0.0, 0.0).unwrap_err();
+        assert!(matches!(err, ObjectError::Static));
+    }
+
+    #[test]
+    fn clear_resets_lock_rotation() {
+        let mut o = Object::new("x", AssetKind::Tri);
+        o.lock_rotation(1.0, 0.0, 0.0).unwrap();
+        o.clear();
+        assert_eq!(o.rotation_lock, None);
+    }
+
+    #[test]
+    fn lock_translation_and_lock_rotation_coexist_independently() {
+        let mut o = Object::new("x", AssetKind::Tri);
+        o.lock_translation(1.0, 0.0, 0.0).unwrap();
+        o.lock_rotation(0.0, 1.0, 0.0).unwrap();
+        assert_eq!(o.translation_lock, Some([1.0, 0.0, 0.0]));
+        assert_eq!(o.rotation_lock, Some([0.0, 1.0, 0.0]));
+    }
+
+    #[test]
+    fn lock_rotation_prohibit_axis_defaults_to_allow_only() {
+        let mut o = Object::new("x", AssetKind::Tri);
+        o.lock_rotation(1.0, 0.0, 0.0).unwrap();
+        assert!(!o.rotation_lock_prohibit_axis);
+    }
+
+    #[test]
+    fn lock_rotation_prohibit_axis_flips_mode() {
+        let mut o = Object::new("x", AssetKind::Tri);
+        o.lock_rotation(1.0, 0.0, 0.0).unwrap();
+        o.lock_rotation_prohibit_axis(true).unwrap();
+        assert!(o.rotation_lock_prohibit_axis);
+        o.lock_rotation_prohibit_axis(false).unwrap();
+        assert!(!o.rotation_lock_prohibit_axis);
+    }
+
+    #[test]
+    fn lock_rotation_prohibit_axis_without_lock_errors() {
+        let mut o = Object::new("x", AssetKind::Tri);
+        let err = o.lock_rotation_prohibit_axis(true).unwrap_err();
+        assert!(matches!(
+            err,
+            ObjectError::LockRotationProhibitAxisRequiresLock
+        ));
+        assert!(!o.rotation_lock_prohibit_axis);
+    }
+
+    #[test]
+    fn clear_resets_lock_rotation_prohibit_axis() {
+        let mut o = Object::new("x", AssetKind::Tri);
+        o.lock_rotation(1.0, 0.0, 0.0).unwrap();
+        o.lock_rotation_prohibit_axis(true).unwrap();
+        o.clear();
+        assert_eq!(o.rotation_lock, None);
+        assert!(!o.rotation_lock_prohibit_axis);
     }
 
     #[test]

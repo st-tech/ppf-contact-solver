@@ -5,6 +5,7 @@ from typing import Optional
 import bpy  # pyright: ignore
 
 from ...core import services
+from ...core.animation import sync_scene_timeline_to_sim
 from ...core.client import communicator as com
 from ...core.encoder import resolve_fps, resolve_start_frame
 from ...models.groups import get_addon_data
@@ -172,6 +173,13 @@ def set_scene_parameters(
         if value is not None:
             setattr(state, param_name, value)
             updated_params[param_name] = value
+
+    if (
+        frame_count is not None
+        or frame_start is not None
+        or use_scene_frame_start is not None
+    ):
+        sync_scene_timeline_to_sim(scene, state)
 
     # Keep the runner's cached project name in lockstep with the UI field.
     # Without this, transfers after an MCP rename would still target the

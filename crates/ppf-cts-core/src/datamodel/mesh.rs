@@ -749,6 +749,72 @@ pub fn tetrahedralize_arg_str(args: &[String], kwargs: &[(String, String)]) -> S
     s
 }
 
+/// Keyword arguments that reach `TriMesh.tetrahedralize` without
+/// changing the mesh it produces: they drive progress reporting and the
+/// subprocess watchdog. They are excluded from the cache key, so two
+/// builds that differ only in how the run was monitored address the same
+/// cached result.
+const TETRA_NON_KEY_KWARGS: &[&str] = &["status_callback", "status_interval", "timeout", "retries"];
+
+/// Canonical argument string a `tetrahedralize` cache entry is keyed by.
+///
+/// Keyword arguments are filtered to the ones that change the result and
+/// sorted by key, so the string is a function of the argument SET and
+/// carries no trace of the order a caller spelled them in. This is the
+/// string [`tetra_cache_name`] digests, and the writer stores it inside
+/// the `.npz` so a later load can confirm it opened the entry it meant
+/// to.
+pub fn tetra_cache_canonical_args(args: &[String], kwargs: &[(String, String)]) -> String {
+    let mut kw: Vec<(String, String)> = kwargs
+        .iter()
+        .filter(|(k, _)| !TETRA_NON_KEY_KWARGS.contains(&k.as_str()))
+        .cloned()
+        .collect();
+    kw.sort_by(|a, b| a.0.cmp(&b.0));
+    tetrahedralize_arg_str(args, &kw)
+}
+
+/// FNV-1a 64-bit digest of `s`, rendered as 16 lowercase hex digits.
+///
+/// The constants and the loop are spelled out here so the digest is a
+/// fixed, self-contained function of its input: a cache key built from
+/// it survives a Rust toolchain change and matches across hosts.
+fn fnv1a64_hex16(s: &str) -> String {
+    const OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
+    const PRIME: u64 = 0x0000_0100_0000_01b3;
+    let mut h = OFFSET_BASIS;
+    for b in s.as_bytes() {
+        h ^= u64::from(*b);
+        h = h.wrapping_mul(PRIME);
+    }
+    format!("{h:016x}")
+}
+
+/// Compose the cache filename component naming a `tetrahedralize`
+/// result for `hash` under `args` / `kwargs`.
+///
+/// This is the single composer for that name: the build planner probes
+/// it and the mesh writer creates it, so the two always address the same
+/// file. Two different argument sets give two different names, which is
+/// what makes the cache safe to reuse.
+///
+/// The name is bounded. `cache_path` wraps it into
+/// `<hash>__<name>.npz`, whose longest form is 170 characters, inside
+/// the 255-character limit a Windows path component has. An argument set
+/// of any size digests to the same 16 hex digits.
+///
+/// A call with no result-changing arguments carries no digest and
+/// composes `{hash}_tetrahedralize_.npz`, so the default
+/// tetrahedralization of a mesh has one fixed name.
+pub fn tetra_cache_name(hash: &str, args: &[String], kwargs: &[(String, String)]) -> String {
+    let canonical = tetra_cache_canonical_args(args, kwargs);
+    if canonical.is_empty() {
+        format!("{hash}_tetrahedralize_.npz")
+    } else {
+        format!("{hash}_tetrahedralize_{}.npz", fnv1a64_hex16(&canonical))
+    }
+}
+
 /// Pick the fTetWild kwargs we expose to the subprocess from a free-
 /// form key/value list and apply defaults. Returns `(key, value)`
 /// pairs preserving the input order; defaults appear at the end if
@@ -1612,6 +1678,126 @@ mod tests {
             &[("a".into(), "3".into()), ("b".into(), "4".into())],
         );
         assert_eq!(s, "1_2a=3_b=4");
+    }
+
+    /// The seven per-object fTetWild overrides the Blender encoder can
+    /// emit, with the float values rendered the way a `float32` property
+    /// reaches Python's `str()`. This is the widest argument set a build
+    /// can present to the cache-name composer.
+    fn widest_tetra_kwargs() -> Vec<(String, String)> {
+        [
+            ("edge_length_fac", "0.05000000074505806"),
+            ("epsilon", "0.0010000000474974513"),
+            ("stop_energy", "10.0"),
+            ("num_opt_iter", "80"),
+            ("optimize", "True"),
+            ("simplify", "True"),
+            ("coarsen", "True"),
+        ]
+        .iter()
+        .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+        .collect()
+    }
+
+    #[test]
+    fn tetra_cache_name_component_is_bounded() {
+        let hash = "f".repeat(64);
+        let name = tetra_cache_name(&hash, &[], &widest_tetra_kwargs());
+        let component = cache_path("/tmp/cache", &hash, &name)
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        // 255 is the limit a Windows path component has; 200 leaves the
+        // composer no room to drift back toward it.
+        assert!(
+            component.len() < 200,
+            "component is {} chars: {component}",
+            component.len()
+        );
+        assert!(
+            component.len() < 255,
+            "component is {} chars",
+            component.len()
+        );
+    }
+
+    #[test]
+    fn tetra_cache_name_empty_matches_default() {
+        let hash = "deadbeef";
+        assert_eq!(
+            tetra_cache_name(hash, &[], &[]),
+            "deadbeef_tetrahedralize_.npz"
+        );
+        // Reporting-only kwargs leave the default name intact.
+        assert_eq!(
+            tetra_cache_name(hash, &[], &[("timeout".into(), "120".into())]),
+            "deadbeef_tetrahedralize_.npz"
+        );
+    }
+
+    #[test]
+    fn tetra_cache_name_is_order_independent() {
+        let hash = "deadbeef";
+        let forward: Vec<(String, String)> = vec![
+            ("epsilon".into(), "0.001".into()),
+            ("optimize".into(), "True".into()),
+            ("simplify".into(), "False".into()),
+        ];
+        let reversed: Vec<(String, String)> = forward.iter().rev().cloned().collect();
+        assert_eq!(
+            tetra_cache_name(hash, &[], &forward),
+            tetra_cache_name(hash, &[], &reversed)
+        );
+    }
+
+    #[test]
+    fn tetra_cache_name_ignores_non_key_kwargs() {
+        let hash = "deadbeef";
+        let bare: Vec<(String, String)> = vec![("epsilon".into(), "0.001".into())];
+        let monitored: Vec<(String, String)> = vec![
+            ("epsilon".into(), "0.001".into()),
+            ("timeout".into(), "600".into()),
+            ("retries".into(), "3".into()),
+            ("status_interval".into(), "5.0".into()),
+        ];
+        assert_eq!(
+            tetra_cache_name(hash, &[], &bare),
+            tetra_cache_name(hash, &[], &monitored)
+        );
+    }
+
+    #[test]
+    fn tetra_cache_name_distinguishes_kwargs() {
+        let hash = "deadbeef";
+        let a: Vec<(String, String)> = vec![("edge_length_fac".into(), "0.05".into())];
+        let b: Vec<(String, String)> = vec![("edge_length_fac".into(), "0.10".into())];
+        let tetgen: Vec<(String, String)> = vec![("backend".into(), "tetgen".into())];
+        assert_ne!(
+            tetra_cache_name(hash, &[], &a),
+            tetra_cache_name(hash, &[], &b)
+        );
+        assert_ne!(
+            tetra_cache_name(hash, &[], &a),
+            tetra_cache_name(hash, &[], &tetgen)
+        );
+        assert_ne!(
+            tetra_cache_name(hash, &[], &tetgen),
+            tetra_cache_name(hash, &[], &[])
+        );
+    }
+
+    #[test]
+    fn tetra_cache_canonical_args_is_sorted_and_filtered() {
+        let s = tetra_cache_canonical_args(
+            &[],
+            &[
+                ("simplify".into(), "True".into()),
+                ("timeout".into(), "600".into()),
+                ("epsilon".into(), "0.001".into()),
+            ],
+        );
+        assert_eq!(s, "epsilon=0.001_simplify=True");
     }
 
     #[test]

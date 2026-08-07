@@ -8,6 +8,7 @@
 import os
 import subprocess
 
+import bpy  # pyright: ignore
 from bpy.types import Operator  # pyright: ignore
 from bpy.app.translations import pgettext_iface as iface_, pgettext_tip as tip_
 
@@ -24,6 +25,40 @@ class SOLVER_OT_ShowConsole(Operator):
 
     def execute(self, _):
         console.show()
+        return {"FINISHED"}
+
+
+class SOLVER_OT_OpenSessionFolder(Operator):
+    """Open the folder holding the solver logs and status record for this run."""
+
+    bl_idname = "solver.open_session_folder"
+    bl_label = "Open Session Folder"
+
+    @classmethod
+    def session_path(cls) -> str:
+        """Filesystem path this operator opens, or ``""`` when unavailable.
+
+        The remote root names a path on the machine the SERVER runs on, so
+        this reaches real files only when that machine is this one. The
+        operator opens what it is given and lets the OS report a path it
+        cannot open, rather than deciding for the user which roots are local.
+        """
+        root = com.normalized_remote_root()
+        return f"{root}/session" if root else ""
+
+    @classmethod
+    def poll(cls, _):
+        return (
+            com.info.status == RemoteStatus.SIMULATION_FAILED
+            and bool(cls.session_path())
+        )
+
+    def execute(self, _):
+        path = self.session_path()
+        if not path:
+            self.report({"WARNING"}, iface_("No session folder to open."))
+            return {"CANCELLED"}
+        bpy.ops.wm.path_open(filepath=path)
         return {"FINISHED"}
 
 
@@ -214,6 +249,7 @@ class SOLVER_OT_ForceTerminatePort(Operator):
 
 classes = [
     SOLVER_OT_ShowConsole,
+    SOLVER_OT_OpenSessionFolder,
     SOLVER_OT_Terminate,
     SOLVER_OT_SaveAndQuit,
     SOLVER_OT_UpdateStatus,

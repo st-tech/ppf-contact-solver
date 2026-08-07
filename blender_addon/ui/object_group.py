@@ -410,6 +410,27 @@ class ObjectGroup(PropertyGroup):
         precision=2,
         description="Inter-grain friction coefficient of the granular (sand) body",
     )  # pyright: ignore
+    enable_soft_constraint: BoolProperty(
+        name="Apply Soft Constraints",
+        default=OBJECT_GROUP_DEFAULTS["enable_soft_constraint"],
+        description="Hold this collider with springs instead of pinning it "
+        "exactly, so contact can push it off its animated path",
+    )  # pyright: ignore
+    # Strictly positive: a pull weight of zero is what classifies a pin as a
+    # hard fix, so a zero here would silently reinstate the exact constraint
+    # this checkbox exists to remove. The encoder rejects it rather than
+    # relying on this minimum, which the MCP and profile paths bypass.
+    soft_constraint_stiffness: FloatProperty(
+        name="Stiffness",
+        default=OBJECT_GROUP_DEFAULTS["soft_constraint_stiffness"],
+        min=1e-6,
+        soft_min=0.001,
+        soft_max=1000.0,
+        precision=4,
+        description="Spring stiffness holding each collider vertex to its "
+        "animated position. Lower yields more to contact; raise it toward an "
+        "exact pin",
+    )  # pyright: ignore
 
     @dynamic_enum_items
     def _get_pdrd_hinge_object_items(self, context):
@@ -425,6 +446,26 @@ class ObjectGroup(PropertyGroup):
         name="Visualize",
         default=OBJECT_GROUP_DEFAULTS["pdrd_hinge_visualize"],
         description="Draw the hinge axle gizmo in the viewport for hinged bodies in this group",
+        update=_invalidate_overlay_from_group,
+    )  # pyright: ignore
+
+    @dynamic_enum_items
+    def _get_lock_translation_object_items(self, context):
+        return _build_assigned_object_enum_items(self)
+
+    lock_translation_object_selection: EnumProperty(
+        name="Object",
+        items=_get_lock_translation_object_items,
+        description="Select which object's Lock Translation / Lock Rotation to edit",
+        options={"SKIP_SAVE"},
+    )  # pyright: ignore
+    preview_lock_translation: BoolProperty(
+        name="Preview Axis",
+        default=OBJECT_GROUP_DEFAULTS["preview_lock_translation"],
+        description=(
+            "Show Lock Translation and Lock Rotation axes in the viewport "
+            "for enabled objects in this group"
+        ),
         update=_invalidate_overlay_from_group,
     )  # pyright: ignore
 
@@ -679,6 +720,40 @@ class ObjectGroup(PropertyGroup):
         description=(
             "Stiffness-proportional Rayleigh damping for shell and rod bending "
             "(seconds), usually smaller than deformation damping; 0 disables it"
+        ),
+    )  # pyright: ignore
+    bend_warp: FloatProperty(
+        name="Bending Stiffness (Warp)",
+        default=OBJECT_GROUP_DEFAULTS["bend_warp"],
+        min=0.0,
+        # Same units as Bending Stiffness, but the useful range runs far higher
+        # than that slider's soft cap suggests: bending resists gravity as
+        # B / (rho g L^3), so a sheet several times the calibration specimen
+        # needs orders of magnitude more. A 5-unit sheet needs about 1e6 before
+        # the two directions visibly part. Soft, so any value can still be typed.
+        soft_max=1.0e7,
+        precision=2,
+        description=(
+            "Extra bending stiffness for the warp (UV X) fibers, added on top "
+            "of Bending Stiffness. 0 keeps bending the same in every "
+            "direction. Needs a UV map"
+        ),
+    )  # pyright: ignore
+    bend_weft: FloatProperty(
+        name="Bending Stiffness (Weft)",
+        default=OBJECT_GROUP_DEFAULTS["bend_weft"],
+        min=0.0,
+        # Same units as Bending Stiffness, but the useful range runs far higher
+        # than that slider's soft cap suggests: bending resists gravity as
+        # B / (rho g L^3), so a sheet several times the calibration specimen
+        # needs orders of magnitude more. A 5-unit sheet needs about 1e6 before
+        # the two directions visibly part. Soft, so any value can still be typed.
+        soft_max=1.0e7,
+        precision=2,
+        description=(
+            "Extra bending stiffness for the weft (UV Y) fibers, added on top "
+            "of Bending Stiffness. 0 keeps bending the same in every "
+            "direction. Needs a UV map"
         ),
     )  # pyright: ignore
     shrink_x: FloatProperty(

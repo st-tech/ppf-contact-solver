@@ -424,10 +424,18 @@ mod tests {
         assert!(clear_cache_dir(&missing).is_ok());
     }
 
+    /// The root must be absolute ON THE HOST PLATFORM. A Windows path is
+    /// absolute only with a drive prefix, so a bare `/repo` there is
+    /// resolved against the current directory and picks up that drive.
     #[test]
     fn frontend_base_dir_from_file_strips_two_levels() {
-        let p = frontend_base_dir_from_file(Path::new("/repo/frontend/_app_.py"));
-        assert_eq!(p, PathBuf::from("/repo"));
+        let root = Path::new(if cfg!(target_os = "windows") {
+            "C:/repo"
+        } else {
+            "/repo"
+        });
+        let p = frontend_base_dir_from_file(&root.join("frontend").join("_app_.py"));
+        assert_eq!(p, PathBuf::from(root));
     }
 
     #[test]

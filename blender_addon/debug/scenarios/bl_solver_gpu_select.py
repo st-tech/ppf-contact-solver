@@ -417,7 +417,7 @@ try:
     class _FakeBackend:
         backend_type = "ssh"
         server_port = 9090
-        current_directory = "/home/u/dev"
+        current_directory = "/home/u/ppf-contact-solver"
 
         def exec_command(self, command, shell=False, cwd=None, timeout=None):
             if "start_server.sh\n" in command:
@@ -438,7 +438,7 @@ try:
     script = launched_script.get("script", "")
     record("L_shell_launch_carries_the_device",
            prefixes == ("", f"CUDA_VISIBLE_DEVICES={devices[1].uuid} ")
-           and f"CUDA_VISIBLE_DEVICES={devices[1].uuid} /home/u/dev/target/release/ppf-cts-server" in script,
+           and f"CUDA_VISIBLE_DEVICES={devices[1].uuid} /home/u/ppf-contact-solver/target/release/ppf-cts-server" in script,
            {"prefixes": prefixes, "script": script[:400]})
 
     # ----- M: connecting does not start the server ----------------------

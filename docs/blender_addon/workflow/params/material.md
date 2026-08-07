@@ -12,9 +12,10 @@ but which fields are relevant depends on the group's type:
 - **PDRD**: density, friction, and contact settings only. PDRD is an
   exactly-rigid body type with no Young's modulus, Poisson ratio, bend,
   shrink, strain limit, or inflate.
-- **Static**: only friction and contact settings (static objects have no
-  deformation to tune). See [Static Objects](../scene/static_objects.md) for the
-  full treatment of Static groups, including how to animate them.
+- **Static**: friction, contact settings, and **Apply Soft Constraints**
+  (static objects have no deformation to tune). See
+  [Static Objects](../scene/static_objects.md) for the full treatment of Static
+  groups, including how to animate them.
 - **Sand**: a granular body whose relevant fields are grain radius,
   particle mass, friction, and contact settings.
 
@@ -29,8 +30,9 @@ Picking one changes the **Material Params** box to match: **Solid**
 shows density, stiffness, and a single shrink factor; **Shell** shows
 the full cloth stack including anisotropic shrink, strain limit,
 inflate, and stitch; **Rod** shows density, stiffness, shrink, bend,
-and strain limit; **Static** collapses to just **Friction** and the
-contact rows; and **Sand** shows grain radius, particle mass, friction,
+and strain limit; **Static** collapses to **Friction**, **Apply Soft
+Constraints**, and the contact rows; and **Sand** shows grain radius,
+particle mass, friction,
 and the contact rows.
 ```
 
@@ -795,6 +797,65 @@ this group's density before sending it to the solver, so a denser body of
 the same material is correspondingly stiffer to move. The field label
 flips to **(Pa)** to show which convention is active.
 
+## Static-Specific
+
+A **Static** group is a collider: you animate its shape, and the solver
+pushes everything else out of its way. Besides **Friction** and the contact
+rows it carries one option.
+
+### Apply Soft Constraints
+
+By default a Static collider follows its animation exactly. Nothing can move
+it, however hard the cloth presses. That is what you want when the cloth can
+always get out of the way.
+
+It is the wrong answer when the collider's own shape closes onto the cloth.
+If a character's arm comes down against the torso, or a hand presses into a
+thigh, the garment in between is caught between two surfaces that will not
+budge, and the simulation stops with an error saying it cannot advance.
+
+Turn on **Apply Soft Constraints** and the collider is held toward its
+animated shape by springs instead of being locked to it. Where the cloth
+pushes harder than the springs, the collider gives way; once the pinch
+passes, it settles back onto its animation.
+
+### Stiffness
+
+How firmly the springs hold, shown only while **Apply Soft Constraints** is
+on. Lower values let the collider yield more; higher values behave more like
+the exact default.
+
+There is no universal number, because the springs are competing against
+however hard your scene's contacts push. Start at the default of **10** and
+adjust from what you see. On a clothed character rig, **0.1** was so soft
+the collider folded into itself, **1** worked but let the body dent by
+around 3 cm at the tightest contact, **10** kept it within a fraction of a
+millimetre on average and 8 mm at worst, and **1000** was close enough to
+exact that the original pinch came back.
+
+:::{note}
+A Static group with **Apply Soft Constraints** on is simulated, not just
+collided against, even if it never moves. There has to be something for the
+springs to act on. Expect it to cost more time per frame than the same
+collider left exact, so turn it on for the colliders that need it rather
+than for all of them.
+:::
+
+:::{admonition} Under the hood
+:class: toggle
+
+An exact collider vertex is a boundary condition: the solver removes its
+degrees of freedom, so the contact force has nothing to act on. A soft one
+keeps its degrees of freedom and gains a spring term, `k * (target - x)`,
+which is what the contact force can work against.
+
+Two exclusions come with it. Collider geometry no longer collides with
+itself or with another collider, which is what allows a rigged mesh that
+ships self-intersecting (layered eyelashes, an arm resting inside a torso)
+to be used at all. Collider faces also carry no stretch or bending energy;
+their shape comes from the springs, not from a material.
+:::
+
 ## Contact Gap and Contact Offset
 
 **Contact Gap** and **Contact Offset** are two distances that together
@@ -960,9 +1021,15 @@ body.param.solid_young_modulus = 5000.0
 body.param.use_group_bounding_box_diagonal = False
 body.param.contact_gap         = 0.001
 
-# Static collider: only friction and contact settings matter.
+# Static collider: friction, contact settings, and optionally soft constraints.
 floor = solver.create_group("Floor", "STATIC")
 floor.param.friction = 0.8
+
+# A collider whose own shape closes onto the cloth can trap it. Holding the
+# collider with springs lets it give way where the cloth pushes back.
+body = solver.create_group("Body", "STATIC")
+body.param.enable_soft_constraint = True
+body.param.soft_constraint_stiffness = 10.0
 ```
 
 :::{admonition} Under the hood

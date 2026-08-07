@@ -6,12 +6,11 @@
 #ifndef CUDA_UTILS_HPP
 #define CUDA_UTILS_HPP
 
-// Fatal-exit reason code, read by the Rust host's atexit hook to label an
-// exit(1) crash with a sub-kind instead of the coarse lock-based
-// UnknownAbrupt. Values mirror ppf_cts_formats::status::error_code
-// (2 = OOM, 3 = CUDA driver/runtime). Defined once in cpp/main/main.cu;
-// the emulator never sets it (its CUDA_HANDLE_ERROR is a no-op).
-extern "C" unsigned char g_ppf_fatal_code;
+// Brings in `g_ppf_fatal_code` / `g_ppf_fatal_detail` (the reason and message
+// the Rust host's atexit hook reads to label an exit(1) crash) plus
+// `ppf_fatal`. Included outside the __CUDACC__ guard below because the
+// emulator compiles this header too and terminates on the same invariants.
+#include "fatal.hpp"
 
 // Process-wide counters of device-memory alloc / free events (every
 // Vec<T>::alloc/reserve and Vec<T>::free bumps these; see vec/vec.hpp).
@@ -34,12 +33,77 @@ extern unsigned long long g_device_free_count;
 #include <cstdlib>
 #include <cuda_runtime.h>
 
+// State of the operating system's kernel-execution watchdog on the device
+// this process selected, as read from `cudaDeviceProp::kernelExecTimeoutEnabled`
+// by the preflight in `initialize()`. Negative until that runs. A crash report
+// naming a launch timeout is only readable next to this value, and the flag is
+// not recoverable after the fact, so it is carried in memory rather than left
+// to a log line. Defined once in cpp/main/main.cu.
+extern int g_ppf_kernel_timeout_enabled;
+
+// Which crash sub-kind a `cudaError_t` reports as. Three errors carry a cause
+// the user can act on differently from "the CUDA runtime failed":
+// an allocation failure means the scene does not fit, cudaErrorAssert means a
+// device-side assert trapped (a violated solver invariant rather than a driver
+// or hardware problem), and cudaErrorLaunchTimeout means the OS reset the
+// device out from under a kernel, which is a property of the machine (a GPU
+// that also drives a display) and is fixed by running on a GPU with no display
+// attached. Everything else, from an unsupported architecture to a corrupted
+// context, is reported as CudaDriver and distinguished by the detail, which
+// carries the runtime's own name and message for the error.
+static unsigned char fatal_code_for_cuda(cudaError_t err) {
+    if (err == cudaErrorMemoryAllocation) {
+        return PPF_FATAL_OOM;
+    }
+    if (err == cudaErrorAssert) {
+        return PPF_FATAL_DEVICE_ASSERT;
+    }
+    if (err == cudaErrorLaunchTimeout) {
+        return PPF_FATAL_WATCHDOG_TIMEOUT;
+    }
+    return PPF_FATAL_CUDA_DRIVER;
+}
+
 static void HandleError(cudaError_t err, const char *file, int line) {
     if (err != cudaSuccess) {
         printf("%s in %s at line %d\n", cudaGetErrorString(err), file, line);
-        // Label the imminent exit(1) so the host's atexit hook can write
-        // Crashed{Oom} vs Crashed{CudaDriver} rather than UnknownAbrupt.
-        g_ppf_fatal_code = (err == cudaErrorMemoryAllocation) ? 2 : 3;
+        // Label the imminent exit(1) so the host's atexit hook can name the
+        // cause instead of writing UnknownAbrupt.
+        const unsigned char code = fatal_code_for_cuda(err);
+        char detail[sizeof(g_ppf_fatal_detail)];
+        int used = snprintf(detail, sizeof(detail),
+                            "%s (cuda error %d %s) in %s at line %d",
+                            cudaGetErrorString(err), (int)err,
+                            cudaGetErrorName(err), file, line);
+        if (code == PPF_FATAL_OOM && used > 0 &&
+            (size_t)used < sizeof(detail)) {
+            // Valid only on the allocation branch: a failed allocation
+            // leaves the context usable, whereas a sticky error would make
+            // this query fail in turn and report nonsense.
+            size_t free_bytes = 0, total_bytes = 0;
+            if (cudaMemGetInfo(&free_bytes, &total_bytes) == cudaSuccess) {
+                snprintf(detail + used, sizeof(detail) - (size_t)used,
+                         "; %zu MB free of %zu MB on the device",
+                         free_bytes >> 20, total_bytes >> 20);
+            }
+        }
+        if (code == PPF_FATAL_WATCHDOG_TIMEOUT && used > 0 &&
+            (size_t)used < sizeof(detail)) {
+            // Report the flag as it was actually read, so a timeout on a
+            // device with no watchdog armed says so rather than asserting a
+            // cause the preflight contradicts.
+            const char *state = g_ppf_kernel_timeout_enabled > 0
+                                    ? "armed"
+                                    : (g_ppf_kernel_timeout_enabled == 0
+                                           ? "not armed"
+                                           : "not known");
+            snprintf(detail + used, sizeof(detail) - (size_t)used,
+                     "; the operating system's kernel-execution watchdog is "
+                     "%s on this device",
+                     state);
+        }
+        ppf_fatal_set_detail(detail);
+        g_ppf_fatal_code = code;
         exit(1);
     }
 }

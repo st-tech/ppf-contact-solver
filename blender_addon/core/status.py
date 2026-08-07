@@ -37,6 +37,45 @@ class BytesPerSecondCalculator:
         return (b1 - b0) / elapsed if elapsed > 0 else 0.0
 
 
+# One-line summary per crash cause, keyed by the server's ``crash_kind`` tag
+# (``ppf_cts_formats::status::CrashKind::tag``).
+#
+# Every value is a translation key, so it must stay free of numbers, paths,
+# process ids and error strings. Those belong in the detail line the panel
+# draws untranslated beneath it; folding them in here would make the key set
+# unbounded and leave every locale falling back to English.
+#
+# A tag with no entry falls back to the generic line, so a newer server can
+# name a cause this addon does not know without the panel going blank.
+CRASH_CAUSE_SUMMARY: dict[str, str] = {
+    "intersection": "Intersection detected",
+    "ccd": "Continuous collision detection failed",
+    "cg": "Linear solver failed to converge",
+    "newton_stall": "Newton solve made no progress (over-constrained configuration)",
+    "pin_infeasible": "A pinned vertex is driven into a collider it cannot yield to",
+    "overlapping_start": "Two surfaces start the step already touching or overlapping",
+    "init_intersection": "Intersection in the initial configuration",
+    "oom": "Out of GPU memory",
+    "cuda_driver": "Unrecoverable CUDA runtime or driver error",
+    "watchdog_timeout": "A GPU kernel ran past the operating system's watchdog timeout",
+    "panic": "Solver host panicked",
+    "solver_invariant": "Solver stopped on a failed internal check",
+    "device_assert": "A solver invariant failed on the GPU",
+    "killed_by_signal": "The solver process was killed before it could report",
+    "library_load_failed": "A required library could not be loaded",
+    "launch_failed": "The solver exited before it started",
+    "unknown_abrupt": "Solver exited abnormally without reporting a cause",
+}
+
+# Shown for a tag this build does not recognize.
+CRASH_CAUSE_FALLBACK = "Solver exited abnormally without reporting a cause"
+
+
+def crash_cause_summary(kind: str) -> str:
+    """Untranslated one-line summary for a ``crash_kind`` tag."""
+    return CRASH_CAUSE_SUMMARY.get(kind, CRASH_CAUSE_FALLBACK)
+
+
 class RemoteStatus(Enum):
     DISCONNECTED = "Disconnected"
     CONNECTING = "Connecting..."

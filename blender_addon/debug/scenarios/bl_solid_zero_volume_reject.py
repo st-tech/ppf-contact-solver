@@ -32,6 +32,27 @@
 #      regression guard for issue #18: if the empty-BVH guards in
 #      ``closest_triangle_index`` / ``frame_mapping`` ever regress, the
 #      raw Rust panic will resurface here and this subtest will fail.
+#   E. ``headline_is_a_single_line``: the first line of the surfaced
+#      error is a complete headline: it opens with ``<Type>: `` and it
+#      still carries the segments the worker appends after that, down to
+#      the interpreter identity it appends last. The worker's stdout
+#      protocol is line-oriented, so a break in the payload costs the
+#      server everything after it, and everything after it is where the
+#      stage, the frame and the interpreter live.
+#   F. ``failure_carries_traceback``: the surfaced error also carries the
+#      worker's traceback, so a user can name the failing call without
+#      opening ``server.log``.
+#   G. ``transfer_reports_failure_not_success``: with the engine at
+#      FAILED, ``SOLVER_OT_Transfer.on_complete`` reports an ERROR.
+#      ``is_complete()`` is satisfied as soon as the status leaves
+#      BUILDING, which includes the failure exit, so an unconditional
+#      report makes the last thing Blender says about a failed build be
+#      that it succeeded.
+#   H. ``every_build_operator_reports_failure``: the same holds for the
+#      other two operators that start a remote build,
+#      ``SOLVER_OT_UpdateParams`` and ``DEBUG_OT_Build``. All three
+#      complete on the same predicate, so all three have to read the
+#      outcome before reporting it.
 
 from __future__ import annotations
 
@@ -47,6 +68,7 @@ NEEDS_BLENDER = True
 
 _DRIVER_BODY = r"""
 import os
+import re
 import time
 import traceback
 
@@ -185,6 +207,105 @@ try:
         {
             "is_panic": is_panic,
             "haystack_tail": haystack[-400:],
+        },
+    )
+
+    # ----- E: the headline is one complete line ----------------------
+    # The build error is delivered as a headline plus the worker's
+    # traceback below it, so the panel and the status bar show the first
+    # line and it has to stand on its own.
+    #
+    # The head shape alone cannot see a break in the payload: the server
+    # keeps whatever precedes the break and drops the rest, and what it
+    # keeps still opens with "<Type>: ". So the two tail segments are
+    # asserted as well. The interpreter segment is assembled last and
+    # unconditionally, which makes its arrival the proof that the whole
+    # physical line arrived; the stage segment is the field that says
+    # which object the build died on.
+    headline = final_server_error.partition("\n")[0]
+    head_ok = bool(re.match(r"^[A-Za-z_][A-Za-z0-9_.]*: ", headline))
+    names_stage = "| while: " in headline
+    names_interpreter = bool(re.search(r"\| python \S+ \S+ at ", headline))
+    dh.record(
+        "E_headline_is_a_single_line",
+        (bool(headline) and "\r" not in headline
+         and head_ok and names_stage and names_interpreter),
+        {
+            "headline": headline[:600],
+            "head_ok": head_ok,
+            "names_stage": names_stage,
+            "names_interpreter": names_interpreter,
+        },
+    )
+
+    # ----- F: the traceback travels with the failure ------------------
+    has_traceback = "Traceback (most recent call last):" in haystack
+    dh.record(
+        "F_failure_carries_traceback",
+        has_traceback,
+        {
+            "has_traceback": has_traceback,
+            "server_error_lines": len(final_server_error.split("\n")),
+        },
+    )
+
+    # ----- G: Transfer reports the failure, not success ---------------
+    # Recorded last: on_complete writes to the console, and the haystack
+    # above must reflect the build alone.
+    solver_ui = __import__(pkg + ".ui.solver", fromlist=["SOLVER_OT_Transfer"])
+
+    class _ReportShim:
+        def __init__(self):
+            self.reports = []
+
+        def report(self, level, message):
+            self.reports.append((set(level), message))
+
+    shim = _ReportShim()
+    solver_ui.SOLVER_OT_Transfer.on_complete(shim, bpy.context)
+    reports_error = any("ERROR" in lvl for lvl, _ in shim.reports)
+    claims_success = any(
+        "Build completed successfully." in msg for _, msg in shim.reports
+    )
+    dh.record(
+        "G_transfer_reports_failure_not_success",
+        reports_error and not claims_success,
+        {
+            "reports": [[sorted(lvl), msg[:200]] for lvl, msg in shim.reports],
+            "remote_status": dh.com.info.status.value,
+        },
+    )
+
+    # ----- H: every build button reports the failure ------------------
+    # Three operators start a remote build and all three complete on the
+    # same "status left BUILDING" predicate, so all three have to read
+    # the outcome. They share one reporting path; this checks that each
+    # of them reaches it.
+    debug_ui = __import__(pkg + ".ui.debug_ops", fromlist=["DEBUG_OT_Build"])
+    build_ops = [
+        ("SOLVER_OT_UpdateParams", solver_ui.SOLVER_OT_UpdateParams),
+        ("DEBUG_OT_Build", debug_ui.DEBUG_OT_Build),
+    ]
+    op_reports = {}
+    ops_ok = True
+    for op_name, op_cls in build_ops:
+        op_shim = _ReportShim()
+        op_cls.on_complete(op_shim, bpy.context)
+        op_error = any("ERROR" in lvl for lvl, _ in op_shim.reports)
+        op_success = any(
+            "Build completed successfully." in msg
+            for _, msg in op_shim.reports
+        )
+        ops_ok = ops_ok and op_error and not op_success
+        op_reports[op_name] = [
+            [sorted(lvl), msg[:200]] for lvl, msg in op_shim.reports
+        ]
+    dh.record(
+        "H_every_build_operator_reports_failure",
+        ops_ok,
+        {
+            "reports": op_reports,
+            "remote_status": dh.com.info.status.value,
         },
     )
 

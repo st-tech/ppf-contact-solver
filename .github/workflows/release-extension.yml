@@ -27,8 +27,8 @@ jobs:
       # Pinned to match blender.yml's BLENDER_VERSION so the release zip
       # is built and validated against the exact Blender ABI the rig
       # exercises. Bump in lockstep with blender.yml when needed.
-      BLENDER_SERIES: "5.1"
-      BLENDER_VERSION: "5.1.1"
+      BLENDER_SERIES: "5.2"
+      BLENDER_VERSION: "5.2.0"
 
     steps:
       - name: Checkout repository

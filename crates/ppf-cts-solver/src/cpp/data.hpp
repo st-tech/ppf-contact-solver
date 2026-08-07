@@ -163,6 +163,12 @@ struct FaceParam {
     // MUST mirror the Rust FaceParam in data.rs (repr(C) ABI).
     float deform_damping;
     float bend_damping;
+    // Directional shell bending stiffnesses, ADDED to the isotropic `bend` at
+    // an orientation-dependent weight (hinge_bend_directional). Carried to the
+    // hinges the same way bend_damping is. Both 0.0 means isotropic. MUST
+    // mirror the Rust FaceParam (repr(C) ABI).
+    float bend_warp;
+    float bend_weft;
 };
 
 struct HingeParam {
@@ -174,6 +180,12 @@ struct HingeParam {
     // Rayleigh bending damping, area-averaged from the adjacent faces'
     // bend_damping. Tail-appended; MUST mirror the Rust HingeParam (repr(C)).
     float bend_damping;
+    // Directional bending stiffnesses added to `bend`, area-averaged from the
+    // adjacent faces alongside it. Paired with HingeProp::uv_edge_sin2 in
+    // hinge_bend_directional. Both 0.0 leaves the stiffness at `bend`. MUST
+    // mirror the Rust HingeParam (repr(C)).
+    float bend_warp;
+    float bend_weft;
 };
 
 struct TetParam {
@@ -198,6 +210,17 @@ struct VertexProp {
     unsigned param_index;
     // 1-based PDRD body id (0 = not a member of any PDRD body).
     unsigned pdrd_body_index;
+    // Vertex belongs to a STATIC collider. A collider's shape is authored and
+    // driven, so a contact between two collider elements is not the solver's to
+    // resolve: neither side can yield to relieve it, and rigged colliders
+    // routinely ship self-tangled (layered eyelash / eyeball / mouth geometry,
+    // an arm resting inside a torso). Pairs with this set on BOTH sides are
+    // skipped for contact and for intersection reporting, whether the two sides
+    // belong to the same collider or to two different ones. An exactly pinned
+    // collider was already excluded by `either_dyn`; this keeps that exclusion
+    // when the collider is held by springs instead and its vertices become
+    // free. Field order must mirror `VertexProp` in data.rs (repr(C) ABI).
+    bool collider;
 };
 
 struct EdgeProp {
@@ -217,6 +240,15 @@ struct FaceProp {
     // separate from `fixed` (kinematic pinning) so the two never alias. Field
     // order must mirror Rust FaceProp in data.rs (repr(C) ABI).
     bool rest_excluded;
+    // Belongs to a STATIC collider, so it carries no elastic energy. A
+    // collider's shape is held by its pins, not by stiffness of its own: while
+    // the pins were exact its DOF were removed and `fixed` already suppressed
+    // this term, but a spring-held collider's vertices are free and the term
+    // would otherwise come alive with whatever material the defaults supplied.
+    // Kept separate from both `fixed` (kinematic pinning) and `rest_excluded`
+    // (owned per frame by update_rest_shape) so none of the three alias. Field
+    // order must mirror Rust FaceProp in data.rs (repr(C) ABI).
+    bool collider;
     unsigned param_index;
 };
 
@@ -227,9 +259,61 @@ struct HingeProp {
     // coefficient |e|^2 / area (see embed_hinge_force_hessian).
     float area;
     float rest_angle;
+    // sin^2(psi) for psi the angle between this hinge's shared edge and the
+    // UV X (warp) axis, in [0, 1], or -1.0 when the mesh carries no UV and the
+    // hinge is therefore isotropic. A hinge bends about its shared edge, so
+    // the surface curves ACROSS it: an edge along warp (psi = 0, sin^2 = 0)
+    // resists with the weft stiffness, which is why the factor below pairs
+    // sin^2 with warp and cos^2 with weft. Stored squared so the kernel needs
+    // no trigonometry (sinf/cosf would also drag FP64 argument reduction into
+    // the device binary). Field order must mirror Rust HingeProp in data.rs.
+    float uv_edge_sin2;
     bool fixed;
+    // Belongs to a STATIC collider, so it carries no bending energy. See
+    // FaceProp::collider. Field order must mirror Rust HingeProp in data.rs.
+    bool collider;
     unsigned param_index;
 };
+
+// A hinge's dimensionless bending stiffness, as the isotropic value plus
+// whatever the two directional ones contribute at this edge's orientation:
+//
+//   k(psi) = bend + warp * sin^2(psi) + weft * cos^2(psi)
+//
+// `psi` is the angle between the hinge's shared edge and the UV X (warp) axis,
+// and the caller supplies sin^2 directly (HingeProp::uv_edge_sin2) so no
+// trigonometry is needed here. sin^2 pairs with WARP and cos^2 with weft,
+// which is the one counter-intuitive part and the only place the convention
+// is pinned: a hinge folds ABOUT its shared edge, so the surface curves
+// ACROSS it. An edge lying along warp therefore bends the sheet in the weft
+// sense and picks up `weft`, while an edge along weft bends the warp fibers
+// and picks up `warp`. Read at the fiber level it is the natural reading:
+// `warp` is how stiff the warp fibers are to being bent.
+//
+// The form is additive and linear in sin^2, which buys two things over the
+// quartic orthotropic transformation it replaces. Every term is non-negative
+// for non-negative inputs, so the result cannot go negative at any
+// orientation and there is no material-stability condition to enforce or to
+// explain. And `bend` keeps meaning exactly what it meant before anisotropy
+// existed: the directional pair ADDS to it rather than redistributing it, so
+// the calibrated isotropic value (BEND_SCALE in energy.cu,
+// calibration/cusick_drape) is untouched and every existing preset holds.
+//
+// The cost is that the 45 degree bias stiffness is not independently
+// settable; it is bend + (warp + weft)/2. Real woven fabric is floppiest on
+// the bias, below both axes, which this cannot express.
+//
+// With warp and weft at their 0.0f defaults the result is `bend` exactly, for
+// any orientation and including the no-UV sentinel, so a scene that does not
+// ask for anisotropy is bit-identical to one built before this existed.
+__device__ __host__ inline float hinge_bend_directional(float bend, float warp,
+                                                        float weft,
+                                                        float sin2) {
+    if (sin2 < 0.0f) {
+        return bend; // no UV, so no direction is defined
+    }
+    return bend + warp * sin2 + weft * (1.0f - sin2);
+}
 
 struct TetProp {
     float mass;
@@ -256,8 +340,8 @@ struct PdrdBodyProp {
     // Joint / DOF-filtering: 0 = free (full 6-DOF rigid body), 1 = hinge
     // (reduced DOF filtered to lock translation and restrict rotation to
     // the single world axle `joint_axis` through the body centroid; see
-    // project_body_dofs_kernel in pdrd_rigid.hpp). `joint_pin` records the
-    // axle anchor (initial centroid). Field order must mirror Rust
+    // project_body_dofs_kernel in pdrd_lock_projector.hpp). `joint_pin`
+    // records the axle anchor (initial centroid). Field order must mirror Rust
     // `PdrdBodyProp` in data.rs (repr(C) ABI).
     unsigned joint_mode;
     Vec3f joint_axis;
@@ -515,6 +599,28 @@ struct VertexSet {
     Vec<Vec3f> curr;
 };
 
+enum RotationLockMode : unsigned {
+    ROTATION_LOCK_ALLOW_ONLY = 0u,
+    ROTATION_LOCK_PROHIBIT_AXIS = 1u,
+};
+
+// Mirror of Rust TranslationLock. `axis` is the optional normalized
+// solver-space translation direction and `rotation_axis` is the optional
+// normalized rotation direction. `rotation_mode` selects allow-only or
+// prohibit-axis semantics. A zero rotation axis disables that component. The
+// `anchor` lets the rotation projector form every relative coordinate as a
+// position difference against a fixed reference rather than from an absolute
+// position. Field order must mirror Rust data.rs (repr(C) ABI).
+struct TranslationLock {
+    Vec3f axis;
+    float total_mass;
+    unsigned pdrd_body_index;
+    unsigned dmap_index;
+    Vec3f rotation_axis;
+    unsigned rotation_mode;
+    Vec3f anchor;
+};
+
 struct DataSet {
     VertexSet vertex;
     MeshInfo mesh;
@@ -598,6 +704,19 @@ struct DataSet {
     Vec<unsigned> hinge_hess_slots;    // 16 per hinge, REMAPPED (2,1,0,3) order
     Vec<unsigned> rod_bend_hess_slots; // 9 per surface vertex (j,i,k stencil)
     Vec<unsigned> stitch_hess_slots;   // 36 per stitch seam
+    // Center-of-mass translation lock data. `translation_lock_index` is
+    // per-global-vertex and uses 0xffffffff for no lock. Initial positions are
+    // immutable so current-minus-initial is always formed against a fixed
+    // reference.
+    Vec<TranslationLock> translation_lock;
+    Vec<unsigned> translation_lock_index;
+    Vec<Vec3f> translation_lock_initial;
+    // Statistics object ownership and per-object accepted-contact counts.
+    // u32::MAX marks a vertex outside the manifest. Counts are cleared before
+    // each Newton assembly and fetched with the output pose.
+    Vec<unsigned> statistics_object_index;
+    Vec<unsigned> statistics_static_object_index;
+    Vec<unsigned> statistics_contact_count;
 };
 
 /********** CUSTOM TYPES **********/

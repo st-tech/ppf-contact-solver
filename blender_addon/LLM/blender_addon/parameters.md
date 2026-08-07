@@ -272,11 +272,11 @@ Every object group carries its own copy of the full material-parameter set, but 
 - **Rod**: density, stiffness, bend, a rest-length scale (the **Shrink** row, `length_factor`), strain limit, Rayleigh damping (deformation + bending), and contact settings.
 - **PDRD**: an exactly-rigid body type. Only density, friction, contact settings, and an optional hinge joint (no Young's modulus, Poisson ratio, bend, shrink, strain limit, inflate, or Rayleigh damping). The surface mesh is not tetrahedralized.
 - **Sand**: a granular body of loose grain-center vertices. Only grain radius (locked at conversion), particle mass, an inter-grain friction, and a contact gap. See Sand-specific below, including how a mesh becomes a Sand body.
-- **Static**: only friction and contact settings (static objects have no deformation to tune). See Static Objects for the full treatment of Static groups, including how to animate them.
+- **Static**: friction, contact settings, and **Apply Soft Constraints** (static objects have no deformation to tune). See Static Objects for the full treatment of Static groups, including how to animate them.
 
 Rows that don't apply to the current type are hidden in the UI.
 
-The six options in the group-type dropdown on each group's header row. Picking one changes the Material Params box to match: Solid shows density, stiffness, and a single shrink factor; Shell shows the full cloth stack including anisotropic shrink, strain limit, inflate, and stitch; Rod shows density, stiffness, a Shrink rest-length scale, bend, and strain limit; PDRD shows its rigid-body density, an optional hinge joint, plus shared contact rows; Sand shows a read-only grain radius, particle mass, friction, and a contact gap; Static collapses to just Friction and the contact rows.
+The six options in the group-type dropdown on each group's header row. Picking one changes the Material Params box to match: Solid shows density, stiffness, and a single shrink factor; Shell shows the full cloth stack including anisotropic shrink, strain limit, inflate, and stitch; Rod shows density, stiffness, a Shrink rest-length scale, bend, and strain limit; PDRD shows its rigid-body density, an optional hinge joint, plus shared contact rows; Sand shows a read-only grain radius, particle mass, friction, and a contact gap; Static collapses to Friction, **Apply Soft Constraints**, and the contact rows.
 
 ### The Material Params box
 
@@ -638,6 +638,23 @@ WARNING: **Convert To Solid Particle Mesh** is destructive. The original faces a
 
 From scripting, `solver.convert_to_particle_mesh(object_name, grain_radius, extra_spacing=0.0, rng_seed=0)` performs the same conversion and returns the grain count; over MCP the tool of the same name does. Use `block-jacobi` as the linear-solver preconditioner for sand scenes: a structureless point cloud has no connectivity for the Schwarz aggregates to work with.
 
+### Static-specific
+
+A Static group is a collider: its shape is driven by the animation you give it, not solved. Besides **Friction** and the contact rows it carries one option.
+
+| UI label                   | Property                    | Default | Meaning                                                        |
+| -------------------------- | --------------------------- | ------- | -------------------------------------------------------------- |
+| **Apply Soft Constraints** | `enable_soft_constraint`    | `False` | Hold the collider with springs instead of pinning it exactly.   |
+| **Stiffness**              | `soft_constraint_stiffness` | 10.0    | Spring stiffness per collider vertex. Shown only when **Apply Soft Constraints** is on. Must be greater than 0. |
+
+By default a Static collider tracks its animation exactly and cannot be pushed off it, whatever the contact force. That is what you want when the cloth can always get out of the way. It is the wrong answer when the collider's own geometry closes onto the cloth: a character's armpit shutting, or a hand pressing into a thigh, traps the garment between two surfaces that will not yield, and the simulation fails because no step exists that avoids penetration.
+
+Turning on **Apply Soft Constraints** holds each collider vertex with a spring of **Stiffness** toward its animated position, so the collider gives way where the contact pushes harder than the spring and returns once it passes. The collider still collides with every dynamic object; it simply stops colliding with itself, which is what lets a self-tangled rigged mesh (layered eyelashes, an arm resting against a torso) serve as a collider at all.
+
+Pick **Stiffness** by how hard the scene's contacts push, since that is what the spring competes against. Lower yields more; raise it toward an exact pin. Measured on a rigged character with a draped garment: 0.1 was too soft and the collider deformed into an intersection, 1 completed but gave up 33 mm at the worst contact, 10 held it to 0.08 mm on average and 8 mm at worst, and 1000 behaved almost like an exact pin. The default 10 is a starting point, not a universal value.
+
+NOTE: A Static group with **Apply Soft Constraints** on is simulated rather than merely collided against, even if it never moves, because there has to be something for the springs to act on. Expect it to cost more than an exactly pinned collider of the same size.
+
 ### Contact gap and contact offset
 
 **Contact Gap** and **Contact Offset** are two distances that together shape the invisible contact layer around each group's geometry. They serve different roles and both are configurable.
@@ -744,9 +761,16 @@ body.param.solid_young_modulus = 5000.0
 body.param.use_group_bounding_box_diagonal = False
 body.param.contact_gap         = 0.001
 
-# Static collider: only friction and contact settings matter.
+# Static collider: friction, contact settings, and optionally soft constraints.
 floor = solver.create_group("Floor", "STATIC")
 floor.param.friction = 0.8
+
+# A collider whose own geometry closes onto cloth (an armpit, a hand against a
+# thigh) can trap it with nowhere to go. Holding the collider with springs
+# instead of pinning it exactly lets it yield where the contact pushes hardest.
+body = solver.create_group("Body", "STATIC")
+body.param.enable_soft_constraint = True
+body.param.soft_constraint_stiffness = 10.0
 ```
 
 UNDER THE HOOD:

@@ -25,7 +25,7 @@ use crate::engine::ServerEngine;
 
 mod build;
 mod session;
-mod solver;
+pub(crate) mod solver;
 
 // Pick the right solver-busy + terminate variants per build. The
 // emulated build runs under the test rig where many workers share the
@@ -609,6 +609,251 @@ mod tests {
         }
     }
 
+    /// A descendant that inherits the worker's stdout must not hold the
+    /// drain open after the worker itself has exited.
+    ///
+    /// EOF on that pipe reports that every holder of its write end has
+    /// closed it, which is a different question from whether the worker
+    /// finished. A build whose worker leaves a background process behind
+    /// would otherwise sit in BUILDING for as long as that process lives,
+    /// with the cancel select already exited so cancel could not reach it.
+    ///
+    /// Both halves are asserted: the drain ends promptly, AND the worker's
+    /// ERROR line still arrives. A bound that truncated the report would
+    /// satisfy the first on its own.
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn drive_build_worker_ends_when_a_descendant_holds_stdout() {
+        let dir = tempfile::tempdir().unwrap();
+        // `sleep` inherits stdout and outlives the worker by far more than
+        // the post-exit grace, so EOF cannot be what ends the drain.
+        let script = write_mock_worker(
+            dir.path(),
+            "mock_lingering_child.sh",
+            "sleep 30 &
+             echo 'PROGRESS percent=0.10 info=Loading'
+             echo 'ERROR tetwild segfaulted'
+             exit 1
+",
+        );
+
+        let engine = engine_ready_to_build();
+        let cancel = engine.install_cancel_handle();
+        let started = std::time::Instant::now();
+        let outcome = build::drive_build_worker(
+            &engine,
+            cancel,
+            Path::new("/bin/sh"),
+            &script,
+            "demo",
+            "/tmp/demo",
+            false,
+        )
+        .await;
+        let elapsed = started.elapsed();
+
+        match outcome {
+            build::BuildOutcome::Failed(msg) => assert!(
+                msg.contains("tetwild"),
+                "the bound cost the worker its report: {msg:?}"
+            ),
+            other => panic!("expected Failed, got {:?}", other_disc(&other)),
+        }
+        assert!(
+            elapsed < Duration::from_secs(10),
+            "drive_build_worker waited on the descendant, not the worker: {elapsed:?}"
+        );
+    }
+
+    /// Write an executable `/bin/sh` mock worker and return its path.
+    /// The marker tests below each need several protocol lines, so they
+    /// share the chmod boilerplate rather than repeating it six times.
+    #[cfg(unix)]
+    fn write_mock_worker(dir: &Path, name: &str, body: &str) -> std::path::PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let script = dir.join(name);
+        std::fs::write(&script, format!("#!/bin/sh\n{body}")).unwrap();
+        let mut perms = std::fs::metadata(&script).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&script, perms).unwrap();
+        script
+    }
+
+    /// Drive a mock worker to exit and return the failure reason it
+    /// produced. Panics with the outcome tag if the worker did not fail.
+    #[cfg(unix)]
+    async fn failure_reason(script: &Path) -> String {
+        let engine = engine_ready_to_build();
+        let cancel = engine.install_cancel_handle();
+        let outcome = build::drive_build_worker(
+            &engine,
+            cancel,
+            Path::new("/bin/sh"),
+            script,
+            "demo",
+            "/tmp/demo",
+            false,
+        )
+        .await;
+        match outcome {
+            build::BuildOutcome::Failed(msg) => msg,
+            other => panic!("expected Failed, got {}", other_disc(&other)),
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn drive_build_worker_attaches_error_detail_lines() {
+        let dir = tempfile::tempdir().unwrap();
+        let script = write_mock_worker(
+            dir.path(),
+            "mock_detail.sh",
+            "echo 'ERROR OSError: [Errno 22] Invalid argument'\n\
+             echo 'ERRORDETAIL Traceback (most recent call last):'\n\
+             echo 'ERRORDETAIL   File \"frontend/_mesh_.py\", line 899'\n\
+             exit 1\n",
+        );
+        let reason = failure_reason(&script).await;
+        assert_eq!(
+            reason.split('\n').collect::<Vec<_>>(),
+            vec![
+                "OSError: [Errno 22] Invalid argument",
+                "Traceback (most recent call last):",
+                // Indentation survives; a traceback is unreadable without it.
+                "  File \"frontend/_mesh_.py\", line 899",
+            ],
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn drive_build_worker_detail_belongs_to_last_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let script = write_mock_worker(
+            dir.path(),
+            "mock_two_errors.sh",
+            "echo 'ERROR first failure'\n\
+             echo 'ERRORDETAIL first detail'\n\
+             echo 'ERROR second failure'\n\
+             echo 'ERRORDETAIL second detail'\n\
+             exit 1\n",
+        );
+        let reason = failure_reason(&script).await;
+        // Last ERROR wins, so the detail under the discarded headline goes
+        // with it instead of being read as the survivor's traceback.
+        assert_eq!(reason, "second failure\nsecond detail");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn drive_build_worker_names_last_stage_on_bare_exit() {
+        let dir = tempfile::tempdir().unwrap();
+        let script = write_mock_worker(
+            dir.path(),
+            "mock_bare_exit.sh",
+            "echo 'PROGRESS percent=0.17 info=Tetrahedralizing Rock (1/1, new)...'\n\
+             exit 3\n",
+        );
+        let reason = failure_reason(&script).await;
+        assert!(reason.contains("code 3"), "lost the exit code: {reason:?}");
+        assert!(
+            reason.contains("Tetrahedralizing Rock (1/1, new)..."),
+            "lost the last stage: {reason:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn drive_build_worker_forwards_stderr_tail_when_no_error_line() {
+        let dir = tempfile::tempdir().unwrap();
+        let script = write_mock_worker(
+            dir.path(),
+            "mock_native_crash.sh",
+            "echo 'Fatal Python error: Segmentation fault MARKER_XYZ' >&2\n\
+             exit 1\n",
+        );
+        let reason = failure_reason(&script).await;
+        assert!(
+            reason.contains("Build Worker stderr"),
+            "expected the stderr tail delimiter: {reason:?}"
+        );
+        assert!(
+            reason.contains("MARKER_XYZ"),
+            "expected the stderr line itself: {reason:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn drive_build_worker_omits_stderr_tail_when_error_line_present() {
+        let dir = tempfile::tempdir().unwrap();
+        let script = write_mock_worker(
+            dir.path(),
+            "mock_chatty.sh",
+            "echo 'tetrahedralizer chatter MARKER_XYZ' >&2\n\
+             echo 'ERROR ValueError: Plane: no enclosed volume'\n\
+             exit 1\n",
+        );
+        let reason = failure_reason(&script).await;
+        // The tetrahedralizer writes to stderr unredirected on Windows, so
+        // a message the worker did report must not be buried under it.
+        assert_eq!(reason, "ValueError: Plane: no enclosed volume");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn drive_build_worker_caps_error_detail_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let script = write_mock_worker(
+            dir.path(),
+            "mock_flood.sh",
+            "echo 'ERROR RuntimeError: deep recursion'\n\
+             i=0\n\
+             while [ $i -lt 5000 ]; do\n\
+             echo \"ERRORDETAIL   File x.py, line $i, in frame$i\"\n\
+             i=$((i+1))\n\
+             done\n\
+             exit 1\n",
+        );
+        let reason = failure_reason(&script).await;
+        assert!(
+            reason.len() < 2 * build::MAX_ERROR_DETAIL_BYTES,
+            "detail block outgrew its cap: {} bytes",
+            reason.len()
+        );
+        assert!(
+            reason.ends_with("full traceback in server.log>"),
+            "expected the truncation notice last, got tail {:?}",
+            &reason[reason.len().saturating_sub(200)..]
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn drive_build_worker_survives_non_utf8_stdout() {
+        let dir = tempfile::tempdir().unwrap();
+        // A native library that writes straight to fd 1 follows the console
+        // code page, so on a Japanese Windows install its chatter reaches
+        // this stream as cp932 bytes. Those bytes must cost one garbled
+        // line, never the report that follows them.
+        let script = write_mock_worker(
+            dir.path(),
+            "mock_bad_bytes.sh",
+            "printf 'chatter \\377\\376 bad\\n'\n\
+             echo 'ERROR OSError: [Errno 22] Invalid argument | while: Tetrahedralizing Rock'\n\
+             echo 'ERRORDETAIL   File \"frontend/_mesh_.py\", line 899'\n\
+             exit 1\n",
+        );
+        let reason = failure_reason(&script).await;
+        assert_eq!(
+            reason.split('\n').collect::<Vec<_>>(),
+            vec![
+                "OSError: [Errno 22] Invalid argument | while: Tetrahedralizing Rock",
+                "  File \"frontend/_mesh_.py\", line 899",
+            ],
+        );
+    }
+
     #[cfg(unix)]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn drive_build_worker_observes_sigterm_cancel() {
@@ -670,6 +915,139 @@ mod tests {
             build::BuildOutcome::Cancelled => "Cancelled",
             build::BuildOutcome::Failed(_) => "Failed",
             build::BuildOutcome::AlreadyDispatched => "AlreadyDispatched",
+        }
+    }
+
+    // ----- non-UTF-8 on a worker stream -----
+    //
+    // Both drains read their pipe as UTF-8 lines. A byte sequence that is
+    // not valid UTF-8 makes the read return `ErrorKind::InvalidData`, which
+    // is a decode verdict about one line, not a signal that the pipe is
+    // finished. A build worker's streams carry whatever the tools it shells
+    // out to emit, so a stray byte in some tool's locale is ordinary input.
+    //
+    // Unix-only, like the three mock-driven tests above: the harness is a
+    // `/bin/sh` script, which a Windows runner does not have. `build.rs`'s
+    // drains therefore have no Windows coverage at all, here or elsewhere.
+    //
+    // Both gates are ARMED against defects that are open. Each carries
+    // `#[should_panic(expected = ...)]` naming the wrong outcome the defect
+    // produces, which is the Rust counterpart of the Python gates'
+    // `pytest.mark.xfail(strict=True)`: the test runs in the blocking unit
+    // job, passes while the defect is present, and fails with "test did not
+    // panic as expected" the moment it is fixed. Answer that failure by
+    // deleting the attribute, which turns the test into the permanent
+    // regression gate its name describes.
+
+    /// Write *body* as an executable `/bin/sh` script under a fresh temp
+    /// directory and return the directory (which must outlive the run) and
+    /// the script path.
+    #[cfg(unix)]
+    fn write_utf8_probe_worker(name: &str, body: &str) -> (tempfile::TempDir, std::path::PathBuf) {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join(name);
+        std::fs::write(&script, body).unwrap();
+        let mut perms = std::fs::metadata(&script).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&script, perms).unwrap();
+        (dir, script)
+    }
+
+    /// A failing worker's ERROR line must reach the caller even when an
+    /// earlier stdout line was not valid UTF-8.
+    ///
+    /// The reason string is the only thing the user is shown, so losing it
+    /// turns a named failure into the exit code that produced it.
+    ///
+    /// The drain decodes lossily and splits on newline bytes, so a byte no
+    /// valid UTF-8 sequence contains costs its own line and nothing after it.
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn drive_build_worker_reports_the_error_line_after_invalid_utf8() {
+        // \377 is 0xFF, which no valid UTF-8 sequence contains.
+        let (_dir, script) = write_utf8_probe_worker(
+            "mock_bad_utf8_stdout.sh",
+            "#!/bin/sh\n\
+             echo 'PROGRESS percent=0.10 info=Loading'\n\
+             printf '\\377\\n'\n\
+             echo 'ERROR tetwild segfaulted'\n\
+             exit 1\n",
+        );
+
+        let engine = engine_ready_to_build();
+        let cancel = engine.install_cancel_handle();
+        let outcome = build::drive_build_worker(
+            &engine,
+            cancel,
+            Path::new("/bin/sh"),
+            &script,
+            "demo",
+            "/tmp/demo",
+            false,
+        )
+        .await;
+        match outcome {
+            build::BuildOutcome::Failed(msg) => assert!(
+                msg.contains("tetwild"),
+                "expected the worker's ERROR text in the failure reason, got {msg:?}"
+            ),
+            other => panic!("expected Failed, got {}", other_disc(&other)),
+        }
+    }
+
+    /// A worker that emits one non-UTF-8 byte on stderr and then keeps
+    /// writing must still complete.
+    ///
+    /// The observable is the EXIT STATUS, not a timeout. Ending the stderr
+    /// drain drops its reader, which closes the parent's read end, so the
+    /// worker takes SIGPIPE on its next write and dies in microseconds:
+    /// there is no deadlock to time out on, and a timeout-based assertion
+    /// would pass against exactly this defect. A worker killed by a signal
+    /// has no exit code, which `drive_build_worker` reports as
+    /// "terminated by signal".
+    ///
+    /// The stderr drain keeps reading past a byte no valid UTF-8 sequence
+    /// contains, so its read end stays open and the worker is never
+    /// SIGPIPEd by a drain that gave up early.
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn drive_build_worker_survives_invalid_utf8_on_stderr() {
+        // ~2 MB of stderr after the bad byte, comfortably past any pipe
+        // buffer, so a closed read end is certain to be observed.
+        let (_dir, script) = write_utf8_probe_worker(
+            "mock_bad_utf8_stderr.sh",
+            "#!/bin/sh\n\
+             echo 'warning: locale not set' >&2\n\
+             printf '\\377\\n' >&2\n\
+             s=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n\
+             s=$s$s$s$s\n\
+             s=$s$s$s$s\n\
+             s=$s$s$s$s\n\
+             i=0\n\
+             while [ $i -lt 1000 ]; do printf '%s\\n' \"$s\" >&2; i=$((i+1)); done\n\
+             echo 'PROGRESS percent=0.95 info=Finalizing'\n\
+             exit 0\n",
+        );
+
+        let engine = engine_ready_to_build();
+        let cancel = engine.install_cancel_handle();
+        let outcome = build::drive_build_worker(
+            &engine,
+            cancel,
+            Path::new("/bin/sh"),
+            &script,
+            "demo",
+            "/tmp/demo",
+            false,
+        )
+        .await;
+        match outcome {
+            build::BuildOutcome::Completed => {}
+            build::BuildOutcome::Failed(msg) => {
+                panic!("expected Completed, got Failed({msg:?})")
+            }
+            other => panic!("expected Completed, got {}", other_disc(&other)),
         }
     }
 }

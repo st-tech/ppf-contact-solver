@@ -376,6 +376,59 @@ struct ContactPairCache {
     }
 };
 
+// Per-object contact statistics are optional. The three arrays below are filled
+// by `configure_dataset` only when the session directory carries a statistics
+// input, and are empty otherwise; a contact then has no object to attribute to.
+// Every recorder returns early in that case rather than indexing an empty array.
+__device__ bool statistics_enabled(const DataSet &data) {
+    return data.statistics_contact_count.size > 0;
+}
+
+__device__ void record_object_contact(const DataSet &data, unsigned object_a,
+                                      unsigned object_b) {
+    // atomicAdd needs a mutable address, which the bounds-checked Vec accessor
+    // cannot hand out through a const DataSet, so assert here what it would
+    // have checked. An object id outside its range is an index-space error, and
+    // the raw subscript would otherwise be a silent out-of-bounds device write.
+    if (object_a != 0xffffffffu) {
+        assert(object_a < data.statistics_contact_count.size);
+        atomicAdd(&data.statistics_contact_count.data[object_a], 1u);
+    }
+    if (object_b != 0xffffffffu && object_b != object_a) {
+        assert(object_b < data.statistics_contact_count.size);
+        atomicAdd(&data.statistics_contact_count.data[object_b], 1u);
+    }
+}
+
+__device__ void record_dynamic_contact(const DataSet &data, unsigned vertex_a,
+                                       unsigned vertex_b) {
+    if (!statistics_enabled(data)) {
+        return;
+    }
+    record_object_contact(data, data.statistics_object_index[vertex_a],
+                          data.statistics_object_index[vertex_b]);
+}
+
+__device__ void record_dynamic_static_contact(const DataSet &data,
+                                              unsigned dynamic_vertex,
+                                              unsigned static_vertex) {
+    if (!statistics_enabled(data)) {
+        return;
+    }
+    record_object_contact(
+        data, data.statistics_object_index[dynamic_vertex],
+        data.statistics_static_object_index[static_vertex]);
+}
+
+__device__ void record_analytic_contact(const DataSet &data,
+                                        unsigned dynamic_vertex) {
+    if (!statistics_enabled(data)) {
+        return;
+    }
+    record_object_contact(data, data.statistics_object_index[dynamic_vertex],
+                          0xffffffffu);
+}
+
 struct PointPointContactForceHessEmbed {
 
     unsigned vertex_index;
@@ -409,7 +462,14 @@ struct PointPointContactForceHessEmbed {
         unsigned bid_a = prop[vertex_index].pdrd_body_index;
         unsigned bid_b = prop[index].pdrd_body_index;
         bool same_pdrd_body = bid_a != 0 && bid_a == bid_b;
-        if (index < vertex_index && either_dyn && !same_pdrd_body) {
+        // A collider's shape is authored and driven, so a contact
+        // between two collider elements cannot be relieved by either
+        // side yielding. Rigged colliders also ship self-tangled
+        // (layered eye / mouth geometry, an arm inside a torso).
+        // Excluded whether the two sides are one collider or two.
+        bool both_collider =
+            prop[vertex_index].collider && prop[index].collider;
+        if (index < vertex_index && either_dyn && !same_pdrd_body && !both_collider) {
             const Vec3f &x = eval_x[vertex_index];
             const Vec3f &y = eval_x[index];
             Vec3f e = x - y;
@@ -553,6 +613,9 @@ struct PointPointContactForceHessEmbed {
                     if (stage == 0 && cache.data) {
                         cache.record(vertex_index, index);
                     }
+                    if (stage == 0) {
+                        record_dynamic_contact(data, vertex_index, index);
+                    }
                     return true;
                 }
             }
@@ -563,6 +626,7 @@ struct PointPointContactForceHessEmbed {
 
 struct PointEdgeContactForceHessEmbed {
 
+    const DataSet &data;
     unsigned vertex_index;
     const Vec<Vec2u> &edge;
     const Vec<Vec3u> &face;
@@ -590,8 +654,15 @@ struct PointEdgeContactForceHessEmbed {
         unsigned bid_v = vert_prop[vertex_index].pdrd_body_index;
         unsigned bid_e = vert_prop[f[0]].pdrd_body_index;
         bool same_pdrd_body = bid_v != 0 && bid_v == bid_e;
+        // A collider's shape is authored and driven, so a contact
+        // between two collider elements cannot be relieved by either
+        // side yielding. Rigged colliders also ship self-tangled
+        // (layered eye / mouth geometry, an arm inside a torso).
+        // Excluded whether the two sides are one collider or two.
+        bool both_collider =
+            vert_prop[vertex_index].collider && vert_prop[f[0]].collider;
         if (f[0] != vertex_index && f[1] != vertex_index && either_dyn &&
-            !same_pdrd_body) {
+            !same_pdrd_body && !both_collider) {
             const Vec3f &p = eval_x[vertex_index];
             const Vec3f &t0 = eval_x[f[0]];
             const Vec3f &t1 = eval_x[f[1]];
@@ -647,6 +718,9 @@ struct PointEdgeContactForceHessEmbed {
                         if (stage == 0 && cache.data) {
                             cache.record(vertex_index, index);
                         }
+                        if (stage == 0) {
+                            record_dynamic_contact(data, vertex_index, f[0]);
+                        }
                         return true;
                     }
                 }
@@ -658,6 +732,7 @@ struct PointEdgeContactForceHessEmbed {
 
 struct PointFaceContactForceHessEmbed {
 
+    const DataSet &data;
     unsigned vertex_index;
     const Vec<Vec3u> &face;
     const Vec<Vec3f> &vertex;
@@ -683,8 +758,15 @@ struct PointFaceContactForceHessEmbed {
         unsigned bid_v = vert_prop[vertex_index].pdrd_body_index;
         unsigned bid_f = vert_prop[f[0]].pdrd_body_index;
         bool same_pdrd_body = bid_v != 0 && bid_v == bid_f;
+        // A collider's shape is authored and driven, so a contact
+        // between two collider elements cannot be relieved by either
+        // side yielding. Rigged colliders also ship self-tangled
+        // (layered eye / mouth geometry, an arm inside a torso).
+        // Excluded whether the two sides are one collider or two.
+        bool both_collider =
+            vert_prop[vertex_index].collider && vert_prop[f[0]].collider;
         if (f[0] != vertex_index && f[1] != vertex_index &&
-            f[2] != vertex_index && either_dyn && !same_pdrd_body) {
+            f[2] != vertex_index && either_dyn && !same_pdrd_body && !both_collider) {
             const Vec3f &p = eval_x[vertex_index];
             const Vec3f &t0 = eval_x[f[0]];
             const Vec3f &t1 = eval_x[f[1]];
@@ -714,6 +796,9 @@ struct PointFaceContactForceHessEmbed {
                     if (stage == 0 && cache.data) {
                         cache.record(vertex_index, index);
                     }
+                    if (stage == 0) {
+                        record_dynamic_contact(data, vertex_index, f[0]);
+                    }
                     return true;
                 }
             }
@@ -724,6 +809,7 @@ struct PointFaceContactForceHessEmbed {
 
 struct EdgeEdgeContactForceHessEmbed {
 
+    const DataSet &data;
     unsigned edge_index;
     const Vec<Vec2u> &edge;
     const Vec<Vec3f> &vertex;
@@ -749,8 +835,15 @@ struct EdgeEdgeContactForceHessEmbed {
         unsigned bid_a = vert_prop[e0[0]].pdrd_body_index;
         unsigned bid_b = vert_prop[e1[0]].pdrd_body_index;
         bool same_pdrd_body = bid_a != 0 && bid_a == bid_b;
+        // A collider's shape is authored and driven, so a contact
+        // between two collider elements cannot be relieved by either
+        // side yielding. Rigged colliders also ship self-tangled
+        // (layered eye / mouth geometry, an arm inside a torso).
+        // Excluded whether the two sides are one collider or two.
+        bool both_collider =
+            vert_prop[e0[0]].collider && vert_prop[e1[0]].collider;
         if (edge_index < index && edge_has_shared_vert(e0, e1) == false &&
-            either_dyn && !same_pdrd_body) {
+            either_dyn && !same_pdrd_body && !both_collider) {
             const Vec3f &p0 = eval_x[e0[0]];
             const Vec3f &p1 = eval_x[e0[1]];
             const Vec3f &q0 = eval_x[e1[0]];
@@ -782,6 +875,9 @@ struct EdgeEdgeContactForceHessEmbed {
                     if (stage == 0 && cache.data) {
                         cache.record(edge_index, index);
                     }
+                    if (stage == 0) {
+                        record_dynamic_contact(data, e0[0], e1[0]);
+                    }
                     return true;
                 }
             }
@@ -802,6 +898,7 @@ struct CollisionHessForceEmbedArgs {
 
 struct CollisionMeshVertexFaceContactForceHessEmbed_M2C {
 
+    const DataSet &data;
     unsigned vertex_index;
     Vec<float> force;
     const Mat3x3f &local_hess;
@@ -820,12 +917,12 @@ struct CollisionMeshVertexFaceContactForceHessEmbed_M2C {
     __device__ bool operator()(unsigned index) {
         if (dyn_vert_prop[vertex_index].fix_index == 0 &&
             dyn_vert_prop[vertex_index].mass > 0.0f) {
-            const Vec3u &f = collision_mesh_face[index];
+            const Vec3u &fc = collision_mesh_face[index];
             Vec3f p = eval_x[vertex_index];
             Vec3f q = vertex[vertex_index] - p;
-            Vec3f t0 = collision_mesh_vertex[f[0]] - p;
-            Vec3f t1 = collision_mesh_vertex[f[1]] - p;
-            Vec3f t2 = collision_mesh_vertex[f[2]] - p;
+            Vec3f t0 = collision_mesh_vertex[fc[0]] - p;
+            Vec3f t1 = collision_mesh_vertex[fc[1]] - p;
+            Vec3f t2 = collision_mesh_vertex[fc[2]] - p;
             Vec3f zero = Vec3f::Zero();
             Vec3f c = distance::point_triangle_distance_coeff_unclassified<
                 float, float>(zero, t0, t1, t2);
@@ -856,6 +953,7 @@ struct CollisionMeshVertexFaceContactForceHessEmbed_M2C {
                 utility::atomic_embed_force<1>(Vec1u(vertex_index), f, force);
                 utility::atomic_embed_hessian<1>(Vec1u(vertex_index), H,
                                                  dyn_out);
+                record_dynamic_static_contact(data, vertex_index, fc[0]);
                 return true;
             }
         }
@@ -950,6 +1048,7 @@ struct CollisionMeshVertexFaceContactForceHessEmbed_C2M {
                 }
                 utility::atomic_embed_force<3>(fc, ff, force);
                 utility::atomic_embed_hessian<3>(fc, HH, fixed_out);
+                record_dynamic_static_contact(data, fc[0], vertex_index);
                 return true;
             }
         }
@@ -959,6 +1058,7 @@ struct CollisionMeshVertexFaceContactForceHessEmbed_C2M {
 
 struct CollisionMeshEdgeEdgeContactForceHessEmbed {
 
+    const DataSet &data;
     unsigned i;
     const Vec<Vec2u> &mesh_edge;
     Vec<float> &force;
@@ -1043,6 +1143,7 @@ struct CollisionMeshEdgeEdgeContactForceHessEmbed {
                 }
                 utility::atomic_embed_force<2>(mesh_edge, ff, force);
                 utility::atomic_embed_hessian<2>(mesh_edge, HH, dyn_out);
+                record_dynamic_static_contact(data, mesh_edge[0], coll_edge[0]);
                 return true;
             }
         }
@@ -1146,11 +1247,13 @@ __device__ unsigned embed_vertex_constraint_force_hessian(
                     }
                     if (reverse == true && d2 > r2) {
                         num_contact += 1;
+                        record_analytic_contact(data, i);
                         f +=
                             stiff_k * push::gradient(o - target, -normal, ghat);
                         H += stiff_k * push::hessian(o - target, -normal, ghat);
                     } else if (reverse == false && d2 < r2) {
                         num_contact += 1;
+                        record_analytic_contact(data, i);
                         f += stiff_k * push::gradient(o - target, normal, ghat);
                         H += stiff_k * push::hessian(o - target, normal, ghat);
                     }
@@ -1172,6 +1275,7 @@ __device__ unsigned embed_vertex_constraint_force_hessian(
                         continue;
                     }
                     num_contact += 1;
+                    record_analytic_contact(data, i);
                     Vec3f normal = (x - center).normalized();
                     Vec3f projected_x = radius * normal;
                     Vec3f o = (x - center);
@@ -1227,6 +1331,7 @@ __device__ unsigned embed_vertex_constraint_force_hessian(
                     continue;
                 }
                 num_contact += 1;
+                record_analytic_contact(data, i);
                 Vec3f projected_x = -e.dot(up) * up;
                 float gap = (x - floor.ground).dot(up);
                 if (floor.kinematic) {
@@ -1458,7 +1563,8 @@ unsigned embed_contact_force_hessian(const DataSet &data,
                  fixed_out, dyn_out, vertex_params, face_params, dt, param,
                  pf_vec] __device__(unsigned e) mutable {
                     PointFaceContactForceHessEmbed embed = {
-                        pf_vec[e][0],      data.mesh.mesh.face,
+                        data,              pf_vec[e][0],
+                        data.mesh.mesh.face,
                         data.vertex.curr,  eval_x,
                         contact_force_vec, force,
                         fixed_hess_in,     fixed_out,
@@ -1475,7 +1581,8 @@ unsigned embed_contact_force_hessian(const DataSet &data,
                  fixed_out, dyn_out, vertex_params, edge_params, dt, param,
                  pe_vec] __device__(unsigned e) mutable {
                     PointEdgeContactForceHessEmbed embed = {
-                        pe_vec[e][0],            data.mesh.mesh.edge,
+                        data,                    pe_vec[e][0],
+                        data.mesh.mesh.edge,
                         data.mesh.mesh.face,     data.mesh.neighbor.edge,
                         data.vertex.curr,        eval_x,
                         contact_force_vec,       force,
@@ -1530,7 +1637,8 @@ unsigned embed_contact_force_hessian(const DataSet &data,
                 if (vert_active && !vert_active[i]) pt_aabb.active = false;
 
                 PointFaceContactForceHessEmbed embed_0 = {
-                    i,                 data.mesh.mesh.face,
+                    data,              i,
+                    data.mesh.mesh.face,
                     data.vertex.curr,  eval_x,
                     contact_force_vec, force,
                     fixed_hess_in,     fixed_out,
@@ -1543,7 +1651,8 @@ unsigned embed_contact_force_hessian(const DataSet &data,
                 count += aabb::query(face_bvh, face_aabb, op_0, pt_aabb);
 
                 PointEdgeContactForceHessEmbed embed_1 = {
-                    i,                   data.mesh.mesh.edge,
+                    data,                i,
+                    data.mesh.mesh.edge,
                     data.mesh.mesh.face, data.mesh.neighbor.edge,
                     data.vertex.curr,    eval_x,
                     contact_force_vec,   force,
@@ -1583,7 +1692,8 @@ unsigned embed_contact_force_hessian(const DataSet &data,
                  fixed_out, dyn_out, edge_params, dt, param,
                  ee_vec] __device__(unsigned e) mutable {
                     EdgeEdgeContactForceHessEmbed embed = {
-                        ee_vec[e][0],      data.mesh.mesh.edge,
+                        data,              ee_vec[e][0],
+                        data.mesh.mesh.edge,
                         data.vertex.curr,  eval_x,
                         contact_force_vec, force,
                         fixed_hess_in,     fixed_out,
@@ -1617,7 +1727,8 @@ unsigned embed_contact_force_hessian(const DataSet &data,
                     aabb::make(eval_x[edge[0]], eval_x[edge[1]], ext_eps);
                 if (edge_active && !edge_active[i]) aabb.active = false;
                 EdgeEdgeContactForceHessEmbed embed = {
-                    i,                 data.mesh.mesh.edge,
+                    data,              i,
+                    data.mesh.mesh.edge,
                     data.vertex.curr,  eval_x,
                     contact_force_vec, force,
                     fixed_hess_in,     fixed_out,
@@ -1737,6 +1848,7 @@ unsigned embed_constraint_force_hessian(const DataSet &data,
             const VertexProp &prop = data.prop.vertex[i];
             const VertexParam &vparam = vertex_params[prop.param_index];
             CollisionMeshVertexFaceContactForceHessEmbed_M2C embed = {
+                data,
                 i,
                 force,
                 local_hess,
@@ -1807,6 +1919,7 @@ unsigned embed_constraint_force_hessian(const DataSet &data,
                 }
             }
             CollisionMeshEdgeEdgeContactForceHessEmbed embed = {
+                data,
                 i,
                 data.mesh.mesh.edge,
                 force,
@@ -1997,7 +2110,14 @@ struct PointFaceCCD {
         unsigned bid_v = vertex_prop[vertex_index].pdrd_body_index;
         unsigned bid_f = vertex_prop[f[0]].pdrd_body_index;
         bool same_pdrd_body = bid_v != 0 && bid_v == bid_f;
-        if (either_dyn && !same_pdrd_body) {
+        // A collider's shape is authored and driven, so a contact
+        // between two collider elements cannot be relieved by either
+        // side yielding. Rigged colliders also ship self-tangled
+        // (layered eye / mouth geometry, an arm inside a torso).
+        // Excluded whether the two sides are one collider or two.
+        bool both_collider =
+            vertex_prop[vertex_index].collider && vertex_prop[f[0]].collider;
+        if (either_dyn && !same_pdrd_body && !both_collider) {
             int dup_i = -1;
             for (int i = 0; i < 3; ++i) {
                 if (f[i] == vertex_index) {
@@ -2074,7 +2194,14 @@ struct EdgeEdgeCCD {
         unsigned bid_a = vert_prop[e0[0]].pdrd_body_index;
         unsigned bid_b = vert_prop[e1[0]].pdrd_body_index;
         bool same_pdrd_body = bid_a != 0 && bid_a == bid_b;
-        if (edge_index < index && either_dyn && !same_pdrd_body) {
+        // A collider's shape is authored and driven, so a contact
+        // between two collider elements cannot be relieved by either
+        // side yielding. Rigged colliders also ship self-tangled
+        // (layered eye / mouth geometry, an arm inside a torso).
+        // Excluded whether the two sides are one collider or two.
+        bool both_collider =
+            vert_prop[e0[0]].collider && vert_prop[e1[0]].collider;
+        if (edge_index < index && either_dyn && !same_pdrd_body && !both_collider) {
             float result = param.line_search_max_t;
             const EdgeParam &eparam_edge =
                 edge_params[edge_prop[edge_index].param_index];
@@ -2155,7 +2282,14 @@ struct PointPointCCD {
         unsigned bid_a = vertex_prop[vertex_index].pdrd_body_index;
         unsigned bid_b = vertex_prop[index].pdrd_body_index;
         bool same_pdrd_body = bid_a != 0 && bid_a == bid_b;
-        if (index < vertex_index && either_dyn && !same_pdrd_body) {
+        // A collider's shape is authored and driven, so a contact
+        // between two collider elements cannot be relieved by either
+        // side yielding. Rigged colliders also ship self-tangled
+        // (layered eye / mouth geometry, an arm inside a torso).
+        // Excluded whether the two sides are one collider or two.
+        bool both_collider =
+            vertex_prop[vertex_index].collider && vertex_prop[index].collider;
+        if (index < vertex_index && either_dyn && !same_pdrd_body && !both_collider) {
             const VertexParam &vparam_a =
                 vertex_params[vertex_prop[vertex_index].param_index];
             const VertexParam &vparam_b =
@@ -2664,7 +2798,14 @@ class EdgeEdgeIntersectTester {
             unsigned bid_a = vert_prop[e0[0]].pdrd_body_index;
             unsigned bid_b = vert_prop[e1[0]].pdrd_body_index;
             bool same_pdrd_body = bid_a != 0 && bid_a == bid_b;
-            if (either_dyn && either_nonzero && !same_pdrd_body) {
+            // A collider's shape is authored and driven, so a contact
+            // between two collider elements cannot be relieved by either
+            // side yielding. Rigged colliders also ship self-tangled
+            // (layered eye / mouth geometry, an arm inside a torso).
+            // Excluded whether the two sides are one collider or two.
+            bool both_collider =
+                vert_prop[e0[0]].collider && vert_prop[e1[0]].collider;
+            if (either_dyn && either_nonzero && !same_pdrd_body && !both_collider) {
                 const EdgeParam &eparam_edge =
                     edge_params[prop[edge_index].param_index];
                 const EdgeParam &eparam_index =
@@ -2771,7 +2912,14 @@ class FaceEdgeIntersectTester {
         unsigned bid_e = vert_prop[edge[edge_index][0]].pdrd_body_index;
         unsigned bid_f = vert_prop[face[index][0]].pdrd_body_index;
         bool same_pdrd_body = bid_e != 0 && bid_e == bid_f;
-        if (either_dyn && either_nonzero && !same_pdrd_body) {
+        // A collider's shape is authored and driven, so a contact
+        // between two collider elements cannot be relieved by either
+        // side yielding. Rigged colliders also ship self-tangled
+        // (layered eye / mouth geometry, an arm inside a torso).
+        // Excluded whether the two sides are one collider or two.
+        bool both_collider =
+            vert_prop[edge[edge_index][0]].collider && vert_prop[face[index][0]].collider;
+        if (either_dyn && either_nonzero && !same_pdrd_body && !both_collider) {
             Vec3u f = face[index];
             unsigned e0 = edge[edge_index][0];
             unsigned e1 = edge[edge_index][1];
@@ -2870,7 +3018,14 @@ class PointPointIntersectTester {
             unsigned bid_a = vert_prop[vertex_index].pdrd_body_index;
             unsigned bid_b = vert_prop[index].pdrd_body_index;
             bool same_pdrd_body = bid_a != 0 && bid_a == bid_b;
-            if (either_dyn && either_nonzero && !same_pdrd_body) {
+            // A collider's shape is authored and driven, so a contact
+            // between two collider elements cannot be relieved by either
+            // side yielding. Rigged colliders also ship self-tangled
+            // (layered eye / mouth geometry, an arm inside a torso).
+            // Excluded whether the two sides are one collider or two.
+            bool both_collider =
+                vert_prop[vertex_index].collider && vert_prop[index].collider;
+            if (either_dyn && either_nonzero && !same_pdrd_body && !both_collider) {
                 const VertexParam &vp_a =
                     vertex_params[vert_prop[vertex_index].param_index];
                 const VertexParam &vp_b =

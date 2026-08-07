@@ -494,8 +494,12 @@ if errorlevel 1 (
 
     echo.
     echo Installing pytetwild (fTetWild^) + tetgen (TetGen^) + pyvista...
-    rem pyvista is imported at the top of pytetwild._accessor but is not
-    rem declared as a hard dependency, so install it explicitly.
+    rem pyvista rides along so the three provisioning paths carry one
+    rem dependency set; nothing in this repository imports it, and neither
+    rem tetrahedralizer needs it for the numpy entry points the frontend
+    rem calls. Dropping it means dropping it from warmup.py and
+    rem .github/workflows/blender.yml in the same change, or the paths
+    rem disagree about what a provisioned host holds.
     "%PYTHON%" -m pip install --no-warn-script-location pytetwild==0.2.3 tetgen==0.8.4 pyvista==0.48.4
     if errorlevel 1 (
         echo WARNING: pytetwild/tetgen failed to install
@@ -506,10 +510,12 @@ if errorlevel 1 (
     REM The pip installs above only WARN on failure and continue, so a partial
     REM failure (observed: pytetwild installed but tetgen/pyvista silently
     REM missing; or scipy absent) would otherwise ship a bundle whose build
-    REM worker cannot run a SOLID simulation. tetgen/pytetwild/pyvista missing =
+    REM worker cannot run a SOLID simulation. tetgen/pytetwild missing =
     REM ModuleNotFoundError at build time; scipy missing is worse, it does not
     REM crash but makes the frontend take a different pin-diffusion path so the
-    REM Windows result silently diverges from Linux. Hard-fail here so a broken
+    REM Windows result silently diverges from Linux. pyvista is checked
+    REM because this list is what the install above promises, not because
+    REM anything imports it. Hard-fail here so a broken
     REM bundle can never be built or published; re-run warmup on a working pip.
     "%PYTHON%" -c "import importlib.util as u, sys; req=['numpy','scipy','cbor2','tetgen','pytetwild','pyvista']; miss=[m for m in req if u.find_spec(m) is None]; sys.stderr.write('missing critical frontend deps: '+', '.join(miss)+'\n') if miss else sys.stdout.write('all critical frontend deps present\n'); sys.exit(1 if miss else 0)"
     if errorlevel 1 (

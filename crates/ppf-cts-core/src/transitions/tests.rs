@@ -11,7 +11,7 @@
 
 use super::transition;
 use crate::effects::Effect;
-use crate::events::Event;
+use crate::events::{Event, ReconciledCrash};
 use crate::state::{Build, Data, ServerState, Solver};
 
 fn has_effect(effects: &[Effect], pred: impl Fn(&Effect) -> bool) -> bool {
@@ -33,7 +33,7 @@ fn new_project_no_data() {
             has_param: false,
             has_app: false,
             is_resumable: false,
-            has_crashed: false,
+            crash: None,
             upload_id: String::new(),
             data_hash: String::new(),
             param_hash: String::new(),
@@ -58,7 +58,7 @@ fn new_project_with_data() {
             has_param: true,
             has_app: false,
             is_resumable: false,
-            has_crashed: false,
+            crash: None,
             upload_id: String::new(),
             data_hash: String::new(),
             param_hash: String::new(),
@@ -82,7 +82,7 @@ fn new_project_with_existing_app() {
             has_param: true,
             has_app: true,
             is_resumable: true,
-            has_crashed: false,
+            crash: None,
             upload_id: String::new(),
             data_hash: String::new(),
             param_hash: String::new(),
@@ -96,8 +96,8 @@ fn new_project_with_existing_app() {
 
 #[test]
 fn reconnect_after_crash_reconstructs_failed() {
-    // A restarted server has no in-memory Solver::Failed; the has_crashed flag
-    // (from status.cbor) must rebuild it so the status reads FAILED, and
+    // A restarted server has no in-memory Solver::Failed; the crash read back
+    // from status.cbor must rebuild it so the status reads FAILED, and
     // with checkpoints present (is_resumable) the addon shows
     // "Failed (Resumable)" instead of a bare "Resumable".
     let s = ServerState::default();
@@ -110,7 +110,10 @@ fn reconnect_after_crash_reconstructs_failed() {
             has_param: true,
             has_app: true,
             is_resumable: true,
-            has_crashed: true,
+            crash: Some(ReconciledCrash {
+                kind_tag: "ccd".into(),
+                rendered: "Continuous collision detection failed: toi collapsed".into(),
+            }),
             upload_id: String::new(),
             data_hash: String::new(),
             param_hash: String::new(),
@@ -121,6 +124,14 @@ fn reconnect_after_crash_reconstructs_failed() {
     assert_eq!(s2.solver, Solver::Failed);
     assert!(s2.resumable);
     assert_eq!(s2.status_string(), "FAILED");
+    // The reason survives the reconnect with the fact. Reporting only that a
+    // run failed would leave the user with less after restarting Blender than
+    // they had while the run was live.
+    assert_eq!(s2.crash_kind, "ccd");
+    assert_eq!(
+        s2.error,
+        "Continuous collision detection failed: toi collapsed"
+    );
 }
 
 #[test]
@@ -137,7 +148,10 @@ fn reconnect_crash_without_build_stays_idle() {
             has_param: true,
             has_app: false,
             is_resumable: false,
-            has_crashed: true,
+            crash: Some(ReconciledCrash {
+                kind_tag: "ccd".into(),
+                rendered: "Continuous collision detection failed: toi collapsed".into(),
+            }),
             upload_id: String::new(),
             data_hash: String::new(),
             param_hash: String::new(),
@@ -167,7 +181,7 @@ fn same_project_refreshes_data() {
             has_param: true,
             has_app: false,
             is_resumable: false,
-            has_crashed: false,
+            crash: None,
             upload_id: String::new(),
             data_hash: String::new(),
             param_hash: String::new(),
@@ -190,7 +204,7 @@ fn project_selected_stamps_upload_id() {
             has_param: true,
             has_app: false,
             is_resumable: false,
-            has_crashed: false,
+            crash: None,
             upload_id: "abc123".into(),
             data_hash: String::new(),
             param_hash: String::new(),
@@ -218,7 +232,7 @@ fn same_project_refreshes_upload_id() {
             has_param: true,
             has_app: false,
             is_resumable: false,
-            has_crashed: false,
+            crash: None,
             upload_id: "new".into(),
             data_hash: String::new(),
             param_hash: String::new(),
@@ -696,11 +710,13 @@ fn solver_crashed() {
         s,
         Event::SolverCrashed {
             error: "Segfault".into(),
+            kind_tag: "killed_by_signal".into(),
             violations: vec![],
         },
     );
     assert_eq!(s2.solver, Solver::Failed);
     assert_eq!(s2.error, "Segfault");
+    assert_eq!(s2.crash_kind, "killed_by_signal");
 }
 
 #[test]
@@ -1009,7 +1025,7 @@ fn project_selected_carries_total_frames_for_new_project() {
             has_param: true,
             has_app: true,
             is_resumable: true,
-            has_crashed: false,
+            crash: None,
             upload_id: String::new(),
             data_hash: String::new(),
             param_hash: String::new(),
@@ -1045,7 +1061,7 @@ fn project_selected_same_project_rehydrates_total_frames_when_lost() {
             has_param: true,
             has_app: true,
             is_resumable: true,
-            has_crashed: false,
+            crash: None,
             upload_id: String::new(),
             data_hash: String::new(),
             param_hash: String::new(),
@@ -1079,7 +1095,7 @@ fn project_selected_same_project_does_not_clobber_live_total_frames() {
             has_param: true,
             has_app: true,
             is_resumable: true,
-            has_crashed: false,
+            crash: None,
             upload_id: String::new(),
             data_hash: String::new(),
             param_hash: String::new(),

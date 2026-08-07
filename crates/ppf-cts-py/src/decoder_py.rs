@@ -214,15 +214,6 @@ pub fn blender_app_paths<'py>(
     Ok(d)
 }
 
-/// Filename used by `SceneDecoder._tetra_cache_path`. The on-disk path
-/// is built by prepending the cache directory; this function only
-/// produces the basename.
-#[pyfunction]
-#[pyo3(signature = (tri_mesh_hash))]
-pub fn tetra_cache_filename(tri_mesh_hash: &str) -> String {
-    dec::tetra_cache_filename(tri_mesh_hash)
-}
-
 /// Resolve the `app_state.pickle` final + tmp path pair used in
 /// `BlenderApp._persist_app_state`.
 #[pyfunction]
@@ -418,15 +409,19 @@ pub fn keyframe_translation_segments<'py>(
     Ok(out)
 }
 
-/// Run the dedup pass over object plan entries and rebuild the
-/// post-dedup `tetra_jobs` list. Replaces both the per-entry
-/// `tet_hash_seen` dict-builder loop and the
-/// `tetra_jobs.append({"name", "cached"})` rebuild loop in
-/// `SceneDecoder.populate_objects` (frontend/_decoder_.py).
+/// Run the dedup pass over the object plan entries `SceneDecoder`
+/// builds (frontend/_decoder_.py) and rebuild the post-dedup
+/// `tetra_jobs` list, so the whole per-entry sweep is one call.
+///
+/// Two SOLID entries share a tetrahedralization exactly when they
+/// address the same cache file, so the dedup key is the entry's
+/// `tetra_cache_name`. That name covers the mesh hash and the object's
+/// tetrahedralizer settings together, so two objects built from one mesh
+/// with different settings each get their own run.
 ///
 /// Mutations applied to each entry:
 ///   - `tetra_reuse_from`: sets to the earlier entry index (int) when
-///     `tri_mesh.hash` matches an earlier SOLID entry, else `None`.
+///     `tetra_cache_name` matches an earlier SOLID entry, else `None`.
 ///   - `tetra_weight`: zeroed for reuse rows.
 ///   - `tetra_index`: 1-indexed integer for fresh tet jobs, `None`
 ///     for reuse rows.
@@ -441,7 +436,7 @@ pub fn dedup_and_rebuild_tetra_jobs<'py>(
     object_entries: &Bound<'_, PyList>,
 ) -> PyResult<(Bound<'py, PyList>, f64)> {
     use std::collections::HashMap;
-    let mut tet_hash_seen: HashMap<String, usize> = HashMap::new();
+    let mut tet_key_seen: HashMap<String, usize> = HashMap::new();
     let mut work_delta: f64 = 0.0;
     // First pass: dedup decisions.
     for (i, entry_obj) in object_entries.iter().enumerate() {
@@ -452,15 +447,26 @@ pub fn dedup_and_rebuild_tetra_jobs<'py>(
             Some(v) => v.extract().unwrap_or_default(),
             None => String::new(),
         };
-        let tri_mesh_obj = match entry.get_item("tri_mesh")? {
-            Some(v) if !v.is_none() => v,
-            _ => continue,
+        let tri_mesh_present = match entry.get_item("tri_mesh")? {
+            Some(v) => !v.is_none(),
+            None => false,
         };
+        if !tri_mesh_present {
+            continue;
+        }
         if group_type != "SOLID" {
             continue;
         }
-        let h: String = tri_mesh_obj.getattr("hash")?.extract()?;
-        if let Some(&earlier) = tet_hash_seen.get(&h) {
+        let h: String = match entry.get_item("tetra_cache_name")? {
+            Some(v) if !v.is_none() => v.extract()?,
+            _ => {
+                return Err(PyValueError::new_err(
+                    "a SOLID plan entry holding a tri_mesh must also hold its \
+                     tetra_cache_name; the build planner composes the two together",
+                ))
+            }
+        };
+        if let Some(&earlier) = tet_key_seen.get(&h) {
             entry.set_item("tetra_reuse_from", earlier)?;
             let weight: f64 = entry
                 .get_item("tetra_weight")?
@@ -469,7 +475,7 @@ pub fn dedup_and_rebuild_tetra_jobs<'py>(
             work_delta -= weight;
             entry.set_item("tetra_weight", 0.0f64)?;
         } else {
-            tet_hash_seen.insert(h, i);
+            tet_key_seen.insert(h, i);
             entry.set_item("tetra_reuse_from", py.None())?;
         }
     }
@@ -810,7 +816,6 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(barycentric_project_anchors, m)?)?;
     m.add_function(wrap_pyfunction!(solid_orig_to_sim, m)?)?;
     m.add_function(wrap_pyfunction!(blender_app_paths, m)?)?;
-    m.add_function(wrap_pyfunction!(tetra_cache_filename, m)?)?;
     m.add_function(wrap_pyfunction!(app_state_persist_paths, m)?)?;
     m.add_function(wrap_pyfunction!(validate_pickle_extension, m)?)?;
     m.add_function(wrap_pyfunction!(validate_param_top_keys, m)?)?;

@@ -496,10 +496,25 @@ __device__ void embed_hinge_force_hessian(const DataSet &data,
     // switch from the old resolution-dependent |e|*ghat factor (which it replaces:
     // |e|*ghat was ~3e5x weaker than |e|^2/area at that mesh). Guard near-degenerate
     // triangles where area -> 0 would blow the stiffness up.
+    //
+    // Directional stiffness (hinge_bend_directional, data.hpp): the isotropic
+    // `bend` plus whatever the warp and weft stiffnesses contribute at this
+    // hinge edge's orientation in the UV material frame. With both at their
+    // 0.0f defaults it returns `bend` unchanged, so an isotropic scene stays
+    // bit-identical to one built before this existed. All three terms are
+    // non-negative (scene.rs), and sin^2 and cos^2 are too, so the result can
+    // never turn negative and flip the sign of the hinge block: it stays PSD
+    // and SPD-by-assembly holds. Folding it in here rather than into the force
+    // covers the lagged damping Hessian below by construction, since that
+    // scales by the same stiff_k.
     const float BEND_SCALE = 1.28e-5f;
-    float stiff_k = (area > 1e-12f)
-                        ? BEND_SCALE * bend * (length * length / area) * areal_density
-                        : 0.0f;
+    float bend_dir = hinge_bend_directional(bend, hinge_param.bend_warp,
+                                            hinge_param.bend_weft,
+                                            prop.uv_edge_sin2);
+    float stiff_k = (area > 1e-12f) ? BEND_SCALE * bend_dir *
+                                          (length * length / area) *
+                                          areal_density
+                                    : 0.0f;
     if (stiff_k > 0.0f) {
         Mat3x4f dedx;
         Mat12x12f d2edx2;
@@ -733,7 +748,12 @@ void embed_elastic_force_hessian(const DataSet &data, const Vec<Vec3f> &eval_x,
         DISPATCH_START(shell_face_count)
         [data, eval_x, force, fixed_hess, dt,
          param] __device__(unsigned i) mutable {
-            if (!data.prop.face[i].fixed && !data.prop.face[i].rest_excluded) {
+            // A collider carries no elastic energy: its shape is held by its
+            // pins, not by stiffness of its own. Exact pins removed its DOF and
+            // `fixed` already covered this; spring-held pins leave the DOF free,
+            // so the exclusion has to be stated.
+            if (!data.prop.face[i].fixed && !data.prop.face[i].rest_excluded &&
+                !data.prop.face[i].collider) {
                 energy::embed_face_force_hessian(data, eval_x, force,
                                                  fixed_hess, dt, param, i);
             }
@@ -755,7 +775,10 @@ void embed_elastic_force_hessian(const DataSet &data, const Vec<Vec3f> &eval_x,
         DISPATCH_START(hinge_count)
         [data, eval_x, force, fixed_hess, dt,
          param] __device__(unsigned i) mutable {
+            // See the face gate above: a collider has no bending stiffness of
+            // its own either.
             if (data.prop.hinge[i].fixed == false &&
+                data.prop.hinge[i].collider == false &&
                 (data.mesh.type.hinge[i] & 1) == 0) {
                 energy::embed_hinge_force_hessian(data, eval_x, force,
                                                   fixed_hess, dt, param, i);

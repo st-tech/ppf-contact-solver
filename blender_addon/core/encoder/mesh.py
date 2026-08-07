@@ -426,19 +426,31 @@ def _local_mesh_hash(obj):
     """Compute a content hash of an object's local-space triangulated mesh.
 
     Two non-linked duplicates with identical geometry (same vertices + the
-    same loop-triangle tessellation in local space) produce the same hash,
-    enabling deduplication. The triangulation is Blender's own
+    same loop-triangle tessellation in local space) AND the same UVs produce
+    the same hash, enabling deduplication. The triangulation is Blender's own
     ``loop_triangles`` split, matching the ``face`` array the encoder ships,
     so the hash keys on exactly the topology that reaches the solver.
+
+    UV belongs in the key because it is part of the PHYSICS, not only of the
+    shading: the solver orients each shell face's material frame from its UV,
+    which is the frame ``shrink-x`` / ``shrink-y`` scale along and the one
+    ``bend-weft`` / ``bend-bias`` measure each hinge edge against. Two objects
+    alike in geometry but carrying different UV layouts are different
+    materials, so collapsing them onto one canonical mesh would silently hand
+    every one of them the first object's material directions.
     """
-    from ..numpy_mesh_utils import extract_mesh_to_numpy, loop_triangle_indices
+    from ..numpy_mesh_utils import extract_mesh_to_numpy, loop_triangulate_mesh
 
     mesh = obj.data
     vertices, _ = extract_mesh_to_numpy(mesh)
-    tri = loop_triangle_indices(mesh)
+    tri, uv = loop_triangulate_mesh(mesh)
     h = hashlib.sha256()
     h.update(vertices.tobytes())
     h.update(tri.tobytes())
+    # A mesh with no active UV layer contributes nothing here, so its hash is
+    # unchanged from before UV entered the key.
+    if len(uv) > 0:
+        h.update(np.ascontiguousarray(uv, dtype=np.float32).tobytes())
     return h.hexdigest()
 
 

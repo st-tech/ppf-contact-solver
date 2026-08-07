@@ -821,16 +821,38 @@ def apply_animation():
         any_per_frame = False
 
         while True:
-            frame, map_by_uuid, surface_map_by_uuid, applied, total = (
+            frame, map_by_uuid, surface_map_by_uuid, statistics_manifest, applied, total = (
                 com.take_one_animation_frame()
             )
             last_applied, last_total = applied, total
             if frame is None:
                 break
 
-            n, vert = frame
+            n, vert, statistics_blobs = frame
             if n < 0:
                 continue
+
+            if statistics_manifest:
+                from .statistics_cache import install_manifest, write_frame_blob
+
+                manifest = install_manifest(statistics_manifest)
+                if not statistics_blobs:
+                    raise ValueError(
+                        f"client: statistics are missing for solver frame {n}"
+                    )
+                # The vertex frame index bounds the statistics: each blob
+                # belongs to a frame already fetched, and the last one is the
+                # frame this iteration carries.
+                statistics_frames = [
+                    write_frame_blob(blob, manifest, max_solver_frame=n)
+                    for blob in statistics_blobs
+                ]
+                statistics_frame = statistics_frames[-1]
+                if statistics_frame != n:
+                    raise ValueError(
+                        "client: statistics frame mismatch "
+                        f"(vertices={n}, statistics={statistics_frame})"
+                    )
 
             if target_objects is None:
                 if getattr(context, "screen", None) and context.screen.is_animation_playing:

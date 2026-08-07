@@ -11,9 +11,10 @@ Output wraps the producer dict in the schema-version envelope
 server.
 
 cbor2 is imported lazily so addon load doesn't fail on installs where
-the wheel isn't yet vendored under ``blender_addon/lib/``. Users
-install it through the existing UI install-ops flow (see
-ui/install_ops.py) the same way paramiko / docker get installed.
+the wheel hasn't been pulled in yet (e.g. the test rig, which sideloads
+the addon and bypasses the manifest's wheels list). Production users
+get cbor2 via ``blender_manifest.toml``; the rig prepares it through
+``debug/orchestrator.py``'s ``warmup_addon_install``.
 """
 
 from __future__ import annotations

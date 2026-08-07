@@ -184,7 +184,7 @@ where
     // Without this, a server restart against an existing project
     // would report `data="NO_DATA"` even with `data.pickle` and
     // `app_state.pickle` on disk.
-    let project = reconcile_project_from_disk(&name, &root);
+    let project = reconcile_project_from_disk(&name, &root, &engine.state().name);
     dispatch_with_executor(engine, executor, project).await;
 
     if let Some(req) = get_arg(&args, "request") {
@@ -214,11 +214,14 @@ where
 /// `app_state.pickle` (the build_worker's "make() succeeded"
 /// marker). `is_resumable` falls out of `project_resumable`, which
 /// scans for the solver's `state_<N>.bin.gz` checkpoints, and
-/// `has_crashed` from the solver-authored `status.cbor` so a reconnect
-/// after a crash reconstructs `Solver::Failed` (the in-memory state is gone). The
-/// transition layer then advances `state.data` / `state.build` so
+/// `crash` from the solver-authored `status.cbor` so a reconnect after a
+/// crash reconstructs `Solver::Failed` AND its reason (the in-memory state is
+/// gone). The transition layer then advances `state.data` / `state.build` so
 /// the addon's status string reflects what survived the restart.
-fn reconcile_project_from_disk(name: &str, root: &str) -> Event {
+///
+/// `selected_name` is the project the engine currently holds, and it decides
+/// whether the crash is reconstructed at all: see the `crash` binding.
+fn reconcile_project_from_disk(name: &str, root: &str, selected_name: &str) -> Event {
     use std::path::PathBuf;
 
     let root_path = PathBuf::from(root);
@@ -229,26 +232,69 @@ fn reconcile_project_from_disk(name: &str, root: &str) -> Event {
     let has_app = root_path.join("app_state.pickle").exists();
     let is_resumable =
         ppf_cts_core::datamodel::project_resumable(&root_path);
-    // Reconstruct a crash from the solver-authored status.cbor (the
-    // in-memory Solver::Failed is gone after a restart): a terminal Crashed
-    // outcome, or a non-terminal record whose owning process is confirmed
-    // dead (liveness lock free AND pid gone) and was not an intentional
-    // terminate. A still-live solver (lock held) reports false here and is
-    // re-adopted as Running by the monitor's live-adoption path.
-    let has_crashed = {
-        use ppf_cts_formats::status::{self, lock, Outcome};
+    // Reconstruct a crash from the on-disk status.cbor (the in-memory
+    // Solver::Failed is gone after a restart): a terminal Crashed outcome, or
+    // a non-terminal record whose owning process is confirmed dead (liveness
+    // lock free AND pid gone) and was not an intentional terminate. A
+    // still-live solver (lock held) reports None here and is re-adopted as
+    // Running by the monitor's live-adoption path.
+    //
+    // Only when the SELECTION CHANGES. The same-project branch of
+    // `Event::ProjectSelected` preserves the in-memory solver state and
+    // discards this field, while a connected addon stamps the project name on
+    // a status poll several times a second. Reconstructing there would read
+    // all of `stdout.log` and all of `error.log` on every poll, for a value
+    // nothing reads; a crashed multi-frame run's stdout is routinely tens of
+    // megabytes.
+    //
+    // The report is rendered by the SAME `render_crash` the live path uses. A
+    // crash the server classified itself is sealed into `status.cbor` when it
+    // is classified, so the usual reconnect reads back a terminal Crashed and
+    // reproduces the live report. The non-terminal branch below covers a
+    // record nothing sealed (the server was not running when the solver
+    // died), and what it can name is limited to what is on disk: the
+    // launcher's exit status is an in-memory witness, so a kill that left no
+    // signal record comes back as "no cause recorded".
+    let crash = if name == selected_name {
+        None
+    } else {
+        use ppf_cts_formats::status::{self, lock, signal_sidecar, Outcome};
         let out = ppf_cts_formats::files::session_output_dir(&root_path);
         match status::read(&out) {
             Ok(Some(rec)) => match rec.outcome {
-                Some(Outcome::Crashed { .. }) => true,
-                Some(_) => false,
+                Some(Outcome::Crashed { sub_kind, detail }) => {
+                    Some(ppf_cts_core::events::ReconciledCrash {
+                        kind_tag: sub_kind.tag().to_string(),
+                        rendered: crate::monitor::render_crash(sub_kind, &detail, &root_path),
+                    })
+                }
+                Some(_) => None,
                 None => {
-                    !lock::is_held_by_other(&out)
+                    let dead = !lock::is_held_by_other(&out)
                         && !lock::pid_alive(rec.pid)
-                        && !out.join(ppf_cts_formats::files::TERMINATE_REQUEST).exists()
+                        && !out.join(ppf_cts_formats::files::TERMINATE_REQUEST).exists();
+                    if !dead {
+                        None
+                    } else {
+                        // The launcher's exit status belongs to a process this
+                        // server may never have spawned, so the only evidence a
+                        // reconnect can read is what the solver left on disk.
+                        let evidence = crate::monitor::AbruptEvidence {
+                            signal: signal_sidecar::read(&out, &rec.launch_id),
+                            launcher_code: None,
+                            launcher_signal: None,
+                            pid: Some(rec.pid),
+                            frame: Some(rec.frame),
+                        };
+                        let (kind, detail) = crate::monitor::classify_abrupt(&evidence);
+                        Some(ppf_cts_core::events::ReconciledCrash {
+                            kind_tag: kind.tag().to_string(),
+                            rendered: crate::monitor::render_crash(kind, &detail, &root_path),
+                        })
+                    }
                 }
             },
-            _ => false,
+            _ => None,
         }
     };
 
@@ -278,7 +324,7 @@ fn reconcile_project_from_disk(name: &str, root: &str) -> Event {
         has_param,
         has_app,
         is_resumable,
-        has_crashed,
+        crash,
         upload_id,
         data_hash,
         param_hash,

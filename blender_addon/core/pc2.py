@@ -1257,12 +1257,14 @@ def migrate_pc2_on_save(*_args):
     Called from a ``bpy.app.handlers.save_post`` handler.
     """
     import shutil
+    from .statistics_cache import migrate_statistics_on_save
 
     from .uuid_registry import get_object_uuid
 
     blend_path = bpy.data.filepath
     if not blend_path:
         return
+    migrate_statistics_on_save()
     target_dir = get_pc2_dir()
     tmp_dir = os.path.realpath(os.path.join(tempfile.gettempdir(), "data"))
     for obj in bpy.data.objects:

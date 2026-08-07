@@ -443,6 +443,48 @@ try:
         },
     )
 
+    # ----- G: UI summary reflects only enabled components ----------
+    from types import SimpleNamespace
+    ui_lists = __import__(
+        pkg + ".ui.dynamics.ui_lists",
+        fromlist=["_velocity_keyframe_label"],
+    )
+    base = {
+        "frame": 1,
+        "direction": (1.0, 0.0, 0.0),
+        "speed": 2.0,
+        "angular_speed": 90.0,
+        "angular_axis": "Z",
+    }
+    no_op = ui_lists._velocity_keyframe_label(SimpleNamespace(
+        **base, enable_translational=False, enable_angular=False,
+    ))
+    linear = ui_lists._velocity_keyframe_label(SimpleNamespace(
+        **base, enable_translational=True, enable_angular=False,
+    ))
+    angular = ui_lists._velocity_keyframe_label(SimpleNamespace(
+        **base, enable_translational=False, enable_angular=True,
+    ))
+    both = ui_lists._velocity_keyframe_label(SimpleNamespace(
+        **base, enable_translational=True, enable_angular=True,
+    ))
+    summary_ok = (
+        no_op == "Frame 1 (No Op)"
+        and "m/s" in linear and "ω=" not in linear
+        and "m/s" not in angular and "ω=" in angular
+        and "m/s" in both and "ω=" in both
+    )
+    dh.record(
+        "G_ui_summary_respects_component_gates",
+        summary_ok,
+        {
+            "no_op": no_op,
+            "linear": linear,
+            "angular": angular,
+            "both": both,
+        },
+    )
+
 except Exception as exc:
     result["errors"].append(f"{type(exc).__name__}: {exc}")
     result["errors"].append(traceback.format_exc())

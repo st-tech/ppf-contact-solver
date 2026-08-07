@@ -41,11 +41,17 @@ def test_smoke_top_level():
 
 
 def test_smoke_app():
-    base = _rust.get_data_dirpath("/tmp/x")
+    # `compose_data_dir` (datamodel/app.rs) roots the data dir at the base
+    # dir on Windows and at $HOME everywhere else, so the expected prefix is
+    # platform-specific. Asserting one platform's layout on all three is what
+    # makes a single commit pass on Windows and fail on macOS and Linux.
+    base_dir = "C:/x" if sys.platform == "win32" else "/tmp/x"
+    expected_prefix = base_dir if sys.platform == "win32" else str(Path.home())
+    base = _rust.get_data_dirpath(base_dir)
     assert isinstance(base, str) and base
-    # The data dir is namespaced under the input root; "/tmp/x" must
-    # appear somewhere in the resolved path.
-    assert "/tmp/x" in base or base.startswith("/tmp/x")
+    assert base.replace("\\", "/").startswith(expected_prefix.replace("\\", "/"))
+    # Every platform namespaces the data dir under ppf-cts/git-<branch>.
+    assert "ppf-cts" in base.replace("\\", "/")
 
 
 def test_smoke_asset():

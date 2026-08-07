@@ -311,6 +311,49 @@ jobs:
           set -e
           cd ${WORKDIR}
 
+          # Pin CUDA 12.8 before anything compiles. The Deep Learning AMI
+          # ships several toolkits and points /usr/local/cuda at whichever it
+          # prefers, which is 13.2 as shipped, and the solver Makefile compiles
+          # through that symlink by ABSOLUTE path
+          # (crates/ppf-cts-solver/src/cpp/Makefile:6), so setting PATH alone
+          # cannot steer it. main.cu reads
+          # cudaDeviceProp::kernelExecTimeoutEnabled, which CUDA 13 removed, so
+          # an unpinned runner fails to compile rather than misbehaving quietly.
+          CUDA_DIR=/usr/local/cuda-12.8
+          if [ ! -x "$CUDA_DIR/bin/nvcc" ]; then
+            echo "ERROR: CUDA 12.8 not found at $CUDA_DIR" >&2
+            echo "Toolkits present on this AMI:" >&2
+            ls -d /usr/local/cuda-* 2>/dev/null | sed 's/^/  /' >&2 || true
+            exit 1
+          fi
+          sudo ln -sfn "$CUDA_DIR" /usr/local/cuda
+          echo "/usr/local/cuda -> $(readlink -f /usr/local/cuda)"
+          # /etc/profile.d/dlami.sh is where the AMI's default actually comes
+          # from: it hardcodes the version into PATH and LD_LIBRARY_PATH and is
+          # sourced twice per login shell, the second time after every other
+          # profile.d file, so no downstream ordering trick beats it. Retarget
+          # it rather than fight it. The pattern matches any version, so a
+          # future AMI default needs no edit here.
+          if [ -f /etc/profile.d/dlami.sh ]; then
+            sudo cp -n /etc/profile.d/dlami.sh /etc/profile.d/dlami.sh.orig
+            sudo sed -i "s|/usr/local/cuda-[0-9][0-9.]*|$CUDA_DIR|g" /etc/profile.d/dlami.sh
+            echo "Retargeted /etc/profile.d/dlami.sh to $CUDA_DIR"
+          fi
+          export PATH=/usr/local/cuda/bin:$PATH
+          export CUDA_PATH=/usr/local/cuda
+          # Assert the version, do not merely report it. The second check is not
+          # redundant: it tests the exact binary the solver Makefile invokes,
+          # which is a different selector from the PATH one above.
+          if ! nvcc --version | grep -q "release 12\.8"; then
+            echo "ERROR: nvcc on PATH is not CUDA 12.8" >&2
+            nvcc --version >&2
+            exit 1
+          fi
+          if ! /usr/local/cuda/bin/nvcc --version | grep -q "release 12\.8"; then
+            echo "ERROR: /usr/local/cuda/bin/nvcc is not CUDA 12.8" >&2
+            exit 1
+          fi
+
           # Run warmup.py
           echo "Running warmup.py..."
           python3 warmup.py --skip-confirmation

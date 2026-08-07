@@ -134,7 +134,13 @@ def transition(state: AppState, event: Event) -> tuple[AppState, list[Effect]]:
         case ConnectRequested(backend_type=bt, config=cfg, server_port=sp) \
                 if state.phase == Phase.OFFLINE:
             return (
-                replace(state, phase=Phase.CONNECTING, error="", server_error=""),
+                replace(
+                    state,
+                    phase=Phase.CONNECTING,
+                    error="",
+                    server_error="",
+                    crash_kind="",
+                ),
                 [DoConnect(bt, cfg, sp)],
             )
 
@@ -165,6 +171,7 @@ def transition(state: AppState, event: Event) -> tuple[AppState, list[Effect]]:
                     activity=Activity.IDLE,
                     error="",
                     server_error="",
+                    crash_kind="",
                 ),
                 effects,
             )
@@ -218,7 +225,7 @@ def transition(state: AppState, event: Event) -> tuple[AppState, list[Effect]]:
             # transient-loss paths, plus a clear of the last server error
             # since this was an intentional shutdown.
             return (
-                replace(_server_gone(state), server_error=""),
+                replace(_server_gone(state), server_error="", crash_kind=""),
                 [DoClearInterrupt(), DoLog("Server stopped.")],
             )
 
@@ -773,6 +780,11 @@ def _interpret_response(
 
     status_str = r.get("status", "")
     error_msg = r.get("error", "")
+    # Stable snake_case name of the crash cause, empty when the error is
+    # not a solver crash or the server predates the field. Read from the
+    # same response as ``error_msg`` so the headline and the report the
+    # Console shows always describe the same failure.
+    crash_kind = str(r.get("crash_kind", "") or "")
     violations = r.get("violations", [])
     info_msg = r.get("info", "")
     root = r.get("root", state.remote_root)
@@ -806,6 +818,7 @@ def _interpret_response(
                 state,
                 server=Server.RUNNING,
                 server_error=error_msg,
+                crash_kind=crash_kind,
                 version_ok=True,
                 server_upload_id=server_upload_id,
                 server_data_hash=server_data_hash,
@@ -1012,6 +1025,7 @@ def _interpret_response(
             server_param_hash=server_param_hash,
             error="Server state lost during build; re-upload and rebuild.",
             server_error=error_msg,
+            crash_kind=crash_kind,
             violations=violations,
             message="",
             progress=0.0,
@@ -1030,6 +1044,7 @@ def _interpret_response(
         remote_root=root,
         error="",
         server_error=error_msg,
+        crash_kind=crash_kind,
         violations=violations if violations else ([] if not error_msg else state.violations),
         message=info_msg if info_msg else (
             state.message if (is_sim_running or is_building) else ""

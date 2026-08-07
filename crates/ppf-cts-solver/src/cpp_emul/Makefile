@@ -26,6 +26,7 @@ CXXFLAGS := -std=c++17 -O2 -fPIC -Wall -Wno-unused-function \
 
 EMUL_OBJS := $(OUT_DIR)/main.o
 DEPS := $(EMUL_OBJS:.o=.d)
+LOCK_TEST := $(OUT_DIR)/test_pd_locks
 
 all: $(LIBDIR)/libsimbackend_cpu.a
 
@@ -38,8 +39,15 @@ $(LIBDIR)/libsimbackend_cpu.a: $(EMUL_OBJS)
 	rm -f $@
 	$(AR) rcs $@ $^
 
+$(LOCK_TEST): test_pd_locks.cpp pd_arap.hpp
+	mkdir -p $(@D)
+	$(CXX) $(CXXFLAGS) $< -o $@
+
+test-pd-locks: $(LOCK_TEST)
+	$(LOCK_TEST)
+
 -include $(DEPS)
 
-.PHONY: clean
+.PHONY: clean test-pd-locks
 clean:
 	rm -rf $(OUT_DIR)

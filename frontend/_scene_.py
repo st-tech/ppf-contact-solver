@@ -114,6 +114,28 @@ class FixedScene:
     # attribute instead of raising at preview time.
     _invisible_vert: Optional[np.ndarray] = None
     _invisible_static_vert: Optional[np.ndarray] = None
+    # Lock Translation axis table, one normalized (or zero/disabled) row
+    # per dmap entry. Class-scope default so a FixedScene unpickled from a
+    # session saved before this feature existed still answers the
+    # attribute instead of raising at export time.
+    _translation_lock: Optional[np.ndarray] = None
+    # Lock Rotation axis table, one normalized (or zero/disabled) row per
+    # dmap entry. Coexists independently with `_translation_lock`.
+    # Class-scope default so a FixedScene unpickled from a session saved
+    # before this feature existed still answers the attribute instead of
+    # raising at export time.
+    _rotation_lock: Optional[np.ndarray] = None
+    # Lock Rotation mode table, one uint32 per dmap entry, aligned with
+    # `_rotation_lock`: 0 = allow-only (rotation about the axis is the
+    # only freedom) or disabled, 1 = prohibit-axis (rotation about the
+    # axis is forbidden, the perpendicular plane stays free). A disabled
+    # row (zero axis in `_rotation_lock`) is always 0 here too; the two
+    # tables must be read together since a bare 0 cannot distinguish
+    # "disabled" from "locked, allow-only". Class-scope default so a
+    # FixedScene unpickled from a session saved before this feature
+    # existed still answers the attribute instead of raising at export
+    # time.
+    _rotation_lock_mode: Optional[np.ndarray] = None
 
     def __init__(
         self,
@@ -157,6 +179,11 @@ class FixedScene:
         pdrd_rest_centered: Optional[np.ndarray] = None,
         sand_param: Optional[dict[str, list[Any]]] = None,
         invisible_vert: Optional[np.ndarray] = None,
+        translation_lock: Optional[np.ndarray] = None,
+        rotation_lock: Optional[np.ndarray] = None,
+        rotation_lock_mode: Optional[np.ndarray] = None,
+        statistics_objects: Optional[list[dict[str, Any]]] = None,
+        collider_vert_mask: Optional[np.ndarray] = None,
         quiet: bool = False,
     ):
         """Initialize the fixed scene.
@@ -197,6 +224,9 @@ class FixedScene:
             bend_rest_vert (Optional[np.ndarray]): Concatenated reference vertices for the bending rest angle, one row per global vertex (unmasked rows equal the initial vert). The solver computes hinge rest angles from these positions for masked objects.
             bend_rest_vert_mask (Optional[np.ndarray]): Per-vertex uint8 mask marking rows of ``bend_rest_vert`` that belong to an object with an enabled reference rest angle.
             invisible_vert (Optional[np.ndarray]): Per-vertex bool mask marking dynamic vertices that belong to an object hidden with :meth:`Object.invisible`. Drawing only; the solver never sees it. None when every object is drawn.
+            translation_lock (Optional[np.ndarray]): Per-dmap-entry (n_objects, 3) normalized Lock Translation axis, aligned with ``concat_displacement``. A zero row means the object is not locked. None when no object in the scene has Lock Translation enabled.
+            rotation_lock (Optional[np.ndarray]): Per-dmap-entry (n_objects, 3) normalized Lock Rotation axis, aligned with ``concat_displacement``. A zero row means the object's rotation is not locked. None when no object in the scene has Lock Rotation enabled. Independent of ``translation_lock``.
+            rotation_lock_mode (Optional[np.ndarray]): Per-dmap-entry (n_objects,) uint32, aligned with ``rotation_lock``: 0 means allow-only (rotation about the axis is the only freedom) or the row is disabled; 1 means prohibit-axis (rotation about the axis is forbidden, the perpendicular plane stays free). Only meaningful together with a non-zero row of ``rotation_lock``. None when no object in the scene has Lock Rotation enabled.
             quiet (bool): When True, suppress the scene-check summary prints. Defaults to False, preserving the interactive diagnostic output.
         """
 
@@ -234,6 +264,26 @@ class FixedScene:
         self._pdrd_vert_index = pdrd_vert_index
         self._pdrd_vert_list = pdrd_vert_list or []
         self._pdrd_rest_centered = pdrd_rest_centered
+        # Lock Translation: one normalized axis per dmap entry (n_objects,
+        # 3), aligned with `_displacement`/`concat_displacement`. None when
+        # no object in the scene has it enabled; a zero row means that
+        # object is not locked. Written to bin/translation_lock.bin at
+        # export time.
+        self._translation_lock = translation_lock
+        # Lock Rotation: one normalized axis per dmap entry (n_objects, 3),
+        # aligned the same way. None when no object in the scene has it
+        # enabled; a zero row means that object's rotation is not locked.
+        # Coexists independently with `_translation_lock`. Written to
+        # bin/rotation_lock.bin at export time.
+        self._rotation_lock = rotation_lock
+        # Lock Rotation mode: one uint32 per dmap entry, aligned with
+        # `_rotation_lock`. 0 = allow-only or disabled, 1 = prohibit-axis.
+        # None when no object in the scene has Lock Rotation enabled
+        # (same emptiness condition as `_rotation_lock`). Written to
+        # bin/rotation_lock_mode.bin at export time.
+        self._rotation_lock_mode = rotation_lock_mode
+        self._statistics_objects = statistics_objects or []
+        self._collider_vert_mask = collider_vert_mask
         self._pin: list[PinData] = []
         self._static_vert = (np.zeros(0, dtype=np.uint32), np.zeros(0))
         self._static_color = np.zeros((0, 0))
@@ -728,6 +778,16 @@ class FixedScene:
         map_path = os.path.join(path, "map.pickle")
         with open(map_path, "wb") as f:
             f.write(_cbor.dumps_envelope(_cbor.KIND_VERTEX_MAP, self._map_by_name))
+        if self._statistics_objects:
+            import cbor2
+
+            statistics_input_path = os.path.join(path, "statistics_input.cbor")
+            with open(statistics_input_path, "wb") as f:
+                f.write(cbor2.dumps({
+                    "version": 1,
+                    "kind": "StatisticsInput",
+                    "payload": {"objects": self._statistics_objects},
+                }))
         if self._surface_map_by_name:
             # Wire format v2: frame-embedding coefs replace barycentric weights.
             # Wrapped in a versioned envelope so legacy clients (which expected
@@ -850,6 +910,18 @@ class FixedScene:
             os.path.join(bin_path, "displacement.bin")
         )
         self._vert[0].astype(np.uint32).tofile(os.path.join(bin_path, "vert_dmap.bin"))
+        # Which vertices belong to a STATIC collider. The solver skips a contact
+        # or intersection pair only when BOTH sides are marked, so a collider
+        # still meets every dynamic object. Written only when the scene has one,
+        # and the solver treats an absent file as "no colliders".
+        if self._collider_vert_mask is not None:
+            assert len(self._collider_vert_mask) == len(self._vert[1]), (
+                f"collider_vert_mask has {len(self._collider_vert_mask)} entries "
+                f"but the scene has {len(self._vert[1])} dynamic vertices"
+            )
+            self._collider_vert_mask.astype(np.uint8).tofile(
+                os.path.join(bin_path, "collider_vert.bin")
+            )
         self._vert[1].astype(np.float64).tofile(os.path.join(bin_path, "vert.bin"))
         # rest_vert_mask is shared between the static rest_vert and the
         # time-varying rest_vert_anim, so write it whenever either is present.
@@ -880,6 +952,37 @@ class FixedScene:
                 self._bend_rest_vert_mask.astype(np.uint8).tofile(
                     os.path.join(bin_path, "bend_rest_vert_mask.bin")
                 )
+        # Lock Translation: one normalized world-space axis per displacement
+        # group (dmap entry), aligned with vert_dmap/displacement.bin
+        # ordering. A zero row means that object is not locked. Absent
+        # entirely when no object in the scene enabled it (mirrors the
+        # other optional per-scene tables above).
+        if self._translation_lock is not None:
+            np.ascontiguousarray(self._translation_lock, dtype=np.float32).tofile(
+                os.path.join(bin_path, "translation_lock.bin")
+            )
+        # Lock Rotation: one normalized world-space axis per displacement
+        # group (dmap entry), aligned the same way as translation_lock.bin
+        # above but independent of it. A zero row means that object's
+        # rotation is not locked. Absent entirely when no object in the
+        # scene enabled it.
+        if self._rotation_lock is not None:
+            np.ascontiguousarray(self._rotation_lock, dtype=np.float32).tofile(
+                os.path.join(bin_path, "rotation_lock.bin")
+            )
+        # Lock Rotation mode: one uint32 per displacement group, aligned
+        # with rotation_lock.bin. 0 = allow-only (rotation about the axis
+        # is the only freedom) or the row is disabled; 1 = prohibit-axis
+        # (rotation about the axis is forbidden, the perpendicular plane
+        # stays free). A bare 0 cannot distinguish "disabled" from
+        # "locked, allow-only" on its own; that is resolved by reading
+        # this table together with rotation_lock.bin's axis row. Absent
+        # entirely when no object in the scene has Lock Rotation enabled
+        # (same emptiness condition as rotation_lock.bin).
+        if self._rotation_lock_mode is not None:
+            np.ascontiguousarray(self._rotation_lock_mode, dtype=np.uint32).tofile(
+                os.path.join(bin_path, "rotation_lock_mode.bin")
+            )
         self._color.astype(np.float32).tofile(os.path.join(bin_path, "color.bin"))
         self._vel.astype(np.float32).tofile(os.path.join(bin_path, "vel.bin"))
 
@@ -2302,6 +2405,41 @@ class Scene:
         )
 
         concat_displacement = assembled["concat_displacement"]
+
+        # ----- Lock Translation: one normalized axis per dmap entry -----
+        # Aligned with concat_displacement (one row per object, dyn +
+        # static, in dmap order); a static object never sets
+        # ``_translation_lock`` so its row stays the zero vector
+        # (disabled). Written to bin/translation_lock.bin at export time.
+        translation_lock = np.zeros((concat_displacement.shape[0], 3), dtype=np.float32)
+        has_translation_lock = False
+        for name, obj in dyn_objects:
+            axis = getattr(obj, "_translation_lock", None)
+            if axis is not None:
+                translation_lock[dmap[name]] = np.asarray(axis, dtype=np.float32)
+                has_translation_lock = True
+
+        # ----- Lock Rotation: one normalized axis per dmap entry --------
+        # Same alignment as translation_lock above, and independent of
+        # it: an object may set either, both, or neither. Written to
+        # bin/rotation_lock.bin at export time.
+        rotation_lock = np.zeros((concat_displacement.shape[0], 3), dtype=np.float32)
+        # ----- Lock Rotation mode: one uint32 per dmap entry ------------
+        # Aligned with rotation_lock above. 0 = allow-only or disabled,
+        # 1 = prohibit-axis. Written to bin/rotation_lock_mode.bin at
+        # export time, only when at least one object has Lock Rotation
+        # enabled (same emptiness condition as rotation_lock.bin).
+        rotation_lock_mode = np.zeros((concat_displacement.shape[0],), dtype=np.uint32)
+        has_rotation_lock = False
+        for name, obj in dyn_objects:
+            axis = getattr(obj, "_rotation_lock", None)
+            if axis is not None:
+                rotation_lock[dmap[name]] = np.asarray(axis, dtype=np.float32)
+                rotation_lock_mode[dmap[name]] = np.uint32(
+                    1 if getattr(obj, "_rotation_lock_prohibit_axis", False) else 0
+                )
+                has_rotation_lock = True
+
         concat_vert = assembled["concat_vert"]
         concat_color = assembled["concat_color"]
         concat_vel = assembled["concat_vel"]
@@ -2464,6 +2602,65 @@ class Scene:
             }
             break
 
+        def _closed_surface_from_faces(faces, face_range):
+            start, count = face_range
+            if count == 0:
+                return False
+            edge_counts = {}
+            for face in faces[start : start + count]:
+                for a, b in (
+                    (int(face[0]), int(face[1])),
+                    (int(face[1]), int(face[2])),
+                    (int(face[2]), int(face[0])),
+                ):
+                    edge = (a, b) if a < b else (b, a)
+                    edge_counts[edge] = edge_counts.get(edge, 0) + 1
+            return bool(edge_counts) and all(
+                count == 2 for count in edge_counts.values()
+            )
+
+        def _closed_surface(face_range):
+            return _closed_surface_from_faces(concat_tri, face_range)
+
+        statistics_objects = []
+        rod_cursor = 0
+        shell_face_cursor = 0
+        solid_face_cursor = shell_count
+        tet_cursor = 0
+        for object_index, (name, obj) in enumerate(dyn_objects):
+            stats = stats_by_name[name]
+            rod_added = int(stats["rod_added"])
+            tri_added = int(stats["tri_added"])
+            tet_added = int(stats["tet_added"])
+            face_cursor = solid_face_cursor if tet_added else shell_face_cursor
+            dynamics_type = getattr(obj, "_statistics_type", obj.obj_type.upper())
+            face_range = [face_cursor, tri_added]
+            grain_radius = None
+            if dynamics_type == "SAND" and concat_sand_param:
+                radii = concat_sand_param.get("grain-radius", [])
+                grain_radius = float(radii[0]) if radii else None
+            statistics_objects.append({
+                "object_index": object_index,
+                "object_uuid": getattr(obj, "_statistics_uuid", name),
+                "object_name": getattr(obj, "_statistics_name", name),
+                "dynamics_type": dynamics_type,
+                "static_object": False,
+                "vertex_indices": [
+                    int(index) for index in np.asarray(map_by_name[name]).tolist()
+                ],
+                "rod_range": [rod_cursor, rod_added],
+                "face_range": face_range,
+                "tet_range": [tet_cursor, tet_added],
+                "closed_surface": _closed_surface(face_range),
+                "grain_radius": grain_radius,
+            })
+            rod_cursor += rod_added
+            if tet_added:
+                solid_face_cursor += tri_added
+            else:
+                shell_face_cursor += tri_added
+            tet_cursor += tet_added
+
         # ----- Pin assembly (Python-side: PinData is a Python dataclass) -----
         # Flatten every (object, pin) pair into a single list comprehension
         # so there's no incremental .append on the outer concat list nor
@@ -2473,6 +2670,17 @@ class Scene:
             if isinstance(op, TorqueOperation) and op.hint_vertex >= 0:
                 return _dc_replace(op, hint_vertex=int(map_arr[op.hint_vertex]))
             return op
+
+        # Per-vertex STATIC-collider mask. `_is_static_moving` is set by the
+        # decoder's `_setup_pin_shell`, which every collider that reaches the
+        # solved namespace goes through (the animated cases and the promoted
+        # rest-pose one). None when the scene has no such collider, so the
+        # solver keeps its prior behavior and no file is written.
+        _collider_mask = np.zeros(len(concat_vert), dtype=np.uint8)
+        for name, obj in dyn_objects:
+            if getattr(obj, "_is_static_moving", False):
+                _collider_mask[np.asarray(map_by_name[name], dtype=np.int64)] = 1
+        collider_vert_mask = _collider_mask if _collider_mask.any() else None
 
         concat_pin: list[PinData] = [
             PinData(
@@ -2802,6 +3010,35 @@ class Scene:
         static_color = assembled["static_color"]
         static_vert_dmap = assembled["static_vert_dmap"]
         static_per_object = assembled["static_per_object"]
+        static_face_cursor = 0
+        for name, obj in self._object.items():
+            if not obj.static:
+                continue
+            entry = static_per_object.get(name)
+            if entry is None:
+                continue
+            vertex_start = int(entry["offset"])
+            vertex_count = len(obj.get("V"))
+            face_count = int(entry["n_face"])
+            static_face_range = [static_face_cursor, face_count]
+            statistics_objects.append({
+                "object_index": len(statistics_objects),
+                "object_uuid": getattr(obj, "_statistics_uuid", name),
+                "object_name": getattr(obj, "_statistics_name", name),
+                "dynamics_type": "STATIC",
+                "static_object": True,
+                "vertex_indices": list(
+                    range(vertex_start, vertex_start + vertex_count)
+                ),
+                "rod_range": [0, 0],
+                "face_range": static_face_range,
+                "tet_range": [0, 0],
+                "closed_surface": _closed_surface_from_faces(
+                    static_tri, static_face_range
+                ),
+                "grain_radius": None,
+            })
+            static_face_cursor += face_count
         # Replicate static-side params + collect transform anims. The
         # param replication still runs as a side effect so we keep the
         # for-loop, but the (offset, anim) collect drops to a single
@@ -2868,7 +3105,14 @@ class Scene:
         for key in ["strain-limit"]:
             concat_tet_param[key] = []
             concat_static_param[key] = []
-        for key in ["shrink-x", "shrink-y"]:
+        # shrink-x/shrink-y and the orthotropic bending ratios are all
+        # shell-only: they are read in the UV material frame, which only a
+        # triangle carries. The registry defines them for every object kind so
+        # a solid's surface triangles can join concat_tri_param without a
+        # key-set mismatch, so they have to be dropped here instead. Leaving
+        # them in trips the rod loop's "Unknown rod parameter" panic
+        # (scene.rs) and the tet loop's equivalent.
+        for key in ["shrink-x", "shrink-y", "bend-warp", "bend-weft"]:
             concat_rod_param[key] = []
             concat_tet_param[key] = []
             concat_static_param[key] = []
@@ -2956,12 +3200,17 @@ class Scene:
             rest_vert_times=rest_vert_times if has_rest_vert_anim else None,
             bend_rest_vert=concat_bend_rest_vert if has_bend_rest_vert else None,
             bend_rest_vert_mask=bend_rest_vert_mask if has_bend_rest_vert else None,
+            collider_vert_mask=collider_vert_mask,
             pdrd_body_rows=pdrd_body_rows if pdrd_body_rows else None,
             pdrd_vert_index=pdrd_vert_index if next_body_id > 0 else None,
             pdrd_vert_list=pdrd_vert_list if next_body_id > 0 else None,
             pdrd_rest_centered=pdrd_rest_centered if next_body_id > 0 else None,
             sand_param=concat_sand_param if concat_sand_param else None,
             invisible_vert=invisible_vert if invisible_vert.any() else None,
+            translation_lock=translation_lock if has_translation_lock else None,
+            rotation_lock=rotation_lock if has_rotation_lock else None,
+            rotation_lock_mode=rotation_lock_mode if has_rotation_lock else None,
+            statistics_objects=statistics_objects,
             quiet=quiet,
         )
 

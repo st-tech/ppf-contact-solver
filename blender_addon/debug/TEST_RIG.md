@@ -52,11 +52,39 @@ python3.12 blender_addon/debug/main.py runtests bl_connect_local
 python3.12 blender_addon/debug/main.py runtests --parallel 4 --repeat 3 --report run.json
 ```
 
-The rig is all-green on macOS, Linux, and Windows (host scenario
-counts vary by platform gate: 65 on macOS, 67 on Linux, 66 on
-Windows). Chain scenarios can flake at ``--parallel 4`` (see
-"Parallel mode caveats" below); drop to ``--parallel 2`` if you need
-stable chain results.
+The rig is all-green on macOS, Linux, and Windows. The registry holds
+178 scenarios and each host runs the subset its ``PLATFORMS`` gates
+admit: 170 on macOS, 173 on Linux, 171 on Windows. ``runtests --list``
+prints the set for the host you are on, which is the number to trust;
+the figures here are a sanity check, not the source of truth. Chain
+scenarios can flake at ``--parallel 4`` (see "Parallel mode caveats"
+below); drop to ``--parallel 2`` if you need stable chain results.
+
+### Displays on Linux
+
+Blender is launched WITHOUT ``--background`` (the bootstrap needs the
+event loop to tick its timers), so it needs an X display. The rig
+starts and owns one: ``ensure_display()`` in ``blender_harness.py``
+brings up an Xvfb on the first free display from ``:100``, publishes it
+through ``DISPLAY`` before the worker pool starts, and tears it down at
+exit. Nothing has to be wrapped in ``xvfb-run``, and a host with no X
+at all runs the suite unchanged.
+
+That happens even when a desktop session is available, which is
+deliberate: rendering onto the developer's desktop puts a window per
+worker in front of whatever they are doing, and it makes the display
+size a property of the machine, so the same run behaves differently on
+a laptop and a CI runner.
+
+- ``PPF_BLENDER_DISPLAY=inherit`` uses the ambient ``DISPLAY`` instead.
+  Reach for it when you want to WATCH the scenarios drive the UI.
+- ``PPF_BLENDER_WINDOW`` sets the window size, as ``WxH``, ``X,Y,W,H``,
+  or ``off`` to let Blender size its own. The default is 800x600, which
+  keeps the per-worker framebuffer small while still laying out the
+  viewport and its sidebar.
+- ``PPF_BLENDER_BIN`` picks the binary. Otherwise the search is per-OS:
+  the ``.app`` bundle first on macOS, ``blender`` on PATH first on
+  Linux, with ``/opt/blender-*`` as the fallback.
 
 ## What runs where
 
@@ -128,21 +156,28 @@ only works on Linux/macOS). See ``bl_real_solid_smoke`` for the pattern.
 ## Scenarios
 
 All registered scenarios live in ``blender_addon/debug/scenarios/`` and
-are wired into the ``REGISTRY`` dict in ``scenarios/__init__.py`` (71
+are wired into the ``REGISTRY`` dict in ``scenarios/__init__.py`` (178
 entries at last count). They split into two families:
 
 Server-only (no Blender needed; do not require a build, just exercise
-the wire protocol):
+the wire protocol or the rig's own helpers):
 
 - ``server_smoke``: first-ping NO_DATA contract.
 - ``upload_id_changes``: two atomic uploads back-to-back must mint
   distinct ids; status returns to NO_BUILD because the prior build (if
   any) is invalid for the new upload.
+- ``rig_launch_config``: how the rig launches Blender, rather than what
+  the addon does once it is up. Pins the window default small, requires
+  an unparseable ``PPF_BLENDER_WINDOW`` to raise instead of falling back
+  to a size the caller will then misreport, and requires a dead display
+  to read as dead (a false positive there sends Blender at a display
+  that is not running, which fails inside GHOST naming nothing).
 
-Blender-driven (opt-in, requires Blender installed at
-``/Applications/Blender.app`` or ``PPF_BLENDER_BIN``): the remaining
-69 entries. They cover connect paths (``bl_connect_local`` is Linux-
-only, ``bl_connect_win_native`` is Windows-only), the pin-fidelity
+Blender-driven (opt-in, requires Blender; see the per-OS search order
+under "Displays on Linux", or set ``PPF_BLENDER_BIN``): every other
+entry, 170 of them on Linux. They cover connect paths
+(``bl_connect_local`` is Linux-only,
+``bl_connect_win_native`` is Windows-only), the pin-fidelity
 matrix, UI / state-machine integration, chain lifecycle, copy/paste
 clipboards, fetch/transfer regressions, progress UX, and the
 intersection-feedback round-trip. Use ``main.py runtests --list`` to

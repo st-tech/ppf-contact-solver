@@ -11,6 +11,7 @@
 #include "../utility/dispatcher.hpp"
 #include "../utility/utility.hpp"
 #include "../energy/model/pdrd_rigid.hpp"
+#include "translation_lock.hpp"
 #include "solver.hpp"
 #include <cmath>
 #include <cstdlib>
@@ -119,80 +120,75 @@ fatal_indefinite_system_matrix(unsigned break_iter, unsigned check_iter,
                                double noise_bound) {
     const char *kind = std::isnan(pAp_f32) ? "not-a-number" : "negative";
     const double rayleigh = pp > 0.0 ? pAp_exact / pp : 0.0;
-    fprintf(stderr,
-            "PPF FATAL: PCG breakdown -- p^T A p is %s at iter %u (detected at "
-            "check iter %u, reresid %.3e).\n"
-            "  p^T A p  (fp32 device reduction, the value that tripped it) = "
-            "%.6e\n"
-            "  p^T A p  (recomputed in double from the same iterate)        = "
-            "%.6e\n"
-            "  |p|^2                                                       = "
-            "%.6e\n"
-            "  Rayleigh quotient p^T A p / |p|^2 (double)                  = "
-            "%.6e\n"
-            "  round-off bound on the fp32 sum                             = "
-            "%.6e  (exceeded, hence a real defect and not cancellation)\n"
-            "  symmetry probe: z^T(A p) = %.6e vs p^T(A z) = %.6e (relative "
-            "gap %.3e)\n"
-            "A double-precision value that is POSITIVE means the assembled "
-            "matrix is SPD and the fp32 reduction cancelled; a NEGATIVE one of "
-            "order-1-and-up magnitude means a genuine indefinite term (a "
-            "per-element Hessian missing its SPD projection, a sign/assembly "
-            "error, or a dropped off-diagonal block). A symmetry gap well above "
-            "float epsilon means the applied operator is not symmetric, in "
-            "which case p^T A p is not a curvature at all.\n",
-            kind, break_iter, check_iter, reresid, pAp_f32, pAp_exact, pp,
-            rayleigh, noise_bound, sym_zAp, sym_pAz,
-            (std::fabs(sym_zAp) + std::fabs(sym_pAz)) > 0.0
-                ? std::fabs(sym_zAp - sym_pAz) * 2.0 /
-                      (std::fabs(sym_zAp) + std::fabs(sym_pAz))
-                : 0.0);
-    fflush(stderr);
-    std::abort();
+    ppf_fatal(
+        PPF_FATAL_SOLVER_INVARIANT,
+        "PPF FATAL: PCG breakdown -- p^T A p is %s at iter %u (detected at "
+        "check iter %u, reresid %.3e).\n"
+        "  p^T A p  (fp32 device reduction, the value that tripped it) = "
+        "%.6e\n"
+        "  p^T A p  (recomputed in double from the same iterate)        = "
+        "%.6e\n"
+        "  |p|^2                                                       = "
+        "%.6e\n"
+        "  Rayleigh quotient p^T A p / |p|^2 (double)                  = "
+        "%.6e\n"
+        "  round-off bound on the fp32 sum                             = "
+        "%.6e  (exceeded, hence a real defect and not cancellation)\n"
+        "  symmetry probe: z^T(A p) = %.6e vs p^T(A z) = %.6e (relative "
+        "gap %.3e)\n"
+        "A double-precision value that is POSITIVE means the assembled "
+        "matrix is SPD and the fp32 reduction cancelled; a NEGATIVE one of "
+        "order-1-and-up magnitude means a genuine indefinite term (a "
+        "per-element Hessian missing its SPD projection, a sign/assembly "
+        "error, or a dropped off-diagonal block). A symmetry gap well above "
+        "float epsilon means the applied operator is not symmetric, in "
+        "which case p^T A p is not a curvature at all.\n",
+        kind, break_iter, check_iter, reresid, pAp_f32, pAp_exact, pp, rayleigh,
+        noise_bound, sym_zAp, sym_pAz,
+        (std::fabs(sym_zAp) + std::fabs(sym_pAz)) > 0.0
+            ? std::fabs(sym_zAp - sym_pAz) * 2.0 /
+                  (std::fabs(sym_zAp) + std::fabs(sym_pAz))
+            : 0.0);
 }
 
 [[noreturn]] static void fatal_nonpositive_rz(unsigned break_iter,
                                               unsigned check_iter,
                                               double reresid, double rz) {
-    fprintf(stderr,
-            "PPF FATAL: PCG breakdown -- r^T M^-1 r is %s at iter %u (detected "
-            "at check iter %u, reresid %.3e), value = %.6e. The preconditioner "
-            "is not SPD. Every block-Jacobi diagonal block is inverted through "
-            "a floored symmetric eigendecomposition, so each per-vertex term "
-            "r_i^T M_i^-1 r_i is positive by construction and their sum cannot "
-            "be negative in exact arithmetic: a non-positive value here means "
-            "a block is NaN/Inf or the residual itself is not finite.\n",
-            std::isnan(rz) ? "not-a-number" : "non-positive", break_iter,
-            check_iter, reresid, rz);
-    fflush(stderr);
-    std::abort();
+    ppf_fatal(
+        PPF_FATAL_SOLVER_INVARIANT,
+        "PPF FATAL: PCG breakdown -- r^T M^-1 r is %s at iter %u (detected "
+        "at check iter %u, reresid %.3e), value = %.6e. The preconditioner "
+        "is not SPD. Every block-Jacobi diagonal block is inverted through "
+        "a floored symmetric eigendecomposition, so each per-vertex term "
+        "r_i^T M_i^-1 r_i is positive by construction and their sum cannot "
+        "be negative in exact arithmetic: a non-positive value here means "
+        "a block is NaN/Inf or the residual itself is not finite.\n",
+        std::isnan(rz) ? "not-a-number" : "non-positive", break_iter, check_iter,
+        reresid, rz);
 }
 
 [[noreturn]] static void fatal_indefinite_hostsync(unsigned iter, double pAp,
                                                    double bound) {
-    fprintf(stderr,
-            "PPF FATAL: PCG breakdown -- p^T A p is %s at iter %u on the host "
-            "fallback loop: value %.6e against a round-off bound of %.6e. "
-            "Beyond that bound the sign is real, so the assembled Newton "
-            "Hessian is not SPD (a per-element Hessian missing its SPD "
-            "projection, a sign/assembly error, or a dropped off-diagonal "
-            "block). This loop keeps no captured iterate; re-run so the "
-            "device path takes the solve to get the double-precision "
-            "recomputation and the symmetry probe.\n",
-            std::isnan(pAp) ? "not-a-number" : "negative", iter, pAp, bound);
-    fflush(stderr);
-    std::abort();
+    ppf_fatal(
+        PPF_FATAL_SOLVER_INVARIANT,
+        "PPF FATAL: PCG breakdown -- p^T A p is %s at iter %u on the host "
+        "fallback loop: value %.6e against a round-off bound of %.6e. "
+        "Beyond that bound the sign is real, so the assembled Newton "
+        "Hessian is not SPD (a per-element Hessian missing its SPD "
+        "projection, a sign/assembly error, or a dropped off-diagonal "
+        "block). This loop keeps no captured iterate; re-run so the "
+        "device path takes the solve to get the double-precision "
+        "recomputation and the symmetry probe.\n",
+        std::isnan(pAp) ? "not-a-number" : "negative", iter, pAp, bound);
 }
 
 [[noreturn]] static void fatal_nonspd_preconditioner(unsigned iter,
                                                      double reresid) {
-    fprintf(stderr,
-            "PPF FATAL: non-SPD preconditioner -- r^T M^-1 r <= 0 in the PCG "
-            "solve at iter %u (reresid %.3e). The preconditioner (Schwarz / "
-            "block-Jacobi) is not SPD.\n",
-            iter, reresid);
-    fflush(stderr);
-    std::abort();
+    ppf_fatal(PPF_FATAL_SOLVER_INVARIANT,
+              "PPF FATAL: non-SPD preconditioner -- r^T M^-1 r <= 0 in the PCG "
+              "solve at iter %u (reresid %.3e). The preconditioner (Schwarz / "
+              "block-Jacobi) is not SPD.\n",
+              iter, reresid);
 }
 
 struct UnrolledMat3x3f {
@@ -1313,13 +1309,12 @@ cg_device(const DeviceOperators &op, Vec<float> &r, Vec<float> &x,
                     // (kernels::scalar_div on the Schwarz path). Say so instead
                     // of blaming p^T A p, which is what the old single-message
                     // report did for every cause.
-                    fprintf(stderr,
-                            "PPF FATAL: PCG breakdown with no latched cause at "
-                            "check iter %u (reresid %.3e). Raised by a divide "
-                            "guard outside the fused path.\n",
-                            iter, reresid);
-                    fflush(stderr);
-                    std::abort();
+                    ppf_fatal(
+                        PPF_FATAL_SOLVER_INVARIANT,
+                        "PPF FATAL: PCG breakdown with no latched cause at "
+                        "check iter %u (reresid %.3e). Raised by a divide "
+                        "guard outside the fused path.\n",
+                        iter, reresid);
                 }
                 // p^T A p breakdown. The iterate that tripped it was captured in
                 // the kernel, so the quadratic form can be recomputed exactly:
@@ -1490,6 +1485,145 @@ cg_hostsync(const DeviceOperators &op, Vec<float> &r, Vec<float> &x,
     // PooledVec buffers auto-release when exiting function
 }
 
+// Host-synchronizing projected PCG for aggregate translation and rotation
+// locks. The fast device-resident path deliberately remains unchanged for
+// unconstrained scenes. A lock solve is less common and must interleave Q around every
+// operator and preconditioner application, so keeping this algebra explicit is
+// safer than hiding it in the CUDA graph kernels.
+//
+// q is the affine particular correction (including exact removed-pin rows).
+// The Krylov unknown z is tangent, and the actual Newton correction is q + z:
+//
+//   Q M Q z = Q (b - M q).
+//
+// This preserves the seeded-residual denominator rule: err0 is the constrained
+// residual after the exact known correction, never ||b||.
+static std::tuple<bool, unsigned, float, bool>
+cg_translation_locked(const DeviceOperators &op,
+                      const translation_lock::FullProjector &projector,
+                      Vec<float> &b, Vec<float> &x, Vec<float> q,
+                      unsigned max_iter, float tol) {
+    const unsigned vertex_count = op.A.nrow;
+    buffer::MemoryPool &pool = buffer::get();
+    auto rbuf = pool.get<float>(3 * vertex_count);
+    auto zbuf = pool.get<float>(3 * vertex_count);
+    auto pbuf = pool.get<float>(3 * vertex_count);
+    auto apbuf = pool.get<float>(3 * vertex_count);
+    auto tmpbuf = pool.get<float>(3 * vertex_count);
+    auto zsolbuf = pool.get<float>(3 * vertex_count);
+    Vec<float> r = rbuf.as_vec(), z = zbuf.as_vec(), p = pbuf.as_vec(),
+               Ap = apbuf.as_vec(), tmp = tmpbuf.as_vec(),
+               zsol = zsolbuf.as_vec();
+
+    // r = Q (b - M q), zsol = 0.
+    op.apply(q, tmp);
+    kernels::copy(b.data, r.data, b.size);
+    kernels::add_scaled(tmp.data, r.data, -1.0f, r.size);
+    projector.project(r);
+    zsol.clear(0.0f);
+
+    const double err0 = op.norm(r, tmp);
+    if (err0 == 0.0) {
+        kernels::copy(q.data, x.data, x.size);
+        return {true, 1u, 0.0f, false};
+    }
+
+    op.precond(r, z);
+    projector.project(z);
+    double rz0 = kernels::inner_product(r.data, z.data, r.size);
+    bool fell_back = false;
+    if ((rz0 <= 0.0 || !std::isfinite(rz0)) && op.H && !op.force_bj) {
+        op.force_bj = true;
+        fell_back = true;
+        op.precond(r, z);
+        projector.project(z);
+        rz0 = kernels::inner_product(r.data, z.data, r.size);
+    }
+    if (rz0 <= 0.0 || !std::isfinite(rz0)) {
+        fatal_nonpositive_rz(1u, 1u, 1.0, rz0);
+    }
+    kernels::copy(z.data, p.data, p.size);
+    projector.project(p);
+
+    unsigned iter = 1;
+    while (true) {
+        // Ap = Q M Q p. p is projected after every update, but projecting it
+        // again here makes this identity explicit and limits accumulated fp32
+        // drift in the two aggregate modes.
+        projector.project(p);
+        op.apply(p, Ap);
+        projector.project(Ap);
+        const double pAp =
+            (double)kernels::inner_product(p.data, Ap.data, p.size);
+        const double pnorm =
+            std::sqrt((double)kernels::inner_product(p.data, p.data, p.size));
+        const double apnorm =
+            std::sqrt((double)kernels::inner_product(Ap.data, Ap.data, Ap.size));
+        const float bound =
+            cg_curvature_bound((float)(pnorm * apnorm));
+        const CurvatureVerdict verdict =
+            cg_curvature_verdict((float)pAp, bound);
+        if (verdict != CURVATURE_OK) {
+            if (verdict == CURVATURE_FATAL) {
+                fatal_indefinite_hostsync(iter, pAp, (double)bound);
+            }
+            printf("* cg truncated (aggregate lock): curvature %.3e within "
+                   "round-off bound %.3e at iter %u\n",
+                   pAp, (double)bound, iter);
+            projector.project(zsol, 3u);
+            kernels::copy(q.data, x.data, x.size);
+            kernels::add_scaled(zsol.data, x.data, 1.0f, x.size);
+            return {true, iter, (float)(op.norm(r, tmp) / err0), fell_back};
+        }
+
+        const double alpha = rz0 / pAp;
+        kernels::add_scaled(p.data, zsol.data, (float)alpha, zsol.size);
+        kernels::add_scaled(Ap.data, r.data, (float)-alpha, r.size);
+        projector.project(r);
+        const double reresid = op.norm(r, tmp) / err0;
+        if (reresid < tol) {
+            projector.project(zsol, 3u);
+            kernels::copy(q.data, x.data, x.size);
+            kernels::add_scaled(zsol.data, x.data, 1.0f, x.size);
+            return {true, iter, (float)reresid, fell_back};
+        }
+        if (iter >= max_iter || !std::isfinite(reresid)) {
+            projector.project(zsol, 3u);
+            kernels::copy(q.data, x.data, x.size);
+            kernels::add_scaled(zsol.data, x.data, 1.0f, x.size);
+            return {false, iter, (float)reresid, fell_back};
+        }
+
+        op.precond(r, z);
+        projector.project(z);
+        const double rz1 = kernels::inner_product(r.data, z.data, r.size);
+        if (rz1 <= 0.0 || !std::isfinite(rz1)) {
+            if (op.H && !op.force_bj) {
+                op.force_bj = true;
+                fell_back = true;
+                op.precond(r, z);
+                projector.project(z);
+                const double rz_restart =
+                    kernels::inner_product(r.data, z.data, r.size);
+                if (rz_restart <= 0.0 || !std::isfinite(rz_restart)) {
+                    fatal_nonpositive_rz(iter, iter, reresid, rz_restart);
+                }
+                kernels::copy(z.data, p.data, p.size);
+                projector.project(p);
+                rz0 = rz_restart;
+                ++iter;
+                continue;
+            }
+            fatal_nonpositive_rz(iter, iter, reresid, rz1);
+        }
+        const double beta = rz1 / rz0;
+        kernels::combine(z.data, p.data, p.data, 1.0f, (float)beta, p.size);
+        projector.project(p);
+        rz0 = rz1;
+        ++iter;
+    }
+}
+
 // PCG entry. Both preconditioners run the device-resident loop; Schwarz also
 // passes check_spd so a non-SPD residual is detected on the device, in which case
 // the inputs are restored and the proven host-sync block-Jacobi fallback runs
@@ -1577,10 +1711,245 @@ std::tuple<bool, unsigned, float, bool> cg(const DeviceOperators &op,
 // must not change the cloth. Per body, not bodies as one group, for the same
 // reason: a heavy body must not set a light body's scale.
 std::tuple<bool, unsigned, float>
+cg_rigid_translation_locked(
+    const DynCSRMat &A, const FixedCSRMat &B, const Vec<Mat3x3f> &C,
+    PDRD::RigidMap &rm, PDRD::RigidPrecond &P,
+    const Vec<Mat3x3f> &inv_diag, Vec<float> bvec, Vec<float> x,
+    unsigned max_iter, float tol, Vec<float> dtheta_out,
+    const translation_lock::FullProjector &lock_projector, Vec<float> qfull,
+    const DataSet &data) {
+    buffer::MemoryPool &pool = buffer::get();
+    const unsigned dim = rm.dim, nrow = rm.nrow, nb = rm.n_bodies;
+    const unsigned body_base = rm.body_base, ngrp = 1u + nb;
+    auto fb = pool.get<float>(dim);
+    auto qb = pool.get<float>(dim);
+    auto solb = pool.get<float>(dim);
+    auto zb = pool.get<float>(dim);
+    auto pb = pool.get<float>(dim);
+    auto rb = pool.get<float>(dim);
+    auto rpb = pool.get<float>(dim);
+    auto tb = pool.get<float>(dim);
+    auto xvb = pool.get<float>(3 * nrow);
+    auto mxvb = pool.get<float>(3 * nrow);
+    Vec<float> f = fb.as_vec(), q = qb.as_vec(), sol = solb.as_vec(),
+               z = zb.as_vec(), p = pb.as_vec(), r = rb.as_vec(), Rp = rpb.as_vec(),
+               tmp = tb.as_vec(), xv = xvb.as_vec(), mxv = mxvb.as_vec();
+    auto gb = pool.get<float>(3 * ngrp);
+    float *g0 = gb.data, *gc = g0 + ngrp, *gr = gc + ngrp;
+
+    // A hinge permits no translation. A requested perpendicular affine
+    // correction is therefore genuinely infeasible, not something to silently
+    // drop by composing the two projectors.
+    if (rm.any_translation_lock) {
+        std::vector<unsigned> hmode(nb), hlock(nb);
+        std::vector<Vec3f> hdrift(data.translation_lock.size);
+        CUDA_HANDLE_ERROR(cudaMemcpy(hmode.data(), rm.jmode.data,
+                                     nb * sizeof(unsigned),
+                                     cudaMemcpyDeviceToHost));
+        CUDA_HANDLE_ERROR(cudaMemcpy(hlock.data(), rm.tlock.data,
+                                     nb * sizeof(unsigned),
+                                     cudaMemcpyDeviceToHost));
+        CUDA_HANDLE_ERROR(cudaMemcpy(hdrift.data(),
+                                     lock_projector.drift().data,
+                                     hdrift.size() * sizeof(Vec3f),
+                                     cudaMemcpyDeviceToHost));
+        std::vector<::TranslationLock> hlocks(data.translation_lock.size);
+        CUDA_HANDLE_ERROR(cudaMemcpy(hlocks.data(), data.translation_lock.data,
+                                     hlocks.size() * sizeof(::TranslationLock),
+                                     cudaMemcpyDeviceToHost));
+        for (unsigned body = 0; body < nb; ++body) {
+            if (hmode[body] != PDRD::PDRD_JOINT_HINGE ||
+                hlock[body] == PDRD::RIGID_UNSET) {
+                continue;
+            }
+            const unsigned li = hlock[body];
+            const Vec3f d = hdrift[li];
+            const float residual =
+                std::sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]) /
+                hlocks[li].total_mass;
+            const float bound = 8.0f / 134217728.0f +
+                                256.0f * 1.19209290e-7f;
+            if (residual > bound) {
+                ppf_fatal(PPF_FATAL_SOLVER_INVARIANT,
+                          "PPF FATAL: PDRD body %u has both a hinge and a "
+                          "translation lock, but its current COM requires a "
+                          "perpendicular translation of %.6e. The hinge "
+                          "removes that DOF, so the requested lock correction "
+                          "is infeasible.\n",
+                          body + 1u, (double)residual);
+            }
+        }
+    }
+
+    // The two projections below commute because their supports are disjoint:
+    // FullProjector skips PDRD vertices and copy_projected_cloth writes only
+    // cloth rows, while launch_project_bodies touches only each body's six
+    // reduced coordinates. Within a body, launch_project_bodies constructs one
+    // combined basis for joints, Translation Lock, and Rotation Lock.
+    auto project_tangent = [&](Vec<float> u) {
+        PDRD::launch_project_bodies(rm, u);
+        PDRD::launch_prolong_rigid(rm, u, xv);
+        lock_projector.project(xv);
+        PDRD::launch_copy_projected_cloth(rm, xv, u);
+        PDRD::launch_project_bodies(rm, u);
+    };
+    auto Rapply_tangent = [&](Vec<float> in, Vec<float> out) {
+        project_tangent(in);
+        PDRD::launch_prolong_rigid(rm, in, xv);
+        solver::apply(A, B, C, 0.0f, xv, mxv);
+        lock_projector.project(mxv);
+        PDRD::launch_restrict_rigid(rm, mxv, out);
+        PDRD::launch_project_bodies(rm, out);
+    };
+    auto Rapply_affine = [&](Vec<float> in, Vec<float> out) {
+        PDRD::launch_prolong_rigid(rm, in, xv);
+        solver::apply(A, B, C, 0.0f, xv, mxv);
+        lock_projector.project(mxv);
+        PDRD::launch_restrict_rigid(rm, mxv, out);
+        PDRD::launch_project_bodies(rm, out);
+    };
+    auto group_l1 = [&](Vec<float> w, float *out) {
+        if (body_base) {
+            DISPATCH_START(body_base)
+            [w, tmp] __device__(unsigned i) mutable {
+                tmp.data[i] = fabsf(w.data[i]);
+            } DISPATCH_END;
+            kernels::sum_into(tmp.data, out, body_base);
+        } else {
+            CUDA_HANDLE_ERROR(cudaMemset(out, 0, sizeof(float)));
+        }
+        DISPATCH_START(nb)
+        [w, out, body_base] __device__(unsigned b) mutable {
+            const float *body = w.data + body_base + 6u * b;
+            float sum = 0.0f;
+            for (unsigned k = 0; k < 6; ++k) sum += fabsf(body[k]);
+            out[1u + b] = sum;
+        } DISPATCH_END;
+    };
+
+    // q begins with exact fixed-pin increments on cloth rows, then receives
+    // the affine PDRD translation correction. It must NOT pass through the
+    // tangent projector, because its perpendicular component is the known
+    // right-hand-side lift that makes the constrained state feasible.
+    PDRD::launch_seed_restrict(rm, qfull, q);
+    PDRD::launch_translation_lock_particular(rm, data, lock_projector.drift(),
+                                             q);
+
+    lock_projector.project(bvec);
+    PDRD::launch_restrict_rigid(rm, bvec, f);
+    PDRD::launch_project_bodies(rm, f);
+    Rapply_affine(q, Rp);
+    kernels::copy(f.data, r.data, dim);
+    kernels::add_scaled(Rp.data, r.data, -1.0f, dim);
+    project_tangent(r);
+
+    group_l1(r, g0);
+    std::vector<float> h_g0(ngrp);
+    CUDA_HANDLE_ERROR(cudaMemcpy(h_g0.data(), g0, ngrp * sizeof(float),
+                                 cudaMemcpyDeviceToHost));
+    double err0 = 0.0;
+    for (unsigned g = 0; g < ngrp; ++g) err0 += (double)h_g0[g];
+    if (err0 == 0.0) {
+        PDRD::launch_prolong_rigid(rm, q, x);
+        if (dtheta_out.data) PDRD::launch_extract_body_dtheta(rm, q, dtheta_out);
+        return {true, 1u, 0.0f};
+    }
+    const float err0_all = (float)err0;
+    auto worst_reresid = [&]() {
+        group_l1(r, gc);
+        DISPATCH_START(ngrp)
+        [gc, g0, gr, err0_all] __device__(unsigned g) mutable {
+            const float initial = g0[g];
+            const float ratio = gc[g] / (initial > 0.0f ? initial : err0_all);
+            gr[g] = isfinite(ratio) ? ratio : INFINITY;
+        } DISPATCH_END;
+        return (double)kernels::max_array(gr, ngrp, 0.0f);
+    };
+
+    sol.clear(0.0f);
+    PDRD::apply_rigid_precond(P, rm, inv_diag, r, z);
+    project_tangent(z);
+    double rz0 = kernels::inner_product(r.data, z.data, dim);
+    if (rz0 <= 0.0 || !std::isfinite(rz0)) {
+        fatal_nonpositive_rz(1u, 1u, 1.0, rz0);
+    }
+    kernels::copy(z.data, p.data, dim);
+    project_tangent(p);
+
+    unsigned iter = 1;
+    while (true) {
+        Rapply_tangent(p, Rp);
+        const double pRp =
+            (double)kernels::inner_product(p.data, Rp.data, dim);
+        const double pnorm =
+            std::sqrt((double)kernels::inner_product(p.data, p.data, dim));
+        const double rp_norm =
+            std::sqrt((double)kernels::inner_product(Rp.data, Rp.data, dim));
+        const float bound =
+            cg_curvature_bound((float)(pnorm * rp_norm));
+        const CurvatureVerdict verdict =
+            cg_curvature_verdict((float)pRp, bound);
+        if (verdict != CURVATURE_OK) {
+            if (verdict == CURVATURE_FATAL) {
+                fatal_indefinite_hostsync(iter, pRp, (double)bound);
+            }
+            printf("* cg truncated (PDRD aggregate lock): curvature %.3e "
+                   "within round-off bound %.3e at iter %u\n",
+                   pRp, (double)bound, iter);
+            project_tangent(sol);
+            kernels::add_scaled(sol.data, q.data, 1.0f, dim);
+            if (dtheta_out.data)
+                PDRD::launch_extract_body_dtheta(rm, q, dtheta_out);
+            PDRD::launch_prolong_rigid(rm, q, x);
+            return {true, iter, (float)worst_reresid()};
+        }
+        const double alpha = rz0 / pRp;
+        kernels::add_scaled(p.data, sol.data, (float)alpha, dim);
+        kernels::add_scaled(Rp.data, r.data, (float)-alpha, dim);
+        project_tangent(r);
+        const float reresid = (float)worst_reresid();
+        if (reresid < tol) {
+            project_tangent(sol);
+            kernels::add_scaled(sol.data, q.data, 1.0f, dim);
+            if (dtheta_out.data)
+                PDRD::launch_extract_body_dtheta(rm, q, dtheta_out);
+            PDRD::launch_prolong_rigid(rm, q, x);
+            return {true, iter, reresid};
+        }
+        if (iter >= max_iter || !std::isfinite((double)reresid)) {
+            project_tangent(sol);
+            kernels::add_scaled(sol.data, q.data, 1.0f, dim);
+            if (dtheta_out.data)
+                PDRD::launch_extract_body_dtheta(rm, q, dtheta_out);
+            PDRD::launch_prolong_rigid(rm, q, x);
+            return {false, iter, reresid};
+        }
+        PDRD::apply_rigid_precond(P, rm, inv_diag, r, z);
+        project_tangent(z);
+        const double rz1 = kernels::inner_product(r.data, z.data, dim);
+        if (rz1 <= 0.0 || !std::isfinite(rz1)) {
+            fatal_nonpositive_rz(iter, iter, reresid, rz1);
+        }
+        const double beta = rz1 / rz0;
+        kernels::combine(z.data, p.data, p.data, 1.0f, (float)beta, dim);
+        project_tangent(p);
+        rz0 = rz1;
+        ++iter;
+    }
+}
+
+std::tuple<bool, unsigned, float>
 cg_rigid(const DynCSRMat &A, const FixedCSRMat &B, const Vec<Mat3x3f> &C,
          PDRD::RigidMap &rm, PDRD::RigidPrecond &P, const Vec<Mat3x3f> &inv_diag,
          Vec<float> bvec, Vec<float> x, unsigned max_iter, float tol,
-         Vec<float> dtheta_out) {
+         Vec<float> dtheta_out,
+         const translation_lock::FullProjector *lock_projector,
+         Vec<float> lock_q, const DataSet &data) {
+    if (lock_projector) {
+        return cg_rigid_translation_locked(
+            A, B, C, rm, P, inv_diag, bvec, x, max_iter, tol, dtheta_out,
+            *lock_projector, lock_q, data);
+    }
     buffer::MemoryPool &pool = buffer::get();
     const unsigned dim = rm.dim;
     const unsigned nrow = rm.nrow;
@@ -1797,7 +2166,8 @@ void rigid_operator_selftest(const DynCSRMat &A, const FixedCSRMat &B,
     unsigned it;
     float rr;
     std::tie(ok, it, rr) =
-        cg_rigid(A, B, C, rm, P, inv_diag, rhs, sol, 2000u, 1e-5f, Vec<float>{});
+        cg_rigid(A, B, C, rm, P, inv_diag, rhs, sol, 2000u, 1e-5f,
+                 Vec<float>{}, nullptr, Vec<float>{}, data);
     fprintf(stderr,
             "[pdrd rigid operator selftest] dim=%u (cloth=%u bodies=%u) "
             "PD<u,Ru>=%.3e sym_rel=%.3e PCG: ok=%d iters=%u resid=%.3e\n",
@@ -1811,7 +2181,8 @@ bool solve(const DynCSRMat &A, const FixedCSRMat &B, const Vec<Mat3x3f> &C,
            Vec<float> b, float tol, unsigned max_iter, Vec<float> x,
            const Vec<Vec3f> &positions, const ParamSet &prm, unsigned &iter,
            float &resid, unsigned &schwarz_fallback, const DataSet &data,
-           float dt, Vec<float> pdrd_dtheta_out) {
+           float dt, Vec<float> pdrd_dtheta_out,
+           Vec<unsigned> dof_removed_mask) {
 
     unsigned vertex_count = A.nrow;
     buffer::MemoryPool &pool = buffer::get();
@@ -1841,6 +2212,8 @@ bool solve(const DynCSRMat &A, const FixedCSRMat &B, const Vec<Mat3x3f> &C,
 
     DeviceOperators ops(A, B, C, inv_diag_vec);
 
+    const bool aggregate_locked = translation_lock::has_any(data);
+
     // Reduced-coordinate rigid PDRD mode. PDRD bodies are solved in reduced 6-DOF
     // RIGID coordinates u_b = (dx_b, dtheta_b). The body carries NO penalty
     // energy; the assembled matrix M holds only per-vertex inertia (diagonal C)
@@ -1863,9 +2236,33 @@ bool solve(const DynCSRMat &A, const FixedCSRMat &B, const Vec<Mat3x3f> &C,
         static PDRD::RigidPrecond s_rprec;
         PDRD::build_rigid_precond(s_rprec, data, state, A, B, dt);
         bool ok;
-        std::tie(ok, iter, resid) =
-            cg_rigid(A, B, C, rm, s_rprec, inv_diag_vec, b, x, max_iter, tol,
-                     pdrd_dtheta_out);
+        if (aggregate_locked) {
+            const unsigned lock_count = data.translation_lock.size;
+            auto lock_frames =
+                pool.get<translation_lock::LockFrame>(lock_count);
+            auto lock_gram = pool.get<Mat4x4f>(lock_count);
+            auto lock_sums = pool.get<Vec4f>(lock_count);
+            auto lock_drift = pool.get<Vec3f>(lock_count);
+            auto lock_torque = pool.get<Vec3f>(lock_count);
+            auto lock_q = pool.get<float>(3 * vertex_count);
+            translation_lock::FullProjector lock_projector(
+                data, dof_removed_mask, lock_frames.as_vec(),
+                lock_gram.as_vec(), lock_sums.as_vec(), lock_drift.as_vec(),
+                lock_torque.as_vec());
+            Vec<float> lock_q_vec = lock_q.as_vec();
+            lock_projector.prepare(positions, x, lock_q_vec);
+            std::tie(ok, iter, resid) = cg_rigid(
+                A, B, C, rm, s_rprec, inv_diag_vec, b, x, max_iter, tol,
+                pdrd_dtheta_out, &lock_projector, lock_q_vec, data);
+            if (ok) {
+                lock_projector.check_tangent(
+                    positions, x, "constrained Newton correction");
+            }
+        } else {
+            std::tie(ok, iter, resid) = cg_rigid(
+                A, B, C, rm, s_rprec, inv_diag_vec, b, x, max_iter, tol,
+                pdrd_dtheta_out, nullptr, Vec<float>{}, data);
+        }
         schwarz_fallback = 0u;
         return ok;
     }
@@ -1894,7 +2291,29 @@ bool solve(const DynCSRMat &A, const FixedCSRMat &B, const Vec<Mat3x3f> &C,
 
     bool success;
     bool fell_back;
-    std::tie(success, iter, resid, fell_back) = cg(ops, b, x, max_iter, tol);
+    if (aggregate_locked) {
+        const unsigned lock_count = data.translation_lock.size;
+        auto lock_frames = pool.get<translation_lock::LockFrame>(lock_count);
+        auto lock_gram = pool.get<Mat4x4f>(lock_count);
+        auto lock_sums = pool.get<Vec4f>(lock_count);
+        auto lock_drift = pool.get<Vec3f>(lock_count);
+        auto lock_torque = pool.get<Vec3f>(lock_count);
+        auto lock_q = pool.get<float>(3 * vertex_count);
+        translation_lock::FullProjector lock_projector(
+            data, dof_removed_mask, lock_frames.as_vec(), lock_gram.as_vec(),
+            lock_sums.as_vec(), lock_drift.as_vec(), lock_torque.as_vec());
+        Vec<float> lock_q_vec = lock_q.as_vec();
+        lock_projector.prepare(positions, x, lock_q_vec);
+        std::tie(success, iter, resid, fell_back) = cg_translation_locked(
+            ops, lock_projector, b, x, lock_q_vec, max_iter, tol);
+        if (success) {
+            lock_projector.check_tangent(
+                positions, x, "constrained Newton correction");
+        }
+    } else {
+        std::tie(success, iter, resid, fell_back) =
+            cg(ops, b, x, max_iter, tol);
+    }
     schwarz_fallback = (fell_back || schwarz_degraded) ? 1u : 0u;
 
     // PooledVec auto-releases when exiting function

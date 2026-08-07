@@ -77,9 +77,35 @@ $(OUT_DIR)/cpp/%.o: %.cpp Makefile
 #   sm_120 Blackwell  RTX 50-series          (consumer)
 # Keep this list in sync with SUPPORTED_SM in crates/ppf-cts-core/src/utils.rs,
 # which gates solver launch against exactly these architectures.
+#
+# This link, not the 17 compiles, is what a rebuild costs. Each -gencode is an
+# independent whole-program optimization of the same LTO IR down to that arch's
+# SASS, and nvcc runs them one after another unless told otherwise, so the link
+# costs the arch count times a single arch. Measured on an L40S (16 cores, nvcc
+# 12.8): 178.9 s for the five against 33.6 s for one alone, while all 17 compiles
+# together take ~6 s wall at -j16.
+#
+# -t overlaps those per-arch optimizations (0 = one thread per CPU), taking the
+# link to 43.9 s, near the floor set by the slowest single arch. It is a
+# scheduling flag only: it selects no optimization level and changes no codegen
+# decision, and the .so it produces is BYTE-IDENTICAL to the serial one (md5
+# verified for -t 0, -t 5 and -t 16 against an unflagged link).
+#
+# Do NOT reach for --split-compile here. It parallelizes too, and slightly
+# faster (39.9 s), but by partitioning the optimizer's scope, so it is not free:
+# it emitted 1,150,536 SASS instructions against 1,132,816 for the serial link,
+# 17,720 more (+1.6%) in the solver's hottest device code. Build time is not
+# worth paying for at run time. --split-compile-extended is worse still: it
+# fails this link outright ("nvlink error: Size doesn't match for '__unnamed_1'
+# in 'lto.cubin'").
+#
+# -t belongs on this link ONLY, never on the compile rule above. That rule
+# builds a single arch (lto_86), where -t has nothing to overlap and measured no
+# gain (solver.cu: 5.3 s with -t 16 vs 5.4 s without), and make already runs the
+# compiles -j wide, so each of the 17 would stack its own thread pool on top.
 $(LIBDIR)/libsimbackend_cuda.so: $(CUDA_OBJS) $(SIMPLELOG_OBJS) $(STUB_OBJS)
 	mkdir -p $(LIBDIR)
-	$(NVCC) -shared -dlto \
+	$(NVCC) -shared -dlto -t 0 \
 		-gencode arch=compute_86,code=sm_86 \
 		-gencode arch=compute_86,code=sm_89 \
 		-gencode arch=compute_86,code=sm_90 \

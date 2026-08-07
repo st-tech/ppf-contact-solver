@@ -19,7 +19,9 @@ from .overlay_geometry import (
     _build_pdrd_hinge_batches,
     _build_pin_data,
     _build_rod_batches,
+    _build_rotation_lock_batches,
     _build_snap_batches,
+    _build_translation_lock_batches,
     _build_violation_batches,
     _build_velocity_arrow_batches,
     _resolve_scene_dyn_params,
@@ -60,6 +62,8 @@ _overlay_cache = {
     "collider_batches": [],
     "velocity_batches": [],
     "velocity_labels": [],
+    "translation_lock_batches": [],
+    "rotation_lock_batches": [],
     "violation_batches": [],
     "violation_labels": [],
     "violation_version": -1,
@@ -569,16 +573,26 @@ def draw_overlay_callback():
     if view_needs_rebuild:
         try:
             if hide_arrows:
-                vel_batches, vel_labels = [], []
+                vel_batches, vel_labels, lock_batches, rot_lock_batches = [], [], [], []
             else:
                 vel_batches, vel_labels = _build_velocity_arrow_batches(
                     scene, view_distance,
                 )
+                lock_batches = _build_translation_lock_batches(
+                    scene, view_distance,
+                )
+                rot_lock_batches = _build_rotation_lock_batches(
+                    scene, view_distance,
+                )
             _overlay_cache["velocity_batches"] = vel_batches
             _overlay_cache["velocity_labels"] = vel_labels
+            _overlay_cache["translation_lock_batches"] = lock_batches
+            _overlay_cache["rotation_lock_batches"] = rot_lock_batches
         except Exception:
             _overlay_cache["velocity_batches"] = []
             _overlay_cache["velocity_labels"] = []
+            _overlay_cache["translation_lock_batches"] = []
+            _overlay_cache["rotation_lock_batches"] = []
         # Promote the view-cache key last, so a failed builder retries next
         # frame rather than freezing stale/empty cached batches.
         _overlay_cache["view_distance"] = view_distance
@@ -600,6 +614,38 @@ def draw_overlay_callback():
             gpu.state.blend_set("NONE")
     except Exception:
         _overlay_cache["velocity_labels"] = []
+    try:
+        lock_batches = _overlay_cache["translation_lock_batches"]
+        if lock_batches:
+            shader = gpu.shader.from_builtin("UNIFORM_COLOR")
+            gpu.state.blend_set("ALPHA")
+            gpu.state.depth_test_set("NONE")
+            gpu.state.depth_mask_set(False)
+            for batch, color in lock_batches:
+                shader.bind()
+                shader.uniform_float("color", color)
+                batch.draw(shader)
+            gpu.state.depth_test_set("LESS_EQUAL")
+            gpu.state.depth_mask_set(True)
+            gpu.state.blend_set("NONE")
+    except Exception:
+        _overlay_cache["translation_lock_batches"] = []
+    try:
+        rot_lock_batches = _overlay_cache["rotation_lock_batches"]
+        if rot_lock_batches:
+            shader = gpu.shader.from_builtin("UNIFORM_COLOR")
+            gpu.state.blend_set("ALPHA")
+            gpu.state.depth_test_set("NONE")
+            gpu.state.depth_mask_set(False)
+            for batch, color in rot_lock_batches:
+                shader.bind()
+                shader.uniform_float("color", color)
+                batch.draw(shader)
+            gpu.state.depth_test_set("LESS_EQUAL")
+            gpu.state.depth_mask_set(True)
+            gpu.state.blend_set("NONE")
+    except Exception:
+        _overlay_cache["rotation_lock_batches"] = []
 
 
 def _draw_overlay_labels():

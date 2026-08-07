@@ -499,6 +499,87 @@ class AssignedObject(PropertyGroup):
         description="Which principal (PCA) axis of the rest shape is the free hinge axle, like Blender's torque-axis dropdown",
         update=_invalidate_overlay,
     )  # pyright: ignore
+    # Lock Translation (per object): restricts this object's mass-weighted
+    # center of mass to the fixed world-space line through its initial
+    # position along `lock_translation_axis`; rotation and deformation stay
+    # free. Available on every dynamic type (SOLID, SHELL, ROD, PDRD, SAND),
+    # so it lives on AssignedObject rather than a per-type group field, same
+    # as the PDRD hinge above. The encoder rejects a zero axis when enabled
+    # (see `_encode_lock_translation_axis`); the UI also warns inline so a
+    # scene never reaches build time with a silently-disabled lock.
+    lock_translation_enable: BoolProperty(
+        name="Lock Translation",
+        default=False,
+        description=(
+            "Constrain this object's mass-weighted center of mass to a "
+            "fixed world-space line through its initial position. Rotation "
+            "and deformation stay free"
+        ),
+        update=_invalidate_overlay,
+    )  # pyright: ignore
+    lock_translation_axis: FloatVectorProperty(
+        name="Translation Axis",
+        subtype="XYZ",
+        default=(1.0, 0.0, 0.0),
+        description=(
+            "World-space direction of the line the center of mass is "
+            "allowed to move along. Normalized by the encoder; only the "
+            "direction matters, not the magnitude. Must be non-zero"
+        ),
+        update=_invalidate_overlay,
+    )  # pyright: ignore
+    # Lock Rotation (per object): restricts this object's mass-weighted
+    # best-fit rigid rotation to rotation about `lock_rotation_axis` only;
+    # translation and deformation stay free. Coexists independently with
+    # Lock Translation above: either, both, or neither may be enabled on
+    # the same object. Available on every dynamic type (SOLID, SHELL,
+    # ROD, PDRD, SAND), so it lives on AssignedObject alongside Lock
+    # Translation. The encoder rejects a zero axis when enabled (see
+    # `_encode_lock_rotation_axis`); the UI also warns inline so a scene
+    # never reaches build time with a silently-disabled lock.
+    lock_rotation_enable: BoolProperty(
+        name="Lock Rotation",
+        default=False,
+        description=(
+            "Restrict this object's mass-weighted best-fit rigid rotation "
+            "to rotation about a fixed world-space axis. Translation and "
+            "deformation stay free"
+        ),
+        update=_invalidate_overlay,
+    )  # pyright: ignore
+    lock_rotation_axis: FloatVectorProperty(
+        name="Rotation Axis",
+        subtype="XYZ",
+        default=(1.0, 0.0, 0.0),
+        description=(
+            "World-space direction of the axis the object is allowed to "
+            "rotate about (or, with Prohibit Rotation on Axis, the axis "
+            "the object is forbidden to rotate about). Normalized by the "
+            "encoder; only the direction matters, not the magnitude. "
+            "Must be non-zero"
+        ),
+        update=_invalidate_overlay,
+    )  # pyright: ignore
+    # Lock Rotation mode switch: unchecked (default) keeps the axis a
+    # WHITELIST (only rotation about `lock_rotation_axis` is allowed, the
+    # behavior above); checked flips it to a BLACKLIST (rotation about
+    # `lock_rotation_axis` is forbidden, and the whole perpendicular
+    # rotation plane stays free instead of just the single allowed axis).
+    # Only meaningful while `lock_rotation_enable` is set; the encoder
+    # still writes it whenever Lock Rotation is enabled, independent of
+    # this flag's value, so a scene can flip modes without touching the
+    # axis.
+    lock_rotation_prohibit_axis: BoolProperty(
+        name="Prohibit Rotation on Axis",
+        default=False,
+        description=(
+            "Unchecked: only rotation about the Rotation Axis is allowed "
+            "(the axis is the sole rotational freedom). Checked: rotation "
+            "about the Rotation Axis is forbidden instead, and the "
+            "perpendicular rotation plane stays free"
+        ),
+        update=_invalidate_overlay,
+    )  # pyright: ignore
     # Per-object bending reference rest angle (SHELL). When enabled with a
     # valid reference object set, this object's bending rest angle is computed
     # from the reference geometry (a topological copy whose vertices were

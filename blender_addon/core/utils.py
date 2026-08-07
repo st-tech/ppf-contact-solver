@@ -52,11 +52,19 @@ def find_invalid_path_char(path: str) -> str | None:
 # ``datamodel/app.rs`` ``compose_data_dir`` plus the cache filename:
 #
 #   <root>\local\share\ppf-cts\git-<branch>\<project>\.cash\
-#   <64-hex>__<64-hex>_tetrahedralize_.npz.npz
+#   <64-hex>__<64-hex>_tetrahedralize_<16-hex>.npz.npz
 #
 # The git branch is resolved on the server and is ``unknown`` for a packaged
 # Windows build (no ``.git``), which is the case this guards.
 WINDOWS_MAX_PATH = 260
+
+# Width of the digest the server puts in a tetrahedralize cache name when the
+# object carries tetrahedralizer overrides. The composer is
+# ``datamodel/mesh.rs`` ``tetra_cache_name``, which digests any argument set
+# to this fixed width, so one number covers every object a scene can hold.
+# The default, argument-free name carries no digest and is 16 characters
+# shorter, which is why the projection below is an upper bound.
+TETRA_ARG_DIGEST_CHARS = 16
 
 
 def projected_windows_cache_path_len(base_path: str, project_name: str) -> int:
@@ -64,14 +72,16 @@ def projected_windows_cache_path_len(base_path: str, project_name: str) -> int:
     *base_path* for *project_name* on a Windows server.
 
     Mirrors the server-side layout described in the ``WINDOWS_MAX_PATH`` note,
-    so the value matches the path that would actually appear in a
-    ``FileNotFoundError`` (computed exactly for the default, empty-arg
-    tetrahedralize cache; a cache with extra tetrahedralize args is longer, so
-    this is a lower bound).
+    so the value covers every cache path the build can write and the guard
+    warns as soon as any of them would reach the limit. A project whose SOLID
+    objects all use default tetrahedralizer settings writes paths
+    ``TETRA_ARG_DIGEST_CHARS`` shorter than this, so such a project can be
+    warned while still fitting.
     """
     root = base_path.strip().rstrip("/\\")
     hex64 = "f" * 64  # a SHA-256 hex digest is 64 chars
-    cache_file = f"{hex64}__{hex64}_tetrahedralize_.npz.npz"
+    digest = "f" * TETRA_ARG_DIGEST_CHARS
+    cache_file = f"{hex64}__{hex64}_tetrahedralize_{digest}.npz.npz"
     tail = "\\".join(
         [
             "local", "share", "ppf-cts", "git-unknown",

@@ -1,0 +1,220 @@
+# File: unit-tests.yml
+# Code: Claude Code
+# Review: Ryoichi Ando (ryoichi.ando@zozo.com)
+# License: Apache v2.0
+#
+# Purpose: run the repository's unit test suites on macOS, Linux and
+# Windows. That is the Rust workspace tests, the solver crate's own tests
+# against its emulated backend, the Python suites under pyproject.toml's
+# testpaths, and the host C++ test target.
+#
+# DISCOVERY, not enumeration: cargo reads its test targets from Cargo.toml,
+# pytest globs testpaths against python_files, and the C++ targets are the
+# Makefiles' own. A new test file is covered with no edit here, provided a
+# Python one is named _something_.py or test_*.py and lives under one of the
+# declared testpaths.
+#
+# A single job, `unit`, selected by the `legs` input: free GitHub-hosted
+# runners, one matrix leg per platform. Everything it runs is pure logic.
+#
+# THIS TIER COMPILES NO CUDA SOLVER, on any platform. Nothing in the
+# workspace depends on ppf-cts-solver (cargo tree -i -p ppf-cts-solver
+# prints only itself), so --exclude ppf-cts-solver removes the one crate
+# whose default build.rs shells out to make and nvcc. The solver's own tests
+# are then run against its `emulated` feature, which compiles the CPU stub
+# under src/cpp_emul instead. PPF_ALLOW_EMULATED is set nowhere in this
+# file: a GitHub-hosted runner has no CUDA toolkit, so build.rs's guard does
+# not fire, and if a runner image ever ships one the guard fails this job
+# rather than quietly producing a stub.
+#
+# GATES AGAINST OPEN DEFECTS: several tests here assert a property the code
+# does not have yet. Each is armed rather than skipped. The Python ones
+# carry pytest.mark.xfail(strict=True) and the Rust ones
+# #[should_panic(expected = ...)], so they run on every platform, pass while
+# the defect is present, and fail this job the moment it is fixed. Answering
+# that failure means deleting the marker, which turns the test into the
+# permanent regression gate its name describes. The -rxX flag below prints
+# each Python gate with its reason, so the log carries the inventory of what
+# is still open.
+
+name: Unit tests (Rust, Python, C++)
+
+# Manual dispatch only, matching every other workflow in this repository.
+# A push trigger would run this on whatever a push contains, which for a
+# tier that executes the repository's own test code is a wider trust
+# boundary than the maintainers have chosen to open.
+on:
+  workflow_dispatch:
+    inputs:
+      legs:
+        description: 'Which jobs to run'
+        required: true
+        default: 'unit'
+        type: choice
+        options:
+          - unit
+
+permissions:
+  contents: read
+
+# A superseded run leaves no external state inconsistent, so it is
+# canceled rather than drained. The other concurrency groups in this
+# repository serialize mutation of a shared resource (a Pages deployment,
+# a provisioned host, a release list) and set cancel-in-progress to false
+# for that reason; neither reason applies to a unit tier.
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ====================================================================
+  # Unit tier - free GitHub-hosted runners, one leg per platform.
+  # ====================================================================
+  unit:
+    name: Unit (${{ matrix.name }})
+    if: inputs.legs == 'unit'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      # One platform's failure must not hide another's: several of the
+      # defects this tier gates are platform-sensitive, and a canceled
+      # sibling leg reports as skipped rather than as untested.
+      fail-fast: false
+      matrix:
+        include:
+          # Pinned, not macos-latest: that label flips to macos-26
+          # (Xcode 26 / Clang 21 / OpenSSL 3.x) by 2026-07-15. blender.yml
+          # freezes on macos-15 for the same reason; keep the two in step.
+          - os: macos-15
+            name: macOS
+          # Pinned, not ubuntu-latest. The AWS orchestrator jobs elsewhere
+          # in this repository use the floating label because their runner
+          # only drives the aws CLI over ssh. This leg compiles C++ through
+          # cc-rs and links a cdylib, so a silent glibc or clang bump is a
+          # real variable.
+          - os: ubuntu-24.04
+            name: Linux
+          # Pinned for the same reason as the other two.
+          - os: windows-2025
+            name: Windows
+    defaults:
+      run:
+        # Git Bash ships on windows-2025, so one set of run blocks serves
+        # all three legs.
+        shell: bash
+    env:
+      PYTHONUNBUFFERED: '1'
+    steps:
+      # A full checkout is required even though no CUDA solver is compiled.
+      # ppf-cts-core's build.rs cc-compiles cpp/intersect_ffi.cpp against
+      # headers under crates/ppf-cts-solver/src/cpp, and ppf-cts-server's
+      # build.rs reads blender_addon/protocol_version.toml at the
+      # workspace root. A crates-only or sparse checkout fails to build.
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: tests
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      # The emulated backend compiles src/cpp_emul with the host C++
+      # compiler, and that stub includes <Eigen/Dense>; so does the host
+      # C++ test below. blender.yml installs Eigen for the same reason.
+      # The Windows leg runs neither step, so it needs no Eigen.
+      - name: Install Eigen
+        if: matrix.os != 'windows-2025'
+        run: |
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            # The runner image pre-taps aws/tap and Homebrew warns about
+            # tap trust on every call; this workflow does not use it.
+            brew untap aws/tap 2>/dev/null || true
+            brew install eigen
+          else
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq libeigen3-dev
+          fi
+
+      - name: Install Python deps
+        # The subset the collected suites import. The heavy geometry and
+        # notebook packages the Blender rig needs (numba, pyvista, tetgen,
+        # pytetwild, triangle, fast-simplification, ipython, ipywidgets)
+        # are absent: nothing here reaches them, and leaving out pytetwild
+        # keeps fTetWild out of this tier entirely. pytest-randomly is
+        # deliberately not installed, so collection order is
+        # deterministic. The cbor2 pin is read from the add-on's own wheel
+        # manifest so it cannot drift from what Blender ships.
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pytest \
+            numpy scipy trimesh pywavefront plyfile pillow \
+            matplotlib tqdm pythreejs tabulate requests psutil tomli \
+            "$(python blender_addon/wheels/fetch.py --pin)"
+
+      # Debug, not release: these are correctness tests and this tier
+      # makes no timing claim. It also builds exactly one profile, so the
+      # frontend's release-then-debug cdylib search has only one candidate
+      # and cannot pick up a stale build.
+      - name: Build the Python extension module
+        run: cargo build -p ppf-cts-py
+
+      # Must precede pytest. Six frontend test files skip themselves at
+      # module level when the cdylib is unavailable, covering roughly half
+      # the collected tests, so a build that silently produced nothing
+      # would otherwise read as a green run over very little. frontend's
+      # __init__ imports the whole package surface, so this also proves
+      # every dependency the suites reach through it is installed.
+      - name: Verify the cdylib is importable
+        run: |
+          python -c "from frontend import _rust as m; print('schema_version', m.schema_version()); print('process_name', m.process_name())"
+
+      - name: Rust workspace tests
+        run: cargo test --workspace --exclude ppf-cts-solver
+
+      # The solver crate is excluded above because its default build.rs
+      # runs make and nvcc. Its own tests are pure Rust, so they run here
+      # against the emulated backend, which compiles the CPU stub under
+      # src/cpp_emul with the host C++ compiler and no CUDA.
+      - name: Solver crate tests (emulated backend)
+        if: matrix.os != 'windows-2025'
+        run: cargo test -p ppf-cts-solver --no-default-features --features emulated
+
+      - name: Solver crate tests (not run on Windows)
+        if: matrix.os == 'windows-2025'
+        run: |
+          echo "::notice title=Subset not run::build.rs links the emulated backend on Windows from libsimbackend_cpu.lib, which build-win-native/build-emul.bat produces with the portable MSVC and Eigen that warmup.bat downloads. The solver crate's tests are covered on the macOS and Linux legs."
+
+      # One invocation per testpath. pytest exits 5 only when the WHOLE run
+      # collects nothing, so a single invocation over every path stays
+      # green when one path goes empty, which is what a rename or a move
+      # produces. Split up, an empty path is that invocation's own exit 5.
+      #
+      # The paths are read from pyproject.toml rather than listed here, so
+      # a new testpath is covered with no edit to this file.
+      # --strict-markers turns a mistyped marker into an error instead of a
+      # silent no-op, and -rxX prints every expected failure with its
+      # reason.
+      - name: Python tests
+        run: |
+          paths=$(python -c "import tomllib; print(' '.join(tomllib.load(open('pyproject.toml','rb'))['tool']['pytest']['ini_options']['testpaths']))")
+          test -n "$paths" || { echo "pyproject.toml declares no testpaths"; exit 1; }
+          rc=0
+          for path in $paths; do
+            echo "===== pytest $path ====="
+            pytest -q -rxX --strict-markers "$path" || rc=1
+          done
+          exit $rc
+
+      - name: Host C++ test
+        if: matrix.os != 'windows-2025'
+        run: make -C crates/ppf-cts-solver/src/cpp/energy/model/tests test
+
+      - name: Host C++ test (not run on Windows)
+        if: matrix.os == 'windows-2025'
+        run: |
+          echo "::notice title=Subset not run::energy/model/tests uses POSIX make, which windows-2025 does not ship. test_pdrd_polar is covered on the macOS and Linux legs."

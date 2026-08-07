@@ -14,16 +14,19 @@ _SCALAR_RNA_TYPES = frozenset({"BOOLEAN", "INT", "FLOAT", "STRING", "ENUM"})
 
 # ObjectGroup fields that must NEVER be copied: identity (uuid/name/
 # index), the model classification (object_type, which selects the
-# prefix filter rather than being a material param), TOML profile
-# binding, UI toggles, dynamic enums whose items depend on per-group
-# context, computed caches, and per-assigned-object collections.
-# Anything not in this set is treated as a material parameter and
-# flows through copy/paste automatically.
+# prefix filter rather than being a material param), the overlay color
+# it derives (``update_object_type`` sets ``color`` from
+# ``object_type``, and writing it repaints every assigned object), TOML
+# profile binding, UI toggles, dynamic enums whose items depend on
+# per-group context, computed caches, and per-assigned-object
+# collections. Anything not in this set is treated as a material
+# parameter and flows through copy/paste automatically.
 MATERIAL_CLIPBOARD_EXCLUDE = frozenset({
     "name",
     "uuid",
     "index",
     "object_type",
+    "color",
     "assigned_objects_index",
     "pin_vertex_groups_index",
     "active",
@@ -37,8 +40,10 @@ MATERIAL_CLIPBOARD_EXCLUDE = frozenset({
     "tet_object_selection",
     "pdrd_hinge_object_selection",
     "bend_ref_object_selection",
+    "lock_translation_object_selection",
     "pdrd_hinge_visualize",
     "preview_velocity",
+    "preview_lock_translation",
     "computed_contact_gap",
     "computed_contact_offset",
     "show_parameters",

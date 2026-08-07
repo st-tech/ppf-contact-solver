@@ -269,6 +269,26 @@ class Object:
         # where pca_axis_index in {0, 1, 2} selects a principal axis of the
         # rest shape as the world rotation axle. See :meth:`hinge`.
         self._joint: Optional[tuple[str, int]] = None
+        # Lock Translation axis: None = free (unlocked), or a unit-length
+        # world-space direction vector. The solver later restricts this
+        # object's mass-weighted center of mass to the line through its
+        # initial position along this direction; rotation and deformation
+        # stay free. See :meth:`lock_translation`.
+        self._translation_lock: Optional[np.ndarray] = None
+        # Lock Rotation axis: None = free (unlocked), or a unit-length
+        # world-space direction vector. The solver later restricts this
+        # object's mass-weighted best-fit rigid rotation to rotation
+        # about this axis only; translation and deformation stay free.
+        # Coexists independently with `_translation_lock`. See
+        # :meth:`lock_rotation`.
+        self._rotation_lock: Optional[np.ndarray] = None
+        # Lock Rotation mode: False (default) keeps `_rotation_lock` a
+        # whitelist (only rotation about the axis is allowed); True flips
+        # it to a blacklist (rotation about the axis is forbidden and the
+        # perpendicular rotation plane stays free instead). Meaningless
+        # while `_rotation_lock` is None. See
+        # :meth:`lock_rotation_prohibit_axis`.
+        self._rotation_lock_prohibit_axis: bool = False
         self._velocity_schedule = []
         # Principal-axis angular velocity overwrite keyframes:
         # list of (time, pca_index, speed_rad_per_s). The spin axis is the
@@ -1082,6 +1102,132 @@ class Object:
         if pca_axis not in (0, 1, 2):
             raise ValueError(f"hinge() pca_axis must be 0, 1 or 2; got {pca_axis!r}")
         self._joint = ("hinge", int(pca_axis))
+        return self
+
+    def lock_translation(self, x: float = 1.0, y: float = 0.0, z: float = 0.0) -> "Object":
+        """Constrain this object's center of mass to a fixed world-space line.
+
+        The solver restricts the object's mass-weighted center of mass to
+        the line through its initial position along ``(x, y, z)``, in
+        world space. Rotation and deformation stay free; only the COM's
+        motion transverse to the axis is removed. Works for any dynamic
+        object type (SOLID, SHELL, ROD, PDRD, SAND).
+
+        There is no separate "unlock" call: an object that never calls
+        this stays free (the disabled state), matching a zero vector in
+        the exported ``translation_lock.bin`` table.
+
+        Args:
+            x, y, z: World-space direction of the allowed line of motion.
+                Must be finite and non-zero; normalized internally (only
+                the direction matters, not the magnitude).
+
+        Returns:
+            Object: ``self``, for chaining.
+
+        Raises:
+            ValueError: if the object is static, or the axis is not
+                finite or is the zero vector.
+
+        Example:
+            Let a bead slide only along world Y::
+
+                scene.add("bead").as_pdrd().lock_translation(0, 1, 0)
+        """
+        _rust.scene_validate_object_not_static(bool(self.static))
+        axis = np.array([float(x), float(y), float(z)], dtype=np.float64)
+        if not np.all(np.isfinite(axis)):
+            raise ValueError(
+                f"lock_translation() axis must be finite; got {(x, y, z)!r}"
+            )
+        norm = float(np.linalg.norm(axis))
+        if norm <= 0.0:
+            raise ValueError("lock_translation() axis must be non-zero")
+        self._translation_lock = axis / norm
+        return self
+
+    def lock_rotation(self, x: float = 1.0, y: float = 0.0, z: float = 0.0) -> "Object":
+        """Restrict this object's rigid rotation to a fixed world-space axis.
+
+        The solver restricts the object's mass-weighted best-fit rigid
+        rotation to rotation about ``(x, y, z)``, in world space, only;
+        the two transverse rotational degrees of freedom are removed.
+        Translation and deformation stay free, and this coexists
+        independently with :meth:`lock_translation`: enabling one has no
+        effect on the other. Works for any dynamic object type (SOLID,
+        SHELL, ROD, PDRD, SAND).
+
+        There is no separate "unlock" call: an object that never calls
+        this stays free (the disabled state), matching a zero vector in
+        the exported ``rotation_lock.bin`` table.
+
+        Args:
+            x, y, z: World-space direction of the allowed rotation axis.
+                Must be finite and non-zero; normalized internally (only
+                the direction matters, not the magnitude).
+
+        Returns:
+            Object: ``self``, for chaining.
+
+        Raises:
+            ValueError: if the object is static, or the axis is not
+                finite or is the zero vector.
+
+        Example:
+            Let a plank rotate only about world Y, while translating and
+            deforming freely::
+
+                scene.add("plank").lock_rotation(0, 1, 0)
+        """
+        _rust.scene_validate_object_not_static(bool(self.static))
+        axis = np.array([float(x), float(y), float(z)], dtype=np.float64)
+        if not np.all(np.isfinite(axis)):
+            raise ValueError(
+                f"lock_rotation() axis must be finite; got {(x, y, z)!r}"
+            )
+        norm = float(np.linalg.norm(axis))
+        if norm <= 0.0:
+            raise ValueError("lock_rotation() axis must be non-zero")
+        self._rotation_lock = axis / norm
+        return self
+
+    def lock_rotation_prohibit_axis(self, prohibit: bool = True) -> "Object":
+        """Flip Lock Rotation between an allow-only axis and a forbidden one.
+
+        Only meaningful after :meth:`lock_rotation` has set a rotation-lock
+        axis on this object. With ``prohibit=False`` (the mode
+        :meth:`lock_rotation` itself establishes), the axis is a
+        whitelist: rotation about it is the object's only rotational
+        freedom. With ``prohibit=True``, the axis becomes a blacklist:
+        rotation about it is forbidden instead, and the whole
+        perpendicular rotation plane stays free. Deformation and
+        translation stay free either way, and this coexists independently
+        with :meth:`lock_translation`.
+
+        Args:
+            prohibit: True to forbid rotation about the locked axis
+                instead of restricting rotation to it.
+
+        Returns:
+            Object: ``self``, for chaining.
+
+        Raises:
+            ValueError: if :meth:`lock_rotation` has not been called on
+                this object yet, since there is no axis for the mode to
+                modify.
+
+        Example:
+            Forbid a wheel from spinning about its own drive axle while
+            leaving it free to tip and roll about every other axis::
+
+                scene.add("wheel").lock_rotation(0, 0, 1).lock_rotation_prohibit_axis(True)
+        """
+        if self._rotation_lock is None:
+            raise ValueError(
+                "lock_rotation_prohibit_axis() requires lock_rotation() to "
+                "be called first; the object has no rotation-lock axis set"
+            )
+        self._rotation_lock_prohibit_axis = bool(prohibit)
         return self
 
     def velocity_schedule(self, schedule: list) -> "Object":

@@ -949,12 +949,19 @@ fn ffmpeg_video_command_handles_spaces_in_paths() {
     assert!(cmd.contains("\"out frame.mp4\""));
 }
 
+/// The root must be absolute ON THE HOST PLATFORM. A Windows path is
+/// absolute only with a drive prefix, so a bare
+/// `/home/user/ppf-contact-solver` there is resolved against the current
+/// directory and picks up that drive.
 #[test]
 fn project_root_from_frontend_file_strips_two_levels() {
-    let p = project_root_from_frontend_file(std::path::Path::new(
-        "/home/user/ppf-contact-solver/frontend/_session_.py",
-    ));
-    assert_eq!(p, PathBuf::from("/home/user/ppf-contact-solver"));
+    let root = std::path::Path::new(if cfg!(target_os = "windows") {
+        "C:/home/user/ppf-contact-solver"
+    } else {
+        "/home/user/ppf-contact-solver"
+    });
+    let p = project_root_from_frontend_file(&root.join("frontend").join("_session_.py"));
+    assert_eq!(p, PathBuf::from(root));
 }
 
 #[test]

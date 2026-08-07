@@ -17,7 +17,7 @@ set -e
 FFMPEG_DIR="$SCRIPT_DIR/ffmpeg"
 WORK_DIR="$SCRIPT_DIR/temp_ffmpeg"
 
-# Load URL/FILE manifest (single source of truth, scripts/downloads.txt)
+# Load the URL/FILE/tag manifest (single source of truth, scripts/downloads.txt)
 MANIFEST="$SCRIPT_DIR/scripts/downloads.txt"
 if [ ! -f "$MANIFEST" ]; then
     echo "ERROR: Manifest not found: $MANIFEST" >&2
@@ -64,10 +64,11 @@ make -j$(nproc)
 make install
 cd ..
 
-# Download ffmpeg source
-echo "Downloading ffmpeg ${FFMPEG_VERSION}..."
-curl -fL "${URL_FFMPEG}" -o "${FILE_FFMPEG}"
-tar xf "${FILE_FFMPEG}"
+# Clone ffmpeg source at its release tag. --branch takes a tag, and git fails
+# non-zero when it names nothing, so a retired tag aborts here under set -e
+# rather than configuring an unexpected tree.
+echo "Cloning ffmpeg ${FFMPEG_VERSION} (${FFMPEG_TAG})..."
+git clone --depth 1 --branch "${FFMPEG_TAG}" "${URL_FFMPEG_GIT}" "ffmpeg-${FFMPEG_VERSION}"
 cd "ffmpeg-${FFMPEG_VERSION}"
 
 # Configure with minimal options for PNG to MP4

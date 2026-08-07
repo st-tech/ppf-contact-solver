@@ -103,6 +103,26 @@ OBJECT_GROUP_DEFAULTS = {
     "sand_grain_radius": 0.02,
     "sand_particle_mass": 1.0,
     "sand_friction": 0.0,
+    # STATIC-specific parameters. A STATIC collider's vertices are driven by
+    # pin operations, and an ordinary pin is an exact Dirichlet boundary
+    # condition: the collider tracks its animation to round-off and cannot be
+    # pushed off it, whatever the contact force. Enabling soft constraints
+    # swaps those pins for Hookean springs, so a vertex carries
+    # `force = k * (target - x)` and yields where the contact pushes harder
+    # than `k`. `soft_constraint_stiffness` IS that `k`, and it must stay
+    # strictly positive: a pin whose pull weight reaches zero is classified as
+    # a fix, which would silently restore the hard constraint the checkbox
+    # asked to remove.
+    "enable_soft_constraint": False,
+    # Measured on a rigged character with a draped garment (the scene this
+    # feature was built for), sweeping 0.1 / 1 / 10 / 100 / 1000: 0.1 is too
+    # soft and the collider deforms into an intersection, 1 completes but
+    # gives up 33 mm at the worst contact, and 1000 starts costing Newton
+    # iterations as it approaches the exact pin it replaces. 10 sits mid-range,
+    # holds the collider to 0.08 mm mean / 8 mm worst-case, and solves as
+    # cheaply as an exact pin does. It is a starting point, not a constant: the
+    # right value scales with how hard the scene's contacts push.
+    "soft_constraint_stiffness": 10.0,
     # Rod-specific parameters (1D analog of shell shrink_x / solid shrink)
     "length_factor": 1.0,
     # The tetrahedralizer backend (fTetWild / TetGen) and its per-field
@@ -119,6 +139,11 @@ OBJECT_GROUP_DEFAULTS = {
     # motion; bending_damping damps shell/rod bending (usually smaller).
     "deformation_damping": 0.0,
     "bending_damping": 0.0,
+    # Directional bending, added on top of `bend`. Both default to 0.0, which
+    # adds nothing, so a group that never touches this reaches the solver
+    # exactly as it did before the feature existed.
+    "bend_warp": 0.0,
+    "bend_weft": 0.0,
     "shrink_x": 1.0,
     "shrink_y": 1.0,
     "enable_inflate": False,
@@ -144,6 +169,7 @@ OBJECT_GROUP_DEFAULTS = {
     "show_group": True,
     "show_pdrd_hinge": False,
     "pdrd_hinge_visualize": True,
+    "preview_lock_translation": False,
     # Pin overlay settings
     "pin_overlay_size": 12.0,
     # Collection indices
@@ -203,6 +229,28 @@ def sand_radius_source_object(group):
             continue
         obj = get_object_by_uuid(obj_ref.uuid)
         if obj is not None and obj.get("ppf_grain_radius"):
+            return obj
+    return None
+
+
+def group_missing_uv_object(group):
+    """First included object in *group* whose mesh carries no UV map.
+
+    Anisotropic bending reads each hinge edge's direction in the UV material
+    frame, so an object with no UV has no direction to read and the scene build
+    rejects it. Returns the offending Blender object, or None when every
+    included object has one. Used by the panel to say so before a run rather
+    than after the build fails.
+    """
+    from ..core.uuid_registry import get_object_by_uuid
+
+    for obj_ref in group.assigned_objects:
+        if not obj_ref.included or not obj_ref.uuid:
+            continue
+        obj = get_object_by_uuid(obj_ref.uuid)
+        if obj is None or obj.type != "MESH":
+            continue
+        if not obj.data.uv_layers:
             return obj
     return None
 

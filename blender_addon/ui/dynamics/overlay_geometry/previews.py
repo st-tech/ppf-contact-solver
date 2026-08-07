@@ -31,6 +31,17 @@ def _strength_to_arrow_factor(strength):
     return min(strength, _ARROW_STRENGTH_CAP) / _ARROW_STRENGTH_REF
 
 
+def _evaluated_world_vertices(obj, depsgraph):
+    """Return copied world-space vertices after the live modifier stack."""
+    evaluated = obj.evaluated_get(depsgraph)
+    mesh = evaluated.to_mesh()
+    try:
+        matrix = evaluated.matrix_world
+        return [matrix @ vertex.co.copy() for vertex in mesh.vertices]
+    finally:
+        evaluated.to_mesh_clear()
+
+
 class DirectionPreviewManager:
     """Manages multiple direction preview visualizations in the viewport."""
 
@@ -262,3 +273,102 @@ def _build_velocity_arrow_batches(scene, view_distance):
                     "color": (r, g, b, 0.9),
                 })
     return batches, labels
+
+
+def _build_translation_lock_batches(scene, view_distance):
+    """Build double-headed world-space axis arrows for Lock Translation."""
+    from ....core.uuid_registry import resolve_assigned
+
+    batches = []
+    shader = gpu.shader.from_builtin("UNIFORM_COLOR")
+    depsgraph = bpy.context.evaluated_depsgraph_get()
+    arrow_len = view_distance * 0.12
+    thickness = max(view_distance * 0.001, 0.001)
+
+    for group in iterate_active_object_groups(scene):
+        if not getattr(group, "preview_lock_translation", False):
+            continue
+        color = (*group.color[:3], 0.9)
+        for assigned in group.assigned_objects:
+            if not assigned.included or not assigned.lock_translation_enable:
+                continue
+            axis = Vector(assigned.lock_translation_axis)
+            if axis.length < 1e-6:
+                continue
+            obj = resolve_assigned(assigned)
+            if obj is None:
+                continue
+            axis.normalize()
+            vertices = _evaluated_world_vertices(obj, depsgraph)
+            if not vertices:
+                continue
+            center = sum(vertices, Vector((0.0, 0.0, 0.0))) / len(vertices)
+            for direction in (axis, -axis):
+                shaft, cone = _generate_arrow(
+                    direction,
+                    shaft_length=arrow_len,
+                    shaft_thickness=thickness * 2,
+                    cone_length=arrow_len * 0.18,
+                    cone_radius=thickness * 5,
+                )
+                triangles = [vertex + center for vertex in shaft + cone]
+                if triangles:
+                    batches.append(
+                        (batch_for_shader(shader, "TRIS", {"pos": triangles}), color)
+                    )
+    return batches
+
+
+def _build_rotation_lock_batches(scene, view_distance):
+    """Build a world-axis rotation ring + arc for Lock Rotation.
+
+    Mirrors the angular-velocity spin preview and the PDRD hinge gizmo
+    (circle + a full-turn directional arc through the object centroid,
+    radius set from the object's own extent perpendicular to the axis),
+    except the axis here is the caller-authored fixed world-space
+    direction rather than a PCA-derived or per-keyframe one. Gated by
+    the same ``preview_lock_translation`` eye toggle and object picker
+    as ``_build_translation_lock_batches`` above (one box, one picker,
+    one eye toggle drives both locks); independent of, and can coexist
+    with, that function's arrows.
+    """
+    from ....core.uuid_registry import resolve_assigned
+
+    batches = []
+    shader = gpu.shader.from_builtin("UNIFORM_COLOR")
+    depsgraph = bpy.context.evaluated_depsgraph_get()
+
+    for group in iterate_active_object_groups(scene):
+        if not getattr(group, "preview_lock_translation", False):
+            continue
+        color = (*group.color[:3], 0.9)
+        for assigned in group.assigned_objects:
+            if not assigned.included or not assigned.lock_rotation_enable:
+                continue
+            axis = Vector(assigned.lock_rotation_axis)
+            if axis.length < 1e-6:
+                continue
+            obj = resolve_assigned(assigned)
+            if obj is None:
+                continue
+            axis.normalize()
+            verts_world = _evaluated_world_vertices(obj, depsgraph)
+            if not verts_world:
+                continue
+            center = sum(verts_world, Vector((0.0, 0.0, 0.0))) / len(verts_world)
+            total = 0.0
+            for v in verts_world:
+                diff = v - center
+                total += (diff - axis * diff.dot(axis)).length
+            avg_radius = total / len(verts_world)
+            if avg_radius < 1e-4:
+                avg_radius = 0.1
+            thickness = max(0.002, avg_radius * 0.01)
+            tris = _generate_circle(
+                center, axis, avg_radius, thickness=thickness,
+            ) + _generate_rotation_arc(
+                center, axis, avg_radius, 360.0, thickness=thickness * 2,
+            )
+            if tris:
+                batches.append((batch_for_shader(shader, "TRIS", {"pos": tris}), color))
+    return batches

@@ -4,13 +4,16 @@
 # License: Apache v2.0
 #
 # Single source of truth for every external download used by warmup.bat,
-# build.bat, and make-slim-ffmpeg.bat/.sh. Format is plain KEY=VALUE so
+# build.bat, make-slim-ffmpeg.bat/.sh, and the Linux/Docker
+# .github/workflows/scripts/make-slim-ffmpeg.sh. Format is plain KEY=VALUE so
 # that both cmd (via scripts\load-downloads.bat) and bash (via
 # `set -a; . scripts/downloads.txt; set +a`) can read it without a parser.
 #
-# To bump a tool version: edit the URL_* and FILE_* lines together, then
-# run scripts\check-downloads.bat to confirm the new pointer is reachable
-# before the next warmup. No URL belongs in any other file.
+# Two kinds of entry. A fetched archive pairs URL_* with FILE_*; a cloned
+# repository pairs URL_*_GIT with the tag to check out, and has no FILE_*.
+# To bump a tool version edit that entry's lines together, then run
+# scripts\check-downloads.bat to confirm the new pointer is reachable before
+# the next warmup. No URL belongs in any other file.
 
 URL_7ZIP=https://github.com/ip7z/7zip/releases/download/24.08/7z2408-x64.exe
 FILE_7ZIP=7z2408-x64.exe
@@ -45,8 +48,16 @@ FILE_EIGEN=eigen-3.4.0.zip
 URL_MSYS2=https://github.com/msys2/msys2-installer/releases/download/2024-12-08/msys2-base-x86_64-20241208.sfx.exe
 FILE_MSYS2=msys2-base-x86_64-20241208.sfx.exe
 
-URL_FFMPEG=https://ffmpeg.org/releases/ffmpeg-7.1.tar.xz
-FILE_FFMPEG=ffmpeg-7.1.tar.xz
+# Cloned rather than fetched as a release tarball. ffmpeg.org is a single
+# self-hosted origin behind no CDN, and when it saturates it stops answering
+# SYN entirely rather than serving slowly: on 2026-08-05 it refused every
+# probe from a us-east-2 CI runner (six attempts, curl exit 28, ~52 s), which
+# is fatal here because check-downloads.bat gates warmup before the first
+# download. github.com/FFmpeg/FFmpeg is the project's own mirror. A tag also
+# resolves to one commit, so the source is pinned by content, which a tarball
+# URL with no checksum beside it is not.
+URL_FFMPEG_GIT=https://github.com/FFmpeg/FFmpeg.git
+FFMPEG_TAG=n7.1
 FFMPEG_VERSION=7.1
 
 # Git repository (cloned, not downloaded as archive)

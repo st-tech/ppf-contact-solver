@@ -350,7 +350,8 @@ def _read_text(path: str) -> str:
 def run_one(scenario_name: str, *, slot: int, run_root: str,
             python: str = sys.executable,
             knobs: dict[str, str] | None = None,
-            timeout: float = 60.0) -> WorkerResult:
+            timeout: float = 60.0,
+            backend: str = "emulated") -> WorkerResult:
     """Provision a worker, launch the debug server, run the scenario,
     return the verdict. The worker dir is left in place so the caller
     can decide whether to keep it (failure) or delete it (success)."""
@@ -416,6 +417,7 @@ def run_one(scenario_name: str, *, slot: int, run_root: str,
             timeout=timeout,
             log_path=spec.scenario_log,
             knobs=dict(effective_knobs),
+            backend=backend,
         )
 
         # Bring up Blender if the scenario asked for it. The harness is
@@ -430,8 +432,8 @@ def run_one(scenario_name: str, *, slot: int, run_root: str,
                     duration_s=time.monotonic() - started_at,
                     violations=[
                         "scenario requires Blender but no binary found "
-                        "(set PPF_BLENDER_BIN or install Blender to "
-                        "/Applications/Blender.app)"
+                        "(set PPF_BLENDER_BIN, put `blender` on PATH, or "
+                        "run ./install-blender.sh)"
                     ],
                 )
             # Scenario must export ``build_driver(ctx) -> str`` returning
@@ -498,6 +500,7 @@ def _pool_task(task: dict) -> dict:
         python=task["python"],
         knobs=task["knobs"],
         timeout=task["timeout"],
+        backend=task["backend"],
     )
     return asdict(result)
 
@@ -525,6 +528,29 @@ def run_many(scenario_names: list[str], *,
     run_root = _run_root(run_id)
     print(f"[orchestrator] run_id={run_id} root={run_root} "
           f"parallel={parallel} repeat={repeat}")
+
+    # Resolve the display once, here in the parent, so the spawned pool
+    # workers inherit it through the environment and the whole run shares
+    # one server. Only scenarios that drive Blender need one, so a
+    # server-only selection still runs on a host with no X at all.
+    if any(getattr(scenarios.get(n), "NEEDS_BLENDER", False)
+           for n in scenario_names):
+        import blender_harness as bh
+        try:
+            bh.ensure_display()
+        except RuntimeError as exc:
+            print(f"[orchestrator] {exc}")
+            return {
+                "run_id": run_id, "run_root": run_root,
+                "parallel": parallel, "repeat": repeat,
+                "total": 0, "passed": 0, "failed": 1,
+                "results": [{
+                    "slot": -1, "scenario": "<display>",
+                    "status": "fail", "duration_s": 0.0,
+                    "violations": [str(exc)],
+                    "notes": [],
+                }],
+            }
 
     # Precompile + smoke-check numba kernels once. Failing here means
     # frontend's parallel njit code is broken on this host (e.g. the
@@ -596,6 +622,7 @@ def run_many(scenario_names: list[str], *,
                 "python": python,
                 "knobs": knobs or {},
                 "timeout": timeout,
+                "backend": backend,
             }
             if serial_only:
                 serial_tasks.append(task)

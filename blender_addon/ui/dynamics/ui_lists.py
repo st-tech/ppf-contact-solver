@@ -273,19 +273,26 @@ class SCENE_UL_ColliderKeyframesList(bpy.types.UIList):
             layout.label(text="", icon="KEYFRAME")
 
 
+def _velocity_keyframe_label(item):
+    parts = []
+    if item.enable_translational:
+        d = item.direction
+        parts.append(
+            f"{item.speed:.1f} m/s [{d[0]:.1f}, {d[1]:.1f}, {d[2]:.1f}]"
+        )
+    if item.enable_angular:
+        parts.append(f"ω={item.angular_speed:.0f}°/s {item.angular_axis}")
+    summary = "; ".join(parts) if parts else iface_("No Op")
+    return iface_("Frame {frame} ({summary})").format(
+        frame=item.frame, summary=summary,
+    )
+
+
 class OBJECT_UL_VelocityKeyframesList(bpy.types.UIList):
     def draw_item(self, context, layout, data, item, icon, active_data, active_property, index):
         if self.layout_type in {"DEFAULT", "COMPACT"}:
-            d = item.direction
-            spin = (
-                f"  ω={item.angular_speed:.0f}°/s {item.angular_axis}"
-                if item.enable_angular and item.angular_speed != 0.0
-                else ""
-            )
             layout.label(
-                text=iface_("Frame {frame}  ({speed:.1f} m/s  [{x:.1f}, {y:.1f}, {z:.1f}]){spin}").format(
-                    frame=item.frame, speed=item.speed, x=d[0], y=d[1], z=d[2], spin=spin
-                ),
+                text=_velocity_keyframe_label(item),
                 icon="KEYFRAME",
             )
         elif self.layout_type == "GRID":

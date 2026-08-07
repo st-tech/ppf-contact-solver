@@ -15,6 +15,7 @@ from bpy.app.translations import pgettext_iface as iface_, pgettext_tip as tip_
 
 from ..core.client import RemoteStatus
 from ..core.client import communicator as com
+from ..core.status import crash_cause_summary
 from ..core.derived import (
     is_server_busy_from_response as is_running,
     is_sim_running_from_response as is_simulating,
@@ -72,6 +73,7 @@ from .addon_ops import classes as addon_classes
 from .jupyter_ops import classes as jupyter_classes
 from .solver_control_ops import (
     SOLVER_OT_ForceTerminatePort,
+    SOLVER_OT_OpenSessionFolder,
     SOLVER_OT_SaveAndQuit,
     SOLVER_OT_ShowConsole,
     SOLVER_OT_Terminate,
@@ -94,6 +96,12 @@ from .geometry_cleanup_ops import (
 # error), so a single (port, timestamp, ours) tuple caps the cache at one
 # entry instead of accumulating a dict key per distinct port hit.
 _PROBE_TTL_S = 1.5
+
+# Character budget for the crash detail row. A panel label renders one line
+# and Blender clips whatever does not fit without marking the cut, so the
+# ellipsis has to be added here for the reader to know the line continues in
+# the Console.
+_CRASH_DETAIL_CHARS = 96
 _probe_cache: tuple[int, float, bool] | None = None
 
 
@@ -146,6 +154,28 @@ def _our_server_responding_in_error(error_msg: str) -> bool:
     ours = _probe_ppf_cts_server(port, timeout=0.5)
     _probe_cache = (port, now, ours)
     return ours
+
+
+def _crash_detail_line(server_error: str, crash_kind: str) -> str:
+    """The solver's own one-line detail out of a rendered crash report.
+
+    The report's first line is ``"<summary>: <detail>"``, and the panel draws
+    the summary separately as a localized headline, so only the part after the
+    colon is left here. When the report has no detail (an empty ``detail``
+    field), the split yields nothing and no second row is drawn.
+
+    The line is truncated to a panel-width budget, because a label renders one
+    line and Blender clips the overflow with no indication that it did. The
+    Console keeps the untruncated report.
+    """
+    first_line = server_error.split("\n", 1)[0]
+    summary = crash_cause_summary(crash_kind)
+    prefix = f"{summary}: "
+    detail = first_line[len(prefix):] if first_line.startswith(prefix) else first_line
+    detail = detail.strip()
+    if len(detail) > _CRASH_DETAIL_CHARS:
+        detail = detail[: _CRASH_DETAIL_CHARS - 1].rstrip() + "…"
+    return detail
 
 
 def _draw_path_warning(layout, path) -> bool:
@@ -567,13 +597,46 @@ class MAIN_PT_RemotePanel(Panel):
                     )
 
         server_error = com.server_error
-        if server_error:
-            layout.label(text=iface_("Remote: {error}").format(error=server_error), icon="ERROR")
+        crash_kind = com.crash_kind
+        if server_error and crash_kind:
+            # A crash report is a multi-line document (cause, detail, then the
+            # solver's stdout and stderr tails), and a panel label renders one
+            # truncated line. Draw the localized cause plus the first line of
+            # detail here, and leave the full report to the Console, which the
+            # same response already logged line by line.
+            layout.label(
+                text=iface_("Solver failed: {cause}").format(
+                    cause=iface_(crash_cause_summary(crash_kind))
+                ),
+                icon="ERROR",
+            )
+            detail = _crash_detail_line(server_error, crash_kind)
+            if detail:
+                # Drawn untranslated: it is machine data (a CUDA error name, a
+                # signal name, a file and line), not prose.
+                layout.label(text=detail)
+        elif server_error:
+            # Any server error can carry supporting lines below its first one
+            # (a build failure appends the worker's traceback), and
+            # `layout.label` draws a multi-line string on a single line with
+            # the breaks as glyphs. Show the headline; the Show Console button
+            # on the next row opens the full report, one line each.
+            headline = server_error.partition("\n")[0]
+            layout.label(text=iface_("Remote: {error}").format(error=headline), icon="ERROR")
 
         row = layout.row()
         row.operator(SOLVER_OT_UpdateStatus.bl_idname, icon="FILE_REFRESH")
         row.operator(SOLVER_OT_ShowConsole.bl_idname, icon="CONSOLE")
         row.prop(state, "debug_mode")
+        if crash_kind:
+            # Drawn whenever a crash is being reported, disabled with a reason
+            # when the folder cannot be resolved, so the route to the logs is
+            # discoverable rather than appearing only in the case that works.
+            col = layout.column(align=True)
+            col.enabled = bool(SOLVER_OT_OpenSessionFolder.session_path())
+            col.operator(SOLVER_OT_OpenSessionFolder.bl_idname, icon="FILE_FOLDER")
+            if not col.enabled:
+                col.label(text=iface_("The session folder is not known for this run."))
 
         # Remote Hardware info (shown when connected)
         hardware = com.response.get("hardware", {})

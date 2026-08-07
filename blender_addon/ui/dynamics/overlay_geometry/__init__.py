@@ -15,6 +15,8 @@ from .pins import (
 )
 from .previews import (
     DirectionPreviewManager,
+    _build_rotation_lock_batches,
+    _build_translation_lock_batches,
     _build_velocity_arrow_batches,
 )
 from .violations import _build_violation_batches
@@ -26,7 +28,9 @@ __all__ = [
     "_build_pdrd_hinge_batches",
     "_build_pin_data",
     "_build_rod_batches",
+    "_build_rotation_lock_batches",
     "_build_snap_batches",
+    "_build_translation_lock_batches",
     "_build_velocity_arrow_batches",
     "_build_violation_batches",
     "_resolve_scene_dyn_params",

@@ -323,6 +323,12 @@ Run Transfer again after any repair, including the ones that leave the count alo
 - Why: the server returned a JSON response with an `error` key, typically from an internal solver exception.
 - Fix: read `server.log` on the remote for the full traceback. Common causes: out of disk space, permission denied on the project directory, CUDA out of memory.
 
+### "Newton solve made no progress (over-constrained configuration)"
+
+- You see: the run stops mid-simulation and the solver log ends with `### newton stalled: no acceptable step after N iterations`, followed by `an over-constrained configuration cannot be advanced`.
+- Why: something prescribed is being driven into geometry that cannot yield, so no step exists that avoids penetration and the solver refuses to fake one. Two shapes are common: a pin whose path runs into a collider, and cloth caught in a closing crevice of a Static collider (a character's armpit shutting, a hand pressing into a thigh). The reported frame is where it gave up; the geometry usually starts closing several frames earlier.
+- Fix: for a pin, re-author its path or make it a soft pull pin. For a collider crevice, turn on **Apply Soft Constraints** on the Static group so the collider is held by springs and gives way where the cloth pushes back, and lower its **Stiffness** if the cloth is still trapped. Widening the crevice or lowering the group's **Contact Gap** also buys room, but neither is reliable once the collider closes all the way.
+
 ## Fetch and Playback
 
 ### "Missing frames" warning below Clear Animation

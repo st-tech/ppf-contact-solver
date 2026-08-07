@@ -19,6 +19,7 @@
 #define SAND_HPP
 
 #include "../cpp/data.hpp"
+#include "pd_arap.hpp"
 
 namespace sand {
 
@@ -40,50 +41,154 @@ inline bool is_point_cloud(const DataSet &dev) {
 // (dev.vertex.curr.size) and its prev/curr write-back, but depends on no
 // shell faces. Pinned grains (fix_index > 0) are held fixed. No-op unless the
 // scene is a faceless/edgeless point cloud (auto-detected).
-inline void step(DataSet &dev, const ParamSet &param) {
+inline bool step(DataSet &dev, const ParamSet &param) {
     if (!is_point_cloud(dev)) {
-        return;
+        return false;
     }
     const int n = static_cast<int>(dev.vertex.curr.size);
     if (n == 0) {
-        return;
+        return false;
     }
     const double dt = param.dt;
     if (!(dt > 0.0)) {
-        return;
+        return false;
     }
     const double prev_dt = (param.prev_dt > 0.0f) ? param.prev_dt : dt;
     const double gx = param.gravity[0];
     const double gy = param.gravity[1];
     const double gz = param.gravity[2];
+    if (dev.translation_lock.size == 0) {
+        for (int v = 0; v < n; ++v) {
+            // Skip pinned grains exactly as the elastic path skips fixed verts.
+            if (v < static_cast<int>(dev.prop.vertex.size) &&
+                dev.prop.vertex.data[v].fix_index > 0) {
+                continue;
+            }
+            const Vec3f c = dev.vertex.curr.data[v];
+            const Vec3f p = dev.vertex.prev.data[v];
+            const double cx = c[0], cy = c[1], cz = c[2];
+            const double px = p[0], py = p[1], pz = p[2];
+            const double vx = (cx - px) / prev_dt + gx * dt;
+            const double vy = (cy - py) / prev_dt + gy * dt;
+            const double vz = (cz - pz) / prev_dt + gz * dt;
+            const double nx = cx + vx * dt;
+            const double ny = cy + vy * dt;
+            double nz = cz + vz * dt;
+            if (nz < FLOOR_Z) {
+                nz = FLOOR_Z;
+            }
+            dev.vertex.prev.data[v] = dev.vertex.curr.data[v];
+            Vec3f nc;
+            nc[0] = static_cast<float>(nx);
+            nc[1] = static_cast<float>(ny);
+            nc[2] = static_cast<float>(nz);
+            dev.vertex.curr.data[v] = nc;
+        }
+        return true;
+    }
+
+    std::vector<char> is_fixed(n, 0);
+    std::vector<int> reduced(n, -1);
+    int n_free = 0;
+    Eigen::MatrixXd reference(n, 3);
+    Eigen::MatrixXd candidate(n, 3);
     for (int v = 0; v < n; ++v) {
-        // Skip pinned grains exactly as the elastic path skips fixed verts.
-        if (v < static_cast<int>(dev.prop.vertex.size) &&
-            dev.prop.vertex.data[v].fix_index > 0) {
+        const Vec3f c = dev.vertex.curr.data[v];
+        const double cx = c[0], cy = c[1], cz = c[2];
+        reference.row(v) << cx, cy, cz;
+        candidate.row(v) = reference.row(v);
+        is_fixed[v] = v < static_cast<int>(dev.prop.vertex.size) &&
+                      dev.prop.vertex.data[v].fix_index > 0;
+        if (!is_fixed[v]) {
+            reduced[v] = n_free++;
+        }
+    }
+    for (unsigned i = 0; i < dev.constraint.fix.size; ++i) {
+        const FixPair &pin = dev.constraint.fix.data[i];
+        if (pin.kinematic && pin.index < static_cast<unsigned>(n)) {
+            const Vec3f old = dev.vertex.prev.data[pin.index];
+            reference.row(pin.index) << old[0], old[1], old[2];
+        }
+    }
+
+    for (int v = 0; v < n; ++v) {
+        if (is_fixed[v]) {
             continue;
         }
         const Vec3f c = dev.vertex.curr.data[v];
         const Vec3f p = dev.vertex.prev.data[v];
         const double cx = float(c[0]), cy = float(c[1]), cz = float(c[2]);
         const double px = float(p[0]), py = float(p[1]), pz = float(p[2]);
-        // velocity from finite difference + gravity, then forward step.
         const double vx = (cx - px) / prev_dt + gx * dt;
         const double vy = (cy - py) / prev_dt + gy * dt;
         const double vz = (cz - pz) / prev_dt + gz * dt;
-        double nx = cx + vx * dt;
-        double ny = cy + vy * dt;
+        const double nx = cx + vx * dt;
+        const double ny = cy + vy * dt;
         double nz = cz + vz * dt;
         if (nz < FLOOR_Z) {
             nz = FLOOR_Z;
         }
-        // Write back: prev <- start-of-step, curr <- stepped position.
+        candidate.row(v) << nx, ny, nz;
+    }
+
+    const pd_arap::ConstraintLayout layout{
+        n, n_free, is_fixed, reduced};
+    const pd_arap::DynamicConstraints constraints =
+        pd_arap::build_dynamic_constraints(dev, reference, candidate, layout);
+    Eigen::VectorXd free_x(3 * n_free);
+    for (int v = 0; v < n; ++v) {
+        if (is_fixed[v]) {
+            continue;
+        }
+        const int rv = reduced[v];
+        for (int coordinate = 0; coordinate < 3; ++coordinate) {
+            free_x[3 * rv + coordinate] = candidate(v, coordinate);
+        }
+    }
+    Eigen::MatrixXd response =
+        Eigen::MatrixXd::Zero(3 * n_free, constraints.C.rows());
+    for (int v = 0; v < n; ++v) {
+        if (is_fixed[v]) {
+            continue;
+        }
+        const double mass = dev.prop.vertex.data[v].mass;
+        if (!(mass > 0.0) || !std::isfinite(mass)) {
+            fprintf(stderr,
+                    "PPF FATAL: emulated SAND aggregate lock has an invalid "
+                    "free physical mass at vertex %d.\n",
+                    v);
+            std::abort();
+        }
+        const double inverse = dt * dt / mass;
+        const int rv = reduced[v];
+        for (int row = 0; row < constraints.C.rows(); ++row) {
+            for (int coordinate = 0; coordinate < 3; ++coordinate) {
+                response(3 * rv + coordinate, row) =
+                    inverse * constraints.C(row, 3 * rv + coordinate);
+            }
+        }
+    }
+    pd_arap::project_with_schur(constraints, response, free_x);
+    for (int v = 0; v < n; ++v) {
+        if (!is_fixed[v]) {
+            const int rv = reduced[v];
+            candidate.row(v) = free_x.segment<3>(3 * rv).transpose();
+        }
+    }
+    pd_arap::check_rotation_tangent(dev, reference, candidate, constraints);
+
+    for (int v = 0; v < n; ++v) {
+        if (is_fixed[v]) {
+            continue;
+        }
         dev.vertex.prev.data[v] = dev.vertex.curr.data[v];
         Vec3f nc;
-        nc[0] = static_cast<float>(nx);
-        nc[1] = static_cast<float>(ny);
-        nc[2] = static_cast<float>(nz);
+        nc[0] = static_cast<float>(candidate(v, 0));
+        nc[1] = static_cast<float>(candidate(v, 1));
+        nc[2] = static_cast<float>(candidate(v, 2));
         dev.vertex.curr.data[v] = nc;
     }
+    return true;
 }
 
 } // namespace sand

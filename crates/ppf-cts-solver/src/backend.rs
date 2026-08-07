@@ -10,10 +10,10 @@ use super::data::{
 };
 use super::plastic_state::{PlasticKinds, PlasticState};
 use super::{mesh::Mesh, DataSet, ParamSet, ProgramArgs, Scene, SimArgs};
-use ppf_cts_formats::status::{crash_kind_from_step, Outcome, Phase};
 use chrono::Local;
 use log::*;
 use na::{Matrix2x3, Matrix3xX};
+use ppf_cts_formats::status::{crash_kind_from_step, Outcome, Phase};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::OpenOptions;
@@ -51,8 +51,10 @@ extern "C" {
         dt: f32,
     );
     fn init_collision_windows(
-        vert_dmap: *const u32, vert_count: u32,
-        windows: *const f32, window_counts: *const u32,
+        vert_dmap: *const u32,
+        vert_count: u32,
+        windows: *const f32,
+        window_counts: *const u32,
         n_groups: u32,
     );
     fn refresh_collision_active(time: f32);
@@ -154,6 +156,14 @@ pub struct MeshSet {
     /// rest angle from `bend_rest_vertex`.
     #[serde(default)]
     pub bend_rest_vertex_mask: Vec<bool>,
+    /// Per-vertex mask (length = vertex count, or empty when the scene has no
+    /// STATIC collider in the solved namespace) marking vertices that belong to
+    /// a collider. Contact and intersection reporting skip a pair only when
+    /// BOTH sides are marked, so a collider still meets every dynamic object.
+    /// `serde(default)` so a checkpoint carrying no such mask loads as "no
+    /// colliders", the same as a scene with no STATIC collider.
+    #[serde(default)]
+    pub collider_vertex_mask: Vec<u8>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -230,7 +240,10 @@ impl Backend {
     pub fn load_state(frame: i32, dirpath: &str) -> Self {
         let (mesh, state) = {
             let path_mesh = format!("{dirpath}/{}", ppf_cts_formats::files::MESHSET);
-            let path_state = format!("{dirpath}/{}", ppf_cts_formats::files::state_filename(frame));
+            let path_state = format!(
+                "{dirpath}/{}",
+                ppf_cts_formats::files::state_filename(frame)
+            );
             let mesh = super::read(&super::read_gz(path_mesh.as_str()));
             let state = super::read(&super::read_gz(path_state.as_str()));
             (mesh, state)
@@ -269,6 +282,7 @@ impl Backend {
         t_frame: f64,
         t_prev: f64,
         t_curr: f64,
+        statistics: &mut Option<crate::statistics::TimelineStatistics>,
     ) {
         // Name: Time Per Video Frame
         // Format: list[(frame, ms)]
@@ -387,12 +401,17 @@ impl Backend {
                 .collect()
         };
 
-        // Write vertices in chunks to avoid large RAM allocation.
+        // Write visible vertices in chunks while retaining the exact full pose
+        // for solver-side object statistics. Interior SOLID vertices are not
+        // written to PC2, but volume analysis needs them.
         const CHUNK_SIZE: usize = 4096;
         let mut chunk_buf: Vec<f32> = Vec::with_capacity(CHUNK_SIZE);
-        for v in 0..surface_vert_count {
+        let mut output_positions = Vec::with_capacity(self.state.curr_vertex.ncols());
+        for v in 0..self.state.curr_vertex.ncols() {
             let p = self.state.prev_vertex.column(v);
             let c = self.state.curr_vertex.column(v);
+            let mut output = [0.0; 3];
+            let mut analysis_output = [0.0_f64; 3];
             match pin_at_frame.get(&(v as u32)) {
                 Some((at_f, at_p, at_c)) => {
                     for k in 0..3 {
@@ -402,16 +421,29 @@ impl Backend {
                         let rp = f32::from(p[k] - at_p[k]);
                         let rc = f32::from(c[k] - at_c[k]);
                         let exact = f32::from(at_f[k]);
-                        chunk_buf.push((exact + rp + alpha * (rc - rp)) * inv_world);
+                        output[k] = (exact + rp + alpha * (rc - rp)) * inv_world;
+                        let rp64 = f64::from(p[k] - at_p[k]);
+                        let rc64 = f64::from(c[k] - at_c[k]);
+                        let exact64 = f64::from(at_f[k]);
+                        analysis_output[k] =
+                            (exact64 + rp64 + alpha as f64 * (rc64 - rp64)) * inv_world as f64;
                     }
                 }
                 None => {
                     for k in 0..3 {
                         let pf = f32::from(p[k]);
                         let cf = f32::from(c[k]);
-                        chunk_buf.push((pf + alpha * (cf - pf)) * inv_world);
+                        output[k] = (pf + alpha * (cf - pf)) * inv_world;
+                        let pf64 = f64::from(p[k]);
+                        let cf64 = f64::from(c[k]);
+                        analysis_output[k] =
+                            (pf64 + alpha as f64 * (cf64 - pf64)) * inv_world as f64;
                     }
                 }
+            }
+            output_positions.push(analysis_output);
+            if v < surface_vert_count {
+                chunk_buf.extend_from_slice(&output);
             }
             if chunk_buf.len() >= CHUNK_SIZE {
                 let buff = unsafe {
@@ -434,6 +466,16 @@ impl Backend {
             writer.write_all(buff).unwrap();
         }
         writer.flush().unwrap();
+        if let Some(statistics) = statistics {
+            statistics.analyze_and_write(
+                frame as u32,
+                t_frame,
+                &output_positions,
+                &self.mesh.mesh.mesh,
+                dataset,
+                inv_world as f64,
+            );
+        }
         // Build the final path explicitly rather than stripping ".tmp" with
         // String::replace, which would also rewrite any ".tmp" inside the
         // output directory path. This mirrors the temp-path construction above
@@ -462,8 +504,7 @@ impl Backend {
         // N-1, 2N-1, ...). Using `(frame + 1) % N == 0` makes the cadence match
         // what the user sees and the Blender->solver checkpoint conversion
         // (display N -> solver N-1).
-        let is_auto_save =
-            sim_args.auto_save > 0 && (frame + 1) % sim_args.auto_save == 0;
+        let is_auto_save = sim_args.auto_save > 0 && (frame + 1) % sim_args.auto_save == 0;
         let is_checkpoint = sim_args
             .checkpoints
             .split(',')
@@ -476,12 +517,7 @@ impl Backend {
         *last_time = Instant::now();
     }
 
-    fn save_state(
-        &self,
-        program_args: &ProgramArgs,
-        sim_args: &SimArgs,
-        dataset: &DataSet,
-    ) {
+    fn save_state(&self, program_args: &ProgramArgs, sim_args: &SimArgs, dataset: &DataSet) {
         use ppf_cts_formats::files;
         let path_mesh = format!("{}/{}", program_args.output, files::MESHSET);
         let path_dataset = format!("{}/{}", program_args.output, files::DATASET);
@@ -591,7 +627,7 @@ impl Backend {
         &mut self,
         program_args: &ProgramArgs,
         sim_args: &SimArgs,
-        dataset: DataSet,
+        mut dataset: DataSet,
         mut param: ParamSet,
         scene: Scene,
     ) {
@@ -605,6 +641,15 @@ impl Backend {
         if initialize_finish_path.exists() {
             std::fs::remove_file(initialize_finish_path.clone()).unwrap();
         }
+        let mut timeline_statistics = crate::statistics::TimelineStatistics::load(
+            &program_args.path,
+            &program_args.output,
+            &self.mesh.mesh.mesh,
+            sim_args.fps,
+        );
+        if let Some(statistics) = &timeline_statistics {
+            statistics.configure_dataset(&mut dataset);
+        }
         if unsafe { initialize(&dataset, &param) } {
             // Initialize collision windows on GPU
             let cw = scene.build_collision_window_table();
@@ -614,8 +659,10 @@ impl Backend {
             if cw.has_windows {
                 unsafe {
                     init_collision_windows(
-                        cw.vert_dmap.as_ptr(), cw.vert_dmap.len() as u32,
-                        cw.windows.as_ptr(), cw.window_counts.as_ptr(),
+                        cw.vert_dmap.as_ptr(),
+                        cw.vert_dmap.len() as u32,
+                        cw.windows.as_ptr(),
+                        cw.window_counts.as_ptr(),
                         cw.n_groups,
                     );
                 }
@@ -627,12 +674,15 @@ impl Backend {
                 self.state.time,
             );
         } else {
-            // initialize() == false: an init failure (e.g. an intersection
-            // in the initial configuration). The panic below stamps the
-            // terminal Crashed{Panic} via the hook; a dedicated
-            // Crashed{InitIntersection} from an init error_code arrives with
-            // the C++ changes in the next increment.
-            panic!("failed to initialize backend");
+            // initialize() reports failure through a bare `false`, so the
+            // cause has to come from the fatal code the backend stamped
+            // alongside it. A code of zero means a failure path inside
+            // initialize() that named no cause; report that as unknown rather
+            // than inheriting the label of the one path that does set a code,
+            // which would attribute a future second failure mode to an
+            // intersection it never saw.
+            crate::status_writer::terminal_init_failure();
+            std::process::exit(1);
         }
         if program_args.load > 0 && !sim_args.disable_contact {
             unsafe {
@@ -660,8 +710,17 @@ impl Backend {
         // surfacing as the bl_pin_* fidelity divergence.
         if self.state.curr_frame < 0 && self.state.time == 0.0 {
             self.write_frame_outputs(
-                program_args, sim_args, &dataset, &param, &scene,
-                &mut last_time, 0, 0.0, 0.0, 0.0,
+                program_args,
+                sim_args,
+                &dataset,
+                &param,
+                &scene,
+                &mut last_time,
+                0,
+                0.0,
+                0.0,
+                0.0,
+                &mut timeline_statistics,
             );
             self.state.curr_frame = 0;
             crate::status_writer::progress(Phase::Running, 0, self.state.time);
@@ -672,38 +731,37 @@ impl Backend {
         // animated rest shapes stay identical, then interpolates between
         // keyframes per step. Empty (no per-step upload) when the scene has no
         // schedule.
-        let rest_shape_keyframes: Vec<RestShapeKeyframe> =
-            match scene.rest_shape_schedule() {
-                Some((times, frames)) => {
-                    let face_props = dataset.prop.face.as_slice();
-                    let tet_props = dataset.prop.tet.as_slice();
-                    let face_params = dataset.param_arrays.face.as_slice();
-                    let tet_params = dataset.param_arrays.tet.as_slice();
-                    times
-                        .into_iter()
-                        .zip(frames.iter())
-                        .map(|(t, rest_v)| {
-                            // exclude_singular = true: a folded captured frame can
-                            // drive a rest element near-singular; rather than
-                            // clamp (which fattens it and hides the bend's
-                            // stretch), flag it so update_rest_shape drops it from
-                            // the energy. Every non-singular element keeps its
-                            // exact rest.
-                            let (inv2, inv3, ef, et) = super::builder::compute_inv_rest(
-                                rest_v,
-                                &self.mesh,
-                                face_props,
-                                tet_props,
-                                face_params,
-                                tet_params,
-                                true,
-                            );
-                            (t, inv2, inv3, ef, et)
-                        })
-                        .collect()
-                }
-                None => Vec::new(),
-            };
+        let rest_shape_keyframes: Vec<RestShapeKeyframe> = match scene.rest_shape_schedule() {
+            Some((times, frames)) => {
+                let face_props = dataset.prop.face.as_slice();
+                let tet_props = dataset.prop.tet.as_slice();
+                let face_params = dataset.param_arrays.face.as_slice();
+                let tet_params = dataset.param_arrays.tet.as_slice();
+                times
+                    .into_iter()
+                    .zip(frames.iter())
+                    .map(|(t, rest_v)| {
+                        // exclude_singular = true: a folded captured frame can
+                        // drive a rest element near-singular; rather than
+                        // clamp (which fattens it and hides the bend's
+                        // stretch), flag it so update_rest_shape drops it from
+                        // the energy. Every non-singular element keeps its
+                        // exact rest.
+                        let (inv2, inv3, ef, et) = super::builder::compute_inv_rest(
+                            rest_v,
+                            &self.mesh,
+                            face_props,
+                            tet_props,
+                            face_params,
+                            tet_params,
+                            true,
+                        );
+                        (t, inv2, inv3, ef, et)
+                    })
+                    .collect()
+            }
+            None => Vec::new(),
+        };
         loop {
             // GPU clock sampling is only meaningful on the CUDA build. The
             // emulated/CPU backend has no device, so gating this out avoids a
@@ -876,18 +934,8 @@ impl Backend {
             let mut result = StepResult::default();
             unsafe { advance(&mut result) };
             if !result.success() {
-                write_intersection_records(
-                    &program_args.output,
-                    if sim_args.world_scaling > 0.0 {
-                        1.0 / sim_args.world_scaling
-                    } else {
-                        1.0
-                    },
-                );
                 // Derive the crash sub-kind from the StepResult booleans the
-                // backend already returns (no log parsing). Stamp the terminal
-                // record before the panic; the panic hook then sees a terminal
-                // outcome already present and skips its Crashed{Panic}.
+                // backend already returns (no log parsing).
                 let kind = crash_kind_from_step(
                     result.ccd_success,
                     result.pcg_success,
@@ -896,20 +944,34 @@ impl Backend {
                     result.pin_feasible,
                     result.contact_separated,
                 );
-                crate::status_writer::terminal_crash(
-                    kind,
-                    format!(
-                        "advance failed at frame {} (ccd={}, pcg={}, \
-                         intersection_free={}, newton_progress={}, \
-                         pin_feasible={}, contact_separated={})",
-                        self.state.curr_frame,
-                        result.ccd_success,
-                        result.pcg_success,
-                        result.intersection_free,
-                        result.newton_progress,
-                        result.pin_feasible,
-                        result.contact_separated
-                    ),
+                let detail = format!(
+                    "advance failed at frame {} (ccd={}, pcg={}, \
+                     intersection_free={}, newton_progress={}, \
+                     pin_feasible={}, contact_separated={})",
+                    self.state.curr_frame,
+                    result.ccd_success,
+                    result.pcg_success,
+                    result.intersection_free,
+                    result.newton_progress,
+                    result.pin_feasible,
+                    result.contact_separated
+                );
+                // The terminal record is the crash report proper, and it is
+                // stamped FIRST so nothing written afterward can cost it. It is
+                // durable (tmp + fsync + rename) and first-writer-wins, so once
+                // it lands the panic hook sees a terminal outcome present and
+                // skips its Crashed{Panic}: a later failure while writing the
+                // intersection records can no longer downgrade a precise
+                // sub-kind to a generic panic.
+                crate::status_writer::terminal_crash(kind, detail);
+
+                write_intersection_records(
+                    &program_args.output,
+                    if sim_args.world_scaling > 0.0 {
+                        1.0 / sim_args.world_scaling
+                    } else {
+                        1.0
+                    },
                 );
                 panic!("failed to advance");
             }
@@ -937,8 +999,17 @@ impl Backend {
                 for f in self.state.curr_frame + 1..=new_frame {
                     let t_frame = f as f64 / sim_args.fps;
                     self.write_frame_outputs(
-                        program_args, sim_args, &dataset, &param, &scene,
-                        &mut last_time, f, t_frame, t_prev, t_curr,
+                        program_args,
+                        sim_args,
+                        &dataset,
+                        &param,
+                        &scene,
+                        &mut last_time,
+                        f,
+                        t_frame,
+                        t_prev,
+                        t_curr,
+                        &mut timeline_statistics,
                     );
                 }
                 self.state.curr_frame = new_frame;
@@ -996,7 +1067,11 @@ fn centroid_of(positions: &[f32]) -> Option<[f32; 3]> {
         c[2] += positions[3 * k + 2] as f64;
     }
     let inv = 1.0 / count as f64;
-    Some([(c[0] * inv) as f32, (c[1] * inv) as f32, (c[2] * inv) as f32])
+    Some([
+        (c[0] * inv) as f32,
+        (c[1] * inv) as f32,
+        (c[2] * inv) as f32,
+    ])
 }
 
 fn resolve_principal_axis(positions: &[f32], pca_index: usize) -> Option<([f32; 3], [f32; 3])> {
@@ -1125,20 +1200,25 @@ fn write_intersection_records(output_dir: &str, inv_world: f32) {
     });
     // Write via a temp file + atomic rename so a crash mid-write never
     // leaves a half-written records file for the overlay / server to read.
-    let path = format!("{output_dir}/intersection_records.json");
+    // Every failure names its path and the OS error: on the crash path, a
+    // message carrying neither leaves nothing to act on.
+    let path = format!(
+        "{output_dir}/{}",
+        ppf_cts_formats::files::INTERSECTION_RECORDS_JSON
+    );
     let tmp = format!("{path}.tmp");
-    match std::fs::File::create(&tmp) {
-        Ok(file) => {
-            if serde_json::to_writer_pretty(file, &json).is_ok()
-                && std::fs::rename(&tmp, &path).is_ok()
-            {
-                info!("wrote {count} intersection records to {path}");
-            } else {
-                error!("failed to write {path}");
-                let _ = std::fs::remove_file(&tmp);
-            }
+    let write_result = std::fs::File::create(&tmp)
+        .map_err(|e| format!("create {tmp}: {e}"))
+        .and_then(|file| {
+            serde_json::to_writer_pretty(file, &json).map_err(|e| format!("write {tmp}: {e}"))
+        })
+        .and_then(|()| std::fs::rename(&tmp, &path).map_err(|e| format!("rename to {path}: {e}")));
+    match write_result {
+        Ok(()) => info!("wrote {count} intersection records to {path}"),
+        Err(msg) => {
+            error!("failed to write intersection records: {msg}");
+            let _ = std::fs::remove_file(&tmp);
         }
-        Err(_) => error!("failed to create {tmp}"),
     }
 }
 
@@ -1155,7 +1235,13 @@ mod rest_shape_tests {
         let i3 = Mat3x3f::identity();
         let keyframes: Vec<RestShapeKeyframe> = vec![
             (0.0_f64, vec![i2], vec![i3], vec![0u8], vec![0u8]),
-            (1.0_f64, vec![i2 * 2.0], vec![i3 * 2.0], vec![0u8], vec![0u8]),
+            (
+                1.0_f64,
+                vec![i2 * 2.0],
+                vec![i3 * 2.0],
+                vec![0u8],
+                vec![0u8],
+            ),
         ];
 
         let r0 = interp_rest_shape(&keyframes, 0.0);
@@ -1202,8 +1288,13 @@ mod rest_shape_tests {
     #[test]
     fn interp_rest_shape_single_keyframe() {
         let i3 = Mat3x3f::identity();
-        let keyframes: Vec<RestShapeKeyframe> =
-            vec![(0.5_f64, Vec::<Mat2x2f>::new(), vec![i3 * 3.0], vec![], vec![0u8])];
+        let keyframes: Vec<RestShapeKeyframe> = vec![(
+            0.5_f64,
+            Vec::<Mat2x2f>::new(),
+            vec![i3 * 3.0],
+            vec![],
+            vec![0u8],
+        )];
         let r = interp_rest_shape(&keyframes, 2.0);
         assert!(r.inv_rest2x2.as_slice().is_empty());
         assert!((r.inv_rest3x3.as_slice()[0] - i3 * 3.0).amax() < 1e-6);

@@ -37,7 +37,7 @@ pub fn transition(state: ServerState, event: Event) -> (ServerState, Vec<Effect>
             has_param,
             has_app,
             is_resumable,
-            has_crashed,
+            crash,
             upload_id,
             data_hash,
             param_hash,
@@ -94,10 +94,20 @@ pub fn transition(state: ServerState, event: Event) -> (ServerState, Vec<Effect>
             // Only when the app actually built -- status_string masks solver
             // state behind NO_BUILD otherwise, and a crash without a build
             // can't resume.
-            let solver = if has_app && has_crashed {
+            //
+            // The reason is carried through with the fact. Reporting only
+            // that a run failed leaves a reconnected user with strictly less
+            // than they had before they restarted Blender, which is exactly
+            // when they most need the cause.
+            let reconciled = has_app.then_some(crash).flatten();
+            let solver = if reconciled.is_some() {
                 Solver::Failed
             } else {
                 Solver::Idle
+            };
+            let (error, crash_kind) = match reconciled {
+                Some(c) => (c.rendered, c.kind_tag),
+                None => (String::new(), String::new()),
             };
             let mut effects: Vec<Effect> = Vec::new();
             if !has_app {
@@ -116,7 +126,8 @@ pub fn transition(state: ServerState, event: Event) -> (ServerState, Vec<Effect>
                     resumable: is_resumable,
                     frame: 0,
                     initialized: false,
-                    error: String::new(),
+                    error,
+                    crash_kind,
                     build_progress: 0.0,
                     build_info: String::new(),
                     total_frames,
@@ -198,6 +209,7 @@ pub fn transition(state: ServerState, event: Event) -> (ServerState, Vec<Effect>
                     build_info: "Preparing build...".to_string(),
                     total_frames: 0,
                     error: String::new(),
+                    crash_kind: String::new(),
                     ..state
                 },
                 vec![Effect::DoSpawnBuild { preserve_output }],
@@ -271,6 +283,7 @@ pub fn transition(state: ServerState, event: Event) -> (ServerState, Vec<Effect>
                 build_progress: 0.0,
                 build_info: String::new(),
                 error: String::new(),
+                crash_kind: String::new(),
                 ..state
             },
             vec![Effect::DoLog {
@@ -284,6 +297,9 @@ pub fn transition(state: ServerState, event: Event) -> (ServerState, Vec<Effect>
                 ServerState {
                     build: Build::Failed,
                     error,
+                    // Not a solver crash, so no cause tag: the addon draws
+                    // the raw message for these.
+                    crash_kind: String::new(),
                     ..state
                 },
                 vec![Effect::DoLog { message: log }],
@@ -301,6 +317,7 @@ pub fn transition(state: ServerState, event: Event) -> (ServerState, Vec<Effect>
                     frame: 0,
                     initialized: false,
                     error: String::new(),
+                    crash_kind: String::new(),
                     ..state
                 },
                 vec![
@@ -332,6 +349,7 @@ pub fn transition(state: ServerState, event: Event) -> (ServerState, Vec<Effect>
                     solver: Solver::Running,
                     initialized: false,
                     error: String::new(),
+                    crash_kind: String::new(),
                     ..state
                 },
                 vec![
@@ -403,13 +421,18 @@ pub fn transition(state: ServerState, event: Event) -> (ServerState, Vec<Effect>
             )
         }
 
-        Event::SolverCrashed { error, violations } => {
+        Event::SolverCrashed {
+            error,
+            kind_tag,
+            violations,
+        } => {
             let log = format!("Solver crashed: {error}");
             (
                 ServerState {
                     solver: Solver::Failed,
                     initialized: false,
                     error,
+                    crash_kind: kind_tag,
                     violations,
                     ..state
                 },
@@ -484,6 +507,8 @@ pub fn transition(state: ServerState, event: Event) -> (ServerState, Vec<Effect>
         Event::ErrorOccurred { error } => (
             ServerState {
                 error: error.clone(),
+                // Not a solver crash, so no cause tag.
+                crash_kind: String::new(),
                 ..state
             },
             vec![Effect::DoLog { message: error }],

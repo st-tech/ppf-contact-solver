@@ -18,12 +18,14 @@ namespace solver {
 // doubles as the `eval_x` the PDRD fit reads, and as the (reserved) Schwarz
 // aggregation seed. `schwarz_fallback` is set to 1 if the Schwarz base produced
 // a non-SPD residual and the solver latched the block-Jacobi fallback for this
-// solve, else 0.
+// solve, else 0. `dof_removed_mask` identifies exact Dirichlet rows so an
+// active aggregate lock can build its affine pin-compensating correction.
 bool solve(const DynCSRMat &A, const FixedCSRMat &B, const Vec<Mat3x3f> &C,
            Vec<float> b, float tol, unsigned max_iter, Vec<float> x,
            const Vec<Vec3f> &positions, const ParamSet &prm, unsigned &iter,
            float &resid, unsigned &schwarz_fallback, const DataSet &data,
-           float dt, Vec<float> pdrd_dtheta_out);
+           float dt, Vec<float> pdrd_dtheta_out,
+           Vec<unsigned> dof_removed_mask);
 
 } // namespace solver
 

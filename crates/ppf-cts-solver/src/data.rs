@@ -209,6 +209,13 @@ pub struct FaceParam {
     // MUST mirror the C++ FaceParam in cpp/data.hpp field-for-field (repr(C)).
     pub deform_damping: f32,
     pub bend_damping: f32,
+    // Directional shell bending stiffnesses, ADDED to the isotropic `bend` at
+    // an orientation-dependent weight; carried to the hinges (area-averaged in
+    // builder.rs) exactly as `bend` and `bend_damping` are. Both 0.0 means
+    // isotropic. Tail-appended; MUST mirror the C++ FaceParam in cpp/data.hpp
+    // (repr(C) ABI).
+    pub bend_warp: f32,
+    pub bend_weft: f32,
 }
 
 impl std::hash::Hash for FaceParam {
@@ -231,6 +238,8 @@ impl std::hash::Hash for FaceParam {
         self.bend_rest_from_geometry.hash(state);
         self.deform_damping.to_bits().hash(state);
         self.bend_damping.to_bits().hash(state);
+        self.bend_warp.to_bits().hash(state);
+        self.bend_weft.to_bits().hash(state);
     }
 }
 
@@ -254,6 +263,8 @@ impl PartialEq for FaceParam {
             && self.bend_rest_from_geometry == other.bend_rest_from_geometry
             && self.deform_damping.to_bits() == other.deform_damping.to_bits()
             && self.bend_damping.to_bits() == other.bend_damping.to_bits()
+            && self.bend_warp.to_bits() == other.bend_warp.to_bits()
+            && self.bend_weft.to_bits() == other.bend_weft.to_bits()
     }
 }
 
@@ -270,6 +281,14 @@ pub struct HingeParam {
     // Rayleigh bending damping, area-averaged from adjacent faces in builder.rs.
     // MUST mirror the C++ HingeParam in cpp/data.hpp (repr(C)).
     pub bend_damping: f32,
+    // Directional bending stiffnesses added to `bend`, area-averaged from the
+    // adjacent faces alongside it. These stay in the param (deduped, a handful
+    // of distinct values per scene) rather than the prop so that retuning them
+    // re-sends the param payload without rebuilding the mesh dataset; the
+    // per-hinge geometry they weight lives in HingeProp::uv_edge_sin2.
+    // Tail-appended; MUST mirror the C++ HingeParam (repr(C)).
+    pub bend_warp: f32,
+    pub bend_weft: f32,
 }
 
 impl std::hash::Hash for HingeParam {
@@ -280,6 +299,8 @@ impl std::hash::Hash for HingeParam {
         self.plasticity.to_bits().hash(state);
         self.plasticity_threshold.to_bits().hash(state);
         self.bend_damping.to_bits().hash(state);
+        self.bend_warp.to_bits().hash(state);
+        self.bend_weft.to_bits().hash(state);
     }
 }
 
@@ -291,6 +312,8 @@ impl PartialEq for HingeParam {
             && self.plasticity.to_bits() == other.plasticity.to_bits()
             && self.plasticity_threshold.to_bits() == other.plasticity_threshold.to_bits()
             && self.bend_damping.to_bits() == other.bend_damping.to_bits()
+            && self.bend_warp.to_bits() == other.bend_warp.to_bits()
+            && self.bend_weft.to_bits() == other.bend_weft.to_bits()
     }
 }
 
@@ -352,6 +375,15 @@ pub struct VertexProp {
     /// vertex/edge/face pairs (intra-body collisions are excluded
     /// because PDRD bodies move as exactly rigid bodies).
     pub pdrd_body_index: u32,
+    /// Vertex belongs to a STATIC collider. Contact and intersection
+    /// reporting skip a pair whose two sides are both collider vertices,
+    /// whether that is one collider against itself or two different ones: a
+    /// collider's shape is authored and driven, so neither side can yield to
+    /// relieve the contact. An exactly pinned collider was already excluded
+    /// by `either_dyn`; this preserves the exclusion once the collider is
+    /// held by springs and its vertices become free. Field order must mirror
+    /// `VertexProp` in `cpp/data.hpp` (repr(C) ABI).
+    pub collider: bool,
 }
 
 #[repr(C)]
@@ -375,6 +407,15 @@ pub struct FaceProp {
     /// separate from `fixed` (kinematic pinning) so the two never alias. Field
     /// order must mirror `FaceProp` in `cpp/data.hpp` (repr(C) ABI).
     pub rest_excluded: bool,
+    /// Belongs to a STATIC collider, so it carries no elastic energy. A
+    /// collider's shape is held by its pins, not by stiffness of its own:
+    /// while the pins were exact its DOF were removed and `fixed` already
+    /// suppressed this term, but a spring-held collider's vertices are free
+    /// and the term would otherwise come alive with whatever material the
+    /// defaults supplied. Kept separate from both `fixed` (kinematic pinning)
+    /// and `rest_excluded` (owned per frame by `update_rest_shape`) so none of
+    /// the three alias. Field order must mirror `FaceProp` in `cpp/data.hpp`.
+    pub collider: bool,
     pub param_index: u32,
 }
 
@@ -387,7 +428,21 @@ pub struct HingeProp {
     // coefficient |e|^2 / area (see energy.cu embed_hinge_force_hessian).
     pub area: f32,
     pub rest_angle: f32,
+    /// `sin^2(psi)` for `psi` the angle between this hinge's shared edge and
+    /// the UV X (warp) axis, in [0, 1], or -1.0 when the mesh carries no UV
+    /// and the hinge is therefore isotropic. A hinge bends about its shared
+    /// edge, so the surface curves ACROSS that edge: an edge along warp
+    /// (`psi = 0`, `sin^2 = 0`) resists with the weft stiffness, which is why
+    /// the orthotropic factor in energy.cu pairs `sin^2` with warp and
+    /// `cos^2` with weft. Squared components are stored rather than the angle
+    /// so the kernel needs no trigonometry. Rest-topology constant, so the
+    /// streamed rest-shape path does not recompute it.
+    pub uv_edge_sin2: f32,
     pub fixed: bool,
+    /// Belongs to a STATIC collider, so it carries no bending energy. See
+    /// `FaceProp::collider`. Field order must mirror `HingeProp` in
+    /// `cpp/data.hpp` (repr(C) ABI).
+    pub collider: bool,
     pub param_index: u32,
 }
 
@@ -653,7 +708,6 @@ pub struct Floor {
     pub kinematic: bool,
 }
 
-
 #[repr(C)]
 #[derive(Serialize, Deserialize)]
 pub struct CollisionMeshPropSet {
@@ -862,6 +916,32 @@ pub struct VertexSet {
     pub curr: CVec<Vec3f>,
 }
 
+/// One enabled aggregate rigid-mode lock. `axis` is the optional unit
+/// translation direction and `rotation_axis` is the optional unit rotation
+/// direction, both in solver space. A zero axis disables that part of the
+/// lock. Translation constrains the physical mass-weighted center of mass to
+/// the line through its initial value. Rotation constrains each Newton
+/// correction's best-fit infinitesimal angular increment to its axis.
+///
+/// `pdrd_body_index` is 0 for a deformable/SAND group and otherwise the
+/// 1-based PDRD body that owns this lock. `anchor` is one locked initial
+/// position used to form all current relative coordinates. Field order must
+/// mirror `TranslationLock` in `cpp/data.hpp` (repr(C) ABI).
+pub const ROTATION_LOCK_ALLOW_ONLY: u32 = 0;
+pub const ROTATION_LOCK_PROHIBIT_AXIS: u32 = 1;
+
+#[repr(C)]
+#[derive(Serialize, Deserialize, Clone, Copy, Default)]
+pub struct TranslationLock {
+    pub axis: Vec3f,
+    pub total_mass: f32,
+    pub pdrd_body_index: u32,
+    pub dmap_index: u32,
+    pub rotation_axis: Vec3f,
+    pub rotation_mode: u32,
+    pub anchor: Vec3f,
+}
+
 #[repr(C)]
 #[derive(Serialize, Deserialize)]
 pub struct DataSet {
@@ -940,4 +1020,24 @@ pub struct DataSet {
     pub hinge_hess_slots: CVec<u32>,
     pub rod_bend_hess_slots: CVec<u32>,
     pub stitch_hess_slots: CVec<u32>,
+    /// Compact enabled lock records. Empty means no translation lock is active.
+    /// `translation_lock_index` maps global vertices to these entries, using
+    /// `u32::MAX` for a vertex outside every locked physical mass group.
+    pub translation_lock: CVec<TranslationLock>,
+    pub translation_lock_index: CVec<u32>,
+    /// Initial positions for the locked-vertex COM reference. This is stored
+    /// separately from `vertex.curr`, which advances during simulation, so the
+    /// solver always forms `(current - initial)` before accumulation.
+    /// Empty when `translation_lock` is empty.
+    pub translation_lock_initial: CVec<Vec3f>,
+    /// Statistics object index for each dynamic and static collision-mesh
+    /// vertex. `u32::MAX` marks a vertex outside the statistics manifest.
+    /// The contact kernels use these tables to attribute every accepted
+    /// constraint to both participating objects.
+    pub statistics_object_index: CVec<u32>,
+    pub statistics_static_object_index: CVec<u32>,
+    /// One accepted-contact count per statistics object. Cleared before each
+    /// Newton assembly, atomically accumulated by contact kernels, and fetched
+    /// with the output pose.
+    pub statistics_contact_count: CVec<u32>,
 }

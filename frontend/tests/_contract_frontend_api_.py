@@ -32,6 +32,12 @@ if str(REPO_ROOT) not in sys.path:
 
 # Snapshot: every name in frontend.__all__, plus the two helpers that
 # lack obvious __all__ membership but are documented entry points.
+#
+# ParamDecoder and SceneDecoder are deliberately absent. They are decoder
+# internals that the package stopped re-exporting in 01698b57 (dropped from
+# __all__) and 2d91a4b3 (import removed), and they remain importable as
+# frontend._decoder_.ParamDecoder / frontend._decoder_.SceneDecoder, which
+# is how every caller in this repository reaches them.
 EXPECTED_PUBLIC_NAMES = {
     "App",
     "AssetFetcher",
@@ -47,13 +53,11 @@ EXPECTED_PUBLIC_NAMES = {
     "MeshManager",
     "Object",
     "ObjectAdder",
-    "ParamDecoder",
     "ParamManager",
     "Plot",
     "PlotManager",
     "Rod",
     "Scene",
-    "SceneDecoder",
     "SceneInfo",
     "SceneManager",
     "Session",
@@ -109,11 +113,17 @@ EXPECTED_APP_MEMBERS = {
 # Snapshot: signature of every static/method on App that takes
 # arguments. Format: {name: "(arg1: T, arg2: T = ...) -> R"}. Computed
 # via inspect.signature so default reprs etc. match the live code.
+#
+# An annotation is compared as the text inspect renders, which names the
+# module a class is DEFINED in, not the module a caller imports it from.
+# get_default_param's ParamManager is defined in frontend._session_param_
+# and re-exported from frontend._session_; both import paths yield the same
+# class, so a caller sees no difference and only this text moves.
 EXPECTED_APP_SIGNATURES = {
     "create": "(name: str, cache_dir: str = '') -> 'App'",
     "load": "(name: str, cache_dir: str = '') -> 'App'",
     "get_proj_root": "() -> str",
-    "get_default_param": "() -> frontend._session_.ParamManager",
+    "get_default_param": "() -> frontend._session_param_.ParamManager",
     "busy": "() -> bool",
     "is_fast_check": "() -> bool",
     "set_fast_check": "(enabled: bool = True)",

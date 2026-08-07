@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# Install Blender 5.1.1 + the Xvfb virtual framebuffer (Linux only)
+# Install Blender 5.2.0 + the Xvfb virtual framebuffer (Linux only)
 # from the Blender Foundation's official download mirror.
 #
 # Mirrors the "Linux runtime deps + Xvfb" / "Download Blender" steps
@@ -13,7 +13,7 @@
 #   Uninstall:  ./install-blender.sh --uninstall
 #
 # What goes where (Linux):
-#   ~/.local/opt/blender-5.1.1-linux-x64/  -- extracted release tree
+#   ~/.local/opt/blender-5.2.0-linux-x64/  -- extracted release tree
 #   ~/.local/bin/blender                  -- symlink to the binary
 #   /usr/bin/Xvfb                          -- via apt, requires sudo
 #
@@ -37,7 +37,7 @@ set -euo pipefail
 BLENDER_TMP=""
 trap 'if [ -n "${BLENDER_TMP:-}" ] && [ -d "$BLENDER_TMP" ]; then rm -rf "$BLENDER_TMP"; fi' EXIT
 
-BLENDER_VERSION_DEFAULT="5.1.1"
+BLENDER_VERSION_DEFAULT="5.2.0"
 BLENDER_VERSION="${PPF_BLENDER_VERSION:-$BLENDER_VERSION_DEFAULT}"
 
 OS="$(uname -s)"
@@ -222,12 +222,17 @@ print_env() {
   fi
   echo "export PPF_BLENDER_BIN=$BLENDER_BIN"
   if [ "$PLATFORM" = linux ]; then
-    if ! pgrep -x Xvfb >/dev/null 2>&1; then
-      # Spawn detached so the eval'ing shell doesn't inherit a child.
-      # Output goes to /tmp/xvfb.log per the CI convention.
-      echo "(Xvfb :99 -screen 0 1280x720x24 -ac >/tmp/xvfb.log 2>&1 &)"
-      echo "for _ in 1 2 3 4 5; do xset -q -display :99 >/dev/null 2>&1 && break || sleep 1; done"
-    fi
+    # The guard asks about :99 specifically, and asks in the eval'ing
+    # shell rather than here. Testing for an Xvfb PROCESS instead would
+    # decide on a different question than the one that matters: any
+    # unrelated Xvfb, on any display and at any size, satisfies it, and
+    # DISPLAY=:99 is exported regardless, so the rig is handed a display
+    # that may not exist. Deferring to eval time also closes the window
+    # between printing this block and running it.
+    # Spawn detached so the eval'ing shell doesn't inherit a child.
+    # Output goes to /tmp/xvfb.log per the CI convention.
+    echo "xset -q -display :99 >/dev/null 2>&1 || (Xvfb :99 -screen 0 1280x720x24 -ac >/tmp/xvfb.log 2>&1 &)"
+    echo "for _ in 1 2 3 4 5; do xset -q -display :99 >/dev/null 2>&1 && break || sleep 1; done"
     echo "export DISPLAY=:99"
   fi
 }

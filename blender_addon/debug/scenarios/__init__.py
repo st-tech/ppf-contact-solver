@@ -22,6 +22,7 @@ REPO_ROOT_POSIX: str = os.path.abspath(
 """Repo root with forward-slash separators. Driver string-substitution
 on Windows would otherwise emit backslash escapes."""
 
+from . import rig_launch_config
 from . import server_smoke
 from . import upload_id_changes
 from . import bl_connect_local
@@ -52,6 +53,8 @@ from . import bl_pin_op_type_enum_stable
 from . import bl_pin_vgroup_enum_ref
 from . import bl_enum_props_guard
 from . import bl_i18n_no_leaks
+from . import bl_solver_crash_kind_localized
+from . import bl_solver_crash_open_session_folder
 from . import bl_pin_capture_deformation
 from . import bl_pin_capture_deformation_persistence
 from . import bl_pinned_anim_transform_display
@@ -90,7 +93,10 @@ from . import bl_emulated_elastic_drape
 from . import bl_sand_emulated_roundtrip
 from . import bl_emulated_angular_spin
 from . import bl_emulated_world_spin
+from . import bl_timeline_statistics
 from . import bl_bend_reference_shell
+from . import bl_bend_anisotropy_uv
+from . import bl_bend_aniso_reference
 from . import bl_bend_reference_rod
 from . import bl_bend_reference_rod_curve
 from . import bl_shallow_copy
@@ -138,6 +144,7 @@ from . import bl_solid_solid_stitch
 from . import bl_static_stitch
 from . import bl_shell_static_stitch
 from . import bl_static_snap_guard
+from . import bl_static_soft_constraint
 from . import bl_deformed_target_snap
 from . import bl_snap_parented_move
 from . import bl_transform_translation_roundtrip
@@ -169,6 +176,12 @@ from . import bl_world_scaling_resume
 from . import bl_world_scaling_pdrd
 
 from . import bl_pdrd_hinge
+from . import bl_lock_translation
+from . import bl_lock_rotation
+from . import bl_emulated_lock_rotation
+from . import bl_emulated_lock_rotation_prohibit
+from . import bl_emulated_lock_translation_free
+from . import bl_emulated_lock_translation_pinned
 from . import bl_pdrd_anchor_release
 from . import bl_pdrd_driven_translate
 from . import bl_pdrd_driven_rotate_vertex
@@ -235,6 +248,11 @@ REGISTRY = {
     "server_smoke": server_smoke,
     "upload_id_changes": upload_id_changes,
 
+    # How the rig LAUNCHES Blender (window size, PPF_BLENDER_WINDOW
+    # parsing, display probing). Server-only so it does not need the
+    # Blender it configures.
+    "rig_launch_config": rig_launch_config,
+
     # Blender-driven scenarios. These produce real ``data.pickle`` via
     # the addon's encoder, exercising the full pipeline:
     # addon -> upload -> frontend.populate -> frontend.make ->
@@ -271,6 +289,8 @@ REGISTRY = {
     "bl_pin_vgroup_enum_ref": bl_pin_vgroup_enum_ref,
     "bl_enum_props_guard": bl_enum_props_guard,
     "bl_i18n_no_leaks": bl_i18n_no_leaks,
+    "bl_solver_crash_kind_localized": bl_solver_crash_kind_localized,
+    "bl_solver_crash_open_session_folder": bl_solver_crash_open_session_folder,
     "bl_pin_capture_deformation": bl_pin_capture_deformation,
     "bl_pin_capture_deformation_persistence": bl_pin_capture_deformation_persistence,
     "bl_pinned_anim_transform_display": bl_pinned_anim_transform_display,
@@ -307,7 +327,10 @@ REGISTRY = {
     "bl_sand_emulated_roundtrip": bl_sand_emulated_roundtrip,
     "bl_emulated_angular_spin": bl_emulated_angular_spin,
     "bl_emulated_world_spin": bl_emulated_world_spin,
+    "bl_timeline_statistics": bl_timeline_statistics,
     "bl_bend_reference_shell": bl_bend_reference_shell,
+    "bl_bend_anisotropy_uv": bl_bend_anisotropy_uv,
+    "bl_bend_aniso_reference": bl_bend_aniso_reference,
     "bl_bend_reference_rod": bl_bend_reference_rod,
     "bl_bend_reference_rod_curve": bl_bend_reference_rod_curve,
     "bl_shallow_copy": bl_shallow_copy,
@@ -363,6 +386,7 @@ REGISTRY = {
     "bl_static_stitch": bl_static_stitch,
     "bl_shell_static_stitch": bl_shell_static_stitch,
     "bl_static_snap_guard": bl_static_snap_guard,
+    "bl_static_soft_constraint": bl_static_soft_constraint,
     "bl_deformed_target_snap": bl_deformed_target_snap,
     "bl_snap_parented_move": bl_snap_parented_move,
     "bl_transform_translation_roundtrip": bl_transform_translation_roundtrip,
@@ -388,6 +412,12 @@ REGISTRY = {
     "bl_world_scaling_pdrd": bl_world_scaling_pdrd,
 
     "bl_pdrd_hinge": bl_pdrd_hinge,
+    "bl_lock_translation": bl_lock_translation,
+    "bl_lock_rotation": bl_lock_rotation,
+    "bl_emulated_lock_rotation": bl_emulated_lock_rotation,
+    "bl_emulated_lock_rotation_prohibit": bl_emulated_lock_rotation_prohibit,
+    "bl_emulated_lock_translation_free": bl_emulated_lock_translation_free,
+    "bl_emulated_lock_translation_pinned": bl_emulated_lock_translation_pinned,
     "bl_pdrd_anchor_release": bl_pdrd_anchor_release,
     "bl_pdrd_driven_translate": bl_pdrd_driven_translate,
     "bl_pdrd_driven_rotate_vertex": bl_pdrd_driven_rotate_vertex,

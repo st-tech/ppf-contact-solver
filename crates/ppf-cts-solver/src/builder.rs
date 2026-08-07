@@ -44,6 +44,14 @@ pub struct SandParams {
     pub friction: f32,
 }
 
+/// `HingeProp::uv_edge_sin2` for a hinge with no usable UV direction, either
+/// because the mesh carries no UV at all or because both incident faces have a
+/// degenerate UV edge. Negative so it cannot collide with a real `sin^2`, which
+/// lies in `[0, 1]`; the kernel and the emulator both read it as "isotropic".
+/// The build refuses a scene that pairs it with non-unit bending ratios, so it
+/// never silently discards an anisotropy the user asked for.
+pub(crate) const NO_UV_EDGE_DIRECTION: f32 = -1.0;
+
 /// Signed dihedral angle between the two faces sharing the edge
 /// `v0-v1` with opposite vertices `v2` and `v3`. Matches the device-side
 /// `face_dihedral_angle` after `remap(hinge)` in `dihedral_angle.hpp`:
@@ -106,7 +114,11 @@ fn invert_or_exclude3(mat: &Matrix3<f32>) -> (Matrix3<f32>, bool) {
     // upstream) must exclude: every comparison with NaN is false, so without
     // this guard a non-finite rest matrix would fall through to `try_inverse`
     // and leave a NaN `inv_rest` active in the energy.
-    if !smax.is_finite() || !smin.is_finite() || smax <= 0.0 || smin < REST_SHAPE_EXCLUDE_RATIO * smax {
+    if !smax.is_finite()
+        || !smin.is_finite()
+        || smax <= 0.0
+        || smin < REST_SHAPE_EXCLUDE_RATIO * smax
+    {
         return (Matrix3::identity(), true);
     }
     (mat.try_inverse().unwrap_or_else(Matrix3::identity), false)
@@ -118,7 +130,11 @@ fn invert_or_exclude2(mat: &Matrix2<f32>) -> (Matrix2<f32>, bool) {
     let (smax, smin) = (sv[0], sv[1]);
     // See `invert_or_exclude3`: a NaN/Inf singular value must exclude, since
     // every comparison with NaN is false and would otherwise pass through.
-    if !smax.is_finite() || !smin.is_finite() || smax <= 0.0 || smin < REST_SHAPE_EXCLUDE_RATIO * smax {
+    if !smax.is_finite()
+        || !smin.is_finite()
+        || smax <= 0.0
+        || smin < REST_SHAPE_EXCLUDE_RATIO * smax
+    {
         return (Matrix2::identity(), true);
     }
     (mat.try_inverse().unwrap_or_else(Matrix2::identity), false)
@@ -284,6 +300,42 @@ pub struct PdrdSceneData<'a> {
     pub rest_centered: &'a [f32],
 }
 
+/// Static aggregate-lock inputs threaded from `Scene`.
+///
+/// Each axis table has one normalized solver-space axis per displacement
+/// group. A zero vector disables that component. `vert_dmap` assigns every
+/// dynamic vertex to its displacement group, so the builder can retain only
+/// enabled physical-mass groups in the CUDA dataset.
+pub struct LockSceneData<'a> {
+    pub translation_axes: &'a [Vec3f],
+    pub rotation_axes: &'a [Vec3f],
+    pub rotation_modes: &'a [u32],
+    pub vert_dmap: &'a [u32],
+}
+
+fn normalized_or_disabled_lock_axis(axis: Vec3f, dmap_index: usize, component: &str) -> Vec3f {
+    if axis == Vec3f::zeros() {
+        return axis;
+    }
+    assert!(
+        axis.iter().all(|value| value.is_finite()),
+        "{component} lock displacement group {dmap_index} has a non-finite axis"
+    );
+    let norm = axis.norm();
+    assert!(
+        norm.is_finite() && (norm - 1.0).abs() <= 64.0 * f32::EPSILON,
+        "{component} lock displacement group {dmap_index} must have a normalized nonzero axis"
+    );
+    axis / norm
+}
+
+fn validate_rotation_lock_mode(mode: u32, dmap_index: usize) {
+    assert!(
+        mode == ROTATION_LOCK_ALLOW_ONLY || mode == ROTATION_LOCK_PROHIBIT_AXIS,
+        "rotation lock displacement group {dmap_index} has invalid mode {mode}"
+    );
+}
+
 pub fn build(
     sim_args: &SimArgs,
     mesh: &MeshSet,
@@ -291,10 +343,32 @@ pub fn build(
     props: &mut Props,
     constraint: Constraint,
     pdrd: PdrdSceneData<'_>,
+    lock_data: LockSceneData<'_>,
 ) -> data::DataSet {
     let dt = clamp_substep_dt(sim_args.dt, sim_args.fps);
     let vertex = &mesh.vertex;
     let n_vert = vertex.ncols();
+    assert_eq!(
+        lock_data.vert_dmap.len(),
+        n_vert,
+        "aggregate-lock vert_dmap size mismatch"
+    );
+    assert_eq!(
+        lock_data.translation_axes.len(),
+        lock_data.rotation_axes.len(),
+        "translation-lock and rotation-lock axis table size mismatch"
+    );
+    assert_eq!(
+        lock_data.translation_axes.len(),
+        lock_data.rotation_modes.len(),
+        "rotation-lock axis and mode table size mismatch"
+    );
+    for (vertex, &group) in lock_data.vert_dmap.iter().enumerate() {
+        assert!(
+            (group as usize) < lock_data.translation_axes.len(),
+            "aggregate-lock vert_dmap[{vertex}] = {group} has no axis entry"
+        );
+    }
     let shell_face_count = mesh.mesh.mesh.shell_face_count;
     let rod_count = mesh.mesh.mesh.rod_count;
     let neighbor = marshal_neighbor(&mesh.mesh.neighbor);
@@ -357,6 +431,36 @@ pub fn build(
         }
     });
 
+    // A face belongs to a STATIC collider when all of its vertices do, mirroring
+    // the `fixed` derivation above: a face shared with anything else keeps its
+    // elastic energy. Faces are the only element kind a collider can reach (the
+    // decoder builds its pin shell with `add.tri`, so no rod edges and no tets),
+    // and hinges inherit it from their two incident faces further down, exactly
+    // as `all_fixed` does.
+    if !mesh.collider_vertex_mask.is_empty() {
+        assert_eq!(
+            mesh.collider_vertex_mask.len(),
+            n_vert,
+            "collider_vertex_mask size mismatch"
+        );
+        let collider_vertices: HashSet<usize> = mesh
+            .collider_vertex_mask
+            .iter()
+            .enumerate()
+            .filter(|(_, &c)| c != 0)
+            .map(|(i, _)| i)
+            .collect();
+        props.face.par_iter_mut().enumerate().for_each(|(i, prop)| {
+            prop.collider = mesh
+                .mesh
+                .mesh
+                .face
+                .column(i)
+                .iter()
+                .all(|&j| collider_vertices.contains(&j));
+        });
+    }
+
     // Props now contains final props and params directly
     let edge_props = &props.edge;
     let face_props = &props.face;
@@ -384,11 +488,31 @@ pub fn build(
         vertex_prop[pair.index as usize].pull_index = (i + 1) as u32;
     }
 
+    // Stamp the STATIC-collider flag on each vertex. Contact and intersection
+    // reporting skip a pair only when BOTH sides carry it, so a collider still
+    // collides with every dynamic object; it just does not collide with itself
+    // or with another collider. An empty mask (an older session directory, or
+    // a scene with no colliders) leaves every vertex false.
+    if !mesh.collider_vertex_mask.is_empty() {
+        assert_eq!(
+            mesh.collider_vertex_mask.len(),
+            n_vert,
+            "collider_vertex_mask size mismatch"
+        );
+        for (i, &is_collider) in mesh.collider_vertex_mask.iter().enumerate() {
+            vertex_prop[i].collider = is_collider != 0;
+        }
+    }
+
     // Stamp the PDRD body id on each vertex. The scene-side
     // vertex-index slice is 1-based already; 0 means "not in any
     // PDRD body".
     if !pdrd.vert_index.is_empty() {
-        assert_eq!(pdrd.vert_index.len(), n_vert, "PDRD vert_index size mismatch");
+        assert_eq!(
+            pdrd.vert_index.len(),
+            n_vert,
+            "PDRD vert_index size mismatch"
+        );
         for (i, &bid) in pdrd.vert_index.iter().enumerate() {
             vertex_prop[i].pdrd_body_index = bid;
         }
@@ -399,11 +523,7 @@ pub fn build(
     // src/cpp/energy/energy.cu:333: vertex has exactly 2 rod edges and 0
     // faces.
     for j in 0..n_vert {
-        let adj_edges: Vec<usize> = mesh
-            .mesh
-            .neighbor
-            .vertex
-            .edge[j]
+        let adj_edges: Vec<usize> = mesh.mesh.neighbor.vertex.edge[j]
             .iter()
             .copied()
             .filter(|&ei| ei < rod_count)
@@ -421,8 +541,7 @@ pub fn build(
         let from_geometry = from_reference
             || adj_edges.iter().any(|&ei| {
                 let edge_prop = &edge_props[ei];
-                edge_params[edge_prop.param_index as usize]
-                    .bend_rest_from_geometry
+                edge_params[edge_prop.param_index as usize].bend_rest_from_geometry
             });
         if !from_geometry {
             continue;
@@ -747,7 +866,8 @@ pub fn build(
     // Step 1: Parallel computation of hinge data. `bend_rest_v` / `bend_mask`
     // (the reference rest shape) are defined at the top of `build`.
     let hinge_columns: Vec<_> = mesh.mesh.mesh.hinge.column_iter().collect();
-    let hinge_data: Vec<(f32, f32, f32, bool, HingeParam)> = hinge_columns
+    let hinge_uv = mesh.uv.as_ref();
+    let hinge_data: Vec<(f32, f32, f32, f32, bool, bool, HingeParam)> = hinge_columns
         .into_par_iter()
         .enumerate()
         .map(|(i, hinge)| {
@@ -759,20 +879,28 @@ pub fn build(
             let mut plasticity_sum = 0.0;
             let mut plasticity_threshold_sum = 0.0;
             let mut bend_damping_sum = 0.0;
+            let mut bend_warp_sum = 0.0;
+            let mut bend_weft_sum = 0.0;
             let mut area_sum = 0.0;
             let mut all_fixed = true;
+            // A hinge bends two faces, so it is a collider hinge exactly when
+            // both of them are. Aggregated here rather than from its four
+            // vertices so it agrees with the face gate by construction.
+            let mut all_collider = true;
             let mut from_geometry = false;
             for &j in mesh.mesh.neighbor.hinge.face[i].iter() {
                 let face_prop = &face_props[j];
                 let face_param = &face_params[face_prop.param_index as usize];
                 all_fixed = all_fixed && face_prop.fixed;
+                all_collider = all_collider && face_prop.collider;
                 offset_sum += face_prop.area * face_param.offset;
                 ghat_sum += face_prop.area * face_param.ghat;
                 bend_sum += face_prop.area * face_param.bend;
                 plasticity_sum += face_prop.area * face_param.bend_plasticity;
-                plasticity_threshold_sum +=
-                    face_prop.area * face_param.bend_plasticity_threshold;
+                plasticity_threshold_sum += face_prop.area * face_param.bend_plasticity_threshold;
                 bend_damping_sum += face_prop.area * face_param.bend_damping;
+                bend_warp_sum += face_prop.area * face_param.bend_warp;
+                bend_weft_sum += face_prop.area * face_param.bend_weft;
                 area_sum += face_prop.area;
                 if face_param.bend_rest_from_geometry {
                     from_geometry = true;
@@ -785,8 +913,68 @@ pub fn build(
                 offset: offset_sum / area_sum,
                 plasticity: plasticity_sum / area_sum,
                 plasticity_threshold: plasticity_threshold_sum / area_sum,
-                bend_damping: if all_fixed { 0.0 } else { bend_damping_sum / area_sum },
+                bend_damping: if all_fixed {
+                    0.0
+                } else {
+                    bend_damping_sum / area_sum
+                },
+                bend_warp: bend_warp_sum / area_sum,
+                bend_weft: bend_weft_sum / area_sum,
             };
+            // Direction of the hinge's shared edge in the UV material frame,
+            // as sin^2 of its angle from the UV X (warp) axis. Both incident
+            // faces carry their own UV triangle and a seam or a mirrored
+            // island can orient them differently, so combine them by area the
+            // way every other quantity in this loop is combined. sin^2 has
+            // period 180 degrees, so which way round the edge is traversed
+            // does not matter and no orientation convention is needed.
+            let uv_edge_sin2 = match hinge_uv {
+                None => NO_UV_EDGE_DIRECTION,
+                Some(uv) => {
+                    let mut sin2_sum = 0.0f32;
+                    let mut weight_sum = 0.0f32;
+                    for &j in mesh.mesh.neighbor.hinge.face[i].iter() {
+                        // `uv` is indexed over shell faces only; a hinge is
+                        // always between two of them, but stay in bounds
+                        // rather than trusting that from a distance.
+                        if j >= uv.len() {
+                            continue;
+                        }
+                        let f = mesh.mesh.mesh.face.column(j);
+                        let corner = |v: usize| (0..3).find(|&k| f[k] == v);
+                        let (Some(c0), Some(c1)) = (corner(hinge[0]), corner(hinge[1])) else {
+                            continue;
+                        };
+                        let e = uv[j].column(c1) - uv[j].column(c0);
+                        let len2 = e.norm_squared();
+                        if len2 > 0.0 {
+                            sin2_sum += face_props[j].area * (e[1] * e[1] / len2);
+                            weight_sum += face_props[j].area;
+                        }
+                    }
+                    if weight_sum > 0.0 {
+                        sin2_sum / weight_sum
+                    } else {
+                        // Both incident faces have a degenerate UV edge, so
+                        // this hinge has no material direction at all.
+                        NO_UV_EDGE_DIRECTION
+                    }
+                }
+            };
+            // Anisotropic bending is meaningless without a direction, so a
+            // scene that asks for it and cannot supply one is an authoring
+            // error rather than something to quietly ignore. Checked only
+            // when the ratios actually differ from isotropic, so a mesh with
+            // no UV (or one broken UV triangle) stays perfectly usable as
+            // long as it is not asking for anisotropy.
+            if uv_edge_sin2 < 0.0 && (hparam.bend_warp != 0.0 || hparam.bend_weft != 0.0) {
+                panic!(
+                    "Hinge {i} (edge {}-{}) requests directional bending \
+                     (bend-warp={}, bend-weft={}) but has no usable UV direction. \
+                     Give the mesh a UV map, or leave both at 0.0.",
+                    hinge[0], hinge[1], hparam.bend_warp, hparam.bend_weft
+                );
+            }
             // A hinge belonging to a reference object (its shared edge is
             // masked) computes its rest angle from the reference shape even
             // when the group's Rest Angle source is Flat.
@@ -802,7 +990,15 @@ pub fn build(
             } else {
                 0.0
             };
-            (length, area_sum, rest_angle, all_fixed, hparam)
+            (
+                length,
+                area_sum,
+                rest_angle,
+                uv_edge_sin2,
+                all_fixed,
+                all_collider,
+                hparam,
+            )
         })
         .collect();
 
@@ -810,13 +1006,15 @@ pub fn build(
     let mut temp_hinge_props = Vec::with_capacity(hinge_data.len());
     let mut temp_hinge_params = Vec::new();
     let mut hinge_param_map: HashMap<HingeParam, u32> = HashMap::new();
-    for (length, area, rest_angle, all_fixed, hparam) in hinge_data {
+    for (length, area, rest_angle, uv_edge_sin2, all_fixed, all_collider, hparam) in hinge_data {
         let param_idx = dedup_param(&mut hinge_param_map, &mut temp_hinge_params, hparam);
         temp_hinge_props.push(HingeProp {
             fixed: all_fixed,
+            collider: all_collider,
             length,
             area,
             rest_angle,
+            uv_edge_sin2,
             param_index: param_idx,
         });
     }
@@ -840,9 +1038,7 @@ pub fn build(
             let rest_centroid = Vec3f::new(row[3], row[4], row[5]);
             // 9 floats laid out row-major.
             let rest_gram_inv = Mat3x3f::new(
-                row[6], row[7], row[8],
-                row[9], row[10], row[11],
-                row[12], row[13], row[14],
+                row[6], row[7], row[8], row[9], row[10], row[11], row[12], row[13], row[14],
             );
             let mass_per_vertex = row[15];
             // Joint block: mode, axle[3], pivot[3] (see PdrdBodyProp).
@@ -850,8 +1046,14 @@ pub fn build(
             let joint_axis = Vec3f::new(row[17], row[18], row[19]);
             let joint_pin = Vec3f::new(row[20], row[21], row[22]);
             assert!(vertex_count > 0, "PDRD body {b} has empty vertex range");
-            assert!(volume > 0.0, "PDRD body {b} has non-positive volume {volume}");
-            assert!(mass_per_vertex > 0.0, "PDRD body {b} has non-positive mass_per_vertex {mass_per_vertex}");
+            assert!(
+                volume > 0.0,
+                "PDRD body {b} has non-positive volume {volume}"
+            );
+            assert!(
+                mass_per_vertex > 0.0,
+                "PDRD body {b} has non-positive mass_per_vertex {mass_per_vertex}"
+            );
             pdrd_body_props.push(PdrdBodyProp {
                 rest_centroid,
                 rest_gram_inv,
@@ -865,6 +1067,115 @@ pub fn build(
             });
         }
     }
+
+    // Compact enabled displacement-group locks into physical-mass groups. A
+    // massless vertex has no contribution to either the center of mass or the
+    // best-fit inertia, so it deliberately stays outside this map. Initial
+    // positions and each record's `anchor` give the CUDA side a fixed
+    // reference, so every relative coordinate is formed as a difference
+    // against it rather than from an absolute position.
+    const TRANSLATION_LOCK_UNSET: u32 = u32::MAX;
+    let mut translation_locks = Vec::<TranslationLock>::new();
+    let mut translation_lock_index = vec![TRANSLATION_LOCK_UNSET; n_vert];
+    let mut pdrd_lock_owner = vec![TRANSLATION_LOCK_UNSET; pdrd_body_props.len()];
+    for dmap_index in 0..lock_data.translation_axes.len() {
+        let translation_axis = lock_data.translation_axes[dmap_index];
+        let rotation_axis = lock_data.rotation_axes[dmap_index];
+        let rotation_mode = lock_data.rotation_modes[dmap_index];
+        validate_rotation_lock_mode(rotation_mode, dmap_index);
+        if translation_axis == Vec3f::zeros() && rotation_axis == Vec3f::zeros() {
+            continue;
+        }
+        let translation_axis =
+            normalized_or_disabled_lock_axis(translation_axis, dmap_index, "translation");
+        let rotation_axis = normalized_or_disabled_lock_axis(rotation_axis, dmap_index, "rotation");
+
+        let mut total_mass = 0.0f64;
+        let mut pdrd_body_index = None;
+        let mut physical_vertex_count = 0usize;
+        let mut anchor = None;
+        for (vertex_index, &group) in lock_data.vert_dmap.iter().enumerate() {
+            if group as usize != dmap_index {
+                continue;
+            }
+            let mass = vertex_prop[vertex_index].mass;
+            assert!(
+                mass.is_finite() && mass >= 0.0,
+                "aggregate lock displacement group {dmap_index} has invalid mass {mass} at vertex {vertex_index}"
+            );
+            if mass == 0.0 {
+                continue;
+            }
+            physical_vertex_count += 1;
+            total_mass += mass as f64;
+            anchor.get_or_insert_with(|| vertex.column(vertex_index).into());
+            let body = vertex_prop[vertex_index].pdrd_body_index;
+            match pdrd_body_index {
+                Some(existing) => assert_eq!(
+                    existing, body,
+                    "aggregate lock displacement group {dmap_index} mixes PDRD and non-PDRD vertices, or multiple PDRD bodies; lock each physical object separately"
+                ),
+                None => pdrd_body_index = Some(body),
+            }
+        }
+        assert!(
+            physical_vertex_count > 0 && total_mass.is_finite() && total_mass > 0.0,
+            "aggregate lock displacement group {dmap_index} has no positive physical mass"
+        );
+        let total_mass = total_mass as f32;
+        assert!(
+            total_mass.is_finite() && total_mass > 0.0,
+            "aggregate lock displacement group {dmap_index} total mass is not representable in float32"
+        );
+
+        let body = pdrd_body_index.unwrap_or(0);
+        if body != 0 {
+            assert!(
+                (body as usize) <= pdrd_body_props.len(),
+                "aggregate lock displacement group {dmap_index} refers to unknown PDRD body {body}"
+            );
+        }
+        let compact_index = translation_locks.len() as u32;
+        for (vertex_index, &group) in lock_data.vert_dmap.iter().enumerate() {
+            if group as usize == dmap_index && vertex_prop[vertex_index].mass > 0.0 {
+                translation_lock_index[vertex_index] = compact_index;
+            }
+        }
+        if body != 0 {
+            let owner = &mut pdrd_lock_owner[body as usize - 1];
+            assert_eq!(
+                *owner, TRANSLATION_LOCK_UNSET,
+                "PDRD body {body} is assigned to multiple aggregate-lock displacement groups"
+            );
+            *owner = compact_index;
+            for (vertex_index, prop) in vertex_prop.iter().enumerate() {
+                if prop.pdrd_body_index == body {
+                    assert_eq!(
+                        translation_lock_index[vertex_index],
+                        compact_index,
+                        "aggregate lock displacement group {dmap_index} contains only part of PDRD body {body}; a PDRD lock must cover its complete body"
+                    );
+                }
+            }
+        }
+        translation_locks.push(TranslationLock {
+            axis: translation_axis,
+            total_mass,
+            pdrd_body_index: body,
+            dmap_index: dmap_index as u32,
+            rotation_axis,
+            rotation_mode,
+            anchor: anchor.expect("positive-mass aggregate lock has no anchor"),
+        });
+    }
+    let translation_lock_initial = if translation_locks.is_empty() {
+        Vec::new()
+    } else {
+        vertex
+            .column_iter()
+            .map(|position| position.into())
+            .collect::<Vec<Vec3f>>()
+    };
 
     // Flat parallel arrays for the PDRD kernel: vertex indices and
     // centered rest positions, body-major. `body.vertex_start /
@@ -882,11 +1193,13 @@ pub fn build(
             pdrd.rest_centered.len(),
         );
         (0..pdrd.vert_list.len())
-            .map(|i| Vec3f::new(
-                pdrd.rest_centered[3 * i],
-                pdrd.rest_centered[3 * i + 1],
-                pdrd.rest_centered[3 * i + 2],
-            ))
+            .map(|i| {
+                Vec3f::new(
+                    pdrd.rest_centered[3 * i],
+                    pdrd.rest_centered[3 * i + 1],
+                    pdrd.rest_centered[3 * i + 2],
+                )
+            })
             .collect()
     };
 
@@ -913,8 +1226,15 @@ pub fn build(
     // stays default-false; only the streamed-rest-shape path (backend.rs) sets
     // it.
     let rest_v = mesh.rest_vertex.as_ref().unwrap_or(&mesh.vertex);
-    let (inv_rest2x2, inv_rest3x3, _, _) =
-        compute_inv_rest(rest_v, mesh, face_props, tet_props, face_params, tet_params, false);
+    let (inv_rest2x2, inv_rest3x3, _, _) = compute_inv_rest(
+        rest_v,
+        mesh,
+        face_props,
+        tet_props,
+        face_params,
+        tet_params,
+        false,
+    );
 
     let inv_rest2x2 = CVec::from(&inv_rest2x2[..]);
     let inv_rest3x3 = CVec::from(&inv_rest3x3[..]);
@@ -1127,8 +1447,7 @@ pub fn build(
         // by vertex index (surface_vert_count rows, the embed's dispatch domain).
         // Non-interior verts stay all-sentinel. j, k derived exactly as
         // embed_rod_bend_force_hessian does.
-        let mut rod_bend_slots =
-            vec![FIXED_SLOT_SENTINEL; 9 * surface_vert_count as usize];
+        let mut rod_bend_slots = vec![FIXED_SLOT_SENTINEL; 9 * surface_vert_count as usize];
         for i in 0..surface_vert_count as usize {
             let edges = &mesh.mesh.neighbor.vertex.edge[i];
             if edges.len() == 2 && mesh.mesh.neighbor.vertex.face[i].is_empty() {
@@ -1141,8 +1460,7 @@ pub fn build(
                 let element = [j, i, k];
                 for a in 0..3 {
                     for b in 0..3 {
-                        rod_bend_slots[9 * i + a * 3 + b] =
-                            slot_of(element[a], element[b]);
+                        rod_bend_slots[9 * i + a * 3 + b] = slot_of(element[a], element[b]);
                     }
                 }
             }
@@ -1154,10 +1472,7 @@ pub fn build(
         for seam in constraint.stitch.iter() {
             for a in 0..6 {
                 for b in 0..6 {
-                    stitch_slots.push(slot_of(
-                        seam.index[a] as usize,
-                        seam.index[b] as usize,
-                    ));
+                    stitch_slots.push(slot_of(seam.index[a] as usize, seam.index[b] as usize));
                 }
             }
         }
@@ -1302,6 +1617,12 @@ pub fn build(
         hinge_hess_slots: CVec::from(hinge_hess_slots.as_slice()),
         rod_bend_hess_slots: CVec::from(rod_bend_hess_slots.as_slice()),
         stitch_hess_slots: CVec::from(stitch_hess_slots.as_slice()),
+        translation_lock: CVec::from(translation_locks.as_slice()),
+        translation_lock_index: CVec::from(translation_lock_index.as_slice()),
+        translation_lock_initial: CVec::from(translation_lock_initial.as_slice()),
+        statistics_object_index: CVec::new(),
+        statistics_static_object_index: CVec::new(),
+        statistics_contact_count: CVec::new(),
     }
 }
 
@@ -1567,6 +1888,10 @@ pub fn make_collision_mesh(
             pull_index: 0,
             param_index: param_idx,
             pdrd_body_index: 0,
+            // The collision mesh is the disjoint contact-only pool: it never
+            // shares a pair with itself (it is not in the solved namespace),
+            // so the flag is inert here.
+            collider: false,
         });
     }
 
@@ -1629,5 +1954,32 @@ mod rest_shape_tests {
         assert!(invert_or_exclude2(&Matrix2::from_element(f32::NAN)).1);
         assert!(invert_or_exclude2(&Matrix2::zeros()).1);
         assert!(!invert_or_exclude2(&Matrix2::<f32>::identity()).1);
+    }
+
+    #[test]
+    fn lock_components_are_independently_enabled() {
+        let translation = normalized_or_disabled_lock_axis(Vec3f::zeros(), 3, "translation");
+        let rotation = normalized_or_disabled_lock_axis(Vec3f::new(0.0, 0.0, 1.0), 3, "rotation");
+        assert_eq!(translation, Vec3f::zeros());
+        assert_eq!(rotation, Vec3f::new(0.0, 0.0, 1.0));
+    }
+
+    #[test]
+    fn lock_component_rejects_non_unit_axis() {
+        assert!(std::panic::catch_unwind(|| {
+            normalized_or_disabled_lock_axis(Vec3f::new(0.0, 2.0, 0.0), 0, "rotation")
+        })
+        .is_err());
+    }
+
+    #[test]
+    fn rotation_lock_modes_accept_both_contract_values() {
+        validate_rotation_lock_mode(ROTATION_LOCK_ALLOW_ONLY, 0);
+        validate_rotation_lock_mode(ROTATION_LOCK_PROHIBIT_AXIS, 1);
+    }
+
+    #[test]
+    fn rotation_lock_mode_rejects_unknown_value() {
+        assert!(std::panic::catch_unwind(|| { validate_rotation_lock_mode(2, 0) }).is_err());
     }
 }

@@ -173,7 +173,9 @@ class EffectRunner:
         self._anim_lock = threading.Lock()
         self._anim_map: dict[str, numpy.ndarray] = {}
         self._anim_surface_map: dict = {}
-        self._anim_frames: list[tuple[int, numpy.ndarray]] = []
+        self._anim_statistics_manifest: bytes | None = None
+        self._anim_statistics_zero_fetched = False
+        self._anim_frames: list[tuple[int, numpy.ndarray, list[bytes]]] = []
         self._anim_total: int = 0
         self._anim_applied: int = 0
         self._fetched: list[int] = []
@@ -318,6 +320,8 @@ class EffectRunner:
                     self._anim_applied = 0
                     self._anim_map = {}
                     self._anim_surface_map = {}
+                    self._anim_statistics_manifest = None
+                    self._anim_statistics_zero_fetched = False
 
             # -- Terminate / Save-and-quit (commands) --
             case DoTerminate():
@@ -335,7 +339,7 @@ class EffectRunner:
 
     # -- animation buffer access (called from main thread) --
 
-    def take_one_animation_frame(self) -> tuple[tuple | None, dict, dict, int, int]:
+    def take_one_animation_frame(self) -> tuple[tuple | None, dict, dict, bytes | None, int, int]:
         """Pop one pending frame (main thread)."""
         with self._anim_lock:
             frame = self._anim_frames.pop(0) if self._anim_frames else None
@@ -345,6 +349,7 @@ class EffectRunner:
                 frame,
                 self._anim_map,
                 self._anim_surface_map,
+                self._anim_statistics_manifest,
                 self._anim_applied,
                 self._anim_total,
             )
@@ -565,6 +570,8 @@ class EffectRunner:
         with self._anim_lock:
             self._anim_map = {}
             self._anim_surface_map = {}
+            self._anim_statistics_manifest = None
+            self._anim_statistics_zero_fetched = False
             self._anim_frames.clear()
             self._anim_total = 0
             self._anim_applied = 0
@@ -1112,6 +1119,37 @@ class EffectRunner:
                 return
 
             self._ensure_anim_map(root)
+            if self._anim_statistics_manifest is None:
+                manifest_path = _server_join(
+                    self._backend,
+                    root,
+                    "session",
+                    "output",
+                    "statistics_manifest.cbor",
+                )
+                try:
+                    statistics_manifest = self._backend.receive_data(
+                        manifest_path,
+                        self._project_name,
+                        chunk_size=self._chunk_size,
+                    )
+                except Exception as exc:
+                    # Sessions produced before timeline statistics remain
+                    # fetchable. Their panel reports that a rerun is required.
+                    console.write(
+                        "statistics manifest unavailable; this session must be "
+                        f"rerun for timeline statistics ({exc})"
+                    )
+                    statistics_manifest = b""
+                with self._anim_lock:
+                    if self._fetched is not fetched:
+                        if not only_latest:
+                            self._engine.dispatch(FetchFailed(
+                                reason="fetch frames: context reset while "
+                                "fetching statistics manifest"
+                            ))
+                        return
+                    self._anim_statistics_manifest = statistics_manifest
 
             if only_latest:
                 start_frame = max(1, frame_count)
@@ -1171,6 +1209,37 @@ class EffectRunner:
                     interrupt_cb=interrupt_cb,
                 )
                 vert = numpy.frombuffer(data, dtype=numpy.float32).reshape(-1, 3)
+                statistics_data = []
+                includes_statistics_zero = False
+                if self._anim_statistics_manifest:
+                    if not self._anim_statistics_zero_fetched:
+                        zero_path = _server_join(
+                            self._backend,
+                            root,
+                            "session",
+                            "output",
+                            "statistics_0.cbor",
+                        )
+                        statistics_data.append(self._backend.receive_data(
+                            zero_path,
+                            self._project_name,
+                            chunk_size=self._chunk_size,
+                            interrupt_cb=interrupt_cb,
+                        ))
+                        includes_statistics_zero = True
+                    statistics_path = _server_join(
+                        self._backend,
+                        root,
+                        "session",
+                        "output",
+                        f"statistics_{i}.cbor",
+                    )
+                    statistics_data.append(self._backend.receive_data(
+                        statistics_path,
+                        self._project_name,
+                        chunk_size=self._chunk_size,
+                        interrupt_cb=interrupt_cb,
+                    ))
                 # Re-check the context inside the lock that gates every
                 # ``_anim_frames`` mutation. ``clear_fetched_frames`` /
                 # ``set_fetched_frames`` take the same lock, so once we
@@ -1183,7 +1252,9 @@ class EffectRunner:
                         self._engine.dispatch(FetchFailed(
                             reason="fetch frames: context reset mid-fetch"))
                         return
-                    self._anim_frames.append((i, vert))
+                    self._anim_frames.append((i, vert, statistics_data))
+                    if includes_statistics_zero:
+                        self._anim_statistics_zero_fetched = True
                     self._fetched.append(i)
                 fetched_count += 1
                 if not only_latest:

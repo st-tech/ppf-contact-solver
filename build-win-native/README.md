@@ -91,9 +91,11 @@ still fails, the script exits non-zero and prints the offending path.
 ## Updating tool versions
 
 All external download URLs and filenames are centralized in
-`scripts\downloads.txt`. To bump a tool (for example CUDA 12.8 -> 12.9),
-edit the matching `URL_*` and `FILE_*` lines together, then verify the
-new pointer:
+`scripts\downloads.txt`. There are two kinds of entry: a fetched archive
+pairs `URL_*` with `FILE_*`, while a cloned repository pairs `URL_*_GIT`
+with the tag to check out and has no `FILE_*`. To bump a tool (for example
+CUDA 12.8 -> 12.9), edit that entry's lines together, then verify the new
+pointer:
 
 ```batch
 scripts\check-downloads.bat

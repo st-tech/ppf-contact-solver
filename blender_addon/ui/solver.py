@@ -368,6 +368,47 @@ def _check_merge_pairs_stitch(context) -> str:
     ).format(names=names, more=more)
 
 
+def report_build_outcome(op) -> None:
+    """Report a finished build's outcome through ``op.report``.
+
+    Every operator that starts a remote build finishes as soon as the
+    status leaves ``BUILDING``, and a failed build leaves it exactly as a
+    successful one does, so the outcome is read here before anything is
+    reported about it. This is the single reporting path for all of them,
+    so the status test, the headline extraction and the wording are
+    defined once and cannot differ from one build button to the next.
+
+    ``com.server_error`` carries the build worker's headline on its first
+    line and its traceback below it. The two surfaces this reaches, the
+    operator status bar and the panel label, each render a single line,
+    so only the headline is reported and the traceback stays in the
+    Console panel.
+
+    Success is claimed only for the statuses that mean the scene is built
+    and runnable. Leaving ``BUILDING`` does not imply that on its own: a
+    lost connection, a stopped server and a protocol mismatch all leave
+    it too, and each ends the build with no scene to run. Those report
+    the status they landed on, so the message never claims more than the
+    status supports.
+    """
+    status = com.info.status
+    if status == RemoteStatus.SIMULATION_FAILED:
+        headline = com.server_error.partition("\n")[0]
+        op.report(
+            {"ERROR"},
+            iface_("Build failed: {error}").format(error=headline),
+        )
+    elif status in (RemoteStatus.READY, RemoteStatus.RESUMABLE):
+        op.report({"INFO"}, iface_("Build completed successfully."))
+    else:
+        op.report(
+            {"WARNING"},
+            iface_("Build ended without a result: {status}").format(
+                status=status.value
+            ),
+        )
+
+
 class TransferRequestMixin:
     """Shared request methods for transfer operators.
 
@@ -685,7 +726,7 @@ class SOLVER_OT_Transfer(AsyncOperator):
     def on_complete(self, context):
         from ..models.console import console as _console
         _console.write(f"[Transfer] complete: {com.info.status.value}")
-        self.report({"INFO"}, iface_("Build completed successfully."))
+        report_build_outcome(self)
 
 
 class SOLVER_OT_Run(AsyncOperator):
@@ -1079,7 +1120,7 @@ class SOLVER_OT_UpdateParams(AsyncOperator):
         return com.is_aborting()
 
     def on_complete(self, context):
-        self.report({"INFO"}, iface_("Build completed successfully."))
+        report_build_outcome(self)
 
 
 class SOLVER_OT_ClearAnimation(Operator):

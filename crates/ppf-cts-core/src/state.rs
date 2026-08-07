@@ -100,6 +100,13 @@ pub struct ServerState {
     pub build_info: String,
     pub error: String,
 
+    /// Stable snake_case name of the crash cause behind `error`
+    /// (`ppf_cts_formats::status::CrashKind::tag`), or empty when `error` is
+    /// not a solver crash. The addon maps it to a localized one-line headline
+    /// and keeps `error` for the full report. Cleared wherever `error` is
+    /// cleared, so a stale tag can never outlive the message it names.
+    pub crash_kind: String,
+
     /// Total frames in the current build's param set, captured by the
     /// build worker and reported back via `Event::BuildMetadata`. The
     /// response builder uses this to publish solver progress

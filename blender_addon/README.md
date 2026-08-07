@@ -407,6 +407,8 @@ Collections: `fetched_frame` (FetchedFrameItem), `saved_pin_keyframes` (SavedPin
 | `strain_limit_percent` | FloatProperty | 5.0 | Shell strain limit, percent of stretch (5.0 = 5%) |
 | `enable_inflate` | BoolProperty | False | Shell inflation pressure |
 | `inflate_pressure` | FloatProperty | 0.0 | Pressure along face normals (Pa) |
+| `enable_soft_constraint` | BoolProperty | False | Static: hold the collider with springs instead of pinning it exactly |
+| `soft_constraint_stiffness` | FloatProperty | 10.0 | Static: spring stiffness holding each collider vertex to its animated position (must be > 0) |
 | `bend` | FloatProperty | 100.0 | Bend stiffness (0-100) |
 | `shrink_x` | FloatProperty | 1.0 | Anisotropic scale factor X (min 0.1; <1 shrinks, >1 extends) |
 | `shrink_y` | FloatProperty | 1.0 | Anisotropic scale factor Y (min 0.1; <1 shrinks, >1 extends) |

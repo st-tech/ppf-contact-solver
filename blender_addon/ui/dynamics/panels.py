@@ -14,6 +14,7 @@ from ...core.utils import get_category_name
 from ...models.groups import (
     GROUP_TYPE_ICONS,
     get_addon_data,
+    group_missing_uv_object,
     has_addon_data,
     pair_supports_cross_stitch,
 )
@@ -82,24 +83,82 @@ def _draw_velocity_keyframes(
     if assigned.velocity_keyframes and 0 <= assigned.velocity_keyframes_index < len(assigned.velocity_keyframes):
         kf = assigned.velocity_keyframes[assigned.velocity_keyframes_index]
         vel_box.prop(kf, "frame")
-        # Translational overwrite, gated by its own checkbox.
+        # Translational overwrite, gated by its own checkbox. Direction /
+        # Speed are HIDDEN (not merely greyed out) while disabled.
         lin_box = vel_box.box()
         lin_box.prop(kf, "enable_translational")
-        lin_sub = lin_box.column()
-        lin_sub.enabled = kf.enable_translational
-        lin_sub.prop(kf, "direction")
-        lin_sub.prop(kf, "speed")
+        if kf.enable_translational:
+            lin_sub = lin_box.column()
+            lin_sub.prop(kf, "direction")
+            lin_sub.prop(kf, "speed")
         # Angular (spin) overwrite, gated by its own checkbox. Solid / shell /
-        # PDRD only; the axis is one of the body's principal axes.
+        # PDRD only; the axis is one of the body's principal axes. Its
+        # fields are likewise hidden while disabled.
         if show_angular:
             spin_box = vel_box.box()
             spin_box.prop(kf, "enable_angular")
-            spin_sub = spin_box.column()
-            spin_sub.enabled = kf.enable_angular
-            spin_sub.prop(kf, "angular_axis")
-            if kf.angular_axis == "CUSTOM":
-                spin_sub.prop(kf, "angular_axis_custom")
-            spin_sub.prop(kf, "angular_speed")
+            if kf.enable_angular:
+                spin_sub = spin_box.column()
+                spin_sub.prop(kf, "angular_axis")
+                if kf.angular_axis == "CUSTOM":
+                    spin_sub.prop(kf, "angular_axis_custom")
+                spin_sub.prop(kf, "angular_speed")
+
+
+def _draw_lock_translation(param_box, group, actual_index):
+    """Draw the per-object Lock Translation / Lock Rotation UI.
+
+    One box, one object picker, one eye toggle: the selected object's
+    mass-weighted center of mass can be restricted to a fixed
+    world-space line (Lock Translation) and, independently, its
+    mass-weighted best-fit rigid rotation can be restricted about a
+    fixed world-space axis (Lock Rotation), while deformation stays
+    free in both cases. Lock Rotation itself has two modes, toggled by
+    `lock_rotation_prohibit_axis`: unchecked (default) allows rotation
+    about the axis only; checked forbids rotation about the axis and
+    frees the perpendicular rotation plane instead. The lock checkboxes
+    are independent booleans on the same AssignedObject: either, both,
+    or neither of Lock Translation / Lock Rotation may be enabled. Per
+    object (like the PDRD Hinge box above), since one group can hold
+    several bodies, each locked to its own axis or axes: an expandable
+    box with a single object picker shared by both locks rather than
+    one group-wide toggle. Available for every dynamic type (SOLID,
+    SHELL, ROD, PDRD, SAND). The eye toggle previews every enabled
+    axis, translation and rotation alike, for the whole group.
+    """
+    lock_box = param_box.box()
+    row = lock_box.row()
+    row.label(text="Lock Translation", icon="LOCKED")
+    row.prop(
+        group,
+        "preview_lock_translation",
+        text="",
+        emboss=False,
+        icon="HIDE_OFF" if group.preview_lock_translation else "HIDE_ON",
+    )
+    row.prop(group, "lock_translation_object_selection", text="")
+    assigned = get_assigned_by_selection_uuid(group, "lock_translation_object_selection")
+    if assigned is None:
+        return
+    lock_box.prop(assigned, "lock_translation_enable")
+    # The axis field is HIDDEN, not merely disabled, unless its own
+    # checkbox is checked.
+    if assigned.lock_translation_enable:
+        lock_box.prop(assigned, "lock_translation_axis")
+        if tuple(assigned.lock_translation_axis) == (0.0, 0.0, 0.0):
+            lock_box.label(
+                text="Axis is zero; scene build will fail until it is non-zero",
+                icon="ERROR",
+            )
+    lock_box.prop(assigned, "lock_rotation_enable")
+    if assigned.lock_rotation_enable:
+        lock_box.prop(assigned, "lock_rotation_prohibit_axis")
+        lock_box.prop(assigned, "lock_rotation_axis")
+        if tuple(assigned.lock_rotation_axis) == (0.0, 0.0, 0.0):
+            lock_box.label(
+                text="Axis is zero; scene build will fail until it is non-zero",
+                icon="ERROR",
+            )
 
 
 def _draw_collision_windows(param_box, group, actual_index):
@@ -1651,6 +1710,7 @@ class DYNAMICS_PT_Groups(Panel):
                             plast_box.prop(group, "plasticity")
                             plast_box.prop(group, "plasticity_threshold")
                         _draw_velocity_keyframes(param_box, group, actual_index, show_angular=True)
+                        _draw_lock_translation(param_box, group, actual_index)
                         _draw_tetrahedralizer(param_box, group, actual_index)
                         _draw_damping(param_box, group, include_bending=False)
                         _draw_stitch_stiffness(param_box, group)
@@ -1679,6 +1739,16 @@ class DYNAMICS_PT_Groups(Panel):
                             contact_box.prop(group, "contact_offset")
                         _draw_collision_windows(param_box, group, actual_index)
                         param_box.prop(group, "bend")
+                        aniso_col = param_box.column(align=True)
+                        aniso_col.prop(group, "bend_warp")
+                        aniso_col.prop(group, "bend_weft")
+                        if group.bend_warp > 0.0 or group.bend_weft > 0.0:
+                            missing_uv = group_missing_uv_object(group)
+                            if missing_uv is not None:
+                                param_box.label(
+                                    text=f"{missing_uv.name} has no UV map",
+                                    icon="ERROR",
+                                )
                         row = param_box.row(align=True)
                         row.prop(group, "shrink_x")
                         row.prop(group, "shrink_y")
@@ -1710,6 +1780,7 @@ class DYNAMICS_PT_Groups(Panel):
                             bplast_box.prop(group, "bend_plasticity")
                             bplast_box.prop(group, "bend_plasticity_threshold")
                         _draw_velocity_keyframes(param_box, group, actual_index, show_angular=True)
+                        _draw_lock_translation(param_box, group, actual_index)
                         _draw_damping(param_box, group, include_bending=True)
                         _draw_stitch_stiffness(param_box, group)
                     elif group.object_type == "ROD":
@@ -1747,6 +1818,7 @@ class DYNAMICS_PT_Groups(Panel):
                             bplast_box.prop(group, "bend_plasticity")
                             bplast_box.prop(group, "bend_plasticity_threshold")
                         _draw_velocity_keyframes(param_box, group, actual_index)
+                        _draw_lock_translation(param_box, group, actual_index)
                         _draw_damping(param_box, group, include_bending=True)
                         _draw_stitch_stiffness(param_box, group)
                     elif group.object_type == "PDRD":
@@ -1796,6 +1868,7 @@ class DYNAMICS_PT_Groups(Panel):
                             param_box, group, actual_index, show_angular=True,
                             label="Velocity (free launch)",
                         )
+                        _draw_lock_translation(param_box, group, actual_index)
                     elif group.object_type == "SAND":
                         # SAND bodies are a faceless cloud of loose vertices
                         # (grain centers). The grains share one radius and a
@@ -1836,11 +1909,17 @@ class DYNAMICS_PT_Groups(Panel):
                         contact_box.label(
                             text="Grain radius is the contact offset", icon="INFO"
                         )
+                        _draw_lock_translation(param_box, group, actual_index)
                         # The "Convert To Solid Particle Mesh" button lives at the
                         # group level (above Delete Group), not here, so it stays
                         # visible without expanding this section.
                     else:  # STATIC
                         param_box.prop(group, "friction")
+
+                        soft_box = param_box.box()
+                        soft_box.prop(group, "enable_soft_constraint")
+                        if group.enable_soft_constraint:
+                            soft_box.prop(group, "soft_constraint_stiffness")
 
                         contact_box = param_box.box()
                         contact_box.prop(group, "use_group_bounding_box_diagonal")

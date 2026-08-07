@@ -19,6 +19,7 @@ from . import (
     save_checkpoint_ops,
     static_deform_ops,
     static_ops,
+    statistics,
     ui_lists,
     velocity_keyframe_ops,
 )
@@ -45,6 +46,7 @@ from .panels import (
     UTILITY_PT_UtilityTools,
     VISUALIZATION_PT_Visualization,
 )
+from .statistics import STATISTICS_PT_Statistics, SOLVER_OT_ExportStatisticsCSV
 from .pin_ops import (
     OBJECT_OT_AddPinOperation,
     OBJECT_OT_AddPinVertexGroup,
@@ -224,6 +226,8 @@ __all__ = [
     "MAIN_PT_SceneConfiguration",
     "DYNAMICS_PT_Groups",
     "VISUALIZATION_PT_Visualization",
+    "STATISTICS_PT_Statistics",
+    "SOLVER_OT_ExportStatisticsCSV",
     "SNAPMERGE_PT_SnapAndMerge",
     "UTILITY_PT_UtilityTools",
     # Overlay functions
@@ -250,12 +254,14 @@ def register():
     profile_ops.register()
     ui_lists.register()
     panels.register()
+    statistics.register()
     overlay.register()
 
 
 def unregister():
     """Unregister all classes and handlers"""
     overlay.unregister()
+    statistics.unregister()
     panels.unregister()
     ui_lists.unregister()
     profile_ops.unregister()

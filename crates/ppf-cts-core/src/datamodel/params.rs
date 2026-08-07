@@ -320,7 +320,19 @@ pub fn object_param(kind: ObjectKind) -> ParamHolder {
     m.insert("poiss-rat".into(), entry(0.35f64, "Poisson's Ratio",
         "Poisson's ratio used together with Young's modulus to derive the Lame parameters. Valid range is (0, 0.5); values near 0.5 produce near-incompressible behavior. Used by 'tri' and 'tet' elements only."));
     m.insert("bend".into(), entry(bend, "Bending Stiffness",
-        "Dimensionless bending stiffness for shell hinges (between adjacent 'tri' faces) and for rod-joint bending at interior rod vertices. Must be non-negative. Not used by 'tet' elements."));
+        "Dimensionless bending stiffness for shell hinges (between adjacent 'tri' faces) and for rod-joint bending at interior rod vertices. Must be non-negative. Not used by 'tet' elements. For 'tri' shells this is the ISOTROPIC part, applied at every hinge whatever its orientation; 'bend-warp' and 'bend-weft' add directional stiffness on top of it."));
+    // Directional shell bending, measured in the UV material frame that
+    // `shrink-x` / `shrink-y` already use for the membrane. These ADD to the
+    // isotropic `bend` at a weight set by each hinge edge's orientation, so
+    // `bend` keeps its calibrated meaning and both default to 0.0, where every
+    // hinge is exactly `bend`. Registered for every object kind for the same
+    // reason as the bend-plasticity keys below: a solid's surface triangles
+    // join concat_tri_param and the key sets must match. The frontend drops
+    // them again for rod / tet / static before export.
+    m.insert("bend-warp".into(), entry(0.0f64, "Bending Stiffness (Warp)",
+        "Extra bending stiffness for the warp (UV X) fibers of 'tri' shells, added on top of 'bend' in proportion to how much a hinge bends those fibers. Same units as 'bend'. 0.0 leaves bending isotropic. Must be non-negative. Requires a UV map when non-zero. Ignored by 'tet' and 'rod' elements."));
+    m.insert("bend-weft".into(), entry(0.0f64, "Bending Stiffness (Weft)",
+        "Extra bending stiffness for the weft (UV Y) fibers of 'tri' shells, added on top of 'bend' in proportion to how much a hinge bends those fibers. Same units as 'bend'. 0.0 leaves bending isotropic. Must be non-negative. Requires a UV map when non-zero. Ignored by 'tet' and 'rod' elements."));
     m.insert("deformation-damping".into(), entry(0.0f64, "Deformation Damping",
         "Stiffness-proportional Rayleigh damping coefficient (beta) for stretch/membrane/solid deformation, in seconds. Damps high-frequency deformation by reusing the element tangent stiffness: it adds (beta/dt)*K to the system matrix. 0.0 disables it. Must be non-negative."));
     m.insert("bending-damping".into(), entry(0.0f64, "Bending Damping",

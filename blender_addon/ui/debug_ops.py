@@ -24,7 +24,7 @@ from ..models.groups import (
     get_addon_data,
     has_simulatable_dynamics,
 )
-from ..ui.solver import TransferRequestMixin
+from ..ui.solver import TransferRequestMixin, report_build_outcome
 
 test_data = None
 
@@ -309,7 +309,7 @@ class DEBUG_OT_Build(AsyncOperator):
 
     def on_complete(self, context):
         redraw_all_areas(context)
-        self.report({"INFO"}, iface_("Build completed successfully."))
+        report_build_outcome(self)
 
 
 class DEBUG_OT_GitPull(Operator):

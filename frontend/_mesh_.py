@@ -52,6 +52,91 @@ _TRIANGULATE_AREA_SCALE = 1.6
 _MIN_TET_VOLUME = 1e-15
 
 
+class CachePathUnusableError(OSError):
+    """A cache path that can be neither read nor shown to be absent.
+
+    Carries the errno, the length of the offending path component, and the
+    path itself, since the three together identify the environment fault
+    (a directory the process cannot search, a name the filesystem refuses,
+    a non-directory in the middle of the path).
+    """
+
+
+def _cache_probe(path: str) -> bool:
+    """Report whether *path* names an existing cache file.
+
+    Returns ``True`` for a file that is there and ``False`` only when
+    nothing along the path exists, which is the ordinary first-build
+    answer and carries no message: a miss names a location the write that
+    follows it can create. Every other outcome means the question could
+    not be answered: the cache directory is unsearchable, or the name is
+    one the filesystem refuses. Those raise
+    :class:`CachePathUnusableError`, so an unusable cache location is
+    reported once rather than as an endless run of cache misses.
+
+    Measured on Windows Server 2025 with CPython 3.11 and the registry's
+    ``LongPathsEnabled`` set to 1, which is the shape the split relies on:
+
+    * a filename component over 255 characters raises ``OSError`` with
+      ``winerror`` 123 (``ERROR_INVALID_NAME``), not ``FileNotFoundError``,
+      so it reaches the unusable branch below on its own;
+    * a total path over ``MAX_PATH`` whose parent directory exists raises
+      ``FileNotFoundError`` with ``winerror`` 2, which is the correct
+      absent answer, since long-path support resolves it;
+    * ``winerror`` 3 (``ERROR_PATH_NOT_FOUND``) means a directory
+      component is missing, which is also absent;
+    * ``NotADirectoryError`` does not occur; a path routed through a file
+      reports ``winerror`` 3 as well.
+
+    So on Windows every genuinely-absent shape arrives as
+    ``FileNotFoundError`` and every refused name arrives as a plain
+    ``OSError``, and the two branches below need no further discrimination.
+    The one configuration not measured is ``LongPathsEnabled`` set to 0,
+    where an over-``MAX_PATH`` path may report as absent instead of as
+    refused. That would restore the silent re-tetrahedralize this function
+    exists to prevent, so it is worth measuring before relying on this
+    function to catch a path-length fault on such a host.
+    """
+    try:
+        os.stat(path)
+    except FileNotFoundError:
+        return False
+    except OSError as exc:
+        component = os.path.basename(path)
+        raise CachePathUnusableError(
+            exc.errno,
+            f"cache path is unusable ({exc.strerror}); "
+            f"filename component is {len(component)} characters",
+            path,
+        ) from exc
+    return True
+
+
+def _warn(text: str) -> None:
+    """Write ``text`` to stderr, or do nothing if that is not possible.
+
+    Callers run inside cleanup that may execute while an exception is
+    propagating, so an exception raised by the write itself would become
+    the exception the caller sees and the real failure would be lost.
+    ``sys.stderr`` is ``None`` under a GUI-subsystem interpreter
+    (``pythonw.exe``, an embedded host with no console) and a harness may
+    substitute a stream that is closed, so the stream is resolved rather
+    than assumed and every failure mode of the write is absorbed. Warning
+    text is diagnostic; the exception on its way past is the record.
+
+    ``build_worker`` carries its own copy: it reports a failure of the
+    ``frontend`` import itself, so it holds no import of this package at
+    module scope and cannot borrow one from here.
+    """
+    try:
+        stream = sys.stderr
+        if stream is None:
+            return
+        stream.write(text)
+    except BaseException:
+        pass
+
+
 def create_mobius(
     length_split: int = 70,
     width_split: int = 15,
@@ -381,7 +466,7 @@ class MeshManager:
         # Mirrors `mesh_cache_path(cache_dir, "preset", name)`
         # (`<cache_dir>/preset__<name>.npz`).
         cache_name = _rust.mesh_cache_path(self._cache_dir, "preset", name)
-        if os.path.exists(cache_name):
+        if _cache_probe(cache_name):
             data = np.load(cache_name)
             return TriMesh.create(data["vert"], data["tri"], self._cache_dir)
 
@@ -657,6 +742,38 @@ class TriMesh(tuple[np.ndarray, np.ndarray]):
         else:
             return cached
 
+    @staticmethod
+    def _assert_tetra_cache_key(data, cache_path: str, cache_key: str) -> None:
+        """Confirm the opened cache file holds the requested settings.
+
+        The filename carries a digest of *cache_key*, and the file carries
+        *cache_key* itself, so this comparison establishes that the two
+        agree rather than that the digest merely collided. A file whose
+        stored key disagrees was tetrahedralized under other settings, and
+        loading it would simulate a mesh nobody asked for.
+
+        A file with no stored key is accepted only for the default,
+        argument-free name, which is the one name no digest stands for.
+        """
+        stored = data["cache_key"] if "cache_key" in data else None
+        name = os.path.basename(cache_path)
+        if stored is None:
+            if cache_key:
+                raise ValueError(
+                    f"Tetrahedralization cache {name} carries no cache_key, "
+                    f"so it cannot be shown to hold the result for "
+                    f"{cache_key!r}. Delete it (or clear the project cache) "
+                    "and rebuild."
+                )
+            return
+        found = str(stored)
+        if found != cache_key:
+            raise ValueError(
+                f"Tetrahedralization cache {name} holds the result for "
+                f"{found!r}, not for {cache_key!r}. Delete it (or clear the "
+                "project cache) and rebuild."
+            )
+
     def tetrahedralize(self, *args, **kwargs) -> TetMesh:
         """Tetrahedralize a surface triangle mesh.
 
@@ -680,33 +797,34 @@ class TriMesh(tuple[np.ndarray, np.ndarray]):
         """
         status_callback = kwargs.pop("status_callback", None)
         status_interval = float(kwargs.pop("status_interval", 5.0))
-        # fTetWild wall-clock guard (opt-in), popped here BEFORE the cache-key
-        # arg string so they never change the cache key. Default None ->
-        # resolved from PPF_FTETWILD_TIMEOUT / PPF_FTETWILD_RETRIES in the
-        # subprocess driver. fTetWild backend only (TetGen runs in-process).
+        # fTetWild wall-clock guard (opt-in). Default None -> resolved from
+        # PPF_FTETWILD_TIMEOUT / PPF_FTETWILD_RETRIES in the subprocess
+        # driver. fTetWild backend only (TetGen runs in-process).
         _ftw_timeout = kwargs.pop("timeout", None)
         _ftw_retries = kwargs.pop("retries", None)
-        # Build the cache-key arg string in Rust to keep formatting
-        # logic out of Python. ``backend`` (when present) rides in the
-        # kwargs here, so fTetWild and TetGen results cache under distinct
-        # keys; an fTetWild-default mesh carries no ``backend`` kwarg and
-        # so keeps its pre-existing cache key.
+        # Compose the cache key in Rust, which is where the build planner
+        # composes it too, so the file this probes is the file the plan
+        # counted. ``backend`` (when present) rides in the kwargs, so
+        # fTetWild and TetGen results occupy distinct keys. ``cache_key``
+        # is the canonical argument string the digested filename stands
+        # for; it is stored in the .npz and checked on load.
         arg_strs = [str(a) for a in args]
         kwarg_pairs = [(str(k), str(v)) for k, v in kwargs.items()]
-        arg_str = _rust.mesh_tetrahedralize_arg_str(arg_strs, kwarg_pairs)
-        cache_path = self.cache_path(
-            f"{self.hash}_tetrahedralize_{arg_str}.npz"
+        cache_name, cache_key = _rust.mesh_tetra_cache_key(
+            self.hash, arg_strs, kwarg_pairs
         )
+        cache_path = self.cache_path(cache_name)
         backend = str(kwargs.pop("backend", "ftetwild")).lower()
         # Source of truth for the surface-map format version. Imported lazily
         # so this module doesn't pull cbor2 at import time. The npz key name
         # ``map_version`` stays unchanged for on-disk back-compat.
         from ._cbor_bridge_ import SURFACE_MAP_VERSION as _SURFACE_MAP_VERSION
 
-        if os.path.exists(cache_path):
+        if _cache_probe(cache_path):
             if status_callback is not None:
                 status_callback("loading cached tetra mesh")
             data = np.load(cache_path)
+            self._assert_tetra_cache_key(data, cache_path, cache_key)
             tri = data["tri"] if "tri" in data else self[1]
             tet_mesh = TetMesh((data["vert"], tri, data["tet"]))
             cached_ver = int(data["map_version"]) if "map_version" in data else 0
@@ -733,6 +851,7 @@ class TriMesh(tuple[np.ndarray, np.ndarray]):
                     map_tri_indices=new_tri_indices,
                     map_coefs=new_coefs,
                     map_version=_SURFACE_MAP_VERSION,
+                    cache_key=np.array(cache_key),
                 )
             return tet_mesh
         else:
@@ -774,6 +893,7 @@ class TriMesh(tuple[np.ndarray, np.ndarray]):
                 map_tri_indices=tri_indices,
                 map_coefs=coefs,
                 map_version=_SURFACE_MAP_VERSION,
+                cache_key=np.array(cache_key),
             )
             return TetMesh((vert, tri, tet)).set_surface_mapping(
                 tri_indices, coefs
@@ -789,10 +909,14 @@ class TriMesh(tuple[np.ndarray, np.ndarray]):
         surface extraction. fTetWild resamples the surface, so the input
         vertices are recovered later through the frame-embedding map.
 
-        The temp .npz files and the child process are cleaned up in a
-        ``finally`` block so a failure inside the savez, the poll loop (e.g.
-        a raising ``status_callback``), or the result load cannot leak a
-        temp file or orphan the fTetWild child.
+        Cleanup of the temp .npz files and the child process is attempted
+        on every exit path, including a failure inside the savez, the poll
+        loop (e.g. a raising ``status_callback``), or the result load. A
+        step that cannot complete reports to stderr, where there is one,
+        and the remaining steps still run, so a cleanup failure never
+        replaces the exception being propagated; what it does cost is a
+        leaked temp file or a surviving child, neither of which affects
+        the build result.
         """
         # Run fTetWild in a subprocess to avoid holding the GIL.
         import tempfile as _tf
@@ -819,14 +943,35 @@ class TriMesh(tuple[np.ndarray, np.ndarray]):
             # Reap a still-running child (e.g. a status_callback raised
             # mid-poll) so it does not orphan, then remove both temp files
             # exactly once whatever path we leave through.
+            #
+            # Cleanup runs while an earlier failure may be propagating, and
+            # an exception raised here becomes the exception the caller
+            # sees, so the real build error would be lost (a temp file the
+            # OS still holds open reports WinError 32 from the unlink).
+            # Neither a surviving child nor a leftover temp file affects
+            # the build result, so each step reports through ``_warn``,
+            # which cannot raise, and continues; the guard sits inside the
+            # loop so one file's failure does not skip the other's removal.
             proc = self._ftw_proc
             if proc is not None and proc.poll() is None:
-                proc.kill()
-                proc.wait()
+                try:
+                    proc.kill()
+                    proc.wait()
+                except OSError as e:
+                    _warn(
+                        f"could not reap the fTetWild worker "
+                        f"(pid {proc.pid}): {type(e).__name__}: {e}\n"
+                    )
             self._ftw_proc = None
             for p in (input_path, output_path):
-                if os.path.exists(p):
-                    os.unlink(p)
+                try:
+                    if os.path.exists(p):
+                        os.unlink(p)
+                except OSError as e:
+                    _warn(
+                        f"could not remove the fTetWild temp file {p}: "
+                        f"{type(e).__name__}: {e}\n"
+                    )
 
     def _run_ftetwild_subprocess(
         self, input_path, output_path, kwargs, status_callback,
@@ -1087,8 +1232,13 @@ np.savez({output_path!r}, vert=vert, tet=tet)
         return self
 
     def load_cache(self, path: str) -> Optional["TriMesh"]:
-        """Load a cached mesh from the given path, or return ``None`` if it does not exist."""
-        if os.path.exists(path):
+        """Load a cached mesh from the given path, or return ``None`` if it does not exist.
+
+        An unusable cache location raises :class:`CachePathUnusableError`
+        rather than reading as a miss, since the write that follows a miss
+        goes to the same path and would fail there anyway.
+        """
+        if _cache_probe(path):
             data = np.load(path)
             return TriMesh.create(data["vert"], data["tri"], self.cache_dir)
         else:

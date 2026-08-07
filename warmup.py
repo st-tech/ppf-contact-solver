@@ -190,6 +190,16 @@ def cbor2_requirement():
 def python_packages():
     return [
         "numpy",
+        # frontend/_decoder_.py runs the two-stage Poisson pin diffusion for
+        # partially pinned SOLID objects (_build_solid_pin_fields,
+        # _build_harmonic_interior_operator) on scipy.sparse solves. It
+        # imports scipy inside a try/except that returns None when scipy is
+        # absent, so a host without it does not crash: it takes the
+        # surface-only fallback and produces a DIFFERENT driven-vertex set,
+        # so the same scene simulates differently there. Every provisioning
+        # path installs it for that reason; build-win-native/warmup.bat
+        # pins it against the numpy ABI it is built for.
+        "scipy",
         "numba",
         "plyfile",
         "requests",
@@ -222,6 +232,65 @@ def python_packages():
         cbor2_requirement(),
         "psutil",
     ]
+
+
+def tetra_packages():
+    return ["pytetwild", "tetgen", "pyvista"]
+
+
+# Packages a provisioned host cannot do without. Each name is an IMPORT
+# name, and each is either imported by the frontend or is a tetrahedralizer
+# backend, so a host missing one either cannot run a SOLID build at all or
+# silently takes a different code path than the hosts that have it. This is
+# a subset of what warmup installs, not a second install list:
+# verify_required_packages() rejects a name this script never installs.
+REQUIRED_PACKAGES = (
+    "numpy",
+    "scipy",
+    "cbor2",
+    "psutil",
+    "pytetwild",
+    "tetgen",
+    "pyvista",
+)
+
+
+def verify_required_packages():
+    """Fail the warmup when a required package did not survive the install.
+
+    pip can report success overall and still leave a package out, through a
+    partial index or a resolver backtrack, and every path that consumes one
+    of these is far from here: a SOLID build, or a simulation whose result
+    quietly differs from the other hosts. The check runs in the venv that
+    was just provisioned, so it sees what a later run will see.
+    """
+    installed = {requirement.split("==")[0] for requirement in python_packages()}
+    installed.update(tetra_packages())
+    unknown = sorted(name for name in REQUIRED_PACKAGES if name not in installed)
+    if unknown:
+        raise SystemExit(
+            "warmup: REQUIRED_PACKAGES names packages this script does not "
+            "install: " + ", ".join(unknown)
+        )
+    missing = subprocess.run(
+        [
+            get_venv_python(),
+            "-c",
+            "import importlib.util as u;"
+            f"print(' '.join(m for m in {list(REQUIRED_PACKAGES)!r}"
+            " if u.find_spec(m) is None))",
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.split()
+    if missing:
+        raise SystemExit(
+            "warmup: required packages are missing after install: "
+            + ", ".join(missing)
+            + ". Re-run warmup on a working network and pip index."
+        )
+    print(f"Verified {len(REQUIRED_PACKAGES)} required packages")
 
 
 def dump_python_requirements(path):
@@ -436,7 +505,32 @@ def setup():
             run(f"apt install -y {' '.join(cuda_packages)}", use_sudo=True)
             print("CUDA packages installed successfully")
     else:
-        print("CUDA toolkit found at /usr/local/cuda")
+        # Report WHICH toolkit, not merely that one exists. A Deep Learning AMI
+        # carries several at once and points /usr/local/cuda at the newest, so
+        # the bare "found" message used to print at exactly the moment a 13.x
+        # toolkit had been selected, reading as reassurance right before the
+        # solver failed to compile against it.
+        try:
+            banner = subprocess.run(
+                ["/usr/local/cuda/bin/nvcc", "--version"],
+                capture_output=True, text=True, check=True,
+            ).stdout
+            release = next(
+                (ln.strip() for ln in banner.splitlines() if "release " in ln),
+                "unknown version",
+            )
+        except (subprocess.CalledProcessError, OSError) as exc:
+            release = f"unreadable ({exc})"
+        print(f"CUDA toolkit found at /usr/local/cuda: {release}")
+        if "release 12.8" not in release:
+            print(
+                "WARNING: this project builds against CUDA 12.8. The solver "
+                "Makefile compiles through /usr/local/cuda/bin/nvcc by "
+                "absolute path, so repoint that symlink at "
+                "/usr/local/cuda-12.8 if a build fails on "
+                "cudaDeviceProp::kernelExecTimeoutEnabled, which CUDA 13 "
+                "removed."
+            )
 
     # Install Python packages in virtual environment
     print("Installing Python packages in virtual environment...")
@@ -450,10 +544,16 @@ def setup():
 
     # Install the tetrahedralizers: pytetwild (fTetWild wrapper, default
     # backend) and tetgen (TetGen wrapper, surface-preserving backend).
-    # pyvista is imported at the top of pytetwild._accessor but is not
-    # declared as a hard dependency, so install it explicitly.
+    # pyvista rides along so the three provisioning paths carry one
+    # dependency set; nothing in this repository imports it, and neither
+    # tetrahedralizer needs it for the numpy entry points the frontend
+    # calls. Dropping it means dropping it from build-win-native/warmup.bat
+    # and .github/workflows/blender.yml in the same change, or the paths
+    # disagree about what a provisioned host holds.
     print("Installing pytetwild and tetgen...")
-    subprocess.run([pip_path, "install", "pytetwild", "tetgen", "pyvista"], check=True)
+    subprocess.run([pip_path, "install"] + tetra_packages(), check=True)
+
+    verify_required_packages()
 
     # Node.js installation (user-level)
     print("Installing Node.js via nvm (Node Version Manager)...")

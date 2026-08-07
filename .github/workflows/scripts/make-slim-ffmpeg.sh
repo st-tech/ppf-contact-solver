@@ -6,7 +6,18 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 WORK_DIR="/tmp/temp_ffmpeg"
 INSTALL_DIR="$PROJECT_DIR/bin"
-FFMPEG_VERSION="7.1"
+
+# Load the URL/tag manifest. It is shared with the Windows build rather than
+# copied, so the two platforms cannot come to pin different ffmpeg revisions.
+MANIFEST="$PROJECT_DIR/build-win-native/scripts/downloads.txt"
+if [ ! -f "$MANIFEST" ]; then
+    echo "ERROR: Manifest not found: $MANIFEST" >&2
+    exit 1
+fi
+set -a
+# shellcheck disable=SC1090
+. "$MANIFEST"
+set +a
 
 echo "Project directory: $PROJECT_DIR"
 echo "Work directory: $WORK_DIR"
@@ -35,11 +46,12 @@ apt-get install -y --no-install-recommends \
     pkg-config \
     zlib1g-dev \
     curl \
+    git \
     ca-certificates
 
 # Download and build x264
 echo "Downloading and building x264..."
-git clone --depth 1 https://code.videolan.org/videolan/x264.git
+git clone --depth 1 "${URL_X264_GIT}"
 cd x264
 ./configure \
     --prefix="$WORK_DIR/deps" \
@@ -57,10 +69,11 @@ make -j$(nproc)
 make install
 cd ..
 
-# Download ffmpeg source
-echo "Downloading ffmpeg ${FFMPEG_VERSION}..."
-curl -L "https://ffmpeg.org/releases/ffmpeg-${FFMPEG_VERSION}.tar.xz" -o ffmpeg.tar.xz
-tar xf ffmpeg.tar.xz
+# Clone ffmpeg source at its release tag. --branch takes a tag, and git fails
+# non-zero when it names nothing, so a retired tag aborts here under set -e
+# rather than configuring an unexpected tree.
+echo "Cloning ffmpeg ${FFMPEG_VERSION} (${FFMPEG_TAG})..."
+git clone --depth 1 --branch "${FFMPEG_TAG}" "${URL_FFMPEG_GIT}" "ffmpeg-${FFMPEG_VERSION}"
 cd "ffmpeg-${FFMPEG_VERSION}"
 
 # Configure with minimal options for PNG to MP4

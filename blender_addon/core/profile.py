@@ -171,6 +171,8 @@ _MATERIAL_PARAM_FIELDS = {
     "strain_limit_percent": "strain_limit_percent",
     "enable_inflate": "enable_inflate",
     "inflate_pressure": "inflate_pressure",
+    "enable_soft_constraint": "enable_soft_constraint",
+    "soft_constraint_stiffness": "soft_constraint_stiffness",
     "stitch_stiffness": "stitch_stiffness",
     "enable_plasticity": "enable_plasticity",
     "plasticity": "plasticity",

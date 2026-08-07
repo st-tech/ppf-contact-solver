@@ -25,6 +25,7 @@
 #include "../main/cuda_utils.hpp"
 #include "../simplelog/SimpleLog.h"
 #include "../solver/solver.hpp"
+#include "../solver/translation_lock.hpp"
 #include "../plasticity/plasticity.hpp"
 #include "../strainlimiting/strainlimiting.hpp"
 #include "../utility/dispatcher.hpp"
@@ -140,6 +141,11 @@ bool initialize(DataSet _host_dataset, DataSet _dev_dataset, ParamSet *_param) {
     dev_dataset = _dev_dataset;
     param = _param;
 
+    if (dev_dataset.translation_lock.size) {
+        translation_lock::check_invariant(
+            dev_dataset, dev_dataset.vertex.curr, "initial state");
+    }
+
     // Detect SAND grains once (host scan of the host-side inverse-inertia mirror;
     // grain_inv_inertia > 0 only for grains, and 0 for every non-SAND scene).
     has_grains = false;
@@ -241,6 +247,16 @@ bool initialize(DataSet _host_dataset, DataSet _dev_dataset, ParamSet *_param) {
                                          *param)) {
 
             logging.message("### intersection detected");
+            // initialize() reports failure through its return value, which
+            // carries no reason. Stamping the code and detail here is what
+            // lets the host write Crashed{InitIntersection} instead of a
+            // generic failure, and it is why the host must treat a zero code
+            // on this path as an unnamed cause rather than assuming this one.
+            ppf_fatal_set_detail(
+                "the scene is already self-intersecting at t=0; the solver "
+                "advances from a separated configuration and cannot untangle "
+                "one, so the geometry has to be authored apart");
+            g_ppf_fatal_code = PPF_FATAL_INIT_INTERSECTION;
             result = false;
         }
         logging.pop();
@@ -424,6 +440,12 @@ StepResult advance() {
                 // Exclude them entirely.
                 const Vec3u &face = mesh_face[i];
                 if (prop_vertex[face[0]].pdrd_body_index != 0) {
+                    return;
+                }
+                // Same reason for a STATIC collider: it carries no elastic
+                // energy, so how far it sits from its rest shape reflects what
+                // its pin springs allowed, not material stretch.
+                if (prop.collider) {
                     return;
                 }
                 if (!prop.fixed) {
@@ -800,6 +822,7 @@ StepResult advance() {
         }
         logging.pop();
         unsigned num_contact = 0;
+        data.statistics_contact_count.clear(0u);
         float dyn_consumed = 0.0f;
         unsigned max_nnz_row = 0;
         // Name: Assembly: Contact
@@ -1052,7 +1075,8 @@ StepResult advance() {
         bool success =
             solver::solve(dyn_hess, fixed_hess, diag_hess, force, prm.cg_tol,
                           prm.cg_max_iter, dx, eval_x_positions, prm, iter,
-                          reresid, schwarz_fallback, data, dt, pdrd_dtheta_vec);
+                          reresid, schwarz_fallback, data, dt, pdrd_dtheta_vec,
+                          dof_removed_mask.as_vec());
         logging.pop();
 
         // Save the converged first-Newton search direction for next frame's
@@ -1428,15 +1452,32 @@ StepResult advance() {
                              okind = 0xFFFFFFFFu;
                     float od2 = -1.0f, ooffset = -1.0f;
                     contact::ccd_overlap_info(ov0, ov1, okind, od2, ooffset);
-                    logging.message(
-                        "### contact starts overlapping during the rigidify "
-                        "commit: two surfaces begin the step already touching "
-                        "or overlapping (kind %u, vertices %u and %u, squared "
-                        "start distance %.6e, offset %.6e). Give the "
-                        "initial geometry a small clearance, or check a "
-                        "stitch/pin pulling elements together faster than "
-                        "contact can resolve.",
-                        okind, ov0, ov1, od2, ooffset);
+                    // See the note at the first overlap site: a negative
+                    // offset means a collapsed sweep frame, not a real offset.
+                    if (ooffset < 0.0f) {
+                        logging.message(
+                            "### contact starts overlapping during the "
+                            "rigidify commit: the sweep frame of a kind %u "
+                            "pair collapsed, so two primitives are coincident "
+                            "to the resolution of the coordinates (vertices "
+                            "%u and %u). Give the initial geometry a small "
+                            "clearance, or check a stitch/pin pulling "
+                            "elements together faster than contact can "
+                            "resolve.",
+                            okind, ov0, ov1);
+                    } else {
+                        logging.message(
+                            "### contact starts overlapping during the "
+                            "rigidify commit: two surfaces begin the step "
+                            "already touching or overlapping (kind %u, "
+                            "vertices %u and %u; a flagged pair has squared "
+                            "start distance %.6e against offset %.6e, in the "
+                            "CCD's rescaled units). Give the initial geometry "
+                            "a small clearance, or check a stitch/pin pulling "
+                            "elements together faster than contact can "
+                            "resolve.",
+                            okind, ov0, ov1, od2, ooffset);
+                    }
                     result.contact_separated = false;
                     return result;
                 }
@@ -1531,6 +1572,15 @@ StepResult advance() {
         param->prev_dt = dt;
         param->time += static_cast<double>(param->prev_dt / param->playback);
 
+        // The constrained solve and every CCD line-search scale keep this
+        // state on the requested COM line. Verify the resulting positions
+        // before they become the next step's positions; this is an invariant
+        // check only, never a corrective snap.
+        if (data.translation_lock.size) {
+            translation_lock::check_invariant(
+                data, eval_x.as_vec(), "completed Newton step");
+        }
+
         kernels::copy(dev_dataset.vertex.curr.data,
                       dev_dataset.vertex.prev.data,
                       dev_dataset.vertex.prev.size);
@@ -1600,12 +1650,18 @@ StepResult advance() {
 
 } // namespace main_helper
 
-// Fatal-exit reason set by the exit(1) paths (HandleError in
-// cuda_utils.hpp, the no-device check below); the Rust host reads it in an
-// atexit hook to write a terminal Crashed{Oom|CudaDriver} record. 0 means
-// no fatal exit (a clean run or a panic, which the host handles
-// separately).
+// Fatal-exit reason and one-line detail set by the exit(1) paths (HandleError
+// in cuda_utils.hpp, ppf_fatal in fatal.hpp, the no-device check below); the
+// Rust host reads them in an atexit hook to write a terminal
+// Crashed{kind, detail} record. Code 0 means no fatal exit (a clean run or a
+// panic, which the host handles separately).
 extern "C" unsigned char g_ppf_fatal_code = 0;
+extern "C" char g_ppf_fatal_detail[512] = {0};
+
+// Watchdog state of the selected device (declared in main/cuda_utils.hpp).
+// -1 until initialize()'s preflight reads it, which is before any kernel runs,
+// so a launch-timeout report can name whether the watchdog was armed.
+int g_ppf_kernel_timeout_enabled = -1;
 
 // Device alloc/free instrumentation (declared in main/cuda_utils.hpp). Bumped
 // by Vec<T>::alloc/reserve/free so advance() can log the per-step delta and we
@@ -1616,6 +1672,10 @@ unsigned long long g_device_free_count = 0;
 
 extern "C" DLL_EXPORT unsigned char ppf_fatal_code() {
     return g_ppf_fatal_code;
+}
+
+extern "C" DLL_EXPORT const char *ppf_fatal_detail() {
+    return g_ppf_fatal_detail;
 }
 
 extern "C" DLL_EXPORT void set_log_path(const char *data_dir) {
@@ -1761,6 +1821,18 @@ DataSet malloc_dataset(DataSet dataset, ParamSet param) {
         mem::malloc_device(dataset.rod_bend_hess_slots);
     Vec<unsigned> dev_stitch_hess_slots =
         mem::malloc_device(dataset.stitch_hess_slots);
+    Vec<TranslationLock> dev_translation_lock =
+        mem::malloc_device(dataset.translation_lock);
+    Vec<unsigned> dev_translation_lock_index =
+        mem::malloc_device(dataset.translation_lock_index);
+    Vec<Vec3f> dev_translation_lock_initial =
+        mem::malloc_device(dataset.translation_lock_initial);
+    Vec<unsigned> dev_statistics_object_index =
+        mem::malloc_device(dataset.statistics_object_index);
+    Vec<unsigned> dev_statistics_static_object_index =
+        mem::malloc_device(dataset.statistics_static_object_index);
+    Vec<unsigned> dev_statistics_contact_count =
+        mem::malloc_device(dataset.statistics_contact_count);
 
     DataSet dev_dataset = {dev_vertex,
                            dev_mesh_info,
@@ -1791,7 +1863,13 @@ DataSet malloc_dataset(DataSet dataset, ParamSet param) {
                            dev_edge_hess_slots,
                            dev_hinge_hess_slots,
                            dev_rod_bend_hess_slots,
-                           dev_stitch_hess_slots};
+                           dev_stitch_hess_slots,
+                           dev_translation_lock,
+                           dev_translation_lock_index,
+                           dev_translation_lock_initial,
+                           dev_statistics_object_index,
+                           dev_statistics_static_object_index,
+                           dev_statistics_contact_count};
 
     return dev_dataset;
 }
@@ -1803,8 +1881,36 @@ extern "C" DLL_EXPORT bool initialize(DataSet *dataset, ParamSet *param) {
     logging::info("cuda: detected %d devices...", num_device);
     if (num_device == 0) {
         logging::info("cuda: no device found...");
-        g_ppf_fatal_code = 3; // CudaDriver: no usable CUDA device
+        // Not CUDA_HANDLE_ERROR: cudaGetDeviceCount returned success and a
+        // count of zero, so there is no cudaError_t to report. The detail
+        // names the condition and what the build can run, because the
+        // headline kind is the coarse CudaDriver.
+        ppf_fatal_set_detail(
+            "no CUDA device is visible to this process; the shipped device "
+            "images cover compute capability 8.6, 8.9, 9.0, 10.0 and 12.0");
+        g_ppf_fatal_code = PPF_FATAL_CUDA_DRIVER;
         exit(1);
+    }
+
+    // State the device's properties before anything runs on it. This gates
+    // nothing: it is the record that makes a later crash report readable,
+    // and kernelExecTimeoutEnabled in particular is not otherwise
+    // recoverable after the fact.
+    cudaDeviceProp props;
+    int device_id = 0;
+    CUDA_HANDLE_ERROR(cudaGetDevice(&device_id));
+    CUDA_HANDLE_ERROR(cudaGetDeviceProperties(&props, device_id));
+    logging::info("cuda: device %d is %s, compute capability %d.%d, "
+                  "tccDriver %d, kernelExecTimeoutEnabled %d",
+                  device_id, props.name, props.major, props.minor,
+                  props.tccDriver, props.kernelExecTimeoutEnabled);
+    // Kept in memory as well as in the log: a launch timeout reports as
+    // PPF_FATAL_WATCHDOG_TIMEOUT and its detail names this flag, and the flag
+    // cannot be read back once the context is gone.
+    g_ppf_kernel_timeout_enabled = props.kernelExecTimeoutEnabled ? 1 : 0;
+    if (props.kernelExecTimeoutEnabled) {
+        logging::info("cuda: the operating system's kernel-execution "
+                      "watchdog is armed on this device");
     }
 
     logging::info("cuda: allocating memory...");
@@ -1824,6 +1930,10 @@ extern "C" DLL_EXPORT void fetch() {
     mem::copy_from_device_to_host(main_helper::dev_dataset.vertex.prev.data,
                                   main_helper::host_dataset.vertex.prev.data,
                                   main_helper::host_dataset.vertex.prev.size);
+    mem::copy_from_device_to_host(
+        main_helper::dev_dataset.statistics_contact_count.data,
+        main_helper::host_dataset.statistics_contact_count.data,
+        main_helper::host_dataset.statistics_contact_count.size);
 }
 
 extern "C" DLL_EXPORT void fetch_inv_rest() {
