@@ -14,11 +14,12 @@ connected, the rest of the UI behaves identically.
 Where each piece lives, and how the add-on reaches it. Blue solid
 arrows carry lifecycle commands (start / stop). Purple dashed arrows
 carry the TCP connection to `ppf-cts-server`, which rides an SSH tunnel
-into the remote's loopback port. The add-on launches `ppf-cts-server`
-with `--host 127.0.0.1`, so the SSH tunnel is the only path in: nothing
-else on the remote's network can reach the solver port. For the
-containerized variant where `ppf-cts-server` runs inside a Docker
-container on the remote, see [Docker over SSH](docker_over_ssh.md).
+into the remote's loopback port. `ppf-cts-server` binds `127.0.0.1` by
+default and the add-on passes no `--host` flag here, so the SSH tunnel
+is the only path in: nothing else on the remote's network can reach the
+solver port. For the containerized variant where `ppf-cts-server` runs
+inside a Docker container on the remote, see
+[Docker over SSH](docker_over_ssh.md).
 ```
 
 :::{warning}
@@ -40,17 +41,19 @@ host is a disposable VM or short-lived environment you are willing to wipe.
 
 ## Setup - Custom Mode
 
-1. Set **Server Type** to `SSH`.
+1. Set **Type** to `SSH`.
 2. Fill in the fields below.
-3. Click **Connect** -> **Start Server**.
+3. Click **Connect** -> **Start Server on Remote**.
 
 ```{figure} ../images/connections/ssh.png
 :alt: Backend Communicator panel in SSH (Custom) mode
 :width: 500px
 
-Backend Communicator with **Server Type** set to `SSH`. **Host**,
-**Port**, **User**, **SSH Key**, and **Remote Path** are exposed,
-plus the shared **Project Name** field. **Connect** is highlighted.
+Backend Communicator with **Type** set to `SSH`. **Host**, **Port**,
+**User**, **SSH Key**, and **Remote Path** are exposed, plus the shared
+**Project Name** field. **Connect** is highlighted. The panel also draws
+a **Proxy Jump** field between **SSH Key** and **Remote Path**; this
+screenshot predates it.
 ```
 
 | Field | Default | Description |
@@ -62,9 +65,12 @@ plus the shared **Project Name** field. **Connect** is highlighted.
 | Proxy Jump | `""` | Jump host to tunnel through, written the way `ssh -J` takes it: `[user@]host[:port]`, comma separated for a chain. Leave empty to use the alias's `ProxyJump` from `~/.ssh/config`. See [Jump Hosts](#jump-hosts). |
 | Remote Path | `""` (e.g. `/root/ppf-contact-solver`) | Remote solver directory (must contain the `ppf-cts-server` binary). |
 
-The remote `ppf-cts-server` port is fixed at `9090` in SSH modes; the panel
-does not expose a Server Port field here (it is only editable in
-Docker-family modes).
+The panel does not expose a server port field in SSH modes -- the port
+field is drawn only for the Docker-family types -- so the port used here
+is whatever the shared port property currently holds, `9090` by default.
+That one value is used by every connection type, so a port set while a
+Docker type was selected carries over, and a profile can set it on an
+SSH entry with the `docker_port` key.
 
 Aliases from your `~/.ssh/config` are resolved automatically, including
 entries pulled in via `Include` directives. If the alias's config
@@ -104,14 +110,16 @@ Paste a shell-style SSH command and the add-on extracts host, port,
 username, and key path from it. This is convenient when you already copy
 such a line from a cloud provider or a shared ops doc.
 
-1. Set **Server Type** to `SSH Command`.
+1. Set **Type** to `SSH Command`.
 2. Paste into **SSH Command**, for example:
 
    ```text
    ssh -p 2222 -i ~/.ssh/gpu_key alice@gpu01.example.com
    ```
 
-3. Set **Remote Path** and **Server Port** as above. Click **Connect**.
+3. Set **Remote Path** as above. Click **Connect**. There is no server
+   port field in this mode either; see the note under Custom Mode for
+   how the port is chosen.
 
 The parser reads the destination (`[user@]host`, or an
 `ssh://user@host:port` URI) plus `-p` for port, `-i` for key path, `-l`
@@ -197,9 +205,10 @@ not recommended.
 ## Installing paramiko
 
 The SSH backend requires the `paramiko` Python package. If it is not
-present, the main panel shows an **Install Paramiko** button that
-installs it into the add-on's private library directory; click it and
-wait for the background installer to finish.
+present, the main panel shows an **Install Paramiko to Add-on
+Directory** button that installs it into Blender's user
+`scripts/addons/modules` directory; click it and wait for the
+background installer to finish.
 
 :::{admonition} Under the hood
 :class: toggle
@@ -272,8 +281,13 @@ built without.
 
 **paramiko install path**
 
-The **Install Paramiko** button runs `pip install --target <lib/>`
-into the add-on's bundled `lib/` directory on a background thread.
-The add-on only imports paramiko from that directory; a system-wide
-paramiko installation is not detected or used.
+The **Install Paramiko to Add-on Directory** button runs
+`pip install --target <dir>` into Blender's user
+`scripts/addons/modules` directory on a background thread. That path is
+already on `sys.path` and sits outside the extension tree, which is why
+it is used rather than a directory inside the add-on. The import itself
+is a plain `importlib.import_module`, but the presence test looks in
+that directory specifically, and it gates the **Connect** button as well
+as the banner, so a paramiko installed anywhere else on Blender's
+`sys.path` still leaves Connect greyed out.
 :::

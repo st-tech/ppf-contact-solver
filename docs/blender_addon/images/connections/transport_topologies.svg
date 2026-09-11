@@ -3,7 +3,7 @@
   <desc>
     Five stacked block diagrams, one per connection type, showing which
     machine the Blender add-on and ppf-cts-server each live on. Top row,
-    Local on Linux, keeps both on the Blender workstation and talks
+    Local keeps both on the Blender workstation and talks
     over a loopback TCP socket with no transport boundary. Second row,
     SSH and SSH Command, keeps the add-on on the workstation and
     reaches ppf-cts-server on a remote Linux host through a paramiko SSH
@@ -58,12 +58,12 @@
   <text x="732" y="34" class="lbl-data">server traffic</text>
   <text x="732" y="48" class="note">TCP to ppf-cts-server</text>
 
-  <!-- ============ Row 1: Local (Linux) ============ -->
-  <text x="20" y="90" class="mode-title">Local (Linux)</text>
-  <text x="20" y="108" class="mode-sub">Add-on and <tspan class="lbl-mono">ppf-cts-server</tspan> share one Linux workstation. Loopback TCP, no transport boundary.</text>
+  <!-- ============ Row 1: Local ============ -->
+  <text x="20" y="90" class="mode-title">Local</text>
+  <text x="20" y="108" class="mode-sub">Add-on and <tspan class="lbl-mono">ppf-cts-server</tspan> share one workstation. Loopback TCP, no transport boundary.</text>
 
   <rect x="20" y="120" width="860" height="72" rx="8" class="machine-box" />
-  <text x="36" y="138" class="machine-lbl">Blender workstation (Linux)</text>
+  <text x="36" y="138" class="machine-lbl">Blender workstation</text>
 
   <rect x="60"  y="146" width="230" height="40" rx="6" class="hdr-addon" />
   <text x="175" y="163" text-anchor="middle" class="hdr-title">Blender + add-on</text>

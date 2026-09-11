@@ -3,11 +3,11 @@
   <desc>
     Nine numbered step boxes arranged as a two-row pipeline. Row one
     covers steps 1 through 5: organize objects into groups (Solid,
-    Shell, Rod, Static); assign material parameters per group
+    Shell, Rod, PDRD, Sand, Static); assign material parameters per group
     (density, Young's modulus, Poisson ratio, bend, shrink, strain
     limit); set scene parameters (gravity, wind, time step, frame
     count, air density and friction); add pins and attach operations
-    (Move By, Spin, Scale, Torque, Embedded Move); and optionally
+    (Move By, Spin, Scale, Torque); and optionally
     add invisible colliders (infinite walls, spheres, bowls). Row
     two covers steps 6 through 9: optionally snap and merge
     overlapping meshes across group boundaries; then Transfer and
@@ -78,8 +78,8 @@
   <text x="45" y="120" text-anchor="middle" class="num-tx">1</text>
   <text x="63" y="120" class="box-ttl">Object groups</text>
   <text x="35" y="146" class="box-sub">Group your meshes by role.</text>
-  <text x="35" y="162" class="box-mono">Solid  /  Shell  /  Rod</text>
-  <text x="35" y="176" class="box-mono">Static (collision only)</text>
+  <text x="35" y="162" class="box-mono">Solid / Shell / Rod / PDRD</text>
+  <text x="35" y="176" class="box-mono">Sand / Static (collision)</text>
   <text x="35" y="196" class="opt-tag">up to 32 active groups</text>
 
   <!-- Step 2: Material params -->
@@ -109,7 +109,7 @@
   <text x="663" y="120" class="box-ttl">Pins + operations</text>
   <text x="635" y="146" class="box-sub">Anchor vertices &amp; drive them.</text>
   <text x="635" y="162" class="box-mono">Move By · Spin · Scale</text>
-  <text x="635" y="176" class="box-mono">Torque · Embedded Move</text>
+  <text x="635" y="176" class="box-mono">Torque</text>
   <text x="635" y="196" class="opt-tag">keyframed or time-ranged</text>
 
   <!-- Step 5: Invisible colliders (optional) -->

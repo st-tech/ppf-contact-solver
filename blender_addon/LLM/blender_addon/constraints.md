@@ -175,7 +175,7 @@ When a pin covers every vertex of an object and a movement operation (Move By, S
 | UI label                      | Python / TOML key                   | Description                                                   |
 | ----------------------------- | ----------------------------------- | ------------------------------------------------------------- |
 | **Include**                   | `included`                          | Pin is active for the current solve.                          |
-| **Duration** / **Active For** | `use_pin_duration` / `pin_duration` | Release the pin at the given frame (`solver.unpin(frame=...)`). |
+| **Duration** / **Active For** | `use_pin_duration` / `pin_duration` | Release the pin after this many frames from the solve's Starting Frame (`unpin(frame=...)` takes a count, not a frame number). |
 | **Pull** / **Strength**       | `use_pull` / `pull_strength`        | Replace the hard pin with a soft pull force.                  |
 
 ### Operations reference

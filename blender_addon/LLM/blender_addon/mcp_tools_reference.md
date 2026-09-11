@@ -1,6 +1,6 @@
 # MCP tool reference
 
-This document tracks the bundled MCP tool surface shipped with the add-on. Every tool listed here is callable over the MCP Streamable HTTP server (`POST /mcp` with `tools/call`, after an `initialize` handshake that returns the `Mcp-Session-Id` to echo on every subsequent request) and, equivalently, via `bpy.ops.zozo_contact_solver.<tool_name>()` inside Blender. See `llm://integrations` for protocol, transport, and security notes.
+This document tracks the bundled MCP tool surface shipped with the add-on. Every tool listed here is callable over the MCP Streamable HTTP server (`POST /mcp` with `tools/call`, as a standalone request carrying `params._meta` and the mirrored `MCP-Protocol-Version`, `Mcp-Method` and `Mcp-Name` headers) and, equivalently, via `bpy.ops.zozo_contact_solver.<tool_name>()` inside Blender. See `llm://integrations` for protocol, transport, and security notes.
 
 If you reached this file as MCP resource `llm://mcp_tools_reference`, its sibling resources (`llm://index`, `llm://overview`, `llm://parameters`, and so on) cover the surrounding concepts. Call `resources/list` once and pick the matching URI; the full resource surface (URI scheme, list/read examples, error handling) is documented under the **Resources** section of `llm://integrations`.
 
@@ -8,17 +8,25 @@ If you reached this file as MCP resource `llm://mcp_tools_reference`, its siblin
 
 Equivalent ways to call a tool named `<tool>` with JSON `arguments`:
 
-1. HTTP (JSON-RPC `tools/call` over MCP Streamable HTTP). After `initialize` returns an `Mcp-Session-Id` header, echo it on every subsequent request and send `Accept: application/json, text/event-stream`:
+1. HTTP (JSON-RPC `tools/call` over MCP Streamable HTTP). There is no handshake and no session: send `Accept: application/json, text/event-stream`, the `MCP-Protocol-Version`, `Mcp-Method` and `Mcp-Name` headers, and the protocol fields in `params._meta`:
 
 ```text
 curl -s -X POST http://127.0.0.1:9633/mcp \
   -H 'Content-Type: application/json' \
   -H 'Accept: application/json, text/event-stream' \
-  -H "Mcp-Session-Id: $SID" \
-  -d '{"jsonrpc":"2.0","method":"tools/call","params":{"name":"<tool>","arguments":{...}},"id":1}'
+  -H 'MCP-Protocol-Version: 2026-07-28' \
+  -H 'Mcp-Method: tools/call' \
+  -H 'Mcp-Name: <tool>' \
+  -d '{"jsonrpc":"2.0","method":"tools/call","id":1,
+       "params":{"name":"<tool>","arguments":{...},
+                 "_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28",
+                          "io.modelcontextprotocol/clientCapabilities":{}}}}'
 ```
 
-See `llm://integrations` for the full `initialize` handshake, session lifecycle, and `DELETE /mcp` termination.
+`Mcp-Name` must repeat `params.name` exactly, or the server answers `-32020`.
+
+See `llm://integrations` for the transport in full: the required headers, the
+error codes, and how a client written against `2025-06-18` is still served.
 
 2. Python (inside Blender):
 
@@ -89,7 +97,7 @@ Establish Windows native connection for contact solver.
 
 ### disconnect()
 
-Disconnect from remote server.
+Disconnect from the solver host, or cancel a connection still in progress.
 
 ### connect()
 
@@ -119,6 +127,45 @@ Update remote server status.
 
 Get detailed connection information.
 
+
+### list_solver_gpus()
+
+List the GPUs on the solver host, and which one is selected.
+
+The list is a cache filled by `refresh_solver_gpus`, which reads it from
+the solver host over the active connection. Before the first refresh the
+list is empty, which reports as `probed: false` rather than as a host with
+no GPUs.
+
+A selection is stored as both an index and a stable UUID, and the UUID
+wins: a .blend saved against one host and opened against another must not
+silently resolve to a different physical device.
+
+### refresh_solver_gpus()
+
+Re-read the GPU list from the solver host.
+
+Requires an active connection: the list is produced by a command run on
+the host, so there is nowhere to read it from otherwise. The refreshed
+list is available from `list_solver_gpus`.
+
+### set_solver_gpu(uuid: str=None, index: int=None)
+
+Choose which GPU on the solver host runs the simulation.
+
+Pass `uuid` to name a device stably, which is what the add-on stores and
+prefers. `index` alone selects by CUDA index and is only reliable while
+the host's device set does not change. Passing neither clears the
+selection back to automatic.
+
+The selection is validated against the cached device list when one has
+been probed; with no list there is no evidence to contradict the request,
+so it is honored as given.
+
+**Parameters:**
+
+- **uuid**: Stable device UUID, from list_solver_gpus
+- **index**: CUDA device index, used when no uuid is given
 ## Group
 
 ### create_group(name: str='', type: str='SOLID')
@@ -323,6 +370,127 @@ Contact properties (mutually exclusive modes):
 
 **Returns:** Dict with success message and properties set
 
+
+### create_vertex_group(object_name: str, name: str, indices: list[int], weight: float=1.0)
+
+Create a vertex group on a mesh and assign the given vertices to it.
+
+This is the membership a mesh pin names: create the group here, then pass
+"object_name::name" to add_pin_vertex_group to pin it. Call
+list_vertex_groups first to see which names the object already carries.
+
+The object does not have to be the active one and Blender can be in any
+mode. An object in Edit Mode is taken to Object Mode for the write and put
+back, which also writes the edit session to the mesh, so the indices below
+address the geometry the caller can see.
+
+Fails before creating anything, leaving Blender as it was found, when the
+object is not a MESH, when it is library-linked, when indices is empty,
+when any index is outside the mesh, or when the object already carries a
+group of that name. An existing group can be driven by an armature or a
+modifier, so it is never overwritten.
+
+**Parameters:**
+
+- **object_name**: Name of the mesh object to create the vertex group on.
+- **name**: Name for the new vertex group; must not already exist on the object.
+- **indices**: Vertex indices to assign, each in 0 to vertex_count - 1. Repeated indices are assigned once.
+- **weight**: Weight for every assigned vertex, in [0, 1]. Defaults to 1.0, which is what the panel's Create button assigns.
+
+### list_vertex_groups(object_name: str)
+
+List a mesh's vertex groups and how many vertices each one holds.
+
+A mesh pin names a vertex group that already exists on the object, so this
+reports the names add_pin_vertex_group accepts and create_vertex_group
+will refuse as duplicates. ``vertex_count`` counts the vertices assigned
+to the group at any weight; a group holding zero vertices pins nothing.
+
+Only a MESH carries vertex groups. A curve's pinned control points live on
+the curve object and are reported by list_pins once they are pinned.
+
+Refuses an object that is in Edit Mode. That session holds the geometry
+and the weights in a BMesh the mesh datablock does not receive until the
+mode is left, so the counts would describe the mesh as it stood before the
+session. Leave Edit Mode and call again.
+
+**Parameters:**
+
+- **object_name**: Name of the mesh object to inspect.
+
+### get_group_material_properties(group_uuid: str)
+
+Report every material parameter a group accepts, with its value.
+
+Which parameters a group carries is decided by its object_type, and the
+set reported here is exactly the set set_group_material_properties
+accepts for this group, so a name absent from this report is refused by
+that tool. A parameter another type carries is reachable only by
+retyping the group with set_group_type first.
+
+Each entry carries the current value, the add-on default, the
+description the panel shows for it, and the limits the property enforces:
+min and max for a number, the accepted identifiers for an enum. Blender
+clamps a number written outside its own min and max, so read the limits
+before setting one.
+
+The values are the authored ones, not what the solver derives from them.
+Contact distances in particular are stored as an absolute pair
+(contact_gap, contact_offset) and a relative pair (contact_gap_rat,
+contact_offset_rat), and both pairs are reported whichever one
+use_group_bounding_box_diagonal currently selects.
+
+Per-object state (inclusion, locks, hinge, bending reference,
+tetrahedralizer) is reported by get_group_objects, and a parameter driven
+across the surface by a weight map is reported by list_material_maps.
+
+**Parameters:**
+
+- **group_uuid**: UUID of the group to report.
+
+### move_pin_vertex_group(group_uuid: str, vertex_group_identifier: str, direction: str)
+
+Move a pin one place up or down its group's pin list.
+
+Pin order decides what two pins of one group do where they hold the same
+vertex: the scene build writes each pin's settings in list order, so for a
+shared vertex the pin lower in the list is the one whose duration, pull
+and operations that vertex takes. Order says nothing about pins that share
+no vertex.
+
+One place per call. list_pins reports the pins in list order, so the
+position of a pin in that array is the position this moves it from. A pin
+already at the top cannot move up and one already at the bottom cannot
+move down; either is refused rather than reported as a move that did
+nothing.
+
+**Parameters:**
+
+- **group_uuid**: UUID of the group holding the pin.
+- **vertex_group_identifier**: The pin to move, in the format "object_name::vertex_group_name".
+- **direction**: "UP" to move it one place toward the start of the list, "DOWN" to move it one place toward the end.
+
+### rename_pin_vertex_group(group_uuid: str, vertex_group_identifier: str, new_name: str)
+
+Rename the vertex group a pin names, on the object and in the pin list.
+
+This renames the membership as well as the pin entry: on a mesh the
+object's vertex group is renamed, and on a curve the "_pin_<name>"
+property holding the pinned control points is. Anything else that names
+that vertex group, an armature or a modifier for instance, refers to it by
+name and stops finding it, so rename a group only the solver pin uses.
+
+The object keeps its name; only the vertex group half of the identifier
+changes. Refused before anything is renamed when the new name is empty,
+when it is the name the pin already has, or when the object already
+carries a vertex group (on a curve, a pin property) under that name, since
+Blender would then store a name other than the one asked for.
+
+**Parameters:**
+
+- **group_uuid**: UUID of the group holding the pin.
+- **vertex_group_identifier**: The pin to rename, in the format "object_name::vertex_group_name".
+- **new_name**: New name for the vertex group half of the identifier.
 ## Object operations
 
 ### set_pin_settings(group_uuid: str, vertex_group_identifier: str, included: Optional[bool]=None, use_pin_duration: Optional[bool]=None, pin_duration: Optional[int]=None, use_pull: Optional[bool]=None, pull_strength: Optional[float]=None)
@@ -643,6 +811,272 @@ Re-capture every deforming STATIC collider and every animated pin. One pass over
 
 Delete every captured deformation cache in the scene. Covers all STATIC-collider deform caches and all animated-pin captures across the active groups, plus any cache orphaned by an object that was deleted or taken out of its group. The objects keep their deformers, so `recapture_all_deformations` rebuilds what this removes. Refused when there is no captured cache to clear, or when a capture or bake is already running.
 
+
+### set_object_locks(group_uuid: str, object_name: str, lock_translation_enable: bool=None, lock_translation_all: bool=None, lock_translation_axis: list[float]=None, lock_rotation_enable: bool=None, lock_rotation_all: bool=None, lock_rotation_axis: list[float]=None, lock_rotation_prohibit_axis: bool=None)
+
+Lock an object's rigid translation, its rigid rotation, or both.
+
+Lock Translation constrains the object's mass-weighted center of mass to a
+fixed world-space line through its initial position; Lock Rotation
+restricts its mass-weighted best-fit rigid rotation to a fixed world-space
+axis. Deformation stays free under either, and the two are independent
+booleans on the same object: either, both or neither may be enabled. Both
+are exact constraints on the Newton direction rather than penalty springs,
+so there is no stiffness to tune.
+
+Per object, and available on the dynamic group types (SOLID, SHELL, ROD,
+PDRD, SAND). A STATIC group is refused, since the encoder ships no lock for
+one. A lock also reaches the solver only for an object that is included in
+its group.
+
+Every argument is optional and an omitted one leaves that field as it is.
+The MODE carries the enable bit, not the axis: lock_translation_all and
+lock_rotation_all saturate their lock to all three axes and stop the axis
+being read, so a zero axis is correct under either. For the per-axis mode
+the axis must be non-zero and finite, and a call that would leave an
+enabled per-axis lock with a zero axis is refused. That is decided on the
+state the call results in, so an axis and its mode can be set together in
+one call in either order.
+
+**Parameters:**
+
+- **group_uuid**: UUID of the group containing the object
+- **object_name**: Name of the assigned object in the group
+- **lock_translation_enable**: Constrain the center of mass (True) or let it move freely (False)
+- **lock_translation_all**: Pin the center of mass to its initial point instead of letting it slide along the translation axis
+- **lock_translation_axis**: World-space direction [x, y, z] of the line the center of mass may move along. Direction only, normalized by the encoder
+- **lock_rotation_enable**: Restrict the best-fit rigid rotation (True) or leave it free (False)
+- **lock_rotation_all**: Forbid net rotation about every axis instead of about the rotation axis alone
+- **lock_rotation_axis**: World-space rotation axis [x, y, z]. Direction only, normalized by the encoder
+- **lock_rotation_prohibit_axis**: False: rotation about the rotation axis is the object's only rotational freedom. True: rotation about that axis is the one thing forbidden, and the perpendicular plane stays free
+
+### add_pin_keyframe(group_uuid: str, vertex_group_identifier: str)
+
+Key the positions of a pin's vertices at the scene's current frame.
+
+The key records the positions the mesh holds right now, at the frame the
+scene is on, so move the timeline and pose the mesh before calling; the
+frame that was keyed comes back in the result. Call it once per pose to
+build the track. The keys are ordinary Blender keyframes on the mesh, set
+to LINEAR interpolation to match how the solver reads a sparse pin track,
+and the Dope Sheet retimes or deletes them like any other key.
+
+A pin takes its motion from EITHER the parametric operations
+(add_pin_operation) OR keyframes, never both. A pin that already carries
+Move/Spin/Scale/Torque operations is therefore refused here, the mirror of
+add_pin_operation refusing a keyframed pin. A pin holding a captured
+deformation is refused too: the capture wins at encode time, so keys
+written on top of it would never be read.
+
+**Parameters:**
+
+- **group_uuid**: UUID of the group containing the pin
+- **vertex_group_identifier**: Pin id in 'object::vertex_group' form
+
+### delete_pin_keyframes(group_uuid: str, vertex_group_identifier: str)
+
+Remove the keyframed motion of a pin, at every frame it was keyed on.
+
+This deletes the vertex position curves add_pin_keyframe wrote and drops
+the marker that records the pin as keyframed, which is what frees the pin
+to take parametric operations again. There is no per-frame form: the whole
+track goes, so retime or delete single keys in the Dope Sheet instead when
+that is what you want.
+
+The curves are addressed by mesh, not by pin, so a second pin on the same
+OBJECT loses its keys in the same call. A captured deformation is a
+separate motion source and is left untouched; clear_pin_deformation is
+what removes that.
+
+**Parameters:**
+
+- **group_uuid**: UUID of the group containing the pin
+- **vertex_group_identifier**: Pin id in 'object::vertex_group' form
+
+### set_pin_operation(group_uuid: str, vertex_group_identifier: str, index: int, frame_start: int=None, frame_end: int=None, transition: str=None, delta: list[float]=None, spin_axis: list[float]=None, spin_angular_velocity: float=None, spin_flip: bool=None, spin_center: list[float]=None, spin_center_mode: str=None, spin_center_vertex: int=None, spin_center_direction: list[float]=None, scale_factor: float=None, scale_center: list[float]=None, scale_center_mode: str=None, scale_center_vertex: int=None, scale_center_direction: list[float]=None, torque_axis_component: str=None, torque_magnitude: float=None, torque_flip: bool=None)
+
+Change fields on one operation a pin already carries, addressed by its
+index.
+
+Every field argument is optional and an omitted one is left as it is, so
+one number can be changed without restating the rest of the entry. Editing
+in place is also what preserves the LIST ORDER: the operations are shipped
+to the solver in list order and compose in that order, while adding one
+puts it at the head, so removing an entry and adding it back to change a
+field moves it to the front and changes the motion the pin performs.
+
+The op type is fixed when the entry is added. A field belonging to another
+op type is refused rather than written where nothing reads it, so turn a
+MOVE_BY into a SPIN by removing it and adding the SPIN in its place. An
+entry on a keyframed pin holds no editable field and is refused as well.
+
+**Parameters:**
+
+- **group_uuid**: UUID of group
+- **vertex_group_identifier**: Pin id in 'object::vertex_group' form
+- **index**: Zero-based index into the pin's operations list, in the order list_pin_operations reports
+- **frame_start**: First frame the op is active
+- **frame_end**: Last frame the op is active
+- **transition**: LINEAR or SMOOTH
+- **delta**: [x, y, z] translation for MOVE_BY (metres)
+- **spin_axis**: [x, y, z] rotation axis for SPIN
+- **spin_angular_velocity**: Degrees per second (SPIN)
+- **spin_flip**: Reverse spin direction
+- **spin_center**: [x, y, z] fixed center for SPIN (ABSOLUTE mode only)
+- **spin_center_mode**: CENTROID, ABSOLUTE, MAX_TOWARDS, or VERTEX
+- **spin_center_vertex**: Vertex index for SPIN VERTEX mode
+- **spin_center_direction**: [x, y, z] direction vector for SPIN MAX_TOWARDS mode
+- **scale_factor**: Scale multiplier for SCALE
+- **scale_center**: [x, y, z] fixed center for SCALE (ABSOLUTE mode only)
+- **scale_center_mode**: CENTROID, ABSOLUTE, MAX_TOWARDS, or VERTEX
+- **scale_center_vertex**: Vertex index for SCALE VERTEX mode
+- **scale_center_direction**: [x, y, z] direction vector for SCALE MAX_TOWARDS mode
+- **torque_axis_component**: PC1, PC2, or PC3 (principal axis)
+- **torque_magnitude**: Torque in newton-metres
+- **torque_flip**: Reverse torque direction
+
+### set_static_op(group_uuid: str, object_name: str, index: int, frame_start: int=None, frame_end: int=None, transition: str=None, delta: list[float]=None, spin_axis: list[float]=None, spin_angular_velocity: float=None, scale_factor: float=None)
+
+Change fields on one static op an object already carries, addressed by
+its index.
+
+Every field argument is optional and an omitted one is left as it is, so
+one number can be changed without restating the rest of the entry. Editing
+in place is also what preserves the LIST ORDER: the ops are shipped to the
+solver in list order and compose in that order, while adding one puts it
+at the head, so removing an entry and adding it back to change a field
+moves it to the front and changes the motion of the object.
+
+The op type is fixed when the entry is added, and a field belonging to
+another op type is refused rather than written where nothing reads it.
+
+**Parameters:**
+
+- **group_uuid**: UUID of STATIC group
+- **object_name**: Name of the assigned object
+- **index**: Zero-based index into the object's static_ops list, in the order list_static_ops reports
+- **frame_start**: First frame the op is active
+- **frame_end**: Last frame the op is active
+- **transition**: LINEAR or SMOOTH
+- **delta**: [x, y, z] translation (MOVE_BY)
+- **spin_axis**: [x, y, z] rotation axis (SPIN)
+- **spin_angular_velocity**: Degrees per second (SPIN)
+- **scale_factor**: Scale multiplier (SCALE)
+
+### set_velocity_keyframe(group_uuid: str, object_name: str, index: int, frame: int=None, direction: list[float]=None, speed: float=None, angular_axis: int | str=None, angular_speed: float=None, angular_axis_custom: list[float]=None, enable_translational: bool=None, enable_angular: bool=None)
+
+Change fields on one velocity keyframe an object already carries,
+addressed by its index.
+
+Every field argument is optional and an omitted one is left as it is, so a
+keyframe's speed can be changed without restating its direction and its
+two enable gates.
+
+The frame may be changed as well, which retimes the keyframe in place. The
+list is held in frame order, so the entry can land at a different index,
+and the index it ends up at comes back as new_index. A frame another
+keyframe on the same object already occupies is refused, since a frame
+carries at most one velocity keyframe.
+
+**Parameters:**
+
+- **group_uuid**: UUID of group
+- **object_name**: Name of the assigned object
+- **index**: Zero-based index into the object's velocity keyframe list, in the frame order list_velocity_keyframes reports
+- **frame**: Blender frame number (>= 1) to retime this keyframe to
+- **direction**: [x, y, z] direction vector (normalized at runtime)
+- **speed**: Velocity magnitude in m/s, zero or greater
+- **angular_axis**: Axis to spin about (solid/shell/PDRD). One of "PC1"/"PC2"/"PC3" (principal axes, resolved dynamically from the geometry), "X"/"Y"/"Z" (fixed world axes), or "CUSTOM" (the angular_axis_custom vector). Ints 0/1/2 map to PC1/PC2/PC3
+- **angular_speed**: Signed spin speed in degrees per second (0 = no spin)
+- **angular_axis_custom**: World [x, y, z] axis used when angular_axis is "CUSTOM" (normalized before use)
+- **enable_translational**: Overwrite the translational velocity at this frame (False leaves translation alone, for a pure spin)
+- **enable_angular**: Overwrite the angular velocity at this frame
+
+### set_collision_window(group_uuid: str, object_name: str, index: int, frame_start: int=None, frame_end: int=None)
+
+Change the bounds of one collision window an object already carries,
+addressed by its index.
+
+Either bound may be given on its own and the other is left as it is. The
+window that results is what gets validated, so moving frame_start past the
+frame_end already stored is refused instead of being kept as an inverted
+window that turns contact off for the whole run.
+
+Editing in place also keeps the window at its index, which is how
+list_collision_windows and remove_collision_window address it.
+
+**Parameters:**
+
+- **group_uuid**: UUID of group
+- **object_name**: Name of the assigned object
+- **index**: Zero-based index into the object's collision_windows list
+- **frame_start**: First frame of the window (>= 1)
+- **frame_end**: Last frame of the window (>= frame_start)
+
+### move_pin_operation(group_uuid: str, vertex_group_identifier: str, index: int, new_index: int)
+
+Move one of a pin's operations to another position in its list.
+
+The order is semantic rather than presentational: the operations are
+shipped to the solver in list order and compose in that order, so moving
+an entry changes the motion the pin performs. Index 0 is the head of the
+list, and the entry that follows composes on top of what precedes it.
+
+Both positions must address an entry that exists, and they must differ.
+
+**Parameters:**
+
+- **group_uuid**: UUID of group
+- **vertex_group_identifier**: Pin id in 'object::vertex_group' form
+- **index**: Zero-based index of the operation to move
+- **new_index**: Zero-based position to move it to
+
+### move_static_op(group_uuid: str, object_name: str, index: int, new_index: int)
+
+Move one of an object's static ops to another position in its list.
+
+The order is semantic rather than presentational: the ops are shipped to
+the solver in list order and compose in that order, so moving an entry
+changes the motion the object performs. Index 0 is the head of the list,
+and the entry that follows composes on top of what precedes it.
+
+Both positions must address an entry that exists, and they must differ.
+
+**Parameters:**
+
+- **group_uuid**: UUID of STATIC group
+- **object_name**: Name of the assigned object
+- **index**: Zero-based index of the static op to move
+- **new_index**: Zero-based position to move it to
+
+### set_bend_reference(group_uuid: str, object_name: str, reference_object_name: str, enable: bool=None)
+
+Point one assigned object's bending rest angle at a reference object.
+
+A reference is a topological COPY of the object whose vertices were moved:
+the same vertex count and the same connectivity (faces for a SHELL, edges
+for a ROD), with only positions differing. Its modifiers and geometry
+nodes are evaluated before the comparison, so a copy shaped by a modifier
+is a valid reference. A curve rod is compared at control-point level
+instead, which is how a curve rod is shipped, and a curve modifier is not
+sampled there. Anything that fails the comparison is refused here, naming
+the mismatch, rather than at scene build.
+
+The group's own bend_rest_from_reference flag is what makes the group read
+a reference at all, so it has to be on before a reference can be set; turn
+it on with set_group_material_properties. Only SHELL and ROD groups carry
+that flag.
+
+Pass an empty reference_object_name to clear the reference, which also
+stops this object reading one. Clearing is accepted whatever the group
+flag holds, so a stale reference can always be taken off.
+
+**Parameters:**
+
+- **group_uuid**: UUID of the SHELL or ROD group
+- **object_name**: Name of the assigned object whose rest angle comes from the reference
+- **reference_object_name**: Name of the reference object, or "" to clear the reference this object holds
+- **enable**: Whether this object reads its reference. Defaults to True when a reference is given and False when one is cleared, so it is worth naming only to record a reference without using it yet
 ## Mesh cleaning
 
 Wrappers over the Utility Tools panel's Mesh Cleaning operators, for the geometry the solver rejects: near-coincident vertices, faceless vertices, zero-area faces, duplicate faces, n-gons, and inconsistent face winding.
@@ -747,6 +1181,46 @@ A single-diagonal triangulation breaks a symmetric mesh's symmetry, which shows 
 
 - **object_names**: Mesh objects to triangulate
 
+
+### triangulate_degenerate_faces()
+
+Re-split only the faces whose tessellation leaves the solver no rest shape.
+
+This is the targeted repair the Transfer refusal names. Blender splits a
+quad along one of its two diagonals, and on a quad whose corner sits on,
+or very near, the straight edge between its neighbors that diagonal
+produces a triangle of three nearly collinear vertices. The solver inverts
+each rest triangle once at scene build and the elastic Hessian is
+quadratic in that inverse. An exactly zero-area triangle aborts the build
+on a degenerate-face assertion; a merely near-collinear one clears that
+assertion, inverts to a finite but enormous rest matrix, and reaches the
+linear solve as a non-finite Hessian that names no geometry. The test is
+the conditioning of the rest matrix against sqrt(float32 eps), not an area
+threshold, so a thin triangle above that ratio is legitimate geometry and
+is left alone.
+
+Only flagged faces are split, and only those whose replacement fill is
+measured sound before the split. Every other face keeps its shape, which is
+what separates this from triangulate_for_solver and symmetric_triangulate:
+each of those rewrites every quad and n-gon of the mesh. The vertex count
+does not change, so no cache is invalidated; the face count grows by one
+face per split quad and by more for a wider n-gon.
+
+There is no object argument, because the operator underneath offers no
+property to narrow its scope: it scans the included objects of every
+active dynamics group except SAND, which is the set Transfer refuses over,
+and repairs all of them in one pass. Each mesh datablock is repaired once,
+so two objects sharing a mesh are reported under a single name.
+
+The result carries, per object, how many flagged faces the repair cleared
+and how many faces the mesh gained. A face no split can rescue is left
+exactly as it is and comes back under ``still_degenerate``: a face that is
+already a triangle is its own only triangulation, and one with no area or
+a zero-length boundary edge forces a degenerate triangle into every
+triangulation. Those need the offending vertex moved, merge_by_distance to
+weld coincident vertices, or dissolve_degenerate_faces. A call that finds
+nothing flagged, or nothing triangulating can repair, is refused rather
+than reported as a success. Run Transfer again afterward.
 ## Simulation
 
 ### transfer_data()
@@ -819,6 +1293,106 @@ Same preconditions and exclusions as `export_usd`: every frame fetched, no other
 
 **Returns:** Dict with the resolved `filepath`, the `format`, and `excluded_curves` when any simulated curve was skipped
 
+
+### get_fetch_status()
+
+Report which simulated frames have been fetched back into Blender.
+
+Fetching is a modal operation: `fetch_animation` returns as soon as it has
+started, so a caller needs a separate way to see how far it got. The export
+tools refuse while any frame is still unfetched, and `bpy.ops` hands back
+only a cancelled status without the reason, so this reports the export
+preflight verdict alongside the frame list.
+
+`fetched_frames` is what landed locally, which is a different question from
+`list_checkpoint_frames` (frames saved on the remote) and from
+`get_remote_status` (how the run itself is doing).
+
+### abort_bake()
+
+Stop a running keyframe bake and undo what it has written so far.
+
+Baking runs as a modal job that keeps going after bake_group_animation,
+bake_all_animation, bake_group_single_frame or bake_all_single_frame
+returns. This raises the job's abort flag. The job stops on its next timer
+tick and rolls back what it wrote: the shape keys and F-curves it added are
+removed and the curve handle types it changed are restored, leaving the PC2
+caches, the ContactSolverCache modifiers and group membership as they were
+before the bake started.
+
+Refused when no bake is running, and refused again while an abort of the
+same bake is already in flight. Call get_modal_job_status for the jobs
+running now, and poll it afterwards until the bake reports running false.
+
+This stops the bake inside Blender. abort_operation stops an operation on
+the solver server, which is a different job.
+
+### abort_static_deformation_capture()
+
+Stop a running STATIC collider deformation capture.
+
+capture_static_deformation and recapture_all_deformations start a modal job
+that steps the timeline and samples the shape of each deforming STATIC
+collider. This raises the job's abort flag. The job stops on its next timer
+tick, restores the frame it started from, and re-enables the
+ContactSolverCache modifiers it suspended for the sampling.
+
+A capture writes an object's result only once every frame of that object is
+sampled, so the frames taken before the abort are discarded and each object
+keeps the deformation cache it already had. get_static_deformation_status
+reports what is on an object; run the capture again to record it.
+
+Refused when no static capture is running, and refused again while an abort
+of it is already in flight. Call get_modal_job_status for the jobs running
+now, and poll it afterwards until this job reports running false.
+
+### abort_pin_deformation_capture()
+
+Stop a running pin deformation capture.
+
+capture_pin_deformation and recapture_all_deformations start a modal job
+that steps the timeline and samples the moving pin vertices of each
+animated pin. This raises the job's abort flag. The job stops on its next
+timer tick, restores the frame it started from, and re-enables the
+ContactSolverCache modifiers it suspended for the sampling.
+
+A capture writes a pin's result only once every frame of that pin is
+sampled, so the frames taken before the abort are discarded and each pin
+keeps the capture it already had. get_pin_deformation_status reports what is
+on a pin; run the capture again to record it.
+
+Refused when no pin capture is running, and refused again while an abort of
+it is already in flight. Call get_modal_job_status for the jobs running now,
+and poll it afterwards until this job reports running false.
+
+### get_modal_job_status()
+
+Report which long-running bake or capture job is running right now.
+
+Three jobs run on a timer inside Blender and outlive the tool call that
+started them, so a caller that starts one has no other way to tell whether
+it is still going: the keyframe bake, the STATIC collider deformation
+capture, and the pin deformation capture. This reports all three in one
+call, each with the frames it has processed and the tool that stops it.
+
+``jobs`` carries one entry per job. ``bake`` is started by
+bake_group_animation, bake_all_animation, bake_group_single_frame or
+bake_all_single_frame and stopped by abort_bake.
+``static_deformation_capture`` is started by capture_static_deformation or
+recapture_all_deformations and stopped by
+abort_static_deformation_capture. ``pin_deformation_capture`` is started by
+capture_pin_deformation or recapture_all_deformations and stopped by
+abort_pin_deformation_capture.
+
+``abort_requested`` is true once the abort tool has been called and the job
+has not yet reached the tick that stops it. ``frames_done``,
+``frames_total``, ``item_count`` (objects for the bake and the STATIC
+capture, pins for the pin capture) and ``status_line`` are null while a job
+is not running, because those counters are cleared when a job ends.
+
+This covers the jobs running inside Blender. get_fetch_status reports how
+much of a solve has been fetched back into Blender and whether an export
+would be accepted, and get_remote_status reports the run on the server.
 ## Scene
 
 ### clear_solver()
@@ -904,6 +1478,62 @@ Bake simulated animation for every dynamic group to Blender keyframes.
 
 Bake the current frame as frame 1 for every dynamic group.
 
+
+### get_scene_info()
+
+Enumerate the current Blender scene: objects, frame range, and groups.
+
+This is the starting point for an agent that did not create the scene: it
+reports what is in the file and which objects are already assigned to a
+dynamics group, so the caller can tell setup work that remains from work
+already done.
+
+Returns the scene's frame range as Blender holds it, alongside the
+simulation frame count and fps the solver will actually use, which are
+separate values and are resolved differently.
+
+### set_merge_pair_properties(object_a: str, object_b: str, stitch_stiffness: float=None, show_stitch: bool=None)
+
+Set one merge pair's own stitch stiffness and stitch visualization.
+
+This ``stitch_stiffness`` belongs to the PAIR and is a separate solver
+input from the group parameter of the same name that
+set_group_material_properties writes: the solver scales this pair's
+stitch gradient and Hessian by it directly, with no mass or dt
+normalization, so raise it to hold this one seam harder.
+
+The value reaches the solver only through the stitch anchors captured at
+snap time, so it stays inert on a pair whose ``stitch_row_count`` (see
+list_merge_pairs) is 0; call resnap_merge_pair to build the anchors. An
+argument left out is not written.
+
+**Parameters:**
+
+- **object_a**: Name of one object in the pair.
+- **object_b**: Name of the other object in the pair, in either order.
+- **stitch_stiffness**: Stiffness of this pair's stitch, 0 or greater.
+- **show_stitch**: Draw this pair's stitch in the viewport.
+
+### resnap_merge_pair(object_a: str, object_b: str)
+
+Re-run the snap on an existing merge pair to rebuild its stitch.
+
+The two objects must already form a merge pair (add_merge_pair or
+snap_to_vertices). The snap MOVES one of them: object A of the STORED
+pair, unless that side is in a STATIC group, in which case the other side
+moves instead. Which object moves therefore follows the stored pair, not
+the argument order used here. The two are left a small gap apart, sized
+from their contact offsets, rather than coincident.
+
+This is what makes a pair's stitch anchors current after either mesh was
+edited, and what gives a pair anchors at all when it was created without
+a snap. A pair whose ``stitch_row_count`` stays 0 forms no stitch at
+solve time.
+
+**Parameters:**
+
+- **object_a**: Name of one object in the pair.
+- **object_b**: Name of the other object in the pair, in either order.
 ## Dynamic parameters
 
 ### add_dynamic_param(param_type: str)
@@ -1233,3 +1863,390 @@ This is useful when programmatic changes need to be reflected in the UI, such as
 ---
 
 Bundled MCP reference synced to `blender_addon/mcp/handlers/*.py` and `blender_addon/mcp/blender_handlers.py`.
+
+## Statistics
+
+Read what the solver measured per object, frame by frame, from the statistics
+cache written by the frame-fetch path. These report a past run, not what the
+scene would produce if it were run now.
+
+### list_statistics_objects()
+
+List the objects the solver recorded statistics for, with their channels.
+
+The statistics are whatever is on disk from the last simulation whose
+frames were fetched, so this reports a past run, not what the scene would
+produce if it were run now.
+
+``object_name`` is the object's name in the scene at this moment and is
+null when its UUID resolves to nothing, which happens once the object is
+deleted; pass ``object_uuid`` to the other statistics tools in that case.
+``recorded_name`` and ``dynamics_type`` are what the solver stored at run
+time. ``channels`` holds the channel ids measured for that object, which is
+the set get_object_statistics_series accepts for it, and
+``channel_catalog`` gives every channel's label and unit.
+
+``start_frame`` is the Blender frame the solve starts on, which every frame
+number in these tools is expressed against.
+
+### get_object_statistics(object_name: str, frame: int)
+
+Read every channel the solver measured for one object at one frame.
+
+``frame`` is a Blender timeline frame, the same number the statistics panel
+shows, and it is converted to the solver frame by subtracting the start
+frame reported as ``effective_start_frame`` by get_scene_parameters.
+
+Only the channels the object supports are returned, since which quantities
+exist depends on what the object is: a rod has a length, a solid has a
+volume. The remaining ids are listed under ``unsupported_channels``. A
+supported channel whose value the solver did not record for this frame
+comes back with a null ``value``.
+
+A frame the run never wrote is refused rather than reported as zero; call
+get_object_statistics_series for the frames that are present.
+
+**Parameters:**
+
+- **object_name**: Blender object name, or the object_uuid from list_statistics_objects when the object is gone from the scene.
+- **frame**: Blender timeline frame to read.
+
+### get_object_statistics_series(object_name: str, channel: str, frame_start: int=None, frame_end: int=None)
+
+Read one channel of one object across frames, as the CSV export does.
+
+Returns one sample per recorded frame, each carrying the Blender frame, the
+simulated time in seconds, and the value. The channel is a single id from
+list_statistics_objects, so a vector is read one component at a time
+(LOCATION_X, LOCATION_Y, LOCATION_Z), and a channel the object does not
+support is refused instead of answered with nulls. A sample whose value the
+solver did not record for that frame carries a null ``value``.
+
+The window bounds are Blender frames and both ends are inclusive. Leaving
+one out extends the window to the recorded frames on that side, so leaving
+both out returns every frame in the cache. An empty ``samples`` list means
+no frame in the window has been recorded yet.
+
+**Parameters:**
+
+- **object_name**: Blender object name, or the object_uuid from list_statistics_objects when the object is gone from the scene.
+- **channel**: Channel id, for example SPEED or CONTACT_COUNT.
+- **frame_start**: First Blender frame to include; omit for the earliest recorded frame.
+- **frame_end**: Last Blender frame to include; omit for the latest recorded frame.
+
+## Material maps
+
+Spatial material maps drive a solver parameter from a per-vertex weight source,
+reduced to one coefficient per element. A map can also be animated by adding a
+sample per frame.
+
+### add_material_map(group_uuid: str, parameter: str, source_type: str, source_name: str, target_value: float, enabled: bool=True)
+
+Add a spatial material map, varying one parameter across the surface.
+
+The value at a vertex is lerp(base, target, weight), where base is the
+group's own slider for that parameter and weight is read per vertex from
+the named source, clamped to [0, 1]. A weight of 0 therefore reproduces the
+unmapped result exactly. Each element takes the mean of its own vertices'
+weights.
+
+Only SHELL and SOLID groups carry the element tables a map is reduced over,
+and each object type reads a different set of parameters, so 'parameter' is
+checked against this group's type. 'pressure' is never mappable. A group
+takes at most one enabled map per parameter.
+
+The source is resolved when the scene is built, so the vertex group or
+attribute does not have to exist yet. A vertex group is read by name from
+the object; an attribute is read from the evaluated mesh on the POINT
+domain, which is where a Store Named Attribute node writes one.
+
+**Parameters:**
+
+- **group_uuid**: UUID of the group to add the map to.
+- **parameter**: Solver key to vary. One of young-mod, bend, friction, deformation-damping, bending-damping, strain-limit, plasticity, bend-plasticity, bend-warp, bend-weft.
+- **source_type**: VERTEX_GROUP to read weight paint, ATTRIBUTE to read a float attribute off the evaluated mesh.
+- **source_name**: Name of the vertex group or float attribute holding the weights at the start frame.
+- **target_value**: Value reached where the weight is 1, in the same units as the group's own slider for this parameter.
+- **enabled**: Whether the map is included in the simulation.
+
+### set_material_map(group_uuid: str, index: int, parameter: str=None, source_type: str=None, source_name: str=None, target_value: float=None, enabled: bool=None)
+
+Edit fields of an existing spatial material map.
+
+Every field left out keeps its current value. The whole resulting row is
+validated before anything is written, so a refusal leaves the map exactly
+as it was. That means changing 'parameter' alone can be refused because the
+target already stored is below the new parameter's own minimum; pass both
+in one call.
+
+**Parameters:**
+
+- **group_uuid**: UUID of the group that owns the map.
+- **index**: Zero-based index as reported by list_material_maps.
+- **parameter**: New solver key to vary, or omit to keep the current one.
+- **source_type**: VERTEX_GROUP or ATTRIBUTE, or omit to keep the current one.
+- **source_name**: New vertex group or attribute name, or omit to keep it.
+- **target_value**: New value reached where the weight is 1, or omit to keep it.
+- **enabled**: Whether the map is included in the simulation, or omit to keep the current setting.
+
+### remove_material_map(group_uuid: str, index: int)
+
+Remove a spatial material map and every weight source on it.
+
+**Parameters:**
+
+- **group_uuid**: UUID of the group that owns the map.
+- **index**: Zero-based index as reported by list_material_maps. Removing a map renumbers the ones after it.
+
+### list_material_maps(group_uuid: str)
+
+List a group's spatial material maps and its mappable parameters.
+
+Each map reports the slider it blends away from as 'base_property', and
+'gate_closed_reason' whenever the parameter is switched off for the whole
+solve, in which case the build refuses the map: a map target cannot
+reintroduce a value the group turned off.
+
+'available_parameters' is what this group's object type can map, which is
+what add_material_map accepts. 'start_frame' is the frame the map's own
+source describes, and every weight sample has to sit after it.
+
+**Parameters:**
+
+- **group_uuid**: UUID of the group to report.
+
+### add_material_map_sample(group_uuid: str, index: int, frame: int, source_name: str, source_type: str=None)
+
+Add a later weight source to a spatial material map.
+
+The map's own source is the weights at the simulation start frame, and each
+sample names a different source reached at its own frame. Between two
+consecutive samples the weights are the linear interpolation of the two, so
+a constant hold is two samples naming one source.
+
+A frame at or before the start frame is refused, because the map's own
+source already describes that frame. Only a SHELL group carries a
+per-element material schedule, so a map on any other type takes a single
+source and no samples.
+
+**Parameters:**
+
+- **group_uuid**: UUID of the group that owns the map.
+- **index**: Zero-based index of the map, as reported by list_material_maps.
+- **frame**: Blender frame at which the weights are exactly this source.
+- **source_name**: Vertex group or float attribute holding this sample's weights.
+- **source_type**: VERTEX_GROUP or ATTRIBUTE. Omit to use the map's own source type.
+
+### remove_material_map_sample(group_uuid: str, index: int, frame: int)
+
+Remove the weight source at a given frame from a material map.
+
+The map's own source is not a sample and cannot be removed here; change it
+with set_material_map instead.
+
+**Parameters:**
+
+- **group_uuid**: UUID of the group that owns the map.
+- **index**: Zero-based index of the map, as reported by list_material_maps.
+- **frame**: Frame of the sample to remove, as reported by list_material_maps.
+
+## Presets and profiles
+
+A **preset** is a bundle of physically grounded material values the add-on
+ships. A **profile** is a named snapshot of settings the artist saved, and
+there is one per settings group: scene, material, pin and connection.
+Copy and paste move the same settings between objects without naming them.
+
+### apply_material_preset(group_uuid: str, preset_name: str)
+
+Write a bundled material preset's parameters onto a dynamics group.
+
+The preset's object_type has to match the group's Type. Applying one never
+changes the Type, so a fabric preset on a SOLID group would write shell
+parameters that group's elements never read, and it is refused instead.
+Use set_group_type first, or pick a preset for the Type the group has.
+
+A parameter the group has locked keeps its value, which is what the
+padlock beside it promises against the tools that overwrite a whole group
+at once. Locked parameters are reported under 'kept_locked'.
+
+'written' reports every parameter that now carries the preset's value,
+including any that already did. A parameter the group's own RNA refuses,
+because the value falls outside the range that property enforces, leaves
+the group holding part of the preset and raises rather than reporting
+success.
+
+**Parameters:**
+
+- **group_uuid**: UUID of the group to write the preset onto.
+- **preset_name**: Preset name as reported by list_material_presets.
+
+### clear_profile_path(kind: str, group_uuid: str=None)
+
+Unbind a profile file from the scene, leaving the file untouched.
+
+This is the panel's Clear button: the scene stops pointing at the file,
+and the dropdown for that kind goes empty. Nothing on disk changes, and
+the settings the last load applied stay as they are. Removing an entry
+from a profile file has no path in the addon, so no tool here does it.
+
+**Parameters:**
+
+- **kind**: SCENE, MATERIAL, PIN or CONNECTION.
+- **group_uuid**: UUID of the group the file is bound to, for MATERIAL and PIN.
+
+### copy_material_parameters(group_uuid: str)
+
+Copy a group's material parameters into the addon's material clipboard.
+
+The clipboard holds one set of parameters at a time and lives on the
+window manager, so it is not saved in the .blend and is empty again after
+a Blender restart. Copying records the source group's Type as well, which
+decides which parameters a later paste applies.
+
+This copies parameters only. Identity, the group's Type, its overlay
+color, its profile bindings, its per parameter locks and everything owned
+by an assigned object stay with their own group.
+
+**Parameters:**
+
+- **group_uuid**: UUID of the group to copy from.
+
+### copy_pin_operations(group_uuid: str, vertex_group_identifier: str)
+
+Copy one pin's operations into the addon's pin operation clipboard.
+
+The clipboard holds the operations of one pin at a time and lives on the
+window manager, so it is not saved in the .blend and is empty again after
+a Blender restart. The pin named here also becomes the one selected in the
+panel, which is how the pin clipboard addresses a pin.
+
+**Parameters:**
+
+- **group_uuid**: UUID of the group that owns the pin.
+- **vertex_group_identifier**: Pin in 'object_name::vertex_group_name' form, as reported by list_pins.
+
+### list_material_presets(object_type: str=None)
+
+List the bundled material presets and the parameters each one writes.
+
+A preset carries an object_type that decides which groups may take it: a
+SHELL group is offered the fabrics and a SOLID group the soft solids, and
+apply_material_preset refuses a mismatch. A Type the library ships no
+preset for gives an empty list rather than an error, so an empty result is
+an answer and not a failure.
+
+'parameters' is what applying the preset writes, keyed by group property
+name. 'unknown_keys' names any key in the preset table that matches no
+group property; those are written by nothing, and a non-empty list is a
+defect in the bundled file rather than something a caller can act on.
+
+**Parameters:**
+
+- **object_type**: Group Type to filter by, one of SOLID, SHELL, ROD, STATIC, PDRD, SAND. Omit to list every preset.
+
+### list_profiles(kind: str, group_uuid: str=None, path: str=None)
+
+List the entries of a profile file, for one of the four profile kinds.
+
+A profile file holds several entries, one TOML table per name, and the
+scene binds one file and one selected entry per kind. With no 'path' the
+bound file is read, and a kind with no file bound is refused rather than
+reported as empty.
+
+MATERIAL and PIN bind their file to a dynamics group, so both need
+group_uuid; SCENE and CONNECTION refuse one.
+
+'unrecognized_keys' names keys of an entry that this kind's apply drops,
+which is what an entry saved under a different kind looks like from here.
+
+**Parameters:**
+
+- **kind**: SCENE, MATERIAL, PIN or CONNECTION.
+- **group_uuid**: UUID of the group the file is bound to, for MATERIAL and PIN.
+- **path**: Profile file to read instead of the bound one. Absolute, or '//' relative to a saved .blend.
+
+### load_profile(kind: str, name: str, group_uuid: str=None, vertex_group_identifier: str=None, path: str=None)
+
+Apply a named entry from a profile file onto the scene.
+
+The entry overwrites every setting its kind covers, so a MATERIAL entry
+replaces the group's material parameters, including its Type and, when the
+entry embeds pins, the operations of the pins it names. A material lock
+does not hold against a profile load; it guards against the presets and
+the clipboard.
+
+An entry whose keys this kind's apply understands none of is refused
+rather than applied as nothing, which is what loading an entry saved under
+a different kind would otherwise look like. Keys the apply does drop are
+reported under 'ignored_keys', for an entry written by an older build.
+
+The file and the entry become the selection the panel shows.
+
+**Parameters:**
+
+- **kind**: SCENE, MATERIAL, PIN or CONNECTION.
+- **name**: Entry name, as reported by list_profiles.
+- **group_uuid**: UUID of the group to write, for MATERIAL and PIN.
+- **vertex_group_identifier**: Pin to write, in 'object_name::vertex_group_name' form, for PIN. The pin also becomes the one selected in the panel, which is how the pin profile picker addresses a pin.
+- **path**: Profile file to read instead of the bound one. Absolute, or '//' relative to a saved .blend.
+
+### paste_material_parameters(group_uuid: str)
+
+Paste the material clipboard onto a group, keeping its locked values.
+
+Call copy_material_parameters first: the clipboard lives on the window
+manager, so a paste is refused after a restart, and after a session that
+never copied.
+
+A parameter the target has locked keeps its value, which is what the
+padlock beside it promises; those are reported under 'kept_locked'. A
+parameter only the source's Type reads is not pasted at all, so a paste
+between two Types carries the shared parameters and leaves the target's
+own model fields alone. The target's Type never changes.
+
+**Parameters:**
+
+- **group_uuid**: UUID of the group to paste onto.
+
+### paste_pin_operations(group_uuid: str, vertex_group_identifier: str)
+
+Paste the pin operation clipboard onto a pin, replacing its operations.
+
+Every operation the target pin carries is discarded and replaced by the
+clipboard's, so this is not an append. Call copy_pin_operations first: the
+clipboard lives on the window manager, so a paste is refused after a
+restart, and after a session that never copied.
+
+The pin named here also becomes the one selected in the panel, which is
+how the pin clipboard addresses a pin.
+
+**Parameters:**
+
+- **group_uuid**: UUID of the group that owns the pin.
+- **vertex_group_identifier**: Pin in 'object_name::vertex_group_name' form, as reported by list_pins.
+
+### save_profile(kind: str, name: str, group_uuid: str=None, vertex_group_identifier: str=None, path: str=None)
+
+Save current settings as a named entry in a profile file.
+
+Each kind reads a different part of the scene: SCENE the solver
+parameters, the dynamic parameter schedules and the invisible colliders;
+MATERIAL one group's material parameters, and no pins; PIN the operations
+of one pin; CONNECTION the solver host settings. MATERIAL and PIN need
+group_uuid, and PIN also needs vertex_group_identifier.
+
+An entry that already carries this name is replaced, and the result says
+so under 'replaced_existing_entry'. Every other entry in the file is kept.
+With no 'path' the file already bound to the scene is written; passing one
+writes that file and binds it, which is what the panel's Save button does
+with a file it was just given. The file and the entry become the selection
+the panel shows.
+
+**Parameters:**
+
+- **kind**: SCENE, MATERIAL, PIN or CONNECTION.
+- **name**: Entry name to write. An entry named NONE is refused, since that identifier means "no profile" in the dropdowns.
+- **group_uuid**: UUID of the group to read, for MATERIAL and PIN.
+- **vertex_group_identifier**: Pin to read, in 'object_name::vertex_group_name' form, for PIN. The pin also becomes the one selected in the panel, which is how the pin profile picker addresses a pin.
+- **path**: Profile file to write instead of the bound one. Absolute, or '//' relative to a saved .blend.

@@ -3,10 +3,10 @@
   <desc>
     Two-panel reference. Left panel shows a group tree: a root node
     labeled Cloth (Shell) containing three pins: ShoulderPins with
-    a Spin operation and an Embedded Move operation, CollarPins with
-    a Move By operation, and WaistPins with a Torque operation that
-    is marked as exclusive with Move By, Spin, and Scale but may
-    coexist with Embedded Move. A legend below lists the five
+    a Spin operation and a Scale operation, CollarPins with
+    a Move By operation, and WaistPins with a Torque operation, tagged
+    exclusive because Torque cannot share a pin with Move By, Spin, or
+    Scale. A legend below lists the five
     available operation types. Right panel shows the four Center
     dropdown options for Spin and Scale. Each option is drawn as a
     small schematic of seven vertex dots (a pin's vertex set) with a
@@ -98,7 +98,7 @@
   <text x="132" y="254" class="lbl-mono">Spin  (ω = 360°/s)</text>
 
   <rect x="120" y="266" width="180" height="28" rx="6" class="op-box" />
-  <text x="132" y="284" class="lbl-mono">Embedded Move</text>
+  <text x="132" y="284" class="lbl-mono">Scale</text>
 
   <!-- Pin 2: CollarPins -->
   <rect x="70" y="292" width="180" height="36" rx="6" class="pin-box" />

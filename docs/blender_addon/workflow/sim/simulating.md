@@ -2,16 +2,18 @@
 
 Once the scene is organized into groups, parameters are set, and pins /
 colliders are in place, the day-to-day loop is: **Transfer -> Run -> Fetch**,
-with **Resume**, **UpdateParams**, and **ClearAnimation** for iteration.
+with **Resume**, **Update Params on Remote**, and **Clear Local Animation**
+for iteration.
 
 ## The Solver Panel
 
 Open the sidebar (`N`) in the 3D viewport and switch to the add-on tab.
 The **Solver** panel is the second panel in the tab, directly below
 **Backend Communicator** and above **Scene Configuration**, **Dynamics
-Groups**, **Snap and Merge**, **Utility Tools**, and **Visualization**.
-It is always visible (never collapsed by default) because it is the
-primary control surface during simulation work.
+Groups**, **Snap and Merge**, **Utility Tools**, **Visualization**, and
+**Object Statistics**. It is always visible (never collapsed by
+default) because it is the primary control surface during simulation
+work.
 
 ```{figure} ../../images/simulating/solver_connected.png
 :alt: Solver panel immediately after connecting and starting the server
@@ -23,41 +25,48 @@ the scene. The info line at the bottom (*Click "Transfer" to upload
 data*) reinforces which step is next.
 ```
 
-The panel is laid out as a single vertical column of buttons, status
-indicators, and controls:
+The panel is a stack of two-button rows, followed by inline notices and
+the boxed sections below them:
 
-1. **Connection row.** At the very top of the panel is a row showing the
-   current connection target (host and port) and a **Connect** /
-   **Disconnect** button. When connected, the label changes to show the
-   active session.
+1. **cbor2 warning** *(conditional)*. When the bundled `cbor2` wheel is
+   missing, the panel opens with an error line saying **Transfer** and
+   **Run** cannot encode, pointing at the recovery button on **Backend
+   Communicator**. Connection settings and the **Connect** /
+   **Disconnect** buttons live on **Backend Communicator**, not here.
 
-2. **Primary action buttons.** Below the connection row, the main
-   buttons are stacked vertically in this order:
-   - **Transfer**. Uploads geometry and parameters to the solver.
-   - **Run**. Starts the simulation.
-   - **Resume**. Opens a checkpoint picker and continues an existing run
-     from a saved state, without re-uploading or rebuilding.
-   - **Update Params**. Re-uploads parameters without resending geometry.
-   - **Fetch All Animation**. Downloads simulation results.
-   - **Bake Animation** / **Bake Single Frame**. Convert the fetched
+2. **Action rows.** Two buttons per row, in this order:
+   - **Transfer** | **Update Params on Remote**. Transfer uploads
+     geometry and parameters; Update Params on Remote re-uploads the
+     parameters without resending geometry.
+   - **Run** | **Resume**. Run starts the solve; Resume opens a
+     checkpoint picker and continues an existing run from a saved
+     state, without re-uploading or rebuilding.
+   - **Fetch All Animation** | **Delete Remote Data**. Download the
+     simulation results, or wipe the solver's project data.
+   - **Bake Animation** | **Bake Single Frame**. Convert the fetched
      animation into standard Blender keyframes (see
      [Baking Animation](baking.md)).
+   - **Clear Local Animation**, on a full-width row of its own.
 
-3. **Status line.** Between the primary action buttons and the secondary
-   controls, a status line displays the current solver state. This line
-   updates in real time during long operations (see "Visual feedback
-   during each stage" below).
+3. **Inline notices.** Below the action rows the panel surfaces whatever
+   applies right now: *Click "Transfer" to upload data*, *Clear local
+   animation before running*, *N frames unfetched. Press "Fetch All
+   Animation".*, a missing-PC2 data path with a **Migrate** button, or a
+   stale-cache warning with a **Remove Stale Cache** button. The running
+   solver's *status line* is on **Backend Communicator**, not here (see
+   "Visual Feedback During Each Stage" below).
 
-4. **Secondary controls.** Below the status line:
-   - **Clear Local Animation**. Removes fetched animation data.
-   - **Delete Remote Data**. Wipes the solver's project data.
-   - **Terminate**. Hard-stops the running simulation.
-   - **Save & Quit**. Gracefully shuts down the server.
-   - **Abort**. Interrupts the current transfer or fetch operation.
+4. **Where the stop buttons are.** **Clear Local Animation** and
+   **Delete Remote Data** are on this panel. **Terminate**, **Save and
+   Quit**, and the transfer/fetch **Abort** are not: **Backend
+   Communicator** draws them, and only while something is in flight —
+   **Abort** during a transfer or fetch, **Save and Quit** /
+   **Terminate** while the simulation itself is live.
 
-5. **Progress bar.** During **Fetch All Animation**, a horizontal
-   progress bar appears inline within the panel, showing download
-   progress as a percentage alongside bandwidth statistics.
+5. **Progress bars.** The Solver panel draws an inline bar with an
+   **Abort** button for a running bake, a **Capture Deformation**, or a
+   pin capture. The **Fetch All Animation** progress bar and its
+   bandwidth readout appear on **Backend Communicator** instead.
 
 6. **Deformations box.** Below the main block is a box labeled
    **Deformations** holding two scene-wide buttons.
@@ -75,6 +84,13 @@ indicators, and controls:
    Blender keyframes. See
    [Exporting USD and Alembic Caches](exporting.md).
 
+8. **JupyterLab and MCP Server boxes.** Two collapsible boxes close the
+   panel. **JupyterLab** holds the notebook export / open / delete
+   buttons and the Jupyter port — see [JupyterLab](jupyterlab.md).
+   **MCP Server** starts and stops the local MCP server and sets its
+   port; its header reads the current state — see
+   [MCP Server](../../integrations/mcp.md).
+
 Buttons that are not applicable to the current state are grayed out. For
 example, **Run** is grayed out until a successful **Transfer** has
 completed, and **Resume** is grayed out unless the server still holds at
@@ -84,34 +100,35 @@ least one saved state to continue from.
 
 | Button                    | What it does                                                         |
 | ------------------------- | -------------------------------------------------------------------- |
-| **Transfer**              | Multi-stage pipeline: delete existing remote data → send mesh → send params → build. |
-| **Run**                   | Warns on stale mesh hash, clears existing animation, starts the solve. |
+| **Transfer**              | Encode geometry → encode parameters → upload both atomically → build. Overwrites `data.pickle` / `param.pickle` without wiping cached artifacts (tetrahedralization, BVH, mesh caches); use **Delete Remote Data** for that. |
+| **Run**                   | Re-encodes the scene and refuses if geometry or parameters drifted from the last upload, then clears existing animation and starts the solve. |
 | **Resume**                | Opens a checkpoint picker and continues an existing run from a saved state. No re-upload, no rebuild. |
-| **Update Params**         | Re-encodes and uploads parameters, then rebuilds. No geometry resend. |
+| **Update Params on Remote** | Re-encodes and uploads parameters, then rebuilds. No geometry resend. |
 | **Fetch All Animation**   | Downloads per-frame vertex data and applies it as PC2 animation.     |
 | **Clear Local Animation** | Removes simulation keyframes and `ContactSolverCache` modifiers. Preserves pin keyframes. |
 | **Delete Remote Data**    | Asks the server to wipe its current project data.                    |
 | **Terminate**             | Hard-stops the current simulation on the server.                     |
-| **Save & Quit**           | Graceful shutdown: flushes state to disk, then exits the server.     |
+| **Save and Quit**         | Graceful shutdown: flushes state to disk, then exits the server.     |
 | **Abort**                 | Interrupts the *current* transfer or fetch. Does not touch running sim. |
 | **Re-capture All Deformations** | Re-records every deforming **Static** collider and every animated pin in the scene, colliders first, with a progress readout and an **Abort** button while it runs. |
 | **Clear All Deformations** | Deletes every captured deformation in the scene, including recordings orphaned by a deleted or un-grouped object. |
 | **Export USD**            | Writes the fetched deformation to a USD point cache (`.usdc` by default). Non-destructive; every frame must be fetched first. See [Exporting USD and Alembic Caches](exporting.md). |
 | **Export Alembic (ABC)**  | The same result as an Alembic `.abc` cache. Neither format carries rod / curve objects. |
 
-`Terminate` and `Save & Quit` target the server itself; **Terminate** is
-the hard equivalent of pulling the plug, while **Save & Quit** lets the
-solver flush its state first so a later reconnect can pick up from there.
+`Terminate` and `Save and Quit` target the server itself; **Terminate**
+is the hard equivalent of pulling the plug, while **Save and Quit** lets
+the solver flush its state first so a later reconnect can pick up from
+there.
 
 ```{figure} ../../images/simulating/solver_state_machine.svg
-:alt: Five state boxes arranged left to right (Connected, Ready, Running, Complete, Fetched) with the status-line text and enabled-button list inside each box. Blue solid arrows mark the canonical forward flow (Transfer → Run → sim ends → Fetch); purple dashed arrows mark loops and recovery transitions (Update Params self-loop on Ready, Terminate and Resume between Running and Complete, Save & Quit from Running back to Connected, Clear Local Animation from Fetched back to Ready). A footer explains that Delete Remote Data is reachable from any post-Transfer state, that Abort only interrupts a Transfer or Fetch, and that the panel is otherwise fully inert while Running.
+:alt: Five state boxes arranged left to right (Connected, Ready, Running, Complete, Fetched) with the status-line text and enabled-button list inside each box. Blue solid arrows mark the canonical forward flow (Transfer → Run → sim ends → Fetch); purple dashed arrows mark loops and recovery transitions (Update Params self-loop on Ready, Terminate and Resume between Running and Complete, Save and Quit from Running back to Connected, Clear Local Animation from Fetched back to Ready). A footer explains that Delete Remote Data is available from Ready, Complete and Fetched and returns the solver to Connected, that Abort only interrupts a Transfer or Fetch, and that the panel is otherwise fully inert while Running.
 :width: 820px
 
 Which buttons light up in each state. The canonical forward flow runs
 left-to-right along the blue arrows; the purple dashed arrows cover the
-loops (**Update Params**), recovery transitions (**Clear Local
-Animation**, **Resume**), and early exits (**Terminate**, **Save &
-Quit**). If a button is grayed out, find the current state on the
+loops (**Update Params on Remote**), recovery transitions (**Clear
+Local Animation**, **Resume**), and early exits (**Terminate**, **Save
+and Quit**). If a button is grayed out, find the current state on the
 diagram; the enabled list inside that box is the full answer. The
 diagram covers the main block only. The **Deformations** and **Export**
 boxes below it are gated by what the scene holds rather than by solver
@@ -132,25 +149,27 @@ This is the state you press **Run** from.
 
 ## Visual Feedback During Each Stage
 
-The **status line** on the Solver panel keeps you informed of what the
-solver is doing at every moment. Here is what you see during each major
-operation:
+The **status line** on the **Backend Communicator** panel keeps you
+informed of what the solver is doing at every moment. Here is what you
+see during each major operation:
 
 ### Transfer
 
-The status line cycles through several sub-stages as the transfer
-proceeds:
+A labeled progress bar on **Backend Communicator** cycles through
+several sub-stages as the transfer proceeds:
 
-1. **"Uploading Mesh Data"**. The add-on serializes and sends vertex
+1. **"Encoding scene geometry..."**. The add-on serializes vertex
    positions, edges, and faces for every active group.
-2. **"Uploading Parameters"**. Material parameters, scene parameters,
-   pins, operations, merge pairs, and invisible colliders are encoded
-   and sent.
-3. **"Building"**. The solver is constructing its internal data
+2. **"Encoding parameters..."**. Material parameters, scene parameters,
+   pins, operations, merge pairs, and invisible colliders are encoded.
+   Geometry and parameters then go up together as one atomic upload
+   (**"Uploading scene..."**), so the server never sees a mismatched
+   pair.
+3. **"Building Scene..."**. The solver is constructing its internal data
    structures (BVH trees, constraint graphs, contact maps). This step
    can take a few seconds for complex scenes.
-4. **"Ready"**. The transfer is complete. The **Run** button is now
-   enabled.
+4. **"Ready to Run"**. The transfer is complete. The **Run** button is
+   now enabled.
 
 If any sub-stage fails, the status line shows an error message in red
 text describing the failure (e.g. "Transfer failed: mesh has zero
@@ -161,9 +180,9 @@ issue and retry.
 
 Once the simulation starts:
 
-1. The Solver-panel status line reads **"Simulation Running..."** and a
-   blue progress bar appears on the **Backend Communicator** panel
-   above, labeled with the same status.
+1. The status line on the **Backend Communicator** panel reads
+   **"Simulation Running..."** and a blue progress bar appears below it,
+   labeled with the same status.
 2. Live counters appear on **Backend Communicator** in two blocks.
    **Realtime Statistics** shows the current `frame` plus several rows,
    grouped by what they measure:
@@ -185,8 +204,9 @@ Once the simulation starts:
    are.
 3. When the simulation completes, the status line returns to **"Ready
    to Run"**, `Simulated Frames` reaches `Total Frames`, and a warning
-   row (*N frames unfetched. Press "Fetch All Animation"*) appears
-   above the Solver panel, directing you at the next step.
+   row (*N frames unfetched. Press "Fetch All Animation"*) appears at
+   the bottom of the Solver panel's button block, directing you at the
+   next step.
 
 ```{figure} ../../images/simulating/sim_in_progress.png
 :alt: Backend Communicator panel mid-solve. Status "Simulation Running...", blue progress bar, Realtime Statistics block showing frame, timing rows (time-per-frame, time-per-step, matrix-assembly, pcg-linsolve, line-search), count rows (num-contact, newton-steps, pcg-iter), ratio rows (toi, toi-advanced, dyn-consumed, stretch), host rows (GPU Util, VRAM Usage, CPU Usage, RAM Usage), and Scene Info with Simulated Frames 96 of 240
@@ -205,30 +225,34 @@ Running...*, the blue progress bar carries the same label, and the
 
 After the run finishes, the status line returns to *Ready to Run*, the
 live counters collapse into an **Average Statistics** block, and
-`Simulated Frames` matches `Total Frames`. The warning row above the
-Solver panel tells you exactly how many frames are still on the remote
-and which button to press next.
+`Simulated Frames` matches `Total Frames`. The warning row at the foot
+of the Solver panel tells you exactly how many frames are still on the
+remote and which button to press next.
 ```
 
 Once a run is no longer live, the same box switches its title to
 **Average Statistics** and shows the run summarized over all simulated
 frames instead of the latest step: the timing rows become per-frame
-averages, the count rows become averages (with `num-contact` reported as
-its peak), and the ratio rows are averaged. This block stays available
-after the run as long as the solver still has its log data, so you can
-read the overall cost of a solve without watching it live.
+averages, and the count and ratio rows are averaged — except
+`num-contact` and `dyn-consumed`, which are reported as run peaks and
+relabeled `num-contact (max)` and `dyn-consumed (max)`. This block stays
+available after the run as long as the solver still has its log data, so
+you can read the overall cost of a solve without watching it live.
 
 ### Fetch
 
 During a fetch:
 
-1. A **progress bar** fills from left to right as frame data is
-   downloaded. The bar shows a percentage and the number of frames
-   fetched so far (e.g. `120 / 240 frames`).
+1. A **progress bar** fills from left to right on **Backend
+   Communicator** as frame data is downloaded. The bar shows a
+   percentage and the number of frames fetched so far (e.g.
+   `120 / 240 frames`).
 2. **Bandwidth statistics** appear alongside the progress bar (e.g.
    `12.3 MB/s`).
-3. On completion, the status line reads **"Animation Ready"** and the
-   fetched frames are immediately available for timeline scrubbing.
+3. On completion the status line returns to **"Ready to Run"**, the
+   scene's frame range is set to the fetched range, and the add-on
+   starts timeline playback on its own rather than waiting for you to
+   scrub.
 
 ```{figure} ../../images/simulating/solver_running.png
 :alt: Solver panel with every action disabled while the simulation is running
@@ -255,38 +279,39 @@ second **Run** needs the previous animation cleared first.
 ## Update Params vs Transfer
 
 When iterating on a scene, the question comes up: does this change
-need a full **Transfer**, or is **Update Params** enough? The rule is:
+need a full **Transfer**, or is **Update Params on Remote** enough? The
+rule is:
 
 - **Transfer** re-sends geometry and parameters, then rebuilds.
-- **Update Params** re-sends parameters only, then rebuilds. Mesh
-  buffers on the server are preserved, which is why it completes much
-  faster on large scenes.
+- **Update Params on Remote** re-sends parameters only, then rebuilds.
+  Mesh buffers on the server are preserved, which is why it completes
+  much faster on large scenes.
 
 So **Transfer** is required whenever mesh topology or group membership
-changes; **Update Params** is enough for everything else that lives in
-the parameter payload (scene settings, material params, pins,
+changes; **Update Params on Remote** is enough for everything else that
+lives in the parameter payload (scene settings, material params, pins,
 colliders, dynamic parameters). The table below enumerates the common
 edits:
 
-| Edit                                                          | What to press                |
-| ------------------------------------------------------------- | ---------------------------- |
-| Mesh topology change (add/remove verts, edges, faces)         | **Transfer**                 |
-| Add or remove an object from a group                          | **Transfer**                 |
-| Change a group's type (e.g. Shell → Solid)                    | **Transfer**                 |
-| Pure transform of an assigned object (move/rotate/scale)      | **Transfer** *(new rest)*    |
-| Add a new pin vertex group on existing geometry               | **Update Params**            |
-| Edit an existing pin's operations (Move By / Spin / Scale / Torque) | **Update Params**      |
-| Change material parameters (density, stiffness, friction, …)  | **Update Params**            |
-| Change scene parameters (gravity, wind, air, step size, …)    | **Update Params**            |
-| Edit dynamic-parameter keyframes                              | **Update Params**            |
-| Add, remove, or keyframe an invisible collider                | **Update Params**            |
-| Add or remove a snap/merge pair                               | **Update Params**            |
-| Load a scene profile or material profile                      | **Update Params**            |
-| Toggle an overlay (Show Pins, preview arrows)                 | *(nothing; viewport only)*   |
+| Edit                                                          | What to press                 |
+| ------------------------------------------------------------- | ----------------------------- |
+| Mesh topology change (add/remove verts, edges, faces)         | **Transfer**                  |
+| Add or remove an object from a group                          | **Transfer**                  |
+| Change a group's type (e.g. Shell → Solid)                    | **Transfer**                  |
+| Pure transform of an assigned object (move/rotate/scale)      | **Transfer** *(new rest)*     |
+| Add a new pin vertex group on existing geometry               | **Update Params on Remote**   |
+| Edit an existing pin's operations (Move By / Spin / Scale / Torque) | **Update Params on Remote** |
+| Change material parameters (density, stiffness, friction, …)  | **Update Params on Remote**   |
+| Change scene parameters (gravity, wind, air, step size, …)    | **Update Params on Remote**   |
+| Edit dynamic-parameter keyframes                              | **Update Params on Remote**   |
+| Add, remove, or keyframe an invisible collider                | **Update Params on Remote**   |
+| Add or remove a snap/merge pair                               | **Update Params on Remote**   |
+| Load a scene profile or material profile                      | **Update Params on Remote**   |
+| Toggle an overlay (a pin's eye, preview arrows)               | *(nothing; viewport only)*    |
 
-The **Mesh hash mismatch** warning in the next section is the add-on's
-safety net: if you skip **Transfer** after a topology change, it shows
-up before **Run** or **Fetch** and tells you to re-transfer.
+The topology warning in the next section is the add-on's safety net: if
+you skip **Transfer** after a topology change, it shows up before
+**Run** or **Fetch** and tells you to re-transfer.
 
 If a run is slow to converge, the **Preconditioner** scene parameter
 (Block Jacobi by default, or Schwarz) is one knob worth trying; see
@@ -296,16 +321,29 @@ If a run is slow to converge, the **Preconditioner** scene parameter
 
 If you edit your meshes (add or remove vertices, change group membership,
 reassign an object's type) after **Transfer** but before **Run** or
-**Fetch**, the panel shows a warning:
+**Fetch**, the add-on reports a warning in Blender's status bar:
 
-> Mesh hash mismatch: groups have changed since last transfer.
+> Mesh topology changed since last transfer (groups differing: Cloth).
+> Re-transfer to sync.
 
-The warning does not block you, but it means the solver's data no longer
+That report does not block you, but it means the solver's data no longer
 matches what is in Blender. Click **Transfer** again to re-upload before
 running or fetching.
 
-Pure transforms and material-parameter edits do not trigger this warning;
-only topology changes do.
+**Run** goes further and refuses outright. It re-encodes the scene when
+you click it and compares the result against the hashes the server
+echoed for the last upload: a geometry change aborts with *Geometry has
+changed since the last transfer. Click "Transfer" to re-upload before
+running.*, and a parameter change aborts with *Parameters have changed
+since the last transfer. Click "Update Params" before running.* So a
+material-parameter edit, which leaves the topology report silent, still
+stops a **Run** until you press **Update Params on Remote**. **Resume**
+runs the same two checks in its own wording; see
+[Resuming a Run](#resuming-a-run).
+
+Pure transforms and material-parameter edits do not change the topology
+report; adding a pin vertex group or re-capturing a **Static** collider's
+deformation does, because both feed the same hash.
 
 ## How Animation Plays Back
 
@@ -337,6 +375,57 @@ Save the `.blend` after fetching. The add-on migrates the fetched PC2
 files into a permanent location on save, so the animation survives
 closing and reopening the file.
 :::
+
+## Reading Per-Frame Statistics
+
+**Fetch** brings back more than vertices. Every frame the solver
+measured also carries a small record of per-object numbers, and those
+records ride along with the vertex data on the same fetch. They land
+beside the PC2 caches in the same `<blend_dir>/data/<blend_basename>/`
+folder, as one `statistics_manifest.cbor` plus one `.stats` file per
+object, and saving the `.blend` migrates them into place with the PC2
+files.
+
+The **Object Statistics** panel, last in the sidebar and collapsed by
+default, is what reads them back. It looks up the record for the
+current frame minus the starting frame and redraws on every frame
+change, so the numbers always belong to the frame the playhead is on
+and scrubbing walks the run. Which rows appear depends on the object:
+
+- **Location**, **Velocity**, **Speed**, **Acceleration** and its
+  magnitude, **Angular Velocity**, **Angular Speed** and **Angular
+  Axis** are measured for every object in the scene, Static colliders
+  included.
+- **Surface Area** appears for an object with faces, **Volume** for one
+  built from tets or closed by its own surface, **Rod Length** for a
+  strand; a **Sand** group reports area and volume both. Each of the
+  three is printed with a percentage in parentheses, its value relative
+  to the same measure on the run's first frame, so `102%` beside a
+  surface area means the sheet has stretched two percent since it
+  started.
+- **Contact Count** is abbreviated past a thousand (`12K`, `1.5M`). An
+  emulated build counts no contacts, so on one of those the row reads
+  `N/A`.
+
+A frame that has not been fetched has no record: every row reads `N/A`
+and **Export CSV** is grayed out. **Clear Local Animation** deletes the
+statistics along with the fetched animation, and the panel then reports
+*Statistics unavailable; rerun the simulation* for that object — the
+data is gone, not corrupt, and a fresh **Run** and **Fetch** brings it
+back.
+
+**Export CSV** opens a menu of the values the selected object supports
+and writes the one you pick, for every fetched frame, to a file three
+columns wide:
+
+| Column   | What's in it                                                |
+| -------- | ----------------------------------------------------------- |
+| `frame`  | Blender frame number: the solver's frame index with the starting frame added back, so it lines up with the timeline. |
+| `time_s` | Solver time in seconds at that frame.                        |
+| `value`  | The value. A vector metric is written as one `[x,y,z]` cell; a frame the solver did not measure this value on is written empty. |
+
+Only frames that were actually fetched are written, so a partial fetch
+produces a shorter file rather than one padded with blanks.
 
 ## Disconnecting While a Simulation Runs
 
@@ -391,8 +480,8 @@ Three related features:
 - **Save State on Finish** (same sub-panel): saves a state on the final
   frame before the solver exits, so a completed run stays resumable even
   when auto-save is off.
-- **Save & Quit**: a one-shot operator that asks the server to flush
-  state and exit cleanly. After **Save & Quit**, the next reconnect can
+- **Save and Quit**: a one-shot operator that asks the server to flush
+  state and exit cleanly. After **Save and Quit**, the next reconnect can
   pick up the run where it left off.
 
 **Terminate** does not flush state. Use it when the simulation is
@@ -414,14 +503,14 @@ the scene has drifted from what the server last received:
   **Transfer** then **Run** for a fresh simulation. The cached state no
   longer matches the mesh.
 - If only the **parameters** changed, **Resume** stops and asks you to
-  press **Update Params** first. **Update Params** re-sends parameters and
+  press **Update Params on Remote** first. That re-sends parameters and
   rebuilds while preserving the saved checkpoints, so you can **Resume**
   immediately afterward.
 
 For **Resume** to have anything to offer, the server must hold at least
 one saved state. That comes from **Auto Save**, from **Save State on
 Finish**, from explicit per-frame **Save Checkpoints**, or from
-**Save & Quit**. With no saved state, **Resume** stays grayed out.
+**Save and Quit**. With no saved state, **Resume** stays grayed out.
 
 ### Recovery Scenarios
 
@@ -433,7 +522,7 @@ ones; the table shows the first move in each.
 | You closed Blender or lost the network mid-run. Solver kept running.  | Everything up to "now".     | Reopen the .blend, **Connect**, **Fetch All Animation**. If still running, leave it. If it finished while you were gone, fetch picks up the rest. |
 | You clicked **Terminate** or killed the run.                          | Frames up to terminate, plus any saved states. | The solver transitions to **Resumable**. Click **Resume**, pick a saved state, and continue; or **Run** to clear the animation and restart. |
 | The run failed (a frame did not converge). | Frames up to the failure, plus any saved states. | The status line reads **Simulation Failed**, but it stays resumable while at least one saved state exists. Click **Resume** and pick an earlier state to continue past the trouble spot, or fix the scene and **Run** again. |
-| Solver process crashed (segfault, OOM, server reboot).                | Whatever was auto-saved (if **Auto Save** was on) or just the frames already written. | Reconnect and **Start Server**. If saved states exist, the solver comes up **Resumable** and **Resume** lets you pick one. If not, press **Run** to re-simulate. |
+| Solver process crashed (segfault, OOM, server reboot).                | Whatever was auto-saved (if **Auto Save** was on) or just the frames already written. | Reconnect and **Start Server on Remote**. If saved states exist, the solver comes up **Resumable** and **Resume** lets you pick one. If not, press **Run** to re-simulate. |
 
 **Auto Save** is what distinguishes "lose a few seconds of solve" from
 "redo the last hour" in the crash case. It's on the Scene Configuration
@@ -510,38 +599,53 @@ solver.terminate_simulation()       # no flush, immediate
 | Transfer              | `solver.transfer`            |
 | Run                   | `solver.run`                 |
 | Resume                | `solver.resume_from`         |
-| Update Params         | `solver.update_params`       |
+| Update Params on Remote | `solver.update_params`     |
 | Fetch All Animation   | `solver.fetch_remote_data`   |
 | Clear Local Animation | `solver.clear_animation`     |
 | Delete Remote Data    | `solver.delete_remote_data`  |
 | Terminate             | `solver.terminate`           |
-| Save & Quit           | `solver.save_quit`           |
+| Save and Quit         | `solver.save_quit`           |
 | Abort                 | `ssh.abort`                  |
 
-Any `solver.*` method in Python that is not explicitly defined on the
-solver proxy is forwarded to the matching Blender operator, which is why
-the Python API above maps one-to-one onto this table.
+Any `solver.*` method not explicitly defined on the solver proxy is
+forwarded to `bpy.ops.zozo_contact_solver.<name>`, an operator generated
+from the MCP handler of the same name. Most of those handlers invoke the
+`solver.*` operator in this table; `terminate_simulation` and
+`save_and_quit_simulation` call the same underlying service directly. So
+the names in the Python block above are the *handler* names
+(`transfer_data`, `terminate_simulation`, and so on), not the
+`bl_idname`s.
 
 **Mesh hash**
 
-The topology hash is computed over each active group's vertex count,
-edge topology, and face topology. Pure transforms and material-parameter
-edits do not affect it.
+The topology hash is computed per active group over vertex count,
+polygon count, edge count, object count, the pin vertex groups and their
+sizes, and a digest of each captured static-deformation cache. Pure
+transforms and material-parameter edits do not affect it; adding a pin
+vertex group or re-capturing a **Static** collider does.
 
 **PC2 files on disk**
 
-Per-object PC2 lives under `<blend_dir>/data/<blend_basename>/`. Each
-object has a `vert_N.bin` per simulated frame. A fetch also writes
-`map.pickle` and `surface_map.pickle` for the object-to-vertex mappings.
+Per-object PC2 lives under `<blend_dir>/data/<blend_basename>/`, one
+`<object-uuid>.pc2` per simulated object. The solver's own per-frame
+`vert_N.bin` files and its `map.pickle` / `surface_map.pickle`
+object-to-vertex mappings stay on the remote host under the project's
+`session/` directory; a fetch reads them over the wire and writes the
+local `.pc2` files from them.
 
 **`ContactSolverCache` entry**
 
 Mesh playback is driven by a `ContactSolverCache` entry in the
 **Modifier Properties** tab, pointing at the object's PC2 file. It
-sits in the **first modifier slot** with `frame_start = 1.0`, so it
-deforms the rest mesh before any other deformer runs. Curves are
-updated directly on every frame change and do not need an entry in
-that tab.
+sits in the **first modifier slot** with `frame_start` set to the
+solve's **Starting Frame** (1 by default), so it deforms the rest mesh
+before any other deformer runs. The exception is an object whose own
+deformers fed the solver — a **Static** collider, or a dynamic object
+carrying a deforming modifier stack such as an Armature or Lattice.
+There the entry is placed *after* those position-preserving deformers
+and before the first topology-changing one, so the solver's output wins
+over the input that produced it. Curves are updated directly on every
+frame change and do not need an entry in that tab.
 
 **Session ID format**
 

@@ -71,12 +71,40 @@ def _install_stub_bpy() -> None:
     bpy.data = types.SimpleNamespace(filepath="")
     bpy.types = types.SimpleNamespace()
 
+    # ``mathutils`` ships with Blender the same way ``bpy`` does, and
+    # ``core/transform.py`` imports Matrix from it at module scope. Any module
+    # that reaches ``core.utils`` therefore fails to IMPORT here unless a test
+    # happened to stub ``core.transform`` first, which made a module's
+    # importability depend on fixture order.
+    #
+    # The stub satisfies the import and nothing else: every attribute raises
+    # when used, so a test that actually reaches this math fails loudly and
+    # names the reason, rather than computing a plausible wrong answer from a
+    # do-nothing placeholder.
+    mathutils = types.ModuleType("mathutils")
+
+    def _unavailable(name):
+        class _Unavailable:
+            def __init__(self, *args, **kwargs):
+                raise RuntimeError(
+                    f"mathutils.{name} is a stub outside Blender. A test that "
+                    f"needs real {name} math belongs in the Blender rig "
+                    "(blender_addon/debug/scenarios), not here."
+                )
+
+        _Unavailable.__name__ = name
+        return _Unavailable
+
+    for _name in ("Matrix", "Vector", "Euler", "Quaternion", "Color"):
+        setattr(mathutils, _name, _unavailable(_name))
+
     sys.modules.update(
         {
             "bpy": bpy,
             "bpy.app": app,
             "bpy.app.handlers": handlers,
             "bpy.app.translations": translations,
+            "mathutils": mathutils,
         }
     )
 
@@ -131,6 +159,13 @@ def _stub_submodule(name: str, **attrs) -> None:
     Used where a loaded module needs a symbol from a sibling whose own
     import chain reaches Blender. The placeholder is registered before the
     module under test runs, so the real file is never executed.
+
+    A name the caller did not list still IMPORTS, and raises when used. The
+    placeholder lives in ``sys.modules`` for the whole session, so a later
+    test importing a symbol this caller had no reason to name would otherwise
+    fail at import with an error naming the placeholder rather than the
+    missing behavior, and which symbols are needed then depends on the order
+    the tests happened to run in.
     """
     fqname = f"blender_addon.{name}"
     if fqname in sys.modules:
@@ -138,6 +173,21 @@ def _stub_submodule(name: str, **attrs) -> None:
     mod = types.ModuleType(fqname)
     for key, value in attrs.items():
         setattr(mod, key, value)
+
+    def __getattr__(attr: str):  # noqa: N807 - PEP 562 module-level hook
+        if attr.startswith("__"):
+            raise AttributeError(attr)
+
+        def _unavailable(*args, **kwargs):
+            raise RuntimeError(
+                f"{fqname}.{attr} is a placeholder outside Blender. A test "
+                f"that needs the real {name} belongs in the Blender rig "
+                "(blender_addon/debug/scenarios), not here."
+            )
+
+        return _unavailable
+
+    mod.__getattr__ = __getattr__
     sys.modules[fqname] = mod
 
 

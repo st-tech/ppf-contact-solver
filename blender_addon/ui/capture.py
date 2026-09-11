@@ -64,6 +64,8 @@ before capture, or drive the add-on interactively and expand them first.
 from __future__ import annotations
 
 import os
+import shutil
+import sys
 from contextlib import contextmanager
 from typing import Callable, Iterable
 
@@ -124,16 +126,125 @@ def force_redraw(iterations: int = 3) -> None:
     bpy.ops.wm.redraw_timer(type="DRAW_WIN_SWAP", iterations=iterations)
 
 
+def _png_size(path: str) -> tuple[int, int]:
+    """``(width, height)`` from a PNG's IHDR, without decoding it."""
+    with open(path, "rb") as fh:
+        head = fh.read(24)
+    if len(head) < 24 or head[:8] != b"\x89PNG\r\n\x1a\n":
+        raise ValueError(f"{path} is not a PNG")
+    return (int.from_bytes(head[16:20], "big"),
+            int.from_bytes(head[20:24], "big"))
+
+
+def _is_uniform(path: str) -> bool:
+    """True if every pixel in the PNG is the same color.
+
+    A capture backend that fails does not usually raise — it writes a
+    perfectly valid, perfectly blank PNG. Downstream that blank frame
+    diffs to nothing, and the caller reports "this panel has no drawable
+    body", which sends you looking at the panel instead of at the
+    capture. Checking the frame here turns a silent wrong answer into a
+    loud one.
+    """
+    try:
+        import numpy as np
+        arr = _load_rgb_int16(path)
+    except Exception:
+        # Can't decode it; let the caller deal with the file as-is rather
+        # than claiming it is blank.
+        return False
+    return bool(np.all(arr == arr.flat[0]))
+
+
+def _x11_grab(path: str, display: str) -> bool:
+    """Grab the whole X display to ``path``. True if a frame was written.
+
+    Reads the X server rather than asking Blender for its own window
+    because ``screen.screenshot`` copies the GL front buffer, and under a
+    software rasterizer on a bare Xvfb (no compositor to preserve it)
+    that buffer is undefined after the swap — in practice a black frame.
+    The X server's idea of the screen is correct in both cases, which is
+    also why the capture wants Blender sized to fill the display.
+    """
+    import subprocess
+    import time
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        return False
+
+    # Let the frame reach the X server before reading it back.
+    #
+    # force_redraw() returns when Blender has issued the draw and swapped,
+    # but the swap is asynchronous from the X server's point of view, so a
+    # grab fired immediately after it can still read the PREVIOUS frame.
+    # Every widget is located by changing ONE label and diffing two grabs,
+    # so a pair that both land on the same frame would diff to nothing and
+    # be reported as "not rendered in the current panel state". No stale
+    # frame has actually been observed at this delay — the empty diffs that
+    # symptom came from were the ROI unit mismatch fixed in panel_bbox, not
+    # a timing race. This stays as cheap insurance, since nothing else
+    # synchronizes the swap from outside the GL context. Set
+    # PPF_CAPTURE_SETTLE=0 to drop it.
+    time.sleep(float(os.environ.get("PPF_CAPTURE_SETTLE", "0.25")))
+
+    proc = subprocess.run(
+        [ffmpeg, "-loglevel", "error", "-f", "x11grab",
+         "-draw_mouse", "0", "-i", display, "-frames:v", "1", "-y", path],
+        capture_output=True, text=True,
+    )
+    if proc.returncode != 0 or not os.path.exists(path):
+        return False
+    return True
+
+
 def screenshot(path: str) -> str:
-    """Write a full-window PNG to ``path`` and return the path.
+    """Write a full-screen PNG to ``path`` and return the path.
 
     Removes any pre-existing file so callers can detect capture failure by
     the file simply not appearing.
+
+    On Linux the frame comes from the X server (see ``_x11_grab``); set
+    ``PPF_CAPTURE_BACKEND=blender`` to force Blender's own
+    ``screen.screenshot`` operator instead. Everywhere else the operator
+    is used directly, since a window server that composites normally
+    hands back a correct front buffer.
     """
     _require_bpy()
     if os.path.exists(path):
         os.remove(path)
+
+    backend = os.environ.get("PPF_CAPTURE_BACKEND", "").strip().lower()
+    display = os.environ.get("DISPLAY", "")
+    use_x11 = (
+        backend != "blender"
+        and sys.platform.startswith("linux")
+        and bool(display)
+    )
+
+    if use_x11:
+        if _x11_grab(path, display):
+            if _is_uniform(path):
+                raise RuntimeError(
+                    f"captured a blank frame from {display}. Blender is "
+                    f"probably not mapped on that display yet, or is not "
+                    f"sized to fill it."
+                )
+            return path
+        if backend == "x11":
+            raise RuntimeError(
+                "PPF_CAPTURE_BACKEND=x11 but no X11 grabber is available: "
+                "install ffmpeg (apt-get install ffmpeg)."
+            )
+        print("capture: no ffmpeg for an X11 grab, falling back to Blender's "
+              "screenshot operator, which is black under software GL.")
+
     bpy.ops.screen.screenshot(filepath=path)
+    if os.path.exists(path) and _is_uniform(path):
+        raise RuntimeError(
+            f"screen.screenshot wrote a blank frame to {path}. On Linux this "
+            f"is the software-GL front-buffer problem; install ffmpeg so the "
+            f"capture can read the X server instead."
+        )
     return path
 
 
@@ -1061,9 +1172,20 @@ class WidgetLocator:
         space_type = getattr(panel_cls, "bl_space_type", "VIEW_3D")
         region_type = getattr(panel_cls, "bl_region_type", "UI")
 
+        # Measure the image space instead of predicting it. Region
+        # coordinates are in device pixels, and this rect has to land in
+        # the same space as the screenshot, so the only safe height is the
+        # screenshot's own. Deriving it as ``window.height * pixel_size``
+        # holds only where the window reports LOGICAL points and the
+        # framebuffer is scaled — true of a Retina Mac, false on an Xvfb,
+        # where Blender reports pixel_size 2.0 from the DPI it infers while
+        # window.height is already the device height. There the product is
+        # twice the image, every ROI lands off the bottom of the frame, and
+        # each widget is reported as "not rendered in the current panel
+        # state" — a message about the panel for what is really a unit
+        # mismatch.
         region = None
-        img_height = 0
-        scale = int(bpy.context.preferences.system.pixel_size)
+        img_height = _png_size(self.baseline_png)[1]
         for win in bpy.context.window_manager.windows:
             for area in win.screen.areas:
                 if area.type != space_type:
@@ -1071,7 +1193,6 @@ class WidgetLocator:
                 for r in area.regions:
                     if r.type == region_type and r.width > 0 and r.height > 0:
                         region = r
-                        img_height = win.height * scale
                         break
                 if region is not None:
                     break

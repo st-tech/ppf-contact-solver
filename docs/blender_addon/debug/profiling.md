@@ -133,7 +133,8 @@ import sys
 import importlib
 
 top = next(
-    (n.split(".")[0] for n in sys.modules if n.endswith(".ui.dynamics.overlay")),
+    (n.removesuffix(".ui.dynamics.overlay") for n in sys.modules
+     if n.endswith(".ui.dynamics.overlay")),
     None,
 )
 if top is None:

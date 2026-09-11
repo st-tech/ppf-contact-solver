@@ -45,7 +45,14 @@ def _coerce_curve_points(points: list[list[float]]) -> list[tuple[float, float, 
     return coerced
 
 
-@mcp_handler
+@mcp_handler(
+    annotations={
+        "readOnlyHint": False,
+        "destructiveHint": True,
+        "idempotentHint": False,
+        "openWorldHint": True,
+    }
+)
 def run_python_script(code: str):
     """Execute arbitrary Python code in Blender with access to bpy, bmesh, and mathutils modules.
 
@@ -289,6 +296,11 @@ def finalize_curve(name: str):
 # UI Element Status Functions
 # ============================================================================
 
+# The categories this tool reports under. Operators are grouped by the module
+# that registers them; properties are grouped by _categorize_state_property
+# and by the property group they live on.
+_UI_CATEGORIES = frozenset({"solver", "dynamics", "client", "debug"})
+
 
 @mcp_handler
 def get_ui_element_status(
@@ -308,6 +320,15 @@ def get_ui_element_status(
     # Validate element_type
     if element_type not in ["operator", "property", "all"]:
         raise ValidationError("element_type must be 'operator', 'property', or 'all'")
+
+    # An unrecognized category would filter everything out and report an empty
+    # list, which reads as "this surface is empty" rather than "you asked for
+    # something that does not exist".
+    if category is not None and category not in _UI_CATEGORIES:
+        raise ValidationError(
+            f"category must be one of {', '.join(sorted(_UI_CATEGORIES))}; "
+            f"got {category!r}"
+        )
 
     try:
         # Get operators if requested
@@ -338,55 +359,97 @@ def _get_operator_status(
 
     # Import UI modules to discover operators
     try:
-        from ..ui import dynamics, solver
+        from ..ui import (
+            addon_ops,
+            connection_ops,
+            debug_ops,
+            dynamics,
+            geometry_cleanup_ops,
+            install_ops,
+            jupyter_ops,
+            main_panel,
+            mcp_ops,
+            solver,
+            solver_control_ops,
+        )
+        from ..ui.dynamics import material_map_ops
 
-        # Define operator mappings with categories
-        operator_modules = {"solver": solver, "dynamics": dynamics}
+        # Every module that registers operators, grouped under the categories
+        # this tool advertises. A category that named no module would report an
+        # empty list for a surface that exists, so the table covers all four.
+        # `material_map_ops` is named explicitly because `ui.dynamics` does not
+        # re-export it, so reaching it through the package would report the
+        # material map operators as absent rather than as a category with no
+        # entries.
+        operator_modules = {
+            "solver": (solver, solver_control_ops, jupyter_ops, main_panel),
+            "dynamics": (dynamics, geometry_cleanup_ops, material_map_ops),
+            "client": (connection_ops, install_ops),
+            "debug": (debug_ops, mcp_ops, addon_ops),
+        }
 
-        for module_name, module in operator_modules.items():
+        # One operator is reported once, whichever module exposes it.
+        seen_idnames = set()
+
+        for module_name, modules in operator_modules.items():
             # Skip if category filter doesn't match
             if category and category != module_name:
                 continue
 
-            # Get all operator classes from the module
-            for attr_name in dir(module):
-                attr = getattr(module, attr_name)
+            for module in modules:
+                # Get all operator classes from the module
+                for attr_name in dir(module):
+                    attr = getattr(module, attr_name)
 
-                # Check if it's an operator class
-                if hasattr(attr, "__bases__") and any(
-                    "Operator" in base.__name__ for base in attr.__bases__
-                ):
-                    # Skip if element_name filter doesn't match
-                    if element_name and attr_name != element_name:
-                        continue
+                    # Check if it's an operator class
+                    if hasattr(attr, "__bases__") and any(
+                        "Operator" in base.__name__ for base in attr.__bases__
+                    ):
+                        # Report a class only from the module or package that
+                        # OWNS it. A package owns what its submodules define,
+                        # which is how `ui.dynamics` covers its operator
+                        # modules; a module that merely imports a sibling's
+                        # operator for its own use does not, which is what
+                        # keeps one operator from being reported several times
+                        # under whichever category was scanned first.
+                        owner = getattr(attr, "__module__", "")
+                        if not owner.startswith(module.__name__):
+                            continue
+                        if getattr(attr, "bl_idname", None) in seen_idnames:
+                            continue
+                        seen_idnames.add(attr.bl_idname)
 
-                    try:
-                        # Get operator info
-                        op_info = {
-                            "name": attr_name,
-                            "bl_idname": getattr(attr, "bl_idname", "unknown"),
-                            "description": attr.__doc__.split("\n")[0].strip()
-                            if attr.__doc__
-                            else "",
-                            "category": module_name,
-                            "clickable": False,
-                        }
+                        # Skip if element_name filter doesn't match
+                        if element_name and attr_name != element_name:
+                            continue
 
-                        # Call poll method if it exists
-                        if hasattr(attr, "poll") and callable(attr.poll):
-                            try:
-                                context = bpy.context
-                                poll_result = attr.poll(context)
-                                op_info["clickable"] = bool(poll_result)
-                            except Exception as poll_error:
-                                op_info["clickable"] = False
-                                op_info["poll_error"] = str(poll_error)
+                        try:
+                            # Get operator info
+                            op_info = {
+                                "name": attr_name,
+                                "bl_idname": getattr(attr, "bl_idname", "unknown"),
+                                "description": attr.__doc__.split("\n")[0].strip()
+                                if attr.__doc__
+                                else "",
+                                "category": module_name,
+                                "clickable": False,
+                            }
 
-                        operators.append(op_info)
+                            # Call poll method if it exists
+                            if hasattr(attr, "poll") and callable(attr.poll):
+                                try:
+                                    context = bpy.context
+                                    poll_result = attr.poll(context)
+                                    op_info["clickable"] = bool(poll_result)
+                                except Exception as poll_error:
+                                    op_info["clickable"] = False
+                                    op_info["poll_error"] = str(poll_error)
 
-                    except Exception:
-                        # If we can't process this operator, skip it
-                        continue
+                            operators.append(op_info)
+
+                        except Exception:
+                            # If we can't process this operator, skip it
+                            continue
 
     except Exception as e:
         raise MCPError(f"Failed to discover operators: {str(e)}") from e

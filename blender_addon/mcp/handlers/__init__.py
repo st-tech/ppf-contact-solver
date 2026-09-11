@@ -10,3 +10,6 @@ from .console import *  # noqa: F401, F403
 from .object_ops import *  # noqa: F401, F403
 from .dyn_params import *  # noqa: F401, F403
 from .mesh_cleaning import *  # noqa: F401, F403
+from .statistics import *  # noqa: F401, F403
+from .material_maps import *  # noqa: F401, F403
+from .presets import *  # noqa: F401, F403

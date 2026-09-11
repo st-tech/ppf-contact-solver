@@ -31,14 +31,14 @@ The SSH fields from the [SSH (Direct)](ssh.md) page are combined with
 the Docker fields: the add-on opens an SSH session to the remote host
 and runs every Docker command there.
 
-1. Set **Server Type** to `Docker over SSH`.
+1. Set **Type** to `Docker over SSH`.
 2. Fill **Host** / **Port** / **User** / **SSH Key** as in SSH
    Custom mode -- these locate the remote host that runs the Docker
    daemon. Fill **Proxy Jump** as well if that host is only reachable
    through a bastion (see {ref}`Jump Hosts <jump-hosts>`).
 3. Fill **Container** with the container name on the *remote* daemon
-   (e.g. `ppf-dev`). The add-on runs `docker exec` against this name
-   over the SSH session.
+   (the field defaults to `ppf-contact-solver`). The add-on runs
+   `docker exec` against this name over the SSH session.
 4. Fill **Container Path** with the working directory **inside that
    container** (e.g. `/root/ppf-contact-solver`). This path
    is not interpreted on the Blender host or on the remote host's
@@ -53,7 +53,7 @@ and runs every Docker command there.
 :alt: Backend Communicator panel in Docker over SSH Command mode
 :width: 500px
 
-Backend Communicator with **Server Type** set to `Docker over SSH
+Backend Communicator with **Type** set to `Docker over SSH
 Command`. The **SSH Command** field replaces the per-field SSH inputs
 (in Custom mode you would see **Host** / **Port** / **User** / **SSH
 Key** instead). **Container**, **Container Path**, and **Docker Port**
@@ -69,11 +69,11 @@ highlighted.
 
 :::{warning}
 The server port must be published on the container (`-p 9090:9090` or
-equivalent in your compose file). Before **Start Server**, the add-on
-checks the port mapping on the remote host and refuses to continue if
-the port is not exposed -- the error text tells you exactly which port
-and container failed. You must fix this on the container side; the
-add-on cannot publish ports on a container that is already created.
+equivalent in your compose file). Before **Start Server on Remote**, the
+add-on checks the port mapping on the remote host and refuses to continue if
+the port is not exposed -- the error text tells you exactly which port and
+container failed. You must fix this on the container side; the add-on cannot
+publish ports on a container that is already created.
 :::
 
 ## Setup - Command Mode
@@ -81,7 +81,7 @@ add-on cannot publish ports on a container that is already created.
 Identical to Custom Mode, but the SSH parameters come from a pasted
 command instead of separate fields.
 
-1. Set **Server Type** to `Docker over SSH Command`.
+1. Set **Type** to `Docker over SSH Command`.
 2. Paste the SSH command into **SSH Command**, e.g.
    `ssh -p 2222 -i ~/.ssh/gpu_key alice@gpu01.example.com`. See the
    [SSH Command section](ssh.md#setup---command-mode) for the parser
@@ -98,12 +98,13 @@ The **Container** and **Container Path** fields behave exactly as in
 Custom Mode -- only the host / port / user / key path are sourced from
 the pasted command.
 
-## Installing paramiko and docker-py
+## Installing paramiko
 
-Docker over SSH needs both the `paramiko` and `docker` Python packages.
-The main panel shows **Install Paramiko to Add-on Directory** and
-**Install Docker-Py to Add-on Directory** buttons when either is
-missing; both install into the add-on's private library directory.
+Docker over SSH needs the `paramiko` Python package only: the remote
+daemon is driven by `docker` commands run over the SSH session, not by
+docker-py. The main panel shows an **Install Paramiko to Add-on
+Directory** button when it is missing, which installs into Blender's
+user `scripts/addons/modules` directory.
 
 ## Troubleshooting
 
@@ -129,7 +130,7 @@ it if it is stopped; a missing container aborts the connect.
 
 **Port publication check**
 
-Before **Start Server** the add-on runs
+Before **Start Server on Remote** the add-on runs
 
 ```sh
 docker port <container> <port>
@@ -137,8 +138,9 @@ docker port <container> <port>
 
 on the remote SSH host. A non-zero exit code aborts with:
 
-> Docker port 9090 is not exposed on container 'ppf-dev'. Please expose
-> the port with '-p 9090:9090' when starting the container.
+> Docker port 9090 is not exposed on container 'ppf-contact-solver'.
+> Please expose the port with '-p 9090:9090' when starting the
+> container.
 
 Fix this on the container side by re-running `docker run -p 9090:9090`
 (or editing your `compose.yaml`); the add-on cannot publish ports on

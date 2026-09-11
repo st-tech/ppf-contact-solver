@@ -217,6 +217,17 @@ class WorkerResult:
     server_stdout: str = ""
     server_stderr: str = ""
     server_progress: str = ""
+    # Filled only for a failure, by ``_attach_failure_logs``. A pass
+    # carries none of it, which is what keeps a 200-scenario report small.
+    worker_dir: str = ""
+    scenario_log: str = ""
+    blender_stdout: str = ""
+    blender_stderr: str = ""
+    driver_result: str = ""
+    # True when the scenario needed Blender and Blender wrote nothing at
+    # all, which means it never reached the addon's registration line and
+    # so never ran. ``run_many`` stops a run on a second one in a row.
+    blender_never_started: bool = False
 
 
 def _provision_worker(run_root: str, slot: int) -> WorkerSpec:
@@ -343,6 +354,48 @@ def _read_text(path: str) -> str:
         return f"<read failed: {e}>"
 
 
+# A failure is usually read later, out of a report file, by someone who cannot
+# rerun it: the worker directory stays on the machine that ran the scenario,
+# and in CI that machine is gone by the time anyone reads the result. So a
+# failing result carries the worker's logs inline. A violation names the check
+# that failed and says nothing about what the run was doing when it did, which
+# is the half that costs a debugging session to recover.
+_LOG_TAIL_CHARS = 16 * 1024
+
+
+def _tail(text: str, limit: int = _LOG_TAIL_CHARS) -> str:
+    """The last *limit* characters of *text*, marked when it was cut."""
+    if len(text) <= limit:
+        return text
+    return f"<truncated, showing the last {limit} characters>\n" + text[-limit:]
+
+
+def _attach_failure_logs(result: WorkerResult, spec: WorkerSpec, bspec=None) -> None:
+    """Attach everything the worker wrote to a failing *result*."""
+    result.worker_dir = spec.workspace
+    result.scenario_log = _tail(_read_text(spec.scenario_log))
+    result.server_stdout = _tail(
+        _read_text(os.path.join(spec.server_dir, "stdout.log")))
+    result.server_stderr = _tail(
+        _read_text(os.path.join(spec.server_dir, "stderr.log")))
+    result.server_progress = _tail(
+        _read_text(os.path.join(spec.server_dir, "progress.log")))
+    if bspec is not None:
+        result.blender_stdout = _tail(_read_text(bspec.stdout_path))
+        result.blender_stderr = _tail(_read_text(bspec.stderr_path))
+        # Blender prints its addon registration line before a driver runs,
+        # so an empty stdout is not a quiet scenario: the process never got
+        # far enough to run one. A display that has stopped answering, an
+        # extension directory being rewritten underneath it and a binary
+        # that cannot start all look like this, and all of them are about
+        # the machine rather than the scenario.
+        result.blender_never_started = not result.blender_stdout.strip()
+        # Every named check with its details, passing ones included: the
+        # state a scenario was in before the failing check is what says
+        # whether the check or the run went wrong.
+        result.driver_result = _tail(_read_text(bspec.result_path))
+
+
 # ---------------------------------------------------------------------------
 # Public entry: run one scenario in one worker slot
 # ---------------------------------------------------------------------------
@@ -384,18 +437,18 @@ def run_one(scenario_name: str, *, slot: int, run_root: str,
     proc = _spawn_server(spec, python=python, knobs=effective_knobs)
     started_at = time.monotonic()
     blender_proc = None
+    bspec = None
     try:
         try:
             _wait_for_server_ready(spec, timeout=15.0)
         except TimeoutError as e:
-            return WorkerResult(
+            failed = WorkerResult(
                 slot=slot, scenario=scenario_name, status="fail",
                 duration_s=time.monotonic() - started_at,
                 violations=[str(e)],
-                server_stdout=_read_text(os.path.join(spec.server_dir, "stdout.log")),
-                server_stderr=_read_text(os.path.join(spec.server_dir, "stderr.log")),
-                server_progress=_read_text(os.path.join(spec.server_dir, "progress.log")),
             )
+            _attach_failure_logs(failed, spec)
+            return failed
 
         # The Rust ppf-cts-server stores uploads at
         # ``<PPF_CTS_DATA_ROOT>/<name>`` (see crates/ppf-cts-server/src/
@@ -427,7 +480,7 @@ def run_one(scenario_name: str, *, slot: int, run_root: str,
 
             blender_bin = bh.find_blender()
             if not blender_bin:
-                return WorkerResult(
+                failed = WorkerResult(
                     slot=slot, scenario=scenario_name, status="fail",
                     duration_s=time.monotonic() - started_at,
                     violations=[
@@ -436,12 +489,14 @@ def run_one(scenario_name: str, *, slot: int, run_root: str,
                         "run ./install-blender.sh)"
                     ],
                 )
+                _attach_failure_logs(failed, spec)
+                return failed
             # Scenario must export ``build_driver(ctx) -> str`` returning
             # the Python source to exec inside Blender. The bootstrap
             # writes its result to bspec.result_path.
             build_driver = getattr(scenario, "build_driver", None)
             if not callable(build_driver):
-                return WorkerResult(
+                failed = WorkerResult(
                     slot=slot, scenario=scenario_name, status="fail",
                     duration_s=time.monotonic() - started_at,
                     violations=[
@@ -449,14 +504,39 @@ def run_one(scenario_name: str, *, slot: int, run_root: str,
                         f"does not export build_driver(ctx)"
                     ],
                 )
+                _attach_failure_logs(failed, spec)
+                return failed
             driver_src = build_driver(ctx)
+            # The PC2 cache lands in ``<tempdir>/data`` for as long as
+            # the .blend is unsaved, which it is in every scenario that
+            # does not save one. That directory is shared by every
+            # scenario the machine has ever run, so a capture one
+            # scenario leaves behind is still on disk for the next one to
+            # find: "Clear All Deformations" gates its poll on that
+            # directory (ui/solver.py) and clears the orphans it sees
+            # there, so a scenario that captured nothing is still told a
+            # cache exists. Give Blender a temp root of our own instead.
+            # It is emptied here rather than named per scenario so the
+            # path stays short for the Windows leg, and because this runs
+            # once per scenario it is the emptying that separates them;
+            # a scenario that relaunches Blender reuses this spec, so the
+            # directory holds for the whole of it.
+            scenario_tmp = os.path.join(spec.workspace, "tmp")
+            shutil.rmtree(scenario_tmp, ignore_errors=True)
+            os.makedirs(scenario_tmp, exist_ok=True)
+            blender_env = dict(effective_knobs)
+            # tempfile.gettempdir() reads TMPDIR, then TEMP, then TMP;
+            # POSIX honors the first and Windows the other two.
+            blender_env.setdefault("TMPDIR", scenario_tmp)
+            blender_env.setdefault("TEMP", scenario_tmp)
+            blender_env.setdefault("TMP", scenario_tmp)
             bspec = bh.BlenderSpec(
                 blender_bin=blender_bin,
                 workspace=spec.workspace,
                 probe_dir=spec.probe_dir,
                 blend_file="",
                 driver_source=driver_src,
-                env_extra=dict(effective_knobs),
+                env_extra=blender_env,
             )
             blender_proc = bh.spawn(bspec)
             ctx.artifacts["blender_spec"] = bspec
@@ -471,7 +551,7 @@ def run_one(scenario_name: str, *, slot: int, run_root: str,
                 "notes": [traceback.format_exc()],
             }
 
-        return WorkerResult(
+        result = WorkerResult(
             slot=slot,
             scenario=scenario_name,
             status=verdict.get("status", "fail"),
@@ -479,6 +559,9 @@ def run_one(scenario_name: str, *, slot: int, run_root: str,
             violations=list(verdict.get("violations") or []),
             notes=list(verdict.get("notes") or []),
         )
+        if result.status != "pass":
+            _attach_failure_logs(result, spec, bspec)
+        return result
     finally:
         if blender_proc is not None:
             import blender_harness as bh
@@ -489,6 +572,74 @@ def run_one(scenario_name: str, *, slot: int, run_root: str,
 # ---------------------------------------------------------------------------
 # Public entry: run a list of scenarios, optionally in parallel
 # ---------------------------------------------------------------------------
+
+# How much of a failure to put on the console. The whole of it is in the
+# report file; what belongs here is enough to name the cause while reading a
+# CI log, without burying the 200 lines around it.
+_LOG_ATTACH_LIMIT = 25
+# How many scenarios in a row may fail with Blender never starting before the
+# run gives up. One is a scenario that lost a race; two in a row is the
+# machine, and every scenario after it will fail the same way, each paying the
+# full per-scenario timeout. On a 236-scenario suite at a 360 s timeout that
+# is the difference between one legible failure and twenty hours of them.
+_NEVER_STARTED_ABORT = 2
+_PRINT_VIOLATIONS = 20
+_PRINT_VIOLATION_CHARS = 2000
+_PRINT_LOG_LINES = 20
+
+
+def _print_log_tail(label: str, text: str, lines: int = _PRINT_LOG_LINES) -> None:
+    body = (text or "").strip()
+    if not body:
+        return
+    tail = body.splitlines()[-lines:]
+    print(f"[orchestrator]   {label} (last {len(tail)} lines):", flush=True)
+    for line in tail:
+        print(f"[orchestrator]     {line}", flush=True)
+
+
+def _never_started_streak(streak: int, r_dict: dict) -> int:
+    """Consecutive results whose Blender never started, *r_dict* included."""
+    return streak + 1 if r_dict.get("blender_never_started") else 0
+
+
+def _abort_reason(streak: int) -> str:
+    reason = (
+        f"{streak} scenarios in a row failed with Blender writing nothing at "
+        f"all, so it is not starting on this machine (DISPLAY="
+        f"{os.environ.get('DISPLAY', 'unset')}). Every scenario left would "
+        f"fail the same way, one per-scenario timeout at a time, so the run "
+        f"stops here."
+    )
+    print(f"[orchestrator] ABORTING RUN: {reason}", flush=True)
+    return reason
+
+
+def _print_result(r_dict: dict) -> None:
+    """One line per result, plus why it failed when it did."""
+    print(f"[orchestrator] slot {r_dict['slot']:02d} "
+          f"<- {r_dict['scenario']} {r_dict['status']} "
+          f"({r_dict.get('duration_s', 0):.1f}s)",
+          flush=True)
+    if r_dict.get("status") == "pass":
+        return
+    if r_dict.get("worker_dir"):
+        print(f"[orchestrator]   worker dir: {r_dict['worker_dir']}", flush=True)
+    violations = r_dict.get("violations") or []
+    for v in violations[:_PRINT_VIOLATIONS]:
+        print(f"[orchestrator]   violation: {str(v)[:_PRINT_VIOLATION_CHARS]}",
+              flush=True)
+    if len(violations) > _PRINT_VIOLATIONS:
+        print(f"[orchestrator]   ... {len(violations) - _PRINT_VIOLATIONS} "
+              f"more violation(s) in the report", flush=True)
+    for n in r_dict.get("notes") or []:
+        print(f"[orchestrator]   note: {str(n)[:_PRINT_VIOLATION_CHARS]}",
+              flush=True)
+    # A scenario that crashed rather than asserted leaves its reason in a log
+    # and nothing in its violations, so the tails go out on every failure.
+    _print_log_tail("blender stderr", r_dict.get("blender_stderr", ""))
+    _print_log_tail("server stderr", r_dict.get("server_stderr", ""))
+
 
 def _pool_task(task: dict) -> dict:
     """Pool-friendly entry. Pickled across the process boundary, so we
@@ -631,6 +782,8 @@ def run_many(scenario_names: list[str], *,
             slot += 1
 
     results: list[dict] = []
+    never_started = 0
+    aborted = ""
     use_parallel = parallel > 1 and len(parallel_tasks) > 1
     if not use_parallel:
         # Sequential path: parallel and serial sets collapse into one
@@ -640,36 +793,40 @@ def run_many(scenario_names: list[str], *,
             print(f"[orchestrator] slot {task['slot']:02d} -> {task['scenario']}",
                   flush=True)
             r_dict = _pool_task(task)
-            print(f"[orchestrator] slot {r_dict['slot']:02d} "
-                  f"<- {r_dict['scenario']} {r_dict['status']} "
-                  f"({r_dict.get('duration_s', 0):.1f}s)",
-                  flush=True)
+            _print_result(r_dict)
             results.append(r_dict)
+            never_started = _never_started_streak(never_started, r_dict)
+            if never_started >= _NEVER_STARTED_ABORT:
+                aborted = _abort_reason(never_started)
+                break
     else:
         # ``spawn`` keeps macOS happy and avoids inheriting any
         # half-initialized state from the parent.
         ctx = mp.get_context("spawn")
         with ctx.Pool(processes=parallel) as pool:
             for r_dict in pool.imap_unordered(_pool_task, parallel_tasks):
-                print(f"[orchestrator] slot {r_dict['slot']:02d} "
-                      f"<- {r_dict['scenario']} {r_dict['status']} "
-                      f"({r_dict.get('duration_s', 0):.1f}s)",
-                      flush=True)
+                _print_result(r_dict)
                 results.append(r_dict)
+                never_started = _never_started_streak(never_started, r_dict)
+                if never_started >= _NEVER_STARTED_ABORT:
+                    aborted = _abort_reason(never_started)
+                    pool.terminate()
+                    break
         # Serial postlude: NOT_PARALLELIZABLE scenarios get a clean
         # single-worker host without the parallel batch's load.
-        if serial_tasks:
+        if serial_tasks and not aborted:
             print(f"[orchestrator] serial postlude: "
                   f"{len(serial_tasks)} scenario(s)", flush=True)
             for task in serial_tasks:
                 print(f"[orchestrator] slot {task['slot']:02d} -> "
                       f"{task['scenario']} (serial)", flush=True)
                 r_dict = _pool_task(task)
-                print(f"[orchestrator] slot {r_dict['slot']:02d} "
-                      f"<- {r_dict['scenario']} {r_dict['status']} "
-                      f"({r_dict.get('duration_s', 0):.1f}s)",
-                      flush=True)
+                _print_result(r_dict)
                 results.append(r_dict)
+                never_started = _never_started_streak(never_started, r_dict)
+                if never_started >= _NEVER_STARTED_ABORT:
+                    aborted = _abort_reason(never_started)
+                    break
 
     # Sort by slot for stable reporting regardless of finish order.
     results.sort(key=lambda x: x["slot"])
@@ -681,12 +838,53 @@ def run_many(scenario_names: list[str], *,
         if not keep:
             shutil.rmtree(worker_dir, ignore_errors=True)
 
+    failed_results = [x for x in results if x["status"] != "pass"]
+    # When a whole run fails the same way (no Blender, no server binary, a
+    # broken display), the first failures carry the reason and the rest carry
+    # copies of it. Keep the report readable by attaching logs to the first
+    # few and leaving the others to their worker directories.
+    for rec in failed_results[_LOG_ATTACH_LIMIT:]:
+        stripped = False
+        for key in ("scenario_log", "blender_stdout", "blender_stderr",
+                    "driver_result", "server_stdout", "server_stderr",
+                    "server_progress"):
+            if rec.get(key):
+                rec[key] = ""
+                stripped = True
+        if stripped:
+            rec.setdefault("notes", []).append(
+                f"logs left out of this report: more than {_LOG_ATTACH_LIMIT} "
+                f"scenarios failed, so they are only in the worker directory")
+    if failed_results:
+        # A long run scrolls the failures out of sight, so name them again at
+        # the end with the worker directory each one left behind.
+        print(f"[orchestrator] {len(failed_results)} of {len(results)} "
+              f"scenario(s) failed:", flush=True)
+        for rec in failed_results:
+            first = (rec.get("violations") or ["(no violation recorded)"])[0]
+            print(f"[orchestrator]   {rec['scenario']} "
+                  f"(slot {rec['slot']:02d}): {str(first)[:_PRINT_VIOLATION_CHARS]}",
+                  flush=True)
+            # --no-keep has already removed it by this point, so name it only
+            # when it is still there to look at.
+            if rec.get("worker_dir") and os.path.isdir(rec["worker_dir"]):
+                print(f"[orchestrator]     {rec['worker_dir']}", flush=True)
+
+    if aborted:
+        not_run = len(parallel_tasks) + len(serial_tasks) - len(results)
+        print(f"[orchestrator] {not_run} scenario(s) were not run", flush=True)
+
     summary = {
         "run_id": run_id,
         "run_root": run_root,
         "backend": backend,
         "parallel": parallel,
         "repeat": repeat,
+        # Empty unless the run gave up early; the reason names what stopped
+        # it, and `total` then counts the scenarios that ran, not the set
+        # that was asked for.
+        "aborted": aborted,
+        "requested": len(parallel_tasks) + len(serial_tasks),
         "total": len(results),
         "passed": sum(1 for x in results if x["status"] == "pass"),
         "failed": sum(1 for x in results if x["status"] != "pass"),

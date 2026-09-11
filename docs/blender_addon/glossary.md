@@ -23,9 +23,12 @@ documentation, grouped by subject and alphabetized within each group.
   survives small mesh edits.
 
 **Embedded Move**
-: A pin **Operation** that plays back per-vertex keyframes captured in
-  Blender, letting pinned vertices follow a hand-animated or scripted
-  pose sequence during the solve.
+: A marker the add-on puts on a pin by itself when **Make Keyframe**
+  writes per-vertex keyframes on it; it is not offered in the pin's
+  **Add** dropdown. It tells the encoder where to splice the per-vertex
+  track in, so the pinned vertices follow the hand-animated or scripted
+  pose sequence during the solve. Deleting the keyframes removes it
+  again.
 
 **Intersection allowance**
 : An opt-in that accepts already-overlapping geometry instead of refusing
@@ -57,13 +60,19 @@ documentation, grouped by subject and alphabetized within each group.
 
 **Operation**
 : A keyframed action stacked on a pin: **Move By**, **Spin**, **Scale**,
-  **Torque**, or **Embedded Move**. **Torque** is exclusive with the first
-  three; it can still coexist with **Embedded Move**. See
+  or **Torque**. **Torque** is exclusive with the other three, and a pin
+  that carries keyframed per-vertex animation (its **Embedded Move**
+  marker) accepts none of the four at all. See
   [Pins and Operations](workflow/constraints/pins.md).
 
 **Overlay color**
 : Per-group viewport tint that shows which objects belong to which group.
   Defaults by group type and can be overridden per group.
+
+**PDRD**
+: Group type for exactly-rigid bodies. The surface mesh moves as a single
+  best-fit rigid transform, so no tetrahedralization is needed. Short for
+  Painless Differentiable Rotation Dynamics.
 
 **Pin**
 : A named set of vertices on an object, registered as a simulation
@@ -85,14 +94,19 @@ documentation, grouped by subject and alphabetized within each group.
 : Group type for 1D structures (ropes, wires, threads). Accepts mesh and
   curve objects.
 
+**Sand**
+: Group type for granular bodies, simulated as a particle cloud rather
+  than a connected mesh.
+
 **Shell**
 : Group type for thin deformable surfaces (cloth, fabric). Accepts mesh
   objects.
 
 **Snap**
-: KDTree-based vertex alignment that translates object A so its nearest
-  vertices land on object B's nearest vertices. Typically followed by a
-  merge pair registration.
+: One-shot alignment that translates object A so its closest vertex
+  lands on the nearest point of object B's surface -- the nearest
+  triangle for a mesh or solid target, the nearest segment for a rod.
+  Typically followed by a merge pair registration.
 
 **Solid**
 : Group type for volumetric deformable bodies.
@@ -112,8 +126,9 @@ documentation, grouped by subject and alphabetized within each group.
 
 **Torque**
 : A pin **Operation** that applies rotational force around an axis derived
-  from the pinned vertices. Exclusive with Move By, Spin, and Scale;
-  coexists with Embedded Move.
+  from the pinned vertices. Exclusive with Move By, Spin, and Scale, and
+  refused outright on a pin that carries keyframed per-vertex animation
+  (Embedded Move).
 
 **UUID registry**
 : Per-object UUID assignment maintained by the add-on. Keeps group
@@ -139,8 +154,8 @@ documentation, grouped by subject and alphabetized within each group.
 : A saved, resumable solver state captured at a chosen frame. Add frames
   to the **Save Checkpoints** list to have the solver write a checkpoint
   at each, or let **Auto Save** record them at a fixed interval. Saved
-  checkpoints are what the **Resume From** picker lists, so the
-  simulation can be continued from any of them later.
+  checkpoints are what the **Resume** picker lists, so the simulation
+  can be continued from any of them later.
 
 **Constitutive model**
 : The mathematical model that governs how a group deforms (for example
@@ -149,10 +164,14 @@ documentation, grouped by subject and alphabetized within each group.
   NeoHookean and ARAP, Rod is locked to ARAP.
 
 **Dynamic parameter**
-: A scene-level parameter whose value is keyframed over time: gravity,
-  wind, air density, air friction, or vertex air damp. Uploaded with
-  the rest of the parameters at transfer time and replayed by the
-  solver during the run. See [Dynamic Parameters](workflow/params/dynamic.md).
+: A scene-level parameter whose value is keyframed over time. Seven can
+  be: gravity, wind, air density, air friction, vertex air damp, step
+  size, and inactive momentum frames. They are keyframed on their own
+  **Scene Configuration** sliders as ordinary Blender F-curves — there is
+  no dynamic-parameter sub-panel — then sampled per frame, uploaded with
+  the rest of the parameters at transfer time, and replayed by the solver
+  during the run. See
+  [Dynamic Parameters](workflow/params/dynamic.md).
 
 **Fetch**
 : Downloads per-frame vertex data from the solver and wires it up to
@@ -169,14 +188,20 @@ documentation, grouped by subject and alphabetized within each group.
   type. See [Material Parameters](workflow/params/material.md).
 
 **Mesh hash**
-: A topology fingerprint (vertex count, face count, UV layout) recorded
-  at transfer time and compared again before Run and Fetch. A mismatch
-  means the Blender mesh no longer matches what the solver has.
+: A topology fingerprint (vertex, polygon, edge, and object counts, the
+  vertex count of every pin group, and a digest of each captured Static
+  deformation; no UV data enters it) recorded at
+  transfer time and compared again before Run, Resume, and Fetch. A
+  mismatch means the Blender mesh no longer matches what the solver
+  has.
 
 **PC2**
-: Point Cache 2. The per-frame vertex file format the add-on writes on
-  Fetch (`vert_N.bin`), read back as the timeline plays. Blender frames
-  `1..N` map to remote frames `0..N-1`.
+: Point Cache 2. The per-object vertex cache the add-on writes locally
+  on Fetch (`data/<blend name>/<object uuid>.pc2`, built from the
+  solver's own `vert_N.bin` frames on the remote), replayed as the
+  timeline plays — through a `MESH_CACHE` modifier on meshes, and
+  through a frame handler on curve rods, which carry no such modifier.
+  Blender frames `1..N` map to remote frames `0..N-1`.
 
 **Profile**
 : A named preset saved to a TOML file: either a **scene profile** (scene
@@ -195,11 +220,11 @@ documentation, grouped by subject and alphabetized within each group.
 
 **Resume**
 : Continues a paused or partially completed simulation from a saved
-  state, preserving earlier results. The **Resume** button picks up from
-  the last completed frame, while **Resume From** opens a checkpoint
-  picker so you can choose which saved frame to continue from. Both stay
-  available after a failed run as long as the solver still holds at least
-  one saved checkpoint.
+  state, preserving earlier results. The panel's single **Resume** button
+  opens a picker listing every saved checkpoint, so you choose which one
+  to continue from; frames before it are kept and the rest are
+  overwritten. It stays available after a failed run as long as the
+  solver still holds at least one saved checkpoint.
 
 **Run**
 : Starts the simulation on the remote solver. Warns on a stale mesh hash
@@ -219,16 +244,18 @@ documentation, grouped by subject and alphabetized within each group.
   [Material Parameters](workflow/params/material.md).
 
 **Solver state**
-: The status surfaced by the Solver panel: Disconnected, Ready to Run,
-  Simulation Running..., Resumable, Fetching Animation..., or Simulation
-  Failed.
+: The status the Backend Communicator panel shows on its "Status: ..."
+  line, one of twenty-three values: Disconnected, Waiting for Server
+  Start..., Ready to Run, Simulation Running..., Resumable, Fetching
+  Animation..., Simulation Failed, Protocol Version Mismatch, and the
+  transient ones in between.
 
 **Transfer**
 : Uploads geometry, pins, colliders, and every parameter to the solver
   and rebuilds its scene. Required whenever topology or group membership
   changes.
 
-**Update Params**
+**Update Params on Remote**
 : Re-encodes and uploads parameters without resending geometry, for fast
   iteration on dynamics and materials.
 
@@ -239,8 +266,9 @@ documentation, grouped by subject and alphabetized within each group.
   from a background thread so the UI never blocks on the network.
 
 **Connection profile**
-: A saved TOML entry capturing every field of the Connections panel for
-  one host, used to switch between hosts and share presets across a team.
+: A saved TOML entry capturing every connection field of the Backend
+  Communicator panel for one host, used to switch between hosts and
+  share presets across a team.
   See [Connection Profiles](connections/profiles.md).
 
 **Docker connection**
@@ -254,13 +282,16 @@ documentation, grouped by subject and alphabetized within each group.
   [Docker over SSH](connections/docker_over_ssh.md).
 
 **`execute_shell_command`**
-: MCP tool that runs arbitrary shell commands on the Blender host. Paired
-  with `run_python_script` as an escape hatch for provisioning and
-  maintenance tasks not yet covered by dedicated tools.
+: MCP tool that runs arbitrary shell commands on the connected solver
+  host, through the active connection backend - a different machine
+  entirely for the SSH-based types, and inside the container for the
+  Docker ones - and only while a connection is live. Paired with
+  `run_python_script`, which runs inside Blender, as an escape hatch for
+  provisioning and maintenance tasks not yet covered by dedicated tools.
 
 **Local connection**
-: A connection type where the solver runs on the same Linux host as
-  Blender, reached over a loopback socket. See [Local](connections/local.md).
+: A connection type where the solver runs on the same host as Blender,
+  reached over a loopback socket. See [Local](connections/local.md).
 
 **MCP resource**
 : A read-only asset exposed by the [MCP server](integrations/mcp.md) via
@@ -310,9 +341,10 @@ documentation, grouped by subject and alphabetized within each group.
   crate, which wraps the algorithmic core in `ppf-cts-core`.
 
 **Session ID**
-: Per-connection identifier the server assigns at start. Persisted with
-  the `.blend` on save so a reopened file can detect whether the remote
-  has been reset since the file was saved.
+: Per-connection identifier the add-on mints at connect (12 hex
+  characters) and stamps on the artifacts that run produces. Persisted
+  with the `.blend` on save so a reopened file can detect whether the
+  remote has been reset since the file was saved.
 
 **SSH Command mode**
 : A connection backend that parses host, port, username, and key path

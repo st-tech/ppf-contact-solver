@@ -32,8 +32,7 @@ the full cloth stack including anisotropic shrink, strain limit,
 inflate, and stitch; **Rod** shows density, stiffness, shrink, bend,
 and strain limit; **Static** collapses to **Friction**, **Apply Soft
 Constraints**, and the contact rows; and **Sand** shows grain radius,
-particle mass, friction,
-and the contact rows.
+particle mass, friction, and the contact rows.
 ```
 
 ## The Material Params Box
@@ -43,12 +42,30 @@ collapsible **Material Params** box. When you expand it you see a
 type-specific set of parameter rows: switching the group's type (for
 example from **Solid** to **Shell**) immediately changes which rows are
 visible, so the box always reflects the parameters that actually affect
-the selected type. A **Static** group shows only the **Friction** and
-**Contact** rows; a **Shell** group shows the full stack of density,
+the selected type. A **Static** group shows only **Friction**, the
+**Apply Soft Constraints** box, the **Contact** rows and **Allow
+Intersections**; a **Shell** group shows the full stack of density,
 stiffness, bending, shrink, strain limit, inflation, and stitch fields;
 and so on.
 
-The rows you see inside **Material Params**, top to bottom:
+The **Material Params** header row carries the **Copy** / **Paste**
+icons. Inside the box, **Solid** and **Shell** groups get a **Preset**
+dropdown of the bundled materials above the profile row, filtered by the
+group's Type: a **Shell** group lists the six fabrics — Silk, Flag,
+Cotton, Wool, Denim and Leather (see
+[Fabric Presets](fabric_presets.md)) — and a **Solid** group lists
+Rubber, Silicone, Foam, Sponge and Jelly. The other types have no
+bundled presets and omit that row. Each value row below carries a
+padlock, which holds its value against **Preset** and **Paste**, plus
+Blender's own keyframe control; the toggles and dropdowns between them
+(**Model**, **Enable Strain Limit**, and so on) carry neither. A
+keyframe is offered only on the properties the encoder samples, so the
+densities, the shrink factors, **Particle Mass**, **Sand Friction** and
+**Stitch Stiffness** are lockable but refuse an F-curve.
+
+The parameter rows, in roughly the order they are drawn (the exact
+sequence varies by type — a **Shell** group draws its contact box before
+Bend and Shrink, for instance):
 
 1. **Model** (when applicable): dropdown to pick the material model.
    **Shell** groups can choose Baraff-Witkin or ARAP; **Solid** groups
@@ -61,25 +78,34 @@ The rows you see inside **Material Params**, top to bottom:
    for **Shell**, kg/m³ for **Solid**, kg/m for **Rod**).
 3. **Young's Modulus**: stiffness. See the note below for how the solver
    interprets it.
-4. **Poisson Ratio**: for **Shell** and **Solid** only.
+4. **Poisson's Ratio**: for **Shell** and **Solid** only.
 5. **Friction**: Coulomb friction coefficient at contacts.
-6. **Bend stiffness** and **Shrink**. **Shell** shows Bend, Shrink X/Y,
-   a **Strain Limit** toggle, an **Inflate** toggle, and a **Stitch
-   Stiffness** field. **Solid** collapses down to a single Shrink
-   slider. **Rod** draws its **Shrink** row just under **Friction** and
-   its **Bend Stiffness** field in a separate **Bend** box below the
-   contact rows.
-7. **Contact Gap**: a toggle picks between absolute distance (in Blender
-   units) and a fraction of the group's bounding-box diagonal; the
-   relevant pair of fields shows up below the toggle.
+6. **Bend stiffness** and **Shrink**. **Shell** shows Bend, the two
+   directional rows **Bending Stiffness (Warp)** and **Bending Stiffness
+   (Weft)** right below it, Shrink X/Y, a **Strain Limit** toggle, an
+   **Inflate** toggle, and a **Stitch Stiffness** field. **Solid**
+   collapses down to a single Shrink slider. **Rod** draws its
+   **Shrink** row just under **Friction** and its **Bend Stiffness**
+   field in a separate **Bend** box below the contact rows.
+7. **Contact Gap**: on **Solid**, **Shell**, **PDRD** and **Static**
+   groups a toggle picks between absolute distance (in Blender units)
+   and a fraction of the group's bounding-box diagonal, and the relevant
+   pair of fields shows up below the toggle. A **Rod** group has no
+   toggle and always uses the absolute pair; a **Sand** group shows
+   **Contact Gap** alone, because its grain radius is the contact
+   offset.
 8. **Collision Active Duration Windows**: optional per-object frame
    ranges that restrict when contact is active. Off by default for
-   **Solid**, **Shell**, and **Rod** groups; unavailable for **Static**.
+   **Solid**, **Shell**, **Rod**, and **PDRD** groups; unavailable for
+   **Static** and **Sand**.
    Covered in
    [Active collision windows](../scene/object_groups.md#active-collision-windows).
-9. **Plasticity**: optional non-linear permanent deformation. Covered in
-   its own subsection below.
-10. **Velocity Overwrite**: optional keyframed velocity targets for one
+9. **Spatial Material Maps**: optional per-group maps that vary one
+   material parameter across the surface from painted per-vertex weights.
+   **Shell** and **Solid** only; covered in its own section below.
+10. **Plasticity**: optional non-linear permanent deformation. Covered in
+    its own subsection below.
+11. **Velocity Overwrite**: optional keyframed velocity targets for one
     of the assigned objects. Covered separately below.
 
 ```{figure} ../../images/material_params/box_shell.png
@@ -89,7 +115,8 @@ The rows you see inside **Material Params**, top to bottom:
 The **Material Params** box expanded on a **Shell** group. The exact
 row set changes with the group's type: **Solid** collapses Shrink X/Y
 into a single Shrink, **Rod** drops Poisson ratio, and **Static** hides
-everything except **Friction** and the contact rows.
+everything except **Friction**, **Apply Soft Constraints**, the contact
+rows and **Allow Intersections**.
 ```
 
 ### Profile Buttons: Open / Clear / Reload / Save
@@ -121,6 +148,12 @@ hand.** Tune the group's material parameters in the panel, click the
 in the `.toml` for you. The TOML structure documented below is shown
 for inspection and sharing only; the supported edit path is always UI →
 Save.
+
+A profile carries the core material block only. The Rayleigh damping
+coefficients, the two directional bending rows, the **Allow
+Intersections** flags, a **Rod**'s **Shrink**, and the PDRD and Sand
+fields are outside it, so set those on the group after applying a
+profile rather than expecting Save to preserve them.
 
 ```{figure} ../../images/material_params/save_icon.png
 :alt: Dynamics Groups panel with the floppy-disk Save icon next to the Open Profile button on a group's Material Params row highlighted in red
@@ -185,23 +218,277 @@ combination rule is selected scene-wide by the **Friction Mode**
 setting (Python / TOML key `friction_mode`) under the **Scene
 Configuration** panel's **Advanced Params** sub-section:
 
-- **Minimum** (`min`, default): take `min(friction_A, friction_B)`.
+- **Minimum** (`MIN`, default): take `min(friction_A, friction_B)`.
   The lower-friction surface wins, so a slippery cloth sliding over a
   grippy body behaves as if the whole contact were slippery. To make
   a contact feel grippy, both sides need to be set high.
-- **Maximum** (`max`): take `max(friction_A, friction_B)`. The
+- **Maximum** (`MAX`): take `max(friction_A, friction_B)`. The
   grippier surface wins, so a single high-friction object acts as a
   brake against everything it touches.
-- **Mean** (`mean`): take `0.5 * (friction_A + friction_B)`. Each
+- **Mean** (`MEAN`): take `0.5 * (friction_A + friction_B)`. Each
   object contributes equally regardless of which side is grippier.
 
-The default `min` reproduces the behavior of earlier releases and is
+The default `MIN` reproduces the behavior of earlier releases and is
 the safest choice when you have not set per-object friction values
 deliberately.
 
 See [Contact gap: absolute vs ratio](#contact-gap-absolute-vs-ratio) below
 for which pair you should be editing, and
 [Allow Intersections](#allow-intersections) for the last two rows.
+
+## Spatial Material Maps
+
+What it does: a **Spatial Material Maps** box, drawn on **Shell** and
+**Solid** groups just above the **Plasticity** box, holding a list of
+maps. Each row varies one material parameter *across the surface* instead
+of holding it constant over the whole group. The value at a vertex is a
+blend between two numbers you already have in front of you: the group's
+own slider, which is what a weight of `0` gives, and the row's **Target**,
+which is what a weight of `1` gives. The weights are per vertex, and come
+from a vertex group you paint or from a float attribute.
+
+The blend runs slider → target, rather than between a minimum and a
+maximum, on purpose: a weight of `0` reproduces the unmapped result
+exactly, so unpainted geometry keeps whatever the group was tuned to and a
+map can be added to a finished material without re-tuning it.
+
+When to use it: a collar or a waistband that should be stiffer than the
+panel it is sewn to, a crease that should take a set while the rest of the
+sheet stays elastic, a patch that should grip while the rest of the
+surface slides. Leave the box empty — the default on every group — when
+one value over the whole group is what you want.
+
+A map belongs to the group, not to an object, so each row is read against
+every object assigned to the group and the source is looked up by name on
+each of them in turn.
+
+### Which Parameters Can Be Mapped
+
+A map is reduced to one coefficient per element, so the parameter has to
+be one this group's elements read. That is what confines the feature to
+**Shell** and **Solid**: a **Rod**, a **PDRD** body and a **Sand** cloud
+carry no element table to reduce over, and a map on one of those types
+is refused at transfer, in a message naming both the parameter and the
+type.
+
+| Parameter (row dropdown) | Blends away from                       | Applies to   |
+| ------------------------ | -------------------------------------- | ------------ |
+| **Young's Modulus**      | **Young's Modulus**                    | Shell, Solid |
+| **Friction**             | **Friction**                           | Shell, Solid |
+| **Deformation Damping**  | **Deformation Damping**                | Shell, Solid |
+| **Plasticity Rate**      | **Theta**, in the **Plasticity** box   | Shell, Solid |
+| **Bending Stiffness**    | **Bend Stiffness**                     | Shell        |
+| **Bending Damping**      | **Bending Damping**                    | Shell        |
+| **Strain Limit**         | **Strain Limit** (a percentage)        | Shell        |
+| **Bend Plasticity Rate** | **Bend Theta**, in **Bend Plasticity** | Shell        |
+| **Bending (Warp)**       | **Bending Stiffness (Warp)**           | Shell        |
+| **Bending (Weft)**       | **Bending Stiffness (Weft)**           | Shell        |
+| **Inflation Pressure**   | — (refused; see the note below)        | none         |
+
+The dropdown offers the same eleven entries whatever the group's type, so
+the list row is what tells you a parameter is wrong for this group: a row
+naming one this type does not read is drawn in alert color, so a
+**Bending Stiffness** map on a **Solid** shows red in the list instead of
+waiting to fail at **Transfer**.
+
+**Target** is in the same units as the slider it blends away from — a
+**Strain Limit** target is a percentage exactly as the field is, and a
+**Young's Modulus** target follows the group's **Density-Normalized
+(Pa/ρ)** checkbox — and it is held to the same minimum. `0` is a legal
+target everywhere except **Young's Modulus**, whose slider stops at
+`0.01`, and a target below the floor is refused rather than quietly
+clamped.
+
+A **Bending (Warp)** or **Bending (Weft)** map with a positive target
+counts as asking for directional bending even when both sliders are left
+at `0`, so a group whose mesh carries no UV map raises the same *has no UV
+map* warning the sliders raise.
+
+Changing a group's type does not delete its rows. A retyped group keeps
+drawing the box even when its new type can use nothing in it, so the rows
+stay visible and removable instead of becoming state you cannot reach.
+
+:::{note}
+**Inflation Pressure cannot be mapped.** The dropdown keeps the entry so
+that saved files naming it still resolve, but a map on it is refused at
+transfer. Its per-face potential is translation-invariant only while the
+pressure is uniform: measured on a 5 cm sphere with pressure painted from
+20 to 100, the per-vertex forces are identical under translation with a
+uniform pressure and change by 275% of their peak once the object is moved
+1 m, 2202% at 8 m. The same painted map would mean something different
+depending on where the object sits in the scene, so it is refused instead
+of shipped.
+:::
+
+### Adding a Map
+
+Expand **Material Params** and find the **Spatial Material Maps** box. The
+`+` beside the list adds a row and selects it; `-` removes the selected
+row and leaves the selection on a row that still exists.
+
+Each list row carries, left to right: an **Enable** checkbox, the
+parameter dropdown, the source name, a `+N` badge once the row carries
+time samples, and the **Target**. Below the list, the selected row
+expands into **Source**, **Name** and **Target**. A row with no source
+name is drawn in alert color, because an unnamed source cannot be
+resolved and would stop the transfer.
+
+**Source** says where the weights are read from:
+
+- **Vertex Group**: what weight paint writes. A vertex the group does not
+  contain reads `0` rather than failing, so painting a region is enough
+  and everything you left unpainted keeps the group's own value.
+- **Attribute**: a scalar attribute on the point domain, read off the
+  *evaluated* mesh — which is where a Store Named Attribute node in a
+  Geometry Nodes modifier puts one. The evaluated mesh has to have the
+  same vertex count as the base mesh, since the weights ship against the
+  base mesh's vertex order. An object excluded from evaluation ran no
+  modifiers at all, so its attribute cannot be read: **Disable in
+  Viewports** (the monitor icon) and excluding the collection from the
+  view layer both do this, while **Hide in Viewport** (the eye icon) does
+  not.
+
+Weights outside `0`–`1` are clamped into the interval. A weight that is
+not a finite number is refused instead, naming the object, the source and
+the vertex, because clamping a NaN would land on `0` and read as "use the
+group's value" while hiding where it came from.
+
+Nothing in a map row takes a keyframe. The fields are deliberately not
+animatable, and an F-curve found on one stops the transfer with a message
+pointing at time samples instead. Neither **Copy** / **Paste** nor a
+material profile carries map rows either: both move plain scalar fields
+only.
+
+### Time Samples
+
+A map can also change over the course of the solve. The row's own source
+is the map **at the start frame**; each *time sample* names a different
+source, reached at its own frame, and between two consecutive samples the
+weights are their linear interpolation. Before the first sample and after
+the last, the nearest one holds. A constant hold is therefore two samples
+naming one source, which is why there is no hold flag to look for.
+
+The samples list sits under the selected row's detail column, below the
+line reminding you that the source above is the map at the start frame.
+Its `+` adds a sample at the playhead and copies the row's source type,
+then re-sorts the list by frame; `-` removes the selected one. Two samples
+cannot share a frame — the second is refused with a warning rather than
+raising into the UI — and a sample at or before the start frame is moved
+to the frame after it, with a message saying why: the row's own source is
+already the weights there.
+
+Time samples are a **Shell** feature. A **Solid** takes a static map only,
+because its map lands on the tetrahedra, which carry no per-element
+material schedule; a keyed map on one is refused at transfer.
+
+A parameter can be keyframed and mapped at once. The keyframed slider
+moves the base the map blends away from, so the map spreads each frame's
+value toward the target, and the map's own authored times are voted onto
+the scene-wide material keyframe axis so they survive its decimation.
+
+:::{important}
+**A sample names a different source; it does not re-read one source at a
+different frame.** Every source — the row's own and each sample's — is
+read once, while the scene sits at the solve's starting frame. An
+attribute that a Geometry Nodes setup varies over time therefore
+contributes its start-frame values and nothing else. To move the weights,
+author several vertex groups (or several attributes) and name them from
+consecutive samples.
+:::
+
+### What Happens at Transfer
+
+The weights are read with the scene held at the solve's starting frame,
+along with everything else geometry-derived, and shipped per object as one
+value per vertex; the reduction to one coefficient per element is an
+average of that element's own vertices.
+
+On a **Solid** the weights are painted on the mesh you see, but the
+simulated vertices are the tetrahedralized ones, which is what the box's
+*Interior values are extended from the painted surface* note is about:
+each tet surface vertex takes the weights of the closest Blender triangle,
+and each interior vertex the Laplace extension of those surface values.
+Both stages are convex combinations of painted values, so the carried
+weights stay inside `0`–`1` and every tet ends up between the group's
+slider and the map's target.
+
+A row whose **Enable** checkbox is off is skipped entirely. Everything
+else is checked, and a map that cannot be resolved stops the transfer with
+a message rather than simulating something else. The refusals are:
+
+- a row with no source name, or a name some assigned object does not
+  carry;
+- a parameter this group's type does not read;
+- two rows driving the same parameter, since the blend is base-to-target
+  and a second target is a different answer for the same value rather
+  than a refinement of it;
+- a target that is not a finite number, or one below the mapped slider's
+  own minimum;
+- a parameter the group has switched off, such as a **Strain Limit** map
+  on a group whose **Enable Strain Limit** is unticked. A map cannot
+  reintroduce a value that is zero for the whole solve, and the message
+  names the condition, which is not always a checkbox: a **Shell** with a
+  shrink factor other than `1` and a group with a captured pull-pin rest
+  shape each close a gate of their own;
+- a time sample at or before the start frame, two samples on one frame, a
+  sample with no source name, or any sample at all on a group that is not
+  a **Shell**;
+- an assigned object that has gone missing or is not a mesh.
+
+:::{admonition} Under the hood
+:class: toggle
+
+The value on an element is `base + (target - base) * w`, with `w` the mean
+of that element's own vertices' weights and `base` the group's parameter
+for it — that frame's animated value when the slider is keyframed. The
+reduction to one coefficient per element happens on the solver side, where
+the per-vertex weights the add-on ships are averaged over each element's
+own vertices as the parameter tables are assembled: a coefficient varying
+*inside* an element would stop the force being the gradient of any energy,
+and stop its Hessian being the one the SPD projection was derived for.
+
+The per-element values then replace the replicated scalar in the
+per-element parameter tables the solver already reads — triangles for a
+shell, tetrahedra for a solid — so a mapped parameter costs no machinery
+beyond the tables a uniform one uses.
+:::
+
+## Lock Translation and Lock Rotation
+
+What it does: a **Lock Translation** box, drawn below the type-specific
+parameters on every dynamic group (**Solid**, **Shell**, **Rod**,
+**PDRD**, **Sand**), holding two independent locks. **Lock Translation**
+constrains an object's mass-weighted center of mass to a fixed
+world-space line through its initial position; **Lock Rotation**
+restricts its mass-weighted best-fit rigid rotation to a fixed
+world-space axis. Deformation stays free under either, and the two are
+separate checkboxes, so either, both, or neither can be on. Both are set
+per object rather than per group, since one group can hold several
+bodies each on its own axis: the header row carries an object pulldown
+that picks which assigned object you are editing, and an eye icon that
+previews every enabled lock in the group.
+
+Each lock adds an all-axes escalation and an axis:
+
+- **Lock All Translations** pins the center of mass to its initial point
+  instead of letting it slide, and **Lock All Rotations** forbids
+  rotation about every axis. Either one makes the axis below it
+  meaningless, so that axis is grayed out — not hidden — under a line
+  saying it is ignored, and the value you typed comes back when you
+  untick the box.
+- **Translation Axis** and **Rotation Axis** are world-space directions.
+  The encoder normalizes them, so only the direction matters and not the
+  magnitude, but a zero axis is refused: the panel warns that the scene
+  build will fail until it is non-zero.
+- **Prohibit Rotation on Axis** flips what the rotation axis means.
+  Unchecked, the axis is the body's only rotational freedom. Checked,
+  rotation about that axis is forbidden instead and the perpendicular
+  rotation plane stays free.
+
+When to enable: a body that should slide along a rail, a wheel or gear
+that should turn on one axle without drifting off it, or a piece that
+should go on deforming while its bulk motion stays where you put it.
+Leave both off for a fully free body.
 
 ## Rayleigh Damping
 
@@ -240,9 +527,11 @@ since a tet has no bending energy.
 | ------------------------ | ---------------------- | ---------------- | -------------------------------------------------------------- |
 | **Model**                | `shell_model`          | `BARAFF_WITKIN`  | Material model. One of `BARAFF_WITKIN`, `ARAP`.                |
 | **Density (kg/m²)**      | `shell_density`        | 1.0              | Areal density, kg/m².                                          |
-| **Young's Modulus (Pa/ρ)** | `shell_young_modulus`  | 1000.0         | Young's modulus (see note below). Accepted range 0 – 10 M.     |
+| **Young's Modulus (Pa/ρ)** | `shell_young_modulus`  | 1000.0         | Young's modulus (see note below). Min 0.01, soft max 10 M (hard max 1e9). |
 | **Poisson's Ratio**      | `shell_poisson_ratio`  | 0.35             | Poisson ratio, 0 – 0.4999.                                     |
 | **Bend Stiffness**       | `bend`                 | 10.0             | Hinge bending stiffness between neighboring faces. Min 0, soft max 100. **Rod** groups write the same property on their own scale; see [Bend Stiffness on a Rod](#bend-stiffness-on-a-rod). |
+| **Bending Stiffness (Warp)** | `bend_warp`        | 0.0              | Extra bending stiffness for the warp (UV X) fibers, added on top of **Bend Stiffness**. `0` keeps bending the same in every direction. Min 0, soft max 1e7. Needs a UV map. |
+| **Bending Stiffness (Weft)** | `bend_weft`        | 0.0              | Extra bending stiffness for the weft (UV Y) fibers, added on top of **Bend Stiffness**. `0` keeps bending the same in every direction. Min 0, soft max 1e7. Needs a UV map. |
 | **Shrink X**             | `shrink_x`             | 1.0              | Anisotropic warp scale (min 0.1). < 1 shrinks, > 1 extends.    |
 | **Shrink Y**             | `shrink_y`             | 1.0              | Anisotropic weft scale (min 0.1). < 1 shrinks, > 1 extends.    |
 | **Enable Strain Limit**  | `enable_strain_limit`  | `False`          | Turns on non-physical strain clamp (good for stiff cloth).     |
@@ -314,9 +603,9 @@ rest length), not a force.
 ### Inflate
 
 What it does: applies a per-face pressure along each face normal, pushing
-the mesh outward (or inward with negative values, once you dip below zero
-via the Python API). Acts uniformly over the surface like a balloon or
-airbag.
+the mesh outward. The property's minimum is a hard `0.0`, so there is no
+inward (suction) pressure from the panel, from Python, or over MCP. Acts
+uniformly over the surface like a balloon or airbag.
 
 When to enable: inflatables (pillows, airbags, balloons), soft garments
 that need a puffy silhouette, or any shell that should resist collapse
@@ -367,9 +656,11 @@ rest-angle source (Flat / Straight, or From Initial Geometry).
 
 ### Velocity Overwrite
 
-What it does: the bottom box in the Material Params stack. It stores a
-per-object list of keyframed velocity vectors. Each entry pins the
-whole group to a given `(direction, speed)` at a chosen frame, overriding
+What it does: a box near the bottom of the Material Params stack, above
+**Lock Translation**, **Rayleigh Damping**, **Stitch Stiffness** and
+**Allow Intersections**. It stores a
+per-object list of keyframed velocity vectors. Each entry pins that
+object to a given `(direction, speed)` at a chosen frame, overriding
 the velocity produced by the simulation. The dropdown on the header row
 picks which assigned object receives the keyframes; the eye icon toggles
 a viewport preview arrow; the copy/paste icons move the keyframe list
@@ -386,11 +677,18 @@ for fully passive simulations.
 
 The **Velocity Overwrite** section with four keyframes populated
 (frames 1, 30, 60, 90). Each row is `frame (speed m/s [direction])`.
-The selected row expands into per-keyframe editor rows (**Frame**,
-**Direction** (XYZ), and **Speed**) so you can tweak one entry
-without opening an animation editor. The **Cloth** dropdown at the
-top picks which assigned object the keyframes belong to, and the
-`+` / `-` buttons on the right add or remove entries.
+The selected row expands into per-keyframe editor rows: **Frame**, then
+a translational box gated by **Enable Translational Velocity Overwrite**
+(**Direction** XYZ and **Speed**), and — on **Solid**, **Shell** and
+**PDRD** groups — an angular box gated by **Enable Angular Velocity
+Overwrite** (**Spin Axis**, a **Custom Axis** field when that is chosen,
+and **Angular Speed (°/s)**). A gated field is hidden, not grayed, while
+its checkbox is off, and **Rod** groups omit the angular box entirely.
+The **Cloth** dropdown at the top picks which assigned object the
+keyframes belong to, and the `+` / `-` buttons on the right add an
+entry at the current timeline frame (a second press on the same frame
+is refused with *Frame N already has a keyframe*) or remove the selected
+one.
 ```
 
 ## Solid-Specific
@@ -399,7 +697,7 @@ top picks which assigned object the keyframes belong to, and the
 | -------------------------- | --------------------- | -------------------- | --------------------------------------------------------- |
 | **Model**                  | `solid_model`         | `ARAP`               | Material model. Either `STABLE_NEOHOOKEAN` or `ARAP`.     |
 | **Density (kg/m³)**        | `solid_density`       | 100.0                | Volumetric density, kg/m³.                                |
-| **Young's Modulus (Pa/ρ)** | `solid_young_modulus` | 500.0                | Young's modulus (see note below). Range 0 – 10 M.         |
+| **Young's Modulus (Pa/ρ)** | `solid_young_modulus` | 500.0                | Young's modulus (see note below). Min 0.01, soft max 10 M (hard max 1e9). |
 | **Poisson's Ratio**        | `solid_poisson_ratio` | 0.35                 | Poisson ratio, 0 – 0.4999.                                |
 | **Shrink**                 | `shrink`              | 1.0                  | Uniform rest-shape scale (min 0.1).                       |
 
@@ -455,7 +753,7 @@ backend.
 
 #### fTetWild Overrides
 
-When **fTetWild** is selected, six per-object overrides appear. Each row
+When **fTetWild** is selected, seven per-object overrides appear. Each row
 has an **Override** checkbox on the left and the value on the right; the
 value is only forwarded to fTetWild when its checkbox is on. With all
 overrides off, fTetWild runs at its own defaults.
@@ -504,7 +802,7 @@ is on, and the rest of the time TetGen runs at its own defaults.
 
 | UI label                   | Python / TOML key   | Default   | Description                                       |
 | -------------------------- | ------------------- | --------- | ------------------------------------------------- |
-| **Model**                  | `rod_model`         | `ARAP`    | Material model. `ARAP` is the only option.        |
+| *(no Model row)*           | `rod_model`         | `ARAP`    | Rods are always ARAP, so the panel draws no Model dropdown. The property still exists and is still written to a material profile. |
 | **Density (kg/m)**         | `rod_density`       | 1.0       | Line density, kg/m.                               |
 | **Young's Modulus (Pa/ρ)** | `rod_young_modulus` | 10000.0   | Young's modulus (see note below).                 |
 | **Shrink**                 | `length_factor`     | 1.0       | Rest-length scale for every segment of the strand (min 0.1). Below 1 pulls the strand taut, above 1 leaves it slack. |
@@ -523,6 +821,20 @@ draws it instead as the first row of the unlabeled box that also carries
 below it. Either way, pick **Flat / Straight** to keep the analytic rest
 angle (rod θ₀ = π, shell hinge θ₀ = 0), or **From Initial Geometry** to
 take the rest angle from the input pose.
+
+Directly under that dropdown is a third route, the **From Reference
+Geometry** checkbox. Tick it and a **Reference Rest Angle (per object)**
+box opens: pick one of the group's objects in the pulldown, tick
+**Enable Reference Rest Angle**, then press the eyedropper to take the
+active object as its reference. The reference has to be a topological
+copy of that object whose vertices were moved — by a modifier, by
+geometry nodes, or by hand — and it is checked against the source's
+topology both when you pick it and again at **Transfer**, so a mesh
+that has drifted is refused with a message instead of silently
+encoded. Every object with an enabled reference that still resolves
+takes its bending rest angle from that reference, overriding the
+group's **Rest Angle** for that object alone; the rest of the group
+keeps it.
 
 ### Bend Stiffness on a Rod
 
@@ -697,7 +1009,13 @@ The dialog has three fields:
 
 The grain count is not something you set. Grains fill the volume at the
 radius and spacing you chose, and the count is whatever that comes to; the
-report line after the conversion tells you the number.
+report line after the conversion tells you the number. If none fit at
+all, the conversion stops with *No grains fit; reduce the grain radius or
+the extra spacing* — but the destructive half has already run: the faces
+are gone, the object is left as an empty particle mesh, and the button
+then greys out with *Active object is already a particle mesh*, so
+retrying at a smaller radius means starting from a copy of the source
+mesh.
 
 :::{warning}
 **The conversion is destructive.** The object's faces are discarded and
@@ -751,10 +1069,27 @@ contact passes torque from one to the next).
 
 The free axle is chosen by **principal axis** of the rest shape: `0` is
 the largest extent, `1` the middle, and `2` the thinnest extent (the
-usual axle for a flat gear or disk, and the default). From the Python API
-a hinge is set per object with `Group.set_hinge`; from the MCP layer use
-the `set_pdrd_hinge` tool. Pass `enable=False` to clear the hinge and let
-the body move freely again.
+usual axle for a flat gear or disk, and the default).
+
+In the panel, a PDRD group's **Material Params** box carries a
+collapsible **Hinge** box. Expand it and you get:
+
+- **Visualize** draws the hinge axle gizmo in the viewport for the
+  hinged bodies of this group. On by default.
+- An unlabeled object pulldown lists the bodies assigned to the group
+  and picks whose hinge the two controls below it edit. A PDRD group
+  can hold several bodies (a gear train), so the pulldown is how you
+  move between them.
+- **Hinge** is the per-object enable. Off by default; ticking it pins
+  that body and locks its rotation to one principal axis.
+- **Axle** offers **Principal Axis 1**, **2**, and **3**, grayed out
+  until **Hinge** is ticked. These are the shown names for `pca_axis`
+  `0`, `1` and `2` respectively, so the default **Principal Axis 3** is
+  the thinnest-extent axle.
+
+From the Python API a hinge is set per object with `Group.set_hinge`;
+from the MCP layer use the `set_pdrd_hinge` tool. Pass `enable=False`
+to clear the hinge and let the body move freely again.
 
 ```python
 from bl_ext.user_default.ppf_contact_solver.ops.api import solver
@@ -765,7 +1100,8 @@ gears.set_hinge("GearA", pca_axis=2)   # spin on the thinnest axis
 ```
 
 The hinge is a per-object property, not a group material attribute, so it
-does not appear in the **Material Params** table above.
+gets its own box inside **Material Params** rather than a row in the
+table above.
 
 :::{note}
 **Young's modulus behaves non-conventionally.** The solver divides the
@@ -909,7 +1245,8 @@ layer with the object's bounding box, so both look proportionally
 wrapped regardless of scale.
 ```
 
-The **Use Group Bounding Box Diagonal** toggle picks between them. The
+On **Solid**, **Shell**, **PDRD** and **Static** groups the **Use Group
+Bounding Box Diagonal** toggle picks between them, and the
 **default is ratio-of-bbox-diagonal** because that's what most users
 want; you only need to flip to absolute when the group contains
 unusually elongated objects (where the diagonal overestimates
@@ -919,6 +1256,12 @@ matching against another group.
 Both pairs (**Contact Gap** / **Contact Gap Ratio** and **Contact
 Offset** / **Contact Offset Ratio**) are independently controlled by
 the same toggle.
+
+A **Rod** group is not offered the toggle: setting a group's type to
+**Rod** switches it to absolute mode and seeds **Contact Gap** at
+`0.001` and **Contact Offset** at `0.005`, and its panel draws that
+absolute pair only. A **Sand** group draws **Contact Gap** alone,
+because its grain radius already is the contact offset.
 
 ## Allow Intersections
 
@@ -1104,10 +1447,12 @@ valid — a `Static` collider preset, for instance, can carry just a
 
 ## Blender Python API
 
-The same workflow is available from Python. Every field in the
-**Material Params** box is reachable through each group's `.param`
-attribute. Changes from Python appear in the panel immediately and vice
-versa.
+The same workflow is available from Python. Most fields in the
+**Material Params** box are reachable through each group's `.param`
+attribute, which is whitelisted: the accepted names are listed in the
+[Blender Python API Reference](../../integrations/python_api_reference.rst),
+and anything outside that list raises `AttributeError`. Changes from
+Python appear in the panel immediately and vice versa.
 
 ```python
 from bl_ext.user_default.ppf_contact_solver.ops.api import solver
@@ -1125,16 +1470,16 @@ body.param.solid_young_modulus = 5000.0
 body.param.use_group_bounding_box_diagonal = False
 body.param.contact_gap         = 0.001
 
-# Static collider: friction, contact settings, and optionally soft constraints.
+# Static collider: friction and contact settings.
 floor = solver.create_group("Floor", "STATIC")
-floor.param.friction = 0.8
-
-# A collider whose own shape closes onto the cloth can trap it. Holding the
-# collider with springs lets it give way where the cloth pushes back.
-body = solver.create_group("Body", "STATIC")
-body.param.enable_soft_constraint = True
-body.param.soft_constraint_stiffness = 10.0
+floor.param.friction        = 0.8
+floor.param.contact_gap_rat = 0.001
 ```
+
+**Apply Soft Constraints** and its **Stiffness** are among the fields
+off the whitelist, so a collider whose own shape closes onto the cloth is
+held with springs from the **Material Params** box rather than from
+Python.
 
 :::{admonition} Under the hood
 :class: toggle

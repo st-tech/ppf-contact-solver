@@ -73,7 +73,14 @@ def execute_server_command(server_script: str):
     }
 
 
-@debug_handler
+@debug_handler(
+    annotations={
+        "readOnlyHint": False,
+        "destructiveHint": True,
+        "idempotentHint": False,
+        "openWorldHint": True,
+    }
+)
 def execute_shell_command(shell_command: str, use_shell: bool = True):
     """Execute a shell command on remote server.
 

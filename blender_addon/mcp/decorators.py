@@ -59,7 +59,7 @@ def parse_docstring(func: Callable) -> dict[str, Any]:
         - parameters: Dict mapping parameter names to descriptions
     """
     if not func.__doc__:
-        return {"description": "", "parameters": {}}
+        return {"description": "", "long_description": "", "parameters": {}}
 
     doc = inspect.cleandoc(func.__doc__)
     # Keep the raw lines so indentation is available for terminating the
@@ -68,6 +68,21 @@ def parse_docstring(func: Callable) -> dict[str, Any]:
 
     # Extract description (first line)
     description = raw_lines[0].strip() if raw_lines else ""
+
+    # The full prose: everything up to the first section header. A handler's
+    # constraints ("the vertex group must already exist", "call X first") are
+    # written in the paragraphs after the summary line, and the tool
+    # description is the only place a caller sees them before calling.
+    prose_lines: list[str] = []
+    for raw_line in raw_lines:
+        stripped = raw_line.strip()
+        if (
+            stripped.endswith(":")
+            and stripped.rstrip(":").lower() in _DOCSTRING_SECTION_HEADERS
+        ):
+            break
+        prose_lines.append(raw_line)
+    long_description = "\n".join(prose_lines).strip()
 
     # Parse Args section
     parameters = {}
@@ -82,10 +97,7 @@ def parse_docstring(func: Callable) -> dict[str, Any]:
         header = stripped.rstrip(":").lower()
 
         # Detect Args section
-        if (
-            header in ("args", "arguments", "parameters")
-            and stripped.endswith(":")
-        ):
+        if header in ("args", "arguments", "parameters") and stripped.endswith(":"):
             in_args_section = True
             args_indent = indent
             last_param = None
@@ -118,7 +130,11 @@ def parse_docstring(func: Callable) -> dict[str, Any]:
             # stop attaching lines to the previous parameter.
             last_param = None
 
-    return {"description": description, "parameters": parameters}
+    return {
+        "description": description,
+        "long_description": long_description,
+        "parameters": parameters,
+    }
 
 
 def _union_args(python_type: Any) -> tuple | None:
@@ -172,8 +188,49 @@ def get_json_schema_type(python_type: type) -> dict[str, Any]:
     return type_mapping.get(python_type, {"type": "string"})
 
 
+# Name prefixes whose annotation is unambiguous from the handler's contract.
+# A handler outside these families gets no hint rather than a guessed one: an
+# annotation a client acts on is worse wrong than absent.
+_READ_ONLY_PREFIXES = ("get_", "list_")
+_DESTRUCTIVE_PREFIXES = ("remove_", "delete_", "clear_")
+
+
+def derive_annotations(name: str) -> dict[str, bool]:
+    """Tool annotations implied by the handler naming convention.
+
+    ``get_*`` and ``list_*`` handlers report state without changing it, which
+    also makes them idempotent. ``remove_*``, ``delete_*`` and ``clear_*``
+    handlers destroy state.
+
+    Only ``clear_*`` earns ``idempotentHint`` among the destructive family. A
+    remover addressed by INDEX is not idempotent: the collection renumbers, so
+    repeating the same call with the same arguments deletes a different row.
+    Claiming otherwise would invite a client to retry a delete.
+    """
+    if name.startswith(_READ_ONLY_PREFIXES):
+        return {"readOnlyHint": True, "idempotentHint": True}
+    if name.startswith(_DESTRUCTIVE_PREFIXES):
+        annotations = {"destructiveHint": True}
+        if name.startswith("clear_"):
+            annotations["idempotentHint"] = True
+        return annotations
+    return {}
+
+
+def humanize(name: str) -> str:
+    """A display label for a handler name, for the tool's ``title``."""
+    words = name.split("_")
+    return " ".join([words[0].capitalize(), *words[1:]])
+
+
 def generate_tool_schema(
-    func: Callable, description: str, param_descriptions: dict[str, str]
+    func: Callable,
+    description: str,
+    param_descriptions: dict[str, str],
+    *,
+    title: str | None = None,
+    annotations: dict[str, bool] | None = None,
+    output_schema: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Generate MCP tool schema from function signature and docstring.
 
@@ -181,6 +238,9 @@ def generate_tool_schema(
         func: Function to generate schema for
         description: Tool description
         param_descriptions: Parameter descriptions from docstring
+        title: Display label; derived from the handler name when absent
+        annotations: Behavior hints; derived from the name when absent
+        output_schema: JSON Schema for the tool's structured result
 
     Returns:
         Complete MCP tool schema
@@ -221,11 +281,21 @@ def generate_tool_schema(
     if required:
         input_schema["required"] = required
 
-    return {
-        "name": func.__name__,
+    name = func.__name__
+    schema: dict[str, Any] = {
+        "name": name,
+        "title": title or humanize(name),
         "description": description,
         "inputSchema": input_schema,
     }
+    resolved_annotations = (
+        derive_annotations(name) if annotations is None else annotations
+    )
+    if resolved_annotations:
+        schema["annotations"] = resolved_annotations
+    if output_schema is not None:
+        schema["outputSchema"] = output_schema
+    return schema
 
 
 def validate_and_convert_args(func: Callable, args: dict[str, Any]) -> dict[str, Any]:
@@ -337,30 +407,60 @@ def validate_and_convert_args(func: Callable, args: dict[str, Any]) -> dict[str,
     return validated_args
 
 
-def mcp_handler(func: Callable) -> Callable:
+def mcp_handler(
+    func: Callable | None = None,
+    *,
+    title: str | None = None,
+    annotations: dict[str, bool] | None = None,
+    output_schema: dict[str, Any] | None = None,
+) -> Callable:
     """Main MCP handler decorator that extracts everything from docstring and signature.
 
     This decorator:
     - Extracts tool name from function name
-    - Extracts description from first line of docstring
+    - Extracts the tool description from the docstring prose, up to the first
+      section header, so a handler's stated constraints reach the caller
     - Extracts parameter info from Args section and type hints
-    - Generates JSON schema automatically
+    - Generates JSON schema automatically, including a display title and the
+      behavior annotations implied by the handler name
     - Provides parameter validation and error handling
     - Registers handler for auto-discovery
 
+    Usable bare (``@mcp_handler``) or with overrides
+    (``@mcp_handler(annotations={"destructiveHint": True})``) where the name
+    does not imply the right hints.
+
     Args:
         func: Function to decorate
+        title: Display label; derived from the handler name when absent
+        annotations: Behavior hints; derived from the name when absent
+        output_schema: JSON Schema for the tool's structured result
 
     Returns:
         Decorated function with MCP handler capabilities
     """
+    if func is None:
+        return functools.partial(
+            mcp_handler,
+            title=title,
+            annotations=annotations,
+            output_schema=output_schema,
+        )
+
     # Parse docstring
     docstring_info = parse_docstring(func)
-    description = docstring_info["description"]
+    description = docstring_info["long_description"] or docstring_info["description"]
     param_descriptions = docstring_info["parameters"]
 
     # Generate schema
-    schema = generate_tool_schema(func, description, param_descriptions)
+    schema = generate_tool_schema(
+        func,
+        description,
+        param_descriptions,
+        title=title,
+        annotations=annotations,
+        output_schema=output_schema,
+    )
 
     @functools.wraps(func)
     def wrapper(args: dict[str, Any]) -> dict[str, Any]:
@@ -441,60 +541,40 @@ def connection_handler(func: Callable) -> Callable:
     return wrapper
 
 
-def group_handler(func: Callable) -> Callable:
+def group_handler(func: Callable | None = None, **meta: Any) -> Callable:
     """Decorator for handlers that operate on dynamics groups.
 
-    Args:
-        func: Function to decorate
-
-    Returns:
-        Decorated function (currently equivalent to ``mcp_handler``; no extra behavior)
+    Equivalent to ``mcp_handler``; it exists to mark the surface a handler
+    belongs to, and forwards any tool metadata to it.
     """
-    decorated = mcp_handler(func)
-
-    return decorated
+    return mcp_handler(func, **meta)
 
 
-def simulation_handler(func: Callable) -> Callable:
+def simulation_handler(func: Callable | None = None, **meta: Any) -> Callable:
     """Decorator for simulation-related handlers.
 
-    Args:
-        func: Function to decorate
-
-    Returns:
-        Decorated function (currently equivalent to ``mcp_handler``; no extra behavior)
+    Equivalent to ``mcp_handler``; it exists to mark the surface a handler
+    belongs to, and forwards any tool metadata to it.
     """
-    decorated = mcp_handler(func)
-
-    return decorated
+    return mcp_handler(func, **meta)
 
 
-def debug_handler(func: Callable) -> Callable:
+def debug_handler(func: Callable | None = None, **meta: Any) -> Callable:
     """Decorator for debug/development handlers.
 
-    Args:
-        func: Function to decorate
-
-    Returns:
-        Decorated function (currently equivalent to ``mcp_handler``; no extra behavior)
+    Equivalent to ``mcp_handler``; it exists to mark the surface a handler
+    belongs to, and forwards any tool metadata to it.
     """
-    decorated = mcp_handler(func)
-
-    return decorated
+    return mcp_handler(func, **meta)
 
 
-def remote_handler(func: Callable) -> Callable:
+def remote_handler(func: Callable | None = None, **meta: Any) -> Callable:
     """Decorator for remote server operation handlers.
 
-    Args:
-        func: Function to decorate
-
-    Returns:
-        Decorated function (currently equivalent to ``mcp_handler``; no extra behavior)
+    Equivalent to ``mcp_handler``; it exists to mark the surface a handler
+    belongs to, and forwards any tool metadata to it.
     """
-    decorated = mcp_handler(func)
-
-    return decorated
+    return mcp_handler(func, **meta)
 
 
 # Utility functions for handlers

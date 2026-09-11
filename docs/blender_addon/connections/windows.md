@@ -36,26 +36,38 @@ bundled directory; there is no contamination of the host to clean up.
 
 ## Setup
 
-1. Set **Server Type** to `Windows Native`.
+1. Set **Type** to `Windows Native`.
 2. Set **Solver Path** to the root of your solver install. This is
-   the directory that contains `ppf-cts-server.exe` (under
-   `target\release\` for a developer build, or at the root for a
-   shipped bundle) plus either a `python\` subfolder (redistributable
+   the directory that contains `ppf-cts-server.exe` under
+   `target\release\` (developer build) or under `bin\` (shipped
+   bundle), plus either a `python\` subfolder (redistributable
    bundle) or a `build-win-native\python\` subfolder (developer build).
-3. Click **Connect**. The add-on verifies `ppf-cts-server.exe` is where
-   it should be, picks up the right Python runtime, and launches the
-   solver as a hidden subprocess on port `9090`. If a `ppf-cts-server`
-   from a previous Blender session is still listening on the port, the
-   add-on attaches to it instead of launching a second one.
-4. The server is launched (or attached to) as part of the connect step,
-   so once **Connect** reports success the server is already running.
-   Pressing **Start Server** afterwards is a no-op on this backend.
+   Picking a subfolder such as `target\release`, `bin`, or `python` is
+   fine: the add-on walks up to the real root and names the one it
+   used.
+3. Click **Connect**. The add-on resolves the solver root and refuses
+   one with no `ppf-cts-server.exe` under it. Connecting does not start
+   the server.
+4. Click **Start Server on Remote**. The add-on picks up the right Python
+   runtime and launches the solver as a hidden subprocess on the
+   configured port (`9090` by default). If a `ppf-cts-server` from a
+   previous Blender session is still listening on that port, the add-on
+   attaches to it instead of launching a second one. The GPU picker is
+   filled in over the connection, so this step is also where the
+   selected device is applied.
+   If the path is deep enough that the cache files the pipeline writes
+   would exceed Windows' 260-character limit, the panel warns under
+   **Solver Path** with *Path too long: cache files reach N chars
+   (Windows limit 260)*. The warning does not block **Connect** or
+   **Start Server on Remote**; the failure would otherwise surface as a
+   cache write error during a later Transfer. Move the solver to a
+   shorter path or enable Windows long paths.
 
 ```{figure} ../images/connections/windows.png
 :alt: Backend Communicator panel in Windows Native mode
 :width: 500px
 
-Backend Communicator with **Server Type** set to `Windows Native`.
+Backend Communicator with **Type** set to `Windows Native`.
 Only **Solver Path** and **Project Name** appear, with no SSH or Docker
 fields. **Connect** is highlighted.
 ```
@@ -64,13 +76,16 @@ fields. **Connect** is highlighted.
 
 | Field | Description |
 | ----- | ----------- |
-| Solver Path | Root directory containing `ppf-cts-server.exe` (under `target\release\` or at the root) plus either `python\` (bundle) or `build-win-native\python\` (dev). |
+| Solver Path | Root directory containing `ppf-cts-server.exe` (under `target\release\` for a developer build, or under `bin\` for a bundle) plus either `python\` (bundle) or `build-win-native\python\` (dev). A subfolder of it is accepted and resolved upward to the real root. |
 
 ## Troubleshooting
 
-- **`ppf-cts-server.exe not found under <root>`** - the root points at the
-  wrong directory. It must be the solver checkout root, not the
-  `python\` subdirectory.
+- **`ppf-cts-server.exe not found under <root>`** - the selection is not
+  inside a solver root at all. A subfolder (`target\release`, `bin`,
+  `python`) is resolved upward automatically, so this means the folder
+  you picked is the one you extracted the bundle *into* rather than the
+  bundle root, or you picked the `.zip`. If you are building from
+  source, run `cargo build --release -p ppf-cts-server` first.
 - **`Embedded Python not found ...`** - the add-on could not find a
   Python runtime under the root. Either rebuild the dev tree, or
   download and unpack the bundle zip.
@@ -80,9 +95,11 @@ fields. **Connect** is highlighted.
 - **`Port N is in use`** - something is already bound to the configured
   server port and it is not a `ppf-cts-server` the add-on recognizes.
   Use the **Force Terminate Process** button shown next to the error to
-  kill the listener, or change the Server Port. The add-on auto-attaches
-  to an already-running `ppf-cts-server` from the same session, so this
-  error means the listener is a different process.
+  kill the listener. The port is the shared port property, which this
+  mode does not draw, so changing it instead means setting it from a
+  Docker mode or through a profile's `docker_port` key. The add-on
+  auto-attaches to an already-running `ppf-cts-server`, so this error
+  means the listener is a different process.
 - **Server output not visible** - stdout and stderr go to `server.log`
   in the solver root, not to a console. Open that file when diagnosing
   startup failures.
@@ -94,7 +111,7 @@ fields. **Connect** is highlighted.
 
 **Layout auto-detection**
 
-Connect picks one of two layouts by looking for `python.exe`:
+Start Server picks one of two layouts by looking for `python.exe`:
 
 #### Dev layout
 
@@ -118,17 +135,17 @@ to `build-win-native\cuda`, and the launcher prepends, in order,
 
 ```text
 <root>/
-  ppf-cts-server.exe
+  bin/                     # ppf-cts-server.exe and native shared libraries
   python/python.exe
-  bin/                     # native shared libraries
 ```
 
 Used by a shipped redistributable. The `ppf-cts-server.exe` binary lives
-at the root. The Python interpreter is `root\python\python.exe`,
-`CUDA_PATH` is not set (CUDA is expected on the system `PATH`), and the
-launcher prepends `root\python` and `root\bin`.
+at `bin\ppf-cts-server.exe`. The Python interpreter is
+`root\python\python.exe`, `CUDA_PATH` is not set (CUDA is expected on
+the system `PATH`), and the launcher prepends `root\python`, `root\bin`,
+and `root\target\release`.
 
-If neither interpreter is present, connect fails with:
+If neither interpreter is present, Start Server fails with:
 
 > Embedded Python not found in \<build\_dir\> or \<root\>
 
@@ -160,25 +177,29 @@ the readiness wait times out.
 
 **Attach to an already-running server**
 
-If a `ppf-cts-server.exe` from a previous Blender session is still
-listening on the port, **Connect** sends a TCMD probe and reuses that
-server instead of failing with `Port N is in use`. The probe checks
-that the response is valid JSON containing `protocol_version`, so a
-non-server listener (for example a notebook server parked on the port)
-still surfaces as an error. In attach mode the add-on does not own the
-process: **Stop Server** is a no-op, and a foreign listener can be
-cleared with the **Force Terminate Process** button.
+If a `ppf-cts-server.exe` from a previous Blender session is still listening
+on the port, **Start Server on Remote** sends a TCMD probe and reuses that
+server instead of failing with `Port N is in use`. The probe checks that the
+response is valid JSON containing `protocol_version`, so a non-server
+listener (for example a notebook server parked on the port) still surfaces
+as an error. In attach mode the add-on holds no process handle, so **Stop
+Server on Remote** falls back to
+`taskkill /F /IM ppf-cts-server.exe`, which stops the adopted server
+(along with any other instance). A foreign listener is cleared with the
+**Force Terminate Process** button instead.
 
 **Shutdown**
 
-On disconnect (or **Stop Server**), the add-on asks the subprocess to
-terminate and waits up to 5 seconds; if it is still alive, it is
-killed. The Unix `pkill -f ppf-cts-server` path is not used; the backend
-holds the Windows process handle directly.
+On disconnect (or **Stop Server on Remote**), the add-on asks the subprocess
+to terminate and waits up to 5 seconds; if it is still alive, it is killed.
+The Unix `pkill -f ppf-cts-server` path is not used; the backend holds the
+Windows process handle directly.
 
-**Why Start Server is a no-op**
+**What Start Server does**
 
-The subprocess is started as part of the Connect step, so by the time
-Connect reports success the server is already running. Pressing
-**Start Server** afterwards has nothing to do.
+Start Server is what spawns `ppf-cts-server.exe` (or attaches to one
+already listening on the port), then waits up to 16 seconds for it to
+answer a TCMD probe. It is also where the GPU selection is applied, as
+`CUDA_VISIBLE_DEVICES` on the child's environment, so moving a running
+solver to another device is Stop Server, pick, Start Server.
 :::

@@ -36,8 +36,10 @@ surface:
   replacing the pin icon). No vertex-group pins are possible on a
   Static group; instead this box holds per-object
   [Static ops](#the-transform-sub-box).
-- The **Material Params** box collapses down to just **Friction** and
-  the **Contact** rows (see [Contact parameters](#contact-parameters)).
+- The **Material Params** box collapses down to **Friction**, an
+  **Apply Soft Constraints** box, the **Contact** rows, and the **Allow
+  Intersections** box that every group type carries (see
+  [Contact parameters](#contact-parameters)).
 - The default overlay color is blue `(0, 0, 0.75)`.
 
 Everything else (duplicating the group, per-object **Include**
@@ -82,7 +84,7 @@ There are **three mutually exclusive** ways to drive that motion:
 **Only one source of motion per object at a time.** If an assigned
 Static mesh has Blender transform keyframes, the add-on uses those
 and ignores that object's Static ops list. The UI flags this with
-the label *"Object has Blender keyframes; these ops will be
+the label *"Object has Blender keyframes — these ops will be
 ignored"* above the ops list. A captured deformation takes priority
 over both: while a deformation cache is present for the object, its
 Static ops and transform keyframes are ignored, because the cache
@@ -112,9 +114,10 @@ object transform.
 On a Static group, the region that would be **Pins** on other group
 types is relabeled **Transform**. Expanding it shows:
 
-1. **A per-assigned-object list**: the same object list as the group
-   card above. Which object you select here determines which object's
-   static-ops list is being edited in the box below.
+1. **No object picker of its own**: the box edits whichever object is
+   selected in the **Assigned Objects** list of the group card above.
+   With no row selected it draws the label *"Select an assigned object
+   above"* and nothing else.
 2. **A warning row**: visible only when the selected object has
    Blender transform fcurves; tells you its ops will be ignored.
 3. **The static-ops list**: `Move By` / `Spin` / `Scale` entries with
@@ -203,7 +206,15 @@ clicked the button. It does not update on its own. If you tweak the
 armature pose, edit the action's keyframes, change the modifier
 stack, edit the rest mesh, or alter parent or constraint chains,
 the recording is now out of date and the solver will keep using the
-old motion. Re-press **Capture Deformation** before the next
+old motion. One stack change is worse than stale: a topology-changing
+modifier (Subdivision Surface, Remesh, Decimate) anywhere in the stack
+makes the capture abort on that object's first frame with *'<name>'
+vertex count changed at frame N*, because each captured frame is
+compared against the base mesh's vertex count. Apply or remove the
+modifier, then retry — reordering it above the deformer, as the message
+suggests, does not help.
+Re-press **Capture
+Deformation** before the next
 **Transfer** so the simulation sees the current animation.
 :::
 
@@ -246,9 +257,11 @@ Reach for the per-object buttons above when one object's animation has
 changed, and for these two after a change that touches many objects at
 once, or when you are not sure which recordings are still current.
 
-Both buttons are disabled while a capture or a bake is already running,
-and **Clear All Deformations** is also disabled when the scene holds no
-recording to clear.
+Both buttons are disabled while a capture or a bake is already running.
+Beyond that, **Re-capture All Deformations** greys out when nothing in
+the scene needs a capture (no capturable Static collider and no
+capturable animated pin), and **Clear All Deformations** when the scene
+holds no recording to clear.
 
 ## Contact Parameters
 
@@ -267,6 +280,17 @@ velocity overwrite) is hidden.
 | **Contact Offset Ratio**             | `contact_offset_rat`              | 0.0     | Contact offset as a fraction of the group's bounding-box diagonal.    |
 | **Apply Soft Constraints**           | `enable_soft_constraint`          | `False` | Hold the collider with springs instead of locking it to its animation. |
 | **Stiffness**                        | `soft_constraint_stiffness`       | 10.0    | How firmly those springs hold. Shown only when the box above is ticked. |
+| **Allow Self-Intersections**         | `allow_self_intersection`         | `False` | Accept a mesh that overlaps itself instead of stopping the run.       |
+| **Allow Inter-Object Intersections** | `allow_inter_object_intersection` | `False` | Accept an overlap against a different mesh instead of stopping the run. |
+
+The last two rows sit in an **Allow Intersections** box drawn below the
+type-specific block, and that box is the same on every group type; a
+Static group is not an exception. What is specific to Static is when the
+setting bites: a collider reaches the solver as a pin shell carrying the
+policy only while it is animated, soft-constrained, or named as one end
+of a cross-stitch. A collider that is none of those stays a contact-only
+collision mesh and neither box changes any pair, but both are still
+drawn. See [Allow Intersections](../params/material.md#allow-intersections).
 
 **Apply Soft Constraints** matters most for the armature-driven colliders
 above. A body rig folds against itself as it moves, and where it closes onto
@@ -294,14 +318,16 @@ use a per-collider **Active Duration** on an
 
 ## Baking Behavior
 
-**Bake Animation** walks through active groups in slot order
-(`object_group_0` → `object_group_31`) and processes every assigned
-object. Static groups are included: if a Static collider was driven by
-Blender transform keyframes and therefore carried a
-`ContactSolverCache` modifier and `.pc2` file after a Fetch, both are
-cleaned up during bake even though the Static object itself has no
-simulated deformation. Bake never touches object-level transform
-fcurves, only the per-frame PC2 data.
+Two buttons carry the label **Bake Animation**. The one on the Solver
+panel walks through active groups in slot order (`object_group_0` →
+`object_group_31`) and processes every assigned object; the one inside a
+group box bakes only the object currently selected in that group's
+**Assigned Objects** list. Static groups are included in the scene-wide
+pass: if a Static collider was driven by Blender transform keyframes and
+therefore carried a `ContactSolverCache` modifier and `.pc2` file after a
+Fetch, both are cleaned up during bake even though the Static object
+itself has no simulated deformation. Bake never touches object-level
+transform fcurves, only the per-frame PC2 data.
 
 If the Static object is driven by Static ops (no fcurves), there is
 nothing to bake on it; the motion lives on the solver side, and
@@ -394,8 +420,8 @@ The encoder checks each Static object in order:
    plus per-segment Bezier-handle data and send them as
    `transform_animation`.
 4. Else if the matching `AssignedObject` has a non-empty
-   `static_ops` collection, serialize those ops (frames converted
-   to seconds using the scene FPS, axes swapped into solver
+   `static_ops` collection, serialize those ops (frames sent as
+   offsets from the starting frame, axes swapped into solver
    orientation) as `static_ops`.
 5. Else send the object with no animation: a rigid, unmoving
    collider.
@@ -407,11 +433,21 @@ just helpful) for an Armature-driven collider.
 
 **Time conversion**
 
-Frame values in the UI and MCP handlers are 1-based Blender frames.
-The encoder converts to seconds as `(frame - 1) / fps`, using the
-scene's effective FPS (`scene.render.fps` or the add-on's
-`frame_rate` override; see
-[Scene Parameters](../params/scene.md)).
+Frame values in the UI and MCP handlers are Blender frames, and
+simulated time zero is the resolved **Starting Frame**: the
+`frame_start` field, or the Blender scene's start frame while **Take
+Starting Frame from Scene** is on. A frame therefore maps to solver
+seconds as `(frame − starting frame) / fps`, where `fps` is the
+effective FPS (`scene.render.fps` or the add-on's `frame_rate`
+override) multiplied by **Time Scale**; see
+[Scene Parameters](../params/scene.md). Static ops themselves are
+shipped as frame offsets relative to the starting frame, clamped at
+zero, and the solver side derives the seconds from the param payload's
+FPS, so changing **Time Scale** or the effective FPS needs only
+**Update Params on Remote** and no geometry re-transfer. Retiming an
+op's own **Start** / **End**, or moving the **Starting Frame** itself,
+changes the offsets baked into the data payload and needs a full
+**Transfer**.
 
 **Assigned-object wiring**
 

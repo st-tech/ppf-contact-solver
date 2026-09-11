@@ -307,8 +307,19 @@ jobs:
         run: |
           .venv/bin/python -c "from frontend import _rust as m; print('schema_version', m.schema_version()); print('process_name', m.process_name())"
 
-      - name: Install addon
-        run: ./install-blender-addon.sh
+      - name: Install addon + paramiko into Blender's Python
+        run: |
+          ./install-blender-addon.sh
+          # bl_mcp_connection_refusals drives connect_ssh, whose operator
+          # polls on module_exists(["paramiko"]); a failed poll surfaces
+          # as "context is incorrect", which reads like a UI-context bug
+          # rather than a missing module. The scenario's own
+          # install_paramiko call is asynchronous, so without this the
+          # check races a pip download. Mirror the addon's
+          # install_module(): ensurepip + pip --target the addon modules
+          # dir (on Blender's sys.path).
+          "$PPF_BLENDER_BIN" -b --factory-startup --python-expr "import bpy,sys,subprocess,os; t=bpy.utils.user_resource('SCRIPTS', path='addons/modules', create=True); subprocess.run([sys.executable,'-m','ensurepip','--upgrade'], check=False); subprocess.check_call([sys.executable,'-m','pip','install','--target',t,'paramiko']); print('PARAMIKO_TARGET', t)"
+          "$PPF_BLENDER_BIN" -b --factory-startup --python-expr "import bpy,sys,os; sys.path.insert(0, bpy.utils.user_resource('SCRIPTS', path='addons/modules')); import paramiko; print('PARAMIKO_OK', paramiko.__version__)"
 
       - name: Run all scenarios (emulated, full suite, under Xvfb)
         shell: bash
@@ -445,8 +456,13 @@ jobs:
           if [ "$VPC_ID" = "None" ] || [ -z "$VPC_ID" ]; then
             echo "ERROR: github-actions-vpc not found in $AWS_REGION"; exit 1
           fi
-          SUBNET_ID=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$VPC_ID" --query 'Subnets[0].SubnetId' --output text)
-          if [ "$SUBNET_ID" = "None" ] || [ -z "$SUBNET_ID" ]; then
+          # Every subnet in the VPC, not only the first. A subnet pins the
+          # availability zone, and a zone that is out of capacity for this
+          # instance type refuses the launch outright while another zone in
+          # the same VPC still has it, so the launch step needs the whole set
+          # to try. Tab separated from the CLI, spaces for the shell's `for`.
+          SUBNET_IDS=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$VPC_ID" --query 'Subnets[].SubnetId' --output text | tr '\t' ' ')
+          if [ "$SUBNET_IDS" = "None" ] || [ -z "$SUBNET_IDS" ]; then
             echo "ERROR: no subnet found in github-actions-vpc ($VPC_ID) in $AWS_REGION"; exit 1
           fi
           SG_ID=$(aws ec2 describe-security-groups --filters "Name=vpc-id,Values=$VPC_ID" "Name=group-name,Values=github-actions-sg" --query 'SecurityGroups[0].GroupId' --output text)
@@ -454,9 +470,9 @@ jobs:
             echo "ERROR: github-actions-sg not found in github-actions-vpc ($VPC_ID) in $AWS_REGION"; exit 1
           fi
           echo "::add-mask::$VPC_ID"
-          echo "::add-mask::$SUBNET_ID"
+          for subnet in $SUBNET_IDS; do echo "::add-mask::$subnet"; done
           echo "::add-mask::$SG_ID"
-          echo "SUBNET_ID=$SUBNET_ID" >> $GITHUB_OUTPUT
+          echo "SUBNET_IDS=$SUBNET_IDS" >> $GITHUB_OUTPUT
           echo "SG_ID=$SG_ID" >> $GITHUB_OUTPUT
 
       - name: Generate identifiers and SSH key
@@ -489,18 +505,34 @@ jobs:
         run: |
           # macOS base64 has no -w flag; strip newlines portably.
           USER_DATA=$(base64 < /tmp/user-data.sh | tr -d '\n')
-          INSTANCE_ID=$(aws ec2 run-instances \
-            --image-id "${{ steps.setup.outputs.AMI_ID }}" \
-            --instance-type "$INSTANCE_TYPE" \
-            --subnet-id "${{ steps.setup.outputs.SUBNET_ID }}" \
-            --security-group-ids "${{ steps.setup.outputs.SG_ID }}" \
-            --associate-public-ip-address \
-            --user-data "$USER_DATA" \
-            --block-device-mappings "DeviceName=/dev/sda1,Ebs={VolumeSize=256,VolumeType=gp3,DeleteOnTermination=true}" \
-            --tag-specifications \
-              "ResourceType=instance,Tags=[{Key=Name,Value=blender-macos-ssh-${{ steps.ids.outputs.TIMESTAMP }}},{Key=ManagedBy,Value=GitHubActions},{Key=Purpose,Value=BlenderCI},{Key=RunId,Value=${{ github.run_id }}}]" \
-            --instance-initiated-shutdown-behavior terminate \
-            --query 'Instances[0].InstanceId' --region "$AWS_REGION" --output text)
+          # A subnet pins the availability zone, so a zone with no capacity for
+          # this instance type refuses the launch while another zone in the same
+          # VPC would take it. Try each in turn, and report the refusals if none
+          # does, since "no capacity here" and "cannot launch at all" are
+          # different failures and only the second one is worth a rerun.
+          INSTANCE_ID=""
+          for SUBNET in ${{ steps.setup.outputs.SUBNET_IDS }}; do
+            if INSTANCE_ID=$(aws ec2 run-instances \
+              --image-id "${{ steps.setup.outputs.AMI_ID }}" \
+              --instance-type "$INSTANCE_TYPE" \
+              --subnet-id "$SUBNET" \
+              --security-group-ids "${{ steps.setup.outputs.SG_ID }}" \
+              --associate-public-ip-address \
+              --user-data "$USER_DATA" \
+              --block-device-mappings "DeviceName=/dev/sda1,Ebs={VolumeSize=256,VolumeType=gp3,DeleteOnTermination=true}" \
+              --tag-specifications \
+                "ResourceType=instance,Tags=[{Key=Name,Value=blender-macos-ssh-${{ steps.ids.outputs.TIMESTAMP }}},{Key=ManagedBy,Value=GitHubActions},{Key=Purpose,Value=BlenderCI},{Key=RunId,Value=${{ github.run_id }}}]" \
+              --instance-initiated-shutdown-behavior terminate \
+              --query 'Instances[0].InstanceId' --region "$AWS_REGION" --output text 2>/tmp/run-instances.err); then
+              break
+            fi
+            cat /tmp/run-instances.err
+            INSTANCE_ID=""
+          done
+          if [ -z "$INSTANCE_ID" ]; then
+            echo "ERROR: no subnet in the VPC could launch $INSTANCE_TYPE in $AWS_REGION"
+            exit 1
+          fi
           echo "INSTANCE_ID=$INSTANCE_ID" >> $GITHUB_OUTPUT
           echo "$INSTANCE_ID" > /tmp/instance_id.txt
 
@@ -767,8 +799,13 @@ jobs:
           if [ "$VPC_ID" = "None" ] || [ -z "$VPC_ID" ]; then
             echo "ERROR: github-actions-vpc not found in $AWS_REGION"; exit 1
           fi
-          SUBNET_ID=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$VPC_ID" --query 'Subnets[0].SubnetId' --output text)
-          if [ "$SUBNET_ID" = "None" ] || [ -z "$SUBNET_ID" ]; then
+          # Every subnet in the VPC, not only the first. A subnet pins the
+          # availability zone, and a zone that is out of capacity for this
+          # instance type refuses the launch outright while another zone in
+          # the same VPC still has it, so the launch step needs the whole set
+          # to try. Tab separated from the CLI, spaces for the shell's `for`.
+          SUBNET_IDS=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$VPC_ID" --query 'Subnets[].SubnetId' --output text | tr '\t' ' ')
+          if [ "$SUBNET_IDS" = "None" ] || [ -z "$SUBNET_IDS" ]; then
             echo "ERROR: no subnet found in github-actions-vpc ($VPC_ID) in $AWS_REGION"; exit 1
           fi
           SG_ID=$(aws ec2 describe-security-groups --filters "Name=vpc-id,Values=$VPC_ID" "Name=group-name,Values=github-actions-sg" --query 'SecurityGroups[0].GroupId' --output text)
@@ -776,9 +813,9 @@ jobs:
             echo "ERROR: github-actions-sg not found in github-actions-vpc ($VPC_ID) in $AWS_REGION"; exit 1
           fi
           echo "::add-mask::$VPC_ID"
-          echo "::add-mask::$SUBNET_ID"
+          for subnet in $SUBNET_IDS; do echo "::add-mask::$subnet"; done
           echo "::add-mask::$SG_ID"
-          echo "SUBNET_ID=$SUBNET_ID" >> $GITHUB_OUTPUT
+          echo "SUBNET_IDS=$SUBNET_IDS" >> $GITHUB_OUTPUT
           echo "SG_ID=$SG_ID" >> $GITHUB_OUTPUT
 
       - name: Generate identifiers and SSH key
@@ -810,18 +847,34 @@ jobs:
         id: instance
         run: |
           USER_DATA=$(base64 -w 0 /tmp/user-data.sh)
-          INSTANCE_ID=$(aws ec2 run-instances \
-            --image-id "${{ steps.setup.outputs.AMI_ID }}" \
-            --instance-type "$INSTANCE_TYPE" \
-            --subnet-id "${{ steps.setup.outputs.SUBNET_ID }}" \
-            --security-group-ids "${{ steps.setup.outputs.SG_ID }}" \
-            --associate-public-ip-address \
-            --user-data "$USER_DATA" \
-            --block-device-mappings "DeviceName=/dev/sda1,Ebs={VolumeSize=256,VolumeType=gp3,DeleteOnTermination=true}" \
-            --tag-specifications \
-              "ResourceType=instance,Tags=[{Key=Name,Value=blender-linux-${{ steps.ids.outputs.TIMESTAMP }}},{Key=ManagedBy,Value=GitHubActions},{Key=Purpose,Value=BlenderCI},{Key=RunId,Value=${{ github.run_id }}}]" \
-            --instance-initiated-shutdown-behavior terminate \
-            --query 'Instances[0].InstanceId' --region "$AWS_REGION" --output text)
+          # A subnet pins the availability zone, so a zone with no capacity for
+          # this instance type refuses the launch while another zone in the same
+          # VPC would take it. Try each in turn, and report the refusals if none
+          # does, since "no capacity here" and "cannot launch at all" are
+          # different failures and only the second one is worth a rerun.
+          INSTANCE_ID=""
+          for SUBNET in ${{ steps.setup.outputs.SUBNET_IDS }}; do
+            if INSTANCE_ID=$(aws ec2 run-instances \
+              --image-id "${{ steps.setup.outputs.AMI_ID }}" \
+              --instance-type "$INSTANCE_TYPE" \
+              --subnet-id "$SUBNET" \
+              --security-group-ids "${{ steps.setup.outputs.SG_ID }}" \
+              --associate-public-ip-address \
+              --user-data "$USER_DATA" \
+              --block-device-mappings "DeviceName=/dev/sda1,Ebs={VolumeSize=256,VolumeType=gp3,DeleteOnTermination=true}" \
+              --tag-specifications \
+                "ResourceType=instance,Tags=[{Key=Name,Value=blender-linux-${{ steps.ids.outputs.TIMESTAMP }}},{Key=ManagedBy,Value=GitHubActions},{Key=Purpose,Value=BlenderCI},{Key=RunId,Value=${{ github.run_id }}}]" \
+              --instance-initiated-shutdown-behavior terminate \
+              --query 'Instances[0].InstanceId' --region "$AWS_REGION" --output text 2>/tmp/run-instances.err); then
+              break
+            fi
+            cat /tmp/run-instances.err
+            INSTANCE_ID=""
+          done
+          if [ -z "$INSTANCE_ID" ]; then
+            echo "ERROR: no subnet in the VPC could launch $INSTANCE_TYPE in $AWS_REGION"
+            exit 1
+          fi
           echo "INSTANCE_ID=$INSTANCE_ID" >> $GITHUB_OUTPUT
           echo "$INSTANCE_ID" > /tmp/instance_id.txt
 
@@ -1032,8 +1085,13 @@ jobs:
           if [ "$VPC_ID" = "None" ] || [ -z "$VPC_ID" ]; then
             echo "ERROR: github-actions-vpc not found in $AWS_REGION"; exit 1
           fi
-          SUBNET_ID=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$VPC_ID" --query 'Subnets[0].SubnetId' --output text)
-          if [ "$SUBNET_ID" = "None" ] || [ -z "$SUBNET_ID" ]; then
+          # Every subnet in the VPC, not only the first. A subnet pins the
+          # availability zone, and a zone that is out of capacity for this
+          # instance type refuses the launch outright while another zone in
+          # the same VPC still has it, so the launch step needs the whole set
+          # to try. Tab separated from the CLI, spaces for the shell's `for`.
+          SUBNET_IDS=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$VPC_ID" --query 'Subnets[].SubnetId' --output text | tr '\t' ' ')
+          if [ "$SUBNET_IDS" = "None" ] || [ -z "$SUBNET_IDS" ]; then
             echo "ERROR: no subnet found in github-actions-vpc ($VPC_ID) in $AWS_REGION"; exit 1
           fi
           SG_ID=$(aws ec2 describe-security-groups --filters "Name=vpc-id,Values=$VPC_ID" "Name=group-name,Values=github-actions-sg" --query 'SecurityGroups[0].GroupId' --output text)
@@ -1041,9 +1099,9 @@ jobs:
             echo "ERROR: github-actions-sg not found in github-actions-vpc ($VPC_ID) in $AWS_REGION"; exit 1
           fi
           echo "::add-mask::$VPC_ID"
-          echo "::add-mask::$SUBNET_ID"
+          for subnet in $SUBNET_IDS; do echo "::add-mask::$subnet"; done
           echo "::add-mask::$SG_ID"
-          echo "SUBNET_ID=$SUBNET_ID" >> $GITHUB_OUTPUT
+          echo "SUBNET_IDS=$SUBNET_IDS" >> $GITHUB_OUTPUT
           echo "SG_ID=$SG_ID" >> $GITHUB_OUTPUT
 
       - name: Generate identifiers
@@ -1068,19 +1126,35 @@ jobs:
       - name: Launch EC2 instance
         id: instance
         run: |
-          INSTANCE_ID=$(aws ec2 run-instances \
-            --image-id "${{ steps.setup.outputs.AMI_ID }}" \
-            --instance-type "$INSTANCE_TYPE" \
-            --key-name "${{ steps.keypair.outputs.KEY_NAME }}" \
-            --subnet-id "${{ steps.setup.outputs.SUBNET_ID }}" \
-            --security-group-ids "${{ steps.setup.outputs.SG_ID }}" \
-            --associate-public-ip-address \
-            --user-data file:///tmp/user-data.ps1 \
-            --block-device-mappings "DeviceName=/dev/sda1,Ebs={VolumeSize=120,VolumeType=gp3,DeleteOnTermination=true}" \
-            --tag-specifications \
-              "ResourceType=instance,Tags=[{Key=Name,Value=blender-win-${{ steps.ids.outputs.TIMESTAMP }}},{Key=ManagedBy,Value=GitHubActions},{Key=Purpose,Value=BlenderCI},{Key=RunId,Value=${{ github.run_id }}}]" \
-            --instance-initiated-shutdown-behavior terminate \
-            --query 'Instances[0].InstanceId' --region "$AWS_REGION" --output text)
+          # A subnet pins the availability zone, so a zone with no capacity for
+          # this instance type refuses the launch while another zone in the same
+          # VPC would take it. Try each in turn, and report the refusals if none
+          # does, since "no capacity here" and "cannot launch at all" are
+          # different failures and only the second one is worth a rerun.
+          INSTANCE_ID=""
+          for SUBNET in ${{ steps.setup.outputs.SUBNET_IDS }}; do
+            if INSTANCE_ID=$(aws ec2 run-instances \
+              --image-id "${{ steps.setup.outputs.AMI_ID }}" \
+              --instance-type "$INSTANCE_TYPE" \
+              --key-name "${{ steps.keypair.outputs.KEY_NAME }}" \
+              --subnet-id "$SUBNET" \
+              --security-group-ids "${{ steps.setup.outputs.SG_ID }}" \
+              --associate-public-ip-address \
+              --user-data file:///tmp/user-data.ps1 \
+              --block-device-mappings "DeviceName=/dev/sda1,Ebs={VolumeSize=120,VolumeType=gp3,DeleteOnTermination=true}" \
+              --tag-specifications \
+                "ResourceType=instance,Tags=[{Key=Name,Value=blender-win-${{ steps.ids.outputs.TIMESTAMP }}},{Key=ManagedBy,Value=GitHubActions},{Key=Purpose,Value=BlenderCI},{Key=RunId,Value=${{ github.run_id }}}]" \
+              --instance-initiated-shutdown-behavior terminate \
+              --query 'Instances[0].InstanceId' --region "$AWS_REGION" --output text 2>/tmp/run-instances.err); then
+              break
+            fi
+            cat /tmp/run-instances.err
+            INSTANCE_ID=""
+          done
+          if [ -z "$INSTANCE_ID" ]; then
+            echo "ERROR: no subnet in the VPC could launch $INSTANCE_TYPE in $AWS_REGION"
+            exit 1
+          fi
           echo "INSTANCE_ID=$INSTANCE_ID" >> $GITHUB_OUTPUT
           echo "$INSTANCE_ID" > /tmp/instance_id.txt
 

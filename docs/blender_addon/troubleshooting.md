@@ -25,9 +25,11 @@ Communicator panel. The button installs `cbor2==6.0.1` into Blender's
 ### Install operator hangs or fails
 
 `pip` exited non-zero or hit the 120 s internal timeout. Read its stderr
-in the Blender system console. The add-on directory must be writable; as
-a fallback, install manually with `python -m pip install --target
-<addon>/lib paramiko docker`.
+in the Blender system console. The install target - Blender's user
+`scripts/addons/modules` directory, which is both what the buttons write
+to and where the add-on looks - must be writable; as a fallback, install
+into it by hand with `python -m pip install --target <blender user
+scripts>/addons/modules paramiko docker`.
 
 ## Connection: SSH
 
@@ -44,8 +46,10 @@ The command names no destination. The parser reads `[user@]host` plus
 `-o User=` / `-o ProxyJump=`; other ssh options are accepted and
 ignored. An unknown option, an option missing its argument, and an
 unbalanced quote are reported in their own words rather than under this
-message. For a `ProxyCommand` setup, switch to **SSH Custom** mode and
-let `~/.ssh/config` fill in the blanks.
+message. For a `ProxyCommand` setup no mode helps: the directive is read
+nowhere in the add-on. Bring the tunnel up from a terminal and point the
+add-on at the forwarded local port instead, as the next entry
+describes.
 
 ### `~/.ssh/config` host works in terminal but not in the add-on
 
@@ -109,10 +113,13 @@ switch to the developer build (which ships its own).
 
 ### "Remote path not found (.../ppf-cts-server)"
 
-The post-connect path check failed. Point **Remote Path** / **Path** /
-**Container Path** / **Solver Path** at the directory containing the
-`ppf-cts-server` binary (`ppf-cts-server.exe` on Windows), not its
-parent or a `build/` subdirectory.
+The post-connect check looks for `<path>/target/release/ppf-cts-server`
+and did not find it. Point **Remote Path** / **Path** / **Container
+Path** at the solver root - the directory that has `target/release/`
+under it, for example `/root/ppf-contact-solver` - not at
+`target/release` itself. Windows Native does not raise this message: a
+**Solver Path** with no binary under `target\release\` or `bin\` reports
+"ppf-cts-server.exe not found under ..." instead.
 
 ## Connection profiles
 
@@ -136,7 +143,7 @@ lost on round-trip. Keep a backup if comments matter.
 
 ## Server startup
 
-### Status stuck on "Waiting for server start..."
+### Status stuck on "Waiting for Server Start..."
 
 You connected but did not click **Start Server on Remote**, or
 `ppf-cts-server` exited before booting. Click **Start Server on
@@ -149,19 +156,24 @@ last 20 lines of `server.log`. Usual causes:
 
 - venv missing at `$HOME/.local/share/ppf-cts/venv`
 - CUDA driver missing or mismatched
-- the bound port is already in use (change **Server Port**)
+- the bound port is already in use (every backend takes the port from
+  **Docker Port**, which the panel draws only for the Docker types)
 
 ### "Port N is in use"
 
-Something is already bound to the configured **Server Port**. On
-Windows Native, the add-on first probes the port: if it answers a
-ppf-cts-server protocol ping, the add-on attaches to that running
-server instead of erroring out (this is what lets you restart Blender
-without losing the server). If the holder is not a ppf-cts-server, the
-panel surfaces the error and shows a **Force Terminate Process**
-button. Clicking it walks the process tree and force-kills the
-listener on that port. If the squatter is not yours, change
-**Server Port** to a free port instead.
+Something is already bound to the port the server was told to use.
+Only Windows Native raises this. There the add-on first probes the
+port: if it answers a ppf-cts-server protocol ping, the add-on attaches
+to that running server instead of erroring out (this is what lets you
+restart Blender without losing the server). If the holder is not a
+ppf-cts-server, the panel surfaces the error and shows a **Force
+Terminate Process** button. Clicking it walks the process tree and
+force-kills the listener on that port. If the squatter is not yours,
+stop it by hand, or move the solver off that port: the field that
+carries the port for every backend (**Docker Port**) is one shared
+property drawn only for the Docker connection types, so change it from
+a Docker mode and switch back, or set `docker_port` on a
+[connection profile](connections/profiles.md) entry.
 
 ### "Server startup failed" with a log line
 
@@ -171,9 +183,11 @@ failed import) is higher up.
 
 ### "Failed to launch server"
 
-The launch script never started: permission denied, read-only working
-directory, or no `python3` on `$PATH`. Make the remote path writable
-and confirm `python3` resolves via the venv or `$PATH`.
+The launch script itself never ran: permission denied, a `/tmp` that is
+not writable or is mounted `noexec`, or a shell that could not execute
+it. The script backgrounds the server with `nohup`, so it reports
+success whatever happens after that - a missing venv or `python3`
+surfaces later as a build-worker `ModuleNotFoundError`, not here.
 
 ### Status: "Protocol version mismatch"
 
@@ -231,20 +245,24 @@ property. `Object > Make Local...` first.
 
 ### "Mesh topology changed since last transfer"
 
-Topology (vertex count, face count, UVs, or pin-group membership)
-changed after **Transfer**. Click **Transfer** again. Fetching across
-a mismatch would bind a PC2 to a mesh of a different vertex count.
+Topology (vertex count, polygon count, edge count, object count, or a
+pin group's vertex count) changed after **Transfer**, or a Static
+object's captured deformation was re-recorded; UVs are not part
+of the fingerprint and a UV-only edit never raises this. Click
+**Transfer** again. Fetching across a mismatch would bind a PC2 to a
+mesh of a different vertex count.
 
 ### "Objects missing UUID" / "Stale UUID references"
 
-Usually after loading an old file or renaming objects. Run **UUID
-Migration** from the Tools panel.
+Usually after loading an old file or renaming objects. Tick **Debug
+Options** in the Backend Communicator panel, then click **Run UUID
+Migration**.
 
 ### `ValueError: Object '...' is assigned to both '...' and '...' groups`
 
 The same object (identified by its UUID) appears in more than one active
-group. Remove it from all but one group via **Add Selected Objects** / the
-group's object list.
+group. Select it in a group's object list and click **Remove Object**
+until it is left in exactly one group.
 
 ### "Object '...' has N isolated vertex(es)" (the message says "isolated vert")
 
@@ -333,7 +351,10 @@ them apart.
 
 ### Run button is disabled
 
-A bake is still running. Let it finish or click **Abort**.
+Most often the previous simulation output is still attached to the
+objects, and the panel shows *Clear local animation before running*:
+click **Clear Local Animation**. **Run** is also greyed out while a
+bake is in progress — let it finish or click **Abort**.
 
 ### Status: "Connection lost" during a run
 
@@ -347,11 +368,32 @@ The server returned a JSON `error`, usually from a solver exception.
 Read `server.log` for the traceback. Common causes: out of disk on the
 remote, permission denied on the project directory, CUDA OOM.
 
+### Status: "Simulation Failed"
+
+The solver crashed instead of finishing. Backend Communicator prints
+*Solver failed:* and a one-line cause — an intersection, a failed
+continuous collision detection, a linear solver that would not
+converge, a Newton solve that made no progress, out of GPU memory, an
+unrecoverable CUDA fault, a kernel past the OS watchdog timeout, a GPU
+architecture missing from the solver's device image, or a process
+killed before it could report — with an untranslated detail line under
+it carrying the machine data (a CUDA error name, a signal, a file and
+line). The full report, solver stdout and stderr tails included, goes
+to the add-on console: press **Show Console** on the row below. Under
+that row, **Open Session Folder** opens the run's `session` directory,
+where the solver's logs and status record are written. It is grayed
+out with *The session folder is not known for this run* when the
+remote root cannot be resolved, and the path it opens is a path on the
+machine the **server** runs on, so it reaches real files only when
+that machine is this one.
+
 ## Fetch and playback
 
-### "Missing frames" warning
+### "N frames unfetched" in the Solver panel
 
-The remote has frames the local Blender does not. Click **Fetch All Animation**.
+The remote has frames the local Blender does not; the panel's line reads
+`N frames unfetched. Press "Fetch All Animation".` Click **Fetch All
+Animation**.
 
 ### Render with unfetched frames
 
@@ -360,25 +402,29 @@ popup fires once per render and does not block.
 
 ### "Data path: ... does not exist"
 
-The `data/<session>/` folder referenced by a `MESH_CACHE` modifier is
-missing (deleted, renamed, or not copied across machines). Restore
-from backup, or click **Migrate data/...** to rebind.
+The `data/<blend-file-name>/` folder referenced by a `MESH_CACHE`
+modifier is missing (deleted, renamed, or not copied across machines).
+Restore from backup, or click **Migrate data/...** to rebind.
 
 ## Bake
 
 ### "Remove all shape keys except Basis before baking"
 
-Baking writes fcurves that conflict with shape keys. In Object Data
-Properties, delete every shape key except `Basis` on the listed
-objects.
+Baking adds one shape key per frame and keyframes their values, which
+would double-blend with any shape keys the mesh already carries. In
+Object Data Properties, delete every shape key except `Basis` on the
+listed objects.
 
 ## MCP server
 
 ### Port already in use
 
-The add-on silently walks `9633`-`9642` and binds the first free port.
-Check the actual port in the MCP panel if an external client points at
-the base.
+The add-on retries the base port a few times, then walks `9634`-`9642`
+and binds the first free one. Started from **Start MCP Server on
+Local** it does not do this silently: the substitution is reported as a
+warning and written back into the panel's **Port** field, so the
+**MCP Server (Running :port)** header names the live port. Check it
+there if an external client points at the base.
 
 ### "Could not find available port in range 9633-9642"
 
@@ -392,7 +438,7 @@ The server thread raised during startup (socket permission, port
 collision, import error). The Blender system console prints the
 exception as `MCP Server error: ...`.
 
-### `run_python_script` returns `"success": false`
+### `run_python_script` returns `"status": "error"`
 
 The snippet you sent raised. Read the `error` field; the full
 traceback is in the Blender system console.
@@ -401,6 +447,224 @@ traceback is in the Blender system console.
 
 The current Blender screen layout has no `VIEW_3D` area. Switch to
 `Layout`, `Modeling`, or `Sculpting`, then retry.
+
+## Debug Options
+
+**Debug Options** is the checkbox on the same row as **Update Stat**
+and **Show Console** in the Backend Communicator panel, and it is off by
+default. Ticking it reveals nine labelled blocks below the panel's usual
+contents. They are development and diagnosis tools rather than parts of
+the simulation workflow: they address the connected machine directly,
+exercise the transport on its own, or reach into the add-on itself.
+What they run elsewhere - a shell command, a server query, a render -
+reports back into the add-on console, which **Show Console** opens.
+Controls that need a live connection are greyed out rather than hidden,
+so the block always shows what would become available once you connect.
+
+### Shell Calls
+
+Two tools that both address the machine at the other end of the
+connection, at two different levels.
+
+**Exec Command via Server** reads the **Args** field as a run of
+`--key value` pairs and sends them to the running solver server as a
+single query, over the same socket the panel's status poll uses; the
+JSON reply is printed to the console between two `------` rules. It
+speaks the server's own text-command protocol rather than a shell, so it
+needs both a connection and a started server, and it is the way to ask
+the server something the panel does not put on screen.
+
+**Execute Shell Command on Remote** runs the **Command** field on the
+machine the backend runs on, in the directory the connection points at
+(the solver root), and prints its stdout and stderr to the console. It
+needs a connection but not a running server, which is what makes it the
+tool for the case where the server will not start: list the venv, run
+`nvidia-smi`, tail `server.log`. On a Docker backend the command runs
+inside the container, not on the daemon host. **Run as Shell**, on by
+default, is what makes pipes, redirection and `&&` work - it wraps the
+command in `/bin/sh -c` on the SSH and Docker backends and hands it to a
+shell on the Local and Windows Native ones - and there is rarely a
+reason to untick it.
+
+### Data Transfer Tests
+
+**Data Send** generates as many megabytes of random bytes as **Data Size
+(MB)** asks for (1 to 256) and uploads them to `dummy_data.pickle` in
+the remote root. **Data Receive** downloads that same file and compares
+it byte for byte against the copy still held in memory, reporting either
+"Data received matches test data." or an error.
+
+The pair exists to take the scene out of the picture. When a
+**Transfer** stalls, a fetch never finishes, or a payload arrives
+damaged, the cause can be the link, the encoder, or the solver, and
+nothing in the panel separates them. A block of random bytes has no
+mesh, no encoder and no solver behind it, so a round trip that fails
+here is the connection, and one that succeeds at a size comparable to
+your scene moves the suspicion upstream. The progress bar and throughput
+readout that run alongside it also give you the link's real speed, which
+is the number to compare against when a transfer merely feels slow.
+
+**Data Receive** stays unavailable until a **Data Send** has run in the
+same Blender session: the reference copy it compares against is held in
+memory, so before then there is nothing to check a download against.
+Both need the server running, not just a connection. Two things worth
+knowing before you read the result: on the Local and Windows Native
+backends the payload is written straight to the filesystem instead of
+through the socket (unless `PPF_FORCE_TCP_TRANSFER=1` is set in the
+environment), so there the round trip measures a file copy rather than a
+network; and the test file is left behind in the remote root - nothing
+in the add-on deletes it - so clean it up yourself after a large test.
+
+### Options
+
+A single field, **Max Console Lines** (default 60, from 8 to 10000).
+Each time the add-on flushes queued messages into its console text
+block, it trims the block back to that length. The cap is what keeps a
+long run from growing the text block without bound; raise it when a
+traceback or a **Simulation Failed** report scrolls past before you can
+read it. It bounds only what Blender keeps in memory - a log file
+written by the block below still receives every line.
+
+### Console Log Export
+
+The path field is the switch: while it holds a path, every line the
+add-on writes to its console is also appended to that file, with the
+parent directory created if it does not exist, and clearing the path
+turns file logging off again. The folder button opens a file browser
+(pre-filled with `log.txt` in your home directory when nothing is set
+yet), the **X** clears the path, and **Delete Log** deletes the file
+itself.
+
+Reach for it when what you need to read outlives the console. The
+console is trimmed to **Max Console Lines** and lives only as long as
+the Blender session, so a crash, a driver fault, or an unattended
+overnight run leaves nothing to inspect afterwards, while a file
+survives all three. It is appended to and never truncated, so it
+accumulates across sessions, which is what **Delete Log** is for.
+
+### GitHub Repo on Remote
+
+**Git Pull** and **Compile** run `git pull` and
+`/root/.cargo/bin/cargo build --release` in the connection's directory,
+by the same route as **Execute Shell Command on Remote** and with their
+output in the console. Both need a connection and nothing else in
+flight. Together they are the update loop for a remote you develop
+against: pull, rebuild, then stop and start the server so the new binary
+is the one running. The `cargo` path is hardcoded to
+`/root/.cargo/bin/cargo`, which is where the project's container image
+installs it; on a host that keeps cargo elsewhere the button fails, and
+the shell field above is the way to run the build by hand.
+
+**Open GitHub Link** sits under the same label but touches no connection
+at all: it opens the project's public repository page in the browser on
+your own machine.
+
+### GitHub Repo on Local
+
+**Git Pull (Local)** runs `git pull` as a subprocess whose working
+directory is inside the add-on's own source tree, so it updates the copy
+of the add-on that Blender is running - not the solver on the remote.
+That only does something when the add-on is installed as a git checkout,
+which is the developer layout; an extension unpacked from a zip is not a
+repository, and the pull reports git's own complaint instead. It gives
+up after 60 seconds, killing the process and reporting "Local git pull
+timed out". Follow it with **Reload Add-on Now** below to run what you
+just pulled without restarting Blender.
+
+### UUID Migration
+
+**Run UUID Migration** walks the scene and fills in the stable
+identifiers the add-on uses to follow things across renames: a group's
+own UUID, the UUID on every assigned object, the object UUID and
+vertex-group content hash on every pin, and the object UUIDs on every
+snap/stitch pair, including the ones stored inside a pair's stitch data.
+
+The problem it solves is historical. Earlier versions referenced objects
+and vertex groups by NAME, so renaming an object - or letting Blender
+append `.001` to a duplicate - silently broke the reference. An object
+now carries a UUID as a custom property and a vertex group is matched by
+a hash of the vertex indices it holds, so both survive a rename. A
+`.blend` saved before that change still carries name-only references,
+and this pass is what converts them.
+
+You rarely have to press it. The same pass runs automatically after a
+file is loaded whenever anything is found missing, writing its result to
+the console prefixed with `[auto-migrate]`, and **Transfer** refuses a
+scene whose identifiers are incomplete with a message that ends "Run
+UUID Migration first." rather than uploading it. The button matters for
+what the automatic pass does not cover: a record inserted
+programmatically rather than through the panel, and the case where the
+automatic attempt raised and was swallowed, which leaves no message at
+all. Pressing it always reports what it did.
+
+Two details about the result. It is printed under the button and stays
+there until the next run, so you can read it after the panel redraws;
+and it ends with "Save to persist", which is literal - the identifiers
+are scene data, and closing the `.blend` without saving loses them.
+Every identifier it writes is one that was empty, so a second run on an
+already-migrated scene changes nothing and says so.
+
+### Render
+
+**Render Animation** renders the scene's frame range one frame at a
+time, driven by a timer, with a progress bar naming the frame and the
+percentage done; **Stop** halts it.
+
+It exists because of one specific interaction with curve playback. The
+built-in **Render Animation** has been observed to evaluate the
+depsgraph between `render_pre` and `frame_change_pre`, which leaves the
+add-on's curve cache half-applied - about half the splines render at
+their rest pose while the viewport looks correct. This loop sets the
+frame first, which runs the add-on's playback handler to completion, and
+only then renders that single frame. So reach for it when a rendered
+animation of simulated curves or rods shows strands frozen in the rest
+pose that the viewport shows moving.
+
+Output goes to the paths the built-in render would use, one file per
+frame from the scene's output settings, so it is a drop-in replacement
+rather than a separate export. If files matching those paths already
+exist, a dialog says how many, and they are deleted before the render
+starts - cancel there if they matter. **Stop** sets a flag that is read
+between frames, so the frame in flight finishes first; Blender exposes
+no mid-frame cancel to Python. The playhead and the output path are
+restored when the run ends or is cancelled.
+
+### Add-on Local Debug Server
+
+**Start** binds a TCP socket on `localhost` at **Port** (8765 by
+default; the field is greyed out while the server runs), and it is what
+the `blender_addon/debug/main.py` CLI talks to - see
+[Debug CLI](troubleshooting.md#debug-cli) below. It is also what makes
+reloading possible at all: **Reload Add-on Now** and **Full Reload** are
+drawn whether or not the server is running, but both fail with an error
+naming the reload server as not running until you press **Start**.
+
+**Reload Add-on Now** deletes the add-on's modules from `sys.modules`,
+invalidates the import caches, and disables and re-enables the add-on
+within one event-loop tick, so what runs afterwards is the source
+currently on disk.
+**Full Reload** does the same work but splits the disable and the enable
+across two ticks, which is what lets Blender rebuild RNA for a changed
+`PropertyGroup`; reach for it when an edit to a property definition does
+not show up after a plain reload (see
+[Hot reload](troubleshooting.md#hot-reload)). Both are scheduled through
+a timer rather than run inline, so the button returns immediately and
+the reload happens a tick later; running the reload inline would free
+the operator while its own Python frame is still on the stack, which
+crashes Blender.
+
+The server is restarted for you after a reload if it was running before
+it, but it comes back on the default port rather than the one you typed,
+and the CLI only ever talks to 8765. A custom **Port** is therefore only
+useful for a session you drive by hand.
+
+:::{warning}
+While this server runs, any process on your machine can send it a JSON
+packet that executes arbitrary Python inside Blender. There is no
+authentication and no `Origin` check. Start it when you are debugging
+and stop it when you are done; see
+[Code Execution Risk](security.md#code-execution-risk-mcp).
+:::
 
 ## Debug CLI
 

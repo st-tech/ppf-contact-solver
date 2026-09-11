@@ -7,8 +7,8 @@
 #
 # The addon ships an in-process HTTP server that exposes its dynamics
 # group surface to MCP clients (LLMs, IDE plug-ins, etc.) via the
-# Streamable HTTP transport (spec 2025-06-18). This scenario spins up
-# that server on a free port, drives it through a full handshake, and
+# Streamable HTTP transport (spec 2026-07-28). This scenario spins up
+# that server on a free port, drives it as a stateless client, and
 # asserts that ``tools/call`` invocations mutate addon state the same
 # way the UI operators would.
 #
@@ -25,10 +25,12 @@
 #      background thread; the driver pumps ``process_mcp_tasks`` from
 #      the main thread until the thread returns.
 #
-#   2. The transport is session-bound. ``POST /mcp`` with an
-#      ``initialize`` request returns a fresh ``Mcp-Session-Id`` header;
-#      every later request must echo that header. The driver caches it
-#      after the handshake.
+#   2. The transport is stateless. Every request is a standalone POST
+#      carrying its protocol version, client capabilities and client
+#      identity in ``params._meta``, mirrored into the
+#      ``MCP-Protocol-Version``, ``Mcp-Method`` and ``Mcp-Name``
+#      headers. The server rejects any disagreement between a header
+#      and the body, so the driver derives the headers from the body.
 #
 # Assertions:
 #   A. ``mcp_create_group_creates_group`` -- after ``create_group``,
@@ -40,7 +42,10 @@
 #   C. ``mcp_responses_match_schema`` -- every JSON-RPC response carries
 #      the documented success shape (``jsonrpc == "2.0"``, ``id`` echoed,
 #      ``result.content[0].text`` parses as JSON whose ``status`` is
-#      ``"success"``).
+#      ``"success"``), and every result carries ``resultType``.
+#   D. ``D_mcp_transport_is_stateless`` -- ``server/discover`` names the
+#      served protocol versions, no response mints an ``Mcp-Session-Id``,
+#      and the retired ``GET`` and ``DELETE`` verbs answer 405.
 
 from __future__ import annotations
 
@@ -50,6 +55,12 @@ from . import _runner as r
 
 
 NEEDS_BLENDER = True
+
+# macOS GitHub-hosted runners block loopback HTTP from urllib to Blender's
+# in-process MCP server, so the rig does not select this scenario there.
+# Declaring it here rather than returning a pass from run() keeps a
+# scenario that never executed from being counted as one that passed.
+PLATFORMS = ("linux", "win32")
 
 
 _DRIVER_BODY = r"""
@@ -108,6 +119,42 @@ def _post_mcp(url, body, headers, timeout=10.0):
         return {"status": -1, "headers": {}, "body": "", "error": str(e)}
 
 
+_PROTOCOL_VERSION = "2026-07-28"
+_NAME_HEADER_SOURCE = {
+    "tools/call": "name",
+    "resources/read": "uri",
+    "prompts/get": "name",
+}
+
+
+def _modernize(body, headers):
+    # Attach the request metadata and the headers that must mirror it.
+    # Derived from the body rather than supplied by the caller: the server
+    # rejects a header that disagrees with the body, so deriving them here
+    # is the only way the two cannot drift.
+    body = dict(body)
+    method = body.get("method", "")
+    params = dict(body.get("params") or {})
+    params["_meta"] = {
+        "io.modelcontextprotocol/protocolVersion": _PROTOCOL_VERSION,
+        "io.modelcontextprotocol/clientCapabilities": {},
+        "io.modelcontextprotocol/clientInfo": {
+            "name": "bl_mcp_roundtrip",
+            "version": "0.1",
+        },
+    }
+    body["params"] = params
+    merged = {
+        "MCP-Protocol-Version": _PROTOCOL_VERSION,
+        "Mcp-Method": method,
+    }
+    source = _NAME_HEADER_SOURCE.get(method)
+    if source and isinstance(params.get(source), str):
+        merged["Mcp-Name"] = params[source]
+    merged.update(headers or {})
+    return body, merged
+
+
 def _drive_request_in_thread(url, body, headers, *, timeout=15.0,
                              pump_interval=0.05):
     # Issue the POST on a background thread so that this driver (running
@@ -118,8 +165,12 @@ def _drive_request_in_thread(url, body, headers, *, timeout=15.0,
     ).process_mcp_tasks
     box = {}
 
+    modern_body, modern_headers = _modernize(body, headers)
+
     def worker():
-        box["resp"] = _post_mcp(url, body, headers, timeout=timeout - 1.0)
+        box["resp"] = _post_mcp(
+            url, modern_body, modern_headers, timeout=timeout - 1.0
+        )
 
     t = threading.Thread(target=worker, daemon=True)
     t.start()
@@ -173,6 +224,11 @@ def _envelope_is_well_formed(envelope, expected_id):
         return False, f"error frame: {envelope['error']!r}"
     if "result" not in envelope:
         return False, "missing result"
+    # Every result a 2026-07-28 server emits is typed, so the client can
+    # tell a finished result from an interim one asking for more input.
+    result_type = envelope["result"].get("resultType")
+    if result_type != "complete":
+        return False, f"resultType is {result_type!r}, expected 'complete'"
     return True, ""
 
 
@@ -208,36 +264,49 @@ try:
     base_url = f"http://127.0.0.1:{actual_port}/mcp"
     schema_violations = []  # collected per-response so check C is precise
 
-    # ----- 1. initialize handshake (mints Mcp-Session-Id) ---------
-    init_resp = _drive_request_in_thread(
+    # ----- 1. server/discover (no handshake, no session) ---------
+    disc_resp = _drive_request_in_thread(
         base_url,
-        {
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "initialize",
-            "params": {
-                "protocolVersion": "2025-06-18",
-                "capabilities": {},
-                "clientInfo": {"name": "bl_mcp_roundtrip", "version": "0.1"},
-            },
-        },
+        {"jsonrpc": "2.0", "id": 1, "method": "server/discover"},
         headers={},
     )
-    init_env = _parse_jsonrpc(init_resp)
-    ok, why = _envelope_is_well_formed(init_env, expected_id=1)
+    disc_env = _parse_jsonrpc(disc_resp)
+    ok, why = _envelope_is_well_formed(disc_env, expected_id=1)
     if not ok:
-        schema_violations.append(f"initialize: {why}")
-    session_id = init_resp["headers"].get("Mcp-Session-Id", "")
-    if not session_id:
+        schema_violations.append(f"server/discover: {why}")
+    disc_result = (disc_env or {}).get("result") or {}
+    versions = disc_result.get("supportedVersions") or []
+    if _PROTOCOL_VERSION not in versions:
         raise RuntimeError(
-            f"initialize response missing Mcp-Session-Id header; "
-            f"headers={init_resp['headers']!r}"
+            f"server/discover does not serve {_PROTOCOL_VERSION}; "
+            f"supportedVersions={versions!r}"
         )
-    auth_headers = {
-        "Mcp-Session-Id": session_id,
-        "MCP-Protocol-Version": "2025-06-18",
+    # A stateless transport mints nothing to carry between requests.
+    minted = disc_resp["headers"].get("Mcp-Session-Id", "")
+    retired_verb_status = {}
+    for verb in ("GET", "DELETE"):
+        req = urllib.request.Request(base_url, method=verb)
+        req.add_header("Accept", "text/event-stream")
+        try:
+            with urllib.request.urlopen(req, timeout=5.0) as resp:
+                retired_verb_status[verb] = resp.status
+        except urllib.error.HTTPError as e:
+            retired_verb_status[verb] = e.code
+        except Exception as e:
+            raise RuntimeError(f"{verb} probe failed: {e}")
+    verbs_retired = all(
+        status == 405 for status in retired_verb_status.values()
+    )
+    result["checks"]["D_mcp_transport_is_stateless"] = {
+        "ok": bool(versions) and not minted and verbs_retired,
+        "details": {
+            "supported_versions": versions,
+            "session_id_minted": minted or None,
+            "retired_verb_status": retired_verb_status,
+        },
     }
-    dh.log(f"initialized session={session_id}")
+    auth_headers = {}
+    dh.log(f"discovered versions={versions}")
 
     # ----- 2. tools/call -> create_group -------------------------
     create_resp = _drive_request_in_thread(
@@ -426,15 +495,6 @@ def build_driver(ctx: r.ScenarioContext) -> str:
 
 
 def run(ctx: r.ScenarioContext) -> dict:
-    # macOS GitHub-hosted runners block loopback HTTP requests from the
-    # urllib client to Blender's in-process MCP server (firewall on the
-    # ephemeral port; runs locally without issue but times out on CI).
-    # Skip on darwin so the rest of the rig stays green; the same MCP
-    # round-trip is exercised on Linux + Windows runners.
-    import sys
-    if sys.platform == "darwin":
-        return {"status": "pass",
-                "notes": ["skipped on macOS (loopback firewall)"]}
     result, err = r.wait_blender_result(ctx, timeout=max(ctx.timeout, 180.0))
     if err is not None:
         return err

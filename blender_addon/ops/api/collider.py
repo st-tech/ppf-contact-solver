@@ -71,8 +71,8 @@ class _ColliderParamProxy:
     - ``contact_gap``: contact gap thickness
     - ``thickness``: wall/sphere shell thickness
     - ``enable_active_duration``: ``True`` to limit collider lifetime
-    - ``active_duration``: number of frames the collider is active when
-      ``enable_active_duration`` is set
+    - ``active_duration``: the first Blender frame at which the collider is
+      no longer active (exclusive cutoff), not a frame count
 
     Example::
 
@@ -81,7 +81,7 @@ class _ColliderParamProxy:
         wall.param.contact_gap = 0.002
         wall.param.thickness = 0.01
         wall.param.enable_active_duration = True
-        wall.param.active_duration = 60  # active for frames 1-60
+        wall.param.active_duration = 60  # active through frame 59; off from 60
 
         sphere = solver.add_sphere((0, 0, 1), 0.5)
         sphere.param.friction = 0.3

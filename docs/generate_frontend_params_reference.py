@@ -83,7 +83,7 @@ def _render_global(param_mod: ModuleType) -> str:
 
 
 def _render_objects(param_mod: ModuleType) -> str:
-    obj_types = ("tri", "tet", "rod")
+    obj_types = ("tri", "tet", "rod", "pdrd", "points")
     all_params = {t: param_mod.object_param(t) for t in obj_types}
 
     all_names: list[str] = []
@@ -103,12 +103,14 @@ def _render_objects(param_mod: ModuleType) -> str:
         ".. Regenerate via: python docs/generate_frontend_params_reference.py",
         "",
         "Per-object material parameters. Set via ``object.param.set(key, "
-        "value)`` on a :class:`frontend.Object`. The solver exposes three "
+        "value)`` on a :class:`frontend.Object`. The solver exposes five "
         "element types, each with its own defaults:",
         "",
         "- ``tri``: triangle shells (cloth).",
         "- ``tet``: tetrahedral solids.",
         "- ``rod``: rod / edge elements.",
+        "- ``pdrd``: exactly-rigid PDRD bodies built from a surface mesh.",
+        "- ``points``: granular (sand) particle clouds.",
         "",
         "``(not applicable)`` in a default column means the given element "
         "type does not expose that parameter.",

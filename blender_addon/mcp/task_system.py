@@ -16,6 +16,15 @@ _mcp_result_times = {}
 _mcp_lock = threading.Lock()
 _mcp_task_id_counter = 0
 
+# Tasks whose reader has gone away, mapped to when the cancellation was
+# recorded. Closing the response stream is the transport's cancellation
+# signal, and a cancelled task must not leave a result behind for nobody.
+#
+# An entry is only needed while the task can still finish and store a result,
+# so it is dropped as soon as that happens, and reaped on the same schedule as
+# an abandoned result in case it never does.
+_cancelled_tasks: dict = {}
+
 # Reap results that were never collected (client disconnected or the
 # get_mcp_result timeout already fired before the handler finished). The
 # default get_mcp_result timeout is 5.0s, so 2x that is comfortably past
@@ -44,17 +53,58 @@ def post_mcp_task(task_type, args):
     return task_id
 
 
+def try_get_mcp_result(task_id):
+    """Take the result of *task_id* if it is ready.
+
+    Returns ``(True, result)`` once, then ``(False, None)`` forever after, so
+    a caller that polls can tell "not finished yet" from "finished and already
+    collected". This is what lets a transport wait on a long tool call without
+    committing to a fixed deadline up front.
+    """
+    with _mcp_lock:
+        if task_id in _mcp_results:
+            result = _mcp_results.pop(task_id)
+            _mcp_result_times.pop(task_id, None)
+            return True, result
+    return False, None
+
+
+def cancel_mcp_task(task_id):
+    """Drop *task_id*, whether it is queued, running, or already finished.
+
+    A queued task is removed before it runs; a task already in flight is
+    allowed to finish on the main thread, but its result is discarded rather
+    than left for a reader that has gone away.
+    """
+    with _mcp_lock:
+        removed_from_queue = False
+        for index, task in enumerate(_mcp_task_queue):
+            if task["id"] == task_id:
+                del _mcp_task_queue[index]
+                removed_from_queue = True
+                break
+        _mcp_results.pop(task_id, None)
+        _mcp_result_times.pop(task_id, None)
+        # A task taken off the queue never runs, so there is no later result
+        # to suppress and nothing to remember. Recording it anyway would grow
+        # the map by one entry for every cancelled call, forever.
+        if not removed_from_queue:
+            _cancelled_tasks[task_id] = time.time()
+
+
 def get_mcp_result(task_id, timeout=5.0):
-    """Wait for and retrieve the result of a posted task."""
+    """Wait up to *timeout* seconds for the result of a posted task.
+
+    Suits a caller that knows the work is short. A caller that cannot bound
+    the work should poll ``try_get_mcp_result`` instead, so a slow task is
+    reported as still running rather than as failed.
+    """
     start_time = time.time()
 
     while time.time() - start_time < timeout:
-        with _mcp_lock:
-            if task_id in _mcp_results:
-                result = _mcp_results[task_id]
-                del _mcp_results[task_id]  # Clean up
-                _mcp_result_times.pop(task_id, None)
-                return result
+        found, result = try_get_mcp_result(task_id)
+        if found:
+            return result
 
         time.sleep(0.01)  # Small sleep to prevent busy waiting
 
@@ -73,6 +123,8 @@ def process_mcp_tasks():
     with _mcp_lock:
         tasks_to_process = _mcp_task_queue[:]
         _mcp_task_queue.clear()
+        cancelled = set(_cancelled_tasks)
+    tasks_to_process = [t for t in tasks_to_process if t["id"] not in cancelled]
 
     # Process each task
     for task in tasks_to_process:
@@ -85,8 +137,11 @@ def process_mcp_tasks():
         except Exception as e:
             result = {"status": "error", "message": str(e)}
 
-        # Store result
+        # Store result, unless the reader has gone away.
         with _mcp_lock:
+            if task_id in _cancelled_tasks:
+                del _cancelled_tasks[task_id]
+                continue
             _mcp_results[task_id] = result
             _mcp_result_times[task_id] = time.time()
 
@@ -104,6 +159,14 @@ def process_mcp_tasks():
         for tid in stale_ids:
             _mcp_results.pop(tid, None)
             del _mcp_result_times[tid]
+        # A cancellation whose task never came back is reaped on the same
+        # schedule, so the map cannot grow without bound over a long session.
+        for tid in [
+            tid
+            for tid, marked_at in _cancelled_tasks.items()
+            if now - marked_at > _RESULT_REAP_SECONDS
+        ]:
+            del _cancelled_tasks[tid]
 
 
 def _execute_blender_task(task_type, args):
@@ -123,6 +186,7 @@ def clear_task_state():
         _mcp_task_queue.clear()
         _mcp_results.clear()
         _mcp_result_times.clear()
+        _cancelled_tasks.clear()
 
 
 # Initialize the integrated system on module load

@@ -9,7 +9,7 @@
 # the Cusick drape test cannot pin (drape is bending-dominated). Two tests:
 #
 #  - STRETCH (young-mod): a vertical strip is pinned along its top edge and hangs
-#    under amplified gravity; the total elongation is measured. The solver's
+#    under amplified gravity; the elongation of its free span is measured. The solver's
 #    young-mod is density-normalized, so the strain scales as g/young-mod
 #    (independent of density): a more compliant fabric (lower young-mod) stretches
 #    more. The elongation ranking calibrates the relative young-mod across
@@ -21,8 +21,10 @@
 #    approximation of real fabric's nonlinear stiffening. young-mod is the INITIAL
 #    (small-strain) modulus, so it must be measured BELOW the strain limit; past
 #    the limit the elongation reports the cap, not the modulus. The harness
-#    therefore also reports the max local strain (the top segment carries the
-#    whole strip's weight) so the load can be kept in the elastic regime. The
+#    therefore also reports the max local strain (the topmost FREE segment, which
+#    carries the weight of everything below it) so the load can be kept in the
+#    elastic regime. That segment must lie below the pinned band: one with both
+#    ends pinned is held at both ends and reports no strain at any load. The
 #    strain limit is the separate "max stretch" knob and is not changed here.
 #
 #  - POISSON (poiss-rat): a horizontal strip is pinned at both ends and stretched
@@ -52,12 +54,15 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))), "cusick_drape"))
 import cusick_drape as cd  # noqa: E402
 
-# Stretch test geometry + load (meters; gravity amplified to get a measurable,
-# still-elastic elongation, ~1-5% for the compliant fabrics).
+# Stretch test geometry + load (meters). Gravity is amplified because the load has
+# to separate six fabrics whose stiffnesses span 26x while every one of them stays
+# below its strain limit. A strip's own weight, and loads an order of magnitude
+# above it, leave the whole set inside a few tenths of a percent, where the
+# ranking is not resolvable; the value here spreads them across ~2%.
 STRETCH_LENGTH = 0.20
 STRETCH_WIDTH = 0.03
 STRETCH_RES = 80
-STRETCH_G = 60.0
+STRETCH_G = 1000.0
 
 # Poisson test geometry: a long strip so lateral contraction develops at mid-span
 # (Saint-Venant) away from the clamped ends.
@@ -84,8 +89,8 @@ def _apply_params(obj, preset, young_mod=None, poisson=None):
 def simulate_stretch(name: str, preset: dict, *, young_mod=None,
                      length=STRETCH_LENGTH, width=STRETCH_WIDTH, res=STRETCH_RES,
                      g=STRETCH_G, frames=DEFAULT_FRAMES, dt=DEFAULT_DT) -> dict:
-    """Hang a vertical strip (top edge pinned) under gravity g; return the total
-    axial elongation (settled length / rest length - 1)."""
+    """Hang a vertical strip (top edge pinned) under gravity g; return the axial
+    elongation of its FREE span (settled gauge / rest gauge - 1)."""
     from frontend import App
 
     app = App.create(f"stretch-{name.lower()}")
@@ -105,15 +110,37 @@ def simulate_stretch(name: str, preset: dict, *, young_mod=None,
 
     rest = np.asarray(scene.vertex(True), dtype=np.float64)
     yo = rest[:, 1]
-    ytop, ybot = float(yo.max()), float(yo.min())
-    L0 = ytop - ybot
-    bot = np.nonzero(yo <= ybot + 0.02 * L0)[0]
-    # Top two mesh rows (by rest Y) -> the top segment carries the whole strip's
-    # weight, so its strain is the max local strain (checked vs the strain limit).
     levels = np.unique(np.round(yo, 6))
-    top_row = np.nonzero(np.abs(yo - levels[-1]) < 1e-6)[0]
-    row2 = np.nonzero(np.abs(yo - levels[-2]) < 1e-6)[0]
-    seg0 = levels[-1] - levels[-2]
+
+    def row_at(level):
+        return np.nonzero(np.abs(yo - level) < 1e-6)[0]
+
+    # The pinned rows cannot stretch, so the gauge runs from the LOWEST pinned row
+    # (the anchor everything below hangs from) to the bottom row, not over the
+    # whole strip.
+    n_pinned = int(np.count_nonzero(levels >= ymax - 0.02 * span))
+    hi_i = len(levels) - n_pinned
+    if hi_i < 1:
+        raise RuntimeError(
+            f"{name}: the pinned band covers the whole strip "
+            f"({n_pinned} of {len(levels)} rows); raise res or narrow the band")
+
+    # Both gauge ends are mesh ROWS, and each is measured the same way at rest and
+    # settled (row mean against row mean). Mixing a rest extremum with a settled
+    # row mean instead puts the row's own half-spacing into the result as a
+    # load-independent offset, which for this geometry is -0.6% and swamps the
+    # elongation the test is trying to rank.
+    top_gauge = row_at(levels[hi_i])
+    bot_gauge = row_at(levels[0])
+    L0 = float(rest[top_gauge, 1].mean() - rest[bot_gauge, 1].mean())
+
+    # Max local strain lives in the topmost FREE segment: it carries the weight of
+    # everything below it. Both ends of a segment inside the pinned band are held,
+    # so such a segment reports no strain whatever the load; take the first level
+    # below the pinned set rather than assuming the top two rows straddle it.
+    seg_hi = top_gauge
+    seg_lo = row_at(levels[hi_i - 1])
+    seg0 = float(levels[hi_i] - levels[hi_i - 1])
 
     session = app.session.create(scene)
     session.param.set("frames", frames).set("dt", dt)
@@ -123,9 +150,9 @@ def simulate_stretch(name: str, preset: dict, *, young_mod=None,
     session.start(blocking=True)
 
     settled = np.asarray(session.get.vertex()[0], dtype=np.float64)
-    bot_y = float(settled[bot, 1].mean())
-    elong = (ytop - bot_y) / L0 - 1.0   # top pinned, bottom drops
-    seg1 = float(settled[top_row, 1].mean() - settled[row2, 1].mean())
+    L1 = float(settled[top_gauge, 1].mean() - settled[bot_gauge, 1].mean())
+    elong = L1 / L0 - 1.0
+    seg1 = float(settled[seg_hi, 1].mean() - settled[seg_lo, 1].mean())
     max_local_strain = seg1 / seg0 - 1.0
     sl = preset.get("strain_limit_percent", 0.0) if preset.get(
         "enable_strain_limit", False) else None

@@ -78,7 +78,8 @@ a static collider for it to drape over.
    choose `Local` if the solver lives on this machine. It has the
    fewest moving parts. Fill **Path** with the solver checkout (the
    folder whose `target/release/` contains `ppf-cts-server`) and set
-   **Project Name** to something short. For other backends see
+   **Project Name** to something short, using only letters, digits,
+   `.`, `-` and `_` (no spaces). For other backends see
    [Connections](../connections/index.md) and the per-backend pages
    ([local](../connections/local.md), [ssh](../connections/ssh.md),
    [docker](../connections/docker.md),
@@ -98,15 +99,16 @@ a static collider for it to drape over.
    completes. Click **Start Server on Remote**. The add-on launches
    `ppf-cts-server` on the remote in the background and waits for it
    to answer. Status advances to *Waiting for Data* once the server
-   responds. If the port is already in use, the add-on auto-attaches
-   to the existing `ppf-cts-server` process; if a foreign process owns
-   it, click **Force Terminate Process** to release the port.
+   responds. If the port is already in use, click **Force Terminate
+   Process** to release it; on the Local backend nothing attaches to an
+   existing `ppf-cts-server` (only Windows Native does that).
 
 3. **Create the Cloth group (Shell).** In the **Dynamics Groups**
-   panel, click **Create Group**, set **Object Type** to **Shell**, and
-   rename it *Cloth*. Select the plane in the 3D viewport, then click
-   **Add Selected Objects** in the group. The add-on tints the plane
-   green (the Shell overlay color) as confirmation.
+   panel, click **Create Group**, set the unlabelled type dropdown
+   beside **Name** to **Shell**, and rename it *Cloth*. Select the
+   plane in the 3D viewport, then click **Add Selected Objects** in the
+   group. The add-on tints the plane green (the Shell overlay color) as
+   confirmation.
 
    ```{figure} ../images/getting_started/step3_group_created.png
    :alt: Dynamics Groups panel after Create Group, Add Selected Objects highlighted
@@ -119,11 +121,11 @@ a static collider for it to drape over.
    ```
 
 4. **Create the Sphere group (Static).** Click **Create Group** again,
-   set **Object Type** to **Static**, and rename it *Sphere*. Select
-   the sphere, then **Add Selected Objects**. The sphere picks up the
-   blue Static overlay color. At this point the scene should look
-   like the image below: a green cloth sheet floating cleanly above a
-   blue sphere.
+   set that same type dropdown to **Static**, and rename it *Sphere*.
+   Select the sphere, then **Add Selected Objects**. The sphere picks
+   up the blue Static overlay color. At this point the scene should
+   look like the image below: a green cloth sheet floating cleanly
+   above a blue sphere.
 
    ```{figure} ../images/getting_started/first_sim_start.png
    :alt: 3D viewport showing a green subdivided plane above a blue icosphere

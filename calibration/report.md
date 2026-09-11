@@ -10,16 +10,16 @@ How each bundled fabric preset behaves: how much it drapes, how much it droops u
 
 | Fabric | Drape DC % | Target % | Folds | Bend droop (deg) | bend | young-mod | Poisson |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| Silk | 34.8 | 20-40 | 14 | 80.4 | 1.42 | 500 | 0.4 |
-| Flag | 27.0 | 20-40 | 12 | 83.7 | 0.83 | 1000 | 0.4 |
-| Cotton | 70.1 | 60-76 | 12 | 66.9 | 4.3 | 5500 | 0.35 |
-| Wool | 61.7 | 40-70 | 10 | 69.6 | 3.67 | 2000 | 0.4 |
-| Denim | 85.4 | 70-90 | 8 | 48.9 | 10.0 | 10000 | 0.25 |
-| Leather | 67.1 | 47-70 | 16 | 78.0 | 1.8 | 13000 | 0.4 |
+| Silk | 33.0 | 20-40 | 10 | 78.7 | 1.42 | 500 | 0.4 |
+| Flag | 26.4 | 20-40 | 10 | 82.3 | 0.83 | 1000 | 0.4 |
+| Cotton | 68.2 | 60-76 | 10 | 64.2 | 4.3 | 5500 | 0.35 |
+| Wool | 61.2 | 40-70 | 11 | 67.0 | 3.67 | 2000 | 0.4 |
+| Denim | 85.9 | 70-90 | 8 | 45.9 | 10.0 | 10000 | 0.25 |
+| Leather | 53.0 | 47-70 | 14 | 75.8 | 1.8 | 13000 | 0.4 |
 
 ## Silk
 
-Drape coefficient **34.8%** &nbsp;|&nbsp; observed folds **14** &nbsp;|&nbsp; cantilever tip droop **80.4 deg** &nbsp;|&nbsp; bend `1.42`, young-mod `500`, Poisson `0.4`
+Drape coefficient **33.0%** &nbsp;|&nbsp; observed folds **10** &nbsp;|&nbsp; cantilever tip droop **78.7 deg** &nbsp;|&nbsp; bend `1.42`, young-mod `500`, Poisson `0.4`
 
 ![Silk drape, top view](report_images/Silk_top.png)
 
@@ -35,7 +35,7 @@ A strip held at the left, drooping under gravity. The blue line is its centerlin
 
 ## Flag
 
-Drape coefficient **27.0%** &nbsp;|&nbsp; observed folds **12** &nbsp;|&nbsp; cantilever tip droop **83.7 deg** &nbsp;|&nbsp; bend `0.83`, young-mod `1000`, Poisson `0.4`
+Drape coefficient **26.4%** &nbsp;|&nbsp; observed folds **10** &nbsp;|&nbsp; cantilever tip droop **82.3 deg** &nbsp;|&nbsp; bend `0.83`, young-mod `1000`, Poisson `0.4`
 
 ![Flag drape, top view](report_images/Flag_top.png)
 
@@ -51,7 +51,7 @@ A strip held at the left, drooping under gravity. The blue line is its centerlin
 
 ## Cotton
 
-Drape coefficient **70.1%** &nbsp;|&nbsp; observed folds **12** &nbsp;|&nbsp; cantilever tip droop **66.9 deg** &nbsp;|&nbsp; bend `4.3`, young-mod `5500`, Poisson `0.35`
+Drape coefficient **68.2%** &nbsp;|&nbsp; observed folds **10** &nbsp;|&nbsp; cantilever tip droop **64.2 deg** &nbsp;|&nbsp; bend `4.3`, young-mod `5500`, Poisson `0.35`
 
 ![Cotton drape, top view](report_images/Cotton_top.png)
 
@@ -67,7 +67,7 @@ A strip held at the left, drooping under gravity. The blue line is its centerlin
 
 ## Wool
 
-Drape coefficient **61.7%** &nbsp;|&nbsp; observed folds **10** &nbsp;|&nbsp; cantilever tip droop **69.6 deg** &nbsp;|&nbsp; bend `3.67`, young-mod `2000`, Poisson `0.4`
+Drape coefficient **61.2%** &nbsp;|&nbsp; observed folds **11** &nbsp;|&nbsp; cantilever tip droop **67.0 deg** &nbsp;|&nbsp; bend `3.67`, young-mod `2000`, Poisson `0.4`
 
 ![Wool drape, top view](report_images/Wool_top.png)
 
@@ -83,7 +83,7 @@ A strip held at the left, drooping under gravity. The blue line is its centerlin
 
 ## Denim
 
-Drape coefficient **85.4%** &nbsp;|&nbsp; observed folds **8** &nbsp;|&nbsp; cantilever tip droop **48.9 deg** &nbsp;|&nbsp; bend `10.0`, young-mod `10000`, Poisson `0.25`
+Drape coefficient **85.9%** &nbsp;|&nbsp; observed folds **8** &nbsp;|&nbsp; cantilever tip droop **45.9 deg** &nbsp;|&nbsp; bend `10.0`, young-mod `10000`, Poisson `0.25`
 
 ![Denim drape, top view](report_images/Denim_top.png)
 
@@ -99,7 +99,7 @@ A strip held at the left, drooping under gravity. The blue line is its centerlin
 
 ## Leather
 
-Drape coefficient **67.1%** &nbsp;|&nbsp; observed folds **16** &nbsp;|&nbsp; cantilever tip droop **78.0 deg** &nbsp;|&nbsp; bend `1.8`, young-mod `13000`, Poisson `0.4`
+Drape coefficient **53.0%** &nbsp;|&nbsp; observed folds **14** &nbsp;|&nbsp; cantilever tip droop **75.8 deg** &nbsp;|&nbsp; bend `1.8`, young-mod `13000`, Poisson `0.4`
 
 ![Leather drape, top view](report_images/Leather_top.png)
 

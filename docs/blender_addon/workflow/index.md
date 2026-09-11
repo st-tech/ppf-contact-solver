@@ -5,18 +5,20 @@ Once you have a running solver and a live connection (see
 the day-to-day loop is:
 
 1. **Organize your scene** into object groups: **Solid**, **Shell**,
-   **Rod**, **PDRD**, or **Static**.
+   **Rod**, **PDRD**, **Sand**, or **Static**.
 2. **Assign material parameters** per group (density, Young's modulus,
    Poisson ratio, friction, bend, shrink, strain limit, and so on).
 3. **Set scene parameters**: gravity, wind, time step, frame count, air
    density, air friction.
 4. **Add pins** and attach operations: **Move By**, **Spin**, **Scale**,
-   **Torque**, or keyframed **Embedded Move**.
+   or **Torque**. (Keyframing a pin by hand attaches **Embedded Move**
+   for you; it is not offered in the Add menu.)
 5. *(Optional)* **Add invisible colliders**: infinite walls or parametric
    spheres (including bowl / inverted sphere variants).
 6. *(Optional)* **Snap and merge** overlapping meshes to stitch them across
    group boundaries.
-7. **Transfer** geometry and parameters to the solver, then **Build**.
+7. **Transfer** geometry and parameters to the solver; the build runs
+   on the remote automatically once the upload completes.
 8. **Run** the simulation and **Fetch** frames back as PC2 animation on your
    Blender objects.
 9. *(Optional)* **Bake** the fetched animation onto the objects as
@@ -24,7 +26,7 @@ the day-to-day loop is:
    add-on.
 
 ```{figure} ../images/workflow/day_to_day_loop.svg
-:alt: Nine numbered step boxes across two rows. Row one covers scene-setup steps 1 through 5: object groups (Solid/Shell/Rod/PDRD/Static), material parameters (density, Young's, Poisson, bend, shrink, strain limit), scene parameters (gravity, wind, time step, frame count, air density), pins and operations (Move By/Spin/Scale/Torque/Embedded Move), and the optional invisible colliders (walls, spheres, bowls). Row two covers steps 6 through 9: the optional Snap & Merge that stitches overlapping meshes across group boundaries, Transfer and Build which encodes the scene for the solver, Run and Fetch which solves on the GPU and downloads per-frame PC2 vertex data onto each Blender mesh, and the optional Bake step that converts the fetched PC2 data into standard Blender shape keys and fcurves and removes the ContactSolverCache modifier. Scene-setup boxes are blue, solver boxes are orange, and the bake box is green. Optional steps have dashed borders.
+:alt: Nine numbered step boxes across two rows. Row one covers scene-setup steps 1 through 5: object groups (Solid/Shell/Rod/PDRD/Sand/Static), material parameters (density, Young's, Poisson, bend, shrink, strain limit), scene parameters (gravity, wind, time step, frame count, air density), pins and operations (Move By/Spin/Scale/Torque), and the optional invisible colliders (walls, spheres, bowls). Row two covers steps 6 through 9: the optional Snap & Merge that stitches overlapping meshes across group boundaries, Transfer and Build which encodes the scene for the solver, Run and Fetch which solves on the GPU and downloads per-frame PC2 vertex data onto each Blender mesh, and the optional Bake step that converts the fetched PC2 data into standard Blender shape keys and fcurves and removes the ContactSolverCache modifier. Scene-setup boxes are blue, solver boxes are orange, and the bake box is green. Optional steps have dashed borders.
 :width: 900px
 
 The same nine steps, laid out by phase. Steps 1 through 6 are scene
@@ -72,9 +74,9 @@ Each sidebar panel maps to one chapter below:
 | Panel                                  | What's there                                                                                 | Docs                                           |
 | -------------------------------------- | -------------------------------------------------------------------------------------------- | ---------------------------------------------- |
 | **Scene Configuration**                | Global sim params: gravity, time step, frame count, CG tolerances, air density / friction, auto-save. | [Scene Parameters](params/scene.md)            |
-| **Scene Configuration → Dynamic Parameters** | Keyframed gravity / wind / air density / air friction / vertex air damping.          | [Dynamic Parameters](params/dynamic.md)    |
+| **Scene Configuration** *(keyframed sliders)* | Gravity, wind, air density, air friction, vertex air damping, step size, and inactive momentum frames are keyframed on their own sliders, so the curves sit on the timeline with every other keyframe. | [Dynamic Parameters](params/dynamic.md)    |
 | **Dynamics Groups**                    | Per-group type, material model, densities, moduli, contact gap, overlay color.               | [Object Groups](scene/object_groups.md), [Material Parameters](params/material.md) |
-| **Dynamics Groups → Pin Vertex Groups** | Pins and their list of operations (**Move By** / **Spin** / **Scale** / **Torque** / **Embedded Move**). | [Pins and Operations](constraints/pins.md)  |
+| **Dynamics Groups → Pins** *(**Pins & Motion** on PDRD)* | Pins and their list of operations (**Move By** / **Spin** / **Scale** / **Torque**, plus the auto-attached **Embedded Move**). A **PDRD** group's **Pins & Motion** section offers only two motion steps, **Translate** and **Rotate**. | [Pins and Operations](constraints/pins.md)  |
 | **Dynamics Groups → Transform** *(Static only)* | Per-object **Move By** / **Spin** / **Scale** ops, or Blender transform keyframes.  | [Static Objects](scene/static_objects.md)            |
 | **Scene Configuration → Invisible Colliders** | Walls and spheres with keyframed position / radius.                                   | [Invisible Colliders](constraints/colliders.md)  |
 | **Snap and Merge**                     | Snap/merge pairs with optional stitch stiffness.                                             | [Snap and Merge](constraints/snap_merge.md)            |
@@ -110,7 +112,7 @@ All add-on data hangs off `scene.zozo_contact_solver`:
 | Lives on                                              | What's there                                                                                 |
 | ----------------------------------------------------- | -------------------------------------------------------------------------------------------- |
 | `scene.zozo_contact_solver.state`                     | Global sim params: gravity, dt, frame count, CG tolerances, air density/friction, auto-save. |
-| `scene.zozo_contact_solver.state.dyn_params`          | Keyframed gravity / wind / air density / air friction / vertex air damp.                     |
+| `scene.zozo_contact_solver.state.dyn_params`          | Legacy keyframe list; converted to slider F-curves on load, then left empty.                 |
 | `scene.zozo_contact_solver.object_group_0…31`         | Per-group type, material model, densities, moduli, contact gap, overlay color.              |
 | `object_group_N.pin_vertex_groups`                    | Pins and their list of operations (MOVE_BY / SPIN / SCALE / TORQUE / EMBEDDED_MOVE).         |
 | `scene.zozo_contact_solver.state.invisible_colliders` | Walls and spheres with keyframed position / radius.                                          |

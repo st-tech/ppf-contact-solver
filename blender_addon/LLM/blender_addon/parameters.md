@@ -823,6 +823,74 @@ Two subdivided square Shell patches joined by vertical loose edges (rendered as 
 
 The **Copy** / **Paste** buttons move parameters between groups within a single Blender session. The clipboard is not persisted to the `.blend` file, so restarting Blender clears it.
 
+## Spatial material maps
+
+A material parameter is normally one number for a whole group. A **spatial material
+map** lets it vary across the surface instead: the map names a parameter, a per-vertex
+weight source, and a target value, and each element blends from its base value toward
+the target by the averaged weight of its own vertices. A weight of 0 reproduces the
+unmapped result exactly, so adding a map with an all-zero source changes nothing.
+
+The base value is whatever the group's ordinary material parameter holds, including that
+frame's animated value, so a map layers on top of animation rather than replacing it.
+
+Maps are available on **SHELL and SOLID groups only**. A map is reduced to one
+coefficient per element by averaging that element's vertices, and a rod, a sand cloud and
+a PDRD body carry no element table to reduce over.
+
+The parameters a map can drive:
+
+| Key | Drives |
+| --- | --- |
+| `young-mod` | Membrane stiffness |
+| `bend` | Isotropic hinge bending stiffness |
+| `bend-warp` / `bend-weft` | Extra bending stiffness along UV X / UV Y |
+| `friction` | Coulomb friction coefficient at contacts |
+| `deformation-damping` | Rayleigh damping on stretch |
+| `bending-damping` | Rayleigh damping on bending |
+| `strain-limit` | Upper bound on tensile strain |
+| `plasticity` / `bend-plasticity` | Stretch / bending plasticity creep rate |
+
+**`pressure` is offered by the enum and refused at encode.** Its per-face potential has a
+translation-variant gradient: only the sum over a closed surface is origin-independent,
+and that sum telescopes to a per-vertex force only while the pressure is uniform. A map
+makes it vary, so the cancellation stops and the same painted map would mean something
+different depending on where the artist put the object. Measured on a 5 cm icosphere with
+pressure painted 20 to 100, per-vertex forces change by 275% of their peak when the object
+is moved 1 m, and 2202% at 8 m.
+
+A map can also be **animated**: adding a sample per frame lets the weight source change
+over time, and the samples are keyed by frame.
+
+Over MCP: `list_material_maps`, `add_material_map`, `set_material_map`,
+`remove_material_map`, `add_material_map_sample`, `remove_material_map_sample`.
+
+## Lock Translation and Lock Rotation
+
+These are per-object constraints that restrict an object's **rigid** motion while leaving
+its deformation free. They are exact constraints applied to the Newton direction, not
+penalty forces, so there is no stiffness to tune and nothing to trade off against the
+contact solve.
+
+**Lock Translation** constrains the object's mass-weighted center of mass. By default it
+constrains it to a fixed world-space *line* through its initial position, so the object
+may slide along the axis you give. With "all axes" set it pins the center of mass to its
+initial *point* instead, and the axis then has nothing left to say.
+
+**Lock Rotation** restricts the object's mass-weighted best-fit rigid rotation to a fixed
+world-space axis. By default the axis is a *whitelist*: rotation about it is the object's
+sole rotational freedom. With "prohibit axis" set the axis becomes a *blacklist* instead:
+rotation about it is forbidden and the perpendicular rotation plane stays free.
+
+The axis is normalized by the encoder, so only its direction matters, not its magnitude.
+It must be non-zero whenever the lock is enabled and not in all-axes mode.
+
+**The mode carries the enable bit, not the axis.** A zero axis does not mean "off", and an
+all-axes translation lock is written with an exactly zero axis on purpose. Never infer
+whether a lock is on by testing the axis against zero.
+
+Over MCP: `set_object_locks` writes these, and `get_group_objects` reports them back.
+
 ## Dynamic parameters
 
 Most scene parameters are single scalars. A handful of them can also be *keyframed*: gravity flipping at frame 60, wind turning on at frame 30, air density changing mid-simulation. These are **dynamic parameters** and live in the **Dynamic Parameters** sub-panel under Scene Configuration.

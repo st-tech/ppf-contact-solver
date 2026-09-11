@@ -1,9 +1,9 @@
 # 📇 Connection Profiles
 
-A connection profile is a TOML entry that captures every field of the
-**Connections** panel for one connection. Profiles let you switch
-between hosts without re-typing credentials and share presets across a
-team.
+A connection profile is a TOML entry that captures every connection
+field of the **Backend Communicator** panel for one connection.
+Profiles let you switch between hosts without re-typing credentials and
+share presets across a team.
 
 Profiles live in a plain `.toml` file; one file can contain many
 profiles as top-level tables.
@@ -68,7 +68,7 @@ round-tripping through the Save button is the supported edit path.
 
 Each profile is a top-level table. The table name is free-form (quote
 it if it contains spaces or other non-bare characters). Inside the
-table, one required discriminator and up to twelve connection fields:
+table, one required discriminator and up to fourteen connection fields:
 
 | TOML key | Notes |
 | -------- | ----- |
@@ -84,7 +84,9 @@ table, one required discriminator and up to twelve connection fields:
 | `docker_path` | Solver directory inside a Docker container. |
 | `local_path` | Local solver directory. |
 | `win_native_path` | Windows solver root. |
-| `docker_port` | Server TCP port (1024-65535). |
+| `docker_port` | Server TCP port (1024-65535). Applies to every type, not just the Docker ones. |
+| `solver_gpu` | CUDA device index for the solver, or `-1` for Automatic. Kept for display and backward compatibility. |
+| `solver_gpu_uuid` | Stable UUID of the selected GPU. This is the identity actually used at **Start Server on Remote**. An entry that carries `solver_gpu` but no `solver_gpu_uuid` clears the saved UUID. |
 
 Unknown keys are silently ignored, so it is safe to sprinkle comments
 or future additions in the file.
@@ -100,7 +102,7 @@ docker_port = 9090
 
 [LocalDocker]
 type = "Docker"
-container = "ppf-dev"
+container = "ppf-contact-solver"
 docker_path = "/root/ppf-contact-solver"
 docker_port = 9090
 
@@ -125,7 +127,7 @@ host = "gpu01.example.com"
 port = 22
 username = "alice"
 key_path = "~/.ssh/id_ed25519"
-container = "ppf-dev"
+container = "ppf-contact-solver"
 docker_path = "/root/ppf-contact-solver"
 docker_port = 9090
 
@@ -180,8 +182,8 @@ loss.
 
 The `type` value in each TOML entry must exactly match one of the
 server-type strings listed in the **File format** table. Any other
-value causes `apply_profile` to return early without setting
-`server_type`, leaving the previously selected connection type
-unchanged; no error is reported and the remaining fields are still
-applied.
+value causes `apply_profile` to return early, before it touches
+anything: the previously selected connection type and every other field
+on screen are left as they were, none of the entry's values are
+applied, and no error is reported.
 :::

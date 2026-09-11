@@ -33,7 +33,7 @@ relies on; see [Security](#security) below.
 
 ## Starting the Server
 
-Main panel → **MCP Server** → **Start MCP Server on Local**.
+Solver panel → **MCP Server** → **Start MCP Server on Local**.
 
 ```{figure} ../images/integrations/mcp_row.png
 :alt: MCP Server section inside the Solver panel
@@ -47,9 +47,12 @@ read-only. The collapsed header reads `MCP Server (Stopped)` or
 ```
 
 The server binds to the **MCP Port** on `localhost` (default `9633`).
-If the port is busy, it tries `port+1`, `port+2`, … up to `port+9`
-and prints the chosen port to the Blender console. **Stop MCP Server**
-shuts the HTTP listener down and drains the task queue.
+If the port is busy it first waits for it to be released, retrying five
+times with a backoff, and only then walks `port+1`, `port+2`, … up to
+`port+9`. A substituted port is reported as a warning and written back
+into the **MCP Port** field, so the `MCP Server (Running :<port>)`
+header always names the live port. **Stop MCP Server** shuts the HTTP
+listener down and closes any live MCP session.
 
 :::{warning}
 The server binds to `localhost` only. Do **not** port-forward it or bind
@@ -136,8 +139,11 @@ That page is regenerated from the handler sources at every docs build,
 so it cannot drift. For a live, schema-attached enumeration against a
 running server, use `tools/list` (or the CLI `tools` subcommand).
 
-Tool descriptions returned by `tools/list` are taken directly from the
-function docstrings registered via the handler decorators.
+Tool descriptions returned by `tools/list` are built from the function
+docstrings registered via the handler decorators, with a pointer to the
+relevant `llm://` resources appended so a client scanning descriptions
+knows where to read for usage context. Do not match on the docstring
+text verbatim.
 
 ## Calling a Tool from the CLI
 
@@ -163,8 +169,9 @@ python blender_addon/debug/main.py scene
 python blender_addon/debug/main.py resources
 ```
 
-Global options are `--host` and `--mcp-port`. `--timeout` is per-subcommand,
-on `call` (default 30s) and `run` (default 60s). Run
+Global options are `--host` and `--mcp-port`. `--timeout` is
+per-subcommand: on `call` it is the request timeout (default 30s), on
+`runtests` the per-scenario timeout (default 60s). Run
 `python blender_addon/debug/main.py --help` for the full subcommand
 surface.
 
@@ -269,24 +276,25 @@ Unknown URIs return a JSON-RPC error with code `-32602`.
 
 **Thread model**
 
-The server is a plain `HTTPServer` running a `handle_request()` loop on
-one daemon thread. It has to stay off Blender's main thread, because
+The server is a `ThreadingHTTPServer` running its `handle_request()`
+accept loop on one daemon thread and handing each accepted request to a
+worker thread. It has to stay off Blender's main thread, because
 Blender owns the main thread. Mutating `bpy.*` from the server thread
 would race the UI and corrupt scene state, so tool dispatch marshals back
 onto Blender's tick via a task queue.
 
 ```
   HTTP request comes in
-      -> HTTPServer handles the request on its dedicated server thread
-      -> server thread enqueues the tool call on the main-thread task queue
+      -> ThreadingHTTPServer hands it to a per-request worker thread
+      -> worker thread enqueues the tool call on the main-thread task queue
       -> Blender's main-thread tick drains the queue and runs the tool
-      -> server thread wakes, serializes the result, returns HTTP response
+      -> worker thread wakes, serializes the result, returns HTTP response
 ```
 
 Practical consequences:
 
-- The server processes one HTTP request at a time; it does not spawn a
-  new thread per request.
+- The server spawns a thread per HTTP request, so the blocking
+  `GET /mcp` keep-alive stream does not stall other requests.
 - Every tool call serializes through Blender's main thread, so two
   `tools/call` requests cannot mutate the scene at the same time. That
   is what keeps the validation layer coherent.

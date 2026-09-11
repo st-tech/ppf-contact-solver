@@ -497,7 +497,7 @@ echo.
 echo BLENDER INTEGRATION
 echo -------------------
 echo The Blender addon is distributed separately - this bundle only
-echo ships server.py, the backend the addon connects to.
+echo ships bin\ppf-cts-server.exe, the backend the addon connects to.
 echo.
 echo   1. Download and install the ppf-contact-solver Blender addon
 echo      following the addon's own install instructions.
@@ -520,7 +520,6 @@ echo python/        - Embedded Python environment
 echo mingit/        - Embedded Git for repository cloning
 echo frontend/      - Python frontend package
 echo examples/      - Example Jupyter notebooks
-echo server.py      - Backend server for Blender addon
 echo config.bat     - Port configuration
 echo start.bat      - JupyterLab launcher
 echo start-jupyterlab.pyw - GUI launcher
@@ -550,16 +549,6 @@ copy "%SRC_DIR%\.github\workflows\scripts\examples.txt" "%DIST_DIR%\examples.txt
 echo   Copied fast-check and utility files
 
 REM ============================================================
-REM Copy server.py (Blender addon connects here; addon itself is
-REM downloaded separately, never bundled into dist)
-REM ============================================================
-echo.
-echo [9.5/9] Copying server.py...
-
-copy "%SRC_DIR%\server.py" "%DIST_DIR%\server.py" >nul
-echo   Copied server.py
-
-REM ============================================================
 REM Summary
 REM ============================================================
 echo.
@@ -578,7 +567,6 @@ echo   python/
 echo   frontend/
 echo   src/
 echo   examples/
-echo   server.py
 echo   start.bat
 echo   start-jupyterlab.pyw
 echo   headless.bat

@@ -16,16 +16,16 @@ This page covers the whole loop in one place.
   but the solver host can keep running. Export, quit Blender, and
   drive `app.session.run()` from a notebook that stays alive on the
   server.
-- **Parameter sweeps and variant generation.** Scripting `solver.param`
-  / `solver.session.param` edits in a notebook is faster than clicking
+- **Parameter sweeps and variant generation.** Scripting
+  `app.session.session.param` edits in a notebook is faster than clicking
   through the sidebar, and the results stream back as plots instead of
   viewport redraws.
 - **Inspecting the codebase.** The notebook attaches to the same
   `frontend` package the add-on talks to, so you can poke at
-  `app.scene`, `app.session`, `app.session.param`, the fixed-scene
-  report, and the live solver state interactively. It is a much faster
-  way to learn the API than reading source, and a convenient surface
-  for summarizing what a project contains.
+  `app.scene`, `app.session`, `app.session.session.param`, the
+  fixed-scene report, and the live solver state interactively. It is a
+  much faster way to learn the API than reading source, and a convenient
+  surface for summarizing what a project contains.
 - **Long runs you want to leave unattended.** Kick off
   `app.session.run()` in a notebook cell, close the browser tab, and
   reconnect later to `app.session.stream()` the tail of stdout.
@@ -62,20 +62,28 @@ sweeps, live previews, interactive inspection), not just step away.
 
 - JupyterLab running and reachable from the add-on, by convention on
   the solver host, on the **JupyterLab Port** (default `8080`).
-- A live connection: **Connect** plus **Start Server** on the main panel.
+- A live connection: **Connect** plus **Start Server on Remote** on the
+  main panel.
 - At least one **Transfer** into the current session so the notebook has
   something to attach to. Without it, `BlenderApp.open(...)` has no
-  pickles to recover from.
+  pickles to build from and raises `FileNotFoundError`.
 
 ## The Jupyter Row
 
-The Solver panel's **JupyterLab** section has three buttons:
+The Solver panel's **JupyterLab** section holds three notebook buttons
+on one row, a debug row below them, and a **Port** field:
 
 | Button       | What it does                                                                  |
 | ------------ | ----------------------------------------------------------------------------- |
 | **Export**   | Write the template notebook onto the solver host                              |
 | **Open URL** | Open `http://localhost:<port>/lab/tree/<path>` in your browser                |
 | **Delete**   | Remove the notebook file from the solver host                                 |
+| **Transfer without Build** | Upload data and parameters without triggering a remote build    |
+| **Build**    | Trigger a remote build without retransferring data                            |
+
+**Transfer without Build** and **Build** are debug halves of what
+**Transfer** does in one go; **Port** is the **JupyterLab Port** that
+**Open URL** points the browser at.
 
 ```{figure} ../../images/jupyterlab/jupyterlab_row.png
 :alt: JupyterLab section inside the Solver panel
@@ -115,10 +123,11 @@ Three cells, all Python:
    app.scene.preview()
    ```
 
-   `BlenderApp.open(...)` recovers a built scene if one is available;
-   otherwise it populates and builds from the uploaded mesh and
-   parameters. It is a no-op if the scene is already built, so running
-   this cell repeatedly is safe.
+   `BlenderApp.open(...)` raises `FileNotFoundError` unless the add-on
+   has already uploaded `data.pickle`, `param.pickle`, and
+   `upload_id.txt` under the project root; with those in place it
+   populates and builds the scene from them. Every call rebuilds, so
+   re-running this cell is safe but not free on a heavy scene.
 
 3. **Run**:
 
@@ -146,8 +155,9 @@ Once the notebook is open, Blender is no longer required. A typical
 "quit Blender and simulate in the notebook" session looks like this:
 
 1. In Blender, finish scene setup, **Transfer**, then **Export**
-   notebook. Optionally press **Start Server** so a solver is already
-   warm; if not, the notebook will spawn one when `run()` is called.
+   notebook. Optionally press **Start Server on Remote** so a solver is
+   already warm; if not, the notebook will spawn one when `run()` is
+   called.
 2. **Open** the notebook in your browser. Confirm the attach cell
    brings up the expected scene via `app.scene.report()` and
    `app.scene.preview()`.
@@ -163,7 +173,7 @@ Once the notebook is open, Blender is no longer required. A typical
    ```
 
 5. Iterate in place. You can tweak parameters through
-   `app.session.param.*` (see the
+   `app.session.session.param.*` (see the
    [JupyterLab Python API](../../../jupyterlab_api/index.rst)) and re-run without
    re-exporting. Because the notebook attaches to the pickled scene on
    disk, you can close the browser tab and reopen it later. The cell
@@ -201,9 +211,9 @@ understands about a project. Useful idioms:
 ```python
 app.scene.report()                       # group summary, counts, flags
 app.scene.preview()                      # 3D preview of the fixed scene
-app.session.param                         # live param object; tab-complete it
-help(app.session)                         # frontend Session API surface
-app.session.param.dyn("gravity")          # dynamic-parameter builder
+app.session.session.param                # live param object; tab-complete it
+help(app.session)                        # frontend FixedSession API surface
+app.session.session.param.dyn("gravity") # dynamic-parameter builder
 ```
 
 Because `frontend` is just a Python package, `inspect.getsource(...)`,
@@ -234,13 +244,14 @@ sidebar section in Blender.
 
 - [Connecting to a solver host](../../connections/index.md): required
   before Export is enabled.
-- [Simulating](simulating.md): covers **Transfer**, **Start Server**,
-  and the **Fetch** button you press when you come back to Blender.
+- [Simulating](simulating.md): covers **Transfer**, **Start Server on
+  Remote**, and the **Fetch** button you press when you come back to
+  Blender.
 - [Baking Animation](baking.md): converting a fetched animation into
   standard Blender keyframes once a JupyterLab-driven run is done.
 - [JupyterLab Python API](../../../jupyterlab_api/index.rst): the full
-  surface of `app.scene`, `app.session`, and `app.session.param` that
-  the notebook exposes.
+  surface of `app.scene`, `app.session`, and `app.session.session.param`
+  that the notebook exposes.
 
 :::{admonition} Under the hood
 :class: toggle

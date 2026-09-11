@@ -3,10 +3,11 @@
 Two separate steps that work together:
 
 - **Snap** is a one-shot alignment: it translates object A in world space
-  so that its closest vertex lines up with the nearest vertex on object B,
-  leaving just enough contact gap to avoid interpenetration. In the same
-  pass it also captures stitch anchors for **every A-vertex within reach
-  of B**, not just the single closest one.
+  so that its closest vertex lines up with the nearest point on object B's
+  surface (the nearest triangle for a mesh or solid target, the nearest
+  segment for a rod), leaving just enough contact gap to avoid
+  interpenetration. In the same pass it also captures stitch anchors for
+  **every A-vertex within reach of B**, not just the single closest one.
 - **Merge** is a solver-side soft stitch between two objects. At transfer
   time it becomes a cross-object stitch force that holds the two meshes
   together during the simulation. It is a force, not a weld: stitched
@@ -33,7 +34,7 @@ meshes so the intended stitch region coincides before snapping.
 :::
 
 ```{figure} ../../images/snap_merge/snap_set_level.svg
-:alt: Two side-by-side panels. Left, Matching topology: a 4x4 grid patch B in green with its copy A in blue offset slightly; every A-vertex is connected to its B counterpart by a short red dashed line; 16 of 16 pairs recorded. Right, Partial overlap: the same B patch at the bottom with a separate 4x4 A patch floating above and to the right such that only A's bottom-left corner vertex coincides with B's top-right corner vertex; a single red dashed line connects that one pair; the other 15 A-vertices are labeled "no pair"; 1 of 16 pairs recorded. A footer reminds the reader that snap is a geometric alignment step, not a topology repair.
+:alt: Two side-by-side panels. Left, "Edges aligned": a 4x4 patch A in blue on the left and patch B in green on the right, with A's right edge and B's left edge at the same four row heights; four short red dashed lines pair the seam vertices; a badge reads "4 / 4 edge pairs recorded". Right, "Edges misaligned": the same two patches with B shifted down so only A's bottom-right corner shares a row with B's top-left; one red dashed line connects that pair, three A-edge vertices are labeled as having no B match, and a badge reads "1 / 4 edge pairs recorded". A footer reminds the reader that snap is a geometric alignment step, not a topology repair.
 :width: 820px
 
 Snap records a stitch pair for every A-vertex already within B's
@@ -62,11 +63,12 @@ Vertices**:
 - A **Snap A to B** button with a snap icon.
 
 To snap two objects together, pick A and B with the dropdowns or
-eyedroppers, then press **Snap A to B**. The add-on finds the closest
-pair of vertices between A and B, translates A (in world space,
-parent-safe) so they line up, applies the contact-gap rules below, and
-records per-vertex barycentric anchor data for a later stitch. It also
-registers a merge pair automatically.
+eyedroppers, then press **Snap A to B**. The add-on finds the source
+vertex whose closest point on the target's surface is globally nearest,
+translates A (in world space, parent-safe) so that pair lines up,
+applies the contact-gap rules below, and records per-vertex barycentric
+anchor data for a later stitch. It also registers a merge pair
+automatically.
 
 ```{figure} ../../images/snap_merge/panel.png
 :alt: Snap and Merge panel with Object A set to PatchA (moves) and Object B set to PatchB (target), the Snap A to B button, and an empty Merge Pairs box ready to receive the new pair.
@@ -108,8 +110,12 @@ As soon as at least one merge pair exists, a second box labeled
 **Merge Pairs** appears below the snap box, containing:
 
 - A UIList showing each pair, with both object names per row.
-- A **Remove Merge Pair** button below the list (disabled unless a row
-  is selected).
+- A **Re-snap** button below the list (disabled unless a row is
+  selected). It re-runs the snap on the selected pair and rebuilds its
+  stitch anchors; when a pair has none, the panel says so with a
+  *"No stitch points found. Try Re-snap."* note.
+- A **Remove** button below that, likewise disabled unless a row is
+  selected.
 - A **Stitch Stiffness** slider, shown for **every supported pair**.
   All stitches are soft and mass-scaled, so the slider applies to
   Shell-Shell and Rod-Rod pairs the same way it applies to the
@@ -193,8 +199,13 @@ the simulation.
 
 ## Merge Pairs Without Snapping
 
-A merge pair alone (without snapping) registers two objects as stitched
-during the solve. Each pair has:
+A merge pair on its own only *registers* two objects; it does not yet
+carry the stitch anchors the solver sews with. Those are captured by
+**Snap A to B** (or **Re-snap** on an existing pair), so a pair that was
+added without ever snapping, or whose anchors a later mesh edit
+invalidated, is refused at **Transfer** with *Merge pair(s) with no
+stitch points: A ↔ B* and a prompt to **Re-snap** or remove it. Each
+pair has:
 
 | UI label              | Python / TOML key   | Description                                                                                                                               |
 | --------------------- | ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
@@ -217,7 +228,8 @@ from bl_ext.user_default.ppf_contact_solver.ops.api import solver
 # merge pair with cross-stitch anchor data.
 solver.snap("Shirt", "Mannequin")
 
-# Or register a merge pair without moving anything.
+# Or register a merge pair without moving anything. Snap / Re-snap must
+# still run before Transfer, or the pair is refused (no stitch points).
 solver.add_merge_pair("Shirt", "Mannequin")
 
 # Iterate existing pairs.
@@ -242,7 +254,8 @@ you hit that error.
 
 Snap is a one-shot alignment:
 
-1. Finds the closest pair of vertices between objects A and B.
+1. Finds the source vertex whose closest point on the other object's
+   nearest triangle (or rod segment) is globally minimal.
 2. Translates the moving object in world space (parent-safe) along the
    approach direction so the closest pair ends a small positive gap apart:
    the summed `contact_gap + contact_offset` of both groups, scaled by a
@@ -258,20 +271,25 @@ Snap is a one-shot alignment:
 Each merge pair carries the captured anchor payload:
 
 - Source and target object UUIDs.
-- Per source vertex: target triangle indices and barycentric weights
-  `[1.0, α, β, γ]`.
+- Per source vertex, a six-wide row: indices `[si, si, si, t0, t1, t2]`
+  (a degenerate source barycentric plus the target triangle) and weights
+  `[1.0, 0.0, 0.0, α, β, γ]`.
 - Target positions at snap time.
 - Vertex counts at snap time, so stale entries can be detected if you
   edit the topology later.
 
-When the pair is sent to the solver, the target vertex with the highest
-barycentric weight is picked per stitch. For rod-to-rod / rod-to-shell
-the target degenerates to a single vertex with weight 1.
+The full barycentric anchor is what reaches the solver: each stitch row
+keeps its three target vertices and their weights, remapped into the
+assembled scene's index space. Only a rod *target* degenerates to a
+single vertex with weight 1, which is the rod-to-rod case; a rod paired
+with a shell or a solid is the source side, and still anchors to a
+target triangle.
 
 **Merge-pair encoding**
 
 Merge pairs are tracked by UUID, so renaming either object preserves the
 link. Pairs referencing an object that has never been snapped or merged
 (no UUID yet) are skipped at transfer. An empty cross-stitch payload
-means snap has not run or the pair is not eligible for a stitch.
+means snap has not run or the pair is not eligible for a stitch, and
+**Transfer** refuses the pair rather than shipping it.
 :::

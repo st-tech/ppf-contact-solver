@@ -268,7 +268,7 @@ __device__ void embed_contact_force_hess(
     const Vec<VertexProp> &vert_prop, Barrier barrier, float dt, float friction,
     unsigned count, const ParamSet &param, int stage, bool include_friction,
     unsigned i, const Vec3f *fdx_override = nullptr,
-    Vec3f *out_fric_grad = nullptr, float *out_lambda = nullptr) {
+    Vec3f *out_fric_grad = nullptr, float *out_stiffness = nullptr) {
 
     // Stage 0 only reserves CSR slots from prox.index; the per-pair prologue
     // below (mass / ex / normal / compute_stiffness, the last of which streams
@@ -342,21 +342,38 @@ __device__ void embed_contact_force_hess(
         // contact-point slip (both grains' lagged spin folded in by the
         // caller); other contacts use the plain relative displacement dx.
         const Vec3f &slip = fdx_override ? *fdx_override : dx;
-        Friction _friction(f, slip, normal, friction, param.friction_eps);
+        // The friction anchor reads the residual on this pair's slip
+        // coordinate and the pair's own inertia (friction.hpp). A vertex
+        // without a degree of freedom, an exact fix pin or a massless static
+        // vertex, gets weight zero in both: it does not move.
+        SVecf<N> w_free;
+        for (unsigned ii = 0; ii < N; ++ii) {
+            const bool owns_dof =
+                vert_prop[prox.index[ii]].fix_index == 0 && mass[ii] > 0.0f;
+            w_free[ii] = owns_dof ? prox.value[ii] : 0.0f;
+        }
+        Vec3f drive = Vec3f::Zero();
+        float drive_stiffness = 0.0f;
+        if (!slip_prediction<N>(prox.index, w_free, mass, fixed_in, force_in,
+                                normal, dt, drive, drive_stiffness)) {
+            drive_stiffness = 0.0f;
+        }
+        Friction _friction(f, slip, normal, friction, param.friction_eps,
+                           drive, drive_stiffness);
         Vec3f fg = _friction.gradient();
         Mat3x3f fh = _friction.hessian();
         f += fg;
         H += fh;
         // Export the friction gradient + stiffness by value (Friction has a
         // reference member and no default ctor, so it cannot be returned).
-        // lambda comes from the struct rather than being recovered from the
-        // Hessian trace, so it stays correct regardless of how the tangential
-        // stiffness is shaped.
+        // The stiffness comes from the struct rather than being recovered
+        // from the Hessian trace, so it stays correct regardless of how the
+        // tangential stiffness is shaped.
         if (out_fric_grad) {
             *out_fric_grad = fg;
         }
-        if (out_lambda) {
-            *out_lambda = _friction.lambda;
+        if (out_stiffness) {
+            *out_stiffness = _friction.stiffness;
         }
     }
 
@@ -568,7 +585,7 @@ struct PointPointContactForceHessEmbed {
                     Vec3f fdx;
                     const Vec3f *fdx_ptr = nullptr;
                     Vec3f fric_grad = Vec3f::Zero();
-                    float fric_lambda = 0.0f;
+                    float fric_stiffness = 0.0f;
                     Vec3f n = Vec3f::Zero();
                     float ra = 0.0f, rb = 0.0f;
                     if ((ga || gb) && stage != 0 && include_friction) {
@@ -598,14 +615,14 @@ struct PointPointContactForceHessEmbed {
                         force_in, dyn_out, ghat, offset, prop, param.barrier,
                         dt, friction, count, param, stage, include_friction,
                         vertex_index, fdx_ptr, fdx_ptr ? &fric_grad : nullptr,
-                        fdx_ptr ? &fric_lambda : nullptr);
+                        fdx_ptr ? &fric_stiffness : nullptr);
 
                     if (fdx_ptr) {
                         // count matches the actually-deposited friction force
                         // (count * ext_force) so the torque tracks the applied
                         // force; count == 1 for pure grain-grain pile contacts.
                         Vec3f f_t = float(count) * fric_grad;
-                        float lam = float(count) * fric_lambda;
+                        float lam = float(count) * fric_stiffness;
                         if (ga) {
                             Vec3f tau = ra * n.cross(f_t);
                             atomicAdd(&data.grain_torque.data[a][0], tau[0]);
@@ -927,6 +944,7 @@ struct CollisionMeshVertexFaceContactForceHessEmbed_M2C {
     const DataSet &data;
     unsigned vertex_index;
     Vec<float> force;
+    const Vec<float> &force_in;
     const Mat3x3f &local_hess;
     FixedCSRMat &dyn_out;
     const Vec<Vec3u> &collision_mesh_face;
@@ -982,7 +1000,18 @@ struct CollisionMeshVertexFaceContactForceHessEmbed_M2C {
                     normal.dot(local_hess * normal) + mass / gap_squared;
                 Vec3f f = stiff_k * push::gradient(-proj_x, normal, ghat);
                 Mat3x3f H = stiff_k * push::hessian(-proj_x, normal, ghat);
-                Friction _friction(f, -q, normal, friction, param.friction_eps);
+                // The enclosing test admits only a free vertex with mass, so
+                // it owns its degree of freedom and its inertia is the slip
+                // coordinate's stiffness (friction.hpp).
+                Vec3f drive = Vec3f::Zero();
+                float drive_stiffness = 0.0f;
+                if (!slip_prediction(local_hess, mass,
+                                     force_in.data + 3 * vertex_index, normal,
+                                     dt, drive, drive_stiffness)) {
+                    drive_stiffness = 0.0f;
+                }
+                Friction _friction(f, -q, normal, friction, param.friction_eps,
+                                   drive, drive_stiffness);
                 f += _friction.gradient();
                 H += _friction.hessian();
 
@@ -1004,6 +1033,7 @@ struct CollisionMeshVertexFaceContactForceHessEmbed_C2M {
     const FixedCSRMat &fixed_hess_in;
     FixedCSRMat &fixed_out;
     Vec<float> force;
+    const Vec<float> &force_in;
     const Vec<Vec3f> &vertex;
     const Vec<Vec3f> &eval_x;
     const Vec<VertexProp> &dyn_vert_prop;
@@ -1078,8 +1108,27 @@ struct CollisionMeshVertexFaceContactForceHessEmbed_C2M {
                 Vec3f proj_x = normal * (offset + ghat);
                 Vec3f f = stiff_k * push::gradient(p - proj_x, normal, ghat);
                 Mat3x3f H = stiff_k * push::hessian(p - proj_x, normal, ghat);
+                // The slip coordinate is the face point c . x, so the face
+                // weights are the pair weights (friction.hpp). The enclosing
+                // test admits only a face that is not fixed and has mass, but
+                // one of its vertices can still be a fix pin.
+                SVecf<3> w_free;
+                SVecf<3> face_mass;
+                for (unsigned k = 0; k < 3; ++k) {
+                    face_mass[k] = dyn_vert_prop[fc[k]].mass;
+                    const bool owns_dof = dyn_vert_prop[fc[k]].fix_index == 0 &&
+                                          face_mass[k] > 0.0f;
+                    w_free[k] = owns_dof ? c[k] : 0.0f;
+                }
+                Vec3f drive = Vec3f::Zero();
+                float drive_stiffness = 0.0f;
+                if (!slip_prediction<3>(fc, w_free, face_mass, fixed_hess_in,
+                                        force_in, normal, dt, drive,
+                                        drive_stiffness)) {
+                    drive_stiffness = 0.0f;
+                }
                 Friction _friction(f, p - q, normal, friction,
-                                   param.friction_eps);
+                                   param.friction_eps, drive, drive_stiffness);
                 f += _friction.gradient();
                 H += _friction.hessian();
                 Mat3x3f ff;
@@ -1108,6 +1157,8 @@ struct CollisionMeshEdgeEdgeContactForceHessEmbed {
     unsigned i;
     const Vec<Vec2u> &mesh_edge;
     Vec<float> &force;
+    const Vec<float> &force_in;
+    const FixedCSRMat &elastic_hess_in;
     const Mat6x6f &local_hess;
     FixedCSRMat &dyn_out;
     const Vec<Vec2u> &collision_mesh_edge;
@@ -1182,8 +1233,24 @@ struct CollisionMeshEdgeEdgeContactForceHessEmbed {
                 Vec3f f = stiff_k * push::gradient(e - proj_x, normal, ghat);
                 Mat3x3f H = stiff_k * push::hessian(e - proj_x, normal, ghat);
 
+                SVecf<2> w_free;
+                SVecf<2> edge_mass;
+                for (unsigned k = 0; k < 2; ++k) {
+                    edge_mass[k] = dyn_vert_prop[mesh_edge[k]].mass;
+                    const bool owns_dof =
+                        dyn_vert_prop[mesh_edge[k]].fix_index == 0 &&
+                        edge_mass[k] > 0.0f;
+                    w_free[k] = owns_dof ? c[k] : 0.0f;
+                }
+                Vec3f drive = Vec3f::Zero();
+                float drive_stiffness = 0.0f;
+                if (!slip_prediction<2>(mesh_edge, w_free, edge_mass,
+                                        elastic_hess_in, force_in, normal, dt,
+                                        drive, drive_stiffness)) {
+                    drive_stiffness = 0.0f;
+                }
                 Friction _friction(f, x - z, normal, friction,
-                                   param.friction_eps);
+                                   param.friction_eps, drive, drive_stiffness);
                 f += _friction.gradient();
                 H += _friction.hessian();
 
@@ -1209,8 +1276,8 @@ struct CollisionMeshEdgeEdgeContactForceHessEmbed {
 
 __device__ unsigned embed_vertex_constraint_force_hessian(
     const DataSet &data, const Vec<Vec3f> &eval_x, Vec<float> &force,
-    const FixedCSRMat &fixed_hess_in, FixedCSRMat &fixed_out, float dt,
-    const ParamSet &param, unsigned i) {
+    const Vec<float> &force_in, const FixedCSRMat &fixed_hess_in,
+    FixedCSRMat &fixed_out, float dt, const ParamSet &param, unsigned i) {
 
     const VertexProp &prop = data.prop.vertex[i];
     const VertexParam &vparam = data.param_arrays.vertex[prop.param_index];
@@ -1271,6 +1338,11 @@ __device__ unsigned embed_vertex_constraint_force_hessian(
     } else if (mass > 0.0f) {
         // Zero-mass vertices are static solids; skip walls and spheres
         // (both are static themselves; no contact between static solids).
+        // This vertex is free and has mass, so its residual, elastic block
+        // and inertia are what anchor the friction of every wall and sphere it
+        // touches (friction.hpp). The prediction depends on each constraint's
+        // normal, so it is made per contact below.
+        const float *resid_i = force_in.data + 3 * i;
         for (unsigned j = 0; j < data.constraint.sphere.size; ++j) {
             const Sphere &sphere = data.constraint.sphere[j];
             float ghat = sphere.ghat;
@@ -1356,8 +1428,15 @@ __device__ unsigned embed_vertex_constraint_force_hessian(
                     // translation friction (rotation solved implicitly), grain
                     // angular coupling via the Schur blocks. `normal` is the
                     // grain's outward push direction.
+                    Vec3f drive = Vec3f::Zero();
+                    float drive_stiffness = 0.0f;
+                    if (!slip_prediction(local_hess, mass, resid_i, normal, dt,
+                                         drive, drive_stiffness)) {
+                        drive_stiffness = 0.0f;
+                    }
                     Friction _friction(f_push, dx, normal, friction,
-                                       param.friction_eps);
+                                       param.friction_eps, drive,
+                                       drive_stiffness);
                     Vec3f fric_grad = _friction.gradient();
                     Mat3x3f fric_hess = _friction.hessian();
                     f += fric_grad;
@@ -1405,7 +1484,14 @@ __device__ unsigned embed_vertex_constraint_force_hessian(
                 // implicitly, not lagged into the slip), so f/H here are exactly a
                 // normal contact's. The grain's angular DOF enters via the Schur
                 // blocks accumulated below.
-                Friction _friction(f_push, dx, up, friction, param.friction_eps);
+                Vec3f drive = Vec3f::Zero();
+                float drive_stiffness = 0.0f;
+                if (!slip_prediction(local_hess, mass, resid_i, up, dt, drive,
+                                     drive_stiffness)) {
+                    drive_stiffness = 0.0f;
+                }
+                Friction _friction(f_push, dx, up, friction, param.friction_eps,
+                                   drive, drive_stiffness);
                 Vec3f fric_grad = _friction.gradient();
                 Mat3x3f fric_hess = _friction.hessian();
                 f += fric_grad;
@@ -1879,11 +1965,22 @@ unsigned embed_constraint_force_hessian(const DataSet &data,
     Vec<unsigned> num_contact_vtf_vec = num_contact_vtf.as_vec();
     Vec<unsigned> num_contact_ee_vec = num_contact_ee.as_vec();
 
+    // Every contact below anchors its friction on the residual (friction.hpp)
+    // while adding its own force into that same vector, so the reads go to a
+    // copy taken before any of them runs. The copy holds what is assembled
+    // when this pass starts: the momentum, elastic and strain-limit terms.
+    // The mesh contacts run after this pass and read `force` directly, with
+    // these forces already in it.
+    auto resid = pool.get<float>(3 * surface_vert_count);
+    kernels::copy(force.data, resid.data, 3 * surface_vert_count);
+    Vec<float> resid_vec = resid.as_vec();
+
     DISPATCH_START(surface_vert_count)
-    [data, eval_x, force, fixed_hess_in, fixed_out, dt, num_contact_vtf_vec,
-     param] __device__(unsigned i) mutable {
+    [data, eval_x, force, resid_vec, fixed_hess_in, fixed_out, dt,
+     num_contact_vtf_vec, param] __device__(unsigned i) mutable {
         num_contact_vtf_vec[i] += embed_vertex_constraint_force_hessian(
-            data, eval_x, force, fixed_hess_in, fixed_out, dt, param, i);
+            data, eval_x, force, resid_vec, fixed_hess_in, fixed_out, dt,
+            param, i);
     } DISPATCH_END;
 
     const bool *vert_active = get_vert_collision_active();
@@ -1897,7 +1994,7 @@ unsigned embed_constraint_force_hessian(const DataSet &data,
             storage::collision_mesh_edge_aabb};
 
         DISPATCH_START(surface_vert_count)
-        [data, eval_x, force, fixed_hess_in, fixed_out, args, dt,
+        [data, eval_x, force, resid_vec, fixed_hess_in, fixed_out, args, dt,
          num_contact_vtf_vec, vertex_params, collision_face_params,
          vert_active, param] __device__(unsigned i) mutable {
             Mat3x3f local_hess = fixed_hess_in(i, i);
@@ -1907,6 +2004,7 @@ unsigned embed_constraint_force_hessian(const DataSet &data,
                 data,
                 i,
                 force,
+                resid_vec,
                 local_hess,
                 fixed_out,
                 args.collision_mesh_face,
@@ -1930,7 +2028,7 @@ unsigned embed_constraint_force_hessian(const DataSet &data,
         } DISPATCH_END;
 
         DISPATCH_START(data.constraint.mesh.vertex.size)
-        [data, eval_x, force, fixed_hess_in, fixed_out, args,
+        [data, eval_x, force, resid_vec, fixed_hess_in, fixed_out, args,
          num_contact_vtf_vec, face_bvh, face_aabb, face_params,
          collision_vertex_params, dt, param] __device__(unsigned i) mutable {
             const VertexProp &prop = data.constraint.mesh.prop.vertex[i];
@@ -1943,6 +2041,7 @@ unsigned embed_constraint_force_hessian(const DataSet &data,
                 fixed_hess_in,
                 fixed_out,
                 force,
+                resid_vec,
                 data.vertex.curr,
                 eval_x,
                 data.prop.vertex,
@@ -1960,7 +2059,7 @@ unsigned embed_constraint_force_hessian(const DataSet &data,
         } DISPATCH_END;
 
         DISPATCH_START(edge_count)
-        [data, eval_x, force, fixed_hess_in, fixed_out, args,
+        [data, eval_x, force, resid_vec, fixed_hess_in, fixed_out, args,
          num_contact_ee_vec, edge_params, collision_edge_params, dt,
          edge_active, param] __device__(unsigned i) mutable {
             const Vec2u &edge = data.mesh.mesh.edge[i];
@@ -1979,6 +2078,8 @@ unsigned embed_constraint_force_hessian(const DataSet &data,
                 i,
                 data.mesh.mesh.edge,
                 force,
+                resid_vec,
+                fixed_hess_in,
                 local_hess,
                 fixed_out,
                 data.constraint.mesh.edge,

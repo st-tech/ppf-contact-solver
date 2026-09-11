@@ -55,10 +55,19 @@ object the add-on:
 
 - removes the `ContactSolverCache` modifier from the mesh (or drops the
   per-CV animation the solver wrote onto the curve for rods),
+- **deletes every modifier sitting above `ContactSolverCache`** in the
+  stack (Armature, Lattice, MeshDeform, and so on), because those fed
+  the captured-deformation cache and would re-deform the baked shape
+  keys at playback. This is a no-op for the usual dynamic object, whose
+  cache sits in the first slot with nothing above it,
 - **deletes the `.pc2` file** from `<blend_dir>/data/<basename>/` on
   disk, and
 - removes the object from its dynamics group, together with any pin
   vertex groups attached to it.
+
+Every bake button opens a confirmation dialog before any of that runs,
+and when there are modifiers to strip the dialog lists them by name under
+*These deforming modifiers will also be removed:*.
 
 :::{note}
 **A captured deformation is not part of that cleanup.** If the object
@@ -162,16 +171,25 @@ key / fcurve to its pre-bake state.
 :alt: Bake Single Frame button highlighted on the Solver panel
 :width: 500px
 
-**Bake Single Frame** is synchronous and finishes in one click. Every
-dynamic object is frozen at the viewport's current evaluated pose,
-applied to frame 1, and removed from its group.
+**Bake Single Frame** is synchronous: it opens its confirmation dialog,
+and on confirm freezes every dynamic object at the viewport's current
+evaluated pose, applies it to frame 1, and removes the object from its
+group.
 ```
 
 Both scene-wide buttons are enabled only when at least one active group
 has an assigned object carrying simulation animation (that is, only
-after a successful **Fetch**). While a bake job is running every other button on
-the Solver panel is inert; wait for the progress bar to finish or press
-**Abort**.
+after a successful **Fetch**). **Bake Animation** additionally refuses
+to start while any animation frames are still unfetched (*Unfetched
+animation frames exist*): **Fetch All Animation** first. **Bake Single
+Frame** carries no such check. While a bake job is running, **Run**,
+**Resume**, **Fetch All Animation**, **Clear Local Animation**, the bake
+buttons themselves, and everything in the **Deformations** and
+**Export** boxes go inert. Not every button on the panel is gated on the
+bake, though: **Transfer**, **Update Params on Remote** and **Delete
+Remote Data** stay clickable, as do the **JupyterLab** and **MCP
+Server** boxes. Do not press them mid-bake; wait for the progress bar to
+finish, or press **Abort** first.
 
 ## The Dynamics Groups Panel (Bake One Object)
 
@@ -235,8 +253,9 @@ are restored, and the `ContactSolverCache` modifier + PC2 file stay
 intact, so you can immediately press **Bake Animation** again or go
 back to iterating.
 
-**Bake Single Frame** does not run modally and cannot be aborted; it
-finishes in one operator call.
+**Bake Single Frame** does not run modally and cannot be aborted. Like
+every bake button it opens a confirmation dialog first, and once
+confirmed it finishes in one operator call.
 
 ## Bake Order and Static Groups
 
@@ -273,9 +292,11 @@ bpy.ops.solver.bake_abort()
 ```
 
 For LLM / MCP-driven flows, the same actions are exposed as the
-`scene.bake_all_animation`, `scene.bake_all_single_frame`,
-`group.bake_group_animation`, and `group.bake_group_single_frame`
-handlers (see [MCP Integration](../../integrations/mcp.md)).
+`bake_all_animation`, `bake_all_single_frame`, `bake_group_animation`,
+and `bake_group_single_frame` handlers (see
+[MCP Integration](../../integrations/mcp.md)). An MCP tool carries the
+bare handler-function name; the `scene.` / `group.` prefixes are just the
+handler module files and are not part of the name a client calls.
 
 :::{admonition} Under the hood
 :class: toggle

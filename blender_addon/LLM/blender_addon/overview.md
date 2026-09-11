@@ -185,7 +185,7 @@ One-line definitions for the terms that appear across the rest of the documentat
 : A connection type where the solver runs on a remote Linux host reached by SSH, with credentials entered as explicit fields.
 
 **Streamable HTTP**
-: The MCP transport profile (protocol version `2025-06-18`) used by the bundled MCP server. All traffic goes through a single `/mcp` endpoint with a server-assigned `Mcp-Session-Id`.
+: The MCP transport profile (protocol version `2026-07-28`) used by the bundled MCP server. All traffic goes through a single `/mcp` endpoint as standalone POSTs; the transport is stateless, so there is no handshake and no session. Clients written against `2025-06-18` are still served.
 
 **Windows Native connection**
 : A connection type where the solver runs directly as a Windows subprocess, using a bundled Python interpreter and no SSH or Docker.

@@ -266,7 +266,8 @@ scripting). Load when:
 - Questions about the MCP server: how to start it (the panel, or
   `python blender_addon/debug/main.py start-mcp`), security
   (localhost-only), the Streamable HTTP endpoint (`POST /mcp` +
-  session headers), `tools/list`, resource discovery.
+  the required request headers), `server/discover`, `tools/list`,
+  resource discovery.
 - **MCP scene setup**: preferred patterns (use MCP tools, not raw
   Python), placement with world clearance, sphere primitive
   construction, target mesh resolution (1-3 % edge length / bbox
@@ -306,9 +307,10 @@ Scene, Dynamic parameters, Remote, Console, Debug, Blender). Each
 entry has the full
 typed signature, parameter list with descriptions, and return notes.
 The top of the file shows three equivalent ways to invoke every tool:
-MCP Streamable HTTP `POST /mcp` (JSON-RPC `tools/call`, after an
-`initialize` handshake that returns an `Mcp-Session-Id` to echo on
-every subsequent request), `bpy.ops.zozo_contact_solver.<tool>(...)`,
+MCP Streamable HTTP `POST /mcp` (JSON-RPC `tools/call` as a
+standalone request carrying `params._meta` and the mirrored
+`MCP-Protocol-Version` / `Mcp-Method` / `Mcp-Name` headers, with no
+handshake and no session), `bpy.ops.zozo_contact_solver.<tool>(...)`,
 and `python blender_addon/debug/main.py call <tool> '{"arg":"value"}'`.
 
 Load when:

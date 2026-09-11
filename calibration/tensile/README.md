@@ -25,11 +25,26 @@ a steep lock-up). Consequences for calibration:
 - `tensile.py --test stretch`: a vertical strip is pinned along its top edge and
   hangs under amplified gravity. `young-mod` is density-normalized, so the strain
   scales as `g / young-mod` (independent of density): more compliant fabric
-  stretches more. The reported max local strain (top segment, which carries the
-  whole strip's weight) ranks the fabrics by compliance and stays under the
-  strain limit (elastic). Verified ranking at g=100:
-  Silk 2.1% > Flag 1.1% > Wool 0.5% > Cotton 0.27% > Denim 0.23% > Leather 0.07%,
-  matching the reference order (Silk/Wool stretch more than Denim/Leather).
+  stretches more. `elong%` is the elongation of the strip's FREE span, `maxloc%`
+  the strain of its topmost free segment, which carries the weight of everything
+  below it and is therefore the largest local strain; `maxloc%` is what the
+  elastic-regime check compares against the strain limit. Measured:
+
+  | Fabric  | young-mod | elong% | maxloc% | strain limit |
+  | ------- | --------: | -----: | ------: | -----------: |
+  | Silk    |       500 |   2.05 |    3.27 |         6.0% |
+  | Wool    |      2000 |   1.24 |    2.13 |         8.0% |
+  | Flag    |      1000 |   1.19 |    1.94 |         4.0% |
+  | Cotton  |      5500 |   0.68 |    1.20 |         5.0% |
+  | Denim   |     10000 |   0.46 |    0.81 |         3.0% |
+  | Leather |     13000 |   0.24 |    0.44 |         2.0% |
+
+  Every fabric stays below its own strain limit, so all six are read in the
+  elastic regime, and the ordering is monotonic in `young-mod` with ONE
+  exception: Wool and Flag come out swapped relative to the reference (Wool is
+  the stiffer of the two by `young-mod` yet stretches marginally more, 1.24
+  against 1.19). The pair is separated by 0.05 points, it reproduces, and it is
+  the one place this test does not confirm the reference order.
 
 - `tensile.py --test poisson`: a strip pinned at both ends is stretched a small
   amount; the mid-span lateral contraction would give nu = -lateral/axial.
@@ -65,7 +80,7 @@ per-fabric notes of `targets.csv`.
 ## Running (CUDA host)
 
 ```sh
-PYTHONPATH=. python calibration/tensile/tensile.py --test stretch --all --g 100
+PYTHONPATH=. python calibration/tensile/tensile.py --test stretch --all
 PYTHONPATH=. python calibration/tensile/tensile.py --test poisson --all
 # probe a single fabric / value:
 PYTHONPATH=. python calibration/tensile/tensile.py --test stretch --fabric Silk --young-mod 800

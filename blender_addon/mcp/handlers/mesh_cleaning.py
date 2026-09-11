@@ -3,14 +3,19 @@
 These wrap the Utility Tools panel's Mesh Cleaning operators. Two shapes are
 deliberate here.
 
-Every tool takes explicit ``object_names`` rather than reading the current
-selection. The operators underneath work on the selection, which is the right
-affordance for an artist with the meshes highlighted in the viewport, but an
-MCP caller has no view of what happens to be selected and these edits are
-destructive. Naming the targets makes the call self-describing and repeatable.
-Every named object has to be reachable and selectable in the active view
-layer, and a call naming one that is not fails whole rather than repairing the
-rest, so a result always describes every object the caller asked about.
+Every tool driving a selection-based operator takes explicit ``object_names``
+rather than reading the current selection. The operators underneath work on
+the selection, which is the right affordance for an artist with the meshes
+highlighted in the viewport, but an MCP caller has no view of what happens to
+be selected and these edits are destructive. Naming the targets makes the call
+self-describing and repeatable. Every named object has to be reachable and
+selectable in the active view layer, and a call naming one that is not fails
+whole rather than repairing the rest, so a result always describes every
+object the caller asked about. ``triangulate_degenerate_faces`` is the one
+tool with no object list at all: the operator it wraps reads the included
+meshes of every active object group except SAND, and offers no property to
+narrow that scope. That set is not the one Transfer refuses over, and it
+differs in both directions, so the tool's own description states where.
 
 The three repairs that change the vertex count require ``acknowledge=True``,
 mirroring the confirmation dialog the panel raises. A vertex-count change
@@ -568,3 +573,267 @@ def symmetric_triangulate(object_names: list[str]):
         objects,
         verb="Symmetric-triangulated",
     )
+
+
+@contextlib.contextmanager
+def _object_mode():
+    """Leave Edit Mode for the duration, then restore the mode that was active.
+
+    The degenerate-tessellation repair reads and writes the mesh datablock
+    through bmesh, and that datablock does not carry an object's pending edits
+    while it is in Edit Mode, so both the repair and the scans that measure it
+    have to run from Object Mode. The restore runs while an error is
+    propagating, so raising there would replace the reason the call failed.
+    """
+    view_layer = bpy.context.view_layer
+    saved_active = view_layer.objects.active
+    saved_mode = saved_active.mode if saved_active is not None else "OBJECT"
+    if bpy.context.mode != "OBJECT":
+        try:
+            bpy.ops.object.mode_set(mode="OBJECT")
+        except RuntimeError as exc:
+            raise MCPError(
+                f"Could not leave the current mode: {exc}. This repair writes "
+                "the mesh datablock, which Blender discards on leaving Edit "
+                "Mode, so it only runs from Object Mode."
+            ) from exc
+    try:
+        yield
+    finally:
+        if saved_mode != "OBJECT":
+            with contextlib.suppress(RuntimeError, ReferenceError):
+                bpy.ops.object.mode_set(mode=saved_mode)
+
+
+def _degenerate_offenders() -> list:
+    """``[(object, scan)]`` for every mesh the degenerate-tessellation repair covers.
+
+    Read through the operator's own scan, so this reports exactly the set the
+    operator acts on: the included objects of every active object group except
+    SAND, one entry per mesh datablock, each judged on its base cage.
+    """
+    from ...ui.geometry_cleanup_ops import _degenerate_tessellation_offenders
+
+    return _degenerate_tessellation_offenders(bpy.context)
+
+
+def _assigned_group_types() -> dict:
+    """``{mesh datablock: [group object type]}`` over the repair's own scope.
+
+    The repair covers every group type except SAND, while the encoder applies
+    the conditioning test to a SHELL and a TetGen SOLID only, so the type is
+    what tells a caller whether the mesh it just rewrote is one Transfer would
+    have refused. The value is a list because a datablock can reach the scan
+    through more than one active group: an object assigned twice, or two
+    objects sharing a mesh.
+
+    The record walk mirrors ``_degenerate_tessellation_offenders``, and this
+    only labels the datablocks that scan returned, so a record the two walks
+    read differently produces a missing label and never a wrong repair.
+    """
+    from ...core.uuid_registry import resolve_assigned
+    from ...models.groups import iterate_object_groups
+
+    types: dict = {}
+    for group in iterate_object_groups(bpy.context.scene):
+        if not group.active or group.object_type == "SAND":
+            continue
+        for assigned in group.assigned_objects:
+            if not assigned.included:
+                continue
+            obj = resolve_assigned(assigned)
+            if obj is None or obj.type != "MESH":
+                continue
+            types.setdefault(obj.data, set()).add(group.object_type)
+    return {data: sorted(found) for data, found in types.items()}
+
+
+@mcp_handler
+def triangulate_degenerate_faces():
+    """Re-split only the faces whose tessellation leaves the solver no rest shape.
+
+    This is the targeted repair the Transfer refusal names. Blender splits a
+    quad along one of its two diagonals, and on a quad whose corner sits on,
+    or very near, the straight edge between its neighbors that diagonal
+    produces a triangle of three nearly collinear vertices. The solver inverts
+    each rest triangle once at scene build and the elastic Hessian is
+    quadratic in that inverse. An exactly zero-area triangle aborts the build
+    on a degenerate-face assertion; a merely near-collinear one clears that
+    assertion, inverts to a finite but enormous rest matrix, and reaches the
+    linear solve as a non-finite Hessian that names no geometry. The test is
+    the conditioning of the rest matrix against sqrt(float32 eps), not an area
+    threshold, so a thin triangle above that ratio is legitimate geometry and
+    is left alone.
+
+    Only flagged faces are split, and only those whose replacement fill is
+    measured sound before the split. Every other face keeps its shape, which is
+    what separates this from triangulate_for_solver and symmetric_triangulate:
+    each of those rewrites every quad and n-gon of the mesh. The vertex count
+    does not change, so no cache is invalidated; the face count grows by one
+    face per split quad and by more for a wider n-gon.
+
+    There is no object argument, because the operator underneath offers no
+    property to narrow its scope: it repairs every included mesh assigned to
+    an active object group other than SAND, STATIC collider groups included,
+    and judges each one on its BASE cage. Each mesh datablock is repaired
+    once, so two objects sharing a mesh are reported under a single name, and
+    each entry of the result names the group object types that datablock is
+    assigned under.
+
+    That set is not the one Transfer refuses over, and it differs in both
+    directions. It is WIDER: the encoder applies this conditioning test only
+    to a SHELL and to a SOLID meshed by TetGen, and gives every other
+    tessellation a positive-area test instead, so a STATIC, ROD, PDRD or
+    fTetWild-SOLID mesh can be rewritten here although Transfer accepts it as
+    authored. Read ``group_object_types`` in the result to see which meshes
+    that covers. A STATIC group promoted into the solved namespace, by soft
+    constraints, a captured deformation, static ops, an unpin time or a stitch
+    endpoint, does invert its rest shape in the solver, so a repair on a
+    collider mesh is not always unnecessary and nothing here separates the two
+    cases before the run. It is also NARROWER: the encoder judges the starting
+    frame's deform-evaluated pose, and this repair judges the base cage,
+    because a re-split of the base mesh is all it can change. A corner that a
+    shape key, an armature or another deforming modifier moves onto the line
+    between its neighbors is therefore invisible here, and a refusal from this
+    tool does not mean the Transfer complaint was spurious.
+
+    The result carries, per object, how many flagged faces the repair cleared
+    and how many faces the mesh gained. A face no split can rescue is left
+    exactly as it is and comes back under ``still_degenerate``: a face that is
+    already a triangle is its own only triangulation, and one with no area or
+    a zero-length boundary edge forces a degenerate triangle into every
+    triangulation. Those need the offending vertex moved, merge_by_distance to
+    weld coincident vertices, or dissolve_degenerate_faces. A call that finds
+    nothing flagged, or nothing triangulating can repair, is refused rather
+    than reported as a success. Run Transfer again afterward.
+    """
+    if bpy.context.scene is None:
+        raise MCPError("No active Blender scene")
+
+    with _object_mode():
+        before = _degenerate_offenders()
+        if not before:
+            raise MCPError(
+                "Nothing to repair: no mesh assigned to an active object "
+                "group tessellates into a triangle with no usable rest shape. "
+                "This repair covers the included objects of every active "
+                "group except SAND, so a mesh outside that set is never "
+                "examined, and it judges the base cage, so a corner that a "
+                "shape key, an armature or another deforming modifier moves "
+                "onto the line between its neighbors is not visible to it. "
+                "Transfer judges the starting frame's deform-evaluated pose, "
+                "so a Transfer refusal standing against this result points at "
+                "the deforming input, not at the base mesh: scan the shipped "
+                "pose in Blender, or disable the deformer to see the corner "
+                "the base cage carries."
+            )
+
+        repairable = sum(len(found["repairable_polygons"]) for _, found in before)
+        if not repairable:
+            detail = "; ".join(
+                f"{obj.name}: {len(found['polygons'])} face(s), "
+                f"{len(found['triangle_polygons'])} of them already triangles"
+                for obj, found in before
+            )
+            raise MCPError(
+                "No flagged face here can be repaired by triangulating, so "
+                f"nothing was changed ({detail}). A face that is already a "
+                "triangle is its own only triangulation, and one with no area "
+                "or a zero-length boundary edge forces a degenerate triangle "
+                "into every triangulation. Move the offending vertex, weld "
+                "coincident vertices with merge_by_distance, or collapse the "
+                "face with dissolve_degenerate_faces."
+            )
+
+        group_types = _assigned_group_types()
+        polygons_before = {obj.data: len(obj.data.polygons) for obj, _ in before}
+        status = bpy.ops.ssh.triangulate_degenerate_faces("EXEC_DEFAULT")
+        polygons_after = {obj.data: len(obj.data.polygons) for obj, _ in before}
+        # Keyed by DATABLOCK, as the scan itself is: two objects sharing a mesh
+        # produce one entry, and which of their names it carries is not fixed,
+        # so a lookup by name would read the repaired mesh as untouched.
+        after = {obj.data: found for obj, found in _degenerate_offenders()}
+
+    objects, repaired_total, added_total, still = [], 0, 0, []
+    for obj, found in before:
+        found_after = after.get(obj.data)
+        remaining = len(found_after["polygons"]) if found_after else 0
+        flagged = len(found["polygons"])
+        gained = polygons_after[obj.data] - polygons_before[obj.data]
+        objects.append(
+            {
+                "object_name": obj.name,
+                "group_object_types": group_types.get(obj.data, []),
+                "faces_repaired": flagged - remaining,
+                "degenerate_faces_before": flagged,
+                "degenerate_faces_after": remaining,
+                "degenerate_triangles_before": found["count"],
+                "degenerate_triangles_after": (
+                    found_after["count"] if found_after else 0
+                ),
+                "polygons_before": polygons_before[obj.data],
+                "polygons_after": polygons_after[obj.data],
+            }
+        )
+        repaired_total += flagged - remaining
+        added_total += gained
+        if remaining:
+            still.append(
+                {
+                    "object_name": obj.name,
+                    "degenerate_faces": remaining,
+                    "already_triangles": len(found_after["triangle_polygons"]),
+                }
+            )
+
+    # The scan taken before the call found a sound split for `repairable`
+    # face(s), so every one of them is unflagged afterward. Reporting a run
+    # that cleared none of them as a success would tell the caller the scene
+    # transfers when it still does not.
+    if repaired_total <= 0:
+        names = [entry["object_name"] for entry in objects]
+        listed = ", ".join(names[:8]) + (", ..." if len(names) > 8 else "")
+        raise MCPError(
+            f"The repair returned {sorted(status)} and left all {repairable} "
+            "face(s) that a sound triangulation exists for still flagged, so "
+            f"the meshes are not repaired ({added_total} face(s) were added) "
+            "and stand as the operator wrote them. Call scan_meshes on "
+            f"{listed} to read what each object still carries under "
+            "degenerate_tessellation. A sound split was measured for every "
+            "one of those faces before the call, so the failure is in the "
+            "repair run itself and finding it needs a person inspecting "
+            "these meshes in Blender."
+        )
+
+    repaired_objects = [
+        entry["object_name"] for entry in objects if entry["faces_repaired"]
+    ]
+    message = (
+        f"Triangulated {repaired_total} face(s) on {len(repaired_objects)} of "
+        f"{len(objects)} mesh(es), adding {added_total} face(s)."
+    )
+    if still:
+        stuck = ", ".join(
+            f"{entry['object_name']} ({entry['degenerate_faces']})" for entry in still
+        )
+        message += (
+            f" Still degenerate: {stuck}. Transfer refuses until those are "
+            "fixed too: move the offending vertex, weld coincident vertices "
+            "with merge_by_distance, or collapse the face with "
+            "dissolve_degenerate_faces."
+        )
+    else:
+        message += " Run Transfer again."
+
+    return {
+        "message": message,
+        "objects": objects,
+        "faces_repaired": repaired_total,
+        "faces_added": added_total,
+        "objects_repaired": repaired_objects,
+        "still_degenerate": still,
+        # Reported as ``operator_status``, never ``status``: mcp_handler treats
+        # a returned dict that already carries a ``status`` key as a fully
+        # formed response and passes it through untouched.
+        "operator_status": sorted(status),
+    }

@@ -67,7 +67,7 @@ WARNING: The server binds to `localhost` only. Do **not** port-forward it or bin
 
 ### Adding the server to an MCP client
 
-Once the server is running, point your MCP client at `http://localhost:9633/mcp` using the Streamable HTTP transport (protocol version `2025-06-18`). If port 9633 was busy and the add-on fell back to 9634, 9635, ..., up to 9642, use the port printed to the Blender console.
+Once the server is running, point your MCP client at `http://localhost:9633/mcp` using the Streamable HTTP transport (protocol version `2026-07-28`). If port 9633 was busy and the add-on fell back to 9634, 9635, ..., up to 9642, use the port printed to the Blender console.
 
 For Claude Code, run:
 
@@ -104,14 +104,48 @@ Rules of the road:
 
 | Property     | Value                                                                         |
 | ------------ | ----------------------------------------------------------------------------- |
-| Version      | `2025-06-18`                                                                  |
-| Transport    | Streamable HTTP (https://modelcontextprotocol.io/specification/2025-06-18/basic/transports) on a single `/mcp` endpoint |
-| Requests     | `POST /mcp` with a JSON-RPC message (or batch)                                |
-| Server push  | `GET /mcp` with `Accept: text/event-stream`, resumable via `Last-Event-ID`    |
-| Termination  | `DELETE /mcp` with `Mcp-Session-Id` ends the session                          |
+| Version      | `2026-07-28` (also serves `2025-06-18` clients)                               |
+| Transport    | Streamable HTTP (https://modelcontextprotocol.io/specification/2026-07-28/basic/transports) on a single `/mcp` endpoint |
+| Requests     | `POST /mcp` with one JSON-RPC request or notification. Arrays are refused     |
+| Retired verbs| `GET` and `DELETE` answer `405`                                               |
 | CORS         | Enabled on every response                                                     |
 
-All traffic flows through `/mcp`. The client calls `initialize` first; the server returns an `Mcp-Session-Id` header that the client echoes on subsequent requests. Every POST must send `Accept: application/json, text/event-stream`. Requests without a valid session get HTTP 404 (the spec's signal to re-initialize). The JSON-RPC surface itself is the standard MCP set: `initialize`, `tools/list`, `tools/call`, `resources/list`, `resources/read`.
+The transport is stateless: there is no handshake and no session. Every request is a standalone POST that declares itself in `params._meta`:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "tools/call",
+  "params": {
+    "name": "create_group",
+    "arguments": {},
+    "_meta": {
+      "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+      "io.modelcontextprotocol/clientCapabilities": {},
+      "io.modelcontextprotocol/clientInfo": {"name": "my-client", "version": "1.0"}
+    }
+  }
+}
+```
+
+Three headers mirror the body and are **required**. The server refuses any disagreement with `-32020`:
+
+| Header                 | Sourced from                                          |
+| ---------------------- | ----------------------------------------------------- |
+| `MCP-Protocol-Version` | `_meta["io.modelcontextprotocol/protocolVersion"]`    |
+| `Mcp-Method`           | `method`                                              |
+| `Mcp-Name`             | `params.name` or `params.uri`, for `tools/call`, `resources/read` and `prompts/get` |
+
+A name that cannot travel as plain ASCII is wrapped as `=?base64?<base64 of UTF-8>?=`.
+
+The JSON-RPC surface is `server/discover`, `tools/list`, `tools/call`, `resources/list`, `resources/templates/list`, `resources/read`, `prompts/list` and `prompts/get`. Call `server/discover` to learn the versions, capabilities and identity of a running server in one request; it needs no headers beyond the standard ones and works before anything else.
+
+Results carry `resultType: "complete"`, identify the server under `_meta["io.modelcontextprotocol/serverInfo"]`, and, for the list and read operations, carry the `ttlMs` and `cacheScope` caching hints. This server returns every list in a single page and mints no pagination cursor, so it rejects any `cursor` you send with `-32602`.
+
+An unsupported protocol version is refused with `-32022` and the error's `data.supported` names what to retry with. An unimplemented method answers HTTP `404` with a `-32601` body.
+
+A client written against `2025-06-18` still works: send `initialize` and the server answers that era, minting an `Mcp-Session-Id` to echo, with `GET` and `DELETE` behaving as that revision specifies.
 
 ### Exposed tools
 
@@ -149,32 +183,32 @@ If you are integrating from something that is not the bundled CLI, drive the Str
 ```bash
 HDR_ACCEPT='Accept: application/json, text/event-stream'
 HDR_JSON='Content-Type: application/json'
+VER='2026-07-28'
+META='"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28",
+              "io.modelcontextprotocol/clientCapabilities":{},
+              "io.modelcontextprotocol/clientInfo":{"name":"example","version":"0"}}'
 
-# 1. Initialize. The response's Mcp-Session-Id header is the session handle.
-SID=$(curl -sD - -o /dev/null -X POST http://localhost:9633/mcp \
+# 1. Ask what the server speaks. No handshake, no session.
+curl -s -X POST http://localhost:9633/mcp \
   -H "$HDR_JSON" -H "$HDR_ACCEPT" \
-  -d '{"jsonrpc":"2.0","id":1,"method":"initialize",
-       "params":{"protocolVersion":"2025-06-18","capabilities":{},
-                 "clientInfo":{"name":"example","version":"0"}}}' \
-  | awk 'tolower($1)=="mcp-session-id:"{print $2}' | tr -d '\r')
+  -H "MCP-Protocol-Version: $VER" -H "Mcp-Method: server/discover" \
+  -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"server/discover\",
+       \"params\":{$META}}"
 
-# 2. (Optional) send the initialized notification.
+# 2. Call a tool. Mcp-Name must repeat params.name or the server answers -32020.
 curl -s -X POST http://localhost:9633/mcp \
-  -H "$HDR_JSON" -H "$HDR_ACCEPT" -H "Mcp-Session-Id: $SID" \
-  -d '{"jsonrpc":"2.0","method":"notifications/initialized"}'
-
-# 3. Call a tool.
-curl -s -X POST http://localhost:9633/mcp \
-  -H "$HDR_JSON" -H "$HDR_ACCEPT" -H "Mcp-Session-Id: $SID" \
-  -d '{"jsonrpc":"2.0","id":2,"method":"tools/call",
-       "params":{"name":"run_python_script",
-                 "arguments":{"code":"import bpy; print(bpy.app.version_string)"}}}'
-
-# 4. Terminate the session when done.
-curl -s -X DELETE http://localhost:9633/mcp -H "Mcp-Session-Id: $SID"
+  -H "$HDR_JSON" -H "$HDR_ACCEPT" \
+  -H "MCP-Protocol-Version: $VER" -H "Mcp-Method: tools/call" \
+  -H "Mcp-Name: run_python_script" \
+  -d "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",
+       \"params\":{\"name\":\"run_python_script\",
+                 \"arguments\":{\"code\":\"import bpy; print(bpy.app.version_string)\"},
+                 $META}}"
 ```
 
-Requests missing `Accept: application/json, text/event-stream` get HTTP 406; requests with an unknown or absent `Mcp-Session-Id` get HTTP 404 (re-initialize to recover); non-localhost `Origin` headers get 403.
+There is nothing to terminate: each request stands alone.
+
+Non-localhost `Origin` headers get 403. A header that disagrees with the body, or a missing required header, gets 400 with `-32020`. A protocol version the server does not serve gets 400 with `-32022`, whose `data.supported` names what to retry with. An unimplemented method gets 404 with `-32601`.
 
 ### Resources: self-contained docs for LLM clients
 
@@ -199,14 +233,15 @@ Why it helps an LLM client:
 
 No HTML scraping, no filesystem access, no separate endpoint to poll: one `resources/list` + one `resources/read` and the model has every answer it needs to route the next question.
 
-Enumerating resources (assuming `$SID` is the session ID from `initialize`):
+Enumerating resources:
 
 ```bash
 curl -s -X POST http://localhost:9633/mcp \
   -H 'Content-Type: application/json' \
   -H 'Accept: application/json, text/event-stream' \
-  -H "Mcp-Session-Id: $SID" \
-  -d '{"jsonrpc":"2.0","id":2,"method":"resources/list"}'
+  -H 'MCP-Protocol-Version: 2026-07-28' -H 'Mcp-Method: resources/list' \
+  -d "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"resources/list\",
+       \"params\":{$META}}"
 ```
 
 The reply lists every URI with a `name`, a `description` (first line of the file body), and `mimeType` (`text/markdown` for docs, `application/json` for the live scene resource).
@@ -217,13 +252,14 @@ Reading a resource:
 curl -s -X POST http://localhost:9633/mcp \
   -H 'Content-Type: application/json' \
   -H 'Accept: application/json, text/event-stream' \
-  -H "Mcp-Session-Id: $SID" \
-  -d '{
-    "jsonrpc": "2.0",
-    "id": 3,
-    "method": "resources/read",
-    "params": {"uri": "llm://overview"}
-  }'
+  -H 'MCP-Protocol-Version: 2026-07-28' -H 'Mcp-Method: resources/read' \
+  -H 'Mcp-Name: llm://overview' \
+  -d "{
+    \"jsonrpc\": \"2.0\",
+    \"id\": 3,
+    \"method\": \"resources/read\",
+    \"params\": {\"uri\": \"llm://overview\", $META}
+  }"'
 ```
 
 The response is a JSON-RPC envelope whose `result.contents[0].text` holds the markdown body. `mimeType` is `text/markdown`. Unknown URIs return a JSON-RPC error with code `-32602`; path-traversal attempts (`llm://../../etc/passwd`) are rejected at the resolver so the URI scheme cannot escape the bundled `LLM/` tree.

@@ -43,9 +43,19 @@ the full list.
 
 ### Dynamic Parameters
 
-Keyframe-driven scene parameters use the `dyn()` builder. The API
-mirrors the frontend's `session.param.dyn()` but takes **frames**, not
-seconds:
+:::{note}
+`dyn()` is the legacy path. It writes the add-on's own keyframe list,
+which is converted into ordinary F-curves and emptied the next time the
+`.blend` is loaded — the animation survives, the list does not, so a
+script that reads `state.dyn_params` back after a reload finds it empty.
+New scripts should keyframe the scene property directly, e.g.
+`state.keyframe_insert(data_path="gravity_3d", frame=60)`. Note the
+property name: `gravity` is a `solver.param` alias, not a data path. See
+[Dynamic Parameters](../workflow/params/dynamic.md).
+:::
+
+The builder is kept for existing scripts. The API mirrors the frontend's
+`session.param.dyn()` but takes **frames**, not seconds:
 
 ```python
 # Flip gravity at frame 60: hold the initial value through 60,
@@ -62,6 +72,10 @@ solver.param.dyn("air_density").time(100).change(0.005)
 solver.param.dyn("gravity").clear()
 ```
 
+`clear()` empties the legacy list only, so once a file has been reloaded
+and converted it removes nothing; deleting the F-curve is a Blender
+operation.
+
 Valid keys: `"gravity"`, `"wind"`, `"air_density"`, `"air_friction"`,
 `"vertex_air_damp"`. Frames must be strictly increasing within a chain;
 `time(30).time(30)` raises.
@@ -72,7 +86,8 @@ semantics of `hold()` vs. `change()`.
 ## Groups
 
 ```python
-cloth = solver.create_group("Cloth", type="SHELL")   # SOLID | SHELL | ROD | STATIC
+# type is one of: SOLID | SHELL | ROD | STATIC | PDRD | SAND
+cloth = solver.create_group("Cloth", type="SHELL")
 cloth.add("Shirt", "Pants")
 cloth.param.shell_density       = 0.5
 cloth.param.shell_young_modulus = 50.0
@@ -146,7 +161,7 @@ cloth.create_pin("Shirt", "HemPins").pull(strength=2.0)
 | `spin(axis, angular_velocity, flip, center*, frame_start, frame_end, transition)` | Rotate about a derived pivot          |
 | `scale(factor, center*, frame_start, frame_end, transition)`    | Scale from a derived pivot                                |
 | `torque(magnitude, axis_component="PC3", flip, frame_start, frame_end)` | PCA-axis torque                                   |
-| `unpin(frame)`                                                  | Release the pin at `frame`                                |
+| `unpin(frame)`                                                  | Release the pin after `frame` frames, counted from the solve's Starting Frame (the argument is a frame count, not a frame number) |
 | `delete()`                                                      | Remove this pin from its group                            |
 
 `transition` is `"LINEAR"` or `"SMOOTH"`. `torque`'s `axis_component`
@@ -294,9 +309,11 @@ The fluent API is a thin layer of proxy objects over the add-on's
 operators and scene state:
 
 - `solver.param` exposes a whitelisted attribute surface over
-  scene-level properties. Assigning an unknown name raises
-  `AttributeError`. `solver.param.dyn(name)` returns a dynamic-parameter
-  builder.
+  scene-level properties. Reading an unknown name raises
+  `AttributeError`; assigning one goes through the
+  `zozo_contact_solver.set` operator, which reports an error and
+  surfaces as `RuntimeError`. `solver.param.dyn(name)` returns a
+  dynamic-parameter builder.
 - `solver.create_group(...)` returns a group handle. Its `.param`
   exposes that group's material/contact whitelist.
 - `group.create_pin(...)` returns a pin handle; every mutating method

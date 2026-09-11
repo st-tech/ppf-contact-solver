@@ -27,8 +27,17 @@ def _require_connected_and_idle():
 
 
 def disconnect():
-    """Disconnect current connection."""
-    if not com.is_connected():
+    """Tear down the connection, or the attempt that has not landed yet.
+
+    The panel splits this across two buttons, Disconnect once a connection is
+    up and Cancel while one is still handshaking, and both dispatch the same
+    teardown. Callers that have a single entry point (the MCP tool) reach
+    both phases through here, so an attempt against a host that never answers
+    can be called off instead of holding the session until it times out. With
+    neither in play there is nothing to tear down, which is a refusal rather
+    than a report of a successful teardown of nothing.
+    """
+    if not com.is_connected() and not com.is_connecting():
         raise RuntimeError("Not connected")
     com.disconnect()
 

@@ -11,6 +11,7 @@
 Pure stdlib. No Blender dependency — runs on any host Python.
 """
 
+import base64
 import importlib.util
 import json
 import os
@@ -35,7 +36,9 @@ def _load_port_defaults():
     fallback = {"DEFAULT_MCP_PORT": 9633, "DEFAULT_RELOAD_PORT": 8765}
     path = os.path.join(
         os.path.dirname(os.path.abspath(__file__)),
-        os.pardir, "models", "defaults.py",
+        os.pardir,
+        "models",
+        "defaults.py",
     )
     try:
         spec = importlib.util.spec_from_file_location("_ppf_cts_defaults", path)
@@ -57,18 +60,31 @@ DEBUG_PORT = _PORT_DEFAULTS["DEFAULT_RELOAD_PORT"]
 DEFAULT_MCP_PORT = _PORT_DEFAULTS["DEFAULT_MCP_PORT"]
 HOST = "localhost"
 
-MCP_PROTOCOL_VERSION = "2025-06-18"
+MCP_PROTOCOL_VERSION = "2026-07-28"
 _MCP_CLIENT_INFO = {"name": "ppf-cts-debug", "version": "0.1.0"}
+
+# The params member each method sources its Mcp-Name header from.
+_NAME_HEADER_SOURCE = {
+    "tools/call": "name",
+    "resources/read": "uri",
+    "prompts/get": "name",
+}
 
 
 # ---------------------------------------------------------------------------
 # MCP Streamable HTTP client
 # ---------------------------------------------------------------------------
 
-class MCPClient:
-    """Short-lived MCP Streamable HTTP client. One session per instance.
 
-    Use as a context manager to get automatic initialize + session teardown::
+class MCPClient:
+    """MCP Streamable HTTP client.
+
+    The transport is stateless: every request is a standalone POST that
+    carries its protocol version, client capabilities and client identity in
+    ``params._meta``, mirrored into the ``MCP-Protocol-Version``,
+    ``Mcp-Method`` and ``Mcp-Name`` headers. There is no handshake to perform
+    and no session to tear down, so the context manager exists only to keep
+    call sites uniform::
 
         with MCPClient(port) as c:
             tools = c.call("tools/list")["result"]["tools"]
@@ -77,37 +93,47 @@ class MCPClient:
     def __init__(self, port=DEFAULT_MCP_PORT, host=HOST, timeout=10.0):
         self._url = f"http://{host}:{port}/mcp"
         self._timeout = timeout
-        self._session_id = None
         self._next_id = 0
-        self.initialize_reply = None
+        self.discover_reply = None
 
     def __enter__(self):
-        self.initialize()
         return self
 
     def __exit__(self, *_):
-        self.close()
+        return False
 
-    def _headers(self):
+    def _meta(self):
+        return {
+            "io.modelcontextprotocol/protocolVersion": MCP_PROTOCOL_VERSION,
+            "io.modelcontextprotocol/clientCapabilities": {},
+            "io.modelcontextprotocol/clientInfo": _MCP_CLIENT_INFO,
+        }
+
+    def _headers(self, method, params):
+        """Standard request headers, mirroring the values in the body.
+
+        The server rejects any disagreement between these and the body, so
+        they are derived from the body here rather than passed in.
+        """
         headers = {
             "Content-Type": "application/json",
             "Accept": "application/json, text/event-stream",
+            "MCP-Protocol-Version": MCP_PROTOCOL_VERSION,
+            "Mcp-Method": method,
         }
-        if self._session_id is not None:
-            headers["Mcp-Session-Id"] = self._session_id
-            headers["MCP-Protocol-Version"] = MCP_PROTOCOL_VERSION
+        source = _NAME_HEADER_SOURCE.get(method)
+        if source:
+            value = params.get(source)
+            if isinstance(value, str):
+                headers["Mcp-Name"] = _encode_header_value(value)
         return headers
 
-    def _post(self, payload, *, timeout=None):
+    def _post(self, payload, headers, *, timeout=None):
         body = json.dumps(payload).encode("utf-8")
         req = urllib.request.Request(
-            self._url, data=body, headers=self._headers(), method="POST"
+            self._url, data=body, headers=headers, method="POST"
         )
         with urllib.request.urlopen(req, timeout=timeout or self._timeout) as resp:
-            if self._session_id is None:
-                sid = resp.headers.get("Mcp-Session-Id")
-                if sid:
-                    self._session_id = sid
             if resp.status == 202:
                 return None
             raw = resp.read()
@@ -117,61 +143,69 @@ class MCPClient:
         self._next_id += 1
         return self._next_id
 
-    def initialize(self):
-        """Perform the initialize handshake and cache the reply."""
-        self.initialize_reply = self._post(
-            {
-                "jsonrpc": "2.0",
-                "id": self._rpc_id(),
-                "method": "initialize",
-                "params": {
-                    "protocolVersion": MCP_PROTOCOL_VERSION,
-                    "capabilities": {},
-                    "clientInfo": _MCP_CLIENT_INFO,
-                },
-            }
-        )
-        self._post({"jsonrpc": "2.0", "method": "notifications/initialized"})
-        return self.initialize_reply
-
     def call(self, method, params=None, *, timeout=None):
-        """Send a JSON-RPC request after initialize and return the reply."""
-        if self._session_id is None:
-            self.initialize()
-        return self._post(
-            {
-                "jsonrpc": "2.0",
-                "id": self._rpc_id(),
-                "method": method,
-                "params": params or {},
-            },
-            timeout=timeout,
-        )
+        """Send one JSON-RPC request and return the reply.
+
+        An HTTP error status still carries a JSON-RPC error body, which is
+        the useful part, so it is parsed and returned rather than raised.
+        """
+        params = dict(params or {})
+        params["_meta"] = self._meta()
+        payload = {
+            "jsonrpc": "2.0",
+            "id": self._rpc_id(),
+            "method": method,
+            "params": params,
+        }
+        headers = self._headers(method, params)
+        try:
+            return self._post(payload, headers, timeout=timeout)
+        except urllib.error.HTTPError as exc:
+            raw = exc.read()
+            if raw:
+                try:
+                    return json.loads(raw)
+                except ValueError:
+                    pass
+            raise
+
+    def discover(self):
+        """Ask the server for its versions, capabilities and identity."""
+        self.discover_reply = self.call("server/discover")
+        return self.discover_reply
 
     def close(self):
-        if not self._session_id:
-            return
-        req = urllib.request.Request(
-            self._url,
-            method="DELETE",
-            headers={"Mcp-Session-Id": self._session_id},
-        )
-        try:
-            urllib.request.urlopen(req, timeout=self._timeout)
-        except (urllib.error.URLError, OSError):
-            pass
-        self._session_id = None
+        """No-op: the transport holds nothing to release."""
+
+
+def _encode_header_value(value):
+    """Wrap *value* in the Base64 sentinel when it cannot travel as ASCII.
+
+    HTTP field values admit visible ASCII, space and horizontal tab, with no
+    leading or trailing whitespace. A resource URI or tool name outside that
+    set, or one that happens to look like the sentinel itself, is encoded.
+    """
+    plain = value == value.strip(" \t") and all(
+        ch == "\t" or 0x20 <= ord(ch) <= 0x7E for ch in value
+    )
+    looks_encoded = value.startswith("=?base64?") and value.endswith("?=")
+    if plain and not looks_encoded:
+        return value
+    encoded = base64.b64encode(value.encode("utf-8")).decode("ascii")
+    return f"=?base64?{encoded}?="
 
 
 # ---------------------------------------------------------------------------
 # Connection checks
 # ---------------------------------------------------------------------------
 
+
 def is_mcp_reachable(port=DEFAULT_MCP_PORT, host=HOST):
-    """True if the MCP server accepts an initialize within 2s."""
+    """True if the MCP server answers server/discover within 2s."""
     try:
-        with MCPClient(port, host, timeout=2.0):
-            return True
+        with MCPClient(port, host, timeout=2.0) as c:
+            reply = c.discover()
+            return bool(reply and "result" in reply)
     except (urllib.error.URLError, OSError, ValueError):
         return False
 
@@ -188,6 +222,7 @@ def is_debug_port_open(host=HOST):
 # ---------------------------------------------------------------------------
 # Debug TCP transport
 # ---------------------------------------------------------------------------
+
 
 def debug_request(packet, host=HOST, timeout=30.0):
     """Send a JSON command over the debug TCP port, read until EOF, and
@@ -212,10 +247,11 @@ def debug_request(packet, host=HOST, timeout=30.0):
 # MCP convenience wrappers
 # ---------------------------------------------------------------------------
 
-def mcp_initialize(port=DEFAULT_MCP_PORT, host=HOST):
-    """MCP initialize handshake, returns the JSON-RPC reply."""
+
+def mcp_discover(port=DEFAULT_MCP_PORT, host=HOST):
+    """Ask the server what it speaks. Returns the JSON-RPC reply."""
     with MCPClient(port, host) as c:
-        return c.initialize_reply
+        return c.discover()
 
 
 def mcp_list_tools(port=DEFAULT_MCP_PORT, host=HOST):
@@ -252,6 +288,7 @@ def mcp_read_resource(port, uri, host=HOST):
 # Debug-port control — reload, exec, start-mcp
 # ---------------------------------------------------------------------------
 
+
 def debug_reload(host=HOST):
     """Trigger addon hot-reload via debug port.
 
@@ -274,18 +311,22 @@ def debug_exec(code, host=HOST, timeout=30.0):
     result payload."""
     return debug_request(
         {"command": "execute", "code": code, "timeout": timeout},
-        host=host, timeout=timeout,
+        host=host,
+        timeout=timeout,
     )
 
 
 def debug_start_mcp(port=DEFAULT_MCP_PORT, host=HOST):
     """Ask the debug server to start the MCP server on `port`."""
-    return debug_request({"command": "start_mcp", "port": port}, host=host, timeout=10.0)
+    return debug_request(
+        {"command": "start_mcp", "port": port}, host=host, timeout=10.0
+    )
 
 
 # ---------------------------------------------------------------------------
 # Convenience / composite helpers
 # ---------------------------------------------------------------------------
+
 
 def check_mcp(port=DEFAULT_MCP_PORT, host=HOST):
     """Verify MCP server is reachable, or exit with a hint.
@@ -294,8 +335,11 @@ def check_mcp(port=DEFAULT_MCP_PORT, host=HOST):
     """
     if not is_mcp_reachable(port, host):
         print(f"Error: MCP server not reachable on {host}:{port}.", file=sys.stderr)
-        print("Hint: start it from Blender UI or run: "
-              "python blender_addon/debug/main.py start-mcp", file=sys.stderr)
+        print(
+            "Hint: start it from Blender UI or run: "
+            "python blender_addon/debug/main.py start-mcp",
+            file=sys.stderr,
+        )
         sys.exit(1)
     return port
 

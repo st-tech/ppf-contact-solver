@@ -12,7 +12,12 @@ or a host that is reachable from the wider internet.
 If you use [Local](connections/local.md) or
 [Windows Native](connections/windows.md) the network-attacker sections
 below do not apply: the solver is a child process on your own machine
-and no TCP socket leaves it. Skip to
+and no TCP socket leaves it. [Docker (Local)](connections/docker.md)
+sits in between: there is no SSH hop, but the server runs inside a
+container that has to publish its port on your workstation, and the
+README's `-p 9090:9090` publishes it on every interface. Read
+[Network exposure of the solver port](#network-exposure-of-the-solver-port)
+before skipping ahead. Otherwise, skip to
 [Code execution risk: MCP](#code-execution-risk-mcp) and
 [Credential files on disk](#credential-files-on-disk).
 
@@ -26,7 +31,8 @@ transport topology. The trust boundaries that matter for security are:
 | Blender workstation -> remote solver host | SSH session (paramiko) | SSH key auth + SSH encryption |
 | SSH session -> `ppf-cts-server` on remote | `direct-tcpip` channel to the remote's `localhost:<server_port>` | Stays inside the SSH tunnel; not a separate network hop |
 | Blender workstation <-> local solver | UNIX loopback TCP socket | No encryption; no encryption needed (never leaves the host) |
-| Blender workstation <-> local MCP server | UNIX loopback TCP socket on port `9633` | Bound to `localhost` only |
+| Blender workstation <-> local MCP server | UNIX loopback TCP socket on port `9633` | Bound to `localhost` only; a non-loopback `Origin` header is refused with `403` |
+| Blender workstation <-> local reload/debug server | UNIX loopback TCP socket on port `8765` | Bound to `localhost` only. Off in a plain Blender session unless you start it from **Debug Options**, but `blender_addon/launch.sh` starts it automatically; its `execute` command runs arbitrary Python inside Blender with no authentication, so treat it exactly like the MCP port |
 
 The important consequence: when you run Docker-over-SSH or plain SSH,
 the solver's TCP socket never crosses an untrusted network directly.
@@ -105,12 +111,15 @@ the tunnel-through-your-own-`ssh` pattern is the supported escape hatch.
 from depends on how the backend is deployed, not on the add-on:
 
 - **Plain SSH / SSH Command.** `ppf-cts-server` runs in the remote
-  user's shell and the add-on launches it with `--host 127.0.0.1`, so
-  the socket is loopback-only on the remote. The add-on reaches it
-  through the SSH session's `direct-tcpip` channel; nothing else on the
-  network can connect, regardless of host firewall. If you need the
-  port reachable from the remote's wider network for some other tool,
-  you must rebind it yourself (e.g. by relaunching
+  user's shell and the add-on launches it with no `--host` flag at all,
+  so the binary falls back to its own default bind address of
+  `127.0.0.1` and the socket is loopback-only on the remote. (Do not
+  read the missing `--host` in `ps` as a failure to set it; check the
+  bind with `ss` instead.) The add-on reaches it through the SSH
+  session's `direct-tcpip` channel; nothing else on the network can
+  connect, regardless of host firewall. If you need the port reachable
+  from the remote's wider network for some other tool, you must rebind
+  it yourself (e.g. by relaunching
   `ppf-cts-server --host 0.0.0.0` outside the add-on).
 - **Docker / Docker over SSH.** Inside the container the add-on
   launches `ppf-cts-server --host 0.0.0.0` because docker `-p HOST:CONTAINER`
@@ -118,9 +127,14 @@ from depends on how the backend is deployed, not on the add-on:
   loopback. External reachability of the *host* is then controlled by
   the `-p` mapping you choose: the container must publish the server
   port (`-p 9090:9090` or the equivalent in your compose file),
-  otherwise the add-on refuses to start. The default `-p 9090:9090`
-  binds to **all interfaces** on the Docker host, which can expose the
-  solver to any network that reaches that host. Prefer
+  otherwise the add-on refuses to start. The one exception is a
+  Docker (Local) container on `--network host`, which publishes nothing
+  and is accepted as is. There the in-container `--host 0.0.0.0` binds
+  every interface of the Docker host directly and no `-p` mapping
+  exists to restrict it, so the mitigation below does not apply; use a
+  bridge network if you need the loopback publish. The default
+  `-p 9090:9090` binds to **all interfaces** on the Docker host, which
+  can expose the solver to any network that reaches that host. Prefer
   `-p 127.0.0.1:9090:9090` so the publish is loopback-only; the add-on
   will still reach it over the SSH tunnel.
 - **Windows Native / Local.** The server binds to the local machine
@@ -173,11 +187,18 @@ For a safer shared setup:
 
 - Give each user their own remote Linux account. Key auth keeps them
   apart at the OS level.
-- Give each user (or project) a distinct **Remote Path** and a distinct
-  **Server Port**. See
-  [Multiple users on one solver host](connections/ssh.md#multiple-users-on-one-solver-host).
-  This prevents one client from overwriting another's checkpoints or
+- Give each user (or project) a distinct **Remote Path**. That is what
+  prevents one client from overwriting another's checkpoints or
   accidentally fetching another run's frames.
+- Give them distinct server ports too where you can, but note that the
+  panel only draws the port field (**Docker Port**) in the
+  Docker-family modes. One shared property sits behind that field, so on
+  SSH, SSH Command, Local, and Windows Native the port is whatever it
+  was last set to (`9090` by default): set it from a Docker mode and
+  switch back, or give each entry its own with a
+  [connection profile](connections/profiles.md)'s `docker_port` key.
+  [SSH](connections/ssh.md#multiple-users-on-one-solver-host) does not
+  recommend sharing a solver host in the first place.
 - Do not share private keys. One key per user means revocation is one
   line in `authorized_keys`.
 - Remember the solver has file-system access to whatever the remote
@@ -189,15 +210,30 @@ For a safer shared setup:
 The bundled [MCP server](integrations/mcp.md) exposes
 `run_python_script` and `execute_shell_command` by design. There is
 no sandbox, no allowlist, and no authentication. The protections are
-purely network-scoping:
+network scoping plus a loopback-`Origin` gate:
 
 - The MCP server binds to `localhost` only (see
-  {ref}`Connections ports <connections-under-the-hood>`). Do not
-  forward the MCP port over `ssh -R`, `ngrok`, `gh codespaces`, or any
-  reverse proxy unless the machine is disposable.
+  [Port usage at a glance](connections/index.md#port-usage-at-a-glance)).
+  Do not forward the MCP port over `ssh -R`, `ngrok`, `gh codespaces`,
+  or any reverse proxy unless the machine is disposable.
+- The HTTP transport refuses any request whose `Origin` header is not
+  `localhost`, `127.0.0.1`, or `::1` with a `403 Origin not allowed`.
+  That is DNS-rebinding protection: it stops a web page you happen to
+  visit from driving `run_python_script` through your browser. A
+  request with no `Origin` at all (curl, native MCP clients) is
+  allowed, so it is not an authentication check.
 - Any process on the Blender machine can reach the MCP port. Treat
   local-user isolation as your security boundary: a malicious local
   user already owns the Blender session.
+- The add-on's reload/debug server on port `8765` is a second
+  unauthenticated code-execution socket. It is off in a plain Blender
+  session and starts when you press **Start** under **Debug Options ->
+  Add-on Local Debug Server**, but `blender_addon/launch.sh` starts it
+  (with the MCP server) automatically at launch (**Reload Add-on Now** and **Full Reload** bring it
+  back afterwards, but only if it was already running). While it runs, a
+  JSON packet sent to it executes arbitrary Python inside Blender, with
+  no `Origin` check and no authentication. Stop it when you are done
+  debugging.
 - LLM outputs wired into `run_python_script` are effectively shell on
   your machine. Always review the agent's tool calls before approving
   them; see [MCP Security](integrations/mcp.md#security).
@@ -213,8 +249,10 @@ keys**; they do not contain the keys themselves or any passphrases.
   (`chmod 600 connections.toml` on Unix). The add-on does not enforce
   this.
 - When sharing a profile with teammates (check-in, chat, paste), strip
-  the `username` and `key_path` fields first. The host + container +
-  port fields are usually fine; the identity fields are not.
+  the `username`, `key_path`, and `proxy_jump` fields first. The host +
+  container + port fields are usually fine; the identity fields are
+  not, and `proxy_jump` is both: it names your bastion host and can
+  carry a `user@` of its own.
 - The private key file itself should also be mode `600` and owned by
   your user (`chmod 600 ~/.ssh/id_ed25519`). paramiko does not load
   world-readable keys silently, but it does not refuse them either.

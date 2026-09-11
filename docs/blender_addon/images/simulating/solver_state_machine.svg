@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 540" role="img" aria-label="Solver panel state machine: five states, which buttons are enabled in each, and which buttons transition between them">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 566" role="img" aria-label="Solver panel state machine: five states, which buttons are enabled in each, and which buttons transition between them">
   <title>Solver panel state machine</title>
   <desc>
     Five state boxes arranged left to right (Connected, Ready,
@@ -11,8 +11,8 @@
     as a self-loop on Ready, Terminate from Running to Complete, Save
     and Quit from Running back to Connected, Resume from Complete back
     to Running, and Clear Local Animation from Fetched back to Ready.
-    A footer line notes that Delete Remote Data is available from any
-    post-Transfer state and returns the solver to Connected, and that
+    A footer line notes that Delete Remote Data is available from Ready,
+    Complete and Fetched and returns the solver to Connected, and that
     Abort only interrupts an in-flight transfer or fetch. While
     Running, the panel is otherwise fully inert.
   </desc>
@@ -65,8 +65,8 @@
   <!-- Connected -->
   <rect x="20" y="140" width="160" height="260" rx="10" class="st-box" />
   <text x="100" y="164" text-anchor="middle" class="st-title">Connected</text>
-  <text x="100" y="182" text-anchor="middle" class="st-stat">"Click Transfer to</text>
-  <text x="100" y="196" text-anchor="middle" class="st-stat">upload data"</text>
+  <text x="100" y="182" text-anchor="middle" class="st-stat">"Waiting for Data"</text>
+  <text x="100" y="196" text-anchor="middle" class="st-stat">(nothing uploaded)</text>
   <line x1="32" y1="208" x2="168" y2="208" class="st-divider" />
   <text x="32" y="226" class="check">✓</text><text x="48" y="226" class="btn-on">Transfer</text>
   <text x="32" y="244" class="btn-off">   Run</text>
@@ -76,13 +76,13 @@
   <text x="32" y="316" class="btn-off">   Bake</text>
   <text x="32" y="334" class="btn-off">   Clear Local</text>
   <text x="32" y="352" class="btn-off">   Delete Remote</text>
-  <text x="32" y="370" class="btn-off">   Terminate</text>
-  <text x="32" y="388" class="btn-off">   Save &amp; Quit</text>
+  <text x="32" y="370" class="btn-off">   Terminate †</text>
+  <text x="32" y="388" class="btn-off">   Save and Quit †</text>
 
   <!-- Ready -->
   <rect x="210" y="140" width="160" height="260" rx="10" class="st-box" />
   <text x="290" y="164" text-anchor="middle" class="st-title">Ready</text>
-  <text x="290" y="182" text-anchor="middle" class="st-stat">"Ready"</text>
+  <text x="290" y="182" text-anchor="middle" class="st-stat">"Ready to Run"</text>
   <text x="290" y="196" text-anchor="middle" class="st-stat">(remote has project)</text>
   <line x1="222" y1="208" x2="358" y2="208" class="st-divider" />
   <text x="222" y="226" class="check">✓</text><text x="238" y="226" class="btn-on">Transfer</text>
@@ -93,14 +93,14 @@
   <text x="222" y="316" class="btn-off">   Bake</text>
   <text x="222" y="334" class="btn-off">   Clear Local</text>
   <text x="222" y="352" class="check">✓</text><text x="238" y="352" class="btn-on">Delete Remote</text>
-  <text x="222" y="370" class="btn-off">   Terminate</text>
-  <text x="222" y="388" class="btn-off">   Save &amp; Quit</text>
+  <text x="222" y="370" class="btn-off">   Terminate †</text>
+  <text x="222" y="388" class="btn-off">   Save and Quit †</text>
 
   <!-- Running -->
   <rect x="400" y="140" width="160" height="260" rx="10" class="st-box" />
   <text x="480" y="164" text-anchor="middle" class="st-title">Running</text>
-  <text x="480" y="182" text-anchor="middle" class="st-stat">"Simulation in</text>
-  <text x="480" y="196" text-anchor="middle" class="st-stat">Progress: N/M"</text>
+  <text x="480" y="182" text-anchor="middle" class="st-stat">"Simulation</text>
+  <text x="480" y="196" text-anchor="middle" class="st-stat">Running..."</text>
   <line x1="412" y1="208" x2="548" y2="208" class="st-divider" />
   <text x="412" y="226" class="btn-off">   Transfer</text>
   <text x="412" y="244" class="btn-off">   Run</text>
@@ -110,42 +110,42 @@
   <text x="412" y="316" class="btn-off">   Bake</text>
   <text x="412" y="334" class="btn-off">   Clear Local</text>
   <text x="412" y="352" class="btn-off">   Delete Remote</text>
-  <text x="412" y="370" class="check">✓</text><text x="428" y="370" class="btn-on">Terminate</text>
-  <text x="412" y="388" class="check">✓</text><text x="428" y="388" class="btn-on">Save &amp; Quit</text>
+  <text x="412" y="370" class="check">✓</text><text x="428" y="370" class="btn-on">Terminate †</text>
+  <text x="412" y="388" class="check">✓</text><text x="428" y="388" class="btn-on">Save and Quit †</text>
 
   <!-- Complete -->
   <rect x="590" y="140" width="160" height="260" rx="10" class="st-box" />
   <text x="670" y="164" text-anchor="middle" class="st-title">Complete</text>
-  <text x="670" y="182" text-anchor="middle" class="st-stat">"Simulation</text>
-  <text x="670" y="196" text-anchor="middle" class="st-stat">Complete"</text>
+  <text x="670" y="182" text-anchor="middle" class="st-stat">"Ready to Run"</text>
+  <text x="670" y="196" text-anchor="middle" class="st-stat">(sim finished)</text>
   <line x1="602" y1="208" x2="738" y2="208" class="st-divider" />
-  <text x="602" y="226" class="btn-off">   Transfer</text>
-  <text x="602" y="244" class="btn-off">   Run</text>
-  <text x="602" y="262" class="check">✓</text><text x="618" y="262" class="btn-on">Resume</text>
-  <text x="602" y="280" class="btn-off">   Update Params</text>
+  <text x="602" y="226" class="check">✓</text><text x="618" y="226" class="btn-on">Transfer</text>
+  <text x="602" y="244" class="check">✓</text><text x="618" y="244" class="btn-on">Run</text>
+  <text x="602" y="262" class="btn-off">   Resume</text>
+  <text x="602" y="280" class="check">✓</text><text x="618" y="280" class="btn-on">Update Params</text>
   <text x="602" y="298" class="check">✓</text><text x="618" y="298" class="btn-on">Fetch</text>
   <text x="602" y="316" class="btn-off">   Bake</text>
   <text x="602" y="334" class="btn-off">   Clear Local</text>
   <text x="602" y="352" class="check">✓</text><text x="618" y="352" class="btn-on">Delete Remote</text>
-  <text x="602" y="370" class="btn-off">   Terminate</text>
-  <text x="602" y="388" class="btn-off">   Save &amp; Quit</text>
+  <text x="602" y="370" class="btn-off">   Terminate †</text>
+  <text x="602" y="388" class="btn-off">   Save and Quit †</text>
 
   <!-- Fetched -->
   <rect x="780" y="140" width="160" height="260" rx="10" class="st-box" />
   <text x="860" y="164" text-anchor="middle" class="st-title">Fetched</text>
-  <text x="860" y="182" text-anchor="middle" class="st-stat">"Animation Ready"</text>
+  <text x="860" y="182" text-anchor="middle" class="st-stat">"Ready to Run"</text>
   <text x="860" y="196" text-anchor="middle" class="st-stat">(cache on disk)</text>
   <line x1="792" y1="208" x2="928" y2="208" class="st-divider" />
-  <text x="792" y="226" class="btn-off">   Transfer</text>
+  <text x="792" y="226" class="check">✓</text><text x="808" y="226" class="btn-on">Transfer</text>
   <text x="792" y="244" class="btn-off">   Run</text>
   <text x="792" y="262" class="btn-off">   Resume</text>
-  <text x="792" y="280" class="btn-off">   Update Params</text>
+  <text x="792" y="280" class="check">✓</text><text x="808" y="280" class="btn-on">Update Params</text>
   <text x="792" y="298" class="check">✓</text><text x="808" y="298" class="btn-on">Fetch (re-fetch)</text>
   <text x="792" y="316" class="check">✓</text><text x="808" y="316" class="btn-on">Bake</text>
   <text x="792" y="334" class="check">✓</text><text x="808" y="334" class="btn-on">Clear Local</text>
   <text x="792" y="352" class="check">✓</text><text x="808" y="352" class="btn-on">Delete Remote</text>
-  <text x="792" y="370" class="btn-off">   Terminate</text>
-  <text x="792" y="388" class="btn-off">   Save &amp; Quit</text>
+  <text x="792" y="370" class="btn-off">   Terminate †</text>
+  <text x="792" y="388" class="btn-off">   Save and Quit †</text>
 
   <!-- ============ Forward arrows (blue) ============ -->
   <line x1="180" y1="270" x2="210" y2="270" class="arr-main" marker-end="url(#s-arrow-b)" />
@@ -180,10 +180,11 @@
 
   <!-- Save & Quit: Running -> Connected (below, curves under Ready box) -->
   <path d="M 450 400 L 450 462 L 100 462 L 100 400" class="arr-alt" marker-end="url(#s-arrow-p)" />
-  <text x="275" y="456" text-anchor="middle" class="lbl-alt">Save &amp; Quit</text>
+  <text x="275" y="456" text-anchor="middle" class="lbl-alt">Save and Quit</text>
 
   <!-- ============ Footer notes ============ -->
   <text x="20" y="496" class="foot"><tspan class="foot-lbl">Delete Remote Data</tspan> is available from Ready, Complete, and Fetched; it returns the solver to <tspan class="foot-lbl">Connected</tspan>.</text>
   <text x="20" y="514" class="foot"><tspan class="foot-lbl">Abort</tspan> only interrupts an in-flight <tspan class="foot-lbl">Transfer</tspan> or <tspan class="foot-lbl">Fetch</tspan>; it does not stop a running simulation; use <tspan class="foot-lbl">Terminate</tspan> for that.</text>
-  <text x="20" y="532" class="foot">While <tspan class="foot-lbl">Running</tspan>, every button except <tspan class="foot-lbl">Terminate</tspan> and <tspan class="foot-lbl">Save &amp; Quit</tspan> is grayed out so you cannot double-fire an action or tear down state mid-solve.</text>
+  <text x="20" y="532" class="foot">While <tspan class="foot-lbl">Running</tspan>, every Solver-panel button is grayed out so you cannot double-fire an action or tear down state mid-solve.</text>
+  <text x="20" y="550" class="foot">† <tspan class="foot-lbl">Terminate</tspan> and <tspan class="foot-lbl">Save and Quit</tspan> are drawn on the Backend Communicator panel above, not on the Solver panel.</text>
 </svg>

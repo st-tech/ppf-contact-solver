@@ -123,16 +123,20 @@ else:  # ratio < 0.01
     mesh is finer than needed; fine to assign, but slow
 ```
 
-Treat the 1–3 % range as a hard requirement for dynamic (**Shell**,
+Treat the 1–3 % range as a hard requirement for deformable (**Shell**,
 **Solid**, **Rod**) groups. **Static** colliders can sit outside the
 window when they are simple primitives (a flat ground plane, a single
-large sphere), but anything dynamic needs to be inside it.
+large sphere). It does not apply to **PDRD** groups, which move as one
+best-fit rigid transform and are never tetrahedralized, nor to **Sand**
+groups, which are faceless meshes of grain centers — with no edges,
+`get_average_edge_length` returns `0.0` and the ratio is undefined.
 
 ## Subdividing to Reach the Window
 
-If a mesh is too coarse, prefer **subdivision** over remeshing.
-Subdivision preserves the vertex order the add-on's UUID tracking
-depends on, so pins and vertex groups survive.
+If a mesh is too coarse, prefer **subdivision** over remeshing. The
+add-on identifies objects by a per-object UUID and pins by
+vertex-group name, neither of which subdivision touches, so pins and
+vertex groups survive.
 
 **Always use the Simple method.** The default Catmull-Clark method
 rounds corners, which changes the silhouette of engineered meshes
@@ -211,12 +215,12 @@ for the semantics.
 ### Contact Gap: Pick One Mode
 
 The absolute and ratio contact-gap modes are mutually exclusive, and
-`use_group_bounding_box_diagonal` switches between them. Do not try
-to set both pairs of fields in a single
-`set_group_material_properties` call. If you need to change modes,
-issue one call that sets `use_group_bounding_box_diagonal`, then a
-second that sets the matching `contact_gap` / `contact_offset` or
-`contact_gap_rat` / `contact_offset_rat` pair.
+`use_group_bounding_box_diagonal` switches between them. Do not set
+both pairs of fields in a single `set_group_material_properties`
+call — that is rejected. You do not have to set the flag yourself:
+sending `contact_gap` / `contact_offset` sets it to `false`, and
+sending `contact_gap_rat` / `contact_offset_rat` sets it to `true`,
+in the same call.
 
 ## Group-Type Cheat Sheet
 
@@ -228,6 +232,8 @@ When assigning a type with `set_group_type`, use these rules:
 | Thin flexible surface (cloth, sheet, banner, shell)    | `SHELL`    |
 | Volumetric flexible solid (rubber ball, sponge, foam)  | `SOLID`    |
 | 1-D flexible line (rope, cable, hair strand)           | `ROD`      |
+| Exactly-rigid moving body (no tetrahedralization)      | `PDRD`     |
+| Granular body (loose grain-center vertices, no faces)  | `SAND`     |
 
 A group with no assigned objects is almost always a bug. Before
 calling `transfer_data`, list every active group via

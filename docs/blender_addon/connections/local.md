@@ -1,9 +1,12 @@
 # 🖥️ Local
 
-The solver runs on the same **Linux** machine as Blender, with no SSH or
-Docker layer in between. On Windows, use the [Windows Native](windows.md)
-backend instead; macOS is not supported as a solver backend (the solver
-requires CUDA).
+The solver runs on the same machine as Blender, with no SSH or Docker
+layer in between. On Windows, use the [Windows Native](windows.md)
+backend instead. Linux needs an NVIDIA GPU and CUDA; on Apple Silicon
+it is the Metal build of the solver that runs, and its macOS bundle
+lays the binary out at `target/release/ppf-cts-server` (inside
+`ppf-contact-solver.app/Contents/Resources`) exactly as a Linux
+checkout does, so Local mode reaches that too.
 
 :::{warning}
 Not recommended for day-to-day workstations. The Linux installation performed
@@ -32,21 +35,22 @@ backend instead, even though the GPU is local.
 
 ## Setup
 
-1. Set **Server Type** to `Local`.
-2. Fill **Path** with the directory that contains the
-   `ppf-cts-server` binary (typically `target/release/` inside your
-   solver checkout).
+1. Set **Type** to `Local`.
+2. Fill **Path** with the root of your solver checkout -- the directory
+   that has `target/release/ppf-cts-server` under it, e.g.
+   `~/ppf-contact-solver`. The add-on appends `target/release/` itself,
+   so do not point the field at that subdirectory.
 3. Set **Project Name** on the main panel.
-4. Click **Connect**. The add-on checks that `ppf-cts-server` exists
-   at the path you gave it.
-5. Click **Start Server**. The panel waits a few seconds for the server
-   to report that it is ready.
+4. Click **Connect**. The add-on checks that
+   `target/release/ppf-cts-server` exists under the path you gave it.
+5. Click **Start Server on Remote**. The panel waits a few seconds for the
+   server to report that it is ready.
 
 ```{figure} ../images/connections/local.png
 :alt: Backend Communicator panel in Local mode
 :width: 500px
 
-Backend Communicator with **Server Type** set to `Local`. Only **Path**
+Backend Communicator with **Type** set to `Local`. Only **Path**
 and **Project Name** show up; no SSH, Docker, or Windows-native fields.
 **Connect** is highlighted.
 ```
@@ -62,11 +66,13 @@ you do not need to do anything.
 
 | Field | Description |
 | ----- | ----------- |
-| Path | Directory containing the `ppf-cts-server` binary. `~/ppf-contact-solver` is a typical value; the field defaults to empty and must be set. |
+| Path | Solver checkout root, i.e. the directory with `target/release/ppf-cts-server` under it. `~/ppf-contact-solver` is a typical value; the field defaults to empty and must be set. |
 
-The local `ppf-cts-server` port is fixed at `9090` in Local mode; the
-panel does not expose a Server Port field here (it is only editable in
-Docker-family modes).
+The panel does not expose a server port field in Local mode -- the port
+field is drawn only for the Docker-family types -- so the port used here
+is whatever the shared port property currently holds, `9090` by default.
+It can still be changed from a Docker mode, or set per entry in a
+profile with the `docker_port` key.
 
 ## Dependencies
 
@@ -76,18 +82,20 @@ SSH and Docker modes.
 
 ## Troubleshooting
 
-- **"Remote path not found (.../ppf-cts-server)"** - the path you
-  entered does not contain the `ppf-cts-server` binary. Point it at the
-  directory holding the binary (typically `target/release/`), not the
-  checkout root or a source subdirectory.
-- **Server startup timed out.** - the solver launched but did not report
-  readiness within 16 seconds. Check `server.log` inside the solver
-  directory; the panel also prints the last 20 lines when the timeout
-  fires.
-- **Port already in use.** - another solver (or a stale `ppf-cts-server`
-  process) is already bound to the port. Click **Stop Server** first, use
-  the **Force Terminate Process** button shown next to the port-in-use
-  error, or change the Server Port.
+- **"Remote path not found (.../ppf-cts-server)"** - the add-on looked
+  for `<Path>/target/release/ppf-cts-server` and did not find it. Point
+  **Path** at the checkout root (the directory that *contains*
+  `target/`), not at `target/release/` itself, and make sure the solver
+  has been built there.
+- **Server startup timed out.** - the solver
+  launched but did not report readiness within 16 seconds. Check
+  `server.log` inside the solver directory; the panel also prints the last
+  20 lines when the timeout fires.
+- **Port already in use.** - another
+  solver (or a stale `ppf-cts-server` process) is already bound to the port.
+  Click **Stop Server on Remote** first, use the **Force Terminate Process**
+  button shown next to the port-in-use error, or change the port as
+  described under **Fields**.
 
 :::{admonition} Under the hood
 :class: toggle
@@ -97,14 +105,17 @@ SSH and Docker modes.
 Local mode launches the server with a bash script (`nohup`, `source
 .../bin/activate`, `./target/release/ppf-cts-server`). That is the same
 launch path the SSH and Docker backends use. The script is `bash`-only,
-which is why Local mode is Linux-only; Windows goes through the Windows
-Native backend and macOS is not supported (the solver requires CUDA).
+which is why Local mode needs a bash shell on the solver machine;
+Windows has none and goes through the Windows Native backend instead.
+macOS has bash, and the Metal build of the solver uses the same
+`target/release/` layout, so Local mode works there as well.
 
 **Shared port field**
 
-The **Server Port** field is the same underlying property for every
-connection type. The label in profile TOML files is `docker_port` for
-historical reasons, even on Local connections.
+The **Docker Port** field the Docker modes draw is the same underlying
+property for every connection type, Local included; only the field's
+visibility is per-mode. The key in profile TOML files is `docker_port`
+for the same historical reason, even on Local connections.
 
 **Virtual environment activation**
 

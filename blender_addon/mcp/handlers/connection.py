@@ -24,10 +24,24 @@ def _get_connection_state():
     return state, addon_data.ssh_state
 
 
-def _require_not_connected():
-    """Raise MCPError if already connected."""
+def _require_offline():
+    """Raise MCPError unless a connection can actually be started.
+
+    The state machine accepts a connect request only from the offline phase,
+    so one issued while a connection is up, or while an earlier attempt is
+    still handshaking, is dropped and changes nothing. Reporting that as an
+    initiated connection would send a caller on to a transfer or a run
+    against a host it never reached, so both states refuse here and the
+    message names the one the session is in. The refusal comes before the
+    connection settings are written, so a refused call leaves the panel
+    holding the settings of the connection that is actually in play.
+    """
     if com.is_connected():
         raise MCPError("Cannot initiate connection: already connected")
+    if com.is_connecting():
+        raise MCPError(
+            "Cannot initiate connection: an earlier attempt is still connecting"
+        )
 
 
 @mcp_handler
@@ -53,6 +67,8 @@ def connect_ssh(
             "[user@]host[:port]" comma separated (optional). Left unset, the
             ProxyJump entry in ~/.ssh/config for the host applies.
     """
+    _require_offline()
+
     # Set connection parameters in scene state
     _, props = _get_connection_state()
 
@@ -68,8 +84,6 @@ def connect_ssh(
         props.container = container
         props.server_type = "DOCKER_SSH"
 
-    _require_not_connected()
-
     # Use bpy.ops for the modal timer loop required by connection lifecycle
     bpy.ops.ssh.run_command()
 
@@ -84,22 +98,35 @@ def connect_ssh(
 
 
 @mcp_handler
-def connect_docker(container: str, path: str):
+def connect_docker(container: str, path: str, port: int = DEFAULT_SERVER_PORT):
     """Establish Docker connection for contact solver.
 
     Args:
         container: Docker container name
         path: Working directory path in container
+        port: Port the solver server listens on inside the container.
+            Must be within the range the port field itself accepts.
     """
+    _require_offline()
+
     # Set connection parameters in scene state
     _, props = _get_connection_state()
+
+    # The port field has its own hard range and Blender clamps an assignment
+    # outside it without saying so, which would report a successful connection
+    # on a port the caller never asked for.
+    port_range = props.bl_rna.properties["docker_port"]
+    if not (port_range.hard_min <= port <= port_range.hard_max):
+        raise MCPError(
+            f"port must be within [{port_range.hard_min}, "
+            f"{port_range.hard_max}], got {port}"
+        )
 
     # Configure Docker connection parameters
     props.server_type = "DOCKER"
     props.container = container
     props.docker_path = path
-
-    _require_not_connected()
+    props.docker_port = port
 
     # Use bpy.ops for the modal timer loop required by connection lifecycle
     bpy.ops.ssh.run_command()
@@ -119,14 +146,14 @@ def connect_local(path: str):
     Args:
         path: Local working directory path
     """
+    _require_offline()
+
     # Set connection parameters in scene state
     _, props = _get_connection_state()
 
     # Configure local connection parameters
     props.server_type = "LOCAL"
     props.local_path = path
-
-    _require_not_connected()
 
     # Use bpy.ops for the modal timer loop required by connection lifecycle
     bpy.ops.ssh.run_command()
@@ -146,14 +173,14 @@ def connect_win_native(path: str, port: int = DEFAULT_SERVER_PORT):
         path: Path to the Windows native build or distribution directory
         port: Port for the solver server
     """
+    _require_offline()
+
     _, props = _get_connection_state()
 
     # Configure Windows native connection parameters
     props.server_type = "WIN_NATIVE"
     props.win_native_path = path
     props.docker_port = port
-
-    _require_not_connected()
 
     # Use bpy.ops for the modal timer loop required by connection lifecycle
     bpy.ops.ssh.run_command()
@@ -168,7 +195,7 @@ def connect_win_native(path: str, port: int = DEFAULT_SERVER_PORT):
 
 @mcp_handler
 def disconnect():
-    """Disconnect from remote server."""
+    """Disconnect from the solver host, or cancel a connection still in progress."""
     if com.info.status.abortable():
         raise MCPError("Cannot disconnect: an abortable operation is in progress")
     services.disconnect()
@@ -178,10 +205,10 @@ def disconnect():
 @mcp_handler
 def connect():
     """Connect using current connection settings, mimicking the connect button press."""
+    _require_offline()
+
     # Get current scene and connection state
     state, props = _get_connection_state()
-
-    _require_not_connected()
 
     # Use bpy.ops for the modal timer loop required by connection lifecycle
     bpy.ops.ssh.run_command()
@@ -336,4 +363,106 @@ def get_connection_info():
         "docker_config": docker_config,
         "project_info": project_info,
         "connection_status": connection_status,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Solver GPU selection
+# ---------------------------------------------------------------------------
+
+
+@mcp_handler
+def list_solver_gpus():
+    """List the GPUs on the solver host, and which one is selected.
+
+    The list is a cache filled by `refresh_solver_gpus`, which reads it from
+    the solver host over the active connection. Before the first refresh the
+    list is empty, which reports as `probed: false` rather than as a host with
+    no GPUs.
+
+    A selection is stored as both an index and a stable UUID, and the UUID
+    wins: a .blend saved against one host and opened against another must not
+    silently resolve to a different physical device.
+    """
+    from ...core import gpu_devices
+
+    _, props = _get_connection_state()
+    devices = gpu_devices.cached_gpu_devices()
+    selected = gpu_devices.selected_device(
+        props.solver_gpu_index, props.solver_gpu_uuid, devices
+    )
+    return {
+        "probed": gpu_devices.has_probed(),
+        "probe_error": gpu_devices.gpu_probe_error() or None,
+        "devices": [
+            {"index": device.index, "uuid": device.uuid, "name": device.name}
+            for device in devices
+        ],
+        "selected_index": props.solver_gpu_index,
+        "selected_uuid": props.solver_gpu_uuid or None,
+        "selected_name": selected.name if selected else None,
+    }
+
+
+@connection_handler
+def refresh_solver_gpus():
+    """Re-read the GPU list from the solver host.
+
+    Requires an active connection: the list is produced by a command run on
+    the host, so there is nowhere to read it from otherwise. The refreshed
+    list is available from `list_solver_gpus`.
+    """
+    com.refresh_solver_host_gpus()
+    return "Solver GPU list refresh requested"
+
+
+@mcp_handler
+def set_solver_gpu(uuid: Optional[str] = None, index: Optional[int] = None):
+    """Choose which GPU on the solver host runs the simulation.
+
+    Pass `uuid` to name a device stably, which is what the add-on stores and
+    prefers. `index` alone selects by CUDA index and is only reliable while
+    the host's device set does not change. Passing neither clears the
+    selection back to automatic.
+
+    The selection is validated against the cached device list when one has
+    been probed; with no list there is no evidence to contradict the request,
+    so it is honored as given.
+
+    Args:
+        uuid: Stable device UUID, from list_solver_gpus
+        index: CUDA device index, used when no uuid is given
+    """
+    from ...core import gpu_devices
+
+    _, props = _get_connection_state()
+
+    if uuid is None and index is None:
+        props.solver_gpu_index = 0
+        props.solver_gpu_uuid = ""
+        return {"message": "Solver GPU selection cleared to automatic"}
+
+    if uuid is not None:
+        device = gpu_devices.find_device_by_uuid(uuid)
+        if device is None and gpu_devices.has_probed():
+            raise MCPError(
+                f"No GPU with uuid {uuid!r} on the solver host. "
+                "Call refresh_solver_gpus, then list_solver_gpus."
+            )
+        resolved_index = device.index if device else (index if index is not None else 0)
+        props.solver_gpu_index = resolved_index
+        props.solver_gpu_uuid = uuid
+    else:
+        try:
+            gpu_devices.validate_selection(index)
+        except Exception as exc:
+            raise MCPError(str(exc)) from exc
+        device = gpu_devices.find_device(index)
+        props.solver_gpu_index = index
+        props.solver_gpu_uuid = device.uuid if device else ""
+
+    return {
+        "message": "Solver GPU selected",
+        "selected_index": props.solver_gpu_index,
+        "selected_uuid": props.solver_gpu_uuid or None,
     }

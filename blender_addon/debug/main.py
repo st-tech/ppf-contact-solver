@@ -45,7 +45,7 @@ from client import (  # noqa: E402
     is_debug_port_open,
     is_mcp_reachable,
     mcp_call_tool,
-    mcp_initialize,
+    mcp_discover,
     mcp_list_resources,
     mcp_list_tools,
     mcp_read_resource,
@@ -62,11 +62,17 @@ def cmd_status(args):
           f"{'reachable' if debug_ok else 'unreachable'}")
     if mcp_ok:
         print(f"MCP server (HTTP): running on port {port}")
-        info = mcp_initialize(port, args.host)
-        server_info = info.get("result", {}).get("serverInfo", {})
+        info = mcp_discover(port, args.host)
+        result = info.get("result", {}) if info else {}
+        server_info = result.get("_meta", {}).get(
+            "io.modelcontextprotocol/serverInfo", {}
+        )
         if server_info:
             print(f"  Server: {server_info.get('name', '?')} "
                   f"v{server_info.get('version', '?')}")
+        versions = result.get("supportedVersions", [])
+        if versions:
+            print(f"  Protocol versions: {', '.join(versions)}")
     else:
         print(f"MCP server (HTTP): not reachable on port {port}")
 

@@ -107,6 +107,17 @@ html_static_path = ["_static"]
 # static_html/ holds the pre-rendered fabric calibration report; its contents
 # (fabric-report/) are copied verbatim into the site root, so the report is
 # served at /fabric-report/index.html.
+#
+# NOTE: html_extra_path copies each entry's CONTENTS to the site ROOT, not to a
+# path mirroring its source location. blender_addon/images/gallery/crumple.webp
+# is therefore served as /crumple.webp, which is why gallery.md refers to it as
+# ``../crumple.webp`` from /blender_addon/gallery.html. That reference looks
+# broken when checked against the source tree — nothing sits beside gallery.md
+# by that name — and "correcting" it to images/gallery/crumple.webp breaks the
+# built page instead: those files are reachable only from the root. The gallery
+# cards are raw <img> in HTML, which Sphinx does not track or copy the way it
+# does an image directive, so html_extra_path is what puts them in the output at
+# all. Check this page in docs/_build, not in docs/.
 html_extra_path = ["blender_addon/images/gallery", "blender_addon/gallery_blends",
                    "static_html"]
 html_css_files = ["custom.css"]

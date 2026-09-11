@@ -15,12 +15,21 @@ Typical entry point:
 
 .. code-block:: python
 
-   from frontend import App
+   from frontend import BlenderApp
 
-   app = App.load()              # attach to the transferred project
-   session = app.session         # the FixedSession you drive
-   session.param.set("dt", 0.01) # override a simulation parameter
-   session.run()                 # start / resume the solver
+   app = BlenderApp.open("my-project")  # attach to the transferred project
+   app.scene.report()                   # inspect what was transferred
+   app.session.run()                    # start the solver, or attach to it
+   app.session.stream()                 # tail the solver's live output
+
+``BlenderApp.open()`` is the cell the add-on writes into the notebook it
+generates, and ``app.scene`` / ``app.session`` are the already-built
+:class:`frontend.FixedScene` and :class:`frontend.FixedSession`. A
+session snapshots its parameters when it is built, so overriding one
+means going through :class:`frontend.App` and setting it before the
+build: ``app = App.load("my-project")``, then
+``session = app.session.create(scene)``,
+``session.param.set("dt", 0.01)``, then ``session.build().run()``.
 
 .. toctree::
    :maxdepth: 1
@@ -41,7 +50,8 @@ Typical entry point:
   bounds, contact gaps, frame rate, etc.).
 - :doc:`material_parameters` lists the per-object material parameters
   set via ``object.param.set(...)``, with separate defaults for the
-  three element types: triangles, tetrahedra, and rods.
+  five element types: triangles, tetrahedra, rods, PDRD rigid bodies,
+  and granular point clouds.
 - :doc:`log_channels` lists the named log streams the solver emits,
   retrievable with ``session.get.log.numbers(name)`` /
   ``session.get.log.stdout()`` for live plotting and post-run analysis.

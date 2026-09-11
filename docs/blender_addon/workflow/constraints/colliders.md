@@ -27,8 +27,10 @@ it with inline fields for the current collider. What you see depends on
 the collider type:
 
 - **Wall**: **Name**, **Position**, **Normal**, **Contact Gap**,
-  **Friction**, **Thickness**, and an **Active Duration** toggle
-  (expands to a duration field when on).
+  **Friction**, **Thickness**, and an **Active Duration** toggle. When
+  on, it expands to an **Active Until (frame)** field: the collider acts
+  on frames before that number and stops at it, so the value is a
+  Blender frame, not a frame count.
 - **Sphere**: **Name**, **Position**, **Radius**, side-by-side
   **Invert** and **Hemisphere** checkboxes, then the same **Contact
   Gap**, **Friction**, **Thickness**, **Active Duration** rows as Wall.
@@ -53,17 +55,17 @@ Duration). Below, the keyframe list shows the auto-generated frame-1
 Because an invisible collider has no mesh, the only way to see where it
 sits, and crucially *which side* it pushes against, is the **Preview**
 overlay. Each row in the collider list carries a small eye icon on the
-right. The preview is **off by default** (closed-eye icon): the wall or
-sphere exists in the solver but nothing draws in the viewport. Click
-the icon to flip it to the open-eye state and the collider draws
-directly in the 3D viewport, updated live as you edit **Position**,
-**Normal**, **Radius**, or as the timeline advances through keyframes.
-Click the open eye again to hide the preview.
+right. A collider added from the **Add** menu starts with its preview
+**on** (open-eye icon), so it draws directly in the 3D viewport, updated
+live as you edit **Position**, **Normal**, **Radius**, or as the
+timeline advances through keyframes. Click the eye to hide the preview
+and click it again to bring it back. (A collider created through the
+Python API starts hidden instead, so flip its eye on to see it.)
 
 Previews are per-collider, so you can isolate one while keeping others
 hidden. They also respect the **Active Duration** cutoff: once the
-current frame passes the end frame the overlay disappears, mirroring what
-the solver does.
+current frame reaches the **Active Until** frame the overlay disappears,
+mirroring what the solver does.
 
 ### Interpreting the Arrows
 
@@ -135,9 +137,9 @@ number plus the values that change at that frame (**Position** for both,
 To animate the selected collider:
 
 1. With the collider selected, scrub the timeline to the frame you want.
-2. Click **Add Keyframe**. A new entry is appended to the keyframe
-   UIList, seeded from the collider's current values, on the current
-   scene frame. Duplicate frames are rejected.
+2. Click **Add Keyframe**. A new entry is inserted into the keyframe
+   UIList in frame order, seeded from the collider's current values, on
+   the current scene frame. Duplicate frames are rejected.
 3. Select the new keyframe in the list. A keyframe-details box appears
    below with **Frame**, **Hold**, and (when **Hold** is off) the
    keyframed value rows (**Position**, plus **Radius** for spheres).

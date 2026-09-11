@@ -931,7 +931,7 @@ pin.move_by(delta=(0, 0, 1.0),
 
 ### unpin(frame: int) -> Pin
 
-Mark this pin to be released at the given frame.
+Release this pin after the given number of frames.
 
 Sets the duration on the underlying pin item, which is what the encoder ships as the frame the pin constraint stops being enforced.
 
@@ -1166,7 +1166,7 @@ Whitelisted attributes:
 - `contact_gap`: contact gap thickness
 - `thickness`: wall/sphere shell thickness
 - `enable_active_duration`: `True` to limit collider lifetime
-- `active_duration`: number of frames the collider is active when `enable_active_duration` is set
+- `active_duration`: the first Blender frame at which the collider is no longer active (exclusive cutoff), not a frame count
 
 ```python
 solver.add_wall((0, 0, 0), (0, 0, 1)).param.friction = 0.5

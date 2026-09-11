@@ -1,15 +1,21 @@
 # Hot Reload
 
 While you are iterating on the add-on source, you do not want to disable,
-re-enable, and sometimes restart Blender on every change. The add-on registers
-a small TCP reload server on startup that does all of that from the command
-line in roughly a second.
+re-enable, and sometimes restart Blender on every change. Launched through
+`blender_addon/launch.sh` — or with the sidebar's *Add-on Local Debug Server*
+started by hand — the add-on runs a small TCP reload server that does all of
+that from the command line in roughly a second.
 
 ## The Reload Server
 
-Every time the add-on registers, it starts a small JSON-over-TCP server
-on `127.0.0.1:8765`. Each connection sends one JSON object with a
-`command` key and reads the reply until the server half-closes.
+The server is opt-in: registering the add-on does not open the port.
+`blender_addon/launch.sh` starts it on `127.0.0.1:8765` (with the MCP
+server on 9633) two seconds after Blender opens. In a Blender you started
+some other way, tick **Debug Options** in the **Backend Communicator**
+sidebar panel and press **Start** under *Add-on Local Debug Server*.
+
+Once it is up, each connection sends one JSON object with a `command` key
+and reads the reply until the server half-closes.
 
 | Command       | Effect                                                                                  |
 | ------------- | --------------------------------------------------------------------------------------- |
@@ -37,12 +43,14 @@ reliable for schema-heavy edits. Use it via
 `python blender_addon/debug/main.py full-reload`.
 
 :::{warning}
-**New PropertyGroup fields still require a full Blender restart.**
+**New PropertyGroup fields need `full-reload`, sometimes a restart.**
 
-Neither `reload` nor `full_reload` can register new fields on a
-`PropertyGroup` that is already bound into a `CollectionProperty` or pointed
-to by existing saved `.blend` data. If you added a new property, removed
-one, or changed a property's type, quit Blender and start it again.
+`reload` cannot register new fields on a `PropertyGroup` that is already
+bound into a `CollectionProperty` or pointed to by existing saved `.blend`
+data. `full_reload` is built for exactly that case and usually manages it,
+because the extra event-loop tick lets Blender drop the old RNA before the
+new `register()` runs. If a property you added, removed, or retyped is still
+missing after `full-reload`, quit Blender and start it again.
 
 This is a long-standing limitation of Blender's RNA system, not of the
 reload server. When the UI "looks right" but new fields are missing from
@@ -64,10 +72,11 @@ inside Blender.
 | `exec <code>`         | Execute Python inside Blender. Pass `-` to read from stdin.                                |
 | `start-mcp`           | Ask the reload server to start the MCP server. `--port` selects port.                      |
 | `tools`               | List MCP tools. `--json` for raw JSON.                                                     |
-| `call <tool> [json]`  | Invoke an MCP tool with the given JSON arguments.                                          |
+| `call <tool> [json]`  | Invoke an MCP tool with the given JSON arguments. `--timeout SEC` (default 30) bounds the request. |
 | `scene`               | Fetch the current Blender scene via the MCP `blender://scene/current` resource.            |
 | `resources`           | List MCP resources. `--json` for raw JSON.                                                 |
 | `read <uri>`          | Read an MCP resource by URI. Prints the text body to stdout; `--json` prints the raw envelope. |
+| `runtests [names]`    | Run the test-rig scenarios. `--list` names them, `--timeout SEC` (default 60) bounds each; see `blender_addon/debug/TEST_RIG.md`. |
 
 Global options:
 
@@ -75,7 +84,6 @@ Global options:
 | ------------------ | ----------- | ------------------------------------------------------ |
 | `--host HOST`      | `localhost` | Target host for both the debug port and the MCP port.  |
 | `--mcp-port PORT`  | `9633`      | MCP server port. The debug port is hardcoded to 8765.  |
-| `--timeout SEC`    | `30`        | Per-request timeout (used by `call`).                  |
 
 ### Examples
 

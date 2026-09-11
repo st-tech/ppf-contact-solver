@@ -81,7 +81,7 @@ PYTHONPATH=. python calibration/cusick_drape/cusick_drape.py --all
 PYTHONPATH=. python calibration/cantilever_bend/cantilever_bend.py --all
 
 # the in-plane stretch ranking (young-mod) and Poisson diagnostic
-PYTHONPATH=. python calibration/tensile/tensile.py --test stretch --all --g 100
+PYTHONPATH=. python calibration/tensile/tensile.py --test stretch --all
 PYTHONPATH=. python calibration/tensile/tensile.py --test poisson --all
 
 # dump one settled drape mesh for offline inspection

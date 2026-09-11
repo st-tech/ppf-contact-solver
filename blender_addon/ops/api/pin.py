@@ -303,13 +303,15 @@ class _Pin:
 
     @blender_api
     def unpin(self, frame: int) -> "_Pin":
-        """Mark this pin to be released at the given frame.
+        """Release this pin after the given number of frames.
 
         Sets the duration on the underlying pin item so the encoder
         knows when to stop enforcing the pin constraint.
 
         Args:
-            frame: Frame number at which the pin is released.
+            frame: Number of frames the pin stays active, counted from
+                the solve's Starting Frame (a count, not a frame number,
+                despite the keyword's name).
 
         Returns:
             ``self`` for chaining.
@@ -317,7 +319,7 @@ class _Pin:
         Example::
 
             pin.move_by(delta=(0, 0, 1.0), frame_start=1, frame_end=60)
-            pin.unpin(frame=120)
+            pin.unpin(frame=120)  # released 120 frames after the solve starts
         """
         _, pin_item = self._find_pin_item()
         if pin_item is not None:

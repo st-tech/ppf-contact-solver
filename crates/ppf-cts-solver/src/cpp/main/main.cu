@@ -836,6 +836,15 @@ StepResult advance() {
         data.statistics_contact_count.clear(0u);
         float dyn_consumed = 0.0f;
         unsigned max_nnz_row = 0;
+        // Walls, spheres and collider meshes go in before the mesh contacts.
+        // Each friction term anchors itself on the residual assembled so far
+        // (friction.hpp), and these are the contacts that carry the normal
+        // load in most scenes, so a mesh contact built after them reads a
+        // tangential drive with that load already removed. The reverse order
+        // would hand a vertex resting on a floor its full weight as the
+        // sideways drive of a contact against a neighbor.
+        num_contact += contact::embed_constraint_force_hessian(
+            data, eval_x, force, tmp_fixed, fixed_hess, dt, prm);
         // Name: Assembly: Contact
         // Format: list[(time, ms)]
         // Description:
@@ -880,9 +889,6 @@ StepResult advance() {
         // csrmat-max-nnz, which is what the same reservation is charged
         // against (see "dyn_consumed" above).
         logging.mark("max_nnz_row", max_nnz_row);
-
-        num_contact += contact::embed_constraint_force_hessian(
-            data, eval_x, force, tmp_fixed, fixed_hess, dt, prm);
 
         // Name: Total Contact Count
         // Format: list[(time, count)]

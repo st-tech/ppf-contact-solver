@@ -10,7 +10,7 @@ The pin tells the solver *which* vertices are constrained. The operations
 tell the solver *how they should move*.
 
 ```{figure} ../../images/pins/pin_hierarchy.svg
-:alt: Two-panel reference. Left panel is a tree with the root node "Group: Cloth (SHELL)" branching into three pins: ShoulderPins (carrying Spin and Embedded Move operations), CollarPins (carrying Move By), and WaistPins (carrying Torque). A legend underneath lists the five operation types (Move By, Spin, Scale, Torque, Embedded Move) and notes that Torque is exclusive with Move By / Spin / Scale. Right panel is a 2×2 grid of small schematics for the four Center modes on Spin and Scale. Centroid places the pivot at the mean of the vertex cluster. Fixed places the pivot at a user-entered world-space coordinate offset from the cluster. Max Towards uses a direction arrow to place the pivot at the centroid of the vertices furthest in that direction. Vertex places the pivot on one specific mesh vertex that deforms along with the mesh.
+:alt: Two-panel reference. Left panel is a tree with the root node "Group: Cloth (SHELL)" branching into three pins: ShoulderPins (carrying Spin and Scale operations), CollarPins (carrying Move By), and WaistPins (carrying Torque). A legend underneath lists the five operation types (Move By, Spin, Scale, Torque, Embedded Move) and notes that Torque is exclusive with Move By / Spin / Scale. Right panel is a 2×2 grid of small schematics for the four Center modes on Spin and Scale. Centroid places the pivot at the mean of the vertex cluster. Fixed places the pivot at a user-entered world-space coordinate offset from the cluster. Max Towards uses a direction arrow to place the pivot at the centroid of the vertices furthest in that direction. Vertex places the pivot on one specific mesh vertex that deforms along with the mesh.
 :width: 880px
 
 Anatomy at a glance. On the left, **pins nest inside a group** and
@@ -34,50 +34,65 @@ How the vertex set is stored depends on the object type:
   **internal** group per pin. The control-point indices are stored as a
   JSON array in a custom property on the curve object, keyed
   `_pin_<name>`. You never edit this property by hand; it is written and
-  read through the **Create Pin VG** button and the Edit-mode
+  read through the **Create** button and the Edit-mode
   select/deselect actions.
 
 ## The Pins Section in a Group Box
 
 Each group box on the **Dynamics Groups** panel contains a **Pins**
 section. It sits between the **Assigned Objects** list and the
-**Material Params** box. The section is laid out top-to-bottom as
-follows:
+**Material Params** box, and is **collapsed on a newly created
+group**: only the **Pins** header is drawn until you click the
+disclosure triangle to its left. The header label itself is not a
+button. The same triangle opens the **Transform** section on a
+**Static** group and **Pins & Motion** on a **PDRD** group. Expanded,
+the section is laid out top-to-bottom as follows:
 
-1. **Vertex-group selector row.** Two side-by-side dropdown menus appear
-   at the top: the left dropdown lists the mesh objects assigned to this
-   group (e.g. `Shirt`), and the right dropdown lists the vertex groups
-   on the selected object (e.g. `ShoulderPins`). Together they form an
-   `[Object][VertexGroup]` pair that identifies which vertex group you
-   want to register as a pin. The dropdown only enumerates **mesh**
-   vertex groups, since curve objects have no vertex groups and so never
-   appear here; their pins are authored through **Create Pin VG**
+1. **Vertex-group selector row.** A single dropdown sits at the top. It
+   lists every vertex group on every mesh object assigned to this group
+   as one combined `[Object][VertexGroup]` entry (e.g.
+   `[Shirt][ShoulderPins]`), and that entry is what identifies the
+   vertex group you want to register as a pin. The **Add** button shares
+   the same row, to the dropdown's right. The dropdown only enumerates
+   **mesh** vertex groups, since curve objects have no vertex groups and
+   so never appear here; their pins are authored through **Create**
    instead.
 
-2. **Action buttons row.** Directly below the selector sit four buttons
-   arranged left to right:
-   - **Add Pin VG**: registers the vertex group currently shown in the
-     selector dropdowns as a new pin on this group.
+2. **Action buttons.** **Add** sits on the selector row above and
+   registers the vertex group currently shown in the selector dropdown
+   as a new pin on this group. The row directly below holds three more
+   buttons, left to right:
    - **Remove**: deletes the currently-selected pin from the list,
      including every operation attached to it. Grayed out when no pin is
      selected.
    - **Rename**: opens a small dialog prefilled with the selected pin's
      vertex-group name. Editing the name renames the underlying vertex
      group (for meshes) or the `_pin_<name>` custom property (for
-     curves), migrates the embedded-move marker, and updates the pin's
-     identifier and hash in one step. Grayed out when no pin is
-     selected.
-   - **Create Pin VG**: only available when you are in Edit Mode with
-     vertices selected. Creates a brand-new vertex group from the
-     selection and registers it as a pin in one step.
+     curves), then updates the pin's identifier and content hash. Grayed
+     out when no pin is selected.
+   - **Create**: only available when you are in Edit Mode with vertices
+     selected. Opens a small dialog with a **Vertex Group Name** field
+     (default `pin`); confirming it creates the vertex group from the
+     selection and registers it as a pin.
 
 3. **Pin UIList.** Below the buttons is a scrollable list of all pins
    registered on this group. Each row displays:
-   - The **object name / vertex-group name** label (e.g.
-     `Shirt / ShoulderPins`).
-   - An **Include** checkbox on the right side of the row. When
-     unchecked, the pin is ignored during the solve but remains in the
-     list for later re-enabling.
+   - The **`[object][vertex-group]`** label (e.g.
+     `[Shirt][ShoulderPins]`).
+   - A **Show** eye toggle on the right side of the row, on by default.
+     Clicking it hides that pin's overlay dots in the viewport without
+     changing anything the solver does.
+   - A row whose **vertex group** was deleted is drawn as
+     `[object][vertex-group] (Missing)` with an error icon; a row whose
+     **object** was deleted keeps its stored label and shows the same
+     error icon without the `(Missing)` suffix. **Remove** the row, or
+     recreate the vertex group under the same name. A plain rename needs
+     no action: the list re-resolves the object by UUID and the vertex
+     group by content hash, and rewrites the label.
+
+   Below the list, a **Size** field sets the overlay dot size and the
+   **▲** / **▼** buttons reorder the pins; for a vertex covered by
+   more than one pin, the lower entry in the list wins.
 
    The list supports single selection: clicking a row highlights it and
    opens the **selected-pin details panel** described below.
@@ -90,25 +105,26 @@ follows:
 
 The **Pins** section of a group box, expanded. The `[Cloth][ShoulderPins]`
 vertex-group selector, **Add / Remove / Rename / Create** buttons, the
-pin UIList with the registered `ShoulderPins` entry, the pin-level
-fields (**Show Pins**, **Duration**, **Pull**), and the **Operations**
-list containing the `Spin ω=360°/s` operation row are all visible.
+pin UIList with the registered `ShoulderPins` entry carrying its own eye
+toggle, the **Size** field sharing a row with the **▲** / **▼** reorder
+buttons, the pin-level fields (**Duration**, **Pull**, **Allow
+Intersections Here**), and the still-empty **Operations** list are all
+visible.
 ```
 
 There are two UI paths to create a pin, both driven from the action
 buttons above the pin UIList:
 
-1. **From an existing vertex group.** Use the left dropdown to pick the
-   mesh object, then the right dropdown to pick the vertex group. Click
-   **Add Pin VG**. The vertex group appears immediately as a new row in
-   the pin UIList with its **included** checkbox on. This path is
+1. **From an existing vertex group.** Pick the `[Object][VertexGroup]`
+   entry in the selector dropdown and click **Add**. The vertex group
+   appears immediately as a new row in the pin UIList. This path is
    mesh-only, since curves have no vertex groups to pick from.
 2. **From an Edit-mode selection.** Enter Edit Mode on a mesh or curve
    that belongs to this group, select the vertices (or curve control
-   points) you want pinned, and click **Create Pin VG**. The add-on
-   creates a new group from the current selection (naming it
-   automatically), registers it as a pin with its **Include** checkbox
-   on, and the new entry appears in the UIList. For meshes this writes
+   points) you want pinned, and click **Create**. Name the new group in
+   the dialog that opens (it defaults to `pin`); on confirm the add-on
+   creates the group from the current selection, registers it as a pin,
+   and the new entry appears in the UIList. For meshes this writes
    a regular Blender vertex group; for curves it writes the internal
    `_pin_<name>` custom property described above. This is the **only**
    way to create a pin on a curve object.
@@ -122,8 +138,11 @@ the list, or the list becomes empty.
 Selecting a pin in the UIList reveals a details panel below the list with
 the pin's own properties:
 
-- **Duration**: a checkbox that enables an **Active For** frame field
-  beside it. When on, the pin is released at that frame.
+- **Duration**: a checkbox that enables an **Active For** frame-count
+  field beside it. When on, the pin is released that many frames after
+  the solve's **Starting Frame**, so with the default Starting Frame of
+  1 an **Active For** of 60 releases at frame 61, and with a Starting
+  Frame of 100 it releases at frame 160.
 - **Pull**: a checkbox with a **Strength** field next to it. When on,
   the pin no longer hard-constrains the vertices; instead, it pulls them
   toward their target positions as a soft force of the given strength.
@@ -134,9 +153,12 @@ the pin's own properties:
 - **Operations UIList**: a list of the operations stacked on this pin,
   each row showing the operation type.
 
-**Pull** is mutually exclusive with movement operations, since the solver
-would have no target to pull toward. The UI reflects this by disabling
-incompatible controls.
+**Pull** composes with the movement operations rather than excluding
+them: the operations supply the target position, and **Pull** is what
+decides how the pin holds its vertices there, softly with the given
+strength instead of prescribing them exactly. The one control it does
+disable is **Fix Weight Threshold**, a **Solid**-only field that applies
+to hard pins.
 
 ### Allow Intersections Here
 
@@ -158,21 +180,34 @@ when all three of its corners are pinned, a rod segment when both of its
 ends are, a **Sand** grain when that one grain is, and every pin holding
 those vertices has to have the option on, not just one of them. A face with
 one free corner is not covered, so a band pinned along a single edge leaves
-the cloth around it reporting overlaps as usual. While the option is on, the
-add-on shows "Fully pinned faces may overlap; partly pinned ones still
-report" under the checkbox.
+the cloth around it reporting overlaps as usual.
+
+Coverage is asked of the pair, not of both of its sides. An overlap is
+accepted as soon as **one** of the two elements is fully held by allowing
+pins, so a face that is only partly pinned, or not pinned at all, is still
+accepted where the geometry it meets is fully covered. Flagging the pin on a
+cuff therefore covers the pairs it forms with the wrist inside it, without
+the wrist needing a pin of its own. Only a pair in which neither element is
+fully covered is reported. While the option is on, the add-on shows
+"Fully pinned faces may overlap; partly pinned ones still report" under
+the checkbox.
 
 :::{important}
 This suppresses the error, not the collision. Contact still acts across the
-overlap and the solver still pushes the surfaces apart. Nothing outside the
-elements this pin covers is affected, and every other overlap in the scene
+overlap and the solver still pushes the surfaces apart. An overlap is
+exempted whenever one of its two sides is an element this pin covers, even
+if the other side is unpinned; an overlap in which neither side is covered
 is still reported.
 :::
 
 The checkbox sits with every pin the add-on offers. On **Solid**, **Shell**,
 **Rod**, and **Sand** groups it is in the pin details panel described above;
 on a **PDRD** group it is in the **Pins & Motion** section, just above
-**Motion steps**, with the same note under it. A **Static** group is driven
+**Motion steps**, with the same note under it. That **Motion steps** list is
+limited to two buttons, **Translate** and **Rotate**; **Scale**, **Torque**
+and **Embedded Move** are not offered there, and a step of one of those
+types imported from a scene built elsewhere shows only as
+`<type>: edit in the generic panel`. A **Static** group is driven
 by **Transform** operations rather than pins, so it has no pin to put the
 checkbox on. For an overlap that is not confined to a pinned region, use the
 group-level
@@ -201,16 +236,19 @@ Edit-mode selection or on mesh-data animation.
 
 ### Adding an Operation
 
-Below the **Operations UIList** in the selected-pin details panel are
-buttons arranged in two rows. The top row holds an **Operations:**
-label alongside **Copy** and **Paste** clipboard icons (copy the pin's
-operation list to a session-scoped clipboard; paste replaces the target
-pin's operations wholesale). The bottom row holds:
+Above the **Operations UIList** in the selected-pin details panel sits
+an **Operations:** label alongside **Copy** and **Paste** clipboard
+icons (copy the pin's operation list to a session-scoped clipboard;
+paste replaces the target pin's operations wholesale), then a pin
+operations **Profile** row for saving the operation list to a file and
+loading it back. Directly below the list is a single row of buttons:
 
 - **Add**: opens a dropdown menu listing the available operation types
   (see below). New operations insert at the top of the list.
 - **Remove**: deletes the currently-selected operation. Removing an
-  **Embedded Move** row is equivalent to **Delete All Keyframes**.
+  **Embedded Move** row drops the sentinel, so the solver stops reading
+  the keyframes, but the per-vertex fcurves stay on the mesh; use
+  **Delete All Keyframes** to remove those as well.
 - Up / Down triangles (**▲** / **▼**): reorder the selected operation
   within the list. Order determines the sequence in which the solver
   applies each operation's contribution when more than one is stacked
@@ -224,9 +262,10 @@ The **Add** dropdown lists the available operation types:
 - **Torque**: apply a rotational force around a PCA-derived axis.
 
 **Embedded Move** is not in the dropdown: it's attached automatically
-on the first **Make Keyframe** press. Entries that would violate
-compatibility rules (e.g. adding **Spin** when a **Torque** already
-exists) are grayed out in the dropdown so you cannot select them.
+on the first **Make Keyframe** press. Every other entry stays
+selectable, but picking one that would violate a compatibility rule
+(e.g. adding **Spin** when a **Torque** already exists) is refused with
+an error in the status bar, and nothing is added.
 
 ```{figure} ../../images/pins/pin_ops_editor.png
 :alt: Dynamics Groups panel on a Shell group with a pin selected and a Spin operation in the Operations list. Above the list is the Operations label with Copy and Paste clipboard icons on the right. Below the list are Add, Remove, and up/down reorder buttons. The Spin editor underneath is in Fixed center mode, showing the Pick from Selected eyedropper
@@ -273,17 +312,20 @@ vector, **Angular Velocity (°/s)**, **Flip Direction** toggle, **Start
   **Start**, **End**, **Transition**.
 - **Scale**: **Factor** (scalar), a **Center** dropdown + companion
   field, **Start**, **End**, **Transition**.
-- **Torque**: **Magnitude (N·m)**, **Axis** dropdown (PC1 / PC2 /
-  PC3), **Flip Direction** checkbox, **Start**, **End**.
+- **Torque**: **Magnitude (N·m)**, **Axis** dropdown (**1st
+  Component** / **2nd Component** / **3rd Component**, i.e. `PC1` /
+  `PC2` / `PC3` in the Python API), **Flip Direction** checkbox,
+  **Start**, **End**.
 - **Embedded Move**: no editable fields; this operation is managed
   entirely via the **Make Keyframe** and **Delete All Keyframes**
   buttons (see below).
 
 :::{warning}
 **Torque** cannot coexist with **Move By**, **Spin**, or **Scale** on
-the same pin. It *can* coexist with **Embedded Move**. The **Add**
-dropdown enforces this at creation time; incompatible entries are
-grayed out.
+the same pin, and it cannot coexist with **Embedded Move** either: a
+keyframed pin refuses every operation you try to add, and **Make
+Keyframe** refuses a pin that already carries operations. Picking an
+incompatible entry reports an error and adds nothing.
 :::
 
 ### Make Keyframe
@@ -327,9 +369,11 @@ any per-frame keyframing by the artist.
 #### Where the controls live
 
 In the **Pins** section of the pin's group, with the pin selected in the
-list, two buttons appear under the **Show Pins** row: **Capture
-Deformation** and **Clear Deformation Cache**. Both turn on only when
-the pin's mesh has a deforming modifier on it. When a cache exists, a
+list, two buttons appear below the pin list's **Size** row: **Capture
+Deformation** and **Clear Deformation Cache**. **Capture Deformation**
+turns on only when the pin's mesh has a deforming modifier on it;
+**Clear Deformation Cache** turns on only once a capture exists. Both
+grey out while a capture is running. When a cache exists, a
 **Pin cache: N frame(s)** label sits just below the buttons, and the
 operation list shows an **`[Embedded] Move (Captured)`** entry that
 labels the captured animation as the live source.
@@ -340,7 +384,7 @@ labels the captured animation as the live source.
 
 The same pin's section in the **Dynamics Groups** panel. The captured
 state is visible in three places at once: the **Capture Deformation**
-/ **Clear Deformation Cache** row, the **Pin cache: 60 frame(s)**
+/ **Clear Deformation Cache** row, the **Pin cache: 180 frame(s)**
 status line, and the **`[Embedded] Move (Captured)`** entry in
 **Operations**.
 ```
@@ -352,9 +396,14 @@ status line, and the **`[Embedded] Move (Captured)`** entry in
    keyframe the pose).
 2. Create the **Dynamics Group**, add the cloth, and register the pin
    vertex group on the edge or region you want the bones to drive.
-3. Set the scene frame range to cover the pose animation, then press
-   **Capture Deformation**. A progress label reports as it walks the
-   range; on completion the **Pin cache** count appears and the
+3. Press **Capture Deformation**. The captured range is derived, not
+   read from the timeline: it begins at the solve's **Starting Frame**
+   and ends at the last keyframe of every action influencing the cloth,
+   so shrinking the scene's frame range does not truncate the cache.
+   (For procedural motion with no keyframes at all, the range instead
+   runs for the Scene Configuration panel's **Frame Count**.) A
+   progress label reports as it walks the range and names the range it
+   derived; on completion the **Pin cache** count appears and the
    operation row updates.
 4. Press **Transfer** and **Run** as usual. The pinned vertices follow
    the bones; the rest of the cloth simulates around them.
@@ -423,19 +472,21 @@ cloth banner with its top edge pinned, deformed by wind.
 3. **Register with a SHELL group.** Leave Edit Mode, open the **Dynamics
    Groups** panel, click **Create Group**, set the type to **Shell**,
    then add the plane via **Add Selected Objects**.
-4. **Pin the top edge.** In the group's **Pins** section, pick
-   `[ClothBanner][TopEdge]` in the vertex-group selector and click
-   **Add Pin VG**. Make sure **Show Pins** is on (it is by default) so
-   the pinned vertices render as white dots in the viewport. Steps 3
-   and 4 leave the Dynamics Groups panel looking like this:
+4. **Pin the top edge.** Expand the group's **Pins** section (a new
+   group has it collapsed, so click the triangle beside the **Pins**
+   header), then pick `[ClothBanner][TopEdge]` in the vertex-group
+   selector and click **Add**. Leave the pin's eye toggle in the list
+   on (it is by default) so the pinned vertices render as white dots in
+   the viewport. Steps 3 and 4 leave the Dynamics Groups panel looking
+   like this:
 
    ```{figure} ../../images/pins/pin_example_panel_groups.png
-   :alt: Dynamics Groups panel with ClothBanner SHELL, ClothBanner object assigned, and TopEdge pinned with Show Pins on
+   :alt: Dynamics Groups panel with ClothBanner SHELL, ClothBanner object assigned, and TopEdge pinned with its overlay visible
    :width: 360px
 
    The panel after steps 3 and 4. `ClothBanner` is the lone assigned
-   object under the Shell group; `[ClothBanner][TopEdge]` is selected
-   in the Pins list; **Show Pins** is on, **Size** is 18.
+   object under the Shell group, and `[ClothBanner][TopEdge]` is
+   selected in the Pins list with its eye toggle on.
    ```
 
 5. **Drive the wind.** In the **Scene Configuration** panel, set the
@@ -460,8 +511,8 @@ cloth banner with its top edge pinned, deformed by wind.
 :width: 520px
 
 Rest pose at frame 1. The row of white dots along the top edge is the
-**Show Pins** overlay drawing each vertex of `TopEdge`. Those vertices
-are the ones the solver will hold fixed.
+pin overlay drawing each vertex of `TopEdge`. Those vertices are the
+ones the solver will hold fixed.
 ```
 
 ```{figure} ../../images/pins/pin_example_blown.png
@@ -490,10 +541,11 @@ into a new resting configuration before letting it fall freely.
 
 | UI label                      | Python / TOML key                   | Description                                                   |
 | ----------------------------- | ----------------------------------- | ------------------------------------------------------------- |
-| **Include**                   | `included`                          | Pin is active for the current solve.                          |
-| **Duration** / **Active For** | `use_pin_duration` / `pin_duration` | Release the pin at the given frame (`pin.unpin(frame=...)`).    |
+| **Show**                      | `show_overlay`                      | Draw this pin's vertices as overlay dots in the viewport (no effect on the solve). |
+| **Duration** / **Active For** | `use_pin_duration` / `pin_duration` | Number of frames the pin stays active, counted from the solve's **Starting Frame**; the pin is released after that many frames. `pin.unpin(frame=...)` sets this count despite the keyword's name. |
 | **Pull** / **Strength**       | `use_pull` / `pull_strength`        | Replace the hard pin with a soft pull force.                  |
 | **Allow Intersections Here**  | `allow_intersection`                | Accept overlaps of the elements this pin holds completely, instead of stopping the run. |
+| **Track Rest-Pose Deformation** | `track_rest_pose_deformation`     | **Solid** only, off by default. Drives a time-varying rest pose from the pin's captured deformation, so the body settles into the captured shape instead of straining against it. Editable only on a *full* pin (one covering every vertex of the mesh) that has a capture; the **Refresh** button beside it re-checks that coverage. It cannot coexist with plasticity, and the panel warns when both are on. |
 
 ## Operations Reference
 
@@ -503,7 +555,7 @@ into a new resting configuration before letting it fall freely.
 | **Move By**       | `MOVE_BY`         | **Delta (m)**, **Start**, **End**, **Transition**                                                   | Translate the pinned vertices by a delta over a frame range.    |
 | **Spin**          | `SPIN`            | **Axis**, **Angular Velocity (°/s)**, **Center**, **Start**, **End**, **Transition**               | Rotate the pinned vertices around an axis through a pivot.      |
 | **Scale**         | `SCALE`           | **Factor**, **Center**, **Start**, **End**, **Transition**                                          | Scale the pinned vertices uniformly from a pivot.               |
-| **Torque**        | `TORQUE`          | **Magnitude (N·m)**, **Axis** (PC1/PC2/PC3), **Flip Direction**, **Start**, **End**                 | Apply a rotational force around a PCA-derived axis.             |
+| **Torque**        | `TORQUE`          | **Magnitude (N·m)**, **Axis** (**1st** / **2nd** / **3rd Component**), **Flip Direction**, **Start**, **End** | Apply a rotational force around a PCA-derived axis.             |
 
 **Transition** is either **Linear** or **Smooth** between the
 operation's **Start** and **End** frames.

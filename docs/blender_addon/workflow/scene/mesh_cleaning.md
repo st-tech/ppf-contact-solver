@@ -61,10 +61,14 @@ found** and still lists its notes below.
 
 ### The Two Thresholds
 
-Two numbers control the scan. They live on the operator rather than in the
-scene, so you set them the way you set any Blender operator's options:
-run the scan, then press <kbd>F9</kbd> (**Adjust Last Operation**) and
-edit them in the popup. The scan re-runs as you change them.
+Two numbers control the scan. They live on the operator rather than in
+the scene, and the panel button always runs at the defaults below. To
+scan at other values, pass them to the operator: `scan_meshes` takes
+both on the [Python / MCP API](#python--mcp-api)
+(`solver.scan_meshes("Cloth", merge_threshold=1e-3)`), and from
+Blender's Python console
+`bpy.ops.object.ppf_scan_mesh_defects(merge_threshold=..., area_eps=...)`
+does the same.
 
 | Field               | Default  | Unit                     | What it does                                                                                     |
 | ------------------- | -------- | ------------------------ | ------------------------------------------------------------------------------------------------ |
@@ -106,10 +110,25 @@ drawn with a warning icon and, where a safe repair exists, its fix button:
 | **Degenerate (zero-area) face(s)**          | Faces at or below the **Degenerate Area**.                                  | **Dissolve Degenerate**  | changes      |
 | **Inconsistently wound edge(s)**            | Neighboring faces that traverse a shared edge in the same direction, so one of them faces the wrong way. | **Recalculate Outside**  | unchanged    |
 
-A **Linked Duplicate** is the one error with no button. The solver assumes
-each object owns its own mesh data, and repairing shared data here would
-edit every object using it, so the report points you at **Object >
-Relations > Make Single User > Object & Data** instead.
+A **Linked Duplicate** is the one error in the table with no button. The
+solver assumes each object owns its own mesh data, and repairing shared
+data here would edit every object using it, so the report points you at
+**Object > Relations > Make Single User > Object & Data** instead.
+
+:::{note}
+**One error counts without listing: degenerate tessellation.** The scan
+also asks the question the **Transfer** gate asks, whether a face splits
+into a triangle whose inverse rest shape is rounding noise, and adds what
+it finds to the *need attention* total. It has no row in the report and
+no fix button, so an object whose only defect is that one is counted in
+the status line while its box below stays empty. The repair is offered
+where the check normally bites: the **Cannot Transfer This Mesh** dialog
+a refused Transfer opens carries a **Triangulate Faces** button that
+splits exactly the offending faces and leaves the rest of the mesh
+alone. That button is drawn only where a split can help: a face that is
+already a triangle has no other triangulation, and the dialog then
+states the refusal on its own.
+:::
 
 **Notes** are geometry worth knowing about that is not by itself a
 problem. They carry an info icon and never make an object read as needing
@@ -132,18 +151,20 @@ boundary is a modeling decision, not a cleanup, so the tool offers no
 button for it.
 :::
 
-Four of the checks (isolated vertices, hanging seam vertices, duplicate
-faces, linked duplicates) are the same checks **Transfer** runs, so a
-clean scan and a passing Transfer cannot disagree about them. The rest
-(near-coincident vertices, degenerate faces, surface integrity, quad
-re-splitting) are performed nowhere else in the pipeline.
+Five of the checks (isolated vertices, hanging seam vertices, duplicate
+faces, linked duplicates, degenerate tessellation) are the same checks
+**Transfer** runs, so a clean scan and a passing Transfer cannot disagree
+about them. The rest (near-coincident vertices, degenerate faces, surface
+integrity, quad re-splitting) are performed nowhere else in the pipeline.
 
 :::{note}
-**A Sand particle mesh is scanned for near-coincident vertices only.** A
-committed particle mesh is a cloud of loose grain centers, so every vertex
-legitimately belongs to no face and the face-based checks do not apply to
-it. Near-coincident grain centers are still worth catching, and are in
-fact the finding that matters most for grains.
+**A Sand particle mesh is scanned for near-coincident vertices and shared
+mesh data.** A committed particle mesh is a cloud of loose grain centers,
+so every vertex legitimately belongs to no face and the face-based checks
+are skipped on it. Near-coincident grain centers are still worth catching,
+and are in fact the finding that matters most for grains. The
+linked-duplicate check runs too, since sharing a mesh datablock is a
+problem whatever the geometry is.
 :::
 
 ## The Repairs
@@ -359,18 +380,27 @@ The whole surface is available to an MCP client as eight tools:
 `symmetric_triangulate`. Each takes an explicit list of object names
 rather than acting on the viewport selection, and `scan_meshes` returns
 the same per-object report the panel draws, including the list of what a
-vertex-count change would invalidate.
+vertex-count change would invalidate. Over MCP the three that change the
+vertex count stand in for the panel's confirmation dialog, so each takes
+`acknowledge: true`; without it the call is refused, and the refusal
+names what the change would have invalidated.
 
 The same eight are on the scripting API as methods on `solver`, where
-`scan_meshes` returns the report as data. The three that change the vertex
-count take an explicit acknowledgement, since a script gets no confirmation
-dialog:
+`scan_meshes` returns the report as data. There the call itself is the
+confirmation, so the three take no acknowledgement. What both surfaces
+take is `clear_stale_caches` (on by default), which decides what becomes
+of the caches the count change invalidates, the same choice the panel's
+dialog offers:
 
 ```python
 from bl_ext.user_default.ppf_contact_solver.ops.api import solver
 
 report = solver.scan_meshes("Cloth")
-solver.merge_by_distance("Cloth", acknowledge=True)
+solver.merge_by_distance("Cloth")
+
+# Keep the caches instead, and expect the viewport overlay to read data
+# sized for the old vertex count until the next Transfer rewrites it.
+solver.merge_by_distance("Cloth", clear_stale_caches=False)
 ```
 
 :::{admonition} Under the hood

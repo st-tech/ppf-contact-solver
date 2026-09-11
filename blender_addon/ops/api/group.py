@@ -88,7 +88,7 @@ class _ParamProxy:
         group.param.solid_model = "ARAP"
         group.param.shell_model = "ARAP"
 
-        # Density (kg/m^3 for solid/shell, kg/m for rod)
+        # Density (kg/m^3 solid, kg/m^2 shell, kg/m rod)
         group.param.solid_density = 100.0
         group.param.shell_density = 0.3
         group.param.rod_density = 0.05
@@ -126,7 +126,7 @@ class _ParamProxy:
         group.param.enable_bend_plasticity = True
         group.param.bend_plasticity = 0.5
         group.param.bend_plasticity_threshold = 0.1
-        group.param.bend_rest_angle_source = "REST"
+        group.param.bend_rest_angle_source = "FROM_GEOMETRY"
 
         # Bending (Shell and Rod), and the Shell per-axis rest-shape scale
         group.param.bend = 1.0e-4

@@ -56,7 +56,7 @@ def _path_for(uri: str) -> Path | None:
         return _LLM_INDEX if _LLM_INDEX.is_file() else None
     if not uri.startswith(_URI_PREFIX):
         return None
-    rel = uri[len(_URI_PREFIX):]
+    rel = uri[len(_URI_PREFIX) :]
     if not rel:
         return None
     # Bare names (no slash) belong to the default section; keep explicit
@@ -117,23 +117,27 @@ def list_llm_resources() -> list[dict]:
     """
     resources: list[dict] = []
     if _LLM_INDEX.is_file():
-        resources.append({
-            "uri": _INDEX_URI,
-            "name": _name_for(_LLM_INDEX),
-            "description": (
-                _description_for(_LLM_INDEX)
-                or "Top-level router listing every other llm:// resource."
-            ),
-            "mimeType": "text/markdown",
-        })
+        resources.append(
+            {
+                "uri": _INDEX_URI,
+                "name": _name_for(_LLM_INDEX),
+                "description": (
+                    _description_for(_LLM_INDEX)
+                    or "Top-level router listing every other llm:// resource."
+                ),
+                "mimeType": "text/markdown",
+            }
+        )
     if _LLM_DIR.is_dir():
         for path in sorted(_LLM_DIR.rglob("*.md")):
-            resources.append({
-                "uri": _uri_for(path),
-                "name": _name_for(path),
-                "description": _description_for(path),
-                "mimeType": "text/markdown",
-            })
+            resources.append(
+                {
+                    "uri": _uri_for(path),
+                    "name": _name_for(path),
+                    "description": _description_for(path),
+                    "mimeType": "text/markdown",
+                }
+            )
     return resources
 
 
@@ -142,11 +146,13 @@ def read_llm_resource(uri: str) -> str | None:
 
     Callers wrap the text in the MCP ``contents`` envelope; this helper
     just does the URI-to-bytes resolution.
+
+    A URI that names no resource returns None. A URI that names a real file
+    which then cannot be read raises OSError: those are different facts, and
+    reporting the second as "unknown resource" would send the caller looking
+    for a URI typo instead of at the unreadable file.
     """
     path = _path_for(uri)
     if path is None:
         return None
-    try:
-        return path.read_text(encoding="utf-8")
-    except OSError:
-        return None
+    return path.read_text(encoding="utf-8")

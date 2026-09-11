@@ -7,15 +7,21 @@
 - **A solver backend.** Build or deploy the engine from
   [st-tech/ppf-contact-solver](https://github.com/st-tech/ppf-contact-solver)
   on any one of: the same machine (simplest), an SSH-reachable Linux host, a
-  Docker container, or a Windows workstation. The solver itself requires an
-  NVIDIA GPU with CUDA 12.x. See [Connections](../connections/index.md) for
+  Docker container, or a Windows workstation. On Linux and Windows the
+  solver requires an NVIDIA GPU and the CUDA 12.8 toolkit (on Linux the
+  build checks `nvcc --version` and refuses any other release); on Apple
+  Silicon it is the Metal build that runs (see
+  [Local](../connections/local.md)). See
+  [Connections](../connections/index.md) for
   the full matrix and GPU requirements. The add-on is just a client and runs
-  fine on any machine Blender runs on (including macOS).
+  fine anywhere Blender runs on one of the platforms its manifest declares:
+  Apple-silicon macOS, x86-64 Linux, and x86-64 Windows.
 - **(Optional) paramiko / docker-py.** Needed only for SSH and Docker
   connections. You do not need to install them yourself. When you pick an SSH
   or Docker server type without the module present, the main panel surfaces an
-  **Install Paramiko** / **Install Docker-Py** button that installs into
-  Blender's user `scripts/addons/modules` directory.
+  **Install Paramiko to Add-on Directory** / **Install Docker-Py to Add-on
+  Directory** button that installs into Blender's user
+  `scripts/addons/modules` directory.
 - **cbor2 (bundled).** Every Transfer is encoded with cbor2, so the add-on
   needs it. It ships as a bundled wheel that is installed for you when you
   install the extension, so there is normally nothing to do. If the bundled
@@ -81,11 +87,19 @@ by absolute URL.
 
 ### Option B: Install from a Local Checkout (script)
 
-Useful when you are working from a checkout, are offline, or want to install
-a build that has not been published as a release yet. The scripts link the
-repository's `blender_addon/` directory into Blender's `extensions/user_default`
-so edits in the checkout are picked up after a Blender restart, with no
-re-zipping.
+Useful when you are working from a checkout or want to install a build that
+has not been published as a release yet. The scripts link the repository's
+`blender_addon/` directory into Blender's `extensions/user_default` so edits
+in the checkout are picked up after a Blender restart, with no re-zipping.
+
+The first run needs Python and network access. Before linking anything the
+script runs `blender_addon/wheels/fetch.py`, which downloads the cbor2 wheels
+named in `blender_manifest.toml`; those wheels are gitignored, so a fresh
+clone has none, and the script aborts rather than linking an add-on that
+cannot encode a Transfer. It also needs a working `python3`/`python` on
+`PATH`, or `PPF_PYTHON_BIN` (`PPF_BUILD_PYTHON` on Windows) pointing at one.
+Once the wheels are on disk the fetch is a no-op, so later re-runs are
+offline-safe.
 
 1. Clone the repository and `cd` into it.
 2. Run the script for your platform from the repository root:

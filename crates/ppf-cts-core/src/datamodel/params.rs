@@ -219,7 +219,9 @@ pub fn app_param() -> ParamHolder {
     m.insert("playback".into(), entry(1.0f64, "Playback Speed",
         "Playback speed. 1.0 is normal, >1.0 is faster, <1.0 is slower."));
     m.insert("min-newton-steps".into(), entry(0i64, "Lower Bound of Newton Steps",
-        "Minimal Newton's steps to advance a step. Recommended 32 if static friction is present."));
+        "Minimal Newton's steps to advance a step. Raise it when a frictional scene needs \
+         the contact forces resolved more tightly within a step; the friction anchor \
+         already lets a loaded contact release at 1."));
     m.insert("max-newton-steps".into(), entry(2048i64, "Upper Bound of Newton Steps",
         "Maximum Newton's steps per substep. An over-constrained configuration (a pinned vertex \
          driven into geometry that cannot yield) otherwise loops forever; this bound turns that \

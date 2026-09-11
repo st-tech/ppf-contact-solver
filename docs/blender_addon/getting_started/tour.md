@@ -4,16 +4,26 @@ All panels live in **View3D → Sidebar (`N`) → ZOZO's Contact Solver**.
 
 ## Backend Communicator
 
-The main panel. Profile row (Open / Clear / Reload / Save), server-type
-selector (**Local**, **SSH**, **SSH Command**, **Docker**, **Docker over
-SSH**, **Docker over SSH Command**, **Windows Native**), Project Name,
-**Connect** / **Disconnect**, **Start Server on Remote** / **Stop Server
-on Remote**, live status line, remote hardware readout, and realtime
-statistics. When a port-in-use error is reported, a **Force Terminate
-Process** button surfaces so you can release the port; if the existing
-process is itself a `ppf-cts-server`, the add-on auto-attaches to it on
-the next connect. Enable **Debug Options** at the bottom to unlock
-shell, data-transfer, UUID migration, and reload-server tools.
+The main panel. Profile row (Open / Clear / Reload / Save), then a
+collapsible **Connection** box holding the server-type selector
+(**Local**, **SSH**, **SSH Command**, **Docker**, **Docker over SSH**,
+**Docker over SSH Command**, **Windows Native**), the path fields that
+type needs, a **GPU** picker naming the CUDA device on the solver host
+(it appears only once you are connected, and greys out while the server
+is running because the choice is applied at Start Server; see
+{ref}`Picking a GPU <gpu-picker>`), Project Name,
+**Connect** / **Disconnect**, and **Start Server on Remote** / **Stop
+Server on Remote**. Below the box sit the live status line and, as the
+connection and the run supply them, a **Remote Hardware** readout, a
+statistics box (**Realtime Statistics** during a run, **Average
+Statistics** once it ends), and a **Scene Info** box. When a port-in-use
+error is reported, a **Force Terminate Process** button surfaces so you
+can release the port; if the existing process is itself a
+`ppf-cts-server`, Windows Native attaches to it instead of erroring out.
+Tick **Debug Options**, the checkbox sharing a row with **Update Stat**
+and **Show Console**, to unlock the shell, data-transfer, UUID-migration
+and reload-server tools, which appear in a block at the bottom of the
+panel.
 
 ```{figure} ../images/tour/backend_communicator.png
 :alt: Backend Communicator panel, Connect button highlighted
@@ -51,27 +61,33 @@ and parameters to the solver) highlighted.
 
 ## Scene Configuration
 
-Global solver inputs: FPS, frame count, step size, gravity, air density,
-air friction. Four collapsible sub-sections: **Wind**, **Advanced Params**,
-**Dynamic Parameters** (keyframed gravity / wind / air), and **Invisible
-Colliders** (walls and spheres).
+Global solver inputs: FPS, time scale, starting frame, frame count, step
+size, min Newton steps, air density, air friction, world scaling, and
+gravity. Five collapsible sub-sections: **Save and Checkpoints**,
+**Wind**, **Invisible Colliders** (walls and spheres), **Linear System
+Solver**, and **Advanced Params**. Only some of these settings can be
+keyframed; the ones that can are keyframed on their own sliders, the
+same gesture as a material parameter, so the panel carries no
+scene-parameter keyframe list of its own. See
+[Dynamic Parameters](../workflow/params/dynamic.md) for which ones.
 
 ```{figure} ../images/tour/scene_configuration.png
 :alt: Scene Configuration panel
 :width: 500px
 
 The Scene Configuration panel. Every field here applies to the whole
-scene; the four collapsible sections at the bottom (Wind, Advanced
-Params, Dynamic Parameters, and Invisible Colliders) expand to reveal
+scene; the collapsible sections below the flat fields expand to reveal
 more inputs.
 ```
 
 ## Dynamics Groups
 
 Up to 32 groups. Create a group, pick its type (**Solid** / **Shell** /
-**Rod** / **Static** / **PDRD** / **Sand**), assign meshes, set per-group material parameters,
-manage pin vertex groups, and attach pin operations (**Move By**,
-**Spin**, **Scale**, **Torque**, **Embedded Move**).
+**Rod** / **Static** / **PDRD** / **Sand**), assign meshes, set per-group
+material parameters, manage pin vertex groups, and attach pin operations
+(**Move By**, **Spin**, **Scale**, **Torque**). See
+[Object Groups](../workflow/scene/object_groups.md) for what each type
+means.
 
 ```{figure} ../images/tour/dynamics_groups.png
 :alt: Dynamics Groups panel, Create Group button highlighted
@@ -99,8 +115,8 @@ solver stitches them at build time.
 :alt: Snap and Merge panel, Snap A to B button highlighted
 :width: 500px
 
-The Snap and Merge panel, with **Snap A to B** (the KDTree-based vertex
-snap that pulls Object A's vertices onto Object B's closest vertices)
+The Snap and Merge panel, with **Snap A to B** (the snap that pulls
+Object A's closest vertex onto the nearest point of Object B's surface)
 highlighted. The panel is collapsed by default; click the header to
 expand.
 ```
@@ -135,19 +151,43 @@ color tints, snap indicators, pin operations) so you can declutter the
 viewport without actually disabling the underlying data.
 ```
 
+## Object Statistics
+
+The last panel in the tab, collapsed by default: a per-object readout
+of what the solver measured on the frame you are looking at. Pick an
+object from the **Object** menu — it lists every object included in an
+active group, Static colliders among them — and the panel prints that
+object's frame and time, then the vector rows every object carries:
+location, velocity, acceleration, angular velocity and angular axis.
+Below those come the measures its geometry supports — volume for a solid
+or a closed shell, surface area for anything with faces, rod length for
+a rod, each followed by its percentage of the same measure on the run's
+first frame — and then the scalars: speed, acceleration magnitude and
+angular speed. A contact count closes the list. The rows follow the
+playhead, so scrubbing walks the run. **Export CSV** picks one of those
+values from a menu and writes it for every fetched frame to a `.csv`
+file. An object the statistics cache does not cover reads *Statistics
+unavailable; rerun the simulation*; see [Reading Per-Frame
+Statistics](../workflow/sim/simulating.md#reading-per-frame-statistics)
+for where the numbers come from and when they go away.
+
 ## Other Sections
 
-The **Debug** tools (Shell Calls, Data Transfer Tests, GitHub Repo on
-Remote / Local, UUID Migration, and the Add-on Local Debug Server) are
-hidden behind the **Debug Options** toggle on the Backend Communicator
-panel.
+The **Debug** tools (Shell Calls, Data Transfer Tests, Options, Console
+Log Export, GitHub Repo on Remote / Local, UUID Migration, Render, and
+the Add-on Local Debug Server) are hidden behind the **Debug Options**
+toggle on the Backend Communicator panel. What each of those tools does,
+what it needs before it will run, and the problem it exists to solve are
+described under [Debug
+Options](../troubleshooting.md#debug-options).
 
 ```{figure} ../images/tour/debug_options.png
 :alt: Backend Communicator panel with Debug Options toggled on, Debug Options checkbox highlighted and the debug section expanded below
 :width: 500px
 
-With **Debug Options** toggled on at the top of the Backend Communicator
-panel, a debug section appears below exposing Shell Calls, Data Transfer
-Tests, GitHub Repo on Remote / Local, UUID Migration, and the Add-on
-Local Debug Server controls.
+With **Debug Options** toggled on — the checkbox on the **Update Stat**
+/ **Show Console** row of the Backend Communicator panel — a debug
+section appears below exposing Shell Calls, Data Transfer Tests,
+Options, Console Log Export, GitHub Repo on Remote / Local, UUID
+Migration, Render, and the Add-on Local Debug Server controls.
 ```

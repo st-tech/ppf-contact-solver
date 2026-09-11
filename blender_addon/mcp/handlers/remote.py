@@ -15,6 +15,11 @@ from ..decorators import (
     remote_handler,
 )
 
+# Mirrors the hard range of ui/state.py's world_scaling FloatProperty. The
+# RNA clamps silently on assignment, so the tool refuses out-of-range input
+# rather than reporting a value the solver will never see.
+_WORLD_SCALING_MIN = 0.001
+_WORLD_SCALING_MAX = 1000.0
 
 @remote_handler
 def abort_operation():
@@ -60,7 +65,9 @@ def set_scene_parameters(
     wind_strength: Optional[float] = None,
     air_density: Optional[float] = None,
     air_friction: Optional[float] = None,
+    world_scaling: Optional[float] = None,
     vertex_air_damp: Optional[float] = None,
+    fix_xz: Optional[float] = None,
     inactive_momentum_frames: Optional[int] = None,
     contact_nnz: Optional[int] = None,
     line_search_max_t: Optional[float] = None,
@@ -68,6 +75,7 @@ def set_scene_parameters(
     cg_max_iter: Optional[int] = None,
     cg_tol: Optional[float] = None,
     include_face_mass: Optional[bool] = None,
+    friction_mode: Optional[str] = None,
     disable_contact: Optional[bool] = None,
     auto_save: Optional[bool] = None,
     auto_save_interval: Optional[int] = None,
@@ -77,9 +85,17 @@ def set_scene_parameters(
     schwarz_levels: Optional[int] = None,
     use_scene_fps: Optional[bool] = None,
     time_scale: Optional[float] = None,
+    post_snap_exactly: Optional[bool] = None,
     project_name: Optional[str] = None,
 ):
     """Set global scene parameters for physics simulation.
+
+    Only the parameters passed are written; the rest keep their current value.
+    Two of them are enums that reject anything else: friction_mode accepts
+    "MIN", "MAX" or "MEAN", and precond accepts "BLOCK_JACOBI" or "SCHWARZ".
+    post_snap_exactly is the one parameter here that is not sent to the
+    solver: it controls how already-simulated frames are written back on
+    fetch, so changing it takes effect on the next fetch and needs no new run.
 
     Args:
         step_size: Simulation step size (seconds)
@@ -95,7 +111,15 @@ def set_scene_parameters(
         wind_strength: Wind speed magnitude (m/s)
         air_density: Air density (kg/m^3)
         air_friction: Tangential/normal air friction ratio
+        world_scaling: Uniform scale applied to all geometry before
+            simulating; results are scaled back so the scene keeps its
+            authored size. Must be within [0.001, 1000.0], and 1.0 disables
+            it. Gravity and material stiffness do not scale
         vertex_air_damp: Vertex-level air damping factor
+        fix_xz: Height threshold (m) above which lateral motion (XY in
+            Blender, XZ in the solver's Y-up frame) is constrained. Must be
+            0 or greater, and 0 disables it. The threshold is scaled by
+            world_scaling along with the geometry
         inactive_momentum_frames: Inactive momentum frame count
         contact_nnz: Max contact non-zero entries
         line_search_max_t: CCD TOI extension factor
@@ -103,6 +127,9 @@ def set_scene_parameters(
         cg_max_iter: PCG max iterations
         cg_tol: PCG relative tolerance
         include_face_mass: Include shell face mass for solids' surface elements
+        friction_mode: How the friction coefficients of two contacting
+            elements combine: "MIN" (min(a, b), the default), "MAX"
+            (max(a, b)) or "MEAN" (0.5 * (a + b))
         disable_contact: Disable all contact detection
         auto_save: Enable auto-save
         auto_save_interval: Auto-save interval (frames)
@@ -117,6 +144,10 @@ def set_scene_parameters(
         time_scale: Playback speed of the Blender animation in simulated
             time (1.0 real time, 0.5 half speed); the solver's time
             mapping runs at effective_fps * time_scale
+        post_snap_exactly: On fetch, move every stitched vertex exactly onto
+            its stitch target so seams appear joined. Applies to all stitch
+            pairs; turn it off to keep the raw simulated gap between
+            stitched parts
         project_name: Project name used for remote session directory
     """
     scene = bpy.context.scene
@@ -133,6 +164,36 @@ def set_scene_parameters(
             raise MCPError("precond must be 'SCHWARZ' or 'BLOCK_JACOBI'")
     if schwarz_levels is not None and schwarz_levels not in (1, 2):
         raise MCPError("schwarz_levels must be 1 or 2")
+    if friction_mode is not None:
+        friction_mode = friction_mode.upper()
+        # The valid identifiers come from the property itself, so the message
+        # names exactly what an assignment would accept.
+        valid_modes = [
+            item.identifier
+            for item in state.bl_rna.properties["friction_mode"].enum_items
+        ]
+        if friction_mode not in valid_modes:
+            raise MCPError(
+                f"friction_mode must be one of {', '.join(valid_modes)}, "
+                f"got {friction_mode!r}"
+            )
+    # The properties below clamp an out-of-range assignment silently, and both
+    # bounds change the meaning of the parameter rather than only its
+    # magnitude: a world scaling of 0 collapses the scene, and a negative
+    # fix_xz clamps to 0, which turns the constraint off instead of lowering
+    # its threshold. Reject them here so neither reaches the solver.
+    # The property's own hard range. A value outside it is clamped by the RNA
+    # on assignment, so accepting one here would report success for a scaling
+    # the solver never receives.
+    if world_scaling is not None and not (
+        _WORLD_SCALING_MIN <= world_scaling <= _WORLD_SCALING_MAX
+    ):
+        raise MCPError(
+            f"world_scaling must be within [{_WORLD_SCALING_MIN}, "
+            f"{_WORLD_SCALING_MAX}] (1.0 disables scaling), got {world_scaling}"
+        )
+    if fix_xz is not None and fix_xz < 0.0:
+        raise MCPError(f"fix_xz must be 0 or greater (0 disables it), got {fix_xz}")
 
     param_map = {
         "step_size": step_size,
@@ -146,7 +207,9 @@ def set_scene_parameters(
         "wind_strength": wind_strength,
         "air_density": air_density,
         "air_friction": air_friction,
+        "world_scaling": world_scaling,
         "vertex_air_damp": vertex_air_damp,
+        "fix_xz": fix_xz,
         "inactive_momentum_frames": inactive_momentum_frames,
         "contact_nnz": contact_nnz,
         "line_search_max_t": line_search_max_t,
@@ -154,6 +217,7 @@ def set_scene_parameters(
         "cg_max_iter": cg_max_iter,
         "cg_tol": cg_tol,
         "include_face_mass": include_face_mass,
+        "friction_mode": friction_mode,
         "disable_contact": disable_contact,
         "auto_save": auto_save,
         "auto_save_interval": auto_save_interval,
@@ -165,6 +229,7 @@ def set_scene_parameters(
         ),
         "use_scene_fps": use_scene_fps,
         "time_scale": time_scale,
+        "post_snap_exactly": post_snap_exactly,
         "project_name": project_name,
     }
 
@@ -210,7 +275,9 @@ def get_scene_parameters():
             "wind_strength": state.wind_strength,
             "air_density": state.air_density,
             "air_friction": state.air_friction,
+            "world_scaling": state.world_scaling,
             "vertex_air_damp": state.vertex_air_damp,
+            "fix_xz": state.fix_xz,
             "inactive_momentum_frames": state.inactive_momentum_frames,
             "contact_nnz": state.contact_nnz,
             "line_search_max_t": state.line_search_max_t,
@@ -218,6 +285,7 @@ def get_scene_parameters():
             "cg_max_iter": state.cg_max_iter,
             "cg_tol": state.cg_tol,
             "include_face_mass": state.include_face_mass,
+            "friction_mode": state.friction_mode,
             "disable_contact": state.disable_contact,
             "auto_save": state.auto_save,
             "auto_save_interval": state.auto_save_interval,
@@ -229,6 +297,7 @@ def get_scene_parameters():
             "time_scale": state.time_scale,
             "frame_start": state.frame_start,
             "use_scene_frame_start": state.use_scene_frame_start,
+            "post_snap_exactly": state.post_snap_exactly,
             "project_name": state.project_name,
             # The scene-time rate in use. `frame_rate` above keeps its last
             # value while `use_scene_fps` is on, so reporting only that would

@@ -30,7 +30,7 @@ WARNING: **New PropertyGroup fields still require a full Blender restart.** Neit
 
 ### The `debug/main.py` CLI
 
-The CLI lives at `blender_addon/debug/main.py` and talks to both the debug reload port (TCP 8765) and the MCP HTTP port (default 9633). All commands accept the global options listed below. Run it from a host shell, not from inside Blender.
+The CLI lives at `blender_addon/debug/main.py` and talks to both the debug reload port (TCP 8765) and the MCP HTTP port (default 9633). All commands accept the two global options listed below; `--timeout` is not one of them, it belongs to `call` and `runtests` individually. Run it from a host shell, not from inside Blender.
 
 | Subcommand               | Description                                                                                |
 | ------------------------ | ------------------------------------------------------------------------------------------ |
@@ -40,11 +40,11 @@ The CLI lives at `blender_addon/debug/main.py` and talks to both the debug reloa
 | `exec <code>`            | Execute Python inside Blender. Pass `-` to read from stdin.                                |
 | `start-mcp`              | Ask the reload server to start the MCP server. `--port` selects port.                      |
 | `tools`                  | List MCP tools. `--json` for raw JSON.                                                     |
-| `call <tool> [json]`     | Invoke an MCP tool with the given JSON arguments.                                          |
+| `call <tool> [json]`     | Invoke an MCP tool with the given JSON arguments. `--timeout SEC` (default 30) bounds the request. |
 | `scene`                  | Fetch the current Blender scene via the MCP `blender://scene/current` resource.            |
 | `resources`              | List MCP resources. `--json` for raw JSON.                                                 |
 | `read <uri>`             | Read an MCP resource by URI. Prints the text body to stdout; `--json` prints the raw envelope. |
-| `runtests [scenarios...]`| Run debug scenarios against an isolated emulated server. `--list` enumerates, `--parallel`, `--repeat`, `--knob` available. |
+| `runtests [scenarios...]`| Run debug scenarios against an isolated emulated server. `--list` enumerates, `--parallel`, `--repeat`, `--knob`, `--timeout SEC` (default 60) available. |
 
 Global options:
 
@@ -52,7 +52,6 @@ Global options:
 | ------------------ | ----------- | ------------------------------------------------------ |
 | `--host HOST`      | `localhost` | Target host for both the debug port and the MCP port.  |
 | `--mcp-port PORT`  | `9633`      | MCP server port. The debug port is hardcoded to 8765.  |
-| `--timeout SEC`    | `30`        | Per-request timeout (used by `call`).                  |
 
 #### Examples
 

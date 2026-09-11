@@ -20,6 +20,9 @@ _LLM_REFS_BY_MODULE: dict[str, tuple[str, ...]] = {
     "remote": ("connections",),
     "console": ("debug",),
     "debug": ("debug",),
+    "statistics": ("simulation",),
+    "material_maps": ("parameters",),
+    "presets": ("parameters", "connections"),
     "blender": ("integrations",),
 }
 _DEFAULT_REFS: tuple[str, ...] = ("integrations",)
@@ -42,6 +45,9 @@ _LLM_REFS_BY_TOOL: dict[str, tuple[str, ...]] = {
     "remove_pin_vertex_group": ("constraints",),
     "set_scene_parameters": ("parameters",),
     "get_scene_parameters": ("parameters",),
+    # Locks are per-object state, so the handler lives on the object surface,
+    # but what they mean is documented with the other solver parameters.
+    "set_object_locks": ("parameters", "constraints"),
     "clear_solver": ("integrations", "scene", "parameters"),
     "list_pins": ("constraints",),
     "create_curve": ("integrations", "scene", "constraints"),
@@ -106,10 +112,13 @@ def initialize_integrated_system():
             debug,
             dyn_params,
             group,
+            material_maps,
             object_ops,
+            presets,
             remote,
             scene,
             simulation,
+            statistics,
         )
     except ImportError as e:
         print(f"Could not load handlers: {e}")

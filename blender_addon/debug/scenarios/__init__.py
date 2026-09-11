@@ -213,6 +213,39 @@ from . import bl_bake_animation
 from . import bl_export_cache
 from . import bl_mcp_mesh_cleaning
 from . import bl_mcp_roundtrip
+from . import bl_mcp_doc_coverage
+from . import bl_mcp_deformation_and_bake
+from . import bl_mcp_object_settings
+from . import bl_mcp_collision_windows
+from . import bl_mcp_connection_refusals
+from . import bl_mcp_console_and_diagnostics
+from . import bl_mcp_curve_authoring
+from . import bl_mcp_dynamic_parameters
+from . import bl_mcp_group_lifecycle
+from . import bl_mcp_invisible_colliders
+from . import bl_mcp_merge_and_snap
+from . import bl_mcp_presets_and_profiles
+from . import bl_mcp_ordered_collections
+from . import bl_mcp_geometry_repair
+from . import bl_mcp_group_material_readback
+from . import bl_mcp_pin_keyframes
+from . import bl_mcp_bend_reference
+from . import bl_mcp_modal_jobs
+from . import bl_mcp_connection_surface
+from . import bl_mcp_error_semantics
+from . import bl_mcp_legacy_era
+from . import bl_mcp_material_maps
+from . import bl_mcp_object_locks
+from . import bl_mcp_prompts
+from . import bl_mcp_resources
+from . import bl_mcp_scene_inspection
+from . import bl_mcp_scene_parameters
+from . import bl_mcp_statistics
+from . import bl_mcp_streaming_tool_call
+from . import bl_mcp_tool_schema_invariants
+from . import bl_mcp_ui_element_status
+from . import bl_mcp_vertex_groups
+from . import bl_mcp_transport_conformance
 from . import bl_addon_reload_handoff
 from . import bl_ftetwild_overrides
 from . import bl_project_rename_resync
@@ -506,6 +539,39 @@ REGISTRY = {
     # rename resync).
     "bl_mcp_mesh_cleaning": bl_mcp_mesh_cleaning,
     "bl_mcp_roundtrip": bl_mcp_roundtrip,
+    "bl_mcp_transport_conformance": bl_mcp_transport_conformance,
+    "bl_mcp_doc_coverage": bl_mcp_doc_coverage,
+    "bl_mcp_deformation_and_bake": bl_mcp_deformation_and_bake,
+    "bl_mcp_object_settings": bl_mcp_object_settings,
+    "bl_mcp_collision_windows": bl_mcp_collision_windows,
+    "bl_mcp_connection_refusals": bl_mcp_connection_refusals,
+    "bl_mcp_console_and_diagnostics": bl_mcp_console_and_diagnostics,
+    "bl_mcp_curve_authoring": bl_mcp_curve_authoring,
+    "bl_mcp_dynamic_parameters": bl_mcp_dynamic_parameters,
+    "bl_mcp_group_lifecycle": bl_mcp_group_lifecycle,
+    "bl_mcp_invisible_colliders": bl_mcp_invisible_colliders,
+    "bl_mcp_merge_and_snap": bl_mcp_merge_and_snap,
+    "bl_mcp_presets_and_profiles": bl_mcp_presets_and_profiles,
+    "bl_mcp_ordered_collections": bl_mcp_ordered_collections,
+    "bl_mcp_geometry_repair": bl_mcp_geometry_repair,
+    "bl_mcp_group_material_readback": bl_mcp_group_material_readback,
+    "bl_mcp_pin_keyframes": bl_mcp_pin_keyframes,
+    "bl_mcp_bend_reference": bl_mcp_bend_reference,
+    "bl_mcp_modal_jobs": bl_mcp_modal_jobs,
+    "bl_mcp_connection_surface": bl_mcp_connection_surface,
+    "bl_mcp_error_semantics": bl_mcp_error_semantics,
+    "bl_mcp_legacy_era": bl_mcp_legacy_era,
+    "bl_mcp_material_maps": bl_mcp_material_maps,
+    "bl_mcp_object_locks": bl_mcp_object_locks,
+    "bl_mcp_prompts": bl_mcp_prompts,
+    "bl_mcp_resources": bl_mcp_resources,
+    "bl_mcp_scene_inspection": bl_mcp_scene_inspection,
+    "bl_mcp_scene_parameters": bl_mcp_scene_parameters,
+    "bl_mcp_statistics": bl_mcp_statistics,
+    "bl_mcp_streaming_tool_call": bl_mcp_streaming_tool_call,
+    "bl_mcp_tool_schema_invariants": bl_mcp_tool_schema_invariants,
+    "bl_mcp_ui_element_status": bl_mcp_ui_element_status,
+    "bl_mcp_vertex_groups": bl_mcp_vertex_groups,
     "bl_addon_reload_handoff": bl_addon_reload_handoff,
     "bl_ftetwild_overrides": bl_ftetwild_overrides,
     "bl_project_rename_resync": bl_project_rename_resync,

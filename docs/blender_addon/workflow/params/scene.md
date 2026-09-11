@@ -7,16 +7,17 @@ Configuration** panel in the 3D viewport's sidebar.
 ## Scene Configuration Panel
 
 Open the sidebar (`N`) in the 3D viewport and switch to the add-on's tab.
-The **Scene Configuration** panel is the first panel; everything below
-is scoped to the whole scene rather than a single object group.
+The **Scene Configuration** panel is the third panel, below **Backend
+Communicator** and **Solver**; everything in it is scoped to the whole
+scene rather than a single object group.
 
 ```{figure} ../../images/scene_params/panel_overview.png
-:alt: Scene Configuration panel in its default state. Open Profile button at the top, basic parameters, and four collapsed sub-section headers (Wind, Advanced Params, Dynamic Parameters, Invisible Colliders)
+:alt: Scene Configuration panel in its default state. Open Profile row at the top; a Take FPS from Scene box holding FPS and Time Scale; a Take Starting Frame from Scene box holding Starting Frame; then Frame Count, Step Size, Min Newton Steps, Air Density, Air Friction, World Scaling, Gravity, Preview Direction and a grayed Inactive Momentum Frames; and five collapsed sub-section headers (Save and Checkpoints, Wind, Invisible Colliders, Linear System Solver, Advanced Params)
 :width: 500px
 
 Default layout of the **Scene Configuration** panel. Top-down: the
 **Open Profile** row (no profile loaded yet), the basic parameters
-block, and the four collapsible sub-section headers. Grayed rows
+block, and the five collapsible sub-section headers. Grayed rows
 (like `Inactive Momentum Frames` here) are gated on scene contents.
 ```
 
@@ -25,30 +26,34 @@ see an **Open Profile** button plus a small save icon; once a profile
 is open the row collapses into a dropdown (the profile selector) with
 four icon buttons on the right: **Open**, **Clear**, **Reload**, and
 **Save** (identical layout to the per-group material profile row).
-Opening a profile reads its TOML payload into every scene parameter,
-replaces dynamic parameters, and replaces invisible colliders. Clear
-drops the association without touching current values. Reload re-reads
-the file from disk. Save writes the current scene parameters,
-dynamic-parameter block, and invisible-collider block back out to the
-file.
+Opening a profile reads its TOML payload into the scene parameters the
+profile covers, replaces the legacy dynamic-parameter entries, and
+replaces invisible colliders. Clear drops the association without
+touching current values. Reload re-reads the file from disk. Save
+writes the current scene parameters, dynamic-parameter block, and
+invisible-collider block back out to the file.
 
 :::{important}
 **The scene-profile TOML file is authored through the Save icon, not by
 hand.** Configure the Scene Configuration panel (basic parameters,
-Wind, Advanced, Dynamic Parameters, Invisible Colliders) the way you
-want it, then click the **Save** icon on the profile row: the add-on
-creates a new `.toml` on the first save and overwrites the currently
-selected entry on later saves. The TOML layout shown further down is
-for inspection only; the intended workflow is always UI → Save.
+Wind, Invisible Colliders, Linear System Solver, Advanced Params) the
+way you want it, then click the **Save** icon on the profile row: the
+add-on creates a new `.toml` on the first save and overwrites the
+currently selected entry on later saves. The TOML layout shown further
+down is for inspection only; the intended workflow is always UI → Save.
 
 ```{figure} ../../images/scene_params/save_icon.png
 :alt: Scene Configuration panel with the floppy-disk Save icon at the top-right of the Open Profile row highlighted in red
 :width: 500px
 
 The **Save** icon (floppy disk, highlighted in red) at the top-right of
-the Scene Configuration profile row. Clicking it writes the entire
-scene block (basic parameters, wind, advanced, dynamic parameters,
-invisible colliders) out to the `.toml` file.
+the Scene Configuration profile row. Clicking it writes the scene
+parameters, the wind block, the linear-solver and advanced settings, the
+legacy dynamic-parameter block and the invisible colliders out to the
+`.toml` file. **World Scaling**, **Friction Mode**, **Save State on
+Finish**, **Keep Saved States** and the **Save Checkpoints** list are
+not part of a scene profile (**Auto Save** and its interval are), and
+neither are keyframes drawn on a slider; those stay on the `.blend`.
 ```
 :::
 
@@ -65,17 +70,23 @@ colliders).
 
 Below the profile row, the panel lays out the basic parameters one per
 line: **FPS** (inside a small box, with a checkbox to drive it from
-Blender's render FPS instead), **Frame Count**, **Step Size**,
-**Min Newton Steps**, **Air Density**, **Air Friction**,
-**World Scaling**, **Gravity**
+Blender's render FPS instead, and a **Time Scale** slider that
+re-interprets how much simulated time one frame covers), a **Starting
+Frame** box (with its own checkbox to take the start frame from the
+scene), **Frame Count**, **Step Size**, **Min Newton Steps**, **Air
+Density**, **Air Friction**, **World Scaling**, **Gravity**
 (a 3-component vector), a **Preview Direction** toggle (viewport arrow),
 and an **Inactive Momentum Frames** row that is grayed-out unless the
 scene contains at least one **Shell** group.
 
-Below the basics, three collapsible sub-sections hang off the panel.
-Each has a disclosure triangle on its header row and toggles
-open/closed independently:
+Below the basics, five collapsible sub-sections hang off the panel, in
+this order: **Save and Checkpoints**, **Wind**, **Invisible Colliders**,
+**Linear System Solver**, and **Advanced Params**. Each has a disclosure
+triangle on its header row and toggles open/closed independently:
 
+- **Save and Checkpoints**: save-on-finish, the auto-save interval and
+  retention, and the explicit checkpoint-frame list. Covered below in
+  [Save and Checkpoints](#save-and-checkpoints).
 - **Wind**: wind direction vector, preview toggle, wind strength.
 
 ```{figure} ../../images/scene_params/wind_expanded.png
@@ -88,28 +99,31 @@ With the **Wind** disclosure triangle open, the sub-section reveals a
 zero-direction vector disables wind regardless of the strength value.
 ```
 
+- **Invisible Colliders**: walls and spheres with their own keyframe
+  lists. Covered separately in [Invisible Colliders](../constraints/colliders.md).
+- **Linear System Solver**: CG max iter, CG tol, the preconditioner
+  choice, and — only while **Schwarz** is selected — Schwarz Levels.
 - **Advanced Params**: contact NNZ, vertex air damp, CCD line-search
-  max t, constraint ghat, CG max iter, CG tol, preconditioner choice,
-  include-face-mass, friction-mode, and disable-contact toggles.
+  max t, constraint ghat, include-face-mass, friction-mode, and
+  disable-contact toggles.
 
 ```{figure} ../../images/scene_params/advanced_expanded.png
-:alt: Scene Configuration panel with the Advanced Params sub-section expanded. Max Contact, Vertex Air Damping, Auto Save, Line Search Max T, Constraint Gap, PCG Max Iterations, PCG Tolerance, Include Face Mass, Disable Contact
+:alt: Scene Configuration panel with the Advanced Params sub-section expanded, showing Max Contact, Vertex Air Damping, Line Search Max T, Constraint Gap, Include Face Mass, Friction Mode and Disable Contact
 :width: 500px
 
 **Advanced Params** exposes the tuning knobs most users never need to
 touch: contact-matrix capacity (**Max Contact**), per-vertex air drag,
-CCD line-search bounds, PCG iteration cap and tolerance, the
-preconditioner choice, and two debugging toggles. Raise PCG limits for
-stiff systems; raise Max Contact only when the solver reports overflow.
-Checkpointing lives in its own [Save and Checkpoints](#save-and-checkpoints)
-section.
+CCD line-search bounds, the barrier gap, the friction-combination mode,
+and two debugging toggles. Raise Max Contact only when the solver
+reports overflow. The PCG iteration cap, its tolerance and the
+preconditioner choice are one box up in **Linear System Solver**, and
+**Auto Save** is in [Save and Checkpoints](#save-and-checkpoints).
 ```
 
-- **Dynamic Parameters**: keyframed gravity / wind / air density /
-  air friction / vertex air damp. Covered separately in
-  [Dynamic Parameters](dynamic.md).
-- **Invisible Colliders**: walls and spheres with their own keyframe
-  lists. Covered separately in [Invisible Colliders](../constraints/colliders.md).
+Keyframed gravity, wind, air density, air friction, vertex air damp,
+step size and inactive-momentum frames are no longer a sub-section of
+their own: each is keyframed on its own slider. See
+[Dynamic Parameters](dynamic.md).
 
 Only the sub-section headers are visible when collapsed; click the
 triangle on any of them to expand.
@@ -119,7 +133,11 @@ triangle on any of them to expand.
 | UI label                     | Python / TOML key          | Default       | Description                                                         |
 | ---------------------------- | -------------------------- | ------------- | ------------------------------------------------------------------- |
 | **Frame Count**              | `frame_count`              | 180           | Simulation length in frames. Minimum 10.                            |
-| **FPS**                      | `frame_rate`               | 60            | FPS used to convert frames to seconds at encode time. Minimum 24.   |
+| **FPS**                      | `frame_rate`               | 60            | FPS used to convert frames to seconds at encode time. Minimum 1, soft max 240. |
+| **Take FPS from Scene**      | `use_scene_fps`            | `False`       | Run at Blender's own frame rate instead of the **FPS** field.       |
+| **Time Scale**               | `time_scale`               | 1.0           | Playback speed of the Blender animation in simulated time. `0.5` re-interprets it at half speed. Range 0.01 – 10. |
+| **Starting Frame**           | `frame_start`              | 1             | Blender frame the first output frame lands on; simulated time zero. Minimum 0. |
+| **Take Starting Frame from Scene** | `use_scene_frame_start` | `False`   | Start at the Blender scene's start frame instead of the field.      |
 | **Step Size**                | `step_size`                | 0.01          | Solver sub-step Δt, in seconds. Range 0.001 – 0.01.                 |
 | **Min Newton Steps**         | `min_newton_steps`         | 1             | Minimum Newton iterations per step. 1 – 64.                         |
 | **Air Density (kg/m³)**      | `air_density`              | 0.001         | Air density, kg/m³. Range 0 – 0.01.                                 |
@@ -210,13 +228,18 @@ regardless of **Strength (m/s)**.
 A live example of the Wind fields. With **Direction = (0, 1, 0)** and
 **Strength = 5.0 m/s**, the encoder ships `direction × strength = (0, 5,
 0)` to the solver. Turning **Preview Direction** on draws the green
-wind-arrow overlay (and a translucent sphere whose radius scales with
-strength) so you can judge the wind field relative to scene geometry
-without running a simulation. The viewport label echoes the magnitude
-and normalized direction live.
+wind-arrow overlay (and a translucent sphere sized to a fixed fraction
+of the current view distance, for scale) so you can judge the wind field
+relative to scene geometry without running a simulation. It is the
+arrow's length that tracks the strength, up to a cap. The viewport label
+echoes the magnitude and normalized direction live.
 ```
 
 ## Advanced
+
+The panel splits these across two boxes. **Linear System Solver** holds
+**PCG Max Iterations**, **PCG Tolerance**, **Preconditioner** and
+**Schwarz Levels**; **Advanced Params** holds the rest.
 
 | UI label                  | Python / TOML key    | Default     | Description                                                      |
 | ------------------------- | -------------------- | ----------- | ---------------------------------------------------------------- |
@@ -336,12 +359,13 @@ purely viewport overlays; they never affect the simulation.
 
 ## What `Update Params` Does
 
-On the Solver panel, **Update Params** re-encodes the parameters (scene
-block, per-group block, pin config, merge pairs, dynamic parameters,
-invisible colliders) and ships them to the solver, then triggers a
-rebuild. Geometry is **not** resent; the mesh buffers on the server are
-preserved. Use this when you want to tweak material parameters, gravity,
-or dynamic keyframes without paying the full transfer cost.
+On the Solver panel, **Update Params on Remote** re-encodes the
+parameters (scene block, per-group block, pin config, merge pairs,
+dynamic parameters, invisible colliders) and ships them to the solver,
+then triggers a rebuild. Geometry is **not** resent; the mesh buffers
+on the server are preserved. Use this when you want to tweak material
+parameters, gravity, or dynamic keyframes without paying the full
+transfer cost.
 
 Topology changes (adding or removing vertices, edges, or faces) still
 require a full **Transfer**, because the mesh hash changes.
@@ -477,5 +501,6 @@ include-face-mass, disable-contact, inactive-momentum,
 line-search-max-t, auto-save, ...
 ```
 
-**Update Params** reships this payload without re-encoding geometry.
+**Update Params on Remote** reships this payload without re-encoding
+geometry.
 :::

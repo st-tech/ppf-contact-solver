@@ -69,6 +69,35 @@
 #   applies it before capture so connection fields are filled and the
 #   panel shows real data instead of empty defaults.
 #
+# PLATFORM: Linux is the supported host for capture. The script starts its
+#   OWN Xvfb (searching :200..:229) and sizes Blender to fill it, so a run
+#   does not depend on a desktop session being present, does not put a
+#   window in front of whoever is using one, and produces the same pixels
+#   on a workstation and in CI. Override the size with PPF_BLENDER_WINDOW
+#   (WxH, default 1920x1800); set PPF_BLENDER_DISPLAY=inherit to render
+#   onto the ambient DISPLAY instead when you want to WATCH a capture.
+#
+#   Two host packages are required beyond Blender itself:
+#     xvfb    — the private display
+#     ffmpeg  — reads the finished frame off the X server
+#   and Pillow is needed by the host Python that does the cropping and
+#   annotation after Blender exits.
+#
+#   WHY THE FRAME COMES FROM THE X SERVER, NOT FROM BLENDER: Blender's
+#   screen.screenshot operator copies the GL front buffer. Under a
+#   software rasterizer on a bare Xvfb there is no compositor preserving
+#   that buffer across the swap, so it reads back BLACK — and it does so
+#   without failing, which is the dangerous part. The blank frame then
+#   diffs to nothing and the run reports "this panel is collapsed and has
+#   no drawable body", pointing at the panel instead of at the capture.
+#   ui/capture.py:screenshot() therefore grabs the display with ffmpeg and
+#   rejects a uniform frame outright. PPF_CAPTURE_BACKEND=blender forces
+#   the old operator path if you ever need to compare them.
+#
+#   This is also why the window is sized to the whole framebuffer and left
+#   mapped: the X server's copy of the screen is the capture, so anything
+#   that hides or shrinks the window removes it from the output.
+#
 # ============================================================================
 set -eo pipefail
 # Note: -u is NOT set because TARGETS[@] triggers "unbound variable"
@@ -78,9 +107,10 @@ usage() {
     cat << 'EOF'
 capture.sh — Capture annotated screenshots of Blender addon UI widgets.
 
-Launches Blender (window hidden), locates each requested widget by pixel-
-diffing, saves a cropped+annotated PNG per widget, then quits.  Multiple
-instances can run in parallel (each picks a free TCP port automatically).
+Starts a private Xvfb, launches Blender filling it, locates each requested
+widget by pixel-diffing, saves a cropped+annotated PNG per widget, then
+quits.  Multiple instances can run in parallel (each picks a free TCP port
+and its own display automatically).
 
 USAGE
     bash capture.sh -o DIR  PANEL:LABEL [PANEL:LABEL ...]
@@ -113,6 +143,14 @@ OPTIONS
     --expand            Auto-expand all collapsible sections (show_wind,
                         show_advanced_parameters, …) before capturing.
 
+    --open-closed-panels
+                        Re-register DEFAULT_CLOSED panels without that flag
+                        so they draw a body.  Needed for Snap and Merge,
+                        Utility Tools, Visualization and Object Statistics,
+                        which are otherwise captured as empty.  Distinct
+                        from --expand, which opens sections WITHIN a panel
+                        that is already open.
+
     --profile PATH[:ENTRY]
                         Load a TOML connection profile so fields are filled.
                         If ENTRY is omitted, the first entry is used.
@@ -142,13 +180,39 @@ OPTIONS
 
     -h, --help          Show this help and exit.
 
+ENVIRONMENT
+    PPF_BLENDER_BIN     Blender binary to use.  Otherwise resolved from
+                        PATH and the usual per-OS install locations.
+
+    PPF_BLENDER_WINDOW  Capture size as WxH (default 1920x1800).  Sets both
+                        the Xvfb framebuffer and Blender's window, which are
+                        kept equal so the UI fills the frame.
+
+    PPF_BLENDER_DISPLAY inherit — render onto the ambient DISPLAY instead of
+                        a private Xvfb.  Use when you want to watch a run.
+
+    PPF_CAPTURE_BACKEND blender — take frames with Blender's screen.screenshot
+                        operator instead of reading the X server.  Black under
+                        software GL; kept for comparison only.
+
+REQUIREMENTS (Linux)
+    xvfb and ffmpeg on PATH, plus Pillow importable by the host python3
+    (used for cropping and annotation after Blender exits).
+
 AVAILABLE PANELS
     MAIN_PT_RemotePanel              "Backend Communicator"
     SSH_PT_SolverPanel               "Solver"
     SSH_PT_ObjectGroupsManager       "Scene Configuration"
     DYNAMICS_PT_Groups               "Dynamics Groups"
-    SNAPMERGE_PT_SnapAndMerge        "Snap and Merge"
-    VISUALIZATION_PT_Visualization   "Visualization"
+    SNAPMERGE_PT_SnapAndMerge        "Snap and Merge"          (closed)
+    UTILITY_PT_UtilityTools          "Utility Tools"           (closed)
+    VISUALIZATION_PT_Visualization   "Visualization"           (closed)
+    STATISTICS_PT_Statistics         "Object Statistics"       (closed)
+
+    "(closed)" marks bl_options={'DEFAULT_CLOSED'}: the panel draws no body
+    until something opens it, so a plain run captures nothing and reports it
+    as having no drawable body.  --open-closed-panels re-registers those
+    classes without the flag so they come up expanded.
 
 EXAMPLES
     # Capture the Connect button from Backend Communicator:
@@ -199,9 +263,59 @@ EOF
     exit 0
 }
 
-BLENDER="/Applications/Blender.app/Contents/MacOS/Blender"
-if [ ! -x "$BLENDER" ]; then
-    echo "Error: Blender not found at $BLENDER" >&2
+# Resolve a Blender binary for the running OS, honoring the same
+# PPF_BLENDER_BIN override the rig and launch.sh honor, so one export
+# drives all three. Hardcoding the macOS bundle path made this script
+# refuse to start anywhere else, which is why the docs screenshots could
+# only ever be regenerated from a Mac.
+find_blender() {
+    if [ -n "${PPF_BLENDER_BIN:-}" ] && [ -x "${PPF_BLENDER_BIN}" ]; then
+        echo "$PPF_BLENDER_BIN"
+        return 0
+    fi
+    case "$(uname -s)" in
+    Darwin)
+        local bundle="/Applications/Blender.app/Contents/MacOS/Blender"
+        [ -x "$bundle" ] && { echo "$bundle"; return 0; }
+        command -v blender 2>/dev/null && return 0
+        ;;
+    Linux)
+        command -v blender 2>/dev/null && return 0
+        local candidate
+        for candidate in $(ls -d /opt/blender-*/blender \
+                                 /usr/local/blender-*/blender \
+                                 /opt/blender/blender 2>/dev/null | sort -rV); do
+            [ -x "$candidate" ] && { echo "$candidate"; return 0; }
+        done
+        ;;
+    esac
+    return 1
+}
+
+BLENDER="$(find_blender)" || {
+    echo "Error: no Blender found for $(uname -s)." >&2
+    echo "       Set PPF_BLENDER_BIN, or install Blender (./install-blender.sh)." >&2
+    exit 1
+}
+
+# Check the host tools up front. Every one of these is needed only AFTER
+# Blender has run — the display before it starts, ffmpeg per frame, Pillow
+# in the annotation pass at the very end — so without this check the
+# common failure is a clean two-minute capture that dies on the last step
+# with an ImportError and leaves no usable PNG.
+missing=""
+if [ "$(uname -s)" = Linux ] && [ "${PPF_BLENDER_DISPLAY:-}" != inherit ]; then
+    command -v Xvfb >/dev/null 2>&1 || missing="$missing xvfb"
+fi
+if [ "${PPF_CAPTURE_BACKEND:-}" != blender ] && [ "$(uname -s)" = Linux ]; then
+    command -v ffmpeg >/dev/null 2>&1 || missing="$missing ffmpeg"
+fi
+python3 -c "import PIL" >/dev/null 2>&1 || missing="$missing python3-pillow"
+if [ -n "$missing" ]; then
+    echo "Error: capture.sh needs:$missing" >&2
+    echo "       apt-get install xvfb ffmpeg   # and: pip install pillow" >&2
+    echo "       (Pillow must be importable by the python3 on PATH, which" >&2
+    echo "        does the cropping and annotation after Blender exits.)" >&2
     exit 1
 fi
 
@@ -210,6 +324,7 @@ OUTDIR=""
 EXPAND=0
 INTERACTIVE=0
 PANEL_ONLY=0
+OPEN_CLOSED=0
 SIDEBAR_WIDTH=560
 HIDE_PANELS=""
 PROFILE=""
@@ -225,6 +340,7 @@ while [[ $# -gt 0 ]]; do
         --expand)     EXPAND=1; shift ;;
         --all)        ALL_PANELS+=("$2"); shift 2 ;;
         --panel-only) PANEL_ONLY=1; shift ;;
+        --open-closed-panels) OPEN_CLOSED=1; shift ;;
         --sidebar-width) SIDEBAR_WIDTH="$2"; shift 2 ;;
         --hide)       HIDE_PANELS="$2"; shift 2 ;;
         --profile)    PROFILE="$2"; shift 2 ;;
@@ -281,6 +397,7 @@ import bpy, sys, os, json, ctypes
 OUTDIR = os.environ["_CAPTURE_OUTDIR"]
 EXPAND = os.environ.get("_CAPTURE_EXPAND", "0") == "1"
 PANEL_ONLY = os.environ.get("_CAPTURE_PANEL_ONLY", "0") == "1"
+OPEN_CLOSED = os.environ.get("_CAPTURE_OPEN_CLOSED", "0") == "1"
 ALL_PANELS = json.loads(os.environ.get("_CAPTURE_ALL_PANELS", "[]"))
 SIDEBAR_WIDTH = int(os.environ.get("_CAPTURE_SIDEBAR_WIDTH", "560"))
 HIDE_PANELS = [p for p in os.environ.get("_CAPTURE_HIDE_PANELS", "").split(",") if p]
@@ -308,7 +425,12 @@ def _run_pre_python():
         return
     with open(PRE_PYTHON) as f:
         src = f.read()
-    exec(compile(src, PRE_PYTHON, "exec"), {"bpy": bpy, "__name__": "__main__"})
+    # __file__ is part of the contract: a prep script that lives beside
+    # sibling helpers (docs/tools/ has several) can only find them by its
+    # own path, and exec() does not supply one.
+    exec(compile(src, PRE_PYTHON, "exec"),
+         {"bpy": bpy, "__name__": "__main__",
+          "__file__": os.path.abspath(PRE_PYTHON)})
     print(f"capture.sh: ran pre-python {PRE_PYTHON}")
 
 def _apply_connection_profile():
@@ -337,6 +459,36 @@ def _apply_connection_profile():
     root = groups_mod.get_addon_data()
     profile_mod.apply_profile(profiles[entry], root.ssh_state)
     print(f"capture.sh: applied connection profile '{entry}' from {path}")
+
+def _open_closed_panels(panel_ids):
+    """Re-register the named panels without their DEFAULT_CLOSED flag.
+
+    A panel's open/closed state is decided when the region first builds
+    its panel list, and DEFAULT_CLOSED means it builds closed and draws no
+    body. Clearing bl_options on the live class is not enough — the region
+    has already made its decision — so the class is unregistered and
+    registered again, which makes the region rebuild it fresh.
+
+    bl_order is preserved across the round trip, so panels keep their
+    place in the sidebar rather than jumping to the bottom.
+    """
+    for pid in sorted(set(panel_ids)):
+        cls = getattr(bpy.types, pid, None)
+        if cls is None:
+            print(f"capture.sh: no panel {pid} to open")
+            continue
+        opts = set(getattr(cls, "bl_options", None) or set())
+        if "DEFAULT_CLOSED" not in opts:
+            continue
+        opts.discard("DEFAULT_CLOSED")
+        try:
+            bpy.utils.unregister_class(cls)
+            cls.bl_options = opts
+            bpy.utils.register_class(cls)
+            print(f"capture.sh: opened {pid}")
+        except Exception as e:
+            print(f"capture.sh: could not open {pid}: {e}")
+
 
 def _setup_sidebar():
     """Dismiss splash, open the sidebar, and switch to the addon tab."""
@@ -379,7 +531,10 @@ def _setup_sidebar():
                 if s.type == "VIEW_3D":
                     s.show_region_ui = True
 
-    # Switch to addon tab
+    # Switch to addon tab. The redraw above matters: a UI region that has
+    # not been laid out yet carries no panel categories, and assigning one
+    # that the region does not know about raises rather than being ignored.
+    cap.force_redraw(iterations=2)
     addon_cat = bpy.types.MAIN_PT_RemotePanel.bl_category
     for a in win.screen.areas:
         if a.type == "VIEW_3D":
@@ -446,6 +601,9 @@ def _run_capture():
     return None
 
 def _do_capture():
+    if OPEN_CLOSED:
+        wanted = list(ALL_PANELS) + [t.split(":", 1)[0] for t in TARGETS if ":" in t]
+        _open_closed_panels(wanted)
     _setup_sidebar()
 
     # Determine which widgets to capture
@@ -728,10 +886,81 @@ else:
 PYEOF
 )
 
+# --- Display and window size ------------------------------------------------
+# This script reads pixels back off the screen, so the display is part of
+# the OUTPUT, not just somewhere to open a window. Two things follow.
+#
+# First, the run owns its display. Rendering onto whatever DISPLAY happens
+# to be exported puts the capture at the mercy of the desktop behind it —
+# its resolution, its DPI, a screensaver, another window overlapping the
+# one being read — and makes the same command produce different PNGs on a
+# laptop and on a CI runner. A private Xvfb makes the geometry a property
+# of the run. Set PPF_BLENDER_DISPLAY=inherit to use the ambient DISPLAY
+# instead, which is what to reach for when you want to WATCH the capture.
+# The search starts at :200 to stay clear of a desktop session (:0), of
+# the :99 that CI and install-blender.sh use, and of the :100.. range the
+# test rig searches (debug/blender_harness.py), so a capture can run
+# alongside all three.
+#
+# Second, Blender is told to fill that display. Without a window manager
+# there is nothing to maximize a window, and Blender left to itself opens
+# at whatever size its userpref remembers, so panels get cropped narrower
+# on one machine than another. Sizing the window to the framebuffer makes
+# the sidebar render at full height and keeps crops crisp.
+# 1800 rows rather than a monitor-shaped 1080: the sidebar is the subject,
+# and a panel taller than the region simply stops being drawn at the
+# bottom. That loss is invisible in the result — the crop ends on a clean
+# widget boundary and looks like the whole panel — so the default buys
+# headroom for the longest panel instead of leaving each caller to notice.
+CAPTURE_GEOMETRY="${PPF_BLENDER_WINDOW:-1920x1800}"
+case "$CAPTURE_GEOMETRY" in
+    *x*) CAPTURE_W="${CAPTURE_GEOMETRY%x*}"; CAPTURE_H="${CAPTURE_GEOMETRY#*x}" ;;
+    *)   echo "Error: PPF_BLENDER_WINDOW='$CAPTURE_GEOMETRY' is not WxH" >&2; exit 1 ;;
+esac
+
+XVFB_PID=""
+cleanup_display() {
+    [ -n "$XVFB_PID" ] && kill "$XVFB_PID" 2>/dev/null || true
+}
+trap cleanup_display EXIT
+
+if [ "$(uname -s)" = Linux ] && \
+   [ "${PPF_BLENDER_DISPLAY:-}" != inherit ] && command -v Xvfb >/dev/null 2>&1; then
+    for _n in $(seq 200 229); do
+        [ -e "/tmp/.X11-unix/X$_n" ] && continue
+        Xvfb ":$_n" -screen 0 "${CAPTURE_W}x${CAPTURE_H}x24" -nolisten tcp \
+            >/dev/null 2>&1 &
+        XVFB_PID=$!
+        # Xvfb either binds the display or exits; give it a moment, then
+        # confirm the socket exists rather than trusting the spawn.
+        for _t in 1 2 3 4 5 6 7 8 9 10; do
+            [ -e "/tmp/.X11-unix/X$_n" ] && break
+            sleep 0.5
+        done
+        if [ -e "/tmp/.X11-unix/X$_n" ] && kill -0 "$XVFB_PID" 2>/dev/null; then
+            export DISPLAY=":$_n"
+            echo "capture.sh: private display $DISPLAY at ${CAPTURE_W}x${CAPTURE_H}"
+            break
+        fi
+        kill "$XVFB_PID" 2>/dev/null || true
+        XVFB_PID=""
+    done
+    if [ -z "$XVFB_PID" ]; then
+        echo "Error: could not start Xvfb on any display in :200..:229" >&2
+        exit 1
+    fi
+elif [ "$(uname -s)" = Linux ] && [ -z "${DISPLAY:-}" ]; then
+    echo "Error: no DISPLAY and Xvfb is not installed (apt-get install xvfb)." >&2
+    exit 1
+fi
+
+WINDOW_ARGS=(--window-geometry 0 0 "$CAPTURE_W" "$CAPTURE_H" --no-window-focus)
+
 # --- Launch Blender (hidden window) -----------------------------------------
 export _CAPTURE_OUTDIR="$OUTDIR"
 export _CAPTURE_EXPAND="$EXPAND"
 export _CAPTURE_PANEL_ONLY="$PANEL_ONLY"
+export _CAPTURE_OPEN_CLOSED="$OPEN_CLOSED"
 export _CAPTURE_ALL_PANELS="$ALL_PANELS_JSON"
 export _CAPTURE_SIDEBAR_WIDTH="$SIDEBAR_WIDTH"
 export _CAPTURE_HIDE_PANELS="$HIDE_PANELS"
@@ -758,12 +987,14 @@ if [ -n "$BLEND_FILE" ]; then
     fi
     BLEND_ARGS+=("$BLEND_FILE")
 fi
-"$BLENDER" "${BLEND_ARGS[@]}" --enable-event-simulate --addons bl_ext.user_default.ppf_contact_solver --python-expr "$PYTHON_SCRIPT" 2>&1 &
+"$BLENDER" "${WINDOW_ARGS[@]}" "${BLEND_ARGS[@]}" --enable-event-simulate --addons bl_ext.user_default.ppf_contact_solver --python-expr "$PYTHON_SCRIPT" 2>&1 &
 BLENDER_PID=$!
 
-# Wait briefly for the window to appear, then hide it
+# Give the window a moment to map before anything tries to read it. On a
+# private Xvfb there is nobody to hide it from, which is the point: the
+# frame the X server holds IS the capture, so the window must stay mapped
+# and on top rather than being pushed out of sight.
 sleep 1
-osascript -e 'tell application "System Events" to set visible of process "Blender" to false' 2>/dev/null || true
 
 if [ "$INTERACTIVE" -eq 1 ]; then
     # Interactive mode: print ports and wait. The LLM drives via
