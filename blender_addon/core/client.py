@@ -519,9 +519,40 @@ def _get_curve_cv_count(obj):
     return total
 
 
+def _display_pins_by_uuid(display_pin_map, display_pin_frame, n):
+    """Group solver frame ``n``'s display-pin positions by object.
+
+    Returns ``{uuid: [(blender_index, world_positions), ...]}`` holding only
+    the blocks still pinned at that frame, or ``{}`` when the session writes
+    no display pins. ``display_pin_frame`` is ``(active, positions)`` as the
+    effect runner parsed it from ``display_pin_<n>.bin``.
+    """
+    if not display_pin_map:
+        return {}
+    if display_pin_frame is None:
+        raise ValueError(
+            f"client: display pins are missing for solver frame {n}"
+        )
+    active, positions = display_pin_frame
+    blocks = display_pin_map["blocks"]
+    if len(active) != len(blocks) or len(positions) != display_pin_map["n_total"]:
+        raise ValueError(
+            f"client: display pins for solver frame {n} hold {len(active)} "
+            f"blocks and {len(positions)} positions, but the session's map "
+            f"has {len(blocks)} blocks and {display_pin_map['n_total']} positions"
+        )
+    grouped = {}
+    for (uuid, blender_index, offset), is_active in zip(blocks, active, strict=True):
+        if not is_active:
+            continue
+        rows = positions[offset:offset + blender_index.size]
+        grouped.setdefault(uuid, []).append((blender_index, rows))
+    return grouped
+
+
 def _apply_single_frame(context, n, vert, map_by_uuid, surface_map_by_uuid,
                         target_objects, world_inv_by_uuid, start_frame,
-                        curve_fit_cache=None):
+                        curve_fit_cache=None, *, display_pins_by_uuid):
     """Process one simulation frame: write vertex/CV data to PC2 files.
 
     Both mesh and curve objects are written to PC2 without calling
@@ -618,6 +649,17 @@ def _apply_single_frame(context, n, vert, map_by_uuid, surface_map_by_uuid,
         else:
             n_verts = len(obj.data.vertices)
             world_vert = numpy.array(vert[map[:n_verts]], dtype=numpy.float64)
+        # A vertex an exact pin holds goes where its script puts it. The
+        # solver evaluated that script at this frame's time
+        # (display_pin_<N>.bin), so the vertex is not reconstructed from a
+        # tetrahedral surface that cannot represent it exactly.
+        for blender_index, rows in display_pins_by_uuid.get(uid, ()):
+            if blender_index.size and int(blender_index.max()) >= len(world_vert):
+                raise ValueError(
+                    f"client: display pins for '{obj.name}' reach vertex "
+                    f"{int(blender_index.max())}, but it has {len(world_vert)}"
+                )
+            world_vert[blender_index] = rows
         world_by_uuid[uid] = world_vert
         records.append({
             "kind": "mesh", "obj": obj, "mat": mat, "world": world_vert,
@@ -839,14 +881,13 @@ def apply_animation():
         any_per_frame = False
 
         while True:
-            frame, map_by_uuid, surface_map_by_uuid, statistics_manifest, applied, total = (
-                com.take_one_animation_frame()
-            )
+            (frame, map_by_uuid, surface_map_by_uuid, display_pin_map,
+             statistics_manifest, applied, total) = com.take_one_animation_frame()
             last_applied, last_total = applied, total
             if frame is None:
                 break
 
-            n, vert, statistics_blobs = frame
+            n, vert, statistics_blobs, display_pin_frame = frame
             if n < 0:
                 continue
 
@@ -950,6 +991,9 @@ def apply_animation():
                 context, n, vert, map_by_uuid, surface_map_by_uuid,
                 target_objects, world_inv_by_uuid, start_frame,
                 curve_fit_cache=curve_fit_cache,
+                display_pins_by_uuid=_display_pins_by_uuid(
+                    display_pin_map, display_pin_frame, n,
+                ),
             )
             max_blender_frame = max(max_blender_frame, bf)
             state.add_fetched_frame(n)

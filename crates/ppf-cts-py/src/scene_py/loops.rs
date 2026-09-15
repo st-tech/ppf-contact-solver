@@ -195,11 +195,14 @@ pub(super) fn scene_pack_transform_keyframe_segments<'py>(
 
 /// Pin TOML formatting (frontend/_scene_.py ~2014-2076). Input ops are
 /// flat dicts (one per pin op) with a `type` discriminator; pin headers
-/// are flat dicts. Returns a single string.
+/// are flat dicts. `section` names the TOML tables, `[<section>-<i>]` and
+/// `[<section>-<i>-op-<j>]`: `pin` for the solver's pins, `display-pin` for
+/// the scripted positions it writes out for display. Returns a single string.
 #[pyfunction]
-#[pyo3(signature = (pin_blocks))]
+#[pyo3(signature = (pin_blocks, section = "pin"))]
 pub(super) fn scene_format_pin_toml<'py>(
     pin_blocks: &Bound<'py, PyList>,
+    section: &str,
 ) -> PyResult<String> {
     let mut headers: Vec<sl::PinHeader> = Vec::with_capacity(pin_blocks.len());
     let mut ops_offsets: Vec<usize> = Vec::with_capacity(pin_blocks.len() + 1);
@@ -225,7 +228,7 @@ pub(super) fn scene_format_pin_toml<'py>(
         ops_offsets.push(ops_flat.len());
         headers.push(header);
     }
-    sl::format_all_pin_sections(&headers, &ops_offsets, &ops_flat)
+    sl::format_all_pin_sections(section, &headers, &ops_offsets, &ops_flat)
         .map_err(into_py_err)
 }
 

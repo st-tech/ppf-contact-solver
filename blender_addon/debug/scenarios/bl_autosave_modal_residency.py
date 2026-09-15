@@ -134,7 +134,7 @@ try:
     #    consume the sentinel between the push and the pop.
     runner = facade.communicator._runner
     with runner._anim_lock:
-        runner._anim_frames.append((0, None, None))
+        runner._anim_frames.append((0, None, None, None))
     d_pending = facade.communicator.has_pending_animation_frames()
     d_work = fp.work_pending()
     with runner._anim_lock:

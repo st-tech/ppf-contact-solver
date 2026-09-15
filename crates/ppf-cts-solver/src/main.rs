@@ -463,6 +463,7 @@ fn setup(program_args: &ProgramArgs) {
         remove_files_in_dir(&program_args.output).unwrap();
     } else {
         remove_files(&program_args.output, "vert", "bin", program_args.load);
+        remove_files(&program_args.output, "display_pin", "bin", program_args.load);
         remove_files(
             &program_args.output,
             "statistics",

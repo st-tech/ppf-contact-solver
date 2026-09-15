@@ -41,8 +41,18 @@ KIND_PARAM = "Param"
 # which producer wrote the file.
 KIND_VERTEX_MAP = "VertexMap"
 KIND_SURFACE_MAP = "SurfaceMap"
+KIND_DISPLAY_PIN_MAP = "DisplayPinMap"
 KIND_APP_STATE = "AppState"
 KIND_FIXED_SESSION = "FixedSession"
+
+# Inner format version of the display-pin map (``display_pin_map.pickle``,
+# written beside ``map.pickle`` by ``FixedScene.export_fixed``). For each
+# ``[display-pin-<i>]`` block, in file order, it names the owning object UUID,
+# the Blender vertex indices the block holds, and the row the block starts at
+# in the solver's per-frame ``display_pin_<N>.bin``. The addon consumer
+# ``blender_addon/core/effect_runner.py`` does not import frontend/, so it
+# keeps its own literal ``1`` that must be bumped in lockstep.
+DISPLAY_PIN_MAP_VERSION = 1
 
 # Inner format version of the surface-map payload (the frame-embedding
 # maps produced by ``_bvh_.frame_mapping``). Bumped when that math changes

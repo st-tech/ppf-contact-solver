@@ -262,6 +262,7 @@ from . import bl_ssh_remote_solid
 from . import bl_real_shell_drape
 from . import bl_real_frame_start_drape
 from . import bl_solid_overlap_pin_last_wins
+from . import bl_solid_spin_flip_per_pin
 from . import bl_pin_reorder_and_gating
 
 # Copy/paste roundtrip coverage. Material Params and Pin Operations
@@ -603,6 +604,7 @@ REGISTRY = {
     "bl_real_shell_drape": bl_real_shell_drape,
     "bl_real_frame_start_drape": bl_real_frame_start_drape,
     "bl_solid_overlap_pin_last_wins": bl_solid_overlap_pin_last_wins,
+    "bl_solid_spin_flip_per_pin": bl_solid_spin_flip_per_pin,
     "bl_pin_reorder_and_gating": bl_pin_reorder_and_gating,
 
     # Copy/paste clipboards (Material Params, Pin Operations).

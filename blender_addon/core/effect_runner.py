@@ -138,6 +138,51 @@ def _decode_surface_map_cbor(blob: bytes) -> dict:
     return {"version": payload.get("version"), "maps": rehydrated}
 
 
+def _decode_display_pin_map_cbor(blob: bytes) -> dict:
+    """Decode a ``display_pin_map.pickle`` CBOR envelope.
+
+    Producer is ``frontend/_scene_.py:export_fixed``. The payload is
+    ``{"version": 1, "n_total": int, "blocks": [{"uuid", "blender_index",
+    "offset"}, ...]}``, with blocks in the order the solver writes them to
+    ``display_pin_<N>.bin``. Returns ``{"n_total": int, "blocks": [(uuid,
+    blender_index, offset), ...]}``. Anything malformed is refused: placing
+    vertices from a misread map would move the wrong ones.
+    """
+    from .module import get_cbor2
+
+    cbor2 = get_cbor2()
+    env = cbor2.loads(blob)
+    if not isinstance(env, dict) or env.get("kind") != "DisplayPinMap":
+        raise ValueError(
+            f"display_pin_map.pickle envelope kind mismatch: "
+            f"got {env.get('kind') if isinstance(env, dict) else type(env)!r}"
+        )
+    payload = env.get("payload")
+    if not isinstance(payload, dict) or payload.get("version") != 1:
+        raise ValueError(
+            "display_pin_map.pickle has an unsupported payload (expected "
+            "version 1); the session needs to be re-baked."
+        )
+    n_total = int(payload["n_total"])
+    blocks = []
+    offset = 0
+    for block in payload["blocks"]:
+        index = numpy.asarray(block["blender_index"], dtype=numpy.int64)
+        if int(block["offset"]) != offset:
+            raise ValueError(
+                f"display_pin_map.pickle block for {block['uuid']!r} starts "
+                f"at {block['offset']}, expected {offset}"
+            )
+        blocks.append((str(block["uuid"]), index, offset))
+        offset += int(index.size)
+    if offset != n_total:
+        raise ValueError(
+            f"display_pin_map.pickle blocks cover {offset} positions, "
+            f"but n_total is {n_total}"
+        )
+    return {"n_total": n_total, "blocks": blocks}
+
+
 class EffectRunner:
     """Execute ``Effect`` objects, dispatching result events to the engine.
 
@@ -173,6 +218,9 @@ class EffectRunner:
         self._anim_lock = threading.Lock()
         self._anim_map: dict[str, numpy.ndarray] = {}
         self._anim_surface_map: dict = {}
+        # ``display_pin_map.pickle`` decoded by _decode_display_pin_map_cbor,
+        # or empty when the session writes no display pins.
+        self._anim_display_pin_map: dict = {}
         self._anim_statistics_manifest: bytes | None = None
         self._anim_statistics_zero_fetched = False
         # The upload the three session artifacts above were downloaded
@@ -180,7 +228,12 @@ class EffectRunner:
         # they outlive the dataset they describe; see
         # ``_drop_stale_session_artifacts``.
         self._anim_upload_id: str | None = None
-        self._anim_frames: list[tuple[int, numpy.ndarray, list[bytes]]] = []
+        # (solver frame, vertices, statistics blobs, display pins). The last
+        # is ``(active, positions)`` parsed from ``display_pin_<N>.bin``, or
+        # None when the session writes no display pins.
+        self._anim_frames: list[
+            tuple[int, numpy.ndarray, list[bytes], tuple | None]
+        ] = []
         self._anim_total: int = 0
         self._anim_applied: int = 0
         self._fetched: list[int] = []
@@ -325,6 +378,7 @@ class EffectRunner:
                     self._anim_applied = 0
                     self._anim_map = {}
                     self._anim_surface_map = {}
+                    self._anim_display_pin_map = {}
                     self._anim_statistics_manifest = None
                     self._anim_statistics_zero_fetched = False
                     self._anim_upload_id = None
@@ -356,7 +410,9 @@ class EffectRunner:
         with self._anim_lock:
             return bool(self._anim_frames)
 
-    def take_one_animation_frame(self) -> tuple[tuple | None, dict, dict, bytes | None, int, int]:
+    def take_one_animation_frame(
+        self,
+    ) -> tuple[tuple | None, dict, dict, dict, bytes | None, int, int]:
         """Pop one pending frame (main thread)."""
         with self._anim_lock:
             frame = self._anim_frames.pop(0) if self._anim_frames else None
@@ -366,6 +422,7 @@ class EffectRunner:
                 frame,
                 self._anim_map,
                 self._anim_surface_map,
+                self._anim_display_pin_map,
                 self._anim_statistics_manifest,
                 self._anim_applied,
                 self._anim_total,
@@ -587,6 +644,7 @@ class EffectRunner:
         with self._anim_lock:
             self._anim_map = {}
             self._anim_surface_map = {}
+            self._anim_display_pin_map = {}
             self._anim_statistics_manifest = None
             self._anim_statistics_zero_fetched = False
             self._anim_upload_id = None
@@ -1114,6 +1172,7 @@ class EffectRunner:
             self._anim_upload_id = upload_id
             self._anim_map = {}
             self._anim_surface_map = {}
+            self._anim_display_pin_map = {}
             self._anim_statistics_manifest = None
             self._anim_statistics_zero_fetched = False
             self._anim_frames.clear()
@@ -1160,9 +1219,28 @@ class EffectRunner:
         except Exception:
             pass
 
+        # Every session this frontend exports carries a display-pin map, empty
+        # when it has no exact SOLID pin, so a map that cannot be read is an
+        # error to report rather than a feature the session lacks.
+        dpin_path = _server_join(
+            self._backend, root, "session", "display_pin_map.pickle",
+        )
+        try:
+            dpin_data = self._backend.receive_data(
+                dpin_path, self._project_name, chunk_size=self._chunk_size,
+            )
+        except Exception as e:
+            raise RuntimeError(
+                "display_pin_map.pickle could not be read from the session; a "
+                f"session built before display pins must be transferred again ({e})"
+            ) from e
+        display_pins = _decode_display_pin_map_cbor(dpin_data)
+        display_pin_map = display_pins if display_pins["blocks"] else {}
+
         with self._anim_lock:
             self._anim_map = anim_map
             self._anim_surface_map = surface_map
+            self._anim_display_pin_map = display_pin_map
 
     def _do_fetch_map(self, root: str) -> None:
         """Download map and dispatch FetchMapComplete. Guarantees a
@@ -1310,6 +1388,37 @@ class EffectRunner:
                     interrupt_cb=interrupt_cb,
                 )
                 vert = numpy.frombuffer(data, dtype=numpy.float32).reshape(-1, 3)
+                # The frame's display pins (see _decode_display_pin_map_cbor):
+                # one byte per block, set while the block is still pinned,
+                # then every scripted position as three float32s.
+                with self._anim_lock:
+                    display_pin_map = self._anim_display_pin_map
+                display_pin_frame = None
+                if display_pin_map:
+                    n_blocks = len(display_pin_map["blocks"])
+                    n_total = display_pin_map["n_total"]
+                    dpin_path = _server_join(
+                        self._backend, root, "session", "output",
+                        f"display_pin_{i}.bin",
+                    )
+                    dpin_data = self._backend.receive_data(
+                        dpin_path, self._project_name,
+                        chunk_size=self._chunk_size,
+                        interrupt_cb=interrupt_cb,
+                    )
+                    if len(dpin_data) != n_blocks + 12 * n_total:
+                        raise ValueError(
+                            f"display_pin_{i}.bin holds {len(dpin_data)} bytes, "
+                            f"expected {n_blocks + 12 * n_total} for {n_blocks} "
+                            f"blocks and {n_total} positions"
+                        )
+                    active = numpy.frombuffer(
+                        dpin_data, dtype=numpy.uint8, count=n_blocks,
+                    ).astype(bool)
+                    positions = numpy.frombuffer(
+                        dpin_data, dtype="<f4", offset=n_blocks,
+                    ).reshape(-1, 3)
+                    display_pin_frame = (active, positions)
                 statistics_data = []
                 includes_statistics_zero = False
                 if self._anim_statistics_manifest:
@@ -1353,7 +1462,9 @@ class EffectRunner:
                         self._engine.dispatch(FetchFailed(
                             reason="fetch frames: context reset mid-fetch"))
                         return
-                    self._anim_frames.append((i, vert, statistics_data))
+                    self._anim_frames.append(
+                        (i, vert, statistics_data, display_pin_frame)
+                    )
                     if includes_statistics_zero:
                         self._anim_statistics_zero_fetched = True
                     self._fetched.append(i)

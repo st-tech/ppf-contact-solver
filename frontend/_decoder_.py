@@ -28,6 +28,32 @@ _PIN_WEIGHT_EPS = 1e-4
 # Used as the cfg "fix_weight_threshold" fallback.
 _DEFAULT_FIX_WEIGHT_THRESHOLD = 0.5
 
+
+@dataclass
+class _SolidPinGroups:
+    """The pin groups one SOLID pin holder spans, with each group's pin weight
+    at every tet vertex the holder drives.
+
+    ``group_of`` maps a pinned Blender vertex to its group index, ``cfgs``
+    maps a group index to that group's pin config, and ``weights[v, g]`` is
+    group ``g``'s weight at tet vertex ``v`` (zero where ``v`` is not driven).
+    Built by ``ParamDecoder._solid_pin_groups``.
+    """
+
+    group_of: dict
+    cfgs: list
+    weights: Any
+
+    def owners(self, vertices, candidates):
+        """For each of ``vertices``, the group among ``candidates`` (group
+        indices) with the largest weight there. A tie goes to the earlier
+        candidate."""
+        import numpy as np
+
+        rows = self.weights[np.asarray(vertices, dtype=np.int64)][:, candidates]
+        return np.asarray(candidates, dtype=np.int64)[np.argmax(rows, axis=1)]
+
+
 _SCIPY_MISSING_WARNED = False
 
 
@@ -992,39 +1018,38 @@ class ParamDecoder:
                 # this a keyframed N-vertex pin became N one-vertex holders,
                 # each carrying every keyframe op -> N*M solver pin files.
                 self._regroup_pin_holders(dyn_obj, obj_cfg)
-                self._split_solid_holder_by_threshold(dyn_obj, obj_cfg, verbose)
+                # A SOLID's surface-mapped holder spans every pin group of the
+                # object. Read each group's weights off it before the intent
+                # split replaces it, then give every holder that split builds
+                # to one group.
+                solid_groups = self._solid_pin_groups(dyn_obj, obj_cfg)
+                self._split_solid_holder_by_threshold(
+                    dyn_obj, obj_cfg, verbose, solid_groups,
+                )
+                self._split_solid_holders_by_pin_group(
+                    dyn_obj, solid_groups, verbose,
+                )
                 for pin_holder in dyn_obj.pin_list:
                     # For solid objects, use stored Blender indices for config lookup
                     lookup_indices = getattr(pin_holder._data, '_blender_pin_indices', None) or pin_holder.index
-                    # Resolve ONE cfg for this holder. Prefer a cfg that carries a
-                    # captured deformation (``embedded_move_index`` / its
-                    # ``rest_shape_track`` flag) over a plain anchor cfg: a SOLID
-                    # holder can span both a captured pin and a non-captured anchor
-                    # (e.g. a fixed pin-root) in one merged surface mapping, and the
-                    # first stored vert is often the anchor. Taking it would drop
-                    # the embedded ops AND the rest-shape track for the whole
-                    # holder. Falls back to the first non-None cfg when none is
-                    # captured (unchanged for pure-anchor / single-intent holders).
-                    # One field is deliberately not read off this cfg: the
+                    # Every holder spans one pin group by now, and a group's
+                    # cfg entries differ only in each vertex's own ``pin_anim``
+                    # track, so the first entry found is the group's cfg. One
+                    # field is deliberately not read off this cfg: the
                     # intersection allowance, which ``_apply_pin_cfg_entry``
-                    # reduces over every contributing pin instead, so a holder
-                    # spanning an allowing and a non-allowing pin does not
-                    # inherit the allowance from whichever cfg wins here.
+                    # reduces over every vertex of the holder instead.
                     chosen_vi = None
                     chosen_cfg = None
                     for vi in lookup_indices:
                         cfg = obj_cfg.get(vi)
-                        if cfg is None:
-                            continue
-                        if chosen_cfg is None:
-                            chosen_vi, chosen_cfg = vi, cfg
-                        if "embedded_move_index" in cfg or cfg.get("rest_shape_track"):
+                        if cfg is not None:
                             chosen_vi, chosen_cfg = vi, cfg
                             break
                     if chosen_cfg is not None:
                         self._apply_pin_cfg_entry(
                             pin_holder, dyn_name, chosen_vi, chosen_cfg, obj_cfg, verbose,
                         )
+                self._build_display_pins(dyn_obj, dyn_name, obj_cfg, verbose)
         finally:
             # Sparse LU objects are build-time accelerators and are not
             # picklable. Captured motion has been materialized into operations
@@ -1034,8 +1059,9 @@ class ParamDecoder:
                     for attr in (
                         "_solid_pin",
                         "_solid_frame_map",
-                        "_solid_surface_tri",
+                        "_solid_weight_map",
                         "_harmonic",
+                        "_harmonic_keep",
                     ):
                         if hasattr(pin_holder._data, attr):
                             delattr(pin_holder._data, attr)
@@ -1052,8 +1078,9 @@ class ParamDecoder:
         vertices. Grouping key is ``pin_group_id`` from ``obj_cfg``.
 
         Skips SOLID surface-mapped holders: those carry
-        ``_blender_pin_indices`` and a sim-vertex set the regroup would
-        lose, and ``_apply_pin_mapping`` already builds them correctly.
+        ``_blender_pin_indices`` and a sim-vertex set this regroup would
+        lose. ``_split_solid_holders_by_pin_group`` divides them by group
+        instead, after the intent split.
         """
         holders = list(dyn_obj.pin_list)
         if not holders:
@@ -1080,7 +1107,8 @@ class ParamDecoder:
         for key in gid_order:
             dyn_obj.pin(gid_verts[key])
 
-    def _split_solid_holder_by_threshold(self, dyn_obj, obj_cfg, verbose=False):
+    def _split_solid_holder_by_threshold(self, dyn_obj, obj_cfg, verbose=False,
+                                         groups=None):
         """Split a partial-pin SOLID holder into a hard (FixPair) sub-holder
         and a soft (PullPair) sub-holder.
 
@@ -1110,6 +1138,12 @@ class ParamDecoder:
         ``pull_strength``, so ``_apply_pin_cfg_entry``'s pull block never fires
         for these holders. Idempotent via ``_solid_split_done``. Never pins an
         empty index list.
+
+        ``groups`` (``_solid_pin_groups``) is ``None`` when the holder spans
+        one pin group. Otherwise the gates below are read over every group,
+        each vertex's threshold comes from the group owning it, and
+        ``_split_solid_holders_by_pin_group`` divides the sub-holders built
+        here by group afterwards.
         """
         import numpy as np
 
@@ -1195,15 +1229,20 @@ class ParamDecoder:
                               f"surf -> FixPair(rest); "
                               f"{n_surf - len(hard_sim)} pull surf + interior")
                 continue
-            # Gates: only a hard-intent (no pull_strength) partial Poisson
-            # SOLID holder is split. The toggle does NOT gate whether the
-            # split runs (interior fix pins always nan); it only sets thr.
-            if "pull_strength" in cfg:
-                continue  # pure-pull intent never hardens
-            # Torque pins are merged by pin_group_id in the solver; do not
-            # split them into two holders that would share one id.
+            # Gates, read over every pin group the holder spans: the holder is
+            # left unsplit when EVERY group pulls, since pull intent never
+            # hardens, or when ANY group carries a torque, since torque pins
+            # are merged by pin_group_id in the solver and must not be split
+            # into several holders sharing one id. The threshold does not gate
+            # whether the split runs; it only sets where the hard core ends.
+            holder_cfgs = [
+                c for c in (obj_cfg.get(int(vi)) for vi in lookup)
+                if c is not None
+            ]
+            if all("pull_strength" in c for c in holder_cfgs):
+                continue
             if any(op.get("type") == "torque"
-                   for op in cfg.get("operations", [])):
+                   for c in holder_cfgs for op in c.get("operations", [])):
                 continue
             sp = getattr(d, "_solid_pin", None)
             fw = getattr(d, "_solid_full_w", None)
@@ -1212,15 +1251,26 @@ class ParamDecoder:
             if sp is None or fw is None or df is None or sm is None:
                 continue  # full_pin / harmonic / SHELL / ROD: no partial fields
 
-            # Per-pin threshold (default _DEFAULT_FIX_WEIGHT_THRESHOLD;
-            # 0 => every surface driven hard).
-            thr = float(
-                cfg.get("fix_weight_threshold", _DEFAULT_FIX_WEIGHT_THRESHOLD)
-            )
             keep = np.asarray(sp["keep"])           # full axis, bool
             full_w = np.asarray(fw)                  # full axis
             df_arr = np.asarray(df)
             surf_mask = np.asarray(sm)               # full axis, bool
+            # Per-pin threshold (default _DEFAULT_FIX_WEIGHT_THRESHOLD;
+            # 0 => every surface driven hard), per vertex on the full axis,
+            # read from the pin group that owns the vertex.
+            if groups is None:
+                thr_cfgs = [cfg] * len(df_arr)
+            else:
+                every_group = list(range(len(groups.cfgs)))
+                thr_cfgs = [
+                    groups.cfgs[g]
+                    for g in groups.owners(df_arr, every_group)
+                ]
+            thr = np.array([
+                float(c.get("fix_weight_threshold",
+                            _DEFAULT_FIX_WEIGHT_THRESHOLD))
+                for c in thr_cfgs
+            ])
             # Hard FixPairs are SURFACE-ONLY. This is the hard-core /
             # soft-skirt authoring split, not a solver limitation: an interior
             # fix pin is well posed now that a fix pin is an exact Dirichlet BC
@@ -1302,28 +1352,19 @@ class ParamDecoder:
                         pull_surf[j] = True
             # Static is SURFACE-only (an interior fix pin is a zero-diagonal CG
             # nan; pin-root is painted on the surface anyway).
+            # Every exact candidate stays exact, surface neighbors included.
+            # Contact is skipped only for a pair whose BOTH sides are
+            # fix-pinned (`either_dyn` in contact.cu), which is a pair of
+            # prescribed motions the solver could not resolve either way; a
+            # primitive with any free vertex still has its contact assembled.
+            # Holding the pinned surface exactly is what lets a spun or moved
+            # cap follow its script instead of lagging on weak springs.
             static_keep = keep & surf_mask & static_surf
             hard_keep = (keep & (full_w >= thr) & surf_mask
                          & local_surf & ~pull_surf & ~static_surf)
-            surface_tri = getattr(d, "_solid_surface_tri", None)
-            exact_candidates = static_keep | hard_keep
-            exact_keep = _independent_surface_pin_mask(
-                df_arr,
-                exact_candidates,
-                surface_tri,
-                full_w + 2.0 * static_keep,
-            )
-            static_soft_keep = static_keep & ~exact_keep
-            static_keep &= exact_keep
-            hard_keep &= exact_keep
             soft_keep = keep & ~hard_keep & ~static_keep
-            soft_keep &= ~static_soft_keep
             static_index = [int(df_arr[k]) for k in range(len(df_arr))
                             if static_keep[k]]
-            static_soft_index = [
-                int(df_arr[k]) for k in range(len(df_arr))
-                if static_soft_keep[k]
-            ]
             hard_index = [int(df_arr[k]) for k in range(len(df_arr))
                           if hard_keep[k]]
             soft_index = [int(df_arr[k]) for k in range(len(df_arr))
@@ -1376,14 +1417,6 @@ class ParamDecoder:
                 # No _solid_pin => no captured ops; the pin-root cfg carries no
                 # embedded move, so this stays a stationary FixPair at rest.
                 fa.pull(0.0)
-            if static_soft_index:
-                sa = dyn_obj.pin(static_soft_index)
-                _carry(sa, d)
-                if static_blender:
-                    sa._data._blender_pin_indices = static_blender
-                sa_w = full_w[static_soft_keep].astype(np.float32)
-                sa.pull(1.0)
-                sa.pull_per_vertex(sa_w)
             if hard_index:
                 h = dyn_obj.pin(hard_index)
                 _carry(h, d)
@@ -1430,11 +1463,304 @@ class ParamDecoder:
                 s.pull(1.0)
                 s.pull_per_vertex(s_w)
             if verbose:
-                print(f"  solid split (capture-aware) @ thr={thr:.3f}: "
+                print(f"  solid split (capture-aware) @ thr="
+                      f"[{thr.min():.3f}, {thr.max():.3f}]: "
                       f"{len(static_index)} static-rest / "
-                      f"{len(static_soft_index)} static-soft / "
                       f"{len(hard_index)} hard-follow / "
                       f"{len(soft_index)} soft-follow")
+
+    @staticmethod
+    def _solid_pin_groups(dyn_obj, obj_cfg):
+        """The pin groups of a SOLID's surface-mapped pin holder, with each
+        group's weight at every vertex the holder drives, as a
+        ``_SolidPinGroups``. ``None`` when ``dyn_obj`` has no such holder or
+        its holder spans a single group.
+
+        ``SceneDecoder._apply_pin_mapping`` builds ONE holder over every
+        pinned Blender vertex of a SOLID, because the surface transfer is
+        solved over the whole pin set at once. Read before the intent split
+        replaces that holder, these weights let
+        ``_split_solid_holders_by_pin_group`` give every vertex to one group
+        afterwards. A group's weight at a vertex is its share of what drives
+        the vertex:
+
+        * partial pin: the diffused weight field is linear in the pinned
+          mask, so its map applied to one group's mask is that group's share,
+          and the interior map extends each share as it extends the field;
+        * full pin and surface-only pin: each sim surface vertex's corner
+          weights summed per group, extended into the interior by the
+          harmonic map when the holder has one.
+        """
+        import numpy as np
+
+        mapped = [
+            h for h in dyn_obj.pin_list
+            if getattr(h._data, "_blender_pin_indices", None)
+        ]
+        if not mapped:
+            return None
+        if len(mapped) > 1:
+            raise RuntimeError(
+                f"SOLID '{dyn_obj.name}' has {len(mapped)} surface-mapped pin "
+                "holders before its pins are split; the pin mapping builds one"
+            )
+        holder = mapped[0]
+        d = holder._data
+        group_of: dict = {}
+        keys: list = []
+        cfgs: list = []
+        for b in sorted({int(b) for b in d._blender_pin_indices}):
+            cfg = obj_cfg.get(b) or {}
+            key = cfg.get("pin_group_id")
+            if key not in keys:
+                keys.append(key)
+                cfgs.append(cfg)
+            group_of[b] = keys.index(key)
+        if len(keys) < 2:
+            return None
+        n_groups = len(keys)
+
+        index = np.asarray(holder.index, dtype=np.int64)
+        solid_pin = getattr(d, "_solid_pin", None)
+        harmonic = getattr(d, "_harmonic", None)
+        sim_weights = getattr(d, "_sim_blender_weights", None)
+        if solid_pin is not None:
+            weight_map = getattr(d, "_solid_weight_map", None)
+            if weight_map is None:
+                raise RuntimeError(
+                    f"SOLID '{dyn_obj.name}' has pins in {n_groups} groups "
+                    "but its partial pin holder carries no weight map to "
+                    "assign its vertices to them"
+                )
+            n_input = int(solid_pin["n_input"])
+            masks = np.zeros((n_input, n_groups), dtype=np.float64)
+            for b, g in group_of.items():
+                if not 0 <= b < n_input:
+                    raise ValueError(
+                        f"SOLID '{dyn_obj.name}': pinned Blender vertex {b} "
+                        f"is outside its {n_input}-vertex surface"
+                    )
+                masks[b, g] = 1.0
+            rows = weight_map.apply(masks).reshape(-1, n_groups)
+            interior_map = solid_pin["interior_map"]
+            if interior_map is not None:
+                rows = np.vstack(
+                    [rows, interior_map.apply(rows).reshape(-1, n_groups)]
+                )
+            axis = np.asarray(d._solid_driven_full, dtype=np.int64)
+        elif sim_weights is not None:
+            n_surf = int(harmonic[0]) if harmonic is not None else index.size
+            if len(sim_weights) != n_surf:
+                raise ValueError(
+                    f"SOLID '{dyn_obj.name}': its pin holder has corner "
+                    f"weights for {len(sim_weights)} surface vertices, "
+                    f"expected {n_surf}"
+                )
+            rows = np.zeros((n_surf, n_groups), dtype=np.float64)
+            for j, corners in enumerate(sim_weights):
+                for b, w in corners:
+                    rows[j, group_of[int(b)]] += w
+            if harmonic is not None and index.size > n_surf:
+                rows = np.vstack(
+                    [rows, harmonic[1].apply(rows).reshape(-1, n_groups)]
+                )
+            axis = index
+        else:
+            raise RuntimeError(
+                f"SOLID '{dyn_obj.name}' has pins in {n_groups} groups but "
+                "its pin holder carries no weights to assign its vertices to "
+                "them"
+            )
+        if rows.shape[0] != axis.size:
+            raise ValueError(
+                f"SOLID '{dyn_obj.name}': pin group weights cover "
+                f"{rows.shape[0]} vertices but the holder drives {axis.size}"
+            )
+        weights = np.zeros((int(axis.max()) + 1, n_groups), dtype=np.float64)
+        weights[axis] = rows
+        return _SolidPinGroups(group_of=group_of, cfgs=cfgs, weights=weights)
+
+    @staticmethod
+    def _split_solid_holders_by_pin_group(dyn_obj, groups, verbose=False):
+        """Divide every SOLID pin holder whose stored Blender vertices span
+        more than one pin group into one holder per group.
+
+        Runs after ``_split_solid_holder_by_threshold``, so each holder
+        already holds one intent (exact core, soft skirt, static anchor), and
+        the object-wide property that split establishes (no surface edge joins
+        two exact pins) is kept: this only divides a holder and never moves a
+        vertex to another intent. A vertex goes to the group with the largest
+        weight at it (``groups``, from ``_solid_pin_groups``) among the groups
+        of the holder's stored Blender vertices, which are the groups the
+        intent split resolved for that intent.
+
+        Every array aligned to ``holder.index`` is sliced with it, and every
+        mask over a full vertex axis is narrowed to the vertices the new
+        holder keeps. Only the motion data ``_build_embedded_move_ops`` would
+        read is carried, in the order it prefers it.
+        """
+        import numpy as np
+
+        if groups is None:
+            return
+
+        def aligned(values, n, what):
+            if len(values) != n:
+                raise ValueError(
+                    f"SOLID '{dyn_obj.name}': {what} has {len(values)} "
+                    f"entries but its pin holder has {n} vertices"
+                )
+            return values
+
+        def narrow(mask, selected):
+            mask = np.asarray(mask, dtype=bool)
+            axes = aligned(np.flatnonzero(mask), selected.size, "a pin mask")
+            out = np.zeros_like(mask)
+            out[axes[selected]] = True
+            return out
+
+        for holder in list(dyn_obj.pin_list):
+            d = holder._data
+            blender = getattr(d, "_blender_pin_indices", None)
+            if not blender:
+                continue
+            candidates = sorted({groups.group_of[int(b)] for b in blender})
+            if len(candidates) < 2:
+                continue
+            if d.operations:
+                raise RuntimeError(
+                    f"SOLID '{dyn_obj.name}': a pin holder is being divided "
+                    "by pin group after operations were applied to it"
+                )
+            index = np.asarray(holder.index, dtype=np.int64)
+            owner = groups.owners(index, candidates)
+            solid_pin = getattr(d, "_solid_pin", None)
+            frame_map = getattr(d, "_solid_frame_map", None)
+            harmonic = getattr(d, "_harmonic", None)
+            sim_weights = getattr(d, "_sim_blender_weights", None)
+            dyn_obj.pin_list.remove(holder)
+            for g in candidates:
+                selected = owner == g
+                if not selected.any():
+                    continue
+                sub = dyn_obj.pin(index[selected].tolist())
+                sub.pull(d.pull_strength)
+                if d.pull_weights is not None:
+                    sub.pull_per_vertex(aligned(
+                        np.asarray(d.pull_weights), index.size,
+                        "per-vertex pull weights",
+                    )[selected])
+                s = sub._data
+                s._blender_pin_indices = [
+                    int(b) for b in blender if groups.group_of[int(b)] == g
+                ]
+                s._tet_V = getattr(d, "_tet_V", None)
+                s._blender_vert = getattr(d, "_blender_vert", None)
+                s._solid_split_done = True
+                if solid_pin is not None:
+                    s._solid_pin = {
+                        **solid_pin,
+                        "keep": narrow(solid_pin["keep"], selected),
+                    }
+                    pin_weights = getattr(d, "_solid_pin_weights", None)
+                    if pin_weights is not None:
+                        s._solid_pin_weights = aligned(
+                            np.asarray(pin_weights), index.size,
+                            "partial pin weights",
+                        )[selected]
+                elif frame_map is not None:
+                    s._solid_frame_map = {
+                        key: aligned(
+                            np.asarray(frame_map[key]), index.size,
+                            "the hard pin frame map",
+                        )[selected]
+                        for key in ("triangles", "coefs")
+                    }
+                elif harmonic is not None:
+                    keep = getattr(d, "_harmonic_keep", None)
+                    if keep is None:
+                        keep = np.ones(index.size, dtype=bool)
+                    s._harmonic = harmonic
+                    s._sim_blender_weights = sim_weights
+                    s._harmonic_keep = narrow(keep, selected)
+                elif sim_weights is not None:
+                    aligned(sim_weights, index.size, "surface corner weights")
+                    s._sim_blender_weights = [
+                        sim_weights[k] for k in np.flatnonzero(selected)
+                    ]
+            if verbose:
+                print(f"  solid pin holder of {index.size} verts divided "
+                      f"across {len(candidates)} pin groups")
+
+    def _build_display_pins(self, dyn_obj, dyn_name, obj_cfg, verbose):
+        """Record a SOLID's exact pins over its own Blender vertices, for
+        display.
+
+        A SOLID's pinned Blender vertices are not simulation vertices, and
+        reconstructing them from the tetrahedral surface cannot put them back
+        on their script exactly. For every exact pin group (no pull strength,
+        no torque) this builds a holder over the group's own Blender vertices,
+        detached from the simulation, carrying the operations a SHELL pin over
+        those vertices would, captured per-vertex tracks included. The export
+        writes them as display-pin blocks, the solver evaluates their script at
+        every output frame, and the addon places those vertices there.
+
+        Rest positions are the Blender vertices in the untranslated frame the
+        solver applies pin operations in: the object's translation is added
+        back through its displacement group, as for its simulation vertices.
+        Sets ``dyn_obj._display_pins`` to a list of ``{"holder",
+        "blender_index", "rest"}``; empty for an object with no surface-mapped
+        SOLID pin.
+        """
+        import numpy as np
+
+        from ._scene_pin_ import PinHolder
+
+        dyn_obj._display_pins = []
+        mapped = [
+            h for h in dyn_obj.pin_list
+            if getattr(h._data, "_blender_pin_indices", None)
+        ]
+        if not mapped:
+            return
+        blender_vert = getattr(mapped[0]._data, "_blender_vert", None)
+        if blender_vert is None:
+            raise RuntimeError(
+                f"SOLID '{dyn_obj.name}' has a surface-mapped pin holder but "
+                "no Blender vertices to write its pins out for display"
+            )
+        blender_vert = np.asarray(blender_vert, dtype=np.float64)
+        translation = np.asarray(dyn_obj.position, dtype=np.float64)
+        members: dict = {}
+        for b, cfg in obj_cfg.items():
+            members.setdefault(cfg.get("pin_group_id"), []).append(int(b))
+        for blender in members.values():
+            index = sorted(blender)
+            cfg = obj_cfg[index[0]]
+            # A pull pin yields, so its vertex does not sit on its script; a
+            # torque is a force with no scripted position at all.
+            if "pull_strength" in cfg:
+                continue
+            if any(op.get("type") == "torque" for op in cfg.get("operations", [])):
+                continue
+            if index[0] < 0 or index[-1] >= len(blender_vert):
+                raise ValueError(
+                    f"SOLID '{dyn_obj.name}': pinned Blender vertex "
+                    f"{index[-1] if index[-1] >= 0 else index[0]} is outside its "
+                    f"{len(blender_vert)} vertices"
+                )
+            holder = PinHolder(dyn_obj, index)
+            self._apply_pin_cfg_entry(
+                holder, dyn_name, index[0], cfg, obj_cfg, verbose,
+            )
+            dyn_obj._display_pins.append({
+                "holder": holder,
+                "blender_index": np.asarray(index, dtype=np.int64),
+                "rest": blender_vert[index] - translation,
+            })
+        if verbose and dyn_obj._display_pins:
+            print(f"  {dyn_name}: {len(dyn_obj._display_pins)} display pin "
+                  "blocks")
 
     def _apply_pin_cfg_entry(self, pin_holder, dyn_name, vi, cfg, obj_cfg,
                              verbose):
@@ -1465,20 +1791,14 @@ class ParamDecoder:
             pin_holder._data.pin_group_id = cfg["pin_group_id"]
             if verbose:
                 print(f"  {dyn_name}[{vi}]: pin_group_id={cfg['pin_group_id']}")
-        # Per-pin intersection allowance. Read from EVERY cfg the holder's
-        # vertices resolve to, not from the single chosen ``cfg``, because a
-        # holder can span more than one Blender pin: ``_regroup_pin_holders``
-        # leaves SOLID surface-mapped holders alone, and
-        # ``_split_solid_holder_by_threshold`` builds sub-holders whose stored
-        # Blender indices mix a captured pin with a static anchor. One holder
-        # carries one flag, so a mixed holder resolves to False, which is the
-        # same unanimity the solver applies per vertex (a vertex is exempt only
-        # when every pin covering it asks for it, and an unpinned vertex never
-        # is). Granting the flag on a mixed holder would instead exempt
-        # elements held by a pin that never asked; splitting the holder by flag
-        # would cut the pin grouping that the surface mapping and the threshold
-        # split are built around. A vertex whose cfg is absent belongs to a pin
-        # that emitted no settings at all, so it is a pin that did not ask.
+        # Per-pin intersection allowance, reduced over EVERY cfg the holder's
+        # vertices resolve to rather than read off the single chosen ``cfg``.
+        # A holder spans one pin group by the time it gets here, so this is
+        # that group's flag, except that a vertex whose cfg is absent belongs
+        # to a pin that emitted no settings at all, which is a pin that did not
+        # ask, and the holder then resolves to False. That is the same
+        # unanimity the solver applies per vertex (a vertex is exempt only when
+        # every pin covering it asks for it, and an unpinned vertex never is).
         # Applies to both pin modes and needs no operations, so it is resolved
         # before the ops-only early return below.
         lookup_indices = (
@@ -1584,6 +1904,7 @@ class ParamDecoder:
             harmonic = getattr(pin_holder._data, "_harmonic", None)
             return ParamDecoder._build_solid_embedded_move_ops(
                 sim_weights, obj_cfg, harmonic,
+                getattr(pin_holder._data, "_harmonic_keep", None),
             )
 
         index = list(pin_holder.index)
@@ -1682,7 +2003,8 @@ class ParamDecoder:
         return ParamDecoder._positions_to_move_ops(positions, times)
 
     @staticmethod
-    def _build_solid_embedded_move_ops(sim_weights, obj_cfg, harmonic=None):
+    def _build_solid_embedded_move_ops(sim_weights, obj_cfg, harmonic=None,
+                                       harmonic_keep=None):
         """Build SOLID capture-deformation MoveBy segments.
 
         ``sim_weights`` lists, per pinned sim SURFACE vertex (in
@@ -1697,7 +2019,11 @@ class ParamDecoder:
         of the surface displacement. With both surface and interior
         prescribed the SOLID is fully kinematic, so its elastic interior
         cannot buckle into self-intersection.
-        ``holder.index`` is ordered ``surface_ids + interior_ids`` to match.
+        ``holder.index`` is ordered ``surface_ids + interior_ids`` to match,
+        unless ``harmonic_keep`` (a mask over that surface + interior axis) is
+        given: a holder divided by pin group keeps only its own vertices, and
+        the whole field is still built first because every interior vertex
+        depends on every surface vertex.
         """
         import numpy as np
         from ._scene_pin_ import MoveByOperation
@@ -1746,6 +2072,8 @@ class ParamDecoder:
             positions = np.concatenate([surf_pos, interior_pos], axis=1)
         else:
             positions = surf_pos
+        if harmonic_keep is not None:
+            positions = positions[:, np.asarray(harmonic_keep, dtype=bool), :]
 
         embedded_ops: list = []
         for k in range(n_frames - 1):
@@ -2040,47 +2368,6 @@ def _graph_laplacian_from_edges(e0, e1, n):
     adj.data[:] = 1.0
     deg = np.asarray(adj.sum(axis=1)).ravel()
     return (sp.diags(deg) - adj).tocsr()
-
-
-def _independent_surface_pin_mask(
-    driven_full, candidates, surface_tri, priority,
-):
-    """Select exact pins with no surface edge joining two selected vertices."""
-    import numpy as np
-
-    candidates = np.asarray(candidates, dtype=bool)
-    selected = np.zeros_like(candidates)
-    if not candidates.any():
-        return selected
-    if surface_tri is None:
-        return candidates.copy()
-
-    driven = np.asarray(driven_full, dtype=np.int64)
-    priority = np.asarray(priority, dtype=np.float64)
-    candidate_axes = np.flatnonzero(candidates)
-    axis_by_vertex = {
-        int(driven[axis]): int(axis) for axis in candidate_axes
-    }
-    neighbors = {vertex: set() for vertex in axis_by_vertex}
-    for face in np.asarray(surface_tri, dtype=np.int64).reshape(-1, 3):
-        present = [int(v) for v in face if int(v) in axis_by_vertex]
-        for i, vertex in enumerate(present):
-            neighbors[vertex].update(present[:i])
-            neighbors[vertex].update(present[i + 1:])
-
-    blocked = set()
-    order = sorted(
-        candidate_axes,
-        key=lambda axis: (-priority[axis], int(driven[axis])),
-    )
-    for axis in order:
-        vertex = int(driven[axis])
-        if vertex in blocked:
-            continue
-        selected[axis] = True
-        blocked.add(vertex)
-        blocked.update(neighbors[vertex])
-    return selected
 
 
 class _SparseLinearMap:
@@ -2468,9 +2755,13 @@ def _build_solid_pin_fields(
             progress_callback("Building partial SOLID surface pin map...")
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", spla.MatrixRankWarning)
-            # Weight field (W = I): diffuse the binary pinned mask.
+            # Weight field (W = I): diffuse the binary pinned mask. The map is
+            # kept, not only this one solve: the field is linear in the mask,
+            # so ``ParamDecoder._solid_pin_groups`` applies it to each pin
+            # group's own mask to find which group drives a vertex.
             A_w = (BtB + alpha * L_s).tocsc()
-            w_surf = spla.spsolve(A_w, B.T @ pin_mask)
+            weight_map = _SparseLinearMap(A_w, B.T)
+            w_surf = weight_map.apply(pin_mask)
             # Target operator (W = diag(pin_mask)): only pinned input
             # constrains it; eps*I removes the constant nullspace on surface
             # components with no pinned input vertex.
@@ -2508,6 +2799,7 @@ def _build_solid_pin_fields(
             "interior_ids": interior_ids if interior_map is not None else [],
             "w_surf": w_surf,
             "interior_w": interior_w,
+            "weight_map": weight_map,
             "surface_map": surface_map,
             "interior_map": interior_map,
             "motion_cache": {},
@@ -3528,6 +3820,10 @@ class SceneDecoder:
                         holder._data._solid_pin_weights = (
                             full_w[keep].astype(np.float32)
                         )
+                        # This holder spans every pin group of the object;
+                        # apply_pin_config reads each group's share of the
+                        # weight field through this map to divide it by group.
+                        holder._data._solid_weight_map = fields["weight_map"]
                         holder._data._solid_pin = {
                             "surface_map": fields["surface_map"],
                             "interior_map": fields["interior_map"],
@@ -3569,7 +3865,6 @@ class SceneDecoder:
                         holder._data._solid_surf_mask = (
                             np.arange(len(driven_full)) < len(surf_ids)
                         )
-                        holder._data._solid_surface_tri = F_arr
                         # Per-surface-vertex Blender corners (inverse map),
                         # aligned to surf_ids / the leading driven_full axis.
                         # The fix_weight_threshold split uses this to tell

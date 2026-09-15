@@ -325,6 +325,11 @@ class FixedScene:
         self._intersect_policy = intersect_policy
         self._pin_allow_vertices = pin_allow_vertices
         self._pin: list[PinData] = []
+        # Display pins (see `set_display_pin`): each a dict with the owning
+        # object's name ("uuid"), its Blender vertex indices, their rest
+        # positions, its displacement group ("dmap"), and the PinData whose
+        # operations drive them.
+        self._display_pin: list[dict] = []
         self._static_vert = (np.zeros(0, dtype=np.uint32), np.zeros(0))
         self._static_color = np.zeros((0, 0))
         self._static_tri = np.zeros((0, 0))
@@ -863,6 +868,33 @@ class FixedScene:
                         "maps": self._surface_map_by_name,
                     },
                 ))
+        # Written for every scene, with no block when it has no display pin, so
+        # the addon can require the file and treat a missing one as an error.
+        # Blocks are in the order the solver writes display_pin_<N>.bin.
+        offsets = np.cumsum(
+            [0] + [len(d["blender_index"]) for d in self._display_pin]
+        )
+        display_pin_map_path = os.path.join(path, "display_pin_map.pickle")
+        with open(display_pin_map_path, "wb") as f:
+            f.write(_cbor.dumps_envelope(
+                _cbor.KIND_DISPLAY_PIN_MAP,
+                {
+                    "version": _cbor.DISPLAY_PIN_MAP_VERSION,
+                    "n_total": int(offsets[-1]),
+                    "blocks": [
+                        {
+                            "uuid": d["uuid"],
+                            "blender_index": np.asarray(
+                                d["blender_index"], dtype=np.int64
+                            ),
+                            "offset": int(offset),
+                        }
+                        for d, offset in zip(
+                            self._display_pin, offsets[:-1], strict=True
+                        )
+                    ],
+                },
+            ))
         pbar.update(1)
 
         info_path = os.path.join(path, "info.toml")
@@ -881,6 +913,7 @@ class FixedScene:
             f.write(f"static_vert = {len(self._static_vert[1])}\n")
             f.write(f"static_tri = {len(self._static_tri)}\n")
             f.write(f"pin_block = {len(self._pin)}\n")
+            f.write(f"display_pin_block = {len(self._display_pin)}\n")
             f.write(f"wall = {len(self._wall)}\n")
             f.write(f"sphere = {len(self._sphere)}\n")
             f.write(f"stitch = {len(self._stitch_ind)}\n")
@@ -918,6 +951,13 @@ class FixedScene:
             f.write(_rust.scene_format_pin_toml(
                 [_pin_to_toml_dict(pin) for pin in self._pin]
             ))
+            # Display pins take the same block format under their own
+            # section, so the solver reads them with the same reader.
+            if self._display_pin:
+                f.write(_rust.scene_format_pin_toml(
+                    [_pin_to_toml_dict(d["pin"]) for d in self._display_pin],
+                    section="display-pin",
+                ))
 
             # Wall TOML: pre-render each param value with Python's str()
             # to preserve the heterogeneous int/float/string formatting,
@@ -1279,34 +1319,37 @@ class FixedScene:
             stiffness.tofile(os.path.join(bin_path, "stitch_stiffness.bin"))
         pbar.update(1)
 
-        for i, pin in enumerate(self._pin):
-            # Write pin indices
-            with open(os.path.join(bin_path, f"pin-ind-{i}.bin"), "wb") as f:
+        def write_pin_bins(section: str, i: int, pin: PinData) -> None:
+            # The bins of one pin block, named after its TOML section (see
+            # `_rust.scene_format_pin_toml`): `pin` for the solver's pins,
+            # `display-pin` for the positions the solver writes out for
+            # display.
+            with open(os.path.join(bin_path, f"{section}-ind-{i}.bin"), "wb") as f:
                 np.array(pin.index, dtype=np.uint64).tofile(f)
 
             # Optional per-vertex pull weights (aligned to pin.index). The
             # solver probes for this file; absent means scalar pull / hard
             # pin as before.
             if getattr(pin, "pull_weights", None) is not None:
-                with open(os.path.join(bin_path, f"pin-pullw-{i}.bin"), "wb") as f:
+                with open(os.path.join(bin_path, f"{section}-pullw-{i}.bin"), "wb") as f:
                     np.asarray(pin.pull_weights, dtype=np.float32).tofile(f)
 
             # Write operation data
             for j, op in enumerate(pin.operations):
                 if isinstance(op, MoveByOperation):
                     # MoveBy operations need to write position delta to binary file
-                    op_path = os.path.join(bin_path, f"pin-{i}-op-{j}.bin")
+                    op_path = os.path.join(bin_path, f"{section}-{i}-op-{j}.bin")
                     with open(op_path, "wb") as f:
                         np.array(op.delta, dtype=np.float64).tofile(f)
                 elif isinstance(op, MoveToOperation):
                     # MoveTo operations need to write target positions to binary file
-                    op_path = os.path.join(bin_path, f"pin-{i}-op-{j}.bin")
+                    op_path = os.path.join(bin_path, f"{section}-{i}-op-{j}.bin")
                     with open(op_path, "wb") as f:
                         np.array(op.target, dtype=np.float64).tofile(f)
                 elif isinstance(op, TransformKeyframeOperation):
                     # TRS keyframes: separate binaries for verts, times, TRS
                     # arrays, and per-segment interpolation metadata.
-                    base = os.path.join(bin_path, f"pin-{i}-op-{j}")
+                    base = os.path.join(bin_path, f"{section}-{i}-op-{j}")
                     np.asarray(op.local_vert, dtype=np.float64).tofile(base + ".bin")
                     np.asarray(op.times, dtype=np.float64).tofile(
                         base + "-time.bin"
@@ -1344,6 +1387,17 @@ class FixedScene:
                     interp_codes.tofile(base + "-interp.bin")
                     handles.tofile(base + "-handles.bin")
                 # Spin and Scale operations have all data in info.toml
+
+        for i, pin in enumerate(self._pin):
+            write_pin_bins("pin", i, pin)
+        for i, display in enumerate(self._display_pin):
+            write_pin_bins("display-pin", i, display["pin"])
+            np.ascontiguousarray(display["rest"], dtype=np.float64).tofile(
+                os.path.join(bin_path, f"display-pin-rest-{i}.bin")
+            )
+            np.full(len(display["rest"]), display["dmap"], dtype=np.uint32).tofile(
+                os.path.join(bin_path, f"display-pin-dmap-{i}.bin")
+            )
         pbar.update(1)
 
         for i, wall in enumerate(self._wall):
@@ -1433,6 +1487,27 @@ class FixedScene:
                 fixed.set_pin(list_of_pin_data)
         """
         self._pin = pin
+
+    def set_display_pin(self, display_pin: list[dict]):
+        """Set the display pins: the Blender vertices exact SOLID pins hold,
+        whose scripted positions the solver writes out every frame
+        (``display_pin_<N>.bin``) so the addon can place them on their script.
+
+        Args:
+            display_pin (list[dict]): One entry per block, each with ``uuid``
+                (the owning object's name), ``blender_index`` (int array of
+                its Blender vertices), ``rest`` ((n, 3) rest positions in the
+                object's untranslated frame), ``dmap`` (the object's
+                displacement group) and ``pin`` (the PinData whose operations
+                drive them).
+
+        Example:
+            Typically invoked internally by :meth:`Scene.build`::
+
+                fixed = scene.build()
+                fixed.set_display_pin(list_of_display_pins)
+        """
+        self._display_pin = display_pin
 
     def set_static(
         self,
@@ -3580,6 +3655,22 @@ class Scene:
 
         if len(concat_pin):
             fixed.set_pin(concat_pin)
+        # Display pins keep each object's own Blender vertex indices: they are
+        # not simulation vertices, so the concatenated vertex map does not
+        # apply to them, and the addon addresses them by object.
+        display_pin = [
+            {
+                "uuid": name,
+                "blender_index": np.asarray(d["blender_index"], dtype=np.int64),
+                "rest": np.asarray(d["rest"], dtype=np.float64),
+                "dmap": dmap[name],
+                "pin": d["holder"]._data,
+            }
+            for name, obj in dyn_objects
+            for d in getattr(obj, "_display_pins", [])
+        ]
+        if display_pin:
+            fixed.set_display_pin(display_pin)
 
         if static_vert.shape[0]:
             fixed.set_static(

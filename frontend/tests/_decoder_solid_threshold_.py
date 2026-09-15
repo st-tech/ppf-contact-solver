@@ -35,10 +35,7 @@ if str(REPO_ROOT) not in sys.path:
 
 try:
     from frontend import _rust  # noqa: F401  (PinHolder builds a Rust mirror)
-    from frontend._decoder_ import (
-        ParamDecoder,
-        _independent_surface_pin_mask,
-    )
+    from frontend._decoder_ import ParamDecoder
     from frontend._scene_pin_ import PinHolder
 except Exception as exc:  # pragma: no cover - environment-dependent
     pytest.skip(
@@ -274,17 +271,16 @@ def test_diffused_weight_without_complete_local_pin_support_stays_soft():
     assert sorted(soft[0].index) == [11, 12, 13]
 
 
-def test_adjacent_exact_surface_candidates_are_demoted_to_soft():
+def test_adjacent_exact_surface_candidates_all_stay_exact():
+    # Surface vertices 10 and 11 are neighbors and both exact candidates; both
+    # stay exact, and neither is demoted to a soft pull.
     dyn = _FakeDyn()
-    holder = _make_original(
+    _make_original(
         dyn,
         [0.9, 0.8, 0.3, 0.2],
         DF,
         BL,
         n_surf=2,
-    )
-    holder._data._solid_surface_tri = np.array(
-        [[10, 11, 99]], dtype=np.int64
     )
 
     ParamDecoder()._split_solid_holder_by_threshold(
@@ -292,30 +288,9 @@ def test_adjacent_exact_surface_candidates_are_demoted_to_soft():
     )
     hard, soft = _classify(dyn)
 
-    assert sorted(hard[0].index) == [10]
-    assert sorted(soft[0].index) == [11, 12, 13]
-
-
-def test_exact_pin_mask_keeps_one_vertex_per_face():
-    selected = _independent_surface_pin_mask(
-        np.array([10, 11, 12]),
-        np.array([True, True, True]),
-        np.array([[10, 11, 12]]),
-        np.array([0.7, 0.9, 0.8]),
-    )
-
-    np.testing.assert_array_equal(selected, [False, True, False])
-
-
-def test_exact_pin_mask_applies_static_priority_across_intents():
-    selected = _independent_surface_pin_mask(
-        np.array([10, 11]),
-        np.array([True, True]),
-        np.array([[10, 11, 99]]),
-        np.array([2.1, 0.9]),
-    )
-
-    np.testing.assert_array_equal(selected, [True, False])
+    assert len(hard) == 1 and len(soft) == 1
+    assert sorted(hard[0].index) == [10, 11]
+    assert sorted(soft[0].index) == [12, 13]
 
 
 def test_explicit_operation_pin_does_not_require_captured_tracks():

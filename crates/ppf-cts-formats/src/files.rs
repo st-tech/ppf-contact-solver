@@ -165,6 +165,14 @@ pub const PLASTIC_PREFIX: &str = "plastic_";
 /// Trailing fragment of a per-frame rest-shape name.
 pub const PLASTIC_SUFFIX: &str = ".bin.gz";
 
+/// Leading fragment of a per-frame display-pin name (`display_pin_<N>.bin`):
+/// the scripted positions, at that frame's time, of the Blender vertices an
+/// exact SOLID pin holds.
+pub const DISPLAY_PIN_PREFIX: &str = "display_pin_";
+
+/// Trailing fragment of a per-frame display-pin name.
+pub const DISPLAY_PIN_SUFFIX: &str = ".bin";
+
 /// The scene's build-time solver payload (mesh topology, per-element
 /// properties and parameters, constraints). Written once per run, since
 /// nothing in it changes as the simulation advances; the one part that does,
@@ -227,4 +235,13 @@ pub fn state_filename(frame: i32) -> String {
 /// full-name forms cannot drift.
 pub fn plastic_filename(frame: i32) -> String {
     format!("{PLASTIC_PREFIX}{frame}{PLASTIC_SUFFIX}")
+}
+
+/// Per-frame display-pin positions written by the solver as
+/// `display_pin_<N>.bin`, alongside the `vert_<N>.bin` of the same frame.
+/// Present only for a scene whose export carries display-pin blocks.
+/// Defined in terms of `DISPLAY_PIN_PREFIX`/`DISPLAY_PIN_SUFFIX` so the
+/// fragment and full-name forms cannot drift.
+pub fn display_pin_filename(frame: i32) -> String {
+    format!("{DISPLAY_PIN_PREFIX}{frame}{DISPLAY_PIN_SUFFIX}")
 }

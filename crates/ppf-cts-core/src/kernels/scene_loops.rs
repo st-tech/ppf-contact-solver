@@ -39,6 +39,8 @@ pub enum SceneLoopsError {
     UnknownSegmentInterp { got: String },
     #[error("ops_offsets len {ops_len} != headers len {headers_len} + 1")]
     PinOpsOffsetsMismatch { ops_len: usize, headers_len: usize },
+    #[error("pin section name {section:?} must be non-empty ASCII letters, digits and '-'")]
+    InvalidPinSection { section: String },
     #[error("axis must be 0, 1, or 2; got {axis}")]
     InvalidAxis { axis: usize },
 }
@@ -371,10 +373,16 @@ fn write_bezier_handles(s: &mut String, handles: Option<[f64; 4]>) {
     }
 }
 
-/// Format a single pin-section TOML block (header plus ops).
-fn format_pin_section(pin_index: usize, header: &PinHeader, ops: &[PinOpToml]) -> String {
+/// Format a single pin-section TOML block (header plus ops), with its tables
+/// named `[<section>-<pin_index>]` and `[<section>-<pin_index>-op-<j>]`.
+fn format_pin_section(
+    section: &str,
+    pin_index: usize,
+    header: &PinHeader,
+    ops: &[PinOpToml],
+) -> String {
     let mut s = String::new();
-    let _ = writeln!(s, "[pin-{pin_index}]");
+    let _ = writeln!(s, "[{section}-{pin_index}]");
     let _ = writeln!(s, "operation_count = {}", header.operation_count);
     let _ = writeln!(s, "pin = {}", header.pin_count);
     let _ = writeln!(s, "pull = {}", format_f64(header.pull_strength));
@@ -392,7 +400,7 @@ fn format_pin_section(pin_index: usize, header: &PinHeader, ops: &[PinOpToml]) -
     s.push('\n');
 
     for (j, op) in ops.iter().enumerate() {
-        let _ = writeln!(s, "[pin-{pin_index}-op-{j}]");
+        let _ = writeln!(s, "[{section}-{pin_index}-op-{j}]");
         match op {
             PinOpToml::MoveBy {
                 t_start,
@@ -492,13 +500,22 @@ fn format_pin_section(pin_index: usize, header: &PinHeader, ops: &[PinOpToml]) -
     s
 }
 
-/// Format every pin block into one TOML string. `ops_offsets` slices
-/// `ops_flat` into per-pin op runs.
+/// Format every pin block into one TOML string, with tables named after
+/// `section` (see `format_pin_section`). `ops_offsets` slices `ops_flat`
+/// into per-pin op runs.
 pub fn format_all_pin_sections(
+    section: &str,
     headers: &[PinHeader],
     ops_offsets: &[usize],
     ops_flat: &[PinOpToml],
 ) -> Result<String, SceneLoopsError> {
+    if section.is_empty()
+        || !section.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+    {
+        return Err(SceneLoopsError::InvalidPinSection {
+            section: section.to_string(),
+        });
+    }
     if ops_offsets.len() != headers.len() + 1 {
         return Err(SceneLoopsError::PinOpsOffsetsMismatch {
             ops_len: ops_offsets.len(),
@@ -509,7 +526,7 @@ pub fn format_all_pin_sections(
     for (i, header) in headers.iter().enumerate() {
         let s = ops_offsets[i];
         let e = ops_offsets[i + 1];
-        let block = format_pin_section(i, header, &ops_flat[s..e]);
+        let block = format_pin_section(section, i, header, &ops_flat[s..e]);
         out.push_str(&block);
     }
     Ok(out)
@@ -860,7 +877,7 @@ mod tests {
             transition: "LINEAR".to_string(),
             bezier_handles: None,
         }];
-        let s = format_pin_section(0, &header, &ops);
+        let s = format_pin_section("pin", 0, &header, &ops);
         assert!(s.contains("[pin-0]"));
         assert!(s.contains("operation_count = 1"));
         assert!(s.contains("pin = 4"));
@@ -887,7 +904,7 @@ mod tests {
             transition: "bezier".to_string(),
             bezier_handles: Some([0.42, 0.0, 0.58, 1.0]),
         }];
-        let s = format_pin_section(0, &header, &ops);
+        let s = format_pin_section("pin", 0, &header, &ops);
         assert!(s.contains("transition = \"bezier\""));
         assert!(s.contains("bezier_h_rx = 0.42"));
         assert!(s.contains("bezier_h_ry = 0.0"));
@@ -905,9 +922,41 @@ mod tests {
             pin_group_id: Some("g0".to_string()),
             allow_intersection: false,
         };
-        let s = format_pin_section(3, &header, &[]);
+        let s = format_pin_section("pin", 3, &header, &[]);
         assert!(s.contains("unpin_time = 2.5"));
         assert!(s.contains("pin_group_id = \"g0\""));
+    }
+
+    #[test]
+    fn pin_sections_are_named_after_their_section() {
+        let header = PinHeader {
+            operation_count: 1,
+            pin_count: 2,
+            pull_strength: 0.0,
+            unpin_time: None,
+            pin_group_id: None,
+            allow_intersection: false,
+        };
+        let ops = vec![PinOpToml::Spin {
+            center_mode: "centroid".to_string(),
+            center: [0.0, 0.0, 0.0],
+            axis: [1.0, 0.0, 0.0],
+            angular_velocity: 90.0,
+            t_start: 0.0,
+            t_end: 1.0,
+        }];
+        let s = format_all_pin_sections("display-pin", &[header], &[0, 1], &ops).unwrap();
+        assert!(s.contains("[display-pin-0]"));
+        assert!(s.contains("[display-pin-0-op-0]"));
+        assert!(!s.contains("[pin-0]"));
+    }
+
+    #[test]
+    fn pin_sections_reject_a_malformed_section_name() {
+        for bad in ["", "pin 0", "pin]", "pin.x"] {
+            let err = format_all_pin_sections(bad, &[], &[0], &[]).unwrap_err();
+            assert!(matches!(err, SceneLoopsError::InvalidPinSection { .. }));
+        }
     }
 
     #[test]
@@ -927,7 +976,7 @@ mod tests {
             t_start: 0.0,
             t_end: 5.0,
         }];
-        let s = format_pin_section(0, &header, &ops);
+        let s = format_pin_section("pin", 0, &header, &ops);
         assert!(s.contains("type = \"torque\""));
         assert!(s.contains("axis_component = 1"));
         assert!(s.contains("magnitude = 7.5"));

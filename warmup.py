@@ -967,7 +967,7 @@ def fast_check(limit=None):
     print()
 
     # Clear caches before running notebook tests
-    clear_cache()
+    _clear_cache_for_fast_check()
     print()
 
     # Read notebooks from examples.txt
@@ -1039,7 +1039,7 @@ def fast_check(limit=None):
                 print(f"stdout: {result.stdout}", flush=True)
             # Clean up temp directory and caches
             shutil.rmtree(fast_check_dir, ignore_errors=True)
-            clear_cache()
+            _clear_cache_for_fast_check()
             return 1
 
         # Inject App.set_fast_check() after App.create/load calls
@@ -1076,12 +1076,12 @@ def fast_check(limit=None):
                 f.write("       FAILED\n")
             # Clean up temp directory and caches
             shutil.rmtree(fast_check_dir, ignore_errors=True)
-            clear_cache()
+            _clear_cache_for_fast_check()
             return 1
 
     # Clean up temp directory and caches
     shutil.rmtree(fast_check_dir, ignore_errors=True)
-    clear_cache()
+    _clear_cache_for_fast_check()
 
     # Print summary
     print()
@@ -1109,6 +1109,24 @@ def fast_check(limit=None):
         f.write(f"\nCompleted: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
 
     return 0
+
+
+def _clear_cache_for_fast_check():
+    """Clear the caches around fast_check's notebook runs, unless told to keep them.
+
+    fast_check clears ``~/.cache/ppf-cts`` before and after the notebooks, so
+    each notebook fetches its meshes the way a fresh install does. A host with
+    no network access cannot fetch, so it seeds the cache beforehand and sets
+    ``PPF_CTS_KEEP_CACHE=1`` to have the notebooks read that cache instead.
+    Any other non-empty value is refused rather than treated as unset.
+    """
+    keep = os.environ.get("PPF_CTS_KEEP_CACHE", "")
+    if keep == "1":
+        print("=== Keeping Caches (PPF_CTS_KEEP_CACHE=1) ===")
+        return 0
+    if keep:
+        raise SystemExit(f"PPF_CTS_KEEP_CACHE must be 1 or unset, got {keep!r}")
+    return clear_cache()
 
 
 def clear_cache():

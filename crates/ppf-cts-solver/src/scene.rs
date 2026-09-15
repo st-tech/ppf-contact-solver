@@ -82,6 +82,7 @@ pub struct Scene {
     stitch_w: Matrix6xX<f32>,
     stitch_stiffness: Vec<f32>,
     pin: Vec<Pin>,
+    display_pin: Vec<DisplayPin>,
     wall: Vec<InvisibleWall>,
     sphere: Vec<InvisibleSphere>,
     rest_vert: Option<Matrix3xX<f32>>,
@@ -364,6 +365,22 @@ enum PinOperation {
         handles: Vec<[f64; 4]>,
         rest_t: [f64; 3],
     },
+}
+
+/// Positions written out for display only: the Blender vertices an exact
+/// SOLID pin holds, driven by that pin's operations from their own rest
+/// positions. They are not simulation vertices and take no part in the solve.
+/// A SOLID is tetrahedralized onto a surface of its own, so reconstructing
+/// its pinned Blender vertices from that surface cannot put them back on
+/// their script exactly; `display_pin_positions` evaluates the script itself,
+/// with the same `apply_pin_op` a fix pin uses, once per output frame.
+struct DisplayPin {
+    /// Rest positions, in the same untranslated frame as `vert`.
+    rest: Matrix3xX<f32>,
+    /// Displacement group of each rest position, as `vert_dmap` is for `vert`.
+    dmap: Vec<u32>,
+    operations: Vec<PinOperation>,
+    unpin_time: Option<f64>,
 }
 
 struct Pin {
@@ -1139,12 +1156,14 @@ impl Scene {
             )
         };
 
-        let mut pin = Vec::new();
-        for i in 0..n_pin_block {
-            let title = format!("pin-{i}");
+        // One reader for both kinds of pin block, `pin` for the solver's pins
+        // and `display-pin` for the positions written out for display: they
+        // share the TOML tables and the op bins, named after the section.
+        let read_pin_block = |section: &str, i: usize| -> Pin {
+            let title = format!("{section}-{i}");
             let count = parsed
                 .get(&title)
-                .unwrap_or_else(|| panic!("Failed to read pin {i}"));
+                .unwrap_or_else(|| panic!("Failed to read {section} {i}"));
             let n_pin = read_usize(count, "pin");
             let operation_count = read_usize(count, "operation_count");
             let unpin_time = count.get("unpin_time").and_then(|v| v.as_float());
@@ -1162,7 +1181,7 @@ impl Scene {
                 .get("allow_intersection")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
-            let pin_ind_path = format!("{}/bin/pin-ind-{}.bin", args.path, i);
+            let pin_ind_path = format!("{}/bin/{section}-ind-{i}.bin", args.path);
 
             let pin_ind = read_vec::<usize>(&pin_ind_path).expect("Failed to read pin index");
             assert_eq!(pin_ind.len(), n_pin);
@@ -1170,7 +1189,7 @@ impl Scene {
             // Optional per-vertex pull weights (aligned to pin_ind). Present
             // only for partially-pinned pull holders; probed by file
             // existence so older payloads (scalar `pull` only) keep working.
-            let pullw_path = format!("{}/bin/pin-pullw-{}.bin", args.path, i);
+            let pullw_path = format!("{}/bin/{section}-pullw-{i}.bin", args.path);
             let pull_weights = std::path::Path::new(&pullw_path).exists().then(|| {
                 let v = read_vec::<f32>(&pullw_path).expect("Failed to read pin pull weights");
                 assert_eq!(
@@ -1184,10 +1203,10 @@ impl Scene {
             // Read operations in order
             let mut operations = Vec::new();
             for j in 0..operation_count {
-                let op_title = format!("pin-{i}-op-{j}");
+                let op_title = format!("{section}-{i}-op-{j}");
                 let op_entry = parsed
                     .get(&op_title)
-                    .unwrap_or_else(|| panic!("Failed to read operation {j} for pin {i}"));
+                    .unwrap_or_else(|| panic!("Failed to read operation {j} for {section} {i}"));
 
                 let op_type = read_string(op_entry, "type");
 
@@ -1197,7 +1216,7 @@ impl Scene {
                         let t_end = read_f64(op_entry, "t_end");
                         let transition = read_string(op_entry, "transition");
                         let bezier_handles = read_bezier_handles(op_entry);
-                        let delta_path = format!("{}/bin/pin-{}-op-{}.bin", args.path, i, j);
+                        let delta_path = format!("{}/bin/{section}-{i}-op-{j}.bin", args.path);
                         let delta = read_mat_from_file::<f64, 3>(&delta_path)
                             .expect("Failed to read move_by delta")
                             .map(|x| (x as f64 * ws) as f32);
@@ -1214,7 +1233,7 @@ impl Scene {
                         let t_end = read_f64(op_entry, "t_end");
                         let transition = read_string(op_entry, "transition");
                         let bezier_handles = read_bezier_handles(op_entry);
-                        let target_path = format!("{}/bin/pin-{}-op-{}.bin", args.path, i, j);
+                        let target_path = format!("{}/bin/{section}-{i}-op-{j}.bin", args.path);
                         let target = read_mat_from_file::<f64, 3>(&target_path)
                             .expect("Failed to read move_to target")
                             .map(|x| (x as f64 * ws) as f32);
@@ -1290,7 +1309,7 @@ impl Scene {
                             read_f64(op_entry, "rest_ty") * ws,
                             read_f64(op_entry, "rest_tz") * ws,
                         ];
-                        let base = format!("{}/bin/pin-{}-op-{}", args.path, i, j);
+                        let base = format!("{}/bin/{section}-{i}-op-{j}", args.path);
                         let local = read_mat_from_file::<f64, 3>(&format!("{base}.bin"))
                             .expect("Failed to read transform_keyframes local verts")
                             .map(|x| (x as f64 * ws) as f32);
@@ -1350,7 +1369,7 @@ impl Scene {
                 }
             }
 
-            pin.push(Pin {
+            Pin {
                 index: pin_ind,
                 operations,
                 unpin_time,
@@ -1358,8 +1377,62 @@ impl Scene {
                 pull_weights,
                 pin_group_id,
                 allow_intersection,
+            }
+        };
+        let pin: Vec<Pin> = (0..n_pin_block).map(|i| read_pin_block("pin", i)).collect();
+
+        // Display pins are optional: a session exported without any reads as
+        // having none, the same way an absent pin-pullw bin reads as no
+        // per-vertex weights.
+        let n_display_pin_block = count
+            .get("display_pin_block")
+            .and_then(|v| v.as_integer())
+            .map_or(0, |n| {
+                usize::try_from(n).expect("display_pin_block must not be negative")
             });
-        }
+        let display_pin: Vec<DisplayPin> = (0..n_display_pin_block)
+            .map(|i| {
+                let block = read_pin_block("display-pin", i);
+                assert!(
+                    block.pull_w == 0.0 && block.pull_weights.is_none(),
+                    "display-pin-{i} must be an exact pin (pull = 0)"
+                );
+                let n = block.index.len();
+                let rest = read_mat_from_file::<f64, 3>(&format!(
+                    "{}/bin/display-pin-rest-{i}.bin",
+                    args.path
+                ))
+                .expect("Failed to read display pin rest positions")
+                .map(|x| (x as f64 * ws) as f32);
+                assert_eq!(
+                    rest.ncols(),
+                    n,
+                    "display-pin-rest-{i} must hold one position per vertex"
+                );
+                let dmap =
+                    read_vec::<u32>(&format!("{}/bin/display-pin-dmap-{i}.bin", args.path))
+                        .expect("Failed to read display pin displacement groups");
+                assert_eq!(
+                    dmap.len(),
+                    n,
+                    "display-pin-dmap-{i} must hold one group per vertex"
+                );
+                for &group in &dmap {
+                    assert!(
+                        (group as usize) < displacement_mat.ncols(),
+                        "display-pin-dmap-{i} names group {group}, outside \
+                         displacement.bin's {} groups",
+                        displacement_mat.ncols(),
+                    );
+                }
+                DisplayPin {
+                    rest,
+                    dmap,
+                    operations: block.operations,
+                    unpin_time: block.unpin_time,
+                }
+            })
+            .collect();
 
         let mut wall = Vec::new();
         for i in 0..n_wall {
@@ -1706,6 +1779,7 @@ impl Scene {
             stitch_w: stitch_w_mat,
             stitch_stiffness: stitch_stiffness_vec,
             pin,
+            display_pin,
             wall,
             sphere,
             rest_vert: rest_vert_mat,
@@ -3335,6 +3409,37 @@ impl Scene {
             }
         }
         out
+    }
+
+    /// Whether the scene carries any display pins (see `DisplayPin`).
+    pub fn has_display_pins(&self) -> bool {
+        !self.display_pin.is_empty()
+    }
+
+    /// Evaluate every display pin at `time`. Returns, per block, whether it is
+    /// still pinned (a block at or past its `unpin_time` is not, and its
+    /// vertices are left to the tetrahedral surface), and the scripted position
+    /// of each of its vertices, blocks in order. A position is the block's
+    /// operations applied to its rest position plus its displacement group,
+    /// exactly as `fix_pin_positions` places a fix-pinned vertex. A block that
+    /// is no longer pinned still reports positions, so every frame has one
+    /// fixed layout.
+    pub fn display_pin_positions(&self, time: f64) -> (Vec<bool>, Vec<Vec3f>) {
+        let mut active = Vec::with_capacity(self.display_pin.len());
+        let mut out = Vec::new();
+        for pin in self.display_pin.iter() {
+            active.push(pin.unpin_time.is_none_or(|ut| time < ut));
+            for i in 0..pin.rest.ncols() {
+                let mut position: Vector3<f32> = pin.rest.column(i).into();
+                for op in pin.operations.iter() {
+                    let (new_pos, _) = apply_pin_op(op, position, i, time);
+                    position = new_pos;
+                }
+                let dx = self.displacement.column(pin.dmap[i] as usize);
+                out.push(position + dx);
+            }
+        }
+        (active, out)
     }
 }
 

@@ -640,6 +640,38 @@ impl Backend {
             sim_args.keep_verts,
             frame,
         );
+        // Display pins: the scripted positions, at t_frame, of the Blender
+        // vertices exact SOLID pins hold (see `Scene::display_pin_positions`).
+        // The file is one byte per block, 1 while the block is still pinned
+        // and 0 once it is released, followed by every position as three
+        // float32s at the user's authored scale, blocks in order. Its layout
+        // is fixed for the scene, so a reader checks the size against the
+        // counts the scene was exported with.
+        if scene.has_display_pins() {
+            let (active, positions) = scene.display_pin_positions(t_frame);
+            let mut bytes: Vec<u8> = Vec::with_capacity(active.len() + 12 * positions.len());
+            bytes.extend(active.iter().map(|&a| u8::from(a)));
+            for p in positions.iter() {
+                for k in 0..3 {
+                    bytes.extend_from_slice(&(p[k] * inv_world).to_le_bytes());
+                }
+            }
+            let final_path = format!(
+                "{}/{}",
+                program_args.output,
+                ppf_cts_formats::files::display_pin_filename(frame)
+            );
+            let tmp_path = format!("{final_path}.tmp");
+            std::fs::write(&tmp_path, &bytes).unwrap();
+            std::fs::rename(&tmp_path, &final_path).unwrap();
+            super::remove_old_files(
+                &program_args.output,
+                ppf_cts_formats::files::DISPLAY_PIN_PREFIX,
+                ppf_cts_formats::files::DISPLAY_PIN_SUFFIX,
+                sim_args.keep_verts,
+                frame,
+            );
+        }
         // Save a resumable state when this frame hits the auto-save cadence
         // or appears in the explicit checkpoint list. Both use the same
         // `frame` convention so a checkpoint saves the exact frame the

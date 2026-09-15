@@ -127,9 +127,18 @@ def artifacts(upload):
     # because ``_ensure_anim_map`` sniffs the first byte to choose its
     # decoder, and the statistics blobs are opaque here: the runner moves
     # bytes and only the Blender side decodes them.
+    import cbor2
+
     return {
         "map.pickle": pickle.dumps({upload: [[0, 1, 2]]}),
         "surface_map.pickle": pickle.dumps({"version": 2, "maps": {}}),
+        # Every exported session carries one; this scene has no exact SOLID
+        # pin, so it holds no blocks.
+        "display_pin_map.pickle": cbor2.dumps({
+            "version": 2,
+            "kind": "DisplayPinMap",
+            "payload": {"version": 1, "n_total": 0, "blocks": []},
+        }),
         "statistics_manifest.cbor": ("manifest-" + upload).encode(),
         "vert_1.bin": VERT,
         "statistics_0.cbor": ("stats0-" + upload).encode(),
