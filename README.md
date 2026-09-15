@@ -61,11 +61,15 @@ involving 👚 shells, 🪵 solids, 🪢 rods, 🧱 rigid bodies and ⏳ sand. S
 >
 > **Intersection errors can also indicate an impossible setup**, such as pinned panels driven through each other ([#116](https://github.com/st-tech/ppf-contact-solver/issues/116)) or cloth trapped in a self-intersecting character animation ([#110](https://github.com/st-tech/ppf-contact-solver/issues/110)). Stopping preserves the guarantee, while completing would silently accept penetration. Check the scene before reporting a bug.
 
-### 🚧 A Gentle Disclaimer
+### 🚧 Gentle Disclaimer and Limitations
 
-- **Offline use:** Built for offline simulation, not real time, though some examples reach interactive rates.
-- **Not production ready:** ZOZO's Contact Solver is immature and has many bugs, including undiscovered ones. Production use is not recommended. Known bugs are tracked in [Issues](https://github.com/st-tech/ppf-contact-solver/issues) and fixed once confirmed.
-- **Development pace:** Actively maintained by Ryoichi Ando alone, with limited time rather than a team's capacity.
+- **⏳ Offline use:** Built for offline simulation, not real time, though some examples reach interactive rates.
+- **🐢 Not the fastest simulator:** We do try to be fast, but other recent work reports faster results, so do not expect state-of-the-art performance.
+- **📉 Not differentiable:** No gradients with respect to simulation inputs, so inverse design and learning workflows are out of scope.
+- **🧪 Not production ready:** ZOZO's Contact Solver is immature and has many bugs, including undiscovered ones. Production use is not recommended. Known bugs are tracked in [Issues](https://github.com/st-tech/ppf-contact-solver/issues) and fixed once confirmed.
+- **🔒 Tightly bound to CUDA:** The solver backend runs on NVIDIA GPUs only; CPU, AMD, and Apple Metal are not supported.
+- **🛠️ Add-on setup takes effort:** Installing the Blender add-on is not a single click; the solver backend is deployed separately, either on the same machine or on a remote one.
+- **👤 Development pace:** Actively maintained by Ryoichi Ando alone, with limited time rather than a team's capacity.
 
 ## 🔖 Table of Contents
 
