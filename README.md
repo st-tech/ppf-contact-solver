@@ -30,7 +30,7 @@ involving 👚 shells, 🪵 solids, 🪢 rods, 🧱 rigid bodies and ⏳ sand. S
 
 ## ✨ Highlights
 
-- **💪 100% Penetration-Free**: Contact resolution is absolute. No snagging intersections. Not 99%. <sup>[[1]](#note-penetration-free)</sup>
+- **💪 100% Penetration-Free Upon Success**: No snagging intersections. <sup>[[1]](#note-penetration-free)</sup>
 - **🦀 Rust-First**: We minimize the use of C++ to maximize safety. No performance compromised.
 - **⏲ Scalable**: An extreme case includes beyond 180M contacts. Not just one million.
 - **🚲 Cache Efficient**: All on the GPU runs in single precision. No double precision.
@@ -52,9 +52,9 @@ involving 👚 shells, 🪵 solids, 🪢 rods, 🧱 rigid bodies and ⏳ sand. S
 
 > <a name="note-penetration-free"></a>[1] **What the guarantee means:**
 >
-> Our [cubic barrier](#-technical-materials) theoretically guarantees penetration-free contact by construction, not heuristics. Bugs and crashes remain possible, but an intersection checker confirms **zero penetration** after every successful run and every step in [GitHub Actions](#-github-actions). No hidden intersections are left behind.
+> Our [cubic barrier](#-technical-materials) theoretically guarantees penetration-free contact by construction, not heuristics, whenever a solution is found. A solution may not be found, for example, when the target contact thickness is atom-level thin. In such extreme cases, as well as with bugs, the solver may crash or stall. What we guarantee is that every step that succeeds is free of intersections. An intersection checker confirms **zero penetration** after every successful run and every step in [GitHub Actions](#-github-actions), so no hidden intersections are left behind.
 >
-> **Intersection errors can indicate an impossible setup**, such as pinned panels driven through each other ([#116](https://github.com/st-tech/ppf-contact-solver/issues/116)) or cloth trapped in a self-intersecting character animation ([#110](https://github.com/st-tech/ppf-contact-solver/issues/110)). Stopping preserves the guarantee; completing would silently accept penetration. Check the scene before reporting a bug.
+> **Intersection errors can also indicate an impossible setup**, such as pinned panels driven through each other ([#116](https://github.com/st-tech/ppf-contact-solver/issues/116)) or cloth trapped in a self-intersecting character animation ([#110](https://github.com/st-tech/ppf-contact-solver/issues/110)). Stopping preserves the guarantee, while completing would silently accept penetration. Check the scene before reporting a bug.
 
 ### 🚧 A Gentle Disclaimer
 
