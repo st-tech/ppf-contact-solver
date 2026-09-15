@@ -52,7 +52,12 @@ involving 👚 shells, 🪵 solids, 🪢 rods, 🧱 rigid bodies and ⏳ sand. S
 
 > <a name="note-penetration-free"></a>[1] **What the guarantee means:**
 >
-> Our [cubic barrier](#-technical-materials) theoretically guarantees penetration-free contact by construction, not heuristics, whenever a solution is found. A solution may not be found, for example, when the target contact thickness is atom-level thin. In such extreme cases, as well as with bugs, the solver may crash or stall. What we guarantee is that every step that succeeds is free of intersections. An intersection checker confirms **zero penetration** after every successful run and every step in [GitHub Actions](#-github-actions), so no hidden intersections are left behind.
+> Our [cubic barrier](#-technical-materials) theoretically guarantees penetration-free contact by construction, not heuristics, whenever a solution is found. A solution may not be found in extreme cases, for example:
+>
+> - The target contact thickness is atom-level thin.
+> - An object collides at the speed of light.
+>
+> In such extreme cases, as well as with bugs, the solver may crash or stall. What we guarantee is that every step that succeeds is free of intersections. An intersection checker confirms **zero penetration** after every successful run and every step in [GitHub Actions](#-github-actions), so no hidden intersections are left behind.
 >
 > **Intersection errors can also indicate an impossible setup**, such as pinned panels driven through each other ([#116](https://github.com/st-tech/ppf-contact-solver/issues/116)) or cloth trapped in a self-intersecting character animation ([#110](https://github.com/st-tech/ppf-contact-solver/issues/110)). Stopping preserves the guarantee, while completing would silently accept penetration. Check the scene before reporting a bug.
 
