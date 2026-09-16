@@ -873,6 +873,7 @@ Below, we describe how to deploy our solver on major cloud services. These instr
 - [*ZOZO's Contact Solver: open-source physics simulation lands in Blender 5*](https://www.kabum.it/blog/zozo-ppfcontact-solver-for-blender/) on [Kabum](https://www.kabum.it/).
 - [*The Polynomial That Fixed 30 Years of Cloth Simulation*](https://towardsdatascience.com/the-polynomial-that-fixed-30-years-of-cloth-simulation/) by Ferran Alia on [Towards Data Science](https://towardsdatascience.com/).
 - [*GALAXY S26 ULTRA new colors*](https://blenderartists.org/t/galaxy-s26-ultra-new-colors/1643756) by NARZ.CG on [Blender Artists](https://blenderartists.org/).
+- [*ZOZO's Contact Solver (ppf-contact-solver) Blender Add-on Installation Procedure*](https://note.com/mon38/n/n34b4687db39d?hl=en) (Japanese article) by [mon38](https://note.com/mon38) on [note](https://note.com/).
 
 ### 🧩 Blender Add-ons
 
