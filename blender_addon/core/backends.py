@@ -103,6 +103,18 @@ _QUERY_CHANNEL_TIMEOUT_S = 30.0
 # turns that into a loud ErrorOccurred / ConnectionLost instead of a silent hang.
 _TRANSFER_CHANNEL_TIMEOUT_S = 30.0
 
+# THE SSH HANDSHAKE IS BOUNDED, because an unbounded one does not report as a
+# failure but as a hang. paramiko takes no timeout by default, so a `connect`
+# to a host that is powered off waits out the OS TCP retry schedule (about two
+# minutes on Linux) with nothing on screen but "Connecting...", and one that
+# accepts the connection and then says nothing waits on the banner. The three
+# phases are capped separately because paramiko caps them separately: the TCP
+# connect (`timeout`), the protocol banner (`banner_timeout`) and
+# authentication (`auth_timeout`). The value is generous for a healthy host on
+# a slow link and short enough that a dead one is REPORTED, which is what the
+# user can act on.
+SSH_HANDSHAKE_TIMEOUT_S = 20.0
+
 
 def _force_tcp() -> bool:
     """True when ``PPF_FORCE_TCP_TRANSFER`` is set to a truthy value.
@@ -1505,6 +1517,9 @@ def _open_jump_chain(
                 key_filename=hop.get("key_path"),
                 sock=sock,
                 compress=True,
+                timeout=SSH_HANDSHAKE_TIMEOUT_S,
+                banner_timeout=SSH_HANDSHAKE_TIMEOUT_S,
+                auth_timeout=SSH_HANDSHAKE_TIMEOUT_S,
             )
             transport = client.get_transport()
             transport.set_keepalive(keepalive)
@@ -1518,6 +1533,7 @@ def _open_jump_chain(
                 kind="direct-tcpip",
                 dest_addr=dest,
                 src_addr=("localhost", 0),
+                timeout=SSH_HANDSHAKE_TIMEOUT_S,
             )
     except Exception as exc:
         # Read the hop that failed before the teardown empties the list: it is
@@ -1592,6 +1608,9 @@ def create_backend(backend_type: str, config: dict) -> ConnectionBackend:
                 key_filename=config.get("key_path"),
                 sock=sock,
                 compress=True,
+                timeout=SSH_HANDSHAKE_TIMEOUT_S,
+                banner_timeout=SSH_HANDSHAKE_TIMEOUT_S,
+                auth_timeout=SSH_HANDSHAKE_TIMEOUT_S,
             )
         except Exception:
             _close_jump_clients(jump_clients)

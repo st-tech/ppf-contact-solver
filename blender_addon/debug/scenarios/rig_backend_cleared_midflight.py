@@ -6,11 +6,12 @@
 # A DISCONNECT LANDING MID-OPERATION IS A TRANSPORT FAILURE, NEVER AN
 # AttributeError (``blender_addon/core/effect_runner.py``).
 #
-# WHY THIS EXISTS. Connect is queued onto the I/O worker
-# (``_submit_cmd(self._do_connect, ...)``), but DISCONNECT IS NOT: ``DoDisconnect``
-# calls ``_do_disconnect`` directly, on Blender's main thread. So the two do not
-# serialize against each other, and ``_do_disconnect`` sets ``self._backend =
-# None`` while the worker may be in the middle of a long operation.
+# WHY THIS EXISTS. Every operation ON a connection is queued onto the I/O
+# worker (``_submit_cmd(self._do_stop_server)`` and the rest), but DISCONNECT IS
+# NOT: ``DoDisconnect`` calls ``_do_disconnect`` directly, on Blender's main
+# thread. So the two do not serialize against each other, and ``_do_disconnect``
+# sets ``self._backend = None`` while the worker may be in the middle of a long
+# operation.
 #
 # ``_do_stop_server`` guarded the attribute ONCE at entry and then re-read it
 # five more times across a wait loop with ``time.sleep(0.25)`` between passes.
@@ -202,7 +203,7 @@ def run(ctx: r.ScenarioContext) -> dict:
                     sig[fn.name] = (len(names) - 1 - n_default, len(names) - 1)
 
     watched = ("_wait_for_native_server", "_launch_native_server",
-               "_do_stop_server", "_do_launch_server")
+               "_do_stop_server", "_do_launch_server", "_do_connect")
 
     def positional(arglist: str) -> int:
         """How many POSITIONAL arguments a call's text passes.

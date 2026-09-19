@@ -46,6 +46,7 @@ from . import bl_connect_win_native
 from . import bl_connection_path_validation
 from . import bl_connection_path_relative
 from . import bl_connection_failure_reporting
+from . import bl_connect_cancel_releases
 from . import bl_remote_device_select
 from . import bl_cbor2_missing_reported
 from . import bl_docker_connect_gate
@@ -385,6 +386,9 @@ REGISTRY = {
     "bl_connection_path_relative": bl_connection_path_relative,
     "bl_remote_device_select": bl_remote_device_select,
     "bl_connection_failure_reporting": bl_connection_failure_reporting,
+    # Cancel frees the add-on, and an attempt the user walked away from
+    # closes itself instead of landing.
+    "bl_connect_cancel_releases": bl_connect_cancel_releases,
     "bl_cbor2_missing_reported": bl_cbor2_missing_reported,
     "bl_docker_connect_gate": bl_docker_connect_gate,
     "bl_ssh_proxy_jump": bl_ssh_proxy_jump,

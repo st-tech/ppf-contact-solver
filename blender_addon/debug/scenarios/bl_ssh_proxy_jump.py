@@ -220,6 +220,10 @@ try:
     # ----- E: the paramiko chain ---------------------------------------
     events = []
     refuse = set()
+    # Kept beside `events` rather than inside it, so the tuples the order and
+    # credential checks below compare keep their shape.
+    connect_kwargs = []
+    channel_timeouts = []
 
     class FakeChannel:
         def __init__(self, source, dest):
@@ -237,8 +241,17 @@ try:
         def is_active(self):
             return True
 
-        def open_channel(self, kind=None, dest_addr=None, src_addr=None):
+        # THE SIGNATURE IS PART OF WHAT THIS DOUBLE PROMISES. A stand-in that
+        # does not take a parameter the real `paramiko.Transport.open_channel`
+        # takes turns a correct call into a TypeError that only a rig run can
+        # see: adding the handshake cap to the real call passed every unit test
+        # (they hold a real paramiko) and failed here, on two CI legs at once.
+        # The cap is asserted below rather than merely absorbed, so the next
+        # change to it has to come through this scenario.
+        def open_channel(self, kind=None, dest_addr=None, src_addr=None,
+                         timeout=None):
             events.append(("channel", self.client.hostname, kind, tuple(dest_addr)))
+            channel_timeouts.append(timeout)
             return FakeChannel(self.client.hostname, tuple(dest_addr))
 
     class FakeSSHClient:
@@ -253,6 +266,7 @@ try:
         def connect(self, **kwargs):
             self.hostname = kwargs.get("hostname")
             self.kwargs = kwargs
+            connect_kwargs.append(dict(kwargs))
             events.append(("connect", self.hostname, kwargs.get("port"),
                            kwargs.get("username"), kwargs.get("key_filename"),
                            getattr(kwargs.get("sock"), "dest", None)))
@@ -311,6 +325,27 @@ try:
                and connects[1][2:5] == (2202, "inner-user", None)
                and connects[2][2:5] == (22, "ubuntu", "/keys/gpu"),
                {"connects": [c[1:5] for c in connects]})
+
+        # Every hop and every forwarded channel carries the handshake cap.
+        # An unbounded handshake does not present as a failure but as a hang:
+        # a `connect` to a host that is powered off waits out the OS TCP retry
+        # schedule with nothing on screen, and a bastion that accepts and then
+        # forwards nothing holds the channel open just as long. The three
+        # phases are named separately because paramiko caps them separately.
+        cap = backends.SSH_HANDSHAKE_TIMEOUT_S
+        hop_caps = [[k.get("timeout"), k.get("banner_timeout"),
+                     k.get("auth_timeout")] for k in connect_kwargs]
+        # `list(...)`, because the recorded detail has to be what was
+        # ASSERTED. These two accumulate for the rest of section E (the
+        # refused hop and the direct connect both add to them), and a detail
+        # holding the live object reads three channel caps under a check that
+        # tested two.
+        record("E_every_hop_and_channel_is_time_capped",
+               cap > 0
+               and hop_caps == [[cap, cap, cap]] * 3
+               and channel_timeouts == [cap, cap],
+               {"cap": cap, "hop_caps": list(hop_caps),
+                "channel_caps": list(channel_timeouts)})
 
         record("E_keepalive_reaches_every_hop",
                all(c.transport.keepalive == 30

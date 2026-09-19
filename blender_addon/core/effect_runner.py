@@ -220,6 +220,14 @@ class EffectRunner:
         self._worker = threading.Thread(target=self._worker_loop, daemon=True)
         self._worker.start()
 
+        # Connection attempts: a counter, and the lock that makes taking a
+        # ticket and adopting a backend one step. A connect runs on a thread
+        # of its own rather than on the worker above (see ``_do_connect``), so
+        # more than one attempt can be in flight and exactly one of them may
+        # land. The holder of the current ticket is that one.
+        self._connect_lock = threading.Lock()
+        self._connect_epoch: int = 0
+
         # Animation state (thread-safe buffer)
         self._anim_lock = threading.Lock()
         self._anim_map: dict[str, numpy.ndarray] = {}
@@ -255,6 +263,10 @@ class EffectRunner:
         """Stop the worker thread. Called during addon unregister/reload."""
         self._stop_event.set()
         self._work_event.set()  # Wake it so it exits
+        # A connection attempt runs on its own thread, which this cannot join:
+        # taking the ticket away is what stops its result from landing in a
+        # runner the add-on has already torn down.
+        self._take_connect_ticket()
         # Drop queued I/O so a later restart() doesn't resurrect jobs
         # that reference a backend the user already walked away from.
         with self._io_lock:
@@ -308,10 +320,19 @@ class EffectRunner:
                 # on the main thread, so the bpy read happens where it is
                 # safe (execute() runs inside Engine.tick() on the main
                 # thread) and the Connected transition arm stays pure. The
-                # values ride on the Connected event the worker dispatches.
+                # values ride on the Connected event the attempt dispatches.
                 sid = new_session_id()
                 saved = self._last_saved_session_id()
-                self._submit_cmd(self._do_connect, bt, cfg_copy, sid, saved)
+                # ON ITS OWN THREAD, NOT ON THE I/O WORKER. See ``_do_connect``
+                # for why: a handshake against a host that does not answer
+                # would hold the one thread every later operation queues onto.
+                epoch = self._take_connect_ticket()
+                threading.Thread(
+                    target=self._do_connect,
+                    args=(bt, cfg_copy, sid, saved, epoch),
+                    name="ppf-connect-attempt",
+                    daemon=True,
+                ).start()
 
             case DoDisconnect():
                 self._do_disconnect()
@@ -567,13 +588,82 @@ class EffectRunner:
             console.write(f"last-saved session id read failed: {e}")
             return ""
 
+    # -- connection attempts --
+
+    def _take_connect_ticket(self) -> int:
+        """Invalidate every attempt in flight and return the new ticket.
+
+        Every path that starts, cancels or supersedes a connection attempt
+        comes through here, so the newest caller always holds the only current
+        ticket and an older attempt can tell that it is no longer wanted.
+        """
+        with self._connect_lock:
+            self._connect_epoch += 1
+            return self._connect_epoch
+
+    def _connect_attempt_is_current(self, epoch: int) -> bool:
+        """True while *epoch* is still the attempt the add-on is waiting for."""
+        with self._connect_lock:
+            return epoch == self._connect_epoch
+
+    def _adopt_backend(self, backend, epoch: int) -> bool:
+        """Publish *backend* as the connection, unless the attempt was dropped.
+
+        The test and the assignment are ONE step under the lock, because the
+        two orderings against a disconnect have to differ. A disconnect that
+        takes the ticket first must find nothing published, so this attempt
+        closes what it opened; one that arrives after must find the reference,
+        so it closes it. Either way the backend has exactly one owner, and no
+        live transport is ever left in a runner the state machine believes is
+        offline.
+        """
+        with self._connect_lock:
+            if epoch != self._connect_epoch:
+                return False
+            self._backend = backend
+            return True
+
+    def _close_abandoned(self, backend) -> None:
+        """Close a connection that landed after the user gave up on it."""
+        try:
+            backend.disconnect()
+        except Exception as e:  # noqa: BLE001 - reported, not swallowed
+            console.write(f"Canceled connection attempt: close failed: {e}")
+        console.write("Closed a connection attempt that was canceled.")
+
     def _do_connect(
         self,
         backend_type: str,
         config: dict,
-        session_id: str = "",
-        saved_session_id: str = "",
+        session_id: str,
+        saved_session_id: str,
+        epoch: int,
     ) -> None:
+        """Open a connection, on a thread this attempt owns.
+
+        RUNS OFF THE I/O WORKER, unlike every other operation here, and that
+        is the whole point. A handshake against a host that is not up blocks
+        for as long as its transport takes, and the worker is the one thread
+        every later operation queues onto, so a connect submitted there makes
+        Cancel followed by a connect somewhere ELSE wait for the host the user
+        already gave up on: measured, an SSH attempt to a stopped box held the
+        worker while a native connect that needed nothing but a local socket
+        sat at "Connecting..." behind it, and the panel looked wedged until
+        Blender was restarted. Nothing about the worker's serial discipline
+        rests on the connect being queued: while the add-on is offline there
+        is no backend for another job to act on, and at most one attempt ever
+        publishes one.
+
+        *epoch* is this attempt's ticket, taken when the effect ran. A cancel,
+        a disconnect, an add-on teardown or a later attempt takes a new one, so
+        an attempt holding a stale ticket is ABANDONED: it closes whatever it
+        opened and dispatches nothing. Both halves of that matter. A
+        ``Connected`` from an abandoned attempt would put the add-on ONLINE
+        against a host the user has walked away from, and a ``ConnectionFailed``
+        from one would replace the state of the attempt they started instead,
+        reporting the dead host's error over a connection that is already
+        succeeding.
+        """
         try:
             # The native backends query a server already on the port before
             # attaching to it, and a query names a project the server then
@@ -581,22 +671,35 @@ class EffectRunner:
             # the first status poll.
             config = dict(config, project_name=self._project_name or "")
             backend = create_backend(backend_type, config)
-            self._backend = backend
             remote_root = ""
             if hasattr(backend, 'current_directory'):
                 remote_root = backend.current_directory
         except Exception as e:
-            # Reset any partial backend so the next attempt starts clean.
-            if self._backend is not None:
-                try:
-                    self._backend.disconnect()
-                except Exception:
-                    pass
-                self._backend = None
+            # Nothing is published until the adoption below, so a failure here
+            # leaves no partial backend to reset: what it can leave is a report
+            # that does not belong to anyone, which the ticket answers.
+            if not self._connect_attempt_is_current(epoch):
+                console.write(f"Canceled connection attempt failed: {e}")
+                return
             self._engine.dispatch(ConnectionFailed(error=str(e)))
+            return
+        if not self._adopt_backend(backend, epoch):
+            self._close_abandoned(backend)
             return
         self._probe_solver_host_gpus(backend)
         self._probe_solver_host_builds(backend)
+        if not self._connect_attempt_is_current(epoch):
+            # A cancel landed while the solver host was being probed, which is
+            # two command round trips long. Reporting a connection now would
+            # put the add-on online over a transport ``_do_disconnect`` has
+            # already closed, which is the one state nothing recovers from.
+            if self._backend is not backend:
+                # A later attempt has taken the reference over, so the close
+                # ``_do_disconnect`` performs on what it finds published did
+                # not reach this one.
+                self._close_abandoned(backend)
+            console.write("Connection canceled while the solver host was probed.")
+            return
         self._engine.dispatch(Connected(
             remote_root=remote_root,
             session_id=session_id,
@@ -720,6 +823,13 @@ class EffectRunner:
     def _do_disconnect(self) -> None:
         from . import gpu_devices, remote_builds
 
+        # ABANDON ANY ATTEMPT STILL HANDSHAKING, which is what Cancel is. The
+        # attempt runs on its own thread and cannot be interrupted, so taking
+        # the ticket is the whole of the cancellation: whatever that thread
+        # opens it will close itself, and it reports nothing. This comes FIRST
+        # so an attempt that adopts a backend a moment later finds the ticket
+        # already gone; see ``_adopt_backend``.
+        self._take_connect_ticket()
         # The next connection may reach a different machine, where a list left
         # over from this one would name GPUs, or build directories, that are
         # not there.

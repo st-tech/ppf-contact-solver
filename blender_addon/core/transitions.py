@@ -145,6 +145,25 @@ def transition(state: AppState, event: Event) -> tuple[AppState, list[Effect]]:
                 [DoConnect(bt, cfg, sp)],
             )
 
+        case ConnectRequested():
+            # THE ARM ABOVE IS PHASE-GUARDED, AND A REQUEST IT REJECTS MUST
+            # NOT VANISH. A connect means something only from OFFLINE: one issued
+            # while a connection is up, or while an earlier attempt is still
+            # handshaking, changes nothing, and a caller that read it as an
+            # initiated connection would go on to a transfer or a run against a
+            # host it never reached. Both callers refuse it before it arrives
+            # here (the panel's ``poll``, and ``_require_offline`` on the MCP
+            # tool), so this arm exists to say so out loud when a third one
+            # appears rather than to be reached in normal use.
+            return (
+                state,
+                [DoLog(
+                    "Connect request ignored: "
+                    + ("already connected." if state.phase == Phase.ONLINE
+                       else "an earlier attempt is still connecting.")
+                )],
+            )
+
         case Connected(remote_root=root, session_id=sid, saved_session_id=saved):
             # A fresh session id is minted on every successful connect so
             # downstream artifacts (PC2 headers, modifier binds, remote

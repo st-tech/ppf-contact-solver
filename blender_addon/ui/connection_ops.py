@@ -118,6 +118,13 @@ class REMOTE_OT_Connect(Operator):
 
     @classmethod
     def poll(cls, context):
+        # A SECOND REQUEST WHILE ONE IS HANDSHAKING CHANGES NOTHING, because
+        # the reducer accepts a connect only from the offline phase. Refusing
+        # it here is what the MCP tool already does (``_require_offline``), and
+        # it keeps a click that would start a modal watching an attempt it did
+        # not start from being possible at all.
+        if com.is_connecting():
+            return False
         root = get_addon_data(context.scene)
         props = root.ssh_state
         state = root.state
@@ -329,7 +336,15 @@ class REMOTE_OT_Connect(Operator):
         # gets this far.
         if time.time() - self._start_time > self.timeout:
             self._detach_timer(context)
+            # THE TIMEOUT TEARS THE ATTEMPT DOWN, exactly as Cancel does. The
+            # phase is CONNECTING and this operator is the only thing watching
+            # it, so returning without disconnecting leaves the state machine
+            # in a phase nothing owns: the reducer accepts a connect request
+            # only from OFFLINE, so every later click is dropped without a word
+            # and the panel reads "Connecting..." until Blender is restarted.
+            com.disconnect()
             self.report({"ERROR"}, iface_("Connection timed out"))
+            redraw_all_areas(context)
             return {"CANCELLED"}
         _refresh_ssh_panel_bridge()
         return {"PASS_THROUGH"}
